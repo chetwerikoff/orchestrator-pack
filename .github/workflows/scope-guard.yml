@@ -1,0 +1,29 @@
+name: scope-guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify-pack:
+    name: Verify orchestrator-pack structure
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run read-only pack verifier
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+      - name: Enforce reusable repository content policy
+        shell: pwsh
+        run: ./scripts/check-reusable.ps1
+
+      - name: Scope guard TODO
+        shell: pwsh
+        run: |
+          Write-Host "TODO: validate PR diff against ao-task-declaration active scope."
+          Write-Host "This CI check is the second line of defense, not a replacement for the runtime scope guard before git add/commit."

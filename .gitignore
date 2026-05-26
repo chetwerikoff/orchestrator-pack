@@ -1,0 +1,64 @@
+# Local AO config generated from the reusable example.
+# Commit agent-orchestrator.yaml.example, not real target-repo configs.
+agent-orchestrator.yaml
+agent-orchestrator.*.yaml
+!agent-orchestrator.yaml.example
+
+# Secrets and credentials.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+secrets/
+private/
+
+# AO runtime/session state. Keep committed material reusable only.
+.ao/
+.agent-orchestrator/
+
+# Upstream source checkout is disposable/reference-only.
+vendor/
+
+# Dependency/build/test artifacts.
+node_modules/
+.pnpm-store/
+.npm/
+dist/
+build/
+coverage/
+.out/
+.cache/
+.turbo/
+.next/
+
+# Logs, local scratch, generated ledgers/databases.
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl.local
+scratch/
+tmp/
+temp/
+worktrees/
+target-repos/
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.code-workspace

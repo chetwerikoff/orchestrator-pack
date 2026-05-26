@@ -1,0 +1,38 @@
+$schema: https://raw.githubusercontent.com/ComposioHQ/agent-orchestrator/main/schema/config.schema.json
+# Windows-friendly Composio Agent Orchestrator example for orchestrator-pack.
+# Copy to agent-orchestrator.yaml and edit the project block before running AO.
+
+port: 3000
+
+defaults:
+  runtime: process        # Windows: native process/ConPTY runtime; tmux is not required.
+  agent: claude-code
+  workspace: worktree
+  notifiers: [desktop]
+
+projects:
+  example:
+    repo: your-org/your-repo
+    path: C:/Users/che/Documents/Projects/your-target-repo
+    defaultBranch: main
+    sessionPrefix: ex
+    agentRulesFile: prompts/agent_rules.md
+
+reactions:
+  ci-failed:
+    auto: true
+    action: send-to-agent
+    retries: 2
+  changes-requested:
+    auto: true
+    action: send-to-agent
+    escalateAfter: 30m
+  approved-and-green:
+    auto: false
+    action: notify
+
+# Upgrade-safe extension notes:
+# - Implement task declaration, runtime scope guard, and token chain ledger through
+#   AO plugin slots, wrappers, hooks, external state, and CI.
+# - Do not patch Composio AO packages/core.
+# - PR CI scope validation is the second line of defense; runtime guard is first.
