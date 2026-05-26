@@ -46,11 +46,19 @@ Rules for `vendor/agent-orchestrator`:
 `agent-orchestrator.yaml.example` demonstrates stock AO settings:
 
 - Windows `process` runtime;
-- `claude-code` default agent;
+- Cursor CLI as the default agent;
+- role overrides so the planner/orchestrator and coder/worker both use Cursor CLI;
 - worktree isolation;
 - desktop notifications;
+- explicit GitHub Issues tracker and GitHub SCM config;
 - `agentRulesFile` pointing to `prompts/agent_rules.md`;
 - safe reactions that do not auto-merge.
+
+The current upstream AO schema supports `orchestrator` and `worker` role
+overrides. It does not expose a stable first-class `reviewer` role field in the
+YAML schema. Codex `gpt-5.5` review should therefore be added as an external
+plugin/workflow or explicit Codex review session, not as an unsupported YAML key
+and never as a core patch.
 
 ### Prompt layer
 
@@ -67,6 +75,7 @@ The plugin directories are contracts, not implementations:
 - `ao-task-declaration` declares active scope and baseline state.
 - `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
 - `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
+- `ao-codex-pr-reviewer` defines the optional Codex `gpt-5.5` PR-review path.
 
 Future implementations should bind to AO plugin slots, wrappers, hooks, or
 external state files. They must not patch AO core.

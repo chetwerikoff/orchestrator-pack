@@ -156,6 +156,8 @@ Write-Host '== Tool versions =='
 [void](Test-CommandVersion -Command 'gh' -Required)
 [void](Test-CommandVersion -Command 'npm' -Required)
 [void](Test-CommandVersion -Command 'ao' -Optional)
+[void](Test-CommandVersion -Command 'cursor' -Optional)
+[void](Test-CommandVersion -Command 'codex' -Optional)
 
 Write-Host ''
 Write-Host '== GitHub CLI auth =='
@@ -197,6 +199,7 @@ $requiredFiles = @(
     '.gitattributes',
     'docs/migration_notes.md',
     'docs/architecture.md',
+    'docs/github_issues_cursor_codex_setup.md',
     'docs/repository_policy.md',
     'prompts/self_architect_check.md',
     'prompts/agent_rules.md',
@@ -204,6 +207,7 @@ $requiredFiles = @(
     'plugins/ao-task-declaration/README.md',
     'plugins/ao-scope-guard/README.md',
     'plugins/ao-token-chain-ledger/README.md',
+    'plugins/ao-codex-pr-reviewer/README.md',
     'scripts/bootstrap.ps1',
     'scripts/verify.ps1',
     'scripts/check-reusable.ps1',
@@ -233,6 +237,7 @@ Write-Host '== Plugin contract markers =='
 Test-ContractMarkers 'plugins/ao-task-declaration/README.md' @('DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline')
 Test-ContractMarkers 'plugins/ao-scope-guard/README.md' @('DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line')
 Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md' @('chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd')
+Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md' @('Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch')
 
 Write-Host ''
 Write-Host '== Reusable repository policy =='

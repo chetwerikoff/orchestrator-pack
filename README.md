@@ -29,6 +29,8 @@ Hard boundary:
   reusable-pack policy.
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
+- `docs/github_issues_cursor_codex_setup.md` — GitHub Issues + Cursor CLI
+  planner/worker + Codex reviewer setup notes.
 - `.gitignore` — keeps local AO configs, runtime state, target repos, vendor
   checkouts, generated artifacts, and secrets out of Git.
 - `.github/workflows/scope-guard.yml` — CI skeleton for the second line of
@@ -169,11 +171,19 @@ agentRulesFile: prompts/agent_rules.md
 The example deliberately sets:
 
 - `defaults.runtime: process`
-- `defaults.agent: claude-code`
+- `defaults.agent: cursor`
+- role overrides so both planner/orchestrator and coder/worker use Cursor CLI
 - `defaults.workspace: worktree`
 - `defaults.notifiers: [desktop]`
+- explicit GitHub Issues tracker and GitHub SCM configuration
 - automatic handling for `ci-failed` and `changes-requested`
 - no auto-merge for `approved-and-green`
+
+Reviewer note: current upstream AO config schema directly exposes orchestrator and
+worker role overrides, but not a first-class `reviewer:` role field. Keep the
+requested Codex `gpt-5.5` reviewer upgrade-safe by wiring it through an external
+plugin/workflow or explicit Codex review session; do not add unsupported YAML
+fields and do not patch AO core.
 
 ## Start AO only with an explicit target repo
 

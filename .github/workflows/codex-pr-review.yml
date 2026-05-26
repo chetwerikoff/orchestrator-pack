@@ -1,0 +1,111 @@
+name: codex-pr-review
+
+# Reusable workflow — wire it into a target repo like this:
+#
+#   # .github/workflows/pr-review.yml  (in the target repository)
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     codex-review:
+#       uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
+#       secrets:
+#         codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+#
+# Required secret in the target repo: CODEX_AUTH_JSON
+#   Generate it locally (PowerShell):
+#     [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.codex\auth.json")) | clip
+#   Then paste the result as the secret value.
+#
+# The auth.json is issued by ChatGPT OAuth and contains a refresh token,
+# so it stays valid across runs. Re-export when you see 401 errors.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Codex model to use for review
+        required: false
+        type: string
+        default: gpt-5.5
+    secrets:
+      codex_auth_json:
+        required: true
+        description: Base64-encoded contents of ~/.codex/auth.json (ChatGPT OAuth credentials)
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  codex-review:
+    name: Codex ${{ inputs.model }} PR review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.base_ref }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Restore Codex OAuth credentials
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.codex_auth_json }}
+        run: |
+          mkdir -p ~/.codex
+          echo "$CODEX_AUTH_JSON" | base64 --decode > ~/.codex/auth.json
+          chmod 600 ~/.codex/auth.json
+
+      - name: Run Codex review
+        run: |
+          codex review \
+            --model "${{ inputs.model }}" \
+            --base "origin/${{ github.base_ref }}" \
+            > codex-review.md 2>&1 || true
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const model = '${{ inputs.model }}';
+
+            let review = '';
+            try {
+              review = fs.readFileSync('codex-review.md', 'utf8').trim();
+            } catch {
+              review = '_Codex review output not found._';
+            }
+            if (!review) review = '_Codex returned no findings._';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                `## Codex Review (${model})`,
+                '',
+                review,
+                '',
+                '---',
+                '_Automated review by Codex CLI · [orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack) · Never auto-merges_'
+              ].join('\n')
+            });
+
+      - name: Wipe OAuth credentials
+        if: always()
+        run: rm -f ~/.codex/auth.json

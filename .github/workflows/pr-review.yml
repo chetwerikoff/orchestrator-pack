@@ -1,0 +1,12 @@
+name: pr-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  codex-review:
+    uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
+    secrets:
+      codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}

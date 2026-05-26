@@ -9,6 +9,8 @@ Contract directories:
   denylist validation, amendments, and baseline state.
 - `ao-scope-guard` — DD-024 equivalent runtime guard plus PR-level CI backup.
 - `ao-token-chain-ledger` — cross-session `chain_id` cost/token accounting.
+- `ao-codex-pr-reviewer` — Codex `gpt-5.5` PR-review contract while planner and
+  worker roles remain on Cursor CLI.
 
 Implementation rules:
 

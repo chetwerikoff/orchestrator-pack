@@ -6,7 +6,11 @@ port: 3000
 
 defaults:
   runtime: process        # Windows: native process/ConPTY runtime; tmux is not required.
-  agent: claude-code
+  agent: cursor           # Primary agent plugin: Cursor CLI.
+  orchestrator:
+    agent: cursor         # Planner/orchestrator role: Cursor CLI.
+  worker:
+    agent: cursor         # Coding/worker role: Cursor CLI.
   workspace: worktree
   notifiers: [desktop]
 
@@ -16,7 +20,29 @@ projects:
     path: C:/Users/che/Documents/Projects/your-target-repo
     defaultBranch: main
     sessionPrefix: ex
+    tracker:
+      plugin: github      # Tasks are GitHub Issues by default/explicit config.
+    scm:
+      plugin: github
+    orchestrator:
+      agent: cursor
+    worker:
+      agent: cursor
     agentRulesFile: prompts/agent_rules.md
+    orchestratorRules: |
+      Use GitHub Issues as the task source of truth.
+      Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent,
+      and keep PRs linked back to their source issues with "Closes #N" or "Fixes #N".
+      Do not use Vibe Kanban or Linear for this project unless explicitly reconfigured.
+      Current AO stable config exposes orchestrator and worker role overrides; do not add
+      an unsupported reviewer field to the YAML. Codex/gpt-5.5 review should be wired via
+      an external review plugin/workflow or an explicit Codex review session, not by patching AO core.
+
+# Review model policy:
+# - Desired reviewer: Codex CLI with model gpt-5.5.
+# - Current upstream AO schema supports orchestrator and worker role config directly.
+# - Keep Codex reviewer integration upgrade-safe: implement it as an external plugin/workflow
+#   under plugins/** or CI, never as a packages/core patch.
 
 reactions:
   ci-failed:

@@ -1,7 +1,20 @@
-# Agent rules for orchestrator-pack
+# Agent Rules
 
 These rules are intended to be injected through Composio AO `agentRulesFile`.
-They are portable across AO-supported agents and must not rely on patched AO core.
+They must be portable across AO-supported agents and must not rely on local
+`ai-orchestrator` internals.
+
+## Tracker and role policy
+
+- GitHub Issues are the task source of truth for this pack's AO setup.
+- Treat every GitHub Issue assigned to AO as the task specification.
+- Link every branch and PR back to its source issue; PR bodies should include
+  `Closes #N`, `Fixes #N`, or an explicit issue reference as appropriate.
+- Planning and coding sessions are expected to run through the Cursor CLI agent
+  unless the AO config explicitly overrides the role.
+- Desired review model is Codex CLI with `gpt-5.5`, but do not invent unsupported
+  AO YAML fields for reviewers. Use only configured AO/plugin/CI review paths.
+- Do not use Vibe Kanban or Linear unless the config explicitly changes the tracker.
 
 ## Scope discipline
 
