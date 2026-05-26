@@ -71,8 +71,7 @@ jobs:
 
       - name: Run Codex review
         run: |
-          codex review \
-            --model "${{ inputs.model }}" \
+          codex --model "${{ inputs.model }}" review \
             --base "origin/${{ github.base_ref }}" \
             > codex-review.md 2>&1 || true
 

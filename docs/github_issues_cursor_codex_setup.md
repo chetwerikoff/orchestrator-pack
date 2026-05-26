@@ -55,7 +55,7 @@ The implemented path is a reusable GitHub Actions workflow:
 ```
 
 Authentication in CI uses ChatGPT OAuth credentials stored as `CODEX_AUTH_JSON`
-(base64-encoded `~/.codex/auth.json`). The workflow uses `codex review --base`
+(base64-encoded `~/.codex/auth.json`). The workflow uses `codex --model ... review --base`
 (Codex CLI's native review command) — no manual diff generation needed.
 
 One-time secret setup on local machine:
@@ -68,6 +68,10 @@ One-time secret setup on local machine:
 ```
 
 See `plugins/ao-codex-pr-reviewer/README.md` for the full wiring snippet.
+A copyable caller workflow template is also available at
+`docs/templates/codex-pr-review-caller.yml`; it is intentionally not kept under
+this repository's active `.github/workflows/` directory, because that would run
+against `orchestrator-pack` itself and fail when target-repo secrets are absent.
 
 Do not patch `packages/core/**` to add reviewer routing.
 
