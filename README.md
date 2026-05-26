@@ -1,3 +1,4 @@
+<!-- smoke-test: delete this line after AO pipeline is verified -->
 # orchestrator-pack
 
 Upgrade-safe safety pack for ComposioHQ Agent Orchestrator (AO).
