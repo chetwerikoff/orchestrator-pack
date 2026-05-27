@@ -5,6 +5,7 @@
   "exports": {
     "./lib/normalize.js": "./lib/normalize.ts",
     "./lib/issue_parser.js": "./lib/issue_parser.ts",
-    "./lib/declaration_schema.js": "./lib/declaration_schema.ts"
+    "./lib/declaration_schema.js": "./lib/declaration_schema.ts",
+    "./lib/git_fixture.js": "./lib/git_fixture.ts"
   }
 }
