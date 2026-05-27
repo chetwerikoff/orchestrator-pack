@@ -30,6 +30,7 @@ describe('scope-guard integration', () => {
   afterEach(() => {
     repo?.dispose();
     repo = undefined;
+    delete process.env.AO_SESSION_ID;
   });
 
   it('passes staged in-scope paths and blocks out-of-scope commits', () => {
@@ -107,6 +108,64 @@ describe('scope-guard integration', () => {
       issueNumber: 99,
       mode: 'index',
       iterationId: 'integration-test',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('resolves the latest declaration without an explicit iteration id', () => {
+    delete process.env.AO_SESSION_ID;
+
+    repo = createSyntheticGitRepo({
+      initialFiles: {
+        'plugins/demo/in-scope.txt': 'ok',
+      },
+    });
+
+    const baseline = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    }).trim();
+
+    writeDeclaration(repo.root, {
+      issue_number: 99,
+      iteration_id: 'stored-iteration',
+      iteration_id_source: 'wrapper_generated',
+      supersedes: null,
+      created_at: '2026-05-27T00:00:00.000Z',
+      baseline: {
+        commit_sha: baseline,
+        worktree_dirty: false,
+        active_scope_hash: 'sha256:integration',
+      },
+      declared_paths: ['plugins/demo/in-scope.txt'],
+      declared_globs: [],
+      amendments: [],
+    });
+
+    writeFileSync(join(repo.root, 'plugins/demo/in-scope.txt'), 'changed', 'utf8');
+    execFileSync('git', ['add', 'plugins/demo/in-scope.txt'], { cwd: repo.root });
+
+    const result = runScopeCheck({
+      repoRoot: repo.root,
+      issueNumber: 99,
+      mode: 'index',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('allows pure control-artifact worktree changes without baseline or declaration', () => {
+    repo = createSyntheticGitRepo({
+      initialFiles: { 'README.md': '# fixture\n' },
+    });
+
+    const snapshotPath = join(repo.root, 'docs/declarations/99.wrapper-test.json');
+    mkdirSync(dirname(snapshotPath), { recursive: true });
+    writeFileSync(snapshotPath, '{}\n', 'utf8');
+
+    const result = runScopeCheck({
+      repoRoot: repo.root,
+      issueNumber: 99,
+      mode: 'worktree',
     });
     expect(result.ok).toBe(true);
   });

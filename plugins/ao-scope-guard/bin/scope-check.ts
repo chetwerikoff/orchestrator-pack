@@ -3,18 +3,19 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
-import type { IterationIdSource } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import {
   checkScope,
   formatViolationReport,
   type ScopeCheckResult,
 } from '../lib/check.js';
 import { partitionControlArtifacts } from '../lib/control_artifacts.js';
-import { loadActiveDeclaration } from '../lib/declaration_loader.js';
+import { loadLatestActiveDeclaration } from '../lib/declaration_loader.js';
 import { resolveIssueDenylist } from '../lib/denylist.js';
 import { listStagedPaths } from '../lib/diff_index.js';
-import { listWorktreeChanges } from '../lib/diff_worktree.js';
+import {
+  listWorktreeChanges,
+  resolveWorktreeBaseline,
+} from '../lib/diff_worktree.js';
 
 export type ScopeCheckMode = 'index' | 'worktree';
 
@@ -33,33 +34,6 @@ function usage(): string {
     '                 [--iteration-id <id>]',
     '                 [--baseline <commit-sha>]',
   ].join('\n');
-}
-
-function resolveIterationId(
-  explicit: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): { iteration_id: string; iteration_id_source: IterationIdSource } {
-  if (explicit?.trim()) {
-    return {
-      iteration_id: explicit.trim(),
-      iteration_id_source: env.AO_SESSION_ID?.trim() ? 'ao_session' : 'wrapper_generated',
-    };
-  }
-
-  const sessionId = env.AO_SESSION_ID?.trim();
-  if (sessionId) {
-    return { iteration_id: sessionId, iteration_id_source: 'ao_session' };
-  }
-
-  const shortUuid = randomUUID().split('-')[0];
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}Z$/, 'Z');
-  return {
-    iteration_id: `wrap-${timestamp}-${shortUuid}`,
-    iteration_id_source: 'wrapper_generated',
-  };
 }
 
 function parseIssueNumber(raw: string | undefined): number {
@@ -126,42 +100,42 @@ export function parseScopeCheckArgs(argv: string[]): ScopeCheckOptions {
 }
 
 export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
-  const iteration = resolveIterationId(options.iterationId);
   const denylist = resolveIssueDenylist(options.repoRoot, options.issueNumber);
 
-  const declarationForBaseline =
-    options.mode === 'worktree' || options.baselineCommitSha
-      ? loadActiveDeclaration(
-          options.repoRoot,
-          options.issueNumber,
-          iteration.iteration_id,
-        )
-      : null;
-
-  const paths =
+  let paths =
     options.mode === 'index'
       ? listStagedPaths(options.repoRoot)
       : listWorktreeChanges(
           options.repoRoot,
           options.baselineCommitSha ??
-            declarationForBaseline?.baseline.commit_sha ??
-            (() => {
-              throw new Error(
-                'worktree mode requires --baseline or an active declaration with baseline.commit_sha',
-              );
-            })(),
+            resolveWorktreeBaseline(options.repoRoot, undefined, null),
         );
 
-  const { scoped } = partitionControlArtifacts(paths);
-  const declaration =
-    scoped.length === 0
-      ? null
-      : (declarationForBaseline ??
-        loadActiveDeclaration(
-          options.repoRoot,
-          options.issueNumber,
-          iteration.iteration_id,
-        ));
+  let { scoped } = partitionControlArtifacts(paths);
+  if (scoped.length === 0) {
+    return checkScope(paths, null, denylist);
+  }
+
+  const declaration = loadLatestActiveDeclaration(
+    options.repoRoot,
+    options.issueNumber,
+    options.iterationId,
+  );
+
+  if (
+    options.mode === 'worktree' &&
+    !options.baselineCommitSha &&
+    declaration?.baseline.commit_sha
+  ) {
+    paths = listWorktreeChanges(
+      options.repoRoot,
+      declaration.baseline.commit_sha,
+    );
+    ({ scoped } = partitionControlArtifacts(paths));
+    if (scoped.length === 0) {
+      return checkScope(paths, null, denylist);
+    }
+  }
 
   return checkScope(paths, declaration, denylist);
 }
