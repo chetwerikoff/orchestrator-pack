@@ -59,6 +59,26 @@ export type PrScopeCheckResult =
       unverifiedIssueConstraints?: boolean;
     };
 
+type PrPathSnapshotCheckResult =
+  | {
+      ok: true;
+      checkedPaths: string[];
+      skippedControlArtifacts: string[];
+    }
+  | {
+      ok: false;
+      reason: 'scope_violation' | 'invalid_path';
+      message: string;
+      violations: {
+        outOfScope: string[];
+        denied: string[];
+        declarationErrors: string[];
+        invalidPaths: Array<{ path: string; reason: string }>;
+      };
+      checkedPaths: string[];
+      skippedControlArtifacts: string[];
+    };
+
 interface LoadedSnapshot {
   iterationId: string;
   snapshot: DeclarationSnapshot;
@@ -256,10 +276,7 @@ function pathInDeclaredScope(
 function checkPrPathsAgainstSnapshot(
   prPaths: string[],
   snapshot: DeclarationSnapshot,
-): Pick<PrScopeCheckResult, 'ok' | 'violations' | 'message' | 'reason'> & {
-  checkedPaths?: string[];
-  skippedControlArtifacts?: string[];
-} {
+): PrPathSnapshotCheckResult {
   const { control, scoped } = partitionControlArtifacts(prPaths);
   const outOfScope: string[] = [];
   const invalidPaths: Array<{ path: string; reason: string }> = [];
@@ -390,8 +407,8 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   if (!pathCheck.ok) {
     return {
       ok: false,
-      reason: pathCheck.reason!,
-      message: pathCheck.message!,
+      reason: pathCheck.reason,
+      message: pathCheck.message,
       violations: pathCheck.violations,
       unverifiedIssueConstraints,
     };
@@ -400,8 +417,8 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   return {
     ok: true,
     snapshot,
-    checkedPaths: pathCheck.checkedPaths ?? [],
-    skippedControlArtifacts: pathCheck.skippedControlArtifacts ?? [],
+    checkedPaths: pathCheck.checkedPaths,
+    skippedControlArtifacts: pathCheck.skippedControlArtifacts,
     unverifiedIssueConstraints,
     warnings,
   };

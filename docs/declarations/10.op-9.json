@@ -7,13 +7,31 @@
   "baseline": {
     "commit_sha": "1ed9b0a9a7889f29b5f9e45f5fbce42317daf9f3",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:6c4fb7c4c8be357d314432d26a250063d534c6dc24c950eb1b85134f9c4e5313"
+    "active_scope_hash": "sha256:10c23241a4cbe415eb3789d0b97fc67dd0f30b5fd4a5f7d8e3a3bf553af831b4"
   },
   "declared_paths": [
     "docs/target_repo_setup.md",
     "docs/issue_template_example.md",
-    "README.md"
+    "README.md",
+    "scripts/pr-scope-check.ts",
+    "tsconfig.base.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6c4fb7c4c8be357d314432d26a250063d534c6dc24c950eb1b85134f9c4e5313",
+      "new_active_scope_hash": "sha256:10c23241a4cbe415eb3789d0b97fc67dd0f30b5fd4a5f7d8e3a3bf553af831b4",
+      "changed": {
+        "added": [
+          "scripts/pr-scope-check.ts",
+          "tsconfig.base.json"
+        ],
+        "removed": []
+      },
+      "reason": "Fix pr-scope-check TypeScript types per review op-rev-3",
+      "actor": "op-9",
+      "timestamp": "2026-05-27T16:57:30.642Z",
+      "applied": true
+    }
+  ]
 }
