@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue uses `chain_id`
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue uses `chain_id`
 distinct from `iteration_id`: a chain may contain multiple iterations
 (re-runs after CI fail), but the ledger aggregates by chain.
 

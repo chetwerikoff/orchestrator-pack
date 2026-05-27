@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue implements
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue implements
 guard layer 3 from #3.C and enforces the validation formula from #3.A on the
 server side.
 

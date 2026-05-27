@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue implements
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue implements
 guard layers 1 and 2 from #3.C and consumes the declaration mirror written by
 #4.
 

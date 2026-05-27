@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue runs in parallel
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue runs in parallel
 with #3 but lands **before #4** so the first plugin implementation lands into a
 working test runner.
 

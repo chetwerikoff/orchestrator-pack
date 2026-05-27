@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue uses the
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue uses the
 two-level model from #3.A (issue body = constraints, snapshot = active scope),
 the iteration identity rule from #3.B, the baseline format from #3.D, and the
 shared package location from #3.E.

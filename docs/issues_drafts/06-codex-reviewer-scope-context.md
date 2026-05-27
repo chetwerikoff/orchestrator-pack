@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions, #6 (CI PR diff validator), and #8 (ledger
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`), #6 (CI PR diff validator), and #8 (ledger
 event schema) must be merged. This issue reuses the same snapshot path
 (`docs/declarations/{issue_number}.{iteration_id}.json`), issue-parsing helper
 from `_shared`, and structured finding format from #3.F.
@@ -65,6 +65,8 @@ format. GitHub Actions review must not define an independent schema.
   includes a non-blocking warning finding.
 - Codex auth flow for the optional GitHub Actions path remains unchanged
   (`CODEX_AUTH_JSON` when that path is used).
+- Local AO path inherits Codex CLI auth from the user's environment
+  (`codex login` state); no repository secret required.
 - No additional repository secrets introduced.
 
 ## Upgrade-safety check

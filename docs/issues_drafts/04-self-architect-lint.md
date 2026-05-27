@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions must be merged. This issue does not
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue does not
 depend on the declaration model but is sequenced after #4–#6 to avoid
 churning lint rules while the core safety contracts settle.
 

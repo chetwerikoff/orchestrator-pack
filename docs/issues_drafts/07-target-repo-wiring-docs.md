@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Issue #3 — Architecture decisions, #4, #5, and #6 must be
+Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`), #4, #5, and #6 must be
 merged. This issue documents the user-facing flow that those implement.
 
 ## Goal

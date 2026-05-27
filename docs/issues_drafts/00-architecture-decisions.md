@@ -169,7 +169,7 @@ and finding format.
 Shared review artifacts:
 
 - `prompts/codex_review_prompt.md` — one prompt contract for local and GitHub
-  Actions Codex review paths.
+  Actions Codex review paths. Created under issue #9.
 - `_shared/issue_parser` — reads `denylist` and optional `allowed_roots`.
 - `_shared/declaration_schema` — validates committed declaration snapshots.
 - Snapshot reader — selects the active `docs/declarations/{issue}.{iteration}.json`.
