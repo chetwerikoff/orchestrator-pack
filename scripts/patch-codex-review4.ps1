@@ -92,9 +92,12 @@ if ($content.Contains($OldPattern)) {
     exit 0
 }
 
-# Chunk exists but neither pattern matched - likely upstream layout changed or fix shipped differently.
-if ($content -match 'exec","review"') {
-    Write-NoOp 'review chunk already uses codex exec review (upstream or prior patch).'
+# Partial fix: review subcommand present but Windows shell splitting bug remains.
+if ($content -match 'exec","review"' -and $content -match 'shell:w\(\)') {
+    Write-Host 'patch-codex-review4.ps1: review chunk looks partially patched (exec review present, shell:w() still used).'
+    Write-Host "File: $chunkPath"
+    Write-Host 'Expected the full patched invocation (shell:false). Reinstall AO 0.9.2 and re-run this script.'
+    exit 1
 }
 
 Write-Host 'patch-codex-review4.ps1: expected patch patterns not found in review chunk.'
