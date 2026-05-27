@@ -31,17 +31,21 @@ Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
 4. **Files in scope** — coarse-grained directories or specific new files.
    Mark new files `(new)`. Avoid prescribing function names / signatures.
 5. **Files out of scope** — explicit list.
-6. **Denylist** — mandatory fenced block:
-   ```
-   ` ``denylist
+6. **Denylist** — mandatory fenced block, opened with three backticks then
+   `denylist`, one path per line, closed with three backticks:
+
+   ````markdown
+   ```denylist
    vendor/**
    packages/core/**
    .ao/**
-   ` ``
    ```
-   `_shared/issue_parser` consumes this verbatim. Always include `vendor/**`
-   and `packages/core/**`. Add `allowed_roots` fence when the task should
-   stay inside a subtree.
+   ````
+
+   `_shared/issue_parser` matches this fence with the regex
+   `` ```(denylist|allowed-roots) `` — only literal triple-backtick fences
+   parse. Always include `vendor/**` and `packages/core/**`. Add an
+   ` ```allowed-roots ` fence when the task should stay inside a subtree.
 7. **Acceptance criteria** — observable, testable bullets. Each one provable
    without reading Claude's mind. Avoid "review by Claude" or "looks good."
 8. **Upgrade-safety check** — explicit invariants (no AO core / vendor edits,
