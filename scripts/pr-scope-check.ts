@@ -63,7 +63,8 @@ interface LoadedSnapshot {
 }
 
 export function extractLinkedIssueNumber(prBody: string): number | null {
-  const matches = [...prBody.matchAll(ISSUE_LINK_PATTERN)];
+  const normalizedBody = prBody.replace(/^\uFEFF/, '').trim();
+  const matches = [...normalizedBody.matchAll(ISSUE_LINK_PATTERN)];
   if (matches.length === 0) {
     return null;
   }

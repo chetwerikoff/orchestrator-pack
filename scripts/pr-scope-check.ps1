@@ -40,11 +40,27 @@ function Format-ScopeGuardComment {
     }
 }
 
+function Normalize-PrBody {
+    param([string]$Body)
+
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        return ''
+    }
+
+    $text = $Body.Trim()
+    if ($text.Length -gt 0 -and [int][char]$text[0] -eq 0xFEFF) {
+        $text = $text.Substring(1)
+    }
+
+    return $text
+}
+
 function Get-LinkedIssueNumber {
     param([string]$PrBody)
 
+    $normalizedBody = Normalize-PrBody -Body $PrBody
     $matches = [regex]::Matches(
-        $PrBody,
+        $normalizedBody,
         '\b(?:closes|fixes)\s+#(\d+)\b',
         [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
     )
@@ -113,8 +129,14 @@ if (-not $prNumber -or -not $repository) {
     Write-Error 'PR_NUMBER and GITHUB_REPOSITORY are required for pr-scope-check.ps1'
 }
 
-$prJson = gh pr view $prNumber --json body | ConvertFrom-Json
-$prBody = [string]$prJson.body
+if (Test-Path Env:PR_BODY) {
+    $prBody = Normalize-PrBody -Body $env:PR_BODY
+}
+else {
+    $prJson = gh pr view $prNumber --json body | ConvertFrom-Json
+    $prBody = Normalize-PrBody -Body ([string]$prJson.body)
+}
+
 $issueNumber = Get-LinkedIssueNumber -PrBody $prBody
 
 if (-not $issueNumber) {
