@@ -6,7 +6,7 @@ import { createSyntheticGitRepo } from '@orchestrator-pack/shared/lib/git_fixtur
 import { runScopeCheck } from '../bin/scope-check.js';
 import { resolveWrapScopeBaseline, runAgentWrap } from '../bin/agent-wrap.js';
 
-describe('agent-wrap baseline handling', () => {
+describe('agent-wrap baseline handling', { timeout: 15_000 }, () => {
   let repo: ReturnType<typeof createSyntheticGitRepo> | undefined;
 
   afterEach(() => {

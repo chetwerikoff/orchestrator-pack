@@ -21,12 +21,20 @@ function normalizeDenylistPatterns(patterns: string[]): string[] {
   return normalized;
 }
 
+/** Max time to wait for gh when resolving issue denylist (ms). */
+const GH_ISSUE_VIEW_TIMEOUT_MS = 3_000;
+
 function fetchIssueDenylist(repoRoot: string, issueNumber: number): string[] | null {
   try {
     const output = execFileSync(
       'gh',
       ['issue', 'view', String(issueNumber), '--json', 'body'],
-      { encoding: 'utf8', cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        encoding: 'utf8',
+        cwd: repoRoot,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: GH_ISSUE_VIEW_TIMEOUT_MS,
+      },
     );
     const parsed = JSON.parse(output) as { body?: string };
     if (typeof parsed.body !== 'string') {

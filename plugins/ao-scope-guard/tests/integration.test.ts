@@ -24,7 +24,7 @@ function writeDeclaration(repoRoot: string, snapshot: DeclarationSnapshot): void
   );
 }
 
-describe('scope-guard integration', () => {
+describe('scope-guard integration', { timeout: 15_000 }, () => {
   let repo: ReturnType<typeof createSyntheticGitRepo> | undefined;
 
   afterEach(() => {
