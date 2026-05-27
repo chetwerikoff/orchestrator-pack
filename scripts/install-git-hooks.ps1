@@ -60,6 +60,16 @@ if ($InstallScopeGuard) {
         exit 1
     }
 
+    if (Test-Path -LiteralPath $scopeGuardHookPath -PathType Leaf) {
+        $existing = Get-Content -LiteralPath $scopeGuardHookPath -Raw
+        if ($existing -notlike "*$scopeGuardMarker*") {
+            Write-Host "Refusing to install scope-guard pre-commit hook: $scopeGuardHookPath already exists and is not managed by orchestrator-pack." -ForegroundColor Red
+            Write-Host 'Back up the existing hook, remove it manually, or chain the scope-guard call into your hook yourself.'
+            Write-Host 'Re-run with -UninstallScopeGuard only after replacing the hook with the managed version.'
+            exit 1
+        }
+    }
+
     $scopeHook = @(
         '#!/usr/bin/env sh'
         'set -eu'

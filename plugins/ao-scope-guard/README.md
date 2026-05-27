@@ -90,7 +90,8 @@ Remove the hook:
 ```
 
 The installer is idempotent: re-running `-InstallScopeGuard` replaces the managed
-hook with the same content.
+hook with the same content. If an unmanaged `pre-commit` hook already exists,
+installation is refused so local checks are not silently removed.
 
 ### Bypass with justification
 
@@ -114,8 +115,9 @@ node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `
 ```
 
 On success the wrapper runs `scope-check --mode worktree`, diffing the working
-tree against `baseline.commit_sha` from the active declaration. On violation it
-exits non-zero and refuses to proceed.
+tree against the active declaration baseline when one exists, otherwise against
+the repository `HEAD` captured immediately before the wrapped command starts.
+On violation it exits non-zero and refuses to proceed.
 
 Environment variables:
 

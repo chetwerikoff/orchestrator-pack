@@ -1,9 +1,11 @@
 #!/usr/bin/env tsx
 
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { formatViolationReport } from '../lib/check.js';
+import { loadLatestActiveDeclaration } from '../lib/declaration_loader.js';
 import { parseScopeCheckArgs, runScopeCheck } from './scope-check.js';
 
 interface WrapOptions {
@@ -12,6 +14,26 @@ interface WrapOptions {
   iterationId?: string;
   baselineCommitSha?: string;
   command: string[];
+}
+
+function resolveRepoHead(repoRoot: string): string {
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+export function resolveWrapScopeBaseline(
+  options: WrapOptions,
+  preRunBaseline: string,
+  declaration: DeclarationSnapshot | null,
+): string {
+  return (
+    options.baselineCommitSha ??
+    declaration?.baseline.commit_sha ??
+    preRunBaseline
+  );
 }
 
 function usage(): string {
@@ -51,6 +73,8 @@ export function runAgentWrap(options: WrapOptions): number {
     throw new Error(`agent command is required after --\n${usage()}`);
   }
 
+  const preRunBaseline = resolveRepoHead(options.repoRoot);
+
   const child = spawnSync(executable, args, {
     cwd: options.repoRoot,
     stdio: 'inherit',
@@ -65,12 +89,22 @@ export function runAgentWrap(options: WrapOptions): number {
     return child.status ?? 1;
   }
 
+  const declaration = loadLatestActiveDeclaration(
+    options.repoRoot,
+    options.issueNumber,
+    options.iterationId,
+  );
+
   const scopeResult = runScopeCheck({
     repoRoot: options.repoRoot,
     issueNumber: options.issueNumber,
     mode: 'worktree',
     iterationId: options.iterationId,
-    baselineCommitSha: options.baselineCommitSha,
+    baselineCommitSha: resolveWrapScopeBaseline(
+      options,
+      preRunBaseline,
+      declaration,
+    ),
   });
 
   if (!scopeResult.ok) {
