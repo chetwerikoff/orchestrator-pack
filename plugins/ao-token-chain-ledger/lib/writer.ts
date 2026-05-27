@@ -262,8 +262,8 @@ export function prepareLedgerRow(
     iteration_id: partial.iteration_id ?? env.AO_ITERATION_ID ?? null,
     session_id:
       partial.session_id ??
-      sessionIdFromSessionInfo(sessionInfo) ??
       env.AO_SESSION_ID?.trim() ??
+      sessionIdFromSessionInfo(sessionInfo) ??
       null,
     parent_session_id: parent.parent_session_id,
     parent_session_id_source: parent.parent_session_id_source,
