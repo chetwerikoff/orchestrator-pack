@@ -1,0 +1,16 @@
+{
+  "name": "@orchestrator-pack/ao-scope-guard",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "scope-check": "./bin/scope-check.ts",
+    "agent-wrap": "./bin/agent-wrap.ts"
+  },
+  "dependencies": {
+    "@orchestrator-pack/shared": "*",
+    "tsx": "^4.8.1"
+  },
+  "scripts": {
+    "test": "npm --prefix ../.. run test -- plugins/ao-scope-guard/tests"
+  }
+}
