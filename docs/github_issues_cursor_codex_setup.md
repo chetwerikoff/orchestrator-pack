@@ -41,37 +41,36 @@ Meaning:
 
 ## Reviewer policy
 
-Desired reviewer: Codex CLI with model `gpt-5.5`, authenticated via **ChatGPT OAuth**.
+Reviewer: Codex CLI, authenticated via **ChatGPT OAuth** (`codex login`).
 
 The current upstream AO schema exposes `orchestrator` and `worker` role overrides,
-but not a stable first-class `reviewer:` YAML role. Do not add unsupported YAML
-keys just to express reviewer routing; schema-valid config is more important for
-upgrade safety.
+but not a stable first-class `reviewer:` YAML role. Review is handled through
+AO's built-in Codex review mechanism, not via an unsupported YAML key.
 
-The implemented path is a reusable GitHub Actions workflow:
+### Primary path — AO built-in local review
 
-```
-.github/workflows/codex-pr-review.yml
-```
+AO 0.9.2 includes a built-in Codex review pipeline. When a worker session creates
+a PR, AO automatically calls `codex exec review` **on the local machine** and
+shows results in the dashboard Reviews board.
 
-Authentication in CI uses ChatGPT OAuth credentials stored as `CODEX_AUTH_JSON`
-(base64-encoded `~/.codex/auth.json`). The workflow uses `codex --model ... review --base`
-(Codex CLI's native review command) — no manual diff generation needed.
-
-One-time secret setup on local machine:
+On Windows with AO 0.9.2, this is broken upstream (wrong subcommand + Windows
+shell argument splitting). Apply the patch once after installing AO:
 
 ```powershell
-[Convert]::ToBase64String(
-  [IO.File]::ReadAllBytes("$env:USERPROFILE\.codex\auth.json")
-) | clip
-# Paste the clipboard value as CODEX_AUTH_JSON in the target repo settings.
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
 ```
 
-See `plugins/ao-codex-pr-reviewer/README.md` for the full wiring snippet.
-A copyable caller workflow template is also available at
-`docs/templates/codex-pr-review-caller.yml`; it is intentionally not kept under
-this repository's active `.github/workflows/` directory, because that would run
-against `orchestrator-pack` itself and fail when target-repo secrets are absent.
+Re-run this after every `npm install -g @aoagents/ao` upgrade.
+
+Prerequisites: Codex CLI installed and authenticated (`codex login`).
+
+### Alternative path — GitHub Actions CI review
+
+A reusable workflow at `.github/workflows/codex-pr-review.yml` runs Codex in CI
+and can post review findings as GitHub PR comments. Useful when you want review
+output visible on the GitHub PR rather than only in the local AO dashboard.
+
+See `plugins/ao-codex-pr-reviewer/README.md` for the full wiring and secret setup.
 
 Do not patch `packages/core/**` to add reviewer routing.
 

@@ -1,13 +1,10 @@
 # AO Codex PR Reviewer
 
-Contract stub for an upgrade-safe Codex reviewer integration.
+Contract and implementation notes for Codex reviewer integration with AO.
 
 ## Goal
 
-Run PR-level review with Codex CLI using model `gpt-5.5` while AO planning and
-coding stay on Cursor CLI.
-
-This is a contract only. It must not patch AO core; it is a no core patch design.
+Run PR-level review with Codex CLI while AO planning and coding stay on Cursor CLI.
 
 ## Boundaries
 
@@ -15,24 +12,48 @@ This is a contract only. It must not patch AO core; it is a no core patch design
 - Source of truth for merge readiness: GitHub PR review state + CI.
 - Planner/orchestrator: Cursor CLI via AO `orchestrator.agent: cursor`.
 - Coder/worker: Cursor CLI via AO `worker.agent: cursor`.
-- Reviewer: Codex CLI, model `gpt-5.5`, via external plugin/workflow/session.
+- Reviewer: Codex CLI, via AO's built-in review mechanism (primary) or GitHub
+  Actions workflow (alternative for CI-based review).
 
-## Required behavior
+## How review works
 
-A future implementation should:
+### Primary path — AO built-in local review (WORKING)
 
-1. Detect PRs created by AO sessions.
-2. Read the linked GitHub Issue and declared scope.
-3. Run Codex review with model `gpt-5.5` against the PR diff.
-4. Report findings as GitHub PR review comments or a summarized PR comment.
-5. Never auto-merge.
-6. Never mutate source files during review.
-7. Respect the same declared scope / denylist metadata as `ao-scope-guard`.
-8. Avoid printing or committing secrets.
+AO has a built-in Codex review mechanism. When a PR is created by an AO worker
+session, AO automatically calls Codex CLI **locally** on the developer's machine
+using `codex exec review`. Results appear in the AO dashboard under "Reviews".
 
-## Implementation paths
+Review lifecycle:
+1. Worker session opens a PR.
+2. AO detects the PR and triggers review automatically (or via the Review button).
+3. AO calls `codex exec review` with the PR files on the local machine.
+4. Findings are shown in the AO dashboard Reviews board.
 
-### GitHub Actions path — IMPLEMENTED
+Prerequisites for this path:
+- Codex CLI installed (`npm install -g @openai/codex`)
+- Codex authenticated (`codex login`)
+- AO 0.9.2 Windows patch applied (see below)
+
+#### Windows fix for AO 0.9.2
+
+AO 0.9.2 has two upstream bugs on Windows that break the built-in review:
+1. Wrong subcommand: calls `codex exec --sandbox read-only` instead of `codex exec review`
+2. `shell: true` causes Windows to split multi-word arguments incorrectly
+
+Apply the patch before running AO:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
+```
+
+The script patches the bundled Next.js chunk in:
+```
+%APPDATA%\npm\node_modules\@aoagents\ao\node_modules\@aoagents\ao-web\.next\server\chunks\4148.js
+```
+
+Re-run after every `npm install -g @aoagents/ao` upgrade.
+
+### Alternative path — GitHub Actions CI review
 
 A reusable workflow is provided at:
 
@@ -40,9 +61,12 @@ A reusable workflow is provided at:
 .github/workflows/codex-pr-review.yml
 ```
 
-Authentication: Codex CLI **ChatGPT OAuth** (`~/.codex/auth.json`). The file is
-base64-encoded and stored as a repository secret `CODEX_AUTH_JSON`. The workflow
-restores it before review and wipes it after. No API key required.
+This runs Codex in GitHub Actions CI (not locally) and can post findings as
+GitHub PR comments. Authentication uses ChatGPT OAuth credentials stored as the
+`CODEX_AUTH_JSON` repository secret.
+
+Use this path if you want review results visible on the GitHub PR rather than
+only in the local AO dashboard.
 
 **One-time secret setup (PowerShell, local machine):**
 
@@ -53,10 +77,7 @@ restores it before review and wipes it after. No API key required.
 # Paste the clipboard value as the CODEX_AUTH_JSON secret in the target repo.
 ```
 
-Re-export when you see 401 errors in CI (OAuth token rotated). Re-run
-`codex login` locally first, then repeat the export.
-
-To wire the workflow into a target repository, add this file in the target repo:
+Caller workflow for a target repository:
 
 ```yaml
 # .github/workflows/pr-review.yml  (in the target repository)
@@ -76,26 +97,20 @@ jobs:
       codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
 ```
 
-Optional inputs:
-
-| Input | Default | Description |
-|-------|---------|-------------|
-| `model` | `gpt-5.5` | Codex model name |
-
 ### AO external plugin path
 
-If upstream AO exposes a stable review/pipeline plugin API, implement this under
-`plugins/ao-codex-pr-reviewer/` and register it through `agent-orchestrator.yaml`.
-
-### Explicit session path
-
-Until a stable reviewer role exists in AO config, a human can explicitly run a
-Codex review session for a PR. This should be documented as an operational step,
-not hidden in unsupported YAML fields.
+If upstream AO exposes a stable review/pipeline plugin API in a future version,
+implement this under `plugins/ao-codex-pr-reviewer/` and register it through
+`agent-orchestrator.yaml`.
 
 ## Non-goals
 
 - Do not add unsupported `reviewer:` keys to `agent-orchestrator.yaml`.
-- Do not patch `packages/core/**`.
-- Do not make Vibe Kanban or Linear mandatory.
+- Do not patch `packages/core/**` in any vendored AO checkout. This is a no core patch design.
 - Do not store API keys, tokens, or model credentials in this repository.
+
+## Contract markers
+
+- Reviewer: Codex CLI (default model `gpt-5.5`)
+- Trigger: PR review against GitHub Issues-linked PRs
+- Constraint: no core patch — AO core is never modified by this plugin
