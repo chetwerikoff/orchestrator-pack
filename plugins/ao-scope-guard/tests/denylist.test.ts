@@ -20,6 +20,22 @@ describe('resolveIssueDenylist', () => {
       throw new Error('gh unavailable');
     });
 
+    const previous = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      expect(resolveIssueDenylist('.', 99)).toEqual([...FALLBACK_DENYLIST]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = previous;
+      }
+    }
+  });
+
+  it('skips gh lookup under vitest and uses the fallback denylist', () => {
+    process.env.VITEST = 'true';
     expect(resolveIssueDenylist('.', 99)).toEqual([...FALLBACK_DENYLIST]);
+    expect(execFileSync).not.toHaveBeenCalled();
   });
 });

@@ -24,7 +24,16 @@ function normalizeDenylistPatterns(patterns: string[]): string[] {
 /** Max time to wait for gh when resolving issue denylist (ms). */
 const GH_ISSUE_VIEW_TIMEOUT_MS = 3_000;
 
+function shouldSkipGhIssueLookup(): boolean {
+  // Vitest sets VITEST=true; avoid slow/flaky gh calls in contract tests.
+  return process.env.VITEST === 'true' || process.env.AO_SCOPE_GUARD_SKIP_GH === '1';
+}
+
 function fetchIssueDenylist(repoRoot: string, issueNumber: number): string[] | null {
+  if (shouldSkipGhIssueLookup()) {
+    return null;
+  }
+
   try {
     const output = execFileSync(
       'gh',
