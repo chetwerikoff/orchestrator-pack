@@ -41,6 +41,21 @@ describe('validateDeclaredScope', () => {
     }
   });
 
+  it('accepts declared paths under directory-style allowed_roots entries', () => {
+    const result = validateDeclaredScope(
+      {
+        declared_paths: ['plugins/ao-task-declaration/lib/validate.ts'],
+        declared_globs: [],
+      },
+      {
+        denylist: ['vendor/**'],
+        allowed_roots: ['plugins/ao-task-declaration'],
+      },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it('rejects declared paths outside allowed_roots when present', () => {
     const result = validateDeclaredScope(
       {

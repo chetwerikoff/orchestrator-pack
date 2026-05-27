@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$InstallScopeGuard,
+    [switch]$UninstallScopeGuard
+)
 
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -29,6 +32,64 @@ if (-not [System.IO.Path]::IsPathRooted($gitDir)) {
 
 $hooksDir = Join-Path $gitDir 'hooks'
 New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+$scopeGuardMarker = '# orchestrator-pack ao-scope-guard pre-commit'
+$scopeGuardHookPath = Join-Path $hooksDir 'pre-commit'
+$scopeGuardSource = Join-Path $Root 'plugins/ao-scope-guard/hooks/pre-commit'
+
+if ($UninstallScopeGuard) {
+    if (Test-Path -LiteralPath $scopeGuardHookPath -PathType Leaf) {
+        $existing = Get-Content -LiteralPath $scopeGuardHookPath -Raw
+        if ($existing -like "*$scopeGuardMarker*") {
+            Remove-Item -LiteralPath $scopeGuardHookPath -Force
+            Write-Host "Removed scope-guard pre-commit hook: $scopeGuardHookPath"
+        }
+        else {
+            Write-Host "pre-commit hook exists but is not managed by orchestrator-pack; left unchanged."
+        }
+    }
+    else {
+        Write-Host 'No pre-commit hook to remove.'
+    }
+}
+
+if ($InstallScopeGuard) {
+    if (-not (Test-Path -LiteralPath $scopeGuardSource -PathType Leaf)) {
+        Write-Host "Scope-guard hook source not found: $scopeGuardSource"
+        exit 1
+    }
+
+    if (Test-Path -LiteralPath $scopeGuardHookPath -PathType Leaf) {
+        $existing = Get-Content -LiteralPath $scopeGuardHookPath -Raw
+        if ($existing -notlike "*$scopeGuardMarker*") {
+            Write-Host "Refusing to install scope-guard pre-commit hook: $scopeGuardHookPath already exists and is not managed by orchestrator-pack." -ForegroundColor Red
+            Write-Host 'Back up the existing hook, remove it manually, or chain the scope-guard call into your hook yourself.'
+            Write-Host 'Re-run with -UninstallScopeGuard only after replacing the hook with the managed version.'
+            exit 1
+        }
+    }
+
+    $scopeHook = @(
+        '#!/usr/bin/env sh'
+        'set -eu'
+        $scopeGuardMarker
+        'ROOT="$(git rev-parse --show-toplevel)"'
+        'exec "$ROOT/plugins/ao-scope-guard/hooks/pre-commit"'
+    ) -join "`n"
+
+    [System.IO.File]::WriteAllText($scopeGuardHookPath, $scopeHook.Replace("`r`n", "`n"), $utf8NoBom)
+
+    if (Get-Command chmod -ErrorAction SilentlyContinue) {
+        & chmod +x $scopeGuardHookPath | Out-Null
+        & chmod +x $scopeGuardSource | Out-Null
+    }
+
+    Write-Host "Installed scope-guard pre-commit hook: $scopeGuardHookPath"
+    Write-Host 'Set AO_ISSUE_NUMBER in the environment before committing.'
+    Write-Host 'Re-run with -UninstallScopeGuard to remove the hook.'
+}
+
 $hookPath = Join-Path $hooksDir 'pre-push'
 
 $hook = @'
@@ -44,7 +105,6 @@ fi
 "$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/check-reusable.ps1"
 '@
 
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($hookPath, $hook.Replace("`r`n", "`n"), $utf8NoBom)
 
 if (Get-Command chmod -ErrorAction SilentlyContinue) {
@@ -53,3 +113,6 @@ if (Get-Command chmod -ErrorAction SilentlyContinue) {
 
 Write-Host "Installed pre-push hook: $hookPath"
 Write-Host 'The hook runs scripts/verify.ps1 and scripts/check-reusable.ps1 before every push.'
+if (-not $InstallScopeGuard) {
+    Write-Host 'Pass -InstallScopeGuard to also install the ao-scope-guard pre-commit hook.'
+}

@@ -60,3 +60,105 @@ guarding because an agent can mutate the working tree and index before CI runs.
 
 Implement as wrapper/hook/CI/plugin integration. Do not patch Composio AO
 `packages/core/`.
+
+## Runtime installation (layers 1 and 2)
+
+Layer 3 (PR-level CI) lives in `.github/workflows/scope-guard.yml` (#6) and
+remains the **second line** at merge time. Local enforcement uses the agent
+wrapper first, then the pre-commit hook.
+
+### Pre-commit hook (layer 2)
+
+Opt-in via the pack installer in a **target repository** (not enabled by default
+in the pack itself):
+
+```powershell
+.\scripts\install-git-hooks.ps1 -InstallScopeGuard
+```
+
+Requirements:
+
+- `AO_ISSUE_NUMBER` must be set to the active GitHub Issue number.
+- `AO_SESSION_ID` should be set when running under AO; otherwise the wrapper
+  generates a wrapper iteration id.
+- The hook invokes `scope-check --mode index` against staged paths.
+
+Remove the hook:
+
+```powershell
+.\scripts\install-git-hooks.ps1 -UninstallScopeGuard
+```
+
+The installer is idempotent: re-running `-InstallScopeGuard` replaces the managed
+hook with the same content. If an unmanaged `pre-commit` hook already exists,
+installation is refused so local checks are not silently removed.
+
+### Bypass with justification
+
+For emergency commits, set `AO_SCOPE_GUARD_BYPASS` to a short reason before
+committing. Document the same reason in the commit message or PR. Bypass is
+local only; PR CI (#6) still enforces scope.
+
+```powershell
+$env:AO_SCOPE_GUARD_BYPASS = "hotfix: unblock CI while declaration is regenerated"
+git commit -m "..."
+```
+
+### Agent wrapper (layer 1)
+
+Wrap cursor/codex invocations so scope is checked after each agent turn:
+
+```powershell
+node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `
+  --issue 5 `
+  -- cursor agent ...
+```
+
+On success the wrapper runs `scope-check --mode worktree`, diffing the working
+tree against the active declaration baseline when one exists, otherwise against
+the repository `HEAD` captured immediately before the wrapped command starts.
+On violation it exits non-zero and refuses to proceed.
+
+Environment variables:
+
+- `AO_ISSUE_NUMBER` — issue number when `--issue` is omitted
+- `AO_SESSION_ID` — iteration id under AO
+
+### scope-check CLI
+
+Direct invocation (used by the hook and wrapper):
+
+```powershell
+node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `
+  --issue 5 `
+  --mode index
+
+node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `
+  --issue 5 `
+  --mode worktree `
+  --iteration-id <id>
+```
+
+Declaration resolution order:
+
+1. `.ao/declarations/{issue}.{iteration}.json` mirror (runtime)
+2. `docs/declarations/{issue}.{iteration}.json` committed snapshot
+
+If neither exists and the change set is **not** pure control artifacts, the
+check fails with a structured JSON report on stderr.
+
+### Control-artifact exclusion
+
+These paths are always allowed and never reported as violations (hardcoded):
+
+- `docs/declarations/**` — committed declaration snapshots
+- `.ao/**` — gitignored runtime mirror/state
+
+**Pure control-artifact policy:** when every changed path is a control artifact,
+scope check exits 0 even without an active declaration.
+
+**Mixed policy:** control-artifact paths are skipped; remaining paths require an
+active declaration. No declaration → reject.
+
+Violations emit exit code 1 and a structured JSON report listing out-of-scope,
+denied, and invalid paths plus the active scope hash used for the decision.

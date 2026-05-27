@@ -81,10 +81,15 @@ export function validateDeclaredScope(
       );
     }
 
-    if (allowedRoots !== undefined && !pathMatchesAnyPattern(path, allowedRoots)) {
-      errors.push(
-        `declared_paths[${index}] "${path}" is outside issue allowed_roots`,
+    if (allowedRoots !== undefined) {
+      const withinRoot = allowedRoots.some((root) =>
+        globIsWithinAllowedRoot(path, root),
       );
+      if (!withinRoot) {
+        errors.push(
+          `declared_paths[${index}] "${path}" is outside issue allowed_roots`,
+        );
+      }
     }
   }
 

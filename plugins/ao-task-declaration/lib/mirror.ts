@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
@@ -15,6 +15,37 @@ export function mirrorAbsolutePath(
   iterationId: string,
 ): string {
   return join(repoRoot, mirrorRelativePath(issueNumber, iterationId));
+}
+
+function iterationIdFromMirrorFilename(
+  issueNumber: number,
+  filename: string,
+): string | null {
+  const prefix = `${issueNumber}.`;
+  if (!filename.startsWith(prefix) || !filename.endsWith('.json')) {
+    return null;
+  }
+
+  return filename.slice(prefix.length, -'.json'.length);
+}
+
+export function findLatestMirrorIterationId(
+  repoRoot: string,
+  issueNumber: number,
+): string | null {
+  const dir = join(repoRoot, MIRROR_DIR);
+  try {
+    const files = readdirSync(dir)
+      .filter((name) => name.startsWith(`${issueNumber}.`) && name.endsWith('.json'))
+      .sort();
+    if (files.length === 0) {
+      return null;
+    }
+
+    return iterationIdFromMirrorFilename(issueNumber, files[files.length - 1]!);
+  } catch {
+    return null;
+  }
 }
 
 export function readMirror(
