@@ -97,11 +97,15 @@ The common finding format and signature rules are defined in
 
 ### CI layer
 
-`.github/workflows/scope-guard.yml` currently runs the read-only verifier and
-contains the TODO for PR diff scope validation.
+`.github/workflows/scope-guard.yml` runs the read-only verifier and, on
+`pull_request` events, `scripts/pr-scope-check.ps1` — the third guard layer from
+#3.C. The check reads the linked issue body, the latest committed declaration
+snapshot on the PR head, and `gh pr diff --name-only`, then enforces the #3.A
+validation formula (with fork fail-closed policy and opt-in degraded mode).
 
-CI is the second line of defense. Runtime scope guard remains mandatory because
-an agent can mutate the working tree and index before a PR exists.
+CI is the third line of defense. Runtime scope guard and the pre-commit hook
+remain mandatory because an agent can mutate the working tree and index before a
+PR exists.
 
 ## Data boundaries
 

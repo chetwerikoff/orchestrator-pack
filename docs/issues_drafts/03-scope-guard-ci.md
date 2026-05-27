@@ -1,5 +1,15 @@
 # Implement scope-guard CI step (PR diff validator)
 
+## Status
+
+Implemented in `.github/workflows/scope-guard.yml` via `scripts/pr-scope-check.ps1`
+and `scripts/pr-scope-check.ts` (PR `pull_request` events on `windows-latest`).
+CI executes the checker from the PR base ref (`trusted-scope-guard` checkout) with
+`npm ci` there; PR head is read only for declaration snapshots (`PR_SCOPE_REPO_ROOT`).
+`pull_request` types include `labeled` so `scope-guard-degraded` re-runs the job.
+The workflow splits read-only pack verification (`verify-pack`) from the
+`pr-scope-guard` job so PR-controlled scripts never run with `pull-requests: write`.
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue implements

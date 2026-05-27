@@ -2,14 +2,21 @@ name: scope-guard
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - main
+
+# Default read-only; jobs that post PR comments override permissions locally.
+permissions:
+  contents: read
 
 jobs:
   verify-pack:
     name: Verify orchestrator-pack structure
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,15 +29,64 @@ jobs:
         shell: pwsh
         run: ./scripts/check-reusable.ps1
 
-      - name: Scope guard TODO
+  pr-scope-guard:
+    name: PR scope guard
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
+      - name: Checkout trusted scope guard (base ref)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-scope-guard
+
+      - name: Run scope guard
         shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          SCOPE_GUARD_DEGRADED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'scope-guard-degraded') }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Write-Host "TODO: validate PR diff against ao-task-declaration active scope."
-          Write-Host "This CI check is the second line of defense, not a replacement for the runtime scope guard before git add/commit."
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            throw 'GitHub CLI (gh) is required for PR scope guard'
+          }
+          if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            throw 'Node.js is required for PR scope guard'
+          }
+
+          $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
+          $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
+          if (-not (Test-Path -LiteralPath $guardScript)) {
+            Write-Warning 'scope guard bootstrap: checker not on base ref yet; using PR head scripts (one-time until merge)'
+            $trustedRoot = $env:GITHUB_WORKSPACE
+            $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
+          }
+
+          Push-Location $trustedRoot
+          try {
+            npm ci --include=dev
+            & $guardScript
+          }
+          finally {
+            Pop-Location
+          }
 
   tests:
     name: Run pack contract tests
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
