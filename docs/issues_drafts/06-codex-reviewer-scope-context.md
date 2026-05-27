@@ -70,9 +70,15 @@ format. GitHub Actions review must not define an independent schema.
     its own line as the entire response body. No prose narration such as
     "No concrete bugs were identified" — that text is forbidden.
   - The reviewer wrapper (`plugins/ao-codex-pr-reviewer/bin/review.*`) MUST
-    treat trimmed stdout equal to `NO_FINDINGS` (or empty) as **zero findings**.
+    treat trimmed stdout **exactly equal to** `NO_FINDINGS` as **zero findings**.
     No finding record is created, written to disk, or surfaced to AO or to the
     GitHub Actions comment step.
+  - **Empty stdout is NOT a clean review.** If trimmed stdout is empty while
+    Codex exited 0, the wrapper MUST exit non-zero with a clear log line
+    (`reviewer produced empty output — refusing to mark run as clean`).
+    Reason: empty output indicates a swallowed payload, a wrapper bug, or a
+    CLI/model regression — not an absence of issues. Silent acceptance would
+    let a broken reviewer masquerade as a green review.
   - On `NO_FINDINGS`, the local AO review run still completes normally
     (`findingCount: 0`, `status: completed`). The GitHub Actions path posts a
     short comment `## Codex Review — no findings` instead of dumping reviewer
@@ -112,3 +118,7 @@ format. GitHub Actions review must not define an independent schema.
     output with a non-zero exit and a clear log line; AO marks the run
     as `failed`, not as a warning-finding. This prevents silent regressions
     if a future model drifts from the contract.
+  - Synthetic fixture where Codex exits 0 with empty stdout → wrapper
+    rejects the run with a non-zero exit and the
+    `reviewer produced empty output` log line; AO marks the run as
+    `failed`. Empty output must not be silently treated as a clean review.
