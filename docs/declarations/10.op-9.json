@@ -1,0 +1,19 @@
+{
+  "issue_number": 10,
+  "iteration_id": "op-9",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-27T16:55:55.112Z",
+  "baseline": {
+    "commit_sha": "1ed9b0a9a7889f29b5f9e45f5fbce42317daf9f3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6c4fb7c4c8be357d314432d26a250063d534c6dc24c950eb1b85134f9c4e5313"
+  },
+  "declared_paths": [
+    "docs/target_repo_setup.md",
+    "docs/issue_template_example.md",
+    "README.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
