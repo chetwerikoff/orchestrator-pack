@@ -106,5 +106,11 @@ implement this under `plugins/ao-codex-pr-reviewer/` and register it through
 ## Non-goals
 
 - Do not add unsupported `reviewer:` keys to `agent-orchestrator.yaml`.
-- Do not patch `packages/core/**` in any vendored AO checkout.
+- Do not patch `packages/core/**` in any vendored AO checkout. This is a no core patch design.
 - Do not store API keys, tokens, or model credentials in this repository.
+
+## Contract markers
+
+- Reviewer: Codex CLI (default model `gpt-5.5`)
+- Trigger: PR review against GitHub Issues-linked PRs
+- Constraint: no core patch — AO core is never modified by this plugin
