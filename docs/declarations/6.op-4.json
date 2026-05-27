@@ -7,15 +7,33 @@
   "baseline": {
     "commit_sha": "6a0e35de7e69c5a1ac2cd393f16c909c08ec903b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:77cc5a8731c7a210f02b966b6c59bc4a9384fe7ba7ab461c68e767d11ec30eda"
+    "active_scope_hash": "sha256:23b188defeb365c8ce96528ef97d65e0f1d946b2a8d8c56ec517a6cb0f1b9750"
   },
   "declared_paths": [
     ".github/workflows/scope-guard.yml",
     "scripts/pr-scope-check.ps1",
     "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-check.test.ts",
+    "vitest.config.ts",
     "docs/architecture.md",
     "docs/issues_drafts/03-scope-guard-ci.md"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:77cc5a8731c7a210f02b966b6c59bc4a9384fe7ba7ab461c68e767d11ec30eda",
+      "new_active_scope_hash": "sha256:23b188defeb365c8ce96528ef97d65e0f1d946b2a8d8c56ec517a6cb0f1b9750",
+      "changed": {
+        "added": [
+          "scripts/pr-scope-check.test.ts",
+          "vitest.config.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add test file and vitest config for scope guard",
+      "actor": "op-4",
+      "timestamp": "2026-05-27T15:43:29.929Z",
+      "applied": true
+    }
+  ]
 }
