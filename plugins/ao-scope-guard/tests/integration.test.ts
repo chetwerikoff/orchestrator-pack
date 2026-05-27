@@ -170,6 +170,61 @@ describe('scope-guard integration', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('detects committed scoped violations even when only control artifacts are dirty', () => {
+    delete process.env.AO_SESSION_ID;
+
+    repo = createSyntheticGitRepo({
+      initialFiles: {
+        'plugins/demo/in-scope.txt': 'ok',
+        'plugins/demo/outside-scope.txt': 'blocked',
+      },
+    });
+
+    const baseline = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    }).trim();
+
+    writeDeclaration(repo.root, {
+      issue_number: 99,
+      iteration_id: 'baseline-locked',
+      iteration_id_source: 'wrapper_generated',
+      supersedes: null,
+      created_at: '2026-05-27T00:00:00.000Z',
+      baseline: {
+        commit_sha: baseline,
+        worktree_dirty: false,
+        active_scope_hash: 'sha256:integration',
+      },
+      declared_paths: ['plugins/demo/in-scope.txt'],
+      declared_globs: [],
+      amendments: [],
+    });
+
+    writeFileSync(
+      join(repo.root, 'plugins/demo/outside-scope.txt'),
+      'committed violation',
+      'utf8',
+    );
+    execFileSync('git', ['add', 'plugins/demo/outside-scope.txt'], { cwd: repo.root });
+    execFileSync('git', ['commit', '-m', 'out of scope commit'], { cwd: repo.root });
+
+    const snapshotPath = join(repo.root, 'docs/declarations/99.baseline-locked.json');
+    mkdirSync(dirname(snapshotPath), { recursive: true });
+    writeFileSync(snapshotPath, '{}\n', 'utf8');
+
+    const result = runScopeCheck({
+      repoRoot: repo.root,
+      issueNumber: 99,
+      mode: 'worktree',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.out_of_scope).toContain('plugins/demo/outside-scope.txt');
+    }
+  });
+
   it('runs the scope-check CLI entrypoint', () => {
     try {
       execFileSync(process.execPath, ['--import', 'tsx', scopeCheckScript, '--help'], {

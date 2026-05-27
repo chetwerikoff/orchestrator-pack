@@ -102,18 +102,19 @@ export function parseScopeCheckArgs(argv: string[]): ScopeCheckOptions {
 export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
   const denylist = resolveIssueDenylist(options.repoRoot, options.issueNumber);
 
-  let paths =
-    options.mode === 'index'
-      ? listStagedPaths(options.repoRoot)
-      : listWorktreeChanges(
-          options.repoRoot,
-          options.baselineCommitSha ??
-            resolveWorktreeBaseline(options.repoRoot, undefined, null),
-        );
+  if (options.mode === 'index') {
+    const paths = listStagedPaths(options.repoRoot);
+    const { scoped } = partitionControlArtifacts(paths);
+    if (scoped.length === 0) {
+      return checkScope(paths, null, denylist);
+    }
 
-  let { scoped } = partitionControlArtifacts(paths);
-  if (scoped.length === 0) {
-    return checkScope(paths, null, denylist);
+    const declaration = loadLatestActiveDeclaration(
+      options.repoRoot,
+      options.issueNumber,
+      options.iterationId,
+    );
+    return checkScope(paths, declaration, denylist);
   }
 
   const declaration = loadLatestActiveDeclaration(
@@ -121,20 +122,17 @@ export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
     options.issueNumber,
     options.iterationId,
   );
-
-  if (
-    options.mode === 'worktree' &&
-    !options.baselineCommitSha &&
-    declaration?.baseline.commit_sha
-  ) {
-    paths = listWorktreeChanges(
+  const paths = listWorktreeChanges(
+    options.repoRoot,
+    resolveWorktreeBaseline(
       options.repoRoot,
-      declaration.baseline.commit_sha,
-    );
-    ({ scoped } = partitionControlArtifacts(paths));
-    if (scoped.length === 0) {
-      return checkScope(paths, null, denylist);
-    }
+      options.baselineCommitSha,
+      declaration,
+    ),
+  );
+  const { scoped } = partitionControlArtifacts(paths);
+  if (scoped.length === 0) {
+    return checkScope(paths, null, denylist);
   }
 
   return checkScope(paths, declaration, denylist);

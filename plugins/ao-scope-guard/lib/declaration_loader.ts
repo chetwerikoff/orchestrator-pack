@@ -92,7 +92,7 @@ function readDeclarationFile(path: string): DeclarationSnapshot | null {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const validated = validateDeclarationSnapshot(raw);
     if (!validated.ok) {
-      throw new Error(validated.errors.join('; '));
+      return null;
     }
     return validated.snapshot;
   } catch (error) {
