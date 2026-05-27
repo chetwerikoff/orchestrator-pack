@@ -27,3 +27,32 @@ jobs:
         run: |
           Write-Host "TODO: validate PR diff against ao-task-declaration active scope."
           Write-Host "This CI check is the second line of defense, not a replacement for the runtime scope guard before git add/commit."
+
+  tests:
+    name: Run pack contract tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
+            Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -AllowClobber -SkipPublisherCheck
+          }
+          Import-Module Pester -MinimumVersion 5.0.0
+          Write-Host "Pester version: $((Get-Module Pester).Version)"
+
+      - name: Run all tests
+        shell: pwsh
+        run: ./scripts/test-all.ps1
