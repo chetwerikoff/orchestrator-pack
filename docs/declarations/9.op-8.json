@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "757f634b104f5f90b90a1e280e36eb6dcd0cc53a",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b92a0f58002cdd84b9ad811bc637b9988b8c35bf18d1fd87491eebf60b304e66"
+    "active_scope_hash": "sha256:210d8000f39fa642975e189fab39911059b815384c9ed161c696be6532dbc8c5"
   },
   "declared_paths": [
     ".github/workflows/codex-pr-review.yml",
+    "docs/declarations/9.op-8.json",
     "package-lock.json",
     "prompts/codex_review_prompt.md",
     "scripts/pr-scope-check.ts"
