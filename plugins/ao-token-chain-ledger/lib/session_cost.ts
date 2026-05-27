@@ -135,6 +135,37 @@ export function manualImportCost(cost: Partial<AgentSessionCost>): LedgerCost {
   };
 }
 
+/** Event kinds that may auto-resolve AO session / parsed stdout cost. */
+export const SESSION_COST_EVENT_KINDS = new Set(['finished', 'cost-observed']);
+
+export function eventKindAcceptsSessionCost(eventKind: string): boolean {
+  return SESSION_COST_EVENT_KINDS.has(eventKind);
+}
+
+export function resolveCostForEvent(
+  eventKind: string,
+  options: {
+    sessionInfo?: AgentSessionInfo | null;
+    agentStdout?: string;
+    manual?: Partial<AgentSessionCost>;
+    explicit?: LedgerCost;
+  },
+): LedgerCost {
+  if (options.explicit) {
+    return options.explicit;
+  }
+  if (options.manual) {
+    const manual = manualImportCost(options.manual);
+    if (manual.source !== 'unavailable') {
+      return manual;
+    }
+  }
+  if (!eventKindAcceptsSessionCost(eventKind)) {
+    return unavailableCost();
+  }
+  return resolveCost(options);
+}
+
 export function resolveCost(options: {
   sessionInfo?: AgentSessionInfo | null;
   agentStdout?: string;

@@ -47,6 +47,26 @@ describe('writer', () => {
     });
   });
 
+  it('leaves cost unavailable on started events even when session info has cost', () => {
+    const repoRoot = makeRepo();
+    process.env.AO_SESSION_INFO_JSON = JSON.stringify({
+      cost: { input_tokens: 99, output_tokens: 1, estimated_cost_usd: 0.99 },
+    });
+    const row = prepareLedgerRow({
+      repoRoot,
+      issueNumber: 8,
+      event_kind: 'started',
+      role: 'worker',
+      task_id: '8',
+    });
+    expect(row.cost).toEqual({
+      input_tokens: null,
+      output_tokens: null,
+      estimated_cost_usd: null,
+      source: 'unavailable',
+    });
+  });
+
   it('appends rows to repo-local .ao/ledger/events.jsonl', () => {
     const repoRoot = makeRepo();
     const row = prepareLedgerRow({

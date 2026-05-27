@@ -3,6 +3,7 @@ import {
   costFromSessionInfo,
   parseAgentOutputCost,
   resolveCost,
+  resolveCostForEvent,
   unavailableCost,
 } from '../lib/session_cost.js';
 
@@ -37,6 +38,21 @@ describe('session_cost', () => {
     expect(parsed.input_tokens).toBe(42);
     expect(parsed.output_tokens).toBe(21);
     expect(parsed.estimated_cost_usd).toBe(0.42);
+  });
+
+  it('does not attach session cost to started events', () => {
+    const resolved = resolveCostForEvent('started', {
+      sessionInfo: { cost: { input_tokens: 100, output_tokens: 50, estimated_cost_usd: 1 } },
+    });
+    expect(resolved).toEqual(unavailableCost());
+  });
+
+  it('attaches session cost to finished events', () => {
+    const resolved = resolveCostForEvent('finished', {
+      sessionInfo: { cost: { input_tokens: 100, output_tokens: 50, estimated_cost_usd: 1 } },
+    });
+    expect(resolved.source).toBe('ao-session-cost');
+    expect(resolved.input_tokens).toBe(100);
   });
 
   it('prefers ao-session-cost over agent-output-parse', () => {

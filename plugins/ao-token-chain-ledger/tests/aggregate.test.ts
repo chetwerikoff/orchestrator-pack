@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateChain } from '../lib/aggregate.js';
+import { aggregateChain, selectRowsForCostAggregation } from '../lib/aggregate.js';
 import { computeFindingSignature } from '../lib/finding_signature.js';
 import type { LedgerRow } from '../lib/types.js';
 
@@ -53,6 +53,7 @@ describe('aggregateChain', () => {
     const report = aggregateChain(
       [
         row({
+          session_id: 'sess-planner',
           role: 'planner',
           event_kind: 'finished',
           cost: {
@@ -63,6 +64,7 @@ describe('aggregateChain', () => {
           },
         }),
         row({
+          session_id: 'sess-worker',
           role: 'worker',
           event_kind: 'finished',
           cost: {
@@ -89,6 +91,38 @@ describe('aggregateChain', () => {
     );
     expect(report.by_event_kind['future-kind']).toBe(1);
     expect(report.unknown_event_kinds).toContain('future-kind');
+  });
+
+  it('dedupes session-level cost to one row per session_id', () => {
+    const sessionCost = {
+      input_tokens: 100,
+      output_tokens: 50,
+      estimated_cost_usd: 0.5,
+      source: 'ao-session-cost' as const,
+    };
+    const rows = [
+      row({
+        session_id: 'sess-a',
+        event_kind: 'started',
+        role: 'worker',
+        cost: sessionCost,
+      }),
+      row({
+        session_id: 'sess-a',
+        event_kind: 'finished',
+        role: 'worker',
+        timestamp: '2026-05-01T01:00:00.000Z',
+        cost: sessionCost,
+      }),
+    ];
+    const billable = selectRowsForCostAggregation(rows);
+    expect(billable.size).toBe(1);
+    expect([...billable][0]?.event_kind).toBe('finished');
+
+    const report = aggregateChain(rows, 'chain-a');
+    expect(report.total_input_tokens).toBe(100);
+    expect(report.total_output_tokens).toBe(50);
+    expect(report.total_estimated_cost_usd).toBe(0.5);
   });
 
   it('counts finding signature recurrence', () => {

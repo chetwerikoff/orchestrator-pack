@@ -54,8 +54,65 @@ function signatureForRow(row: LedgerRow): string | null {
   return row.finding.signature ?? computeFindingSignature(row.finding);
 }
 
+function isSessionLevelCostSource(source: LedgerCost['source']): boolean {
+  return source === 'ao-session-cost' || source === 'agent-output-parse';
+}
+
+function sessionCostRowPriority(row: LedgerRow): number {
+  if (row.event_kind === 'cost-observed') {
+    return 3;
+  }
+  if (row.event_kind === 'finished') {
+    return 2;
+  }
+  return 1;
+}
+
+function pickSessionCostWinner(a: LedgerRow, b: LedgerRow): LedgerRow {
+  const priorityDelta = sessionCostRowPriority(b) - sessionCostRowPriority(a);
+  if (priorityDelta !== 0) {
+    return priorityDelta > 0 ? b : a;
+  }
+  return a.timestamp >= b.timestamp ? a : b;
+}
+
+/** At most one session-level cost row per session_id; manual-import rows always count. */
+export function selectRowsForCostAggregation(rows: LedgerRow[]): Set<LedgerRow> {
+  const billable = new Set<LedgerRow>();
+  const sessionWinners = new Map<string, LedgerRow>();
+
+  for (const row of rows) {
+    if (row.cost.source === 'unavailable' || !costHasData(row.cost)) {
+      continue;
+    }
+    if (row.cost.source === 'manual-import') {
+      billable.add(row);
+      continue;
+    }
+    if (!isSessionLevelCostSource(row.cost.source)) {
+      billable.add(row);
+      continue;
+    }
+    if (!row.session_id) {
+      billable.add(row);
+      continue;
+    }
+    const previous = sessionWinners.get(row.session_id);
+    sessionWinners.set(
+      row.session_id,
+      previous ? pickSessionCostWinner(previous, row) : row,
+    );
+  }
+
+  for (const row of sessionWinners.values()) {
+    billable.add(row);
+  }
+  return billable;
+}
+
 export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggregateReport {
   const chainRows = rows.filter((row) => row.chain_id === chainId);
+  const billableCostRows = selectRowsForCostAggregation(chainRows);
 
   const byRole = new Map<string, RoleBreakdown>();
   const byIteration = new Map<string, IterationBreakdown>();
@@ -113,7 +170,7 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
       if (row.iteration_id) {
         iterationsWithoutCost.add(row.iteration_id);
       }
-    } else {
+    } else if (billableCostRows.has(row)) {
       roleEntry.cost_rows += 1;
       const roleTotals = accumulateCost(
         {

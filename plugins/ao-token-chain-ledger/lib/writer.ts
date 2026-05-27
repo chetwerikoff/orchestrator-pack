@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { withFindingSignature } from './finding_signature.js';
 import {
   readSessionInfoFromEnv,
-  resolveCost,
+  resolveCostForEvent,
   unavailableCost,
   type AgentSessionInfo,
 } from './session_cost.js';
@@ -218,7 +218,7 @@ export function prepareLedgerRow(
 
   const cost =
     partial.cost ??
-    resolveCost({
+    resolveCostForEvent(partial.event_kind, {
       sessionInfo,
       agentStdout: options?.agentStdout,
     });

@@ -92,7 +92,12 @@ appendLedgerRow(row, { repoRoot: process.cwd() });
 
 Cost fields use the three-source fallback (`ao-session-cost` via
 `AO_SESSION_INFO_JSON`, `agent-output-parse` from stdout, or `manual-import`).
-Missing cost is stored as `null` with `source: "unavailable"`.
+Session-level cost is attached only on `finished` and `cost-observed` rows so a
+`started`/`finished` pair does not double-count the same session. The aggregator
+also keeps at most one `ao-session-cost` / `agent-output-parse` row per
+`session_id` (preferring `finished`, then `cost-observed`). Explicit
+`manual-import` rows always count. Missing cost is stored as `null` with
+`source: "unavailable"`.
 
 ### Aggregating a chain
 
