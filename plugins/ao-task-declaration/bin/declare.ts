@@ -9,7 +9,7 @@ import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declarat
 import { applyAmendment } from '../lib/amendment.js';
 import { assertCleanWorktree, computeBaseline } from '../lib/baseline.js';
 import { resolveIterationId } from '../lib/iteration.js';
-import { writeMirror } from '../lib/mirror.js';
+import { findLatestMirrorIterationId, writeMirror } from '../lib/mirror.js';
 import {
   findLatestIterationId,
   readSnapshot,
@@ -28,6 +28,7 @@ interface CliOptions {
   reason?: string;
   actor: string;
   repoRoot: string;
+  iterationId?: string;
 }
 
 function usage(): string {
@@ -35,6 +36,7 @@ function usage(): string {
     'Usage: ao-declare --issue <n> --declared-paths <path[,path...]>',
     '                 [--declared-globs <glob[,glob...]>]',
     '                 [--amend --reason <text> [--actor <name>]]',
+    '                 [--iteration-id <id>]',
     '                 [--repo-root <path>]',
   ].join('\n');
 }
@@ -58,6 +60,7 @@ function parseArgs(argv: string[]): CliOptions {
   let reason: string | undefined;
   let actor = process.env.AO_SESSION_ID?.trim() || 'local';
   let repoRoot = process.cwd();
+  let iterationId: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -87,6 +90,9 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case '--repo-root':
         repoRoot = argv[++index] ?? repoRoot;
+        break;
+      case '--iteration-id':
+        iterationId = argv[++index];
         break;
       case '--help':
       case '-h':
@@ -118,7 +124,20 @@ function parseArgs(argv: string[]): CliOptions {
     reason,
     actor,
     repoRoot,
+    iterationId,
   };
+}
+
+function resolveDeclareIterationId(options: CliOptions): ReturnType<typeof resolveIterationId> {
+  const fallbackIterationId = options.amend
+    ? (findLatestIterationId(options.repoRoot, options.issueNumber) ??
+      findLatestMirrorIterationId(options.repoRoot, options.issueNumber))
+    : null;
+
+  return resolveIterationId(process.env, {
+    explicitIterationId: options.iterationId,
+    fallbackIterationId,
+  });
 }
 
 function fetchIssueBody(issueNumber: number, repoRoot: string): string {
@@ -152,7 +171,7 @@ function buildInitialSnapshot(
     throw new Error(validated.errors.join('; '));
   }
 
-  const iteration = resolveIterationId();
+  const iteration = resolveDeclareIterationId(options);
   const existing = readSnapshot(
     options.repoRoot,
     options.issueNumber,
@@ -203,7 +222,7 @@ function buildAmendedSnapshot(
 ): DeclarationSnapshot {
   assertCleanWorktree(options.repoRoot);
 
-  const iteration = resolveIterationId();
+  const iteration = resolveDeclareIterationId(options);
   const existing = readSnapshot(
     options.repoRoot,
     options.issueNumber,
