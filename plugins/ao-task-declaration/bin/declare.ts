@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 
 import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
@@ -120,11 +121,11 @@ function parseArgs(argv: string[]): CliOptions {
   };
 }
 
-function fetchIssueBody(issueNumber: number): string {
+function fetchIssueBody(issueNumber: number, repoRoot: string): string {
   const output = execFileSync(
     'gh',
     ['issue', 'view', String(issueNumber), '--json', 'body'],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', cwd: repoRoot },
   );
   const parsed = JSON.parse(output) as { body?: string };
   if (typeof parsed.body !== 'string') {
@@ -240,7 +241,7 @@ function buildAmendedSnapshot(
 
 export function runDeclare(argv: string[]): DeclarationSnapshot {
   const options = parseArgs(argv);
-  const issueBody = fetchIssueBody(options.issueNumber);
+  const issueBody = fetchIssueBody(options.issueNumber, options.repoRoot);
   const constraints = normalizeIssueConstraints(parseIssueBody(issueBody));
 
   const snapshot = options.amend
@@ -261,7 +262,7 @@ function isDirectExecution(): boolean {
     return false;
   }
 
-  return fileURLToPath(import.meta.url) === fileURLToPath(process.argv[1]);
+  return resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 }
 
 if (isDirectExecution()) {
