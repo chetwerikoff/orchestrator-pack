@@ -54,6 +54,18 @@ describe('validateDeclarationSnapshot', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('rejects empty baseline active_scope_hash', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      baseline: {
+        ...(base.baseline as object),
+        active_scope_hash: 'sha256:',
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects unnormalized declared_paths', () => {
     const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
     const result = validateDeclarationSnapshot({

@@ -24,7 +24,7 @@ From the repository root:
 This runs the Vitest track (`npm test`) and the Pester track. Either failure
 causes a non-zero exit code.
 
-First run installs Node dependencies via `npm ci` when `node_modules/` is absent.
+First run installs Node dependencies via `npm ci --include=dev` when `node_modules/` is absent (dev deps are required for Vitest).
 
 ## Run a single plugin's TypeScript tests
 

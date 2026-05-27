@@ -34,8 +34,8 @@ if (-not $SkipNpm) {
         Push-Location $Root
         try {
             if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-                Write-Host 'Installing npm dependencies...'
-                & npm ci
+                Write-Host 'Installing npm dependencies (including dev)...'
+                & npm ci --include=dev
                 if ($LASTEXITCODE -ne 0) {
                     Write-Track 'npm ci' 'FAIL' "exit=$LASTEXITCODE"
                     $Failures.Add('npm ci failed') | Out-Null

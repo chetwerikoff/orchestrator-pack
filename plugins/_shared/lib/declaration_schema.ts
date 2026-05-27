@@ -209,7 +209,7 @@ export function validateDeclarationSnapshot(
     if (typeof b.worktree_dirty !== 'boolean') {
       errors.push('baseline.worktree_dirty must be a boolean');
     }
-    if (typeof b.active_scope_hash !== 'string' || !b.active_scope_hash.startsWith('sha256:')) {
+    if (!isScopeHash(b.active_scope_hash)) {
       errors.push('baseline.active_scope_hash must be a sha256: prefixed string');
     }
   }
