@@ -95,12 +95,26 @@ function readDeclarationFile(path: string): DeclarationSnapshot | null {
       return null;
     }
     return validated.snapshot;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
+  } catch {
+    // Unreadable, missing, or malformed files are not active declarations.
+    return null;
   }
+}
+
+function loadNewestReadableDeclaration(
+  repoRoot: string,
+  issueNumber: number,
+  directory: string,
+): DeclarationSnapshot | null {
+  const files = listIssueDeclarationFiles(repoRoot, directory, issueNumber);
+  for (let index = files.length - 1; index >= 0; index -= 1) {
+    const snapshot = readDeclarationFile(join(repoRoot, directory, files[index]!));
+    if (snapshot) {
+      return snapshot;
+    }
+  }
+
+  return null;
 }
 
 export function loadActiveDeclaration(
@@ -125,15 +139,22 @@ export function loadLatestActiveDeclaration(
   explicitIterationId?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): DeclarationSnapshot | null {
-  const iterationId = resolveScopeCheckIterationId(
-    repoRoot,
-    issueNumber,
-    explicitIterationId,
-    env,
-  );
-  if (!iterationId) {
-    return null;
+  if (explicitIterationId?.trim() || env.AO_SESSION_ID?.trim()) {
+    const iterationId = resolveScopeCheckIterationId(
+      repoRoot,
+      issueNumber,
+      explicitIterationId,
+      env,
+    );
+    if (!iterationId) {
+      return null;
+    }
+
+    return loadActiveDeclaration(repoRoot, issueNumber, iterationId);
   }
 
-  return loadActiveDeclaration(repoRoot, issueNumber, iterationId);
+  return (
+    loadNewestReadableDeclaration(repoRoot, issueNumber, MIRROR_DIR) ??
+    loadNewestReadableDeclaration(repoRoot, issueNumber, SNAPSHOT_DIR)
+  );
 }

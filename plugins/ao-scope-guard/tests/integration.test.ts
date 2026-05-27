@@ -160,7 +160,26 @@ describe('scope-guard integration', () => {
 
     const snapshotPath = join(repo.root, 'docs/declarations/99.wrapper-test.json');
     mkdirSync(dirname(snapshotPath), { recursive: true });
-    writeFileSync(snapshotPath, '{}\n', 'utf8');
+    writeFileSync(snapshotPath, '{ incomplete json', 'utf8');
+
+    const result = runScopeCheck({
+      repoRoot: repo.root,
+      issueNumber: 99,
+      mode: 'worktree',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('allows malformed declaration snapshots while authoring control artifacts only', () => {
+    delete process.env.AO_SESSION_ID;
+
+    repo = createSyntheticGitRepo({
+      initialFiles: { 'README.md': '# fixture\n' },
+    });
+
+    const snapshotPath = join(repo.root, 'docs/declarations/99.draft.json');
+    mkdirSync(dirname(snapshotPath), { recursive: true });
+    writeFileSync(snapshotPath, '{ "issue_number": 99, incomplete', 'utf8');
 
     const result = runScopeCheck({
       repoRoot: repo.root,

@@ -5,6 +5,7 @@ import { createSyntheticGitRepo } from '@orchestrator-pack/shared/lib/git_fixtur
 import {
   findLatestMirrorIterationId,
   findLatestSnapshotIterationId,
+  loadLatestActiveDeclaration,
   resolveScopeCheckIterationId,
 } from '../lib/declaration_loader.js';
 
@@ -52,5 +53,39 @@ describe('resolveScopeCheckIterationId', () => {
 
     expect(findLatestMirrorIterationId(repo.root, 7)).toBe('gamma');
     expect(resolveScopeCheckIterationId(repo.root, 7)).toBe('gamma');
+  });
+
+  it('treats malformed declaration JSON as unreadable and skips to older valid files', () => {
+    repo = createSyntheticGitRepo({
+      initialFiles: { 'README.md': '# fixture\n' },
+    });
+
+    const baseline = 'abc123def4567890abc123def4567890abc12345';
+    const validSnapshot = {
+      issue_number: 8,
+      iteration_id: 'valid',
+      iteration_id_source: 'wrapper_generated',
+      supersedes: null,
+      created_at: '2026-05-27T00:00:00.000Z',
+      baseline: {
+        commit_sha: baseline,
+        worktree_dirty: false,
+        active_scope_hash: 'sha256:valid',
+      },
+      declared_paths: ['README.md'],
+      declared_globs: [],
+      amendments: [],
+    };
+
+    const mirrorDir = join(repo.root, '.ao', 'declarations');
+    mkdirSync(mirrorDir, { recursive: true });
+    writeFileSync(
+      join(mirrorDir, '8.valid.json'),
+      `${JSON.stringify(validSnapshot, null, 2)}\n`,
+      'utf8',
+    );
+    writeFileSync(join(mirrorDir, '8.draft.json'), '{ incomplete json', 'utf8');
+
+    expect(loadLatestActiveDeclaration(repo.root, 8)).toEqual(validSnapshot);
   });
 });
