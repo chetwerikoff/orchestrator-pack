@@ -53,4 +53,34 @@ describe('validateDeclarationSnapshot', () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it('rejects unnormalized declared_paths', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      declared_paths: ['../vendor/secret.ts'],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('declared_paths'))).toBe(true);
+    }
+  });
+
+  it('rejects declared_paths that need normalization', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      declared_paths: ['./plugins/_shared/lib/normalize.ts'],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects backslashes in declared_globs', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      declared_globs: ['plugins\\_shared\\tests\\**'],
+    });
+    expect(result.ok).toBe(false);
+  });
 });

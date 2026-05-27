@@ -1,3 +1,5 @@
+import { normalizePath } from './normalize.js';
+
 export type IterationIdSource = 'ao_session' | 'wrapper_generated';
 
 export interface DeclarationBaseline {
@@ -41,6 +43,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+function validateNormalizedScopeEntries(
+  entries: string[],
+  field: string,
+): string[] {
+  const errors: string[] = [];
+  entries.forEach((entry, index) => {
+    const normalized = normalizePath(entry);
+    if (!normalized.ok) {
+      errors.push(`${field}[${index}]: ${normalized.reason}`);
+      return;
+    }
+    if (normalized.path !== entry) {
+      errors.push(
+        `${field}[${index}]: must be a normalized relative path (got "${entry}")`,
+      );
+    }
+  });
+  return errors;
+}
+
+function buildSnapshot(input: Record<string, unknown>): DeclarationSnapshot {
+  const baseline = input.baseline as Record<string, unknown>;
+  return {
+    issue_number: input.issue_number as number,
+    iteration_id: input.iteration_id as string,
+    iteration_id_source: input.iteration_id_source as IterationIdSource,
+    supersedes: input.supersedes as string | null,
+    created_at: input.created_at as string,
+    baseline: {
+      commit_sha: baseline.commit_sha as string,
+      worktree_dirty: baseline.worktree_dirty as boolean,
+      active_scope_hash: baseline.active_scope_hash as string,
+    },
+    declared_paths: input.declared_paths as string[],
+    declared_globs: input.declared_globs as string[],
+    amendments: input.amendments as DeclarationAmendment[],
+  };
 }
 
 /**
@@ -93,10 +134,14 @@ export function validateDeclarationSnapshot(
 
   if (!isStringArray(input.declared_paths)) {
     errors.push('declared_paths must be an array of strings');
+  } else {
+    errors.push(...validateNormalizedScopeEntries(input.declared_paths, 'declared_paths'));
   }
 
   if (!isStringArray(input.declared_globs)) {
     errors.push('declared_globs must be an array of strings');
+  } else {
+    errors.push(...validateNormalizedScopeEntries(input.declared_globs, 'declared_globs'));
   }
 
   if (!Array.isArray(input.amendments)) {
@@ -107,5 +152,5 @@ export function validateDeclarationSnapshot(
     return { ok: false, errors };
   }
 
-  return { ok: true, snapshot: input as DeclarationSnapshot };
+  return { ok: true, snapshot: buildSnapshot(input) };
 }
