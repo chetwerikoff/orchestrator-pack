@@ -27,6 +27,8 @@ Hard boundary:
 - `scripts/verify.ps1` — read-only structure/prerequisite verification.
 - `scripts/check-reusable.ps1` — guard that rejects tracked files outside the
   reusable-pack policy.
+- `scripts/lint-self-architect.ps1` — warning-first lint for duplicated prompt
+  literals and paired script/template drift (see `prompts/self_architect_check.md`).
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
 - `scripts/patch-codex-review4.ps1` — temporary Windows compatibility patch for
@@ -149,6 +151,39 @@ Before pushing, run:
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-reusable.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
+```
+
+### Self-architect lint
+
+The lint scans staged changes by default (add `-IncludeUnstaged` to include the
+working tree). It depends only on Git and PowerShell.
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -Strict
+```
+
+`-Strict` is used in CI and exits 1 only for:
+
+- **duplicate-literal** — identical blocks of ≥ 10 consecutive lines in two or
+  more files under configured scan paths.
+- **paired-edit-divergence** — both a script and a template changed in the same
+  diff and share an ≥ 8-line partially matching block that diverged.
+
+Heuristic near-duplicate detection emits `[WARN]` lines only. Configure paths,
+thresholds, and justified suppressions in `scripts/lint-self-architect.config.json`:
+
+```json
+{
+  "suppressions": [
+    {
+      "rule": "duplicate-literal",
+      "files": ["prompts/example-a.md", "prompts/example-b.md"],
+      "reason": "intentional shared boilerplate"
+    }
+  ]
+}
 ```
 
 After this directory is initialized as a Git repo, install the local pre-push

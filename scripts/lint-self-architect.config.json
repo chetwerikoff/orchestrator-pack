@@ -1,0 +1,25 @@
+{
+  "scanPaths": [
+    "prompts/**",
+    "scripts/**",
+    "plugins/**",
+    "docs/**",
+    ".github/**"
+  ],
+  "excludePaths": [
+    "tests/fixtures/**",
+    "vendor/**",
+    "packages/core/**",
+    ".ao/**",
+    "node_modules/**"
+  ],
+  "scriptExtensions": [".ps1", ".sh", ".bash", ".js", ".ts", ".mjs", ".cjs"],
+  "templateExtensions": [".md", ".yaml", ".yml", ".json", ".example", ".template", ".tpl"],
+  "duplicateLiteralMinLines": 10,
+  "pairedEditMinLines": 8,
+  "heuristicMinLines": 3,
+  "heuristicMaxLines": 9,
+  "similarityThreshold": 0.85,
+  "pairedOverlapMinLines": 6,
+  "suppressions": []
+}
