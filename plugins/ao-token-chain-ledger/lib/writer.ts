@@ -119,7 +119,9 @@ export function resolveChainId(options: ResolveChainIdOptions): {
   const aoChain =
     sessionInfo?.chain_id?.trim() ||
     env.AO_TASK_CHAIN_ID?.trim() ||
-    env.AO_CHAIN_TASK_ID?.trim();
+    env.AO_CHAIN_TASK_ID?.trim() ||
+    sessionInfo?.task_id?.trim() ||
+    env.AO_TASK_ID?.trim();
   if (aoChain) {
     return { chain_id: aoChain, chain_id_source: 'ao' };
   }

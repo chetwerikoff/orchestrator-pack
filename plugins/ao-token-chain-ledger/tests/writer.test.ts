@@ -18,6 +18,7 @@ describe('writer', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     delete process.env.AO_CHAIN_ID;
+    delete process.env.AO_TASK_ID;
     delete process.env.AO_SESSION_INFO_JSON;
   });
 
@@ -33,6 +34,36 @@ describe('writer', () => {
     expect(
       resolveChainId({ repoRoot, issueNumber: 8, env: process.env }).chain_id,
     ).toBe('explicit-chain');
+  });
+
+  it('prefers session chain_id over task_id when both are present', () => {
+    const repoRoot = makeRepo();
+    expect(
+      resolveChainId({
+        repoRoot,
+        sessionInfo: { chain_id: 'chain-primary', task_id: 'task-secondary' },
+      }),
+    ).toEqual({ chain_id: 'chain-primary', chain_id_source: 'ao' });
+  });
+
+  it('resolves chain_id from AO task_id when chain_id is absent', () => {
+    const repoRoot = makeRepo();
+    expect(
+      resolveChainId({
+        repoRoot,
+        issueNumber: 8,
+        sessionInfo: { task_id: 'ao-task-abc' },
+      }),
+    ).toEqual({ chain_id: 'ao-task-abc', chain_id_source: 'ao' });
+  });
+
+  it('resolves chain_id from AO_TASK_ID env when session metadata lacks chain_id', () => {
+    const repoRoot = makeRepo();
+    process.env.AO_TASK_ID = 'ao-env-task-99';
+    expect(resolveChainId({ repoRoot, issueNumber: 8, env: process.env })).toEqual({
+      chain_id: 'ao-env-task-99',
+      chain_id_source: 'ao',
+    });
   });
 
   it('falls back to issue-{n} when no higher-priority source exists', () => {

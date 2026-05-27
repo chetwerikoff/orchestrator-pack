@@ -73,9 +73,9 @@ Install workspace dependencies from the repository root (`npm install`), then us
 ### Recording events (writer)
 
 Append-only rows are written to `.ao/ledger/events.jsonl` under the repository root.
-`chain_id` is resolved in priority order: `AO_CHAIN_ID` → AO chain/task id →
-`issue-{n}` → persisted wrapper fallback (`chain-{utc}-{uuid}` in
-`.ao/ledger/active-chain.json`).
+`chain_id` is resolved in priority order: `AO_CHAIN_ID` → AO chain/task id
+(`chain_id`, `AO_TASK_CHAIN_ID`, session `task_id`, `AO_TASK_ID`) → `issue-{n}`
+→ persisted wrapper fallback (`chain-{utc}-{uuid}` in `.ao/ledger/active-chain.json`).
 
 ```typescript
 import { appendLedgerRow, prepareLedgerRow } from './lib/writer.js';
