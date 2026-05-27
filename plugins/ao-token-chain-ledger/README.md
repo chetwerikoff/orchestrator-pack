@@ -91,7 +91,9 @@ appendLedgerRow(row, { repoRoot: process.cwd() });
 ```
 
 Cost fields use the three-source fallback (`ao-session-cost` via
-`AO_SESSION_INFO_JSON`, `agent-output-parse` from stdout, or `manual-import`).
+`AO_SESSION_INFO_JSON` using documented camelCase or ledger snake_case field
+names, `agent-output-parse` from stdout, or `manual-import`). Session rows use
+`agentSessionId` from AO metadata when `AO_SESSION_ID` is not set.
 Session-level cost is attached only on `finished` and `cost-observed` rows so a
 `started`/`finished` pair does not double-count the same session. The aggregator
 also keeps at most one `ao-session-cost` / `agent-output-parse` row per

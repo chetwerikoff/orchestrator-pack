@@ -57,6 +57,17 @@ describe('writer', () => {
     ).toEqual({ chain_id: 'ao-task-abc', chain_id_source: 'ao' });
   });
 
+  it('resolves chain_id from camelCase taskId in session metadata', () => {
+    const repoRoot = makeRepo();
+    expect(
+      resolveChainId({
+        repoRoot,
+        issueNumber: 8,
+        sessionInfo: { taskId: 'ao-task-camel' },
+      }),
+    ).toEqual({ chain_id: 'ao-task-camel', chain_id_source: 'ao' });
+  });
+
   it('resolves chain_id from AO_TASK_ID env when session metadata lacks chain_id', () => {
     const repoRoot = makeRepo();
     process.env.AO_TASK_ID = 'ao-env-task-99';
@@ -76,6 +87,23 @@ describe('writer', () => {
       parent_session_id: null,
       parent_session_id_source: 'unavailable',
     });
+  });
+
+  it('uses agentSessionId from AO session metadata when AO_SESSION_ID is unset', () => {
+    const repoRoot = makeRepo();
+    const env = { ...process.env };
+    delete env.AO_SESSION_ID;
+    const row = prepareLedgerRow(
+      {
+        repoRoot,
+        issueNumber: 8,
+        event_kind: 'started',
+        role: 'worker',
+        task_id: '8',
+      },
+      { sessionInfo: { agentSessionId: 'ao-sess-42' }, env },
+    );
+    expect(row.session_id).toBe('ao-sess-42');
   });
 
   it('leaves cost unavailable on started events even when session info has cost', () => {

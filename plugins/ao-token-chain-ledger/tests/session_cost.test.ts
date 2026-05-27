@@ -13,7 +13,7 @@ describe('session_cost', () => {
     expect(costFromSessionInfo({ cost: {} })).toEqual(unavailableCost());
   });
 
-  it('reads documented AgentSessionInfo.cost fields', () => {
+  it('reads documented AgentSessionInfo.cost fields (snake_case)', () => {
     expect(
       costFromSessionInfo({
         cost: {
@@ -26,6 +26,23 @@ describe('session_cost', () => {
       input_tokens: 10,
       output_tokens: 5,
       estimated_cost_usd: 0.01,
+      source: 'ao-session-cost',
+    });
+  });
+
+  it('reads documented AgentSessionInfo.cost fields (camelCase)', () => {
+    expect(
+      costFromSessionInfo({
+        cost: {
+          inputTokens: 20,
+          outputTokens: 10,
+          estimatedCostUsd: 0.02,
+        },
+      }),
+    ).toMatchObject({
+      input_tokens: 20,
+      output_tokens: 10,
+      estimated_cost_usd: 0.02,
       source: 'ao-session-cost',
     });
   });

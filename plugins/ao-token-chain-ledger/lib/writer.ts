@@ -3,8 +3,12 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { withFindingSignature } from './finding_signature.js';
 import {
+  chainIdFromSessionInfo,
+  parentSessionIdFromSessionInfo,
   readSessionInfoFromEnv,
   resolveCostForEvent,
+  sessionIdFromSessionInfo,
+  taskIdFromSessionInfo,
   unavailableCost,
   type AgentSessionInfo,
 } from './session_cost.js';
@@ -117,10 +121,10 @@ export function resolveChainId(options: ResolveChainIdOptions): {
   }
 
   const aoChain =
-    sessionInfo?.chain_id?.trim() ||
+    chainIdFromSessionInfo(sessionInfo ?? null) ||
     env.AO_TASK_CHAIN_ID?.trim() ||
     env.AO_CHAIN_TASK_ID?.trim() ||
-    sessionInfo?.task_id?.trim() ||
+    taskIdFromSessionInfo(sessionInfo ?? null) ||
     env.AO_TASK_ID?.trim();
   if (aoChain) {
     return { chain_id: aoChain, chain_id_source: 'ao' };
@@ -207,7 +211,7 @@ export function prepareLedgerRow(
 
   const parent = normalizeParentSession(
     partial.parent_session_id ??
-      sessionInfo?.parent_session_id ??
+      parentSessionIdFromSessionInfo(sessionInfo) ??
       env.AO_PARENT_SESSION_ID ??
       null,
     partial.parent_session_id_source,
@@ -230,7 +234,10 @@ export function prepareLedgerRow(
     chain_id_source: partial.chain_id_source ?? chain.chain_id_source,
     iteration_id: partial.iteration_id ?? env.AO_ITERATION_ID ?? null,
     session_id:
-      partial.session_id ?? sessionInfo?.id ?? env.AO_SESSION_ID?.trim() ?? null,
+      partial.session_id ??
+      sessionIdFromSessionInfo(sessionInfo) ??
+      env.AO_SESSION_ID?.trim() ??
+      null,
     parent_session_id: parent.parent_session_id,
     parent_session_id_source: parent.parent_session_id_source,
     task_id: partial.task_id,

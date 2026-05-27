@@ -1,19 +1,91 @@
 import type { LedgerCost, CostSource } from './types.js';
 
-/** Documented AO AgentSessionInfo.cost subset — upgrade-safe, no AO internals. */
+/** Documented AO AgentSessionInfo.cost — accepts AO camelCase and ledger snake_case. */
 export interface AgentSessionCost {
   input_tokens?: number | null;
   output_tokens?: number | null;
   estimated_cost_usd?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  estimatedCostUsd?: number | null;
 }
 
 /** Documented AO AgentSessionInfo subset used for chain and cost attribution. */
 export interface AgentSessionInfo {
   id?: string;
+  agentSessionId?: string;
   parent_session_id?: string | null;
+  parentSessionId?: string | null;
   chain_id?: string;
+  chainId?: string;
   task_id?: string;
+  taskId?: string;
   cost?: AgentSessionCost;
+}
+
+function readField(
+  record: Record<string, unknown>,
+  snakeKey: string,
+  camelKey: string,
+): number | null {
+  const snake = snakeKey in record ? toNullableNumber(record[snakeKey]) : null;
+  const camel = camelKey in record ? toNullableNumber(record[camelKey]) : null;
+  return snake ?? camel;
+}
+
+function readStringField(
+  info: AgentSessionInfo,
+  snakeKey: keyof AgentSessionInfo,
+  camelKey: keyof AgentSessionInfo,
+): string | undefined {
+  const raw = info as Record<string, unknown>;
+  const snake = raw[snakeKey as string];
+  if (typeof snake === 'string' && snake.trim()) {
+    return snake.trim();
+  }
+  const camel = raw[camelKey as string];
+  if (typeof camel === 'string' && camel.trim()) {
+    return camel.trim();
+  }
+  return undefined;
+}
+
+export function sessionIdFromSessionInfo(info: AgentSessionInfo | null): string | null {
+  if (!info) {
+    return null;
+  }
+  const raw = info as Record<string, unknown>;
+  for (const key of ['agentSessionId', 'id']) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+export function parentSessionIdFromSessionInfo(info: AgentSessionInfo | null): string | null {
+  if (!info) {
+    return null;
+  }
+  return (
+    readStringField(info, 'parent_session_id', 'parentSessionId') ??
+    null
+  );
+}
+
+export function chainIdFromSessionInfo(info: AgentSessionInfo | null): string | undefined {
+  if (!info) {
+    return undefined;
+  }
+  return readStringField(info, 'chain_id', 'chainId');
+}
+
+export function taskIdFromSessionInfo(info: AgentSessionInfo | null): string | undefined {
+  if (!info) {
+    return undefined;
+  }
+  return readStringField(info, 'task_id', 'taskId');
 }
 
 const TOKEN_LINE =
@@ -64,9 +136,10 @@ export function costFromSessionInfo(info: AgentSessionInfo | null): LedgerCost {
   if (!info?.cost) {
     return unavailableCost();
   }
-  const input = toNullableNumber(info.cost.input_tokens);
-  const output = toNullableNumber(info.cost.output_tokens);
-  const usd = toNullableNumber(info.cost.estimated_cost_usd);
+  const costRecord = info.cost as Record<string, unknown>;
+  const input = readField(costRecord, 'input_tokens', 'inputTokens');
+  const output = readField(costRecord, 'output_tokens', 'outputTokens');
+  const usd = readField(costRecord, 'estimated_cost_usd', 'estimatedCostUsd');
   if (input === null && output === null && usd === null) {
     return unavailableCost();
   }
@@ -121,9 +194,10 @@ export function parseAgentOutputCost(stdout: string): LedgerCost {
 }
 
 export function manualImportCost(cost: Partial<AgentSessionCost>): LedgerCost {
-  const input = toNullableNumber(cost.input_tokens);
-  const output = toNullableNumber(cost.output_tokens);
-  const usd = toNullableNumber(cost.estimated_cost_usd);
+  const costRecord = cost as Record<string, unknown>;
+  const input = readField(costRecord, 'input_tokens', 'inputTokens');
+  const output = readField(costRecord, 'output_tokens', 'outputTokens');
+  const usd = readField(costRecord, 'estimated_cost_usd', 'estimatedCostUsd');
   if (input === null && output === null && usd === null) {
     return unavailableCost();
   }
