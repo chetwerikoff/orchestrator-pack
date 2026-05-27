@@ -75,10 +75,25 @@ The plugin directories are contracts, not implementations:
 - `ao-task-declaration` declares active scope and baseline state.
 - `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
 - `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
-- `ao-codex-pr-reviewer` defines the optional Codex `gpt-5.5` PR-review path.
+- `ao-codex-pr-reviewer` defines Codex `gpt-5.5` review contracts for the local AO primary path and optional GitHub Actions path.
 
 Future implementations should bind to AO plugin slots, wrappers, hooks, or
 external state files. They must not patch AO core.
+
+### Review paths
+
+The primary review path is AO's local built-in Codex review flow. Local Codex
+review runs through AO, writes findings to the AO dashboard, and can feed
+blocking feedback back to Cursor workers through AO reactions such as
+`changes-requested -> send-to-agent`.
+
+GitHub Actions Codex review remains an optional path for PR comments, reusable
+workflow consumers, and external visibility. It must use the same prompt, scope
+context, and structured finding format as the local path; it must not define an
+independent review schema.
+
+The common finding format and signature rules are defined in
+`docs/issues_drafts/00-architecture-decisions.md` section F.
 
 ### CI layer
 

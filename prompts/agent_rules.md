@@ -60,3 +60,15 @@ scope:
 - Do not edit upstream `packages/core/` to satisfy a task.
 - If upstream behavior appears missing, write a contract or wrapper first and
   escalate the need for a proper plugin/API only after confirming the gap.
+
+## Review feedback handling
+
+When AO sends review feedback through `changes-requested` or `ci-failed`:
+
+- Treat the feedback as a scoped correction for the same issue and chain.
+- Classify each finding as scope, spec, quality, test, CI, or security.
+- Make the smallest change that resolves the finding.
+- Do not broaden the declaration only to silence review feedback.
+- If feedback appears repetitive or contradictory, stop guessing and escalate
+  with evidence.
+- Report verification commands and unresolved findings before handing back.
