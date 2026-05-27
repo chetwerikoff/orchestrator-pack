@@ -58,20 +58,36 @@ function isSessionLevelCostSource(source: LedgerCost['source']): boolean {
   return source === 'ao-session-cost' || source === 'agent-output-parse';
 }
 
-function sessionCostRowPriority(row: LedgerRow): number {
-  if (row.event_kind === 'cost-observed') {
+function sessionCostSourcePriority(source: LedgerCost['source']): number {
+  if (source === 'ao-session-cost') {
     return 3;
   }
-  if (row.event_kind === 'finished') {
+  if (source === 'agent-output-parse') {
     return 2;
   }
   return 1;
 }
 
+function sessionCostEventKindPriority(eventKind: string): number {
+  if (eventKind === 'finished') {
+    return 2;
+  }
+  if (eventKind === 'cost-observed') {
+    return 1;
+  }
+  return 0;
+}
+
 function pickSessionCostWinner(a: LedgerRow, b: LedgerRow): LedgerRow {
-  const priorityDelta = sessionCostRowPriority(b) - sessionCostRowPriority(a);
-  if (priorityDelta !== 0) {
-    return priorityDelta > 0 ? b : a;
+  const sourceDelta =
+    sessionCostSourcePriority(b.cost.source) - sessionCostSourcePriority(a.cost.source);
+  if (sourceDelta !== 0) {
+    return sourceDelta > 0 ? b : a;
+  }
+  const kindDelta =
+    sessionCostEventKindPriority(b.event_kind) - sessionCostEventKindPriority(a.event_kind);
+  if (kindDelta !== 0) {
+    return kindDelta > 0 ? b : a;
   }
   return a.timestamp >= b.timestamp ? a : b;
 }
@@ -119,8 +135,6 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
   const byEventKind: Record<string, number> = {};
   const unknownEventKinds = new Set<string>();
   const signatureCounts = new Map<string, FindingSignatureCount>();
-  const sessionsWithoutCost = new Set<string>();
-  const iterationsWithoutCost = new Set<string>();
 
   let totalInput: number | null = null;
   let totalOutput: number | null = null;
@@ -164,12 +178,6 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
       unavailableCostRows += 1;
       roleEntry.unavailable_cost_rows += 1;
       iterationEntry.unavailable_cost_rows += 1;
-      if (row.session_id) {
-        sessionsWithoutCost.add(row.session_id);
-      }
-      if (row.iteration_id) {
-        iterationsWithoutCost.add(row.iteration_id);
-      }
     } else if (billableCostRows.has(row)) {
       roleEntry.cost_rows += 1;
       const roleTotals = accumulateCost(
@@ -225,11 +233,33 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
     }
   }
 
+  const sessionsWithBillableCost = new Set<string>();
+  const iterationsWithBillableCost = new Set<string>();
+  for (const row of billableCostRows) {
+    if (row.session_id) {
+      sessionsWithBillableCost.add(row.session_id);
+    }
+    if (row.iteration_id) {
+      iterationsWithBillableCost.add(row.iteration_id);
+    }
+  }
+
+  const sessionsSeen = new Set(
+    chainRows.map((row) => row.session_id).filter((id): id is string => Boolean(id)),
+  );
+  const iterationsSeen = new Set(
+    chainRows.map((row) => row.iteration_id).filter((id): id is string => Boolean(id)),
+  );
+
   const missing_data: MissingDataReport = {
     total_rows: chainRows.length,
     unavailable_cost_rows: unavailableCostRows,
-    sessions_without_cost: [...sessionsWithoutCost].sort(),
-    iterations_without_cost: [...iterationsWithoutCost].sort(),
+    sessions_without_cost: [...sessionsSeen]
+      .filter((sessionId) => !sessionsWithBillableCost.has(sessionId))
+      .sort(),
+    iterations_without_cost: [...iterationsSeen]
+      .filter((iterationId) => !iterationsWithBillableCost.has(iterationId))
+      .sort(),
   };
 
   return {

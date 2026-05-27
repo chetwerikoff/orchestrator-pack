@@ -93,6 +93,75 @@ describe('aggregateChain', () => {
     expect(report.unknown_event_kinds).toContain('future-kind');
   });
 
+  it('prefers ao-session-cost over later parsed cost-observed for the same session', () => {
+    const rows = [
+      row({
+        session_id: 'sess-a',
+        event_kind: 'finished',
+        role: 'worker',
+        timestamp: '2026-05-01T10:00:00.000Z',
+        cost: {
+          input_tokens: 100,
+          output_tokens: 50,
+          estimated_cost_usd: 1,
+          source: 'ao-session-cost',
+        },
+      }),
+      row({
+        session_id: 'sess-a',
+        event_kind: 'cost-observed',
+        role: 'worker',
+        timestamp: '2026-05-01T11:00:00.000Z',
+        cost: {
+          input_tokens: 999,
+          output_tokens: 999,
+          estimated_cost_usd: 9,
+          source: 'agent-output-parse',
+        },
+      }),
+    ];
+    const billable = selectRowsForCostAggregation(rows);
+    const sessionRow = [...billable].find((entry) => entry.session_id === 'sess-a');
+    expect(sessionRow?.cost.source).toBe('ao-session-cost');
+
+    const report = aggregateChain(rows, 'chain-a');
+    expect(report.total_input_tokens).toBe(100);
+    expect(report.total_estimated_cost_usd).toBe(1);
+  });
+
+  it('does not mark started+finished sessions as missing cost', () => {
+    const report = aggregateChain(
+      [
+        row({ session_id: 'sess-a', event_kind: 'started', role: 'worker' }),
+        row({
+          session_id: 'sess-a',
+          event_kind: 'finished',
+          role: 'worker',
+          cost: {
+            input_tokens: 1,
+            output_tokens: 1,
+            estimated_cost_usd: 0.01,
+            source: 'ao-session-cost',
+          },
+        }),
+      ],
+      'chain-a',
+    );
+    expect(report.missing_data.sessions_without_cost).toEqual([]);
+    expect(report.missing_data.iterations_without_cost).toEqual([]);
+  });
+
+  it('marks sessions with no billable cost as missing after scanning all rows', () => {
+    const report = aggregateChain(
+      [
+        row({ session_id: 'sess-stuck', event_kind: 'started', role: 'worker' }),
+        row({ session_id: 'sess-stuck', event_kind: 'finding', role: 'worker' }),
+      ],
+      'chain-a',
+    );
+    expect(report.missing_data.sessions_without_cost).toEqual(['sess-stuck']);
+  });
+
   it('dedupes session-level cost to one row per session_id', () => {
     const sessionCost = {
       input_tokens: 100,

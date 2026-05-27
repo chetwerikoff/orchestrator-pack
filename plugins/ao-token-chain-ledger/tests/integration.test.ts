@@ -35,6 +35,8 @@ describe('ao-token-chain-ledger integration', () => {
       }),
     );
     expect(report.missing_data.unavailable_cost_rows).toBe(4);
+    expect(report.missing_data.sessions_without_cost).toEqual([]);
+    expect(report.missing_data.iterations_without_cost).toEqual([]);
   });
 
   it('prints a human report via ao-ledger CLI', () => {

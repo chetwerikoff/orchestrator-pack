@@ -95,7 +95,8 @@ Cost fields use the three-source fallback (`ao-session-cost` via
 Session-level cost is attached only on `finished` and `cost-observed` rows so a
 `started`/`finished` pair does not double-count the same session. The aggregator
 also keeps at most one `ao-session-cost` / `agent-output-parse` row per
-`session_id` (preferring `finished`, then `cost-observed`). Explicit
+`session_id` (preferring `ao-session-cost`, then `agent-output-parse`, then
+`finished` over `cost-observed`). Explicit
 `manual-import` rows always count. Missing cost is stored as `null` with
 `source: "unavailable"`.
 
