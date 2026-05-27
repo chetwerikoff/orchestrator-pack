@@ -1,5 +1,3 @@
-#!/usr/bin/env tsx
-
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { aggregateChain, formatChainReport } from '../lib/aggregate.js';

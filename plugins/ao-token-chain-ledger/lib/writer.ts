@@ -184,6 +184,34 @@ export function normalizeParentSession(
   };
 }
 
+export function resolveParentSession(options: {
+  explicitId?: string | null;
+  explicitSource?: ParentSessionIdSource;
+  sessionInfo?: AgentSessionInfo | null;
+  envParentId?: string | null;
+}): {
+  parent_session_id: string | null;
+  parent_session_id_source: ParentSessionIdSource;
+} {
+  if (options.explicitId?.trim()) {
+    return normalizeParentSession(
+      options.explicitId,
+      options.explicitSource ?? 'manual',
+    );
+  }
+  const fromSession = parentSessionIdFromSessionInfo(options.sessionInfo ?? null);
+  if (fromSession) {
+    return normalizeParentSession(fromSession, options.explicitSource ?? 'ao');
+  }
+  if (options.envParentId?.trim()) {
+    return normalizeParentSession(
+      options.envParentId,
+      options.explicitSource ?? 'ao',
+    );
+  }
+  return normalizeParentSession(null, options.explicitSource);
+}
+
 export function isRecognizedEventKind(eventKind: string): boolean {
   return RECOGNIZED_EVENT_KINDS.has(eventKind);
 }
@@ -209,13 +237,12 @@ export function prepareLedgerRow(
     manualChainId: partial.chain_id,
   });
 
-  const parent = normalizeParentSession(
-    partial.parent_session_id ??
-      parentSessionIdFromSessionInfo(sessionInfo) ??
-      env.AO_PARENT_SESSION_ID ??
-      null,
-    partial.parent_session_id_source,
-  );
+  const parent = resolveParentSession({
+    explicitId: partial.parent_session_id,
+    explicitSource: partial.parent_session_id_source,
+    sessionInfo,
+    envParentId: env.AO_PARENT_SESSION_ID,
+  });
 
   let finding = partial.finding ?? null;
   if (finding) {

@@ -6,6 +6,7 @@ import {
   appendLedgerRow,
   normalizeParentSession,
   prepareLedgerRow,
+  resolveParentSession,
   readLedgerRows,
   resolveChainId,
 } from '../lib/writer.js';
@@ -87,6 +88,44 @@ describe('writer', () => {
       parent_session_id: null,
       parent_session_id_source: 'unavailable',
     });
+  });
+
+  it('marks parent_session_id_source ao when parent comes from session metadata', () => {
+    expect(
+      resolveParentSession({
+        sessionInfo: { parentSessionId: 'parent-ao-1' },
+      }),
+    ).toEqual({
+      parent_session_id: 'parent-ao-1',
+      parent_session_id_source: 'ao',
+    });
+  });
+
+  it('marks parent_session_id_source ao when parent comes from AO_PARENT_SESSION_ID', () => {
+    expect(
+      resolveParentSession({
+        envParentId: 'parent-env-1',
+      }),
+    ).toEqual({
+      parent_session_id: 'parent-env-1',
+      parent_session_id_source: 'ao',
+    });
+  });
+
+  it('prepareLedgerRow uses ao parent source from session metadata', () => {
+    const repoRoot = makeRepo();
+    const row = prepareLedgerRow(
+      {
+        repoRoot,
+        issueNumber: 8,
+        event_kind: 'started',
+        role: 'worker',
+        task_id: '8',
+      },
+      { sessionInfo: { parentSessionId: 'parent-ao-2' }, env: {} },
+    );
+    expect(row.parent_session_id).toBe('parent-ao-2');
+    expect(row.parent_session_id_source).toBe('ao');
   });
 
   it('uses agentSessionId from AO session metadata when AO_SESSION_ID is unset', () => {

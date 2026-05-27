@@ -68,7 +68,7 @@ Each ledger row should record:
 ## Usage
 
 Install workspace dependencies from the repository root (`npm install`), then use the
-`ao-ledger` CLI from `plugins/ao-token-chain-ledger` (or via `npx tsx` on the bin).
+`ao-ledger` CLI via `npx ao-ledger` (Node bin wrapper; PowerShell-safe on Windows).
 
 ### Recording events (writer)
 

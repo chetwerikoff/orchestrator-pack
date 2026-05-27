@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "ao-ledger": "./bin/ledger.ts"
+    "ao-ledger": "./bin/ledger.mjs"
   },
   "dependencies": {
     "@orchestrator-pack/shared": "*",
