@@ -62,3 +62,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.code-workspace
+
+# Claude Code session state (keep skills, ignore everything else).
+.claude/*
+!.claude/skills/
