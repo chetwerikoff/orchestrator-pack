@@ -80,3 +80,62 @@ This contract produces active scope for:
 - `ao-scope-guard` PR-level CI validation;
 - audit/reporting tools;
 - optional `ao-token-chain-ledger` chain attribution.
+
+## CLI usage (`ao-declare`)
+
+The implementer-facing CLI reads authoritative constraints from the linked GitHub
+Issue body and writes the committed snapshot plus a gitignored runtime mirror.
+
+### Example issue body
+
+Issue bodies must include a mandatory `denylist` fence and may include
+`allowed-roots`. See `plugins/_shared/tests/fixtures/issue-bodies/with-allowed-roots.md`
+for a parseable example used by unit tests.
+
+### Example invocation
+
+```powershell
+ao-declare --issue 4 `
+  --declared-paths plugins/ao-task-declaration/lib/validate.ts `
+  --declared-globs plugins/ao-task-declaration/tests/**
+```
+
+The CLI:
+
+1. reads the issue body via `gh issue view <n> --json body`;
+2. parses mandatory `denylist` and optional `allowed-roots` fences;
+3. rejects dirty worktrees before recording baseline state;
+4. writes `docs/declarations/{issue_number}.{iteration_id}.json`;
+5. mirrors the snapshot under `.ao/declarations/` for runtime guards.
+
+Use `--amend --reason "<text>"` once per iteration to rewrite declared scope.
+A second amendment within the same `iteration_id` is rejected without modifying
+the snapshot.
+
+### Example snapshot
+
+```json
+{
+  "issue_number": 4,
+  "iteration_id": "sess-abc123",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-26T12:00:00.000Z",
+  "baseline": {
+    "commit_sha": "abc123def456",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:deadbeef"
+  },
+  "declared_paths": [
+    "plugins/ao-task-declaration/lib/validate.ts"
+  ],
+  "declared_globs": [
+    "plugins/ao-task-declaration/tests/**"
+  ],
+  "amendments": []
+}
+```
+
+`declared_paths` / `declared_globs` are the allow side of active scope.
+`denylist` constraints come from the issue body and are enforced at declaration
+time together with optional `allowed_roots`.
