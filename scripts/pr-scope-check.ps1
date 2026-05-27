@@ -170,12 +170,18 @@ if (-not $issueNumber) {
 
 $issueBody = $null
 $issueReadFailed = $false
-try {
-    $issueJson = gh issue view $issueNumber --json body | ConvertFrom-Json
-    $issueBody = [string]$issueJson.body
-}
-catch {
+$issueViewOutput = gh issue view $issueNumber --json body 2>&1
+if ($LASTEXITCODE -ne 0) {
     $issueReadFailed = $true
+}
+else {
+    try {
+        $issueJson = $issueViewOutput | ConvertFrom-Json
+        $issueBody = [string]$issueJson.body
+    }
+    catch {
+        $issueReadFailed = $true
+    }
 }
 
 $degradedMode = $false
