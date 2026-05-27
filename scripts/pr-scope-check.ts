@@ -17,7 +17,9 @@ import {
 
 const SNAPSHOT_DIR = join('docs', 'declarations');
 
-const ISSUE_LINK_PATTERN = /\b(?:closes|fixes)\s+#(\d+)\b/gi;
+/** GitHub-supported closing keywords; keep in sync with pr-scope-check.ps1 */
+export const ISSUE_LINK_PATTERN =
+  /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b/gi;
 
 export interface PrScopeCheckInput {
   repoRoot: string;
@@ -163,23 +165,6 @@ export function resolveLatestCommittedSnapshot(
     loaded.push(result);
   }
 
-  const sorted = [...loaded].sort((left, right) =>
-    left.iterationId.localeCompare(right.iterationId),
-  );
-
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = Date.parse(sorted[index - 1]!.snapshot.created_at);
-    const current = Date.parse(sorted[index]!.snapshot.created_at);
-    if (Number.isNaN(previous) || Number.isNaN(current) || current < previous) {
-      return {
-        ok: false,
-        reason: 'snapshot_chain_inconsistency',
-        message:
-          'snapshot chain inconsistency: created_at order disagrees with filename iteration_id order',
-      };
-    }
-  }
-
   const heads = loaded.filter(
     (candidate) =>
       !loaded.some((other) => other.snapshot.supersedes === candidate.iterationId),
@@ -196,9 +181,11 @@ export function resolveLatestCommittedSnapshot(
     };
   }
 
+  const head = heads[0]!;
   const byId = new Map(loaded.map((entry) => [entry.iterationId, entry]));
+  const chainNewestFirst: LoadedSnapshot[] = [];
   const visited = new Set<string>();
-  let current: LoadedSnapshot | undefined = heads[0];
+  let current: LoadedSnapshot | undefined = head;
 
   while (current) {
     if (visited.has(current.iterationId)) {
@@ -209,6 +196,7 @@ export function resolveLatestCommittedSnapshot(
       };
     }
     visited.add(current.iterationId);
+    chainNewestFirst.push(current);
 
     const previousId = current.snapshot.supersedes;
     if (!previousId) {
@@ -233,7 +221,25 @@ export function resolveLatestCommittedSnapshot(
     };
   }
 
-  return { ok: true, snapshot: heads[0]!.snapshot };
+  const chainOldestFirst = [...chainNewestFirst].reverse();
+  for (let index = 1; index < chainOldestFirst.length; index += 1) {
+    const previous = Date.parse(chainOldestFirst[index - 1]!.snapshot.created_at);
+    const currentCreatedAt = Date.parse(chainOldestFirst[index]!.snapshot.created_at);
+    if (
+      Number.isNaN(previous) ||
+      Number.isNaN(currentCreatedAt) ||
+      currentCreatedAt < previous
+    ) {
+      return {
+        ok: false,
+        reason: 'snapshot_chain_inconsistency',
+        message:
+          'snapshot chain inconsistency: created_at order disagrees with supersedes chain order',
+      };
+    }
+  }
+
+  return { ok: true, snapshot: head.snapshot };
 }
 
 function pathInDeclaredScope(
@@ -440,6 +446,8 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
       '',
       '```',
       'Closes #123',
+      'Fixes #123',
+      'Resolves #123',
       '```',
     );
   }

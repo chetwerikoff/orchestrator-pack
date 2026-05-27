@@ -73,7 +73,7 @@ function Get-LinkedIssueNumber {
     $normalizedBody = Normalize-PrBody -Body $PrBody
     $matches = [regex]::Matches(
         $normalizedBody,
-        '\b(?:closes|fixes)\s+#(\d+)\b',
+        '\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b',
         [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
     )
 
@@ -161,7 +161,7 @@ if (-not $issueNumber) {
     $failure = [pscustomobject]@{
         ok      = $false
         reason  = 'missing_issue_link'
-        message = 'PR description must include a closing issue reference such as Closes #N or Fixes #N'
+        message = 'PR description must include a closing issue reference such as Closes #N, Fixes #N, or Resolves #N'
     }
     Write-ScopeGuardComment -Body (Format-ScopeGuardComment -Result $failure) -PrNumber $prNumber
     Write-Host $failure.message
