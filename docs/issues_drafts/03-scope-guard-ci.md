@@ -1,5 +1,10 @@
 # Implement scope-guard CI step (PR diff validator)
 
+## Status
+
+Implemented in `.github/workflows/scope-guard.yml` via `scripts/pr-scope-check.ps1`
+and `scripts/pr-scope-check.ts` (PR `pull_request` events on `windows-latest`).
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue implements

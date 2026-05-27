@@ -6,6 +6,11 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
 jobs:
   verify-pack:
     name: Verify orchestrator-pack structure
@@ -22,11 +27,24 @@ jobs:
         shell: pwsh
         run: ./scripts/check-reusable.ps1
 
-      - name: Scope guard TODO
+      - name: PR scope guard
+        if: github.event_name == 'pull_request'
         shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          SCOPE_GUARD_DEGRADED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'scope-guard-degraded') }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Write-Host "TODO: validate PR diff against ao-task-declaration active scope."
-          Write-Host "This CI check is the second line of defense, not a replacement for the runtime scope guard before git add/commit."
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            throw 'GitHub CLI (gh) is required for PR scope guard'
+          }
+          if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            throw 'Node.js is required for PR scope guard'
+          }
+          npm ci --include=dev
+          ./scripts/pr-scope-check.ps1
 
   tests:
     name: Run pack contract tests
