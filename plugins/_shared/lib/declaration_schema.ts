@@ -45,6 +45,74 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
 
+const MAX_AMENDMENTS_PER_ITERATION = 1;
+
+function isScopeHash(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('sha256:') && value.length > 'sha256:'.length;
+}
+
+function validateAmendmentEntries(amendments: unknown): string[] {
+  const errors: string[] = [];
+
+  if (!Array.isArray(amendments)) {
+    return ['amendments must be an array'];
+  }
+
+  if (amendments.length > MAX_AMENDMENTS_PER_ITERATION) {
+    errors.push(
+      `amendments must contain at most ${MAX_AMENDMENTS_PER_ITERATION} entry per iteration`,
+    );
+  }
+
+  amendments.forEach((entry, index) => {
+    const prefix = `amendments[${index}]`;
+
+    if (!isRecord(entry)) {
+      errors.push(`${prefix}: must be an object`);
+      return;
+    }
+
+    if (!isScopeHash(entry.previous_active_scope_hash)) {
+      errors.push(`${prefix}.previous_active_scope_hash must be a sha256: prefixed string`);
+    }
+
+    if (!isScopeHash(entry.new_active_scope_hash)) {
+      errors.push(`${prefix}.new_active_scope_hash must be a sha256: prefixed string`);
+    }
+
+    if (!isRecord(entry.changed)) {
+      errors.push(`${prefix}.changed must be an object`);
+    } else {
+      if (!isStringArray(entry.changed.added)) {
+        errors.push(`${prefix}.changed.added must be an array of strings`);
+      }
+      if (!isStringArray(entry.changed.removed)) {
+        errors.push(`${prefix}.changed.removed must be an array of strings`);
+      }
+    }
+
+    if (typeof entry.reason !== 'string' || !entry.reason.trim()) {
+      errors.push(`${prefix}.reason must be a non-empty string`);
+    }
+
+    if (typeof entry.actor !== 'string' || !entry.actor.trim()) {
+      errors.push(`${prefix}.actor must be a non-empty string`);
+    }
+
+    if (typeof entry.timestamp !== 'string' || !ISO_8601.test(entry.timestamp)) {
+      errors.push(`${prefix}.timestamp must be an ISO 8601 timestamp string`);
+    }
+
+    if (typeof entry.applied !== 'boolean') {
+      errors.push(`${prefix}.applied must be a boolean`);
+    } else if (entry.applied !== true) {
+      errors.push(`${prefix}.applied must be true for committed amendments`);
+    }
+  });
+
+  return errors;
+}
+
 function validateNormalizedScopeEntries(
   entries: string[],
   field: string,
@@ -144,9 +212,7 @@ export function validateDeclarationSnapshot(
     errors.push(...validateNormalizedScopeEntries(input.declared_globs, 'declared_globs'));
   }
 
-  if (!Array.isArray(input.amendments)) {
-    errors.push('amendments must be an array');
-  }
+  errors.push(...validateAmendmentEntries(input.amendments));
 
   if (errors.length > 0) {
     return { ok: false, errors };

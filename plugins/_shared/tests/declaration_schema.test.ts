@@ -83,4 +83,37 @@ describe('validateDeclarationSnapshot', () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it('rejects malformed amendment entries', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      amendments: [{ reason: 'missing audit fields' }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.startsWith('amendments[0]'))).toBe(true);
+    }
+  });
+
+  it('rejects more than one amendment per iteration', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const amendment = {
+      previous_active_scope_hash: 'sha256:aaa',
+      new_active_scope_hash: 'sha256:bbb',
+      changed: { added: [], removed: [] },
+      reason: 'scope tweak',
+      actor: 'worker',
+      timestamp: '2026-05-26T12:00:00.000Z',
+      applied: true,
+    };
+    const result = validateDeclarationSnapshot({
+      ...base,
+      amendments: [amendment, amendment],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('at most 1 entry'))).toBe(true);
+    }
+  });
 });
