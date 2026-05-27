@@ -36,7 +36,7 @@ This issue commits the repository to a reusable contract covering:
    named state for "review send issued, awaiting worker response", the
    decision procedure on each subsequent orchestrator turn, and a round limit.
 2. **Worker rules** (`prompts/agent_rules.md`) requiring an explicit transition
-   to `addressing_reviews` (via `ao report addressing-reviews`) after `ao
+   to `addressing_reviews` (via `ao report addressing_reviews`) after `ao
    review send` lands, or an explicit terminal failure report with a reason.
    Silent idleness is forbidden.
 3. **Reactions configuration** wiring the AO `report-stale` reactionKey as
