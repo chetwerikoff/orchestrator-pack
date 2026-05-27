@@ -2,8 +2,14 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $PSScriptRoot
-$CheckScript = Join-Path $Root 'scripts/pr-scope-check.ts'
+$TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+if ($env:PR_SCOPE_REPO_ROOT) {
+    $PrRoot = (Resolve-Path $env:PR_SCOPE_REPO_ROOT).Path
+}
+else {
+    $PrRoot = $TrustedRoot
+}
+$CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
 
 function Write-ScopeGuardComment {
     param(
@@ -33,7 +39,13 @@ function Format-ScopeGuardComment {
     $payloadFile = New-TemporaryFile
     try {
         $Result | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName
+        Push-Location $TrustedRoot
+        try {
+            return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName
+        }
+        finally {
+            Pop-Location
+        }
     }
     finally {
         Remove-Item -LiteralPath $payloadFile.FullName -Force -ErrorAction SilentlyContinue
@@ -109,7 +121,13 @@ function Invoke-PrScopeCheckCore {
     $payloadFile = New-TemporaryFile
     try {
         $InputJson | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        $output = node --import tsx $CheckScript --input $payloadFile.FullName
+        Push-Location $TrustedRoot
+        try {
+            $output = node --import tsx $CheckScript --input $payloadFile.FullName
+        }
+        finally {
+            Pop-Location
+        }
         if ($LASTEXITCODE -eq 2) {
             throw 'pr-scope-check.ts failed with configuration error'
         }
@@ -173,7 +191,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $input = @{
-    repoRoot     = $Root
+    repoRoot     = $PrRoot
     issueNumber  = $issueNumber
     issueBody    = if ($issueReadFailed) { $null } else { $issueBody }
     prPaths      = $prPaths
