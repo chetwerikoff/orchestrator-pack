@@ -58,6 +58,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Install Codex CLI
         run: npm install -g @openai/codex
 
@@ -69,40 +72,47 @@ jobs:
           echo "$CODEX_AUTH_JSON" | base64 --decode > ~/.codex/auth.json
           chmod 600 ~/.codex/auth.json
 
-      - name: Run Codex review
+      - name: Save PR body for scope resolution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr view "${{ github.event.pull_request.number }}" --json body --jq .body > pr-body.md
+
+      - name: Run Codex review (scoped wrapper)
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          codex --model "${{ inputs.model }}" review \
+          set -o pipefail
+          npx tsx plugins/ao-codex-pr-reviewer/bin/review.ts \
+            --repo-root . \
             --base "origin/${{ github.base_ref }}" \
-            > codex-review.md 2>&1 || true
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --pr-body-file pr-body.md \
+            --model "${{ inputs.model }}" \
+            --source codex-github-action \
+            --github-comment-file codex-review-comment.md \
+            > codex-ao-findings.json
 
       - name: Post review comment
+        if: success()
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
-            const model = '${{ inputs.model }}';
-
-            let review = '';
+            let body = '## Codex Review — no findings\n';
             try {
-              review = fs.readFileSync('codex-review.md', 'utf8').trim();
+              body = fs.readFileSync('codex-review-comment.md', 'utf8').trim();
             } catch {
-              review = '_Codex review output not found._';
+              body = '_Codex review comment file not found._';
             }
-            if (!review) review = '_Codex returned no findings._';
+            if (!body) body = '## Codex Review — no findings\n';
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: [
-                `## Codex Review (${model})`,
-                '',
-                review,
-                '',
-                '---',
-                '_Automated review by Codex CLI · [orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack) · Never auto-merges_'
-              ].join('\n')
+              body
             });
 
       - name: Wipe OAuth credentials

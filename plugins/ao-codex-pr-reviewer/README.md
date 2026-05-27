@@ -97,11 +97,56 @@ jobs:
       codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
 ```
 
-### AO external plugin path
+### Scoped reviewer wrapper (local AO primary path)
 
-If upstream AO exposes a stable review/pipeline plugin API in a future version,
-implement this under `plugins/ao-codex-pr-reviewer/` and register it through
-`agent-orchestrator.yaml`.
+Use the pack-owned wrapper so Codex receives declaration scope and returns
+structured findings (or the `NO_FINDINGS` clean-review token):
+
+```powershell
+# From the repository root (reviewer workspace or target repo checkout)
+ao review run <worker-session-id> --execute --command `
+  "node --import tsx plugins/ao-codex-pr-reviewer/bin/review.ts --repo-root . --base origin/main"
+```
+
+On Windows, prefer the PowerShell launcher:
+
+```powershell
+ao review run <worker-session-id> --execute --command `
+  "pwsh -NoProfile -File plugins/ao-codex-pr-reviewer/bin/review.ps1 --repo-root . --base origin/main"
+```
+
+Wrapper contract:
+
+| Codex stdout (trimmed) | Wrapper exit | AO / worker effect |
+|------------------------|--------------|-------------------|
+| Exactly `NO_FINDINGS` | 0, empty stdout | `findingCount: 0`, run `clean` |
+| Empty | non-zero | Run `failed`; log: `reviewer produced empty output` |
+| Legacy prose (“No concrete bugs…”) | non-zero | Run `failed`; no warning-finding noise |
+| JSON `{"findings":[…]}` | 0 | Structured findings parsed into AO store |
+
+The wrapper reads `prompts/codex_review_prompt.md`, injects scope from the linked
+issue (`denylist`, `allowed_roots`) and the active declaration snapshot
+(`docs/declarations/{issue}.{iteration}.json` via `_shared` / scope-guard loaders),
+and maps findings to architecture §F (`type`, `code`, `severity`, `path`,
+`summary`, `source`, signature).
+
+Resolve the issue number from `AO_ISSUE_NUMBER`, `--issue`, or the PR body
+(`Closes #N`). When neither issue fences nor a snapshot exist, the prompt omits
+authoritative scope and the wrapper adds a non-blocking
+`scope-context-unavailable` warning finding.
+
+### Dual-path shared contract
+
+Both the local AO path and the optional GitHub Actions workflow use:
+
+- `prompts/codex_review_prompt.md` — single prompt contract
+- `plugins/ao-codex-pr-reviewer/bin/review.{ts,ps1}` — scope assembly, Codex
+  invocation (`codex exec review`), `NO_FINDINGS` filtering, structured output
+- Architecture §F finding format and signatures (`plugins/ao-token-chain-ledger`)
+
+The reusable workflow calls the same wrapper; it posts
+`## Codex Review — no findings` when Codex returns `NO_FINDINGS` instead of
+dumping reviewer prose.
 
 ## Non-goals
 
