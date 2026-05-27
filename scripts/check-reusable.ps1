@@ -65,6 +65,7 @@ Write-Host ('Tracked files inspected: {0}' -f $tracked.Count)
 $allowedRootPatterns = @(
     'README.md',
     'AGENTS.md',
+    'CLAUDE.md',
     'CONTRIBUTING.md',
     'CHANGELOG.md',
     'LICENSE',
@@ -89,6 +90,7 @@ $allowedRootPatterns = @(
 
 $allowedPathPatterns = @(
     '.github/*',
+    '.claude/skills/*',
     'docs/*',
     'prompts/*',
     'plugins/*',
