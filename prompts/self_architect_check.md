@@ -39,10 +39,11 @@ ranges, and a one-line rationale.
 - `paired-edit-divergence` — a script and a template were both changed and share
   an ≥ 8-line block with partial overlap that no longer matches exactly.
 
-**Warning-only heuristics** (never fail `-Strict` on their own):
+**Warning-only heuristics** (local default mode only; skipped under `-Strict` / CI):
 
 - `near-duplicate-literal` — similar but not identical blocks in the configured
-  short-line window.
+  short-line window. CI omits this scan for speed; local runs cap candidates via
+  `scripts/lint-self-architect.config.json`.
 
 Thresholds and scan paths live in `scripts/lint-self-architect.config.json`.
 To suppress a justified duplicate, add an entry under `suppressions` with `rule`,

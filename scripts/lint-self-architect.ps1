@@ -19,9 +19,13 @@ function Get-DefaultConfig {
         templateExtensions      = @('.md', '.yaml', '.yml', '.json', '.example', '.template', '.tpl')
         duplicateLiteralMinLines = 10
         pairedEditMinLines      = 8
+        pairedLineStride        = 2
         heuristicMinLines       = 3
         heuristicMaxLines       = 9
         similarityThreshold     = 0.85
+        heuristicLineStride     = 3
+        heuristicMaxFindings    = 25
+        heuristicMaxFileLines   = 300
         pairedOverlapMinLines   = 6
         pairedOverlapMinRatio   = 0.75
         suppressions            = @()
@@ -339,27 +343,40 @@ function Find-HeuristicDuplicateFindings {
     $minLines = [int]$Config.heuristicMinLines
     $maxLines = [int]$Config.heuristicMaxLines
     $threshold = [double]$Config.similarityThreshold
+    $stride = [int]$Config.heuristicLineStride
+    if ($stride -lt 1) { $stride = 1 }
+    $maxFindings = [int]$Config.heuristicMaxFindings
+    if ($maxFindings -lt 1) { $maxFindings = 1 }
+    $maxFileLines = [int]$Config.heuristicMaxFileLines
     $paths = @($FileLines.Keys)
 
     for ($i = 0; $i -lt $paths.Count; $i++) {
+        if ($findings.Count -ge $maxFindings) { break }
         for ($j = $i + 1; $j -lt $paths.Count; $j++) {
+            if ($findings.Count -ge $maxFindings) { break }
+
             $leftPath = $paths[$i]
             $rightPath = $paths[$j]
             $leftLines = $FileLines[$leftPath]
             $rightLines = $FileLines[$rightPath]
 
+            if ($maxFileLines -gt 0) {
+                if ($leftLines.Count -gt $maxFileLines -or $rightLines.Count -gt $maxFileLines) {
+                    continue
+                }
+            }
+
             for ($size = $minLines; $size -le $maxLines; $size++) {
+                if ($findings.Count -ge $maxFindings) { break }
                 if ($leftLines.Count -lt $size -or $rightLines.Count -lt $size) { continue }
 
-                for ($li = 0; $li -le ($leftLines.Count - $size); $li++) {
-                    $leftBlock = @($leftLines[$li..($li + $size - 1)])
-                    for ($ri = 0; $ri -le ($rightLines.Count - $size); $ri++) {
-                        $rightBlock = @($rightLines[$ri..($ri + $size - 1)])
-                        if (($leftBlock -join "`n") -eq ($rightBlock -join "`n")) {
-                            continue
-                        }
+                for ($li = 0; $li -le ($leftLines.Count - $size); $li += $stride) {
+                    if ($findings.Count -ge $maxFindings) { break }
 
-                        $similarity = Get-LineSimilarity -Left $leftBlock -Right $rightBlock
+                    for ($ri = 0; $ri -le ($rightLines.Count - $size); $ri += $stride) {
+                        if ($findings.Count -ge $maxFindings) { break }
+
+                        $similarity = Get-LineSimilarity -Left @($leftLines[$li..($li + $size - 1)]) -Right @($rightLines[$ri..($ri + $size - 1)])
                         if ($similarity -ge $threshold -and $similarity -lt 1.0) {
                             $rule = 'near-duplicate-literal'
                             if (Test-Suppressed -Config $Config -Rule $rule -Files @($leftPath, $rightPath)) { continue }
@@ -389,6 +406,9 @@ function Find-PairedEditFindings {
     $minLines = [int]$Config.pairedEditMinLines
     $overlapMin = [int]$Config.pairedOverlapMinLines
     $overlapRatioMin = [double]$Config.pairedOverlapMinRatio
+    $stride = [int]$Config.pairedLineStride
+    if ($stride -lt 1) { $stride = 1 }
+    $size = $minLines
     $changed = @{}
     foreach ($path in $ChangedPaths) {
         $normalized = Normalize-RepoPath $path
@@ -408,31 +428,28 @@ function Find-PairedEditFindings {
             if ($scriptLines.Count -lt $minLines -or $templateLines.Count -lt $minLines) { continue }
 
             $bestMatch = $null
-            for ($si = 0; $si -le ($scriptLines.Count - $minLines); $si++) {
-                for ($ti = 0; $ti -le ($templateLines.Count - $minLines); $ti++) {
-                    for ($size = $minLines; $size -le [Math]::Min($scriptLines.Count - $si, $templateLines.Count - $ti); $size++) {
-                        $left = @($scriptLines[$si..($si + $size - 1)])
-                        $right = @($templateLines[$ti..($ti + $size - 1)])
-                        if (($left -join "`n") -eq ($right -join "`n")) { continue }
-
-                        $matching = 0
-                        for ($k = 0; $k -lt $size; $k++) {
-                            if ($left[$k] -eq $right[$k]) { $matching++ }
+            for ($si = 0; $si -le ($scriptLines.Count - $size); $si += $stride) {
+                for ($ti = 0; $ti -le ($templateLines.Count - $size); $ti += $stride) {
+                    $matching = 0
+                    for ($k = 0; $k -lt $size; $k++) {
+                        if ($scriptLines[$si + $k] -eq $templateLines[$ti + $k]) {
+                            $matching++
                         }
+                    }
 
-                        if ($matching -lt $overlapMin) { continue }
+                    if ($matching -lt $overlapMin) { continue }
 
-                        $overlapRatio = [double]$matching / $size
-                        if ($overlapRatio -lt $overlapRatioMin) { continue }
+                    $overlapRatio = [double]$matching / $size
+                    if ($overlapRatio -lt $overlapRatioMin) { continue }
+                    if ($matching -eq $size) { continue }
 
-                        if (-not $bestMatch -or $size -gt $bestMatch.size) {
-                            $bestMatch = [pscustomobject]@{
-                                si           = $si
-                                ti           = $ti
-                                size         = $size
-                                matching     = $matching
-                                overlapRatio = $overlapRatio
-                            }
+                    if (-not $bestMatch -or $overlapRatio -gt $bestMatch.overlapRatio) {
+                        $bestMatch = [pscustomobject]@{
+                            si           = $si
+                            ti           = $ti
+                            size         = $size
+                            matching     = $matching
+                            overlapRatio = $overlapRatio
                         }
                     }
                 }
@@ -499,8 +516,14 @@ foreach ($finding in (Find-DuplicateLiteralFindings -FileLines $fileLines -Confi
 foreach ($finding in (Find-PairedEditFindings -FileLines $fileLines -ChangedPaths $changedPaths -Config $Config)) {
     $allFindings.Add($finding) | Out-Null
 }
-foreach ($finding in (Find-HeuristicDuplicateFindings -FileLines $fileLines -Config $Config)) {
-    $allFindings.Add($finding) | Out-Null
+$heuristicSkipped = $false
+if ($Strict) {
+    $heuristicSkipped = $true
+}
+else {
+    foreach ($finding in (Find-HeuristicDuplicateFindings -FileLines $fileLines -Config $Config)) {
+        $allFindings.Add($finding) | Out-Null
+    }
 }
 
 $strictFindings = @($allFindings | Where-Object { $_.severity -eq 'strict' })
@@ -520,6 +543,9 @@ else {
     Write-Host $scopeLabel
 }
 Write-Host "Scanned files: $($scanPaths.Count)"
+if ($heuristicSkipped) {
+    Write-Host 'Heuristic near-duplicate scan: skipped (-Strict / CI mode)'
+}
 Write-Host ''
 
 if ($allFindings.Count -eq 0) {

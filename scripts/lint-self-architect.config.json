@@ -17,9 +17,13 @@
   "templateExtensions": [".md", ".yaml", ".yml", ".json", ".example", ".template", ".tpl"],
   "duplicateLiteralMinLines": 10,
   "pairedEditMinLines": 8,
+  "pairedLineStride": 2,
   "heuristicMinLines": 3,
   "heuristicMaxLines": 9,
   "similarityThreshold": 0.85,
+  "heuristicLineStride": 3,
+  "heuristicMaxFindings": 25,
+  "heuristicMaxFileLines": 300,
   "pairedOverlapMinLines": 6,
   "pairedOverlapMinRatio": 0.75,
   "suppressions": []
