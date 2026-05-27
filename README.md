@@ -29,6 +29,9 @@ Hard boundary:
   reusable-pack policy.
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
+- `scripts/patch-codex-review4.ps1` — fixes AO 0.9.2 built-in Codex review on
+  Windows (upstream bug: wrong subcommand + shell argument splitting). Re-run
+  after every `npm install -g @aoagents/ao` upgrade.
 - `docs/github_issues_cursor_codex_setup.md` — GitHub Issues + Cursor CLI
   planner/worker + Codex reviewer setup notes.
 - `.gitignore` — keeps local AO configs, runtime state, target repos, vendor
@@ -50,6 +53,18 @@ Windows baseline:
 - `tmux` is not required on Windows.
 - PowerShell 7+ is recommended for AO usage, but the verification scripts avoid
   requiring secrets or elevated privileges.
+
+**AO 0.9.2 Windows patch (required for Codex review):**
+
+AO 0.9.2 has upstream bugs that break its built-in Codex review on Windows.
+Apply the patch once after installing AO, and re-run after each upgrade:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
+```
+
+After patching, AO will call `codex exec review` locally when a PR is created.
+Review results appear in the AO dashboard under "Reviews".
 
 Required external prerequisites for a real AO run:
 
