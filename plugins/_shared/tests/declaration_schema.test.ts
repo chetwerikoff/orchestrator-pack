@@ -96,6 +96,47 @@ describe('validateDeclarationSnapshot', () => {
     }
   });
 
+  it('rejects unnormalized paths in amendment changed.added', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      amendments: [
+        {
+          previous_active_scope_hash: 'sha256:aaa',
+          new_active_scope_hash: 'sha256:bbb',
+          changed: { added: ['../vendor/secret.ts'], removed: [] },
+          reason: 'scope tweak',
+          actor: 'worker',
+          timestamp: '2026-05-26T12:00:00.000Z',
+          applied: true,
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('changed.added'))).toBe(true);
+    }
+  });
+
+  it('rejects backslashes in amendment changed.removed', () => {
+    const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
+    const result = validateDeclarationSnapshot({
+      ...base,
+      amendments: [
+        {
+          previous_active_scope_hash: 'sha256:aaa',
+          new_active_scope_hash: 'sha256:bbb',
+          changed: { added: [], removed: ['plugins\\x.ts'] },
+          reason: 'scope tweak',
+          actor: 'worker',
+          timestamp: '2026-05-26T12:00:00.000Z',
+          applied: true,
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects more than one amendment per iteration', () => {
     const base = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>;
     const amendment = {

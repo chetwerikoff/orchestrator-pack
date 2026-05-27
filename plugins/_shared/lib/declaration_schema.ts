@@ -85,9 +85,23 @@ function validateAmendmentEntries(amendments: unknown): string[] {
     } else {
       if (!isStringArray(entry.changed.added)) {
         errors.push(`${prefix}.changed.added must be an array of strings`);
+      } else {
+        errors.push(
+          ...validateNormalizedScopeEntries(
+            entry.changed.added,
+            `${prefix}.changed.added`,
+          ),
+        );
       }
       if (!isStringArray(entry.changed.removed)) {
         errors.push(`${prefix}.changed.removed must be an array of strings`);
+      } else {
+        errors.push(
+          ...validateNormalizedScopeEntries(
+            entry.changed.removed,
+            `${prefix}.changed.removed`,
+          ),
+        );
       }
     }
 
