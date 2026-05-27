@@ -1,0 +1,19 @@
+{
+  "issue_number": 4,
+  "iteration_id": "sess-abc123",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-26T12:00:00.000Z",
+  "baseline": {
+    "commit_sha": "abc123def456",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:deadbeef"
+  },
+  "declared_paths": [
+    "plugins/_shared/lib/normalize.ts"
+  ],
+  "declared_globs": [
+    "plugins/_shared/tests/**"
+  ],
+  "amendments": []
+}
