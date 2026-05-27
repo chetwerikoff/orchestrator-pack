@@ -23,6 +23,7 @@ function Get-DefaultConfig {
         heuristicMaxLines       = 9
         similarityThreshold     = 0.85
         pairedOverlapMinLines   = 6
+        pairedOverlapMinRatio   = 0.75
         suppressions            = @()
     }
 }
@@ -387,6 +388,7 @@ function Find-PairedEditFindings {
     $findings = New-Object System.Collections.Generic.List[object]
     $minLines = [int]$Config.pairedEditMinLines
     $overlapMin = [int]$Config.pairedOverlapMinLines
+    $overlapRatioMin = [double]$Config.pairedOverlapMinRatio
     $changed = @{}
     foreach ($path in $ChangedPaths) {
         $normalized = Normalize-RepoPath $path
@@ -420,12 +422,16 @@ function Find-PairedEditFindings {
 
                         if ($matching -lt $overlapMin) { continue }
 
+                        $overlapRatio = [double]$matching / $size
+                        if ($overlapRatio -lt $overlapRatioMin) { continue }
+
                         if (-not $bestMatch -or $size -gt $bestMatch.size) {
                             $bestMatch = [pscustomobject]@{
-                                si        = $si
-                                ti        = $ti
-                                size      = $size
-                                matching  = $matching
+                                si           = $si
+                                ti           = $ti
+                                size         = $size
+                                matching     = $matching
+                                overlapRatio = $overlapRatio
                             }
                         }
                     }
@@ -436,7 +442,8 @@ function Find-PairedEditFindings {
                 $rule = 'paired-edit-divergence'
                 if (Test-Suppressed -Config $Config -Rule $rule -Files @($scriptPath, $templatePath)) { continue }
 
-                $findings.Add((New-Finding -Rule $rule -Severity 'strict' -Rationale "Paired script/template edit: shared $($bestMatch.size)-line block diverged ($($bestMatch.matching) matching lines); extract or generate from one source." -Locations @(
+                $pct = [int]($bestMatch.overlapRatio * 100)
+                $findings.Add((New-Finding -Rule $rule -Severity 'strict' -Rationale "Paired script/template edit: shared $($bestMatch.size)-line block diverged ($($bestMatch.matching)/$($bestMatch.size) lines, $pct% overlap); extract or generate from one source." -Locations @(
                         (Format-Location -File $scriptPath -StartLine ($bestMatch.si + 1) -EndLine ($bestMatch.si + $bestMatch.size)),
                         (Format-Location -File $templatePath -StartLine ($bestMatch.ti + 1) -EndLine ($bestMatch.ti + $bestMatch.size))
                     ))) | Out-Null

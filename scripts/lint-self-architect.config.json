@@ -21,5 +21,6 @@
   "heuristicMaxLines": 9,
   "similarityThreshold": 0.85,
   "pairedOverlapMinLines": 6,
+  "pairedOverlapMinRatio": 0.75,
   "suppressions": []
 }
