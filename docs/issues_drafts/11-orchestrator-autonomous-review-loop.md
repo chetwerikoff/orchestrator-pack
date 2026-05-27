@@ -53,12 +53,12 @@ All behavior is enforced through:
 
 1. Orchestrator prompt rules while the orchestrator is active.
 2. Worker prompt rules.
-3. Existing AO CLI state (`ao review list --json`, `ao status --json --reports`,
+3. Existing AO CLI state (`ao review list --json`, `ao status --json --reports full`,
    `ao events list --json`).
 4. Existing AO reactions, particularly `report-stale`, as a long-tail backstop.
 
 The contract is observable from `ao events list` (reactionKey traffic),
-`ao review list` (`findingCount`), and `ao status --reports` (worker
+`ao review list` (`findingCount`), and `ao status --reports full` (worker
 transitions). No new tracking storage is introduced.
 
 ## Files in scope
@@ -128,7 +128,7 @@ docs/**
 - **Turn-driven decision procedure.** On each subsequent orchestrator turn
   while the PR remains in the pending state, the rules MUST require the
   orchestrator to inspect `ao review list --json`, `ao status --json
-  --reports`, and recent `ao events list --json` **before any other
+  --reports full`, and recent `ao events list --json` **before any other
   planning work**. Wall-clock target windows MAY appear as operator guidance
   (e.g. "expect worker acknowledgement within ~2 minutes; ping after that;
   respawn ~3 minutes after the ping") but the rules MUST explicitly state
@@ -210,7 +210,7 @@ docs/**
     response";
   - the four named exit conditions from that state;
   - a turn-opening decision procedure that inspects
-    `ao review list --json`, `ao status --json --reports`, and
+    `ao review list --json`, `ao status --json --reports full`, and
     `ao events list --json`;
   - the single-ping and respawn discipline using `ao send`,
     `ao session kill`, and `ao spawn --claim-pr`;
@@ -247,4 +247,4 @@ docs/**
   `docs/migration_notes.md` and the orchestratorRules block can describe,
   without consulting the architect, what the orchestrator should do next
   for a given combination of `ao review list` state and worker
-  `ao status --reports` state.
+  `ao status --reports full` state.
