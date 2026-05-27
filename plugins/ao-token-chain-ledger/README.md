@@ -65,6 +65,47 @@ Each ledger row should record:
 - Mark missing token/cost data as unknown instead of inventing values.
 - Keep raw ledger state outside committed source unless it is a sanitized sample.
 
+## Usage
+
+Install workspace dependencies from the repository root (`npm install`), then use the
+`ao-ledger` CLI from `plugins/ao-token-chain-ledger` (or via `npx tsx` on the bin).
+
+### Recording events (writer)
+
+Append-only rows are written to `.ao/ledger/events.jsonl` under the repository root.
+`chain_id` is resolved in priority order: `AO_CHAIN_ID` → AO chain/task id →
+`issue-{n}` → persisted wrapper fallback (`chain-{utc}-{uuid}` in
+`.ao/ledger/active-chain.json`).
+
+```typescript
+import { appendLedgerRow, prepareLedgerRow } from './lib/writer.js';
+
+const row = prepareLedgerRow({
+  repoRoot: process.cwd(),
+  issueNumber: 8,
+  event_kind: 'finished',
+  role: 'worker',
+  task_id: '8',
+});
+appendLedgerRow(row, { repoRoot: process.cwd() });
+```
+
+Cost fields use the three-source fallback (`ao-session-cost` via
+`AO_SESSION_INFO_JSON`, `agent-output-parse` from stdout, or `manual-import`).
+Missing cost is stored as `null` with `source: "unavailable"`.
+
+### Aggregating a chain
+
+```bash
+ao-ledger report --chain issue-8
+ao-ledger report --chain fixture-chain-8 --ledger plugins/ao-token-chain-ledger/tests/fixtures/three-session-chain.jsonl
+ao-ledger report --chain issue-8 --json
+```
+
+Reports include total in/out tokens, total estimated cost, per-role and per-iteration
+rollups, missing-data counts, finding signature recurrence, and preserved unknown
+`event_kind` values.
+
 ## Outputs
 
 - total input/output tokens per `chain_id`;

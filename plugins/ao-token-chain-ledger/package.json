@@ -1,0 +1,15 @@
+{
+  "name": "@orchestrator-pack/ao-token-chain-ledger",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ao-ledger": "./bin/ledger.ts"
+  },
+  "dependencies": {
+    "@orchestrator-pack/shared": "*",
+    "tsx": "^4.8.1"
+  },
+  "scripts": {
+    "test": "npm --prefix ../.. run test -- plugins/ao-token-chain-ledger/tests"
+  }
+}
