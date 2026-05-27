@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -166,10 +167,18 @@ export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
 }
 
 function isDirectExecution(): boolean {
-  if (!process.argv[1]) {
+  const entryScript = process.argv[1];
+  if (!entryScript) {
     return false;
   }
-  return resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+
+  try {
+    return (
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entryScript)
+    );
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectExecution()) {

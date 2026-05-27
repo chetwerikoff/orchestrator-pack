@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { formatViolationReport } from '../lib/check.js';
 import { parseScopeCheckArgs, runScopeCheck } from './scope-check.js';
@@ -85,10 +85,18 @@ export function runAgentWrap(options: WrapOptions): number {
 }
 
 function isDirectExecution(): boolean {
-  if (!process.argv[1]) {
+  const entryScript = process.argv[1];
+  if (!entryScript) {
     return false;
   }
-  return resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+
+  try {
+    return (
+      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entryScript)
+    );
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectExecution()) {
