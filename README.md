@@ -29,9 +29,9 @@ Hard boundary:
   reusable-pack policy.
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
-- `scripts/patch-codex-review4.ps1` — fixes AO 0.9.2 built-in Codex review on
-  Windows (upstream bug: wrong subcommand + shell argument splitting). Re-run
-  after every `npm install -g @aoagents/ao` upgrade.
+- `scripts/patch-codex-review4.ps1` — temporary Windows compatibility patch for
+  AO 0.9.2 built-in Codex review (wrong subcommand + shell argument splitting).
+  Safe to re-run; no-ops once AO ships the upstream fix.
 - `docs/github_issues_cursor_codex_setup.md` — GitHub Issues + Cursor CLI
   planner/worker + Codex reviewer setup notes.
 - `.gitignore` — keeps local AO configs, runtime state, target repos, vendor
@@ -54,16 +54,39 @@ Windows baseline:
 - PowerShell 7+ is recommended for AO usage, but the verification scripts avoid
   requiring secrets or elevated privileges.
 
-**AO 0.9.2 Windows patch (required for Codex review):**
+### AO 0.9.2 Windows Codex review patch
 
-AO 0.9.2 has upstream bugs that break its built-in Codex review on Windows.
-Apply the patch once after installing AO, and re-run after each upgrade:
+**Why it exists:** AO 0.9.2 calls the wrong Codex subcommand on Windows and passes
+arguments with `shell: true`, which splits multi-word flags incorrectly. The patch
+rewrites the bundled review chunk so AO invokes `codex exec review` reliably.
+
+**Affected version:** `@aoagents/ao` **0.9.2** on Windows only. AO **0.9.3+** is
+expected to include the upstream fix; the script detects the installed version and
+exits 0 with a no-op message when patching is unnecessary.
+
+**Apply or re-check after upgrades:**
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
 ```
 
-After patching, AO will call `codex exec review` locally when a PR is created.
+Re-run after every `npm install -g @aoagents/ao`. The script is idempotent on 0.9.2
+(already-patched installs report a no-op and exit 0).
+
+**Verify whether you still need it:**
+
+1. `ao --version` — if the output is **0.9.3 or newer**, the patch should no-op.
+2. Run the script — it prints whether it patched, was already applied, or is not
+   needed for your AO version.
+3. Confirm built-in review works: create or open a PR in AO and check that the
+   dashboard **Reviews** board shows Codex output (not a failed review run).
+
+**Removal condition:** delete `scripts/patch-codex-review4.ps1` and remove README
+references once AO **≥ 0.9.3** is released, verified on Windows, and the no-op path
+has been confirmed on a clean `npm install -g @aoagents/ao` without manual edits to
+`node_modules`.
+
+After patching on 0.9.2, AO calls `codex exec review` locally when a PR is created.
 Review results appear in the AO dashboard under "Reviews".
 
 Required external prerequisites for a real AO run:
