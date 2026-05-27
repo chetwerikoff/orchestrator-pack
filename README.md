@@ -193,6 +193,13 @@ If `ao` is already installed, both scripts check `ao --version`.
 
 ## Configure AO for a target repository
 
+End-to-end adoption checklist (pre-commit hook, Codex CI workflow, first scoped
+issue, `ao-declare`, and scope-guard smoke tests):
+
+- [`docs/target_repo_setup.md`](docs/target_repo_setup.md)
+- [`docs/issue_template_example.md`](docs/issue_template_example.md) — minimal
+  GitHub Issue body with mandatory `denylist` and optional `allowed-roots` fences
+
 Copy the example config and edit the project block for the real target repo:
 
 ```powershell
