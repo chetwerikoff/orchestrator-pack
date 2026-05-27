@@ -7,15 +7,16 @@ on:
     branches:
       - main
 
+# Default read-only; jobs that post PR comments override permissions locally.
 permissions:
   contents: read
-  pull-requests: write
-  issues: read
 
 jobs:
   verify-pack:
     name: Verify orchestrator-pack structure
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,15 +29,25 @@ jobs:
         shell: pwsh
         run: ./scripts/check-reusable.ps1
 
+  pr-scope-guard:
+    name: PR scope guard
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
       - name: Checkout trusted scope guard (base ref)
-        if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted-scope-guard
 
-      - name: PR scope guard
-        if: github.event_name == 'pull_request'
+      - name: Run scope guard
         shell: pwsh
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -74,6 +85,8 @@ jobs:
   tests:
     name: Run pack contract tests
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
