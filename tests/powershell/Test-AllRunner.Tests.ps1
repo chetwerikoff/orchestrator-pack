@@ -15,7 +15,16 @@ Describe 'scripts/test-all.ps1' {
     }
 
     It 'is invokable without running full tracks in this smoke test' {
-        { & $script:TestAllScript -SkipNpm -SkipPester } | Should -Not -Throw
+        # Run in a child process: test-all.ps1 uses exit, which would terminate
+        # the Pester host when invoked with the call operator in-process.
+        $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+        if ($pwsh) {
+            $shell = $pwsh.Source
+        }
+        else {
+            $shell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+        }
+        & $shell -NoProfile -ExecutionPolicy Bypass -File $script:TestAllScript -SkipNpm -SkipPester
         $LASTEXITCODE | Should -Be 0
     }
 }
