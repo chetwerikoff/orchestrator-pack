@@ -28,9 +28,10 @@ format. GitHub Actions review must not define an independent schema.
 
 ## Files in scope
 
-- `prompts/codex_review_prompt.md` (new) — shared reviewer prompt template referencing scope and required finding format
-- `plugins/ao-codex-pr-reviewer/README.md` — append dual-path scope-context behavior
-- `.github/workflows/codex-pr-review.yml` — optional path: inject scope context and structured finding requirements
+- `prompts/codex_review_prompt.md` (new) — shared reviewer prompt template referencing scope, required finding format, and the `NO_FINDINGS` clean-review contract
+- `plugins/ao-codex-pr-reviewer/bin/review.{ts,ps1}` (new) — reviewer wrapper invoked by AO via `ao review run --command`; calls `codex exec review`, parses output, filters `NO_FINDINGS`, emits structured findings
+- `plugins/ao-codex-pr-reviewer/README.md` — append dual-path scope-context behavior and the wrapper invocation contract
+- `.github/workflows/codex-pr-review.yml` — optional path: inject scope context, structured finding requirements, and the `NO_FINDINGS` skip in the PR-comment step
 - `docs/issues_drafts/06-codex-reviewer-scope-context.md` — this spec
 
 ## Files out of scope
@@ -63,11 +64,30 @@ format. GitHub Actions review must not define an independent schema.
 - Backward-compatible behavior: when neither issue body fences nor snapshot
   exist, the scope section is omitted from the prompt and the review output
   includes a non-blocking warning finding.
+- **Clean-review contract (`NO_FINDINGS` token):**
+  - The prompt MUST instruct Codex: when no concrete bugs, contract violations,
+    or scope violations are identified, emit the single token `NO_FINDINGS` on
+    its own line as the entire response body. No prose narration such as
+    "No concrete bugs were identified" — that text is forbidden.
+  - The reviewer wrapper (`plugins/ao-codex-pr-reviewer/bin/review.*`) MUST
+    treat trimmed stdout equal to `NO_FINDINGS` (or empty) as **zero findings**.
+    No finding record is created, written to disk, or surfaced to AO or to the
+    GitHub Actions comment step.
+  - On `NO_FINDINGS`, the local AO review run still completes normally
+    (`findingCount: 0`, `status: completed`). The GitHub Actions path posts a
+    short comment `## Codex Review — no findings` instead of dumping reviewer
+    prose.
+  - Rationale: observed during the #11 review cycle (2026-05-27) — AO 0.9.x
+    wraps any non-empty reviewer stdout as a `severity: warning` finding,
+    so "no bugs" narration becomes noise that gets routed to the worker
+    via `reactions.changes-requested` and burns tokens on a non-action.
 - Codex auth flow for the optional GitHub Actions path remains unchanged
   (`CODEX_AUTH_JSON` when that path is used).
 - Local AO path inherits Codex CLI auth from the user's environment
   (`codex login` state); no repository secret required.
 - No additional repository secrets introduced.
+- No changes to AO core / `packages/core/**`: the `NO_FINDINGS` filter lives
+  in the plugin-owned wrapper, not in AO runtime.
 
 ## Upgrade-safety check
 
@@ -83,3 +103,12 @@ format. GitHub Actions review must not define an independent schema.
   structure in a PR comment.
 - Matching scope produces only code findings or none.
 - Existing reusable workflow wiring still resolves when the optional path is enabled.
+- **`NO_FINDINGS` round-trip:**
+  - Synthetic fixture where Codex returns exactly `NO_FINDINGS` → reviewer
+    wrapper writes zero finding records; `ao review list` shows
+    `findingCount: 0, openFindingCount: 0` for the run.
+  - Synthetic fixture where Codex returns prose like "No concrete bugs
+    were identified" (legacy/regression case) → wrapper rejects the
+    output with a non-zero exit and a clear log line; AO marks the run
+    as `failed`, not as a warning-finding. This prevents silent regressions
+    if a future model drifts from the contract.
