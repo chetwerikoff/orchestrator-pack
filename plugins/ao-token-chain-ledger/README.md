@@ -126,6 +126,10 @@ Convergence is derived only from ledger JSONL rows (no AO core reads). A loop is
 
 The same finding `signature` (sha256 of `type`, `code`, normalized path per #3.F)
 appearing in two or more iterations is reported as a **repeated signature**.
+
+Rows with a missing `iteration_id` are labeled `(no-iteration-id)` in convergence
+output. That label is reserved for null ids only; a literal AO iteration id of
+`(none)` is reported unchanged and remains distinct in per-iteration breakdowns.
 Operational retry/escalation limits live in `agent-orchestrator.yaml.example`
 `reactions:`; analytical warnings (for example repeated signatures across
 iterations) use optional ledger report configuration only — prompt rules must not

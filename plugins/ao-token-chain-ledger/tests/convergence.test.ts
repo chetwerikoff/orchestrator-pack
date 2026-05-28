@@ -98,7 +98,7 @@ describe('computeConvergence', () => {
     expect(report.final_state).toBe('escalated');
   });
 
-  it('accounts for rows with null iteration_id under (none)', () => {
+  it('accounts for rows with null iteration_id under (no-iteration-id)', () => {
     const missing = {
       total_rows: 2,
       unavailable_cost_rows: 0,

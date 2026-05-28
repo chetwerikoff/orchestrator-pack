@@ -12,8 +12,8 @@ import type {
 
 const DEFAULT_REPEATED_SIGNATURE_ITERATION_THRESHOLD = 2;
 
-/** Report label for null iteration_id rows (matches aggregate.ts display). */
-export const NULL_ITERATION_LABEL = '(none)';
+/** Report label for null iteration_id rows (distinct from a literal iteration id of "(none)"). */
+export const NULL_ITERATION_LABEL = '(no-iteration-id)';
 
 /** Internal bucket for null iteration_id; not a valid AO iteration id. */
 const NULL_ITERATION_BUCKET = '\0ledger:null-iteration';
