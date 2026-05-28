@@ -107,6 +107,36 @@ function Get-RepoRoot {
     return (Resolve-Path -LiteralPath $scriptRoot).Path
 }
 
+function Invoke-GitQuiet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
+        [string[]]$GitArgs
+    )
+
+    $prevErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $nativePreference = $null
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+        $nativePreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    try {
+        $output = & git @GitArgs 2>&1
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = @($output)
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prevErrorAction
+        if ($null -ne $nativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
+        }
+    }
+}
+
 function Get-ChangedRelativePaths {
     param(
         [string]$Root,
@@ -312,12 +342,16 @@ function Get-BaseFileLines {
     Push-Location $Root
     try {
         $spec = "${BaseRef}:${RelativePath}"
-        $output = @(& git show $spec 2>$null)
-        if ($LASTEXITCODE -ne 0) {
+        $result = Invoke-GitQuiet -GitArgs @('show', $spec)
+        if ($result.ExitCode -ne 0) {
             return @()
         }
 
-        return @($output | ForEach-Object { $_.TrimEnd() })
+        return @(
+            $result.Output |
+                Where-Object { $_ -is [string] } |
+                ForEach-Object { $_.TrimEnd() }
+        )
     }
     finally {
         Pop-Location
@@ -341,6 +375,29 @@ function Test-BlockExistsInLines {
     }
 
     return $false
+}
+
+function Test-IsBlockNovelAtPath {
+    param(
+        [string]$Root,
+        [string]$BaseRef,
+        [string]$RelativePath,
+        [string]$BlockText,
+        [int]$Size,
+        [hashtable]$BaseLinesCache
+    )
+
+    $normalized = Normalize-RepoPath $RelativePath
+    if (-not $BaseLinesCache.ContainsKey($normalized)) {
+        $baseLinesCache[$normalized] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $normalized
+    }
+
+    $baseLines = $baseLinesCache[$normalized]
+    if ($baseLines.Count -eq 0) {
+        return $true
+    }
+
+    return -not (Test-BlockExistsInLines -Lines $baseLines -BlockText $BlockText -Size $Size)
 }
 
 function Get-LineSimilarity {
@@ -416,37 +473,42 @@ function Find-DuplicateLiteralFindings {
             if (-not $touchesIntroduced) { continue }
 
             if ($BaseRef) {
-                if (-not $touchesUnchanged) { continue }
-
                 $sampleLoc = $locations[0]
                 $samplePath = Normalize-RepoPath $sampleLoc.file
                 $blockText = (
                     $FileLines[$samplePath][($sampleLoc.startLine - 1)..($sampleLoc.endLine - 1)] -join "`n"
                 )
-                $hasNovelIntroduction = $false
                 $baseLinesCache = @{}
+                $shouldReport = $false
 
-                foreach ($loc in $locations) {
-                    $changedPath = Normalize-RepoPath $loc.file
-                    if (-not $introduced.ContainsKey($changedPath.ToLowerInvariant())) { continue }
+                if ($touchesUnchanged) {
+                    foreach ($loc in $locations) {
+                        $changedPath = Normalize-RepoPath $loc.file
+                        if (-not $introduced.ContainsKey($changedPath.ToLowerInvariant())) { continue }
 
-                    if (-not $baseLinesCache.ContainsKey($changedPath)) {
-                        $baseLinesCache[$changedPath] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $changedPath
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $changedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache) {
+                            $shouldReport = $true
+                            break
+                        }
+                    }
+                }
+                else {
+                    $novelIntroducedCount = 0
+                    foreach ($file in $distinctFiles) {
+                        $introducedPath = Normalize-RepoPath $file
+                        if (-not $introduced.ContainsKey($introducedPath.ToLowerInvariant())) { continue }
+
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $introducedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache) {
+                            $novelIntroducedCount++
+                        }
                     }
 
-                    $baseLines = $baseLinesCache[$changedPath]
-                    if ($baseLines.Count -eq 0) {
-                        $hasNovelIntroduction = $true
-                        break
-                    }
-
-                    if (-not (Test-BlockExistsInLines -Lines $baseLines -BlockText $blockText -Size $sampleLoc.lineCount)) {
-                        $hasNovelIntroduction = $true
-                        break
+                    if ($novelIntroducedCount -ge 2) {
+                        $shouldReport = $true
                     }
                 }
 
-                if (-not $hasNovelIntroduction) { continue }
+                if (-not $shouldReport) { continue }
             }
         }
 
