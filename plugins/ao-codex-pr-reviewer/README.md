@@ -63,7 +63,8 @@ A reusable workflow is provided at:
 
 This runs Codex in GitHub Actions CI (not locally) and can post findings as
 GitHub PR comments. Authentication uses ChatGPT OAuth credentials stored as the
-`CODEX_AUTH_JSON` repository secret.
+`CODEX_AUTH_JSON` repository secret. Caller and reusable workflows need
+`issues: read` so `gh issue view` can load linked-issue denylist/allowed_roots fences.
 
 The reusable workflow checks out **two** repositories: the caller PR head (workspace
 root, where `codex exec review` runs) and `orchestrator-pack` at
@@ -97,6 +98,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
   pull-requests: write
 
 jobs:

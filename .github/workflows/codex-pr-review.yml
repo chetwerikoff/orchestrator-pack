@@ -8,6 +8,7 @@ name: codex-pr-review
 #       types: [opened, synchronize, reopened]
 #   permissions:
 #     contents: read
+#     issues: read
 #     pull-requests: write
 #   jobs:
 #     codex-review:
@@ -49,6 +50,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
   pull-requests: write
 
 jobs:
