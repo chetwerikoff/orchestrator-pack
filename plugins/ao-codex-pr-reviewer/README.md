@@ -68,10 +68,11 @@ GitHub PR comments. Authentication uses ChatGPT OAuth credentials stored as the
 The reusable workflow checks out **two** repositories: the caller PR head (workspace
 root, where `codex exec review` runs) and `orchestrator-pack` at
 `orchestrator-pack/` (wrapper + `npm ci`). The pack ref is resolved from
-`job.workflow_sha` / `github.workflow_ref` (the caller's `uses: ...@ref`), not
-`github.action_ref`. The reviewer runs via `./node_modules/.bin/tsx` inside the
-pack checkout so caller repos do not need `tsx` installed. Optional input
-`pack_ref` overrides the resolved ref when needed.
+optional `pack_ref`, else `job.workflow_sha` (commit of this reusable workflow
+file in orchestrator-pack), else `main`. Do not use `github.workflow_ref` in
+`workflow_call` runs — that context belongs to the caller workflow, not this
+repo. The reviewer runs via `./node_modules/.bin/tsx` inside the pack checkout
+so caller repos do not need `tsx` installed.
 
 Use this path if you want review results visible on the GitHub PR rather than
 only in the local AO dashboard.

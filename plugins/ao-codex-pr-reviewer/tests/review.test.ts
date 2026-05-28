@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCodexExecReviewArgs } from '../lib/run_review.js';
 import { emitAoReviewPayload, toAoFindings } from '../lib/emit.js';
@@ -97,6 +100,27 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
     expect(payload.findings).toHaveLength(1);
+  });
+
+  it('writes scope-unavailable warning to GitHub comment on NO_FINDINGS', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-comment-'));
+    const commentFile = join(dir, 'comment.md');
+    try {
+      executeReview({
+        repoRoot: process.cwd(),
+        baseRef: 'origin/main',
+        issueNumber: 999_999,
+        source: 'codex-github-action',
+        fixtureStdout: NO_FINDINGS_TOKEN,
+        githubCommentFile: commentFile,
+      });
+
+      const comment = readFileSync(commentFile, 'utf8');
+      expect(comment).toContain('scope-context-unavailable');
+      expect(comment).not.toBe('## Codex Review — no findings\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('fails on legacy prose fixture', () => {

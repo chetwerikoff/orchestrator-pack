@@ -67,16 +67,15 @@ jobs:
       - name: Resolve orchestrator-pack checkout ref
         id: pack-ref
         run: |
+          # github.workflow_ref belongs to the *caller* workflow in workflow_call runs;
+          # never use it to checkout orchestrator-pack. Prefer explicit pack_ref,
+          # then job.workflow_sha (commit of this reusable workflow file), else main.
           if [ -n "${{ inputs.pack_ref }}" ]; then
             ref="${{ inputs.pack_ref }}"
           elif [ -n "${{ job.workflow_sha }}" ]; then
             ref="${{ job.workflow_sha }}"
           else
-            workflow_ref="${{ github.workflow_ref }}"
-            ref="${workflow_ref#*@}"
-            if [ -z "$ref" ]; then
-              ref="main"
-            fi
+            ref="main"
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
