@@ -12,6 +12,8 @@
   "declared_paths": [
     ".github/workflows/codex-pr-review.yml",
     "docs/declarations/9.op-8.json",
+    "docs/target_repo_setup.md",
+    "docs/templates/codex-pr-review-caller.yml",
     "package-lock.json",
     "prompts/codex_review_prompt.md",
     "scripts/pr-scope-check.ts"
