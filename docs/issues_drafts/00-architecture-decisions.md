@@ -284,6 +284,10 @@ within ~1 minute of spawn with no PR while the orchestrator remained healthy.
 
 3. **Durable fix** belongs in ComposioHQ/agent-orchestrator / cursor agent plugin:
    pass worker prompt via file or agent flag; no POSIX `printf` on Windows.
+   Escalated upstream as
+   [ComposioHQ/agent-orchestrator#2072](https://github.com/ComposioHQ/agent-orchestrator/issues/2072)
+   (filed 2026-05-29). Sibling Windows arg-passing issues on the code-review
+   path: #2003 / #2006 — a cmd.exe escape alone does not close signature B.
 
 See `docs/issues_drafts/25-worker-spawn-launch-safety.md` (Issue #63) and
 `docs/migration_notes.md`.
