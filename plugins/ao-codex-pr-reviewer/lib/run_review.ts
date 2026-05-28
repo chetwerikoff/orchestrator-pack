@@ -26,6 +26,26 @@ function readOutputFile(path: string): string | null {
   }
 }
 
+export function buildCodexExecReviewArgs(options: {
+  baseRef: string;
+  outputFile: string;
+  model?: string;
+}): string[] {
+  const args = ['exec', 'review'];
+  if (options.model) {
+    args.push('-m', options.model);
+  }
+  args.push(
+    '--base',
+    options.baseRef,
+    '--output-last-message',
+    options.outputFile,
+    '--dangerously-bypass-approvals-and-sandbox',
+    '-',
+  );
+  return args;
+}
+
 export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewResult {
   if (options.fixtureStdout !== undefined) {
     return { exitCode: 0, stdout: options.fixtureStdout, stderr: '' };
@@ -35,19 +55,11 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
   const outputFile = join(tempDir, 'last-message.txt');
 
   try {
-    const args = [
-      'exec',
-      'review',
-      '--base',
-      options.baseRef,
-      '--output-last-message',
+    const args = buildCodexExecReviewArgs({
+      baseRef: options.baseRef,
       outputFile,
-      '--dangerously-bypass-approvals-and-sandbox',
-      '-',
-    ];
-    if (options.model) {
-      args.splice(3, 0, '-m', options.model);
-    }
+      model: options.model,
+    });
 
     const spawnOptions = {
       cwd: options.repoRoot,

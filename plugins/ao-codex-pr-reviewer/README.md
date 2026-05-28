@@ -65,6 +65,11 @@ This runs Codex in GitHub Actions CI (not locally) and can post findings as
 GitHub PR comments. Authentication uses ChatGPT OAuth credentials stored as the
 `CODEX_AUTH_JSON` repository secret.
 
+The reusable workflow checks out **two** repositories: the caller PR head (workspace
+root, where `codex exec review` runs) and `orchestrator-pack` at
+`orchestrator-pack/` (wrapper + `npm ci`, pinned to the same ref as your
+`uses: ...@ref`). Target repos do not need to vendor the pack.
+
 Use this path if you want review results visible on the GitHub PR rather than
 only in the local AO dashboard.
 

@@ -22,6 +22,10 @@ name: codex-pr-review
 #
 # The auth.json is issued by ChatGPT OAuth and contains a refresh token,
 # so it stays valid across runs. Re-export when you see 401 errors.
+#
+# This workflow checks out the caller PR repository (workspace root) and a
+# separate orchestrator-pack checkout (orchestrator-pack/) for the reviewer
+# wrapper and npm dependencies.
 
 on:
   workflow_call:
@@ -45,7 +49,7 @@ jobs:
     name: Codex ${{ inputs.model }} PR review
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout PR repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -53,12 +57,20 @@ jobs:
       - name: Fetch base branch
         run: git fetch origin "${{ github.base_ref }}"
 
+      - name: Checkout orchestrator-pack
+        uses: actions/checkout@v4
+        with:
+          repository: chetwerikoff/orchestrator-pack
+          ref: ${{ github.action_ref }}
+          path: orchestrator-pack
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Install pack dependencies
+        working-directory: orchestrator-pack
         run: npm ci
 
       - name: Install Codex CLI
@@ -83,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          npx tsx plugins/ao-codex-pr-reviewer/bin/review.ts \
+          node --import tsx orchestrator-pack/plugins/ao-codex-pr-reviewer/bin/review.ts \
             --repo-root . \
             --base "origin/${{ github.base_ref }}" \
             --pr-number "${{ github.event.pull_request.number }}" \

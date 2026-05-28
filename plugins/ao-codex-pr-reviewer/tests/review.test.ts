@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildCodexExecReviewArgs } from '../lib/run_review.js';
 import { emitAoReviewPayload, toAoFindings } from '../lib/emit.js';
 import { NO_FINDINGS_TOKEN, parseCodexOutput } from '../lib/parse_output.js';
 import { buildReviewPrompt } from '../lib/prompt.js';
@@ -9,6 +10,22 @@ import {
   scopeUnavailableWarningFinding,
 } from '../lib/scope_context.js';
 const SCOPED_ISSUE_NUMBER = 6;
+
+describe('buildCodexExecReviewArgs', () => {
+  it('places model flag before --base and keeps base ref as its value', () => {
+    const args = buildCodexExecReviewArgs({
+      baseRef: 'origin/main',
+      outputFile: '/tmp/out.txt',
+      model: 'gpt-5.5',
+    });
+    const baseIndex = args.indexOf('--base');
+    expect(baseIndex).toBeGreaterThan(-1);
+    expect(args[baseIndex + 1]).toBe('origin/main');
+    expect(args).toContain('-m');
+    expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
+    expect(args.indexOf('-m')).toBeLessThan(baseIndex);
+  });
+});
 
 describe('parseCodexOutput', () => {
   it('treats exact NO_FINDINGS as clean', () => {
