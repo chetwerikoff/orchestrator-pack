@@ -72,3 +72,39 @@ When AO sends review feedback through `changes-requested` or `ci-failed`:
 - If feedback appears repetitive or contradictory, stop guessing and escalate
   with evidence.
 - Report verification commands and unresolved findings before handing back.
+
+## AO review response contract (workers)
+
+When AO-local review findings land (via `changes-requested`, `ao review send`,
+or the `report-stale` backstop), the worker MUST NOT go idle silently.
+
+**Required `ao report` transitions on the review path:**
+
+1. `ao report addressing_reviews` — as soon as you begin working on findings
+   (mandatory after findings are delivered; do not wait for a human ping).
+2. `ao report fixing_ci` — optional, while fixing CI triggered by review fixes.
+3. `ao report ready_for_review` — after pushing fixes and local verification,
+   when the PR is ready for the next orchestrator-driven review round.
+
+Use underscore state names (`addressing_reviews`, `fixing_ci`, `ready_for_review`)
+so `ao status --reports full` matches what orchestratorRules watches; hyphenated
+CLI aliases exist but can stall the autonomous review loop if status never shows
+the underscore form.
+
+**Terminal failure.** If you cannot address findings, report terminal failure
+with a reason: `ao report completed --note "<reason>"` or `ao send` to the
+orchestrator session explaining the blocker. Do not disappear without a signal.
+
+**Forbidden `completed` while review is open.** Do NOT run `ao report completed`
+while, for the current PR head:
+
+- the latest review run has `openFindingCount > 0`, or
+- any review run for that head is in `needs_triage` (findings not yet sent).
+
+Completion means nothing further to do; open findings or an unsent triage queue
+contradict that. Instead, run `ao report addressing_reviews` (after briefly
+allowing the orchestrator to `ao review send` if status is `needs_triage`), or
+report terminal failure with a reason.
+
+**Inspect before reporting.** Use `ao review list --json` to confirm run status
+and counts; do not infer cleanliness from finding prose.
