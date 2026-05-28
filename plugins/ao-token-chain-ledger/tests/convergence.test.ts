@@ -5,6 +5,7 @@ import { aggregateChain } from '../lib/aggregate.js';
 import {
   computeConvergence,
   isIterationConverged,
+  NULL_ITERATION_KEY,
 } from '../lib/convergence.js';
 import { computeFindingSignature } from '../lib/finding_signature.js';
 import { readLedgerRows } from '../lib/writer.js';
@@ -95,6 +96,45 @@ describe('computeConvergence', () => {
       { missingData: missing },
     );
     expect(report.final_state).toBe('escalated');
+  });
+
+  it('accounts for rows with null iteration_id under (none)', () => {
+    const missing = {
+      total_rows: 2,
+      unavailable_cost_rows: 0,
+      sessions_without_cost: [],
+      iterations_without_cost: [],
+    };
+    const report = computeConvergence(
+      [
+        row(
+          {
+            iteration_id: null,
+            event_kind: 'started',
+            role: 'worker',
+            timestamp: '2026-05-02T10:00:00.000Z',
+          },
+          { ...convergenceRowDefaults, chain_id: 'chain-null-iter' },
+        ),
+        row(
+          {
+            iteration_id: null,
+            event_kind: 'finished',
+            role: 'worker',
+            timestamp: '2026-05-02T10:30:00.000Z',
+          },
+          { ...convergenceRowDefaults, chain_id: 'chain-null-iter' },
+        ),
+      ],
+      'chain-null-iter',
+      { missingData: missing },
+    );
+
+    expect(report.total_iterations).toBe(1);
+    expect(report.blocking_findings_by_iteration).toEqual([
+      { iteration_id: NULL_ITERATION_KEY, blocking_findings: 0 },
+    ]);
+    expect(report.final_state).toBe('converged');
   });
 });
 

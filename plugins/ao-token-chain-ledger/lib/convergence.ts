@@ -12,6 +12,13 @@ import type {
 
 const DEFAULT_REPEATED_SIGNATURE_ITERATION_THRESHOLD = 2;
 
+/** Matches aggregate.ts bucketing for null iteration_id. */
+export const NULL_ITERATION_KEY = '(none)';
+
+export function iterationKey(iterationId: string | null): string {
+  return iterationId ?? NULL_ITERATION_KEY;
+}
+
 function signatureForFinding(finding: StructuredFinding): string {
   return finding.signature ?? computeFindingSignature(finding);
 }
@@ -40,20 +47,21 @@ function reactionIndicatesCiFailure(reaction: Record<string, unknown> | null): b
 function orderedIterationIds(rows: LedgerRow[]): string[] {
   const firstSeen = new Map<string, string>();
   for (const row of rows) {
-    if (!row.iteration_id) {
-      continue;
-    }
-    const previous = firstSeen.get(row.iteration_id);
+    const key = iterationKey(row.iteration_id);
+    const previous = firstSeen.get(key);
     if (!previous || row.timestamp < previous) {
-      firstSeen.set(row.iteration_id, row.timestamp);
+      firstSeen.set(key, row.timestamp);
     }
   }
   return [...firstSeen.entries()]
     .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
-    .map(([iterationId]) => iterationId);
+    .map(([id]) => id);
 }
 
 function rowsForIteration(rows: LedgerRow[], iterationId: string): LedgerRow[] {
+  if (iterationId === NULL_ITERATION_KEY) {
+    return rows.filter((row) => row.iteration_id === null);
+  }
   return rows.filter((row) => row.iteration_id === iterationId);
 }
 
@@ -94,12 +102,13 @@ function detectRepeatedSignatures(rows: LedgerRow[]): RepeatedSignatureReport[] 
   const bySignature = new Map<string, Map<string, number>>();
 
   for (const row of rows) {
-    if (row.event_kind !== 'finding' || !row.finding || !row.iteration_id) {
+    if (row.event_kind !== 'finding' || !row.finding) {
       continue;
     }
+    const key = iterationKey(row.iteration_id);
     const signature = signatureForFinding(row.finding);
     const perIteration = bySignature.get(signature) ?? new Map<string, number>();
-    perIteration.set(row.iteration_id, (perIteration.get(row.iteration_id) ?? 0) + 1);
+    perIteration.set(key, (perIteration.get(key) ?? 0) + 1);
     bySignature.set(signature, perIteration);
   }
 
