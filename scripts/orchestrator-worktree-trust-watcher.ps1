@@ -43,10 +43,20 @@ function Write-WatcherLog {
 function Register-TrustedPath {
     param([string]$Path)
     if ($known[$Path]) { return }
+    # Write .workspace-trusted before the worker PTY reads the path (race with AO spawn).
     & $TrustScript -WorkspacePath $Path -Quiet
     $known[$Path] = $true
     Add-Content -LiteralPath $StateFile -Value $Path
     Write-WatcherLog "trusted: $Path"
+}
+
+# Parent worktrees dir — reduces trust churn for every new op-* session.
+try {
+    & $TrustScript -TrustWorktreesRoot -ProjectId $ProjectId -Quiet
+    Write-WatcherLog 'trusted worktrees root (once per watcher start)'
+}
+catch {
+    Write-WatcherLog "worktrees root trust skipped: $_"
 }
 
 Write-WatcherLog "starting (project=$ProjectId, poll=${PollSeconds}s, root=$WorktreesRoot)"
