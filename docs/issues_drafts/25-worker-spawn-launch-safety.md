@@ -114,9 +114,12 @@ This issue commits the repository to:
 6. **Recovery runbook pointer.** The operator recovery surface
    (`docs/orchestrator-recovery-runbook.md` and/or its draft
    `docs/issues_drafts/15-orchestrator-recovery-runbook.md`) references this
-   launch-failure signature so an operator who sees a worker stuck immediately
-   after spawn is routed to the migration note rather than to the
-   orchestrator-stuck path.
+   launch-failure signature so an operator (or the orchestrator) who sees a worker
+   `agent_process_exited` with no PR shortly after spawn inspects the PTY for
+   Signature A/B and routes to the migration note **instead of** the
+   orchestrator-stuck ping path. It must also distinguish this launch failure from
+   benign `workspace.branch_collision` warnings, which are a separate
+   (workspace-hygiene) concern.
 7. **Decision log.** `docs/issues_drafts/00-architecture-decisions.md` gains a new
    subsection (next available letter) recording the decision: the worker
    launch failure is an upstream prompt-delivery defect (inline-argv + POSIX
@@ -246,3 +249,9 @@ code-reviews/**
    `00-architecture-decisions.md` subsection (criteria 6, 8); capture
    `gh issue view 3` output in PR notes to prove the Issue #3 re-sync (criterion 8).
 7. Show the recovery-surface pointer to the launch-failure signature (criterion 7).
+8. PR description lists **every** synced artifact (draft 24 + #60 body, draft 25 +
+   #63 body, §G + Issue #3 body) and states explicitly that this PR amends the #60
+   body's quote clauses while #60's review-preflight implementation remains a
+   separate issue. If a size-based launch-feasibility warning is implemented,
+   record the empirical threshold it uses (e.g. observed worker-prompt size vs the
+   Windows argv limit) in PR notes — the spec pins no fixed number.
