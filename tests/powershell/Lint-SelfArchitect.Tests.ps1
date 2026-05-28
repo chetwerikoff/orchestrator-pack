@@ -158,4 +158,53 @@ Describe 'scripts/lint-self-architect.ps1' {
             Pop-Location
         }
     }
+
+    It 'detects duplicate when a PR copies from a changed file that already had the block' {
+        $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-changed-source-copy'
+        $promptDir = Join-Path -Path $tempRoot -ChildPath 'prompts'
+        New-Item -ItemType Directory -Path $promptDir -Force | Out-Null
+
+        $sharedBlock = @(
+            'Before implementing, staging, or committing, run this short check:',
+            '',
+            '1. Paired script/template edits: am I changing the same behavior in both a script',
+            '   and a template? If yes, extract or generate from one source of truth.',
+            '2. Duplicated prompt literals: did I copy a rule/prompt/path string into multiple',
+            '   files? If yes, centralize it before continuing.',
+            '3. Broad declarations: is the declared scope a whole directory or glob when a',
+            '   file-level scope would work? If yes, narrow it or justify it explicitly.',
+            '4. New subsystem smell: am I adding a new subsystem for behavior that AO already',
+            '   has through config, reactions, session metadata, or plugin slots?',
+            '5. Core patch smell: am I about to patch upstream AO core? If yes, stop and use',
+            '   plugin/config/prompt/wrapper/hook/CI instead.'
+        )
+
+        $sourcePath = Join-Path -Path $promptDir -ChildPath 'source.md'
+        Set-Content -LiteralPath $sourcePath -Value (@('# Source', '') + $sharedBlock) -Encoding UTF8
+
+        Push-Location $tempRoot
+        try {
+            git init | Out-Null
+            git add prompts/source.md | Out-Null
+            git -c user.email='test@example.com' -c user.name='test' commit -m 'base' | Out-Null
+            $baseRef = (git rev-parse HEAD).Trim()
+
+            Set-Content -LiteralPath $sourcePath -Value (@('# Source', 'Unrelated edit.', '') + $sharedBlock) -Encoding UTF8
+            $copyPath = Join-Path -Path $promptDir -ChildPath 'copy.md'
+            Set-Content -LiteralPath $copyPath -Value (@('# Copy', '') + $sharedBlock) -Encoding UTF8
+            git add prompts/source.md prompts/copy.md | Out-Null
+            git -c user.email='test@example.com' -c user.name='test' commit -m 'copy block to second file' | Out-Null
+            $headRef = (git rev-parse HEAD).Trim()
+
+            $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -RepoRoot $tempRoot -Strict -BaseRef $baseRef -HeadRef $headRef 2>&1
+            $exitCode = $LASTEXITCODE
+            $output = $rawOutput | Out-String
+            $exitCode | Should -Be 1
+            $output | Should -Match 'duplicate-literal'
+            $output | Should -Match 'STRICT'
+        }
+        finally {
+            Pop-Location
+        }
+    }
 }

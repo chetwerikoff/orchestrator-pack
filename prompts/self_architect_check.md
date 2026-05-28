@@ -35,8 +35,9 @@ ranges, and a one-line rationale.
 **Strict rules (exit 1 when matched):**
 
 - `duplicate-literal` — the same ≥ 10 consecutive lines appear in two or more
-  scanned files, including when a PR introduces the block in multiple changed
-  files or copies it from an unchanged tracked file under configured scan paths.
+  scanned files, including when a PR copies the block into another changed or
+  new file (even if the source file was also touched) or from an unchanged
+  tracked file under configured scan paths.
 - `paired-edit-divergence` — a script and a template were both changed and share
   an ≥ 8-line block with partial overlap that no longer matches exactly.
 

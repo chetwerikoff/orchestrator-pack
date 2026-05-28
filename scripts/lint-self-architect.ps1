@@ -503,7 +503,9 @@ function Find-DuplicateLiteralFindings {
                         }
                     }
 
-                    if ($novelIntroducedCount -ge 2) {
+                    # One novel introduced path is enough: the other file may already
+                    # contain the block at base but still be in IntroducedInPaths.
+                    if ($novelIntroducedCount -ge 1) {
                         $shouldReport = $true
                     }
                 }
