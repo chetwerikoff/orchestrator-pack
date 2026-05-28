@@ -82,6 +82,7 @@ Observable by reading `prompts/codex_review_prompt.md`:
 ## Denylist
 
 ```denylist
+# issue 51 — calibration prompt worker scope
 vendor/**
 packages/core/**
 .ao/**
