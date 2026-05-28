@@ -1,15 +1,15 @@
 #!/usr/bin/env tsx
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   validateDeclarationSnapshot,
   type DeclarationSnapshot,
 } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
+import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.js';
 import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.js';
-import { pathMatchesAnyPattern } from '../plugins/ao-scope-guard/lib/glob_match.js';
+import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.js';
 import {
   normalizeIssueConstraints,
   validateDeclaredScope,
@@ -108,17 +108,6 @@ function iterationIdFromFilename(issueNumber: number, filename: string): string 
   return filename.slice(prefix.length, -'.json'.length);
 }
 
-function listSnapshotFilenames(repoRoot: string, issueNumber: number): string[] {
-  const dir = join(repoRoot, SNAPSHOT_DIR);
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.startsWith(`${issueNumber}.`) && name.endsWith('.json'))
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
 function readSnapshotFile(
   repoRoot: string,
   issueNumber: number,
@@ -163,7 +152,7 @@ export function resolveLatestCommittedSnapshot(
 ):
   | { ok: true; snapshot: DeclarationSnapshot }
   | { ok: false; reason: 'missing_snapshot' | 'snapshot_chain_inconsistency'; message: string } {
-  const filenames = listSnapshotFilenames(repoRoot, issueNumber);
+  const filenames = listIssueSnapshots(repoRoot, issueNumber);
   if (filenames.length === 0) {
     return {
       ok: false,
@@ -262,44 +251,16 @@ export function resolveLatestCommittedSnapshot(
   return { ok: true, snapshot: head.snapshot };
 }
 
-function pathInDeclaredScope(
-  path: string,
-  declaredPaths: string[],
-  declaredGlobs: string[],
-): boolean {
-  if (declaredPaths.includes(path)) {
-    return true;
-  }
-  return pathMatchesAnyPattern(path, declaredGlobs);
-}
-
 function checkPrPathsAgainstSnapshot(
   prPaths: string[],
   snapshot: DeclarationSnapshot,
 ): PrPathSnapshotCheckResult {
   const { control, scoped } = partitionControlArtifacts(prPaths);
-  const outOfScope: string[] = [];
-  const invalidPaths: Array<{ path: string; reason: string }> = [];
-  const checkedPaths: string[] = [];
-
-  for (const rawPath of scoped) {
-    const normalized = normalizePath(rawPath);
-    if (!normalized.ok) {
-      invalidPaths.push({ path: rawPath, reason: normalized.reason });
-      continue;
-    }
-
-    checkedPaths.push(normalized.path);
-    if (
-      !pathInDeclaredScope(
-        normalized.path,
-        snapshot.declared_paths,
-        snapshot.declared_globs,
-      )
-    ) {
-      outOfScope.push(normalized.path);
-    }
-  }
+  const { outOfScope, invalidPaths, checkedPaths } = classifyScopedPaths(scoped, {
+    denylist: [],
+    declaredPaths: snapshot.declared_paths,
+    declaredGlobs: snapshot.declared_globs,
+  });
 
   if (invalidPaths.length > 0) {
     return {

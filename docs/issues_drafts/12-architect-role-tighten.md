@@ -126,7 +126,6 @@ agent-orchestrator.yaml
 agent-orchestrator.yaml.example
 prompts/agent_rules.md
 scripts/pr-scope-check.ps1
-scripts/pr-scope-check.ts
 scripts/pr-scope-check.test.ts
 docs/first_principles_10_critical_framework.md
 docs/first_principles_5_operational_framework.md
@@ -144,6 +143,7 @@ plugins/ao-task-declaration/bin/**
 plugins/ao-token-chain-ledger/**
 scripts/verify.ps1
 scripts/patch-codex-review4.ps1
+scripts/pr-scope-check.ts
 scripts/lib/**
 ```
 
