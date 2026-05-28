@@ -109,3 +109,19 @@ To adopt on an existing live `agent-orchestrator.yaml`:
 Full operator steps, dedup window, and failure detection are in
 `docs/orchestrator-wake-runbook.md`. When the listener is stopped, AO and workers
 continue normally; only automatic orchestrator wakes stop.
+
+## Orchestrator stuck / probe_failure recovery
+
+When AO observability flags the orchestrator session (e.g. `op-orchestrator`) as
+`stuck` or `probe_failure` while workers or review runs still need coordination,
+use the manual escalation runbook — do not improvise kills without inspecting
+in-flight state first:
+
+1. Read `docs/orchestrator-recovery-runbook.md` (ordered steps: ping → inspect →
+   kill orchestrator session → full `ao stop`/`ao start`).
+2. Optionally run `pwsh -File scripts/orchestrator-diagnose.ps1` for a read-only
+   one-screen snapshot before escalation.
+
+After recovery, the orchestrator re-applies `orchestratorRules` from your live
+YAML (see **Autonomous review loop** above). This path does not add automatic
+recovery or new AO configuration.
