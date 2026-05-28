@@ -82,9 +82,14 @@ or the `report-stale` backstop), the worker MUST NOT go idle silently.
 
 1. `ao report addressing_reviews` — as soon as you begin working on findings
    (mandatory after findings are delivered; do not wait for a human ping).
-2. `ao report fixing-ci` — optional, while fixing CI triggered by review fixes.
-3. `ao report ready-for-review` — after pushing fixes and local verification,
+2. `ao report fixing_ci` — optional, while fixing CI triggered by review fixes.
+3. `ao report ready_for_review` — after pushing fixes and local verification,
    when the PR is ready for the next orchestrator-driven review round.
+
+Use underscore state names (`addressing_reviews`, `fixing_ci`, `ready_for_review`)
+so `ao status --reports full` matches what orchestratorRules watches; hyphenated
+CLI aliases exist but can stall the autonomous review loop if status never shows
+the underscore form.
 
 **Terminal failure.** If you cannot address findings, report terminal failure
 with a reason: `ao report completed --note "<reason>"` or `ao send` to the
