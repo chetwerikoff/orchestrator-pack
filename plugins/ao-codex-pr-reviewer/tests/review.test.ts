@@ -10,13 +10,32 @@ import {
 } from '../lib/emit.js';
 import { NO_FINDINGS_TOKEN, parseCodexOutput } from '../lib/parse_output.js';
 import { buildReviewPrompt } from '../lib/prompt.js';
-import { executeReview } from '../lib/review_core.js';
+import {
+  executeReview,
+  hasReviewRuntimeDeps,
+  resolvePackRepoRoot,
+  reviewDependencySearchRoots,
+} from '../lib/review_core.js';
 import {
   formatScopeSection,
   resolveScopeContext,
   scopeUnavailableWarningFinding,
 } from '../lib/scope_context.js';
 const SCOPED_ISSUE_NUMBER = 6;
+
+describe('review dependency roots', () => {
+  it('resolves pack repo root to orchestrator-pack', () => {
+    expect(resolvePackRepoRoot()).toBe(process.cwd());
+  });
+
+  it('checks pack root before reviewed repo when they differ', () => {
+    const packRoot = resolvePackRepoRoot();
+    const otherRoot = join(tmpdir(), 'foreign-pr-repo');
+    expect(reviewDependencySearchRoots(otherRoot)).toEqual([packRoot, otherRoot]);
+    expect(reviewDependencySearchRoots(packRoot)).toEqual([packRoot]);
+    expect(hasReviewRuntimeDeps(packRoot)).toBe(true);
+  });
+});
 
 describe('buildCodexExecReviewArgs', () => {
   it('uses stdin prompt mode without --base (Codex CLI mutual-exclusion)', () => {

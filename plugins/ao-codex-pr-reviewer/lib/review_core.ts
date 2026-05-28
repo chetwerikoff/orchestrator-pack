@@ -1,5 +1,6 @@
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildReviewPrompt } from './prompt.js';
 import { parseCodexOutput } from './parse_output.js';
 import {
@@ -37,16 +38,35 @@ export interface ReviewResult {
   githubComment?: string;
 }
 
+/** orchestrator-pack root (where npm ci installs tsx for the wrapper process). */
+export function resolvePackRepoRoot(): string {
+  const libDir = dirname(fileURLToPath(import.meta.url));
+  return join(libDir, '..', '..', '..');
+}
+
+export function hasReviewRuntimeDeps(root: string): boolean {
+  return existsSync(join(root, 'node_modules', 'tsx', 'package.json'));
+}
+
+/** Roots to probe for tsx: pack checkout first, then optional reviewed repo (AO op-rev). */
+export function reviewDependencySearchRoots(repoRoot: string): string[] {
+  const packRoot = resolvePackRepoRoot();
+  if (repoRoot === packRoot) {
+    return [packRoot];
+  }
+  return [packRoot, repoRoot];
+}
+
 function assertReviewDependencies(repoRoot: string): void {
-  const tsxModule = join(repoRoot, 'node_modules', 'tsx', 'package.json');
-  if (existsSync(tsxModule)) {
+  const roots = reviewDependencySearchRoots(repoRoot);
+  if (roots.some((root) => hasReviewRuntimeDeps(root))) {
     return;
   }
   console.error(
     [
-      'Pack Codex review requires dev dependencies in the repo root (tsx from npm ci).',
-      'Run: npm ci --include=dev',
-      'Or invoke scripts/run-pack-review.ps1 (includes preflight before review.ps1).',
+      'Pack Codex review requires tsx from npm ci in the pack checkout (or in the reviewed repo for AO workspaces).',
+      `Checked: ${roots.join(', ')}`,
+      'Run npm ci --include=dev in the pack checkout, or scripts/run-pack-review.ps1 for AO local review.',
     ].join('\n'),
   );
   process.exit(1);
