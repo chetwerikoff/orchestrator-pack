@@ -43,7 +43,7 @@ No new prohibitions, no new acceptance gates, no implementation changes.
 - Tests, CI workflows.
 - Any change to the actual review wiring (review-loop rules belong to #28, reviewer wrapper belongs to #9).
 
-## Denylist
+## Scope fences (issue #38)
 
 ```denylist
 vendor/**
