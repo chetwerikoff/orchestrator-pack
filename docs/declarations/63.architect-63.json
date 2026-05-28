@@ -1,0 +1,28 @@
+{
+  "issue_number": 63,
+  "iteration_id": "architect-63",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T18:10:15.124Z",
+  "baseline": {
+    "commit_sha": "2559ebad4f54629bf5f6702dbd09d91904d5db76",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:63f8aadcc61ce28caf0056c904e8290bc4ff3db9e7cd2b1e8f2c2e5710049323"
+  },
+  "declared_paths": [
+    "scripts/check-worker-launch-failure.ps1",
+    "scripts/lib/Test-WorkerLaunchFailure.ps1",
+    "scripts/orchestrator-diagnose.ps1",
+    "scripts/verify.ps1",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/issues_drafts/15-orchestrator-recovery-runbook.md",
+    "docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md",
+    "docs/issues_drafts/25-worker-spawn-launch-safety.md"
+  ],
+  "declared_globs": [
+    "tests/fixtures/worker-launch-failure/**"
+  ],
+  "amendments": []
+}
