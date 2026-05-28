@@ -1,29 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateChain, selectRowsForCostAggregation } from '../lib/aggregate.js';
 import { computeFindingSignature } from '../lib/finding_signature.js';
-import type { LedgerRow } from '../lib/types.js';
-
-function row(overrides: Partial<LedgerRow> & Pick<LedgerRow, 'event_kind' | 'role'>): LedgerRow {
-  return {
-    chain_id: 'chain-a',
-    chain_id_source: 'manual',
-    iteration_id: 'iter-1',
-    session_id: 'sess-1',
-    parent_session_id: null,
-    parent_session_id_source: 'unavailable',
-    task_id: '1',
-    timestamp: '2026-05-01T00:00:00.000Z',
-    finding: null,
-    reaction: null,
-    cost: {
-      input_tokens: null,
-      output_tokens: null,
-      estimated_cost_usd: null,
-      source: 'unavailable',
-    },
-    ...overrides,
-  };
-}
+import { ledgerTestRow as row } from './ledger_row.js';
 
 describe('aggregateChain', () => {
   it('sums available cost rows without zero-filling missing totals', () => {

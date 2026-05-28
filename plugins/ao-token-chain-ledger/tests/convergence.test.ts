@@ -8,7 +8,7 @@ import {
 } from '../lib/convergence.js';
 import { computeFindingSignature } from '../lib/finding_signature.js';
 import { readLedgerRows } from '../lib/writer.js';
-import type { LedgerRow } from '../lib/types.js';
+import { ledgerTestRow as row } from './ledger_row.js';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -16,27 +16,7 @@ function fixturePath(name: string): string {
   return join(fixturesDir, name);
 }
 
-function row(overrides: Partial<LedgerRow> & Pick<LedgerRow, 'event_kind' | 'role'>): LedgerRow {
-  return {
-    chain_id: 'chain-test',
-    chain_id_source: 'manual',
-    iteration_id: 'iter-1',
-    session_id: 'sess-1',
-    parent_session_id: null,
-    parent_session_id_source: 'unavailable',
-    task_id: '19',
-    timestamp: '2026-05-01T00:00:00.000Z',
-    finding: null,
-    reaction: null,
-    cost: {
-      input_tokens: null,
-      output_tokens: null,
-      estimated_cost_usd: null,
-      source: 'unavailable',
-    },
-    ...overrides,
-  };
-}
+const convergenceRowDefaults = { chain_id: 'chain-test', task_id: '19' };
 
 describe('computeConvergence', () => {
   it('reports converged when review flags finding then fix and clean review', () => {
@@ -106,7 +86,10 @@ describe('computeConvergence', () => {
     };
     const report = computeConvergence(
       [
-        row({ event_kind: 'escalation', role: 'orchestrator', iteration_id: 'iter-9' }),
+        row(
+          { event_kind: 'escalation', role: 'orchestrator', iteration_id: 'iter-9' },
+          convergenceRowDefaults,
+        ),
       ],
       'chain-test',
       { missingData: missing },
@@ -119,34 +102,40 @@ describe('isIterationConverged', () => {
   it('requires no blocking findings, scope violations, or CI failures', () => {
     expect(
       isIterationConverged([
-        row({
-          event_kind: 'finding',
-          role: 'reviewer',
-          finding: {
-            type: 'scope-violation',
-            code: 'scope-violation:path-outside-declaration',
-            severity: 'blocking',
-            path: 'vendor/foo.ts',
-            summary: 'out of scope',
-            source: 'codex-local',
+        row(
+          {
+            event_kind: 'finding',
+            role: 'reviewer',
+            finding: {
+              type: 'scope-violation',
+              code: 'scope-violation:path-outside-declaration',
+              severity: 'blocking',
+              path: 'vendor/foo.ts',
+              summary: 'out of scope',
+              source: 'codex-local',
+            },
           },
-        }),
+          convergenceRowDefaults,
+        ),
       ]),
     ).toBe(false);
 
     expect(
       isIterationConverged([
-        row({
-          event_kind: 'reaction',
-          role: 'reviewer',
-          reaction: { trigger: 'ci-failed', action: 'send-to-agent' },
-        }),
+        row(
+          {
+            event_kind: 'reaction',
+            role: 'reviewer',
+            reaction: { trigger: 'ci-failed', action: 'send-to-agent' },
+          },
+          convergenceRowDefaults,
+        ),
       ]),
     ).toBe(false);
 
     expect(
       isIterationConverged([
-        row({ event_kind: 'finished', role: 'reviewer' }),
+        row({ event_kind: 'finished', role: 'reviewer' }, convergenceRowDefaults),
       ]),
     ).toBe(true);
   });
