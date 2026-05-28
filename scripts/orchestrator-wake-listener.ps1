@@ -56,7 +56,7 @@ function Invoke-WakeFilter {
     try {
         $output = $BodyJson | node $Script:FilterCli evaluate 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "wake filter exited $LASTEXITCODE: $output"
+            throw "wake filter exited ${LASTEXITCODE}: $output"
         }
         return ($output | Out-String).Trim() | ConvertFrom-Json
     }
