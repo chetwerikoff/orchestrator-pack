@@ -52,11 +52,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     issueNumber,
   });
 
-  const prompt = buildReviewPrompt({
-    repoRoot: options.repoRoot,
-    scope,
-    source,
-  });
+  const prompt = buildReviewPrompt({ scope, source });
 
   if (options.skipCodex && options.fixtureStdout === undefined) {
     return {
@@ -72,6 +68,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     baseRef: options.baseRef,
     prompt,
     model: options.model,
+    source,
     fixtureStdout: options.fixtureStdout,
   });
 

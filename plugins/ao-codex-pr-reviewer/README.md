@@ -75,6 +75,10 @@ Do not use `github.workflow_ref` in `workflow_call` runs — that context belong
 to the caller workflow. The reviewer runs via `./node_modules/.bin/tsx` inside
 the pack checkout so caller repos do not need `tsx` installed.
 
+For untrusted PR workspaces (`codex-github-action` / `PR_REPO_ROOT`), Codex runs
+with `--sandbox read-only` (no sandbox bypass) and the child process env omits
+`GH_TOKEN` and related CI secrets so prompt injection cannot exfiltrate them.
+
 Use this path if you want review results visible on the GitHub PR rather than
 only in the local AO dashboard.
 
@@ -118,7 +122,8 @@ Wrapper contract:
 | Legacy prose (“No concrete bugs…”) | non-zero | Run `failed`; no warning-finding noise |
 | JSON `{"findings":[…]}` | 0 | Structured findings parsed into AO store |
 
-The wrapper reads `prompts/codex_review_prompt.md`, injects scope from the linked
+The wrapper always loads the pack-bundled `prompts/codex_review_prompt.md` (never
+a copy in the reviewed workspace), injects scope from the linked
 issue (`denylist`, `allowed_roots`) and the active declaration snapshot
 (`docs/declarations/{issue}.{iteration}.json` via `_shared` / scope-guard loaders),
 and maps findings to architecture §F (`type`, `code`, `severity`, `path`,
