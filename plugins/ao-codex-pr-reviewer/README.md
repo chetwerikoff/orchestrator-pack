@@ -87,26 +87,9 @@ only in the local AO dashboard.
 # Paste the clipboard value as the CODEX_AUTH_JSON secret in the target repo.
 ```
 
-Caller workflow for a target repository:
-
-```yaml
-# .github/workflows/pr-review.yml  (in the target repository)
-name: pr-review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  issues: read
-  pull-requests: write
-
-jobs:
-  codex-review:
-    uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
-    secrets:
-      codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
-```
+Caller workflow for a target repository: copy
+`docs/templates/codex-pr-review-caller.yml` into `.github/workflows/pr-review.yml`
+(see `docs/target_repo_setup.md` section 6).
 
 ### Scoped reviewer wrapper (local AO primary path)
 

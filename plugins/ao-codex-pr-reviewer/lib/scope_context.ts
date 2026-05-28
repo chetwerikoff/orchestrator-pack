@@ -24,50 +24,53 @@ function shouldSkipGh(): boolean {
   return process.env.VITEST === 'true' || process.env.AO_CODEX_REVIEW_SKIP_GH === '1';
 }
 
-function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
+function readGhJsonBody(
+  repoRoot: string,
+  command: string,
+  args: string[],
+): Record<string, unknown> | null {
   if (shouldSkipGh()) {
     return null;
   }
 
   try {
-    const output = execFileSync(
-      'gh',
-      ['issue', 'view', String(issueNumber), '--json', 'body'],
-      {
-        encoding: 'utf8',
-        cwd: repoRoot,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: GH_TIMEOUT_MS,
-      },
-    );
-    const parsed = JSON.parse(output) as { body?: string };
-    return typeof parsed.body === 'string' ? parsed.body : null;
+    const output = execFileSync(command, args, {
+      encoding: 'utf8',
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GH_TIMEOUT_MS,
+    });
+    return JSON.parse(output) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-function fetchPrBody(repoRoot: string, prNumber: number): string | null {
-  if (shouldSkipGh()) {
-    return null;
-  }
+function bodyFromGhJson(parsed: Record<string, unknown> | null): string | null {
+  const body = parsed?.body;
+  return typeof body === 'string' ? body : null;
+}
 
-  try {
-    const output = execFileSync(
-      'gh',
-      ['pr', 'view', String(prNumber), '--json', 'body'],
-      {
-        encoding: 'utf8',
-        cwd: repoRoot,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: GH_TIMEOUT_MS,
-      },
-    );
-    const parsed = JSON.parse(output) as { body?: string };
-    return typeof parsed.body === 'string' ? parsed.body : null;
-  } catch {
-    return null;
-  }
+function fetchIssueBody(repoRoot: string, issueNumber: number): string | null {
+  const parsed = readGhJsonBody(repoRoot, 'gh', [
+    'issue',
+    'view',
+    String(issueNumber),
+    '--json',
+    'body',
+  ]);
+  return bodyFromGhJson(parsed);
+}
+
+function fetchPrBody(repoRoot: string, prNumber: number): string | null {
+  const parsed = readGhJsonBody(repoRoot, 'gh', [
+    'pr',
+    'view',
+    String(prNumber),
+    '--json',
+    'body',
+  ]);
+  return bodyFromGhJson(parsed);
 }
 
 function readPrBodyFromFile(path: string): string | null {
