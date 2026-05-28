@@ -112,6 +112,17 @@ docs/**
   (`findingCount: 0, openFindingCount: 0`), never by reading or
   pattern-matching finding body prose. This honors the NO_FINDINGS contract
   from file `06-...`.
+- **Named review-run states the rules MUST handle.** The
+  `orchestratorRules` block MUST handle the AO-emitted review-run statuses
+  exactly as they appear in `ao review list --json`. As of AO 0.9.x these
+  include at minimum:
+  - `needs_triage` — review run completed, findings have not been sent to
+    the worker yet. The orchestrator MUST call `ao review send <run-id>`
+    for any `needs_triage` run with `openFindingCount > 0`.
+  - `waiting_update` — review run already had findings sent
+    (`sentFindingCount > 0`) and the orchestrator is awaiting the worker's
+    response.
+  Invented statuses are forbidden (e.g. `awaiting_triage`).
 - **Named pending state.** The rules MUST introduce an explicit named state
   for "review send issued, awaiting worker response" (suggested:
   `waiting_worker_review_response`; planner picks the exact identifier).
@@ -176,7 +187,10 @@ docs/**
   - forbids silently going idle after receiving review findings;
   - requires a terminal failure report (`completed` with a failure
     note, or explicit `ao send` to the orchestrator) with a reason if the
-    worker cannot address findings.
+    worker cannot address findings;
+  - **forbids `ao report completed` while the latest review run for the
+    current PR head has `openFindingCount > 0`, or while any review run
+    for the current PR head is in `needs_triage`.**
 - **Migration paragraph.** `docs/migration_notes.md` MUST contain a
   paragraph instructing operators how to fold the updated
   `orchestratorRules` block from `agent-orchestrator.yaml.example` into
@@ -206,6 +220,8 @@ docs/**
 - **Static — orchestratorRules content.** Reading
   `agent-orchestrator.yaml.example` shows an `orchestratorRules` block that
   contains, at minimum:
+  - explicit handling of AO-emitted statuses (`needs_triage` triggers
+    `ao review send`; `waiting_update` is the awaiting-worker state);
   - the named pending state for "review send issued, awaiting worker
     response";
   - the four named exit conditions from that state;
@@ -223,7 +239,9 @@ docs/**
 - **Static — agent_rules.md content.** Reading `prompts/agent_rules.md`
   shows the worker response contract listing the required `ao report`
   transitions, the prohibition on silent idleness after
-  `changes-requested`, and the terminal failure path.
+  `changes-requested`, the terminal failure path, and the prohibition on
+  `ao report completed` while `openFindingCount > 0` or any run on the
+  current head is in `needs_triage`.
 - **Static — reactions wiring.** Reading `agent-orchestrator.yaml.example`
   shows the `report-stale` reaction block with `auto: true,
   action: send-to-agent`, and a `message` field referencing pending AO

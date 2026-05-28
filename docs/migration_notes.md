@@ -64,3 +64,23 @@ Do not port:
 - `install_into_project.ps1`;
 - the `.ai-loop/` layout as a mandatory protocol;
 - per-iteration console-tail UX already covered by AO dashboard/reactions.
+
+## Autonomous review loop (`orchestratorRules` + `report-stale`)
+
+Issue #28 ships the canonical autonomous review-loop contract in
+`agent-orchestrator.yaml.example` (`orchestratorRules` block and
+`reactions.report-stale` backstop) plus worker rules in `prompts/agent_rules.md`.
+
+To adopt on an existing live `agent-orchestrator.yaml`:
+
+1. Open `agent-orchestrator.yaml.example` and copy the full `orchestratorRules`
+   literal for your project (under `projects.<id>.orchestratorRules`).
+2. Merge the `report-stale` entry under top-level `reactions` (keep your other
+   reaction entries; do not duplicate keys).
+3. Ensure `agentRulesFile: prompts/agent_rules.md` (or equivalent path) so workers
+   receive the review response contract.
+4. Restart AO so prompts reload: `ao stop` then `ao start`.
+
+Until restart, the orchestrator and workers keep prior prompt text. The live YAML
+is gitignored — diff against the example when upgrading; do not hand-edit only
+the worker rules without updating `orchestratorRules`.
