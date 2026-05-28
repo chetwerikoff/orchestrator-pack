@@ -17,6 +17,12 @@ Run PR-level review with Codex CLI while AO planning and coding stay on Cursor C
 
 ## How review works
 
+Local Codex PR review **is active**. AO drives it through `ao review run`,
+`send`, `list`, and `execute`; orchestration lives in `orchestratorRules` in
+`agent-orchestrator.yaml`. Discover runs with `ao review list <project>` and the
+AO dashboard. See [`README.md`](../../README.md#local-codex-review-active) and
+[`docs/architecture.md`](../../docs/architecture.md#review-paths).
+
 ### Primary path — AO built-in local review (WORKING)
 
 AO has a built-in Codex review mechanism. When a PR is created by an AO worker
@@ -150,7 +156,8 @@ dumping reviewer prose.
 
 ## Non-goals
 
-- Do not add unsupported `reviewer:` keys to `agent-orchestrator.yaml`.
+- On AO 0.9.x, a `reviewer:` YAML block is silently ignored (no schema error) —
+  wire review through `orchestratorRules` and the `ao review` CLI instead.
 - Do not patch `packages/core/**` in any vendored AO checkout. This is a no core patch design.
 - Do not store API keys, tokens, or model credentials in this repository.
 

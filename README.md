@@ -15,6 +15,25 @@ Hard boundary:
   `vendor/agent-orchestrator`, treat it as disposable/upstream-only, and keep it
   free of local changes.
 
+## Local Codex review (active)
+
+Local Codex PR review **is active** in this pack. AO drives it through the
+first-class `ao review` CLI (`run`, `send`, `list`, `execute`). Orchestration
+and the autonomous review loop are wired in the project's `orchestratorRules`
+block in `agent-orchestrator.yaml` (see `agent-orchestrator.yaml.example`).
+Discover current runs with `ao review list <project>` or the AO dashboard
+Reviews board.
+
+On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add
+`reviewer:` to YAML, AO parses it without error or warning but silently ignores
+it; wire review through `orchestratorRules` and `ao review`, not a `reviewer:`
+key.
+
+See also: [`prompts/agent_rules.md`](prompts/agent_rules.md),
+[`docs/architecture.md`](docs/architecture.md#review-paths),
+[`docs/github_issues_cursor_codex_setup.md`](docs/github_issues_cursor_codex_setup.md),
+and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/README.md).
+
 ## What this pack adds
 
 - `agent-orchestrator.yaml.example` — Windows-friendly AO config example.
@@ -259,11 +278,11 @@ The example deliberately sets:
 - automatic handling for `ci-failed` and `changes-requested`
 - no auto-merge for `approved-and-green`
 
-Reviewer note: current upstream AO config schema directly exposes orchestrator and
-worker role overrides, but not a first-class `reviewer:` role field. Keep the
-requested Codex `gpt-5.5` reviewer upgrade-safe by wiring it through an external
-plugin/workflow or explicit Codex review session; do not add unsupported YAML
-fields and do not patch AO core.
+Review wiring: local Codex review is active via `orchestratorRules` and the
+`ao review` CLI (see [Local Codex review](#local-codex-review-active) above).
+On AO 0.9.x, a `reviewer:` YAML block is silently ignored (no schema error) —
+do not rely on it. Keep Codex `gpt-5.5` review upgrade-safe through
+`orchestratorRules` and `ao review`; do not patch AO core.
 
 ## Start AO only with an explicit target repo
 

@@ -41,11 +41,23 @@ Meaning:
 
 ## Reviewer policy
 
-Reviewer: Codex CLI, authenticated via **ChatGPT OAuth** (`codex login`).
+Local Codex PR review **is active**. AO drives it through the first-class
+`ao review` CLI (`run`, `send`, `list`, `execute`). Orchestration and the
+autonomous review loop live in `orchestratorRules` in `agent-orchestrator.yaml`
+(see `agent-orchestrator.yaml.example`). Discover current runs with
+`ao review list <project>` and the AO dashboard Reviews board.
 
-The current upstream AO schema exposes `orchestrator` and `worker` role overrides,
-but not a stable first-class `reviewer:` YAML role. Review is handled through
-AO's built-in Codex review mechanism, not via an unsupported YAML key.
+Reviewer: Codex CLI with `gpt-5.5`, authenticated via **ChatGPT OAuth**
+(`codex login`).
+
+See also: [`README.md`](../README.md#local-codex-review-active),
+[`prompts/agent_rules.md`](../prompts/agent_rules.md), and
+[`docs/architecture.md`](architecture.md#review-paths).
+
+On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add
+`reviewer:` to YAML, AO parses it without error or warning but silently ignores
+it; wire review through `orchestratorRules` and `ao review`, not a `reviewer:`
+key.
 
 ### Primary path — AO built-in local review
 
