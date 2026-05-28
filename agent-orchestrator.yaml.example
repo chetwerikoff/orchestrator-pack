@@ -77,9 +77,9 @@ projects:
             ao review send <run-id>
           Then treat the PR as entering waiting_worker_review_response (below).
         waiting_update — findings were sent (sentFindingCount > 0); await worker response.
-          While in this status with openFindingCount > 0, the PR is in
-          waiting_worker_review_response until an exit condition fires.
-        clean — findingCount: 0 and openFindingCount: 0 for that run's target SHA.
+          Any run in this status is in waiting_worker_review_response until an exit
+          condition fires (do not re-send; findings are already with the worker).
+        clean — findingCount: 0 for that run's target SHA (subsumes open and sent).
         queued / preparing / running — review in flight; poll on next turn.
         outdated — superseded by a newer worker commit; trigger a new review run.
         failed / cancelled — inspect terminationReason; notify human or retry once.
@@ -87,8 +87,8 @@ projects:
       Do NOT invent statuses (e.g. awaiting_triage) — AO will never match them.
 
       CLEANLINESS FROM COUNTS ONLY. Decide whether a review is clean solely from
-      ao review list --json fields findingCount and openFindingCount. Never read or
-      pattern-match finding body prose (NO_FINDINGS contract).
+      ao review list --json field findingCount (0 means no open or sent findings).
+      Never read or pattern-match finding body prose (NO_FINDINGS contract).
 
       TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports ready_for_review
       on an open PR (visible in ao status --reports full), immediately run:
@@ -97,8 +97,9 @@ projects:
 
       NAMED PENDING STATE: waiting_worker_review_response.
       A PR enters this state after ao review send succeeds for a run in needs_triage,
-      or while a run is in waiting_update with openFindingCount > 0 and the worker
-      has not yet satisfied an exit condition.
+      or while any run for that PR is in waiting_update (sentFindingCount may be > 0
+      with openFindingCount: 0 after send) and the worker has not yet satisfied an
+      exit condition.
       While in waiting_worker_review_response, do NOT treat merge_ready,
       ready_for_review, or stale dashboard metadata as task-complete for that PR.
 
@@ -138,8 +139,8 @@ projects:
 
       NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge.
       Emit ready-for-human-merge notification only when ALL are true:
-        - Latest AO-local review run for current PR head has findingCount: 0 and
-          openFindingCount: 0;
+        - Latest AO-local review run for current PR head has findingCount: 0
+          (no open or sent findings remain);
         - PR is open with green CI on the same head SHA;
         - Worker reported ready_for_review for current head, OR the latest clean
           review completed after the worker's latest ready_for_review with no newer
