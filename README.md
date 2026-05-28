@@ -156,8 +156,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
 
 ### Self-architect lint
 
-The lint scans staged changes by default (add `-IncludeUnstaged` to include the
-working tree). It depends only on Git and PowerShell.
+The lint scans staged changes by default (add `-WithWorkingTree` to include unstaged
+and untracked files). It depends only on Git and PowerShell.
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1

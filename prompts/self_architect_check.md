@@ -22,10 +22,10 @@ Run the pack lint before staging or opening a PR:
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
 ```
 
-Include unstaged edits when checking your working tree:
+Include unstaged and untracked edits when checking your working tree:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -IncludeUnstaged
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -WithWorkingTree
 ```
 
 CI uses `-Strict`, which fails only on the narrow rules below. Default mode always
@@ -35,7 +35,8 @@ ranges, and a one-line rationale.
 **Strict rules (exit 1 when matched):**
 
 - `duplicate-literal` — the same ≥ 10 consecutive lines appear in two or more
-  scanned files.
+  scanned files, including when a changed file copies a block from an unchanged
+  tracked file under configured scan paths.
 - `paired-edit-divergence` — a script and a template were both changed and share
   an ≥ 8-line block with partial overlap that no longer matches exactly.
 

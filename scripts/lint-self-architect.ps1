@@ -5,7 +5,7 @@ param(
     [string]$HeadRef = 'HEAD',
     [string]$ConfigPath,
     [string]$RepoRoot,
-    [switch]$IncludeUnstaged,
+    [switch]$WithWorkingTree,
     [string]$FixtureRoot
 )
 
@@ -110,20 +110,20 @@ function Get-RepoRoot {
 function Get-ChangedRelativePaths {
     param(
         [string]$Root,
-        [string]$Base,
-        [string]$Head,
-        [switch]$Unstaged
+        [string]$BaseRef,
+        [string]$HeadRef = 'HEAD',
+        [switch]$IncludeWorkingTree
     )
 
     Push-Location $Root
     try {
         $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 
-        if ($Base) {
-            $diffArgs = @('diff', '--name-only', "$Base...$Head")
+        if ($BaseRef) {
+            $diffArgs = @('diff', '--name-only', "$BaseRef...$HeadRef")
             $names = @(& git @diffArgs 2>$null)
             if ($LASTEXITCODE -ne 0) {
-                $names = @(& git diff --name-only $Base $Head 2>$null)
+                $names = @(& git diff --name-only $BaseRef $HeadRef 2>$null)
             }
             foreach ($name in $names) {
                 if ($name) { [void]$paths.Add((Normalize-RepoPath $name)) }
@@ -136,10 +136,44 @@ function Get-ChangedRelativePaths {
             if ($name) { [void]$paths.Add((Normalize-RepoPath $name)) }
         }
 
-        if ($Unstaged) {
+        if ($IncludeWorkingTree) {
             $unstaged = @(& git diff --name-only 2>$null)
             foreach ($name in $unstaged) {
                 if ($name) { [void]$paths.Add((Normalize-RepoPath $name)) }
+            }
+
+            $untracked = @(& git ls-files --others --exclude-standard 2>$null)
+            foreach ($name in $untracked) {
+                if ($name) { [void]$paths.Add((Normalize-RepoPath $name)) }
+            }
+        }
+
+        return @($paths)
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Get-ScanTargetRelativePaths {
+    param(
+        [string]$Root,
+        [hashtable]$Config
+    )
+
+    Push-Location $Root
+    try {
+        $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $tracked = @(& git ls-files 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            return @()
+        }
+
+        foreach ($name in $tracked) {
+            if (-not $name) { continue }
+            $normalized = Normalize-RepoPath $name
+            if (Test-ShouldScanPath -RelativePath $normalized -Config $Config) {
+                [void]$paths.Add($normalized)
             }
         }
 
@@ -268,6 +302,47 @@ function Get-SlidingBlocks {
     return $blocks
 }
 
+function Get-BaseFileLines {
+    param(
+        [string]$Root,
+        [string]$BaseRef,
+        [string]$RelativePath
+    )
+
+    Push-Location $Root
+    try {
+        $spec = "${BaseRef}:${RelativePath}"
+        $output = @(& git show $spec 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            return @()
+        }
+
+        return @($output | ForEach-Object { $_.TrimEnd() })
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Test-BlockExistsInLines {
+    param(
+        [string[]]$Lines,
+        [string]$BlockText,
+        [int]$Size
+    )
+
+    if ($Lines.Count -lt $Size) { return $false }
+
+    for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+        $candidate = ($Lines[$start..($start + $Size - 1)] -join "`n")
+        if ($candidate -eq $BlockText) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-LineSimilarity {
     param(
         [string[]]$Left,
@@ -286,12 +361,22 @@ function Get-LineSimilarity {
 function Find-DuplicateLiteralFindings {
     param(
         [hashtable]$FileLines,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [string[]]$IntroducedInPaths = @(),
+        [string]$Root,
+        [string]$BaseRef
     )
 
     $findings = New-Object System.Collections.Generic.List[object]
     $minStrict = [int]$Config.duplicateLiteralMinLines
     $blockMap = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[object]]'
+    $introduced = @{}
+    foreach ($path in $IntroducedInPaths) {
+        if ($path) {
+            $introduced[(Normalize-RepoPath $path).ToLowerInvariant()] = $true
+        }
+    }
+    $requireIntroduced = ($introduced.Count -gt 0)
 
     foreach ($entry in $FileLines.GetEnumerator()) {
         $relativePath = $entry.Key
@@ -314,6 +399,56 @@ function Find-DuplicateLiteralFindings {
         $locations = @($pair.Value | Sort-Object file, startLine)
         $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
         if ($distinctFiles.Count -lt 2) { continue }
+
+        if ($requireIntroduced) {
+            $touchesIntroduced = $false
+            $touchesUnchanged = $false
+            foreach ($file in $distinctFiles) {
+                $normalizedFile = (Normalize-RepoPath $file).ToLowerInvariant()
+                if ($introduced.ContainsKey($normalizedFile)) {
+                    $touchesIntroduced = $true
+                }
+                else {
+                    $touchesUnchanged = $true
+                }
+            }
+
+            if (-not $touchesIntroduced) { continue }
+
+            if ($BaseRef) {
+                if (-not $touchesUnchanged) { continue }
+
+                $sampleLoc = $locations[0]
+                $samplePath = Normalize-RepoPath $sampleLoc.file
+                $blockText = (
+                    $FileLines[$samplePath][($sampleLoc.startLine - 1)..($sampleLoc.endLine - 1)] -join "`n"
+                )
+                $hasNovelIntroduction = $false
+                $baseLinesCache = @{}
+
+                foreach ($loc in $locations) {
+                    $changedPath = Normalize-RepoPath $loc.file
+                    if (-not $introduced.ContainsKey($changedPath.ToLowerInvariant())) { continue }
+
+                    if (-not $baseLinesCache.ContainsKey($changedPath)) {
+                        $baseLinesCache[$changedPath] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $changedPath
+                    }
+
+                    $baseLines = $baseLinesCache[$changedPath]
+                    if ($baseLines.Count -eq 0) {
+                        $hasNovelIntroduction = $true
+                        break
+                    }
+
+                    if (-not (Test-BlockExistsInLines -Lines $baseLines -BlockText $blockText -Size $sampleLoc.lineCount)) {
+                        $hasNovelIntroduction = $true
+                        break
+                    }
+                }
+
+                if (-not $hasNovelIntroduction) { continue }
+            }
+        }
 
         $lineCount = $locations[0].lineCount
         $rule = 'duplicate-literal'
@@ -495,22 +630,53 @@ if ($FixtureRoot) {
     $Root = (Resolve-Path -LiteralPath $fixturePath).Path
 }
 else {
-    $changedPaths = Get-ChangedRelativePaths -Root $Root -Base $BaseRef -Head $HeadRef -Unstaged:$IncludeUnstaged
+    $changedParams = @{
+        Root    = $Root
+        HeadRef = $HeadRef
+    }
+    if ($BaseRef) {
+        $changedParams['BaseRef'] = $BaseRef
+    }
+    if ($WithWorkingTree) {
+        $changedParams['IncludeWorkingTree'] = $true
+    }
+    $changedPaths = Get-ChangedRelativePaths @changedParams
 }
 
 $scanPaths = @(
     $changedPaths | Where-Object { Test-ShouldScanPath -RelativePath $_ -Config $Config }
 )
 
+if ($FixtureRoot) {
+    $comparisonPaths = $scanPaths
+}
+else {
+    $comparisonPathSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @(Get-ScanTargetRelativePaths -Root $Root -Config $Config)) {
+        if ($path) { [void]$comparisonPathSet.Add((Normalize-RepoPath $path)) }
+    }
+    foreach ($path in $scanPaths) {
+        if ($path) { [void]$comparisonPathSet.Add((Normalize-RepoPath $path)) }
+    }
+    $comparisonPaths = @($comparisonPathSet)
+}
+
 $fileLines = @{}
-foreach ($relative in $scanPaths) {
+foreach ($relative in $comparisonPaths) {
     $fullPath = Join-Path $Root ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { continue }
     $fileLines[$relative] = Read-TextLines -FullPath $fullPath
 }
 
+$heuristicFileLines = @{}
+foreach ($relative in $scanPaths) {
+    if ($fileLines.ContainsKey($relative)) {
+        $heuristicFileLines[$relative] = $fileLines[$relative]
+    }
+}
+
 $allFindings = New-Object System.Collections.Generic.List[object]
-foreach ($finding in (Find-DuplicateLiteralFindings -FileLines $fileLines -Config $Config)) {
+foreach ($finding in (Find-DuplicateLiteralFindings -FileLines $fileLines -Config $Config -IntroducedInPaths $scanPaths -Root $Root -BaseRef $BaseRef)) {
     $allFindings.Add($finding) | Out-Null
 }
 foreach ($finding in (Find-PairedEditFindings -FileLines $fileLines -ChangedPaths $changedPaths -Config $Config)) {
@@ -521,7 +687,7 @@ if ($Strict) {
     $heuristicSkipped = $true
 }
 else {
-    foreach ($finding in (Find-HeuristicDuplicateFindings -FileLines $fileLines -Config $Config)) {
+    foreach ($finding in (Find-HeuristicDuplicateFindings -FileLines $heuristicFileLines -Config $Config)) {
         $allFindings.Add($finding) | Out-Null
     }
 }
@@ -539,10 +705,11 @@ elseif ($FixtureRoot) {
 }
 else {
     $scopeLabel = 'Scope: staged changes'
-    if ($IncludeUnstaged) { $scopeLabel += ' + unstaged' }
+    if ($WithWorkingTree) { $scopeLabel += ' + unstaged/untracked' }
     Write-Host $scopeLabel
 }
-Write-Host "Scanned files: $($scanPaths.Count)"
+Write-Host "Changed files: $($scanPaths.Count)"
+Write-Host "Comparison files: $($comparisonPaths.Count)"
 if ($heuristicSkipped) {
     Write-Host 'Heuristic near-duplicate scan: skipped (-Strict / CI mode)'
 }
