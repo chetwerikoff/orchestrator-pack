@@ -77,6 +77,11 @@ projects:
         into Cursor argv; symptom: error unknown option -NoProfile, session stuck or
         probe_failure). Keep REVIEW_COMMAND here; supply --command only on the CLI.
 
+      COMMAND DISCIPLINE — non-negotiable at shell time:
+        Copy REVIEW_COMMAND verbatim into --command. Wrap the entire REVIEW_COMMAND value in one pair of double quotes on Windows.
+        FORBIDDEN alternate commands: plugins/ao-codex-pr-reviewer/bin/review.ps1 without scripts/run-pack-review.ps1; cmd /c npm ci && …; bare cmd.exe; inventing npm ci preflight chains; ao review run --execute without --command (built-in Codex path).
+        On failed or cancelled runs, read terminationReason before any retry; never treat findingCount 0 as clean.
+
       AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
       review or loop. On every orchestrator turn while any open PR has an active
       review path, read these BEFORE any other planning work:
@@ -192,6 +197,7 @@ reactions:
   approved-and-green:
     auto: false
     action: notify
+    priority: action
   report-stale:
     auto: true
     action: send-to-agent

@@ -3,6 +3,9 @@
 Event-driven local bridge: AO `webhook` notifier → loopback HTTP POST →
 `ao send <orchestrator-session-id> <wake message>`.
 
+For the full autonomous review-loop go-live checklist (live YAML, review command,
+verification), see [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
+
 The orchestrator applies its `orchestratorRules` decision procedure on the next
 AO-message-induced turn; the wake message is only a nudge naming the event kind
 and affected worker session / PR.
@@ -123,3 +126,8 @@ headers in local `agent-orchestrator.yaml` only; do not commit secrets.
 
 Press Ctrl+C in the listener terminal. AO and worker sessions are unaffected;
 only automatic orchestrator wakes stop until the listener is started again.
+
+## See also
+
+- [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md) — end-to-end autoloop adoption
+- [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) — orchestrator `stuck` / `probe_failure`

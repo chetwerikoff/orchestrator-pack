@@ -10,8 +10,11 @@ resumes the autonomous review-loop decision procedure defined in
 `agent-orchestrator.yaml.example` (`orchestratorRules`) and
 `docs/migration_notes.md` (Issue #28).
 
+For first-time setup and the full autoloop checklist (processes, live YAML,
+verification), see [`docs/orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
+
 For a **healthy orchestrator process that never reacts to CI/review events**, see
-`docs/orchestrator-wake-runbook.md` (wake listener) before killing sessions.
+[`docs/orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) (wake listener) before killing sessions.
 
 For a **worker that exits within ~1 minute of spawn** with no PR, no
 `ao acknowledge`, and no Cursor chat, see
@@ -87,10 +90,22 @@ Do not skip step 2 before step 3 or 4.
 Give the orchestrator session a turn without killing anything.
 
 ```powershell
-ao send op-orchestrator "Recovery ping: run ao review list --json, ao status --json --reports full, and ao events list --json. Resume orchestratorRules review-loop procedure for any open PRs."
+ao send op-orchestrator @'
+Recovery ping: ao review list orchestrator-pack --json; ao status --json --reports full.
+For any worker with ready_for_review and no clean run on the current PR head, run exactly one review:
+  ao review run <worker-session-id> --execute --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main"
+Copy that --command string verbatim from orchestratorRules PACK_REVIEW_SHELL. Forbidden: plugins/ao-codex-pr-reviewer/bin/review.ps1 alone, npm ci && chains, cmd /c without quoting, ao review run without --command.
+failed or cancelled with findingCount 0 is NOT clean — read terminationReason before retry.
+'@
 ```
 
 Replace `op-orchestrator` with your orchestrator session id from `ao status`.
+
+**Operator-only review (orchestrator stuck):** run the same `--command` yourself — do not improvise:
+
+```powershell
+ao review run <worker-session-id> --execute --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main"
+```
 
 ### Before
 
