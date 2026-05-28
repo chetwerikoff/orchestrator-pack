@@ -1,3 +1,4 @@
+import { computeConvergence, formatConvergenceReport } from './convergence.js';
 import { computeFindingSignature } from './finding_signature.js';
 import { RECOGNIZED_EVENT_KINDS } from './event_kinds.js';
 import type {
@@ -254,7 +255,7 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
       .sort(),
   };
 
-  return {
+  const baseReport = {
     chain_id: chainId,
     total_input_tokens: totalInput,
     total_output_tokens: totalOutput,
@@ -269,6 +270,11 @@ export function aggregateChain(rows: LedgerRow[], chainId: string): ChainAggrega
       b.count - a.count || a.signature.localeCompare(b.signature),
     ),
     missing_data,
+  };
+
+  return {
+    ...baseReport,
+    convergence: computeConvergence(chainRows, chainId, { missingData: missing_data }),
   };
 }
 
@@ -331,6 +337,8 @@ export function formatChainReport(report: ChainAggregateReport): string {
   lines.push(
     `  iterations_without_cost: ${report.missing_data.iterations_without_cost.join(', ') || '(none)'}`,
   );
+
+  lines.push('', formatConvergenceReport(report.convergence));
 
   return lines.join('\n');
 }

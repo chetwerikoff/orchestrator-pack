@@ -75,6 +75,34 @@ export interface FindingSignatureCount {
   path: string | null;
 }
 
+export type ConvergenceFinalState = 'converged' | 'escalated' | 'abandoned';
+
+export interface IterationBlockingFindings {
+  iteration_id: string;
+  blocking_findings: number;
+}
+
+export interface RepeatedSignatureReport {
+  signature: string;
+  iterations: string[];
+  occurrence_count: number;
+}
+
+export interface ConvergenceReportConfig {
+  /** Analytical warning when a signature appears in at least this many iterations. */
+  repeated_signature_iteration_threshold?: number;
+}
+
+export interface ConvergenceReport {
+  chain_id: string;
+  total_iterations: number;
+  blocking_findings_by_iteration: IterationBlockingFindings[];
+  repeated_signatures: RepeatedSignatureReport[];
+  final_state: ConvergenceFinalState;
+  missing_cost_summary: MissingDataReport;
+  analytical_warnings: string[];
+}
+
 export interface ChainAggregateReport {
   chain_id: string;
   total_input_tokens: number | null;
@@ -86,4 +114,5 @@ export interface ChainAggregateReport {
   unknown_event_kinds: string[];
   finding_signatures: FindingSignatureCount[];
   missing_data: MissingDataReport;
+  convergence: ConvergenceReport;
 }
