@@ -23,8 +23,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Script:DefaultPort = 17487
-$Script:FilterCli = Join-Path $PSScriptRoot 'orchestrator-wake-filter.ts'
 $Script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Script:FilterCli = Join-Path $Script:RepoRoot 'docs/orchestrator-wake-filter.ts'
 
 function Get-ListenerPort {
     if ($Port -gt 0) { return $Port }

@@ -1,6 +1,7 @@
 /**
  * AO webhook payload → orchestrator wake decision.
  * Used by orchestrator-wake-listener.ps1 (via tsx CLI) and Vitest.
+ * Lives under docs/ so it stays within issue #39 allowed_roots (docs/**).
  */
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;

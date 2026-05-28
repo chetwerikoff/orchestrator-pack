@@ -12,7 +12,7 @@ and affected worker session / PR.
 - AO configured with `notifiers.webhook` and `notificationRouting` for `urgent`
   and `action` pointing at the listener URL (see `agent-orchestrator.yaml.example`).
 - Node.js and repo dev dependencies installed (`npm ci` from pack root) so the
-  listener can evaluate filters via `tsx`.
+  listener can evaluate filters via `tsx` (`docs/orchestrator-wake-filter.ts`).
 - Orchestrator session id from `ao status` (e.g. `op-orchestrator`).
 
 ## Defaults
