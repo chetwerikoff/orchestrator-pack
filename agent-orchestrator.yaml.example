@@ -108,8 +108,9 @@ projects:
 
       Do NOT invent statuses (e.g. awaiting_triage) — AO will never match them.
 
-      CLEANLINESS FROM COUNTS ONLY. Decide whether a review is clean solely when
-      ao review list --json shows status clean (or needs_triage after a completed run).
+      CLEANLINESS FROM COUNTS ONLY. A review is clean only when ao review list --json
+      shows status clean with findingCount: 0 for the current PR head. needs_triage
+      is NOT clean — it means findings exist but were not sent; run ao review send.
       findingCount 0 on failed or cancelled runs is NOT clean. Never read or
       pattern-match finding body prose (NO_FINDINGS contract).
 
