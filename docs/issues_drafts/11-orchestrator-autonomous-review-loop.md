@@ -15,7 +15,10 @@ Make the AO orchestrator drive the review→fix loop **without a human typing
 "review loop"** for every PR, and stop treating `merge_ready` / `ready_for_review`
 as task-complete while the latest AO-local review is still `waiting_update`.
 Add a worker-side response contract so an idle Cursor session on Windows cannot
-silently swallow review findings.
+silently swallow review findings. The loop MUST start from the observable
+existence of an unreviewed open PR, not solely from the worker announcing it: a
+worker that never reports `ready_for_review` must not be able to silently
+prevent review from ever running.
 
 This issue is a **prompt/config contract over the orchestrator's decision
 procedure**, not a runtime-enforced wall-clock SLA. Wall-clock timing values
@@ -27,14 +30,24 @@ the worker never reported `addressing_reviews`, the orchestrator waited
 ~14 minutes until an explicit user ping. The durable fix is in the spec for
 orchestrator behavior and worker rules, not in the merged code of any one PR.
 
+Observed failure (PR #56 on 2026-05-28, **follow-up after this draft's first
+implementation merged**): the worker session was mergeable but never reported
+`ready_for_review`; `ao review list` showed zero runs for the PR and the
+orchestrator went `stuck` with no review ever initiated. Spec-level root cause:
+the review trigger was gated entirely on the worker's self-report, so a missed
+or delayed report left no path to start review. The state-derived trigger added
+below (see the "State-derived review trigger" acceptance criterion) closes that
+gap; the rest of this draft already shipped.
+
 ## Binding surface
 
 This issue commits the repository to a reusable contract covering:
 
 1. **Orchestrator rules** (the text that the orchestrator agent receives at
-   spawn) describing the autonomous review loop, its triggers, an explicit
-   named state for "review send issued, awaiting worker response", the
-   decision procedure on each subsequent orchestrator turn, and a round limit.
+   spawn) describing the autonomous review loop, its triggers (both
+   report-driven and state-derived / reconciliation), an explicit named state
+   for "review send issued, awaiting worker response", the decision procedure
+   on each subsequent orchestrator turn, and a round limit.
 2. **Worker rules** (`prompts/agent_rules.md`) requiring an explicit transition
    to `addressing_reviews` (via `ao report addressing_reviews`) after `ao
    review send` lands, or an explicit terminal failure report with a reason.
@@ -107,6 +120,31 @@ docs/**
   `ready_for_review` on an open PR, without waiting for a human prompt
   containing the words "review" or "loop". Verified by reading the rules
   block, not by timing how long until it fires.
+- **State-derived review trigger (reconciliation, not report-gated).** In
+  addition to the report-driven trigger above, the `orchestratorRules` MUST
+  instruct the orchestrator, as part of the turn-opening inspection, to:
+  1. enumerate open PRs and each PR's current head SHA from **GitHub** (via
+     the `gh` CLI the rules already use for PR operations — the open-PR set
+     exists in GitHub regardless of whether any worker reported), and
+  2. cross-reference each open PR's head SHA against `ao review list --json`,
+  3. resolve the target worker session for that PR from AO session state
+     (`ao status --json --reports full`); if no live session is associated
+     with the PR, the rules MUST say how the orchestrator obtains one (e.g.
+     `ao spawn --claim-pr <PR>`) before running review,
+  4. then initiate a review run (through the pack review wrapper, per the
+     existing review-run invocation rule) for any open PR whose current head
+     SHA has no review run and no run currently in flight — **even when no
+     worker has reported `pr_created` or `ready_for_review` for it**.
+
+  The trigger MUST derive the open-PR/head-SHA set from GitHub and the
+  review-run state from `ao review list --json`, so that a missing or delayed
+  worker report cannot block review. The rule MUST NOT start a second run while
+  a run for the current head SHA is `queued`, `preparing`, or `running`; MUST
+  reuse the existing `outdated` / round-progression handling when the head SHA
+  advances; and remains subject to the 20-round stop rule below. This adds
+  **no background process** — the check runs only when the orchestrator already
+  has a turn, and guaranteeing those turns during event silence is owned by
+  file `14-orchestrator-wake-mechanism.md`. Verified by reading the rules block.
 - **Cleanliness derives from count, not prose.** The orchestrator MUST
   decide cleanliness from `ao review list --json`
   (`findingCount: 0, openFindingCount: 0`), never by reading or
@@ -152,8 +190,10 @@ docs/**
   worker response.
 - **Respawn discipline.** If a later orchestrator turn still observes no
   acknowledgement and no new PR commit, the rules MUST instruct the
-  orchestrator to kill the stale worker session via `ao session kill` and
-  respawn via `ao spawn --claim-pr <PR>`.
+  orchestrator to kill the stale worker session via
+  `ao session kill <worker-session>` — where the session id is read from AO
+  session state (`ao status --json --reports full`), never inferred from the
+  PR number or the issue number — and respawn via `ao spawn --claim-pr <PR>`.
 - **Round limit as prompt-level stop rule.** The rules MUST instruct the
   orchestrator to stop initiating new review→fix cycles on the same PR
   after **20 completed review runs whose `openFindingCount > 0` or
@@ -166,8 +206,10 @@ docs/**
   or click Merge. Merge is a human decision in this repo. The orchestrator
   MAY emit a "ready for human merge" notification only when **all** of the
   following are true:
-  - the latest AO-local review run for the current PR head has
-    `findingCount: 0` and `openFindingCount: 0`;
+  - the latest AO-local review run for the current PR head is in a terminal
+    completed status (e.g. `clean` / a finished run — **not** `queued`,
+    `preparing`, `running`, or `outdated`, whose zero counts are merely
+    "no result yet") **and** has `findingCount: 0` and `openFindingCount: 0`;
   - the PR is open with green CI for the same head SHA;
   - either the worker has reported `ready_for_review` for the current PR
     head, **or** the latest clean review ran after the worker's latest
@@ -185,17 +227,19 @@ docs/**
     path (`addressing_reviews`, optionally `fixing_ci`, then
     `ready_for_review`);
   - forbids silently going idle after receiving review findings;
-  - requires a terminal failure report (`completed` with a failure
-    note, or explicit `ao send` to the orchestrator) with a reason if the
-    worker cannot address findings;
+  - requires a terminal failure signal via an explicit `ao send` to the
+    orchestrator (or a non-`completed` terminal report) with a reason if the
+    worker cannot address findings — **not** `ao report completed`, which the
+    next clause forbids while findings remain open, so the two clauses do not
+    contradict;
   - **forbids `ao report completed` while the latest review run for the
     current PR head has `openFindingCount > 0`, or while any review run
     for the current PR head is in `needs_triage`.**
 - **Migration paragraph.** `docs/migration_notes.md` MUST contain a
   paragraph instructing operators how to fold the updated
   `orchestratorRules` block from `agent-orchestrator.yaml.example` into
-  their existing live config and restart AO (`ao stop` → `ao start`) for
-  the rules to take effect.
+  their existing live config and restart AO (run `ao stop`, then `ao start`)
+  for the rules to take effect.
 
 ## Upgrade-safety check
 
@@ -222,6 +266,15 @@ docs/**
   contains, at minimum:
   - explicit handling of AO-emitted statuses (`needs_triage` triggers
     `ao review send`; `waiting_update` is the awaiting-worker state);
+  - a state-derived reconciliation trigger that (a) enumerates open PRs and
+    their current head SHA from GitHub via the `gh` CLI, (b) cross-references
+    each against `ao review list --json`, (c) resolves the target worker
+    session from `ao status --json --reports full` and names the no-live-session
+    path (e.g. `ao spawn --claim-pr <PR>`) before running review, and (d)
+    starts a review run for any open PR whose current head SHA has no run and
+    none in flight — explicitly independent of any worker `pr_created` /
+    `ready_for_review` report, with the in-flight / `outdated` / round-limit
+    guards stated;
   - the named pending state for "review send issued, awaiting worker
     response";
   - the four named exit conditions from that state;
@@ -238,8 +291,8 @@ docs/**
     guidance, not enforced timers.
 - **Static — agent_rules.md content.** Reading `prompts/agent_rules.md`
   shows the worker response contract listing the required `ao report`
-  transitions, the prohibition on silent idleness after
-  `changes-requested`, the terminal failure path, and the prohibition on
+  transitions, the prohibition on silent idleness after receiving AO-local
+  review findings, the terminal failure path, and the prohibition on
   `ao report completed` while `openFindingCount > 0` or any run on the
   current head is in `needs_triage`.
 - **Static — reactions wiring.** Reading `agent-orchestrator.yaml.example`

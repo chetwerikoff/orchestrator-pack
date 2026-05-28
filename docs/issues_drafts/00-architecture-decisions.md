@@ -208,6 +208,62 @@ Auto-fix thresholds and escalation timing live in AO reaction configuration and
 ledger/report configuration. Prompt rules may describe operational behavior but
 must not duplicate numeric thresholds.
 
+## G. AO local review preflight and failed-run discipline
+
+AO local review runs in per-PR reviewer workspaces (`code-reviews/workspaces/op-rev-*`).
+Those checkouts do not include `node_modules` until dependencies are installed.
+The pack wrapper (`review.ps1` / `review.ts`) requires `tsx` from the reviewed
+repo; **REVIEW_COMMAND** in `agent-orchestrator.yaml.example` MUST include a
+documented preflight step (typically `npm ci --include=dev` with exit-code check)
+before the wrapper line. Agents MUST NOT improvise alternate `--command` chains.
+
+A review run with `status: failed` or `cancelled` and `findingCount: 0` is **not**
+a clean review. Orchestrator and worker rules MUST inspect `terminationReason`
+and MUST NOT treat zero findings alone as Codex approval. Only `clean` status or
+successful triage/send paths count as review progress.
+
+On Windows, `orchestratorRules` and GitHub Issue bodies used as spawn prompts
+MUST stay launch-safe (no embedded `"` or inline `--command "` literals); see
+Issue #55 and `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md`.
+
+## H. Review trigger reconciliation and orchestrator turn delivery
+
+Two coupled decisions, taken 2026-05-28 after the PR #56 incident: a worker was
+mergeable but never reported `ready_for_review`; `ao review list` showed zero
+runs and the orchestrator went `stuck` — review never started.
+
+1. **Review triggering is state-derived, not worker-report-gated.** The
+   orchestrator MUST start a review run from the observable existence of an
+   unreviewed open PR, not solely from a worker `pr_created` /
+   `ready_for_review` report. The open-PR set and each PR's current head SHA
+   are read from GitHub (the `gh` CLI); review-run coverage per head SHA is
+   read from `ao review list --json`. A missing or delayed worker report MUST
+   NOT be able to block review. This is a reconciliation (observe-and-converge)
+   trigger, not an event/push trigger: it runs as part of the orchestrator's
+   turn-opening inspection and adds no background process. (Issue #28 / #58,
+   file `11-orchestrator-autonomous-review-loop.md`.)
+
+2. **The wake mechanism's strict no-polling invariant is relaxed for a
+   low-frequency heartbeat.** Issue #39 (file
+   `14-orchestrator-wake-mechanism.md`) originally committed the wake listener
+   to being strictly event-driven (no scheduler, no polling). That invariant is
+   **superseded**: a purely event-driven listener cannot give the orchestrator
+   a turn during event silence — exactly the #56 failure mode — so a coarse,
+   low-frequency heartbeat (order of tens of minutes) is now permitted. The
+   heartbeat only delivers turns; it does not run the decision procedure
+   itself, and it MUST stay independent of the webhook-receipt path so a single
+   stoppage cannot silence both wakes. High-frequency / busy polling of `ao`
+   state remains out of scope. (Issue #39 / #59.)
+
+These compose: decision 2 guarantees the orchestrator gets turns even in event
+silence; decision 1 defines what it does on each such turn (reconcile open PRs
+against review-run coverage and trigger review). Neither is sufficient alone —
+without the heartbeat the reconciliation never runs in silence; without
+reconciliation the delivered turn has no state-derived trigger to act on. A
+third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
+on a command-approval prompt) is handled operationally in the recovery runbook,
+file `15-orchestrator-recovery-runbook.md`, not here.
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
