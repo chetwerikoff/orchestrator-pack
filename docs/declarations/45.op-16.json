@@ -1,0 +1,20 @@
+{
+  "issue_number": 45,
+  "iteration_id": "op-16",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T08:55:57.597Z",
+  "baseline": {
+    "commit_sha": "f7f8434abe4cb64d04d668032d5f8b00f3d606c4",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:b7f5b430fa18cdd70f3e6039c1f653d0a0fe5cedb6eda1f1f04100a54399d4d9"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/17-patch-review-loop-sentfindingcount.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
