@@ -111,8 +111,44 @@ ao-ledger report --chain issue-8 --json
 ```
 
 Reports include total in/out tokens, total estimated cost, per-role and per-iteration
-rollups, missing-data counts, finding signature recurrence, and preserved unknown
-`event_kind` values.
+rollups, missing-data counts, finding signature recurrence, preserved unknown
+`event_kind` values, and an auto-fix **convergence** section.
+
+### Convergence report
+
+Convergence is derived only from ledger JSONL rows (no AO core reads). A loop is
+**converged** when the chronologically last `iteration_id` has:
+
+- no `severity: blocking` findings;
+- no `type: scope-violation` findings;
+- no blocking `type: ci` findings and no `reaction` rows whose trigger is
+  `ci-failed`.
+
+The same finding `signature` (sha256 of `type`, `code`, normalized path per #3.F)
+appearing in two or more iterations is reported as a **repeated signature**.
+Operational retry/escalation limits live in `agent-orchestrator.yaml.example`
+`reactions:`; analytical warnings (for example repeated signatures across
+iterations) use optional ledger report configuration only — prompt rules must not
+duplicate numeric thresholds.
+
+`final_state` is one of:
+
+| State | Meaning |
+| --- | --- |
+| `converged` | Last iteration meets the convergence criteria above |
+| `escalated` | Chain includes an `escalation` ledger event |
+| `abandoned` | Chain ended without convergence or escalation |
+
+```bash
+ao-ledger report --chain fixture-converging --ledger plugins/ao-token-chain-ledger/tests/fixtures/converging-loop.jsonl
+ao-ledger report --chain fixture-repeated-finding --ledger plugins/ao-token-chain-ledger/tests/fixtures/repeated-finding-loop.jsonl
+ao-ledger report --chain fixture-ci-fail --ledger plugins/ao-token-chain-ledger/tests/fixtures/ci-fail-loop.jsonl
+ao-ledger report --chain fixture-missing-cost --ledger plugins/ao-token-chain-ledger/tests/fixtures/missing-cost-loop.jsonl
+```
+
+Sanitized fixtures under `tests/fixtures/` cover: review → fix → clean review,
+repeated signatures, CI fail then pass, and missing cost with valid iteration
+accounting.
 
 ## Outputs
 

@@ -58,6 +58,8 @@ describe('ao-token-chain-ledger integration', () => {
       const output = stdout.join('');
       expect(output).toContain('Chain report: fixture-chain-8');
       expect(output).toContain('Finding signature recurrence');
+      expect(output).toContain('Convergence');
+      expect(output).toContain('final_state: abandoned');
     } finally {
       process.stdout.write = original;
     }
