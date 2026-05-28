@@ -15,16 +15,16 @@ GitHub Issue: #63
   `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md`,
   GitHub Issue #60) is the issue whose worker repeatedly failed to launch while
   this was diagnosed. This issue makes that launch failure **legible and
-  escalated** ÔÇö it does not fix worker launch in the pack. It also **amends the
+  escalated** — it does not fix worker launch in the pack. It also **amends the
   #60 clauses built on the now-disproven hypothesis that issue-body quotes break
   the worker launch** (binding-surface item 4c and the matching topic in
-  acceptance criterion 4 ÔÇö "launch-safe GitHub Issue bodies for spawn"); the #60
+  acceptance criterion 4 — "launch-safe GitHub Issue bodies for spawn"); the #60
   body is re-synced in the same PR. No #60 review-preflight or failed-run clause
   changes.
 - Issue #11 autonomous review-loop contract (file
   `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md`) defines
   orchestrator/worker roles; this issue only adds a launch-failure detection /
-  documentation surface and an upstream escalation ÔÇö it does not change review
+  documentation surface and an upstream escalation — it does not change review
   statuses.
 - The real fix is in the AO Cursor agent plugin (`@aoagents/ao-plugin-agent-cursor`)
   and/or AO core, which are vendor packages outside this repository. The pack
@@ -45,21 +45,21 @@ agent, and must record that the obvious shell workaround does not fix it.
 ### Root cause (verified, upstream)
 
 `@aoagents/ao-plugin-agent-cursor` builds the **worker** launch command by inlining
-the prompt into argv via shell command substitution ÔÇö when both a system-prompt
+the prompt into argv via shell command substitution — when both a system-prompt
 file and a task prompt are present, the form is essentially
 `agent ÔÇª -- "$(cat <file>; printf ÔÇª; printf %s '<prompt>')"`. On Windows this
 fails two independent ways:
 
-- **Signature A ÔÇö POSIX builtin under PowerShell.** AO's default Windows shell is
+- **Signature A — POSIX builtin under PowerShell.** AO's default Windows shell is
   `powershell.exe -Command` (no `pwsh`). `printf` is a POSIX builtin that does not
   exist in PowerShell, so the launch line dies with
   `printf : The term 'printf' is not recognized ÔÇª` and the agent CLI then sees
   `error: unknown option '-ne'`.
-- **Signature B ÔÇö command line too long.** Even after forcing a POSIX shell
+- **Signature B — command line too long.** Even after forcing a POSIX shell
   (`AO_SHELL=bash`) and resolving the agent binary, the substitution inlines the
   **entire** prompt into argv. For a large issue body (the #60 worker prompt is
   ~24 KB) this exceeds the Windows command-line length limit and the launch dies
-  with `The command line is too long`. This mode is **shell-independent** ÔÇö it is
+  with `The command line is too long`. This mode is **shell-independent** — it is
   about argv size, not shell dialect.
 
 The orchestrator session survives because its launch path uses the file-only form
@@ -76,14 +76,14 @@ launcher), and after a shim it fails on Signature B for the #60-sized prompt.
 This issue commits the repository to:
 
 1. **Named launch-failure signature.** The pack defines and documents a single
-   named condition ÔÇö a Cursor worker that exits at launch on Windows ÔÇö covering
+   named condition — a Cursor worker that exits at launch on Windows — covering
    **both** observed signatures (POSIX-builtin-under-PowerShell and
    command-line-too-long). The definition keys off the launch-failure evidence
    (worker `agent_process_exited` shortly after `spawning ÔåÆ working`, no PR, no
    acknowledge, no Cursor chat) plus the PTY error text, **not** off issue-body
    character content.
 2. **Pack-side detection / diagnostic.** A pack-owned, offline-runnable check or
-   diagnostic (new or an extension of an existing script ÔÇö planner's choice of
+   diagnostic (new or an extension of an existing script — planner's choice of
    name and placement) that recognizes the launch-failure condition from available
    artifacts (e.g. session/lifecycle state and/or a captured PTY log fixture) and
    reports it with an actionable message pointing at the documentation and the
@@ -91,8 +91,8 @@ This issue commits the repository to:
    no network).
 3. **No spec-content restriction.** The cause is the delivery mechanism, not body
    characters. Nothing here rejects a draft body as an invalid spec for containing
-   quotes or JSON. A size-based launch-feasibility **warning** ÔÇö flagging that a
-   prompt will exceed the Windows argv limit and therefore will not launch ÔÇö is
+   quotes or JSON. A size-based launch-feasibility **warning** — flagging that a
+   prompt will exceed the Windows argv limit and therefore will not launch — is
    in-scope *detection* (item 2), not a content restriction, because it informs
    rather than invalidates the spec.
 4. **Amend the #60 quote-hypothesis clauses.** Draft 24 / Issue #60 carries a
@@ -100,7 +100,7 @@ This issue commits the repository to:
    `--command "` literals, per Issue #55) in **both** binding-surface item 4c and
    the matching topic of acceptance criterion 4 ("launch-safe GitHub Issue bodies
    for spawn"), built on the hypothesis that body quotes break the worker launch.
-   The verified root cause above disproves that ÔÇö the failure is prompt delivery,
+   The verified root cause above disproves that — the failure is prompt delivery,
    independent of body quotes. This issue amends **every** such #60 clause to drop
    the quote-based body restriction and point at the prompt-delivery cause, and
    re-syncs the #60 body in the same PR. No #60 review-preflight or failed-run
@@ -127,30 +127,30 @@ This issue commits the repository to:
    escalation, and `AO_SHELL=bash` is not a sufficient workaround. The **existing**
    ┬ºG sentence asserting that GitHub Issue bodies used as spawn prompts must avoid
    `"` / `--command "` literals MUST also be corrected in the same change (the
-   `orchestratorRules` half stays ÔÇö that is Issue #55 ÔÇö but the issue-body
+   `orchestratorRules` half stays — that is Issue #55 — but the issue-body
    quote restriction is the disproven half), consistent with the #60 item 4c
    amendment. The corresponding Issue #3 body is re-synced in the same PR.
 8. **Upstream escalation note.** The migration note (or decision log) records that
-   the durable fix belongs in `@aoagents/ao-plugin-agent-cursor` / AO core ÔÇö
+   the durable fix belongs in `@aoagents/ao-plugin-agent-cursor` / AO core —
    deliver the worker prompt via a file or flag rather than inlining it into argv,
-   and do not use a POSIX `printf` builtin on Windows ÔÇö and links where to file it.
+   and do not use a POSIX `printf` builtin on Windows — and links where to file it.
 
 ## Files in scope
 
-- `scripts/` ÔÇö the launch-failure detection / diagnostic (new script or extension
+- `scripts/` — the launch-failure detection / diagnostic (new script or extension
   of an existing one such as `scripts/orchestrator-diagnose.ps1`; planner's
   choice), wired into `scripts/verify.ps1` if it is a verifiable check.
-- `docs/migration_notes.md` ÔÇö new subsection (binding-surface items 5 and 8).
-- `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md` ÔÇö amend
+- `docs/migration_notes.md` — new subsection (binding-surface items 5 and 8).
+- `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md` — amend
   every clause encoding the quote hypothesis (item 4c and the matching topic in
   acceptance criterion 4); re-sync the #60 body in the same PR. Do not touch #60's
   review-preflight or failed-run clauses.
 - `docs/orchestrator-recovery-runbook.md` and/or
-  `docs/issues_drafts/15-orchestrator-recovery-runbook.md` ÔÇö pointer
+  `docs/issues_drafts/15-orchestrator-recovery-runbook.md` — pointer
   (binding-surface item 6).
-- `docs/issues_drafts/00-architecture-decisions.md` ÔÇö new subsection + Issue #3
+- `docs/issues_drafts/00-architecture-decisions.md` — new subsection + Issue #3
   re-sync (binding-surface item 7).
-- `docs/issues_drafts/25-worker-spawn-launch-safety.md` ÔÇö this spec.
+- `docs/issues_drafts/25-worker-spawn-launch-safety.md` — this spec.
 
 ## Files out of scope
 
@@ -158,17 +158,17 @@ This issue commits the repository to:
   the spawn-prompt interpolation (vendor packages; `vendor/**` and the AO install).
   The pack cannot patch how AO delivers the worker prompt; that is the upstream
   escalation in item 7. This issue does not commit to making the worker launch on
-  Windows ÔÇö only to detecting, documenting, and escalating the failure.
+  Windows — only to detecting, documenting, and escalating the failure.
 - AO's worktree checkout / branch-collision behaviour and stale-branch /
-  leftover-worktree hygiene ÔÇö a separate workspace-hygiene issue.
+  leftover-worktree hygiene — a separate workspace-hygiene issue.
 - Spawn-side failed-fast detection inside AO (treating an immediate
   `agent_process_exited` as launch-failed rather than sitting in `detecting` for
-  minutes) ÔÇö an AO-core concern; this issue only documents the signature and adds
+  minutes) — an AO-core concern; this issue only documents the signature and adds
   a pack-side diagnostic.
 - Live `agent-orchestrator.yaml` (gitignored; operator merges from example +
   `migration_notes.md`).
 - Issue #55 quote handling, the NO_FINDINGS pack-wrapper review contract, and
-  #60's review preflight / failed-run clauses ÔÇö all unchanged.
+  #60's review preflight / failed-run clauses — all unchanged.
 
 ## Denylist
 
@@ -195,7 +195,7 @@ code-reviews/**
 3. If the detection is a verifiable check, `scripts/verify.ps1` runs green with it
    wired in.
 4. Nothing added by this issue rejects a `docs/issues_drafts/*.md` body as an
-   invalid spec for containing quotes or JSON ÔÇö provable by running the pack's
+   invalid spec for containing quotes or JSON — provable by running the pack's
    checks against a quote-dense fixture body and showing no failure attributable to
    that content. (A size-based launch-feasibility *warning* per binding item 3 does
    not count as rejecting the spec.)
@@ -217,7 +217,7 @@ code-reviews/**
    literals (the `orchestratorRules` half may remain). Both are repo-local
    grep-able. The Issue #3 re-sync is proven by an explicit `gh issue view 3`
    capture in PR notes (see Verification step 6).
-9. `scripts/check-orchestrator-rules-quotes.ps1` (Issue #55 guard) still passes ÔÇö
+9. `scripts/check-orchestrator-rules-quotes.ps1` (Issue #55 guard) still passes —
    this issue does not touch `orchestratorRules`.
 
 ## Upgrade-safety check
@@ -254,4 +254,4 @@ code-reviews/**
    body's quote clauses while #60's review-preflight implementation remains a
    separate issue. If a size-based launch-feasibility warning is implemented,
    record the empirical threshold it uses (e.g. observed worker-prompt size vs the
-   Windows argv limit) in PR notes ÔÇö the spec pins no fixed number.
+   Windows argv limit) in PR notes — the spec pins no fixed number.

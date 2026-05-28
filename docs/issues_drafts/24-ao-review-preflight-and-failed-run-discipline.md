@@ -7,13 +7,13 @@ GitHub Issue: #60
 - GitHub Issue #55 is **closed** (PR #56 on `main`): launch-safe `orchestratorRules`
   (no embedded `"` / inline `--command` lines) and the **REVIEW_COMMAND** naming
   pattern in `agent-orchestrator.yaml.example`. This issue extends **REVIEW_COMMAND**
-  with a dependency preflight and tightens failed-run handling ÔÇö it does not
+  with a dependency preflight and tightens failed-run handling — it does not
   re-litigate quote safety.
 - NO_FINDINGS pack-wrapper review contract (file
-  `docs/issues_drafts/06-codex-reviewer-scope-context.md`) must remain intact ÔÇö this
+  `docs/issues_drafts/06-codex-reviewer-scope-context.md`) must remain intact — this
   issue must not change how the wrapper signals "no findings".
 - Auto-fix loop convergence metrics (file
-  `docs/issues_drafts/09-auto-fix-loop-convergence.md`) must remain intact ÔÇö a failed
+  `docs/issues_drafts/09-auto-fix-loop-convergence.md`) must remain intact — a failed
   review run must not be counted as a convergence/clean signal.
 - Issue #11 autonomous review-loop contract (file
   `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md`) is the baseline
@@ -25,18 +25,18 @@ GitHub Issue: #60
 Stop empty or misleading local Codex review outcomes on Windows when AO runs the
 pack wrapper inside `code-reviews/workspaces/op-rev-*` checkouts. Observed failure
 (PR #56, 2026-05-28): five `ao review run` attempts produced **failed** runs with
-`findingCount: 0` and no findings text ÔÇö root causes were layered: (a) reviewer
+`findingCount: 0` and no findings text — root causes were layered: (a) reviewer
 workspaces without `npm ci` (`tsx` missing); (b) improvised PowerShell command
 chains (`&&`, broken `if ( -ne 0)`) the orchestrator invented to add a preflight;
 (c) the pack wrapper's `codex exec review` invocation is **incompatible with the
-installed Codex CLI** ÔÇö once dependencies were present (op-rev-5), the run still
+installed Codex CLI** — once dependencies were present (op-rev-5), the run still
 exited 2 because the wrapper passes a base-ref scope **and** a custom prompt
 together, which that CLI rejects as mutually exclusive; and (d) orchestrator/worker
 reports treating zero findings on a failed run as a clean review. Preflight alone
 does not fix (c): without it, even a clean reviewer workspace still fails. Make the
 repository commit a **single canonical review command value** (including dependency
 preflight), a wrapper review invocation that the installed Codex CLI actually
-accepts, explicit **failed Ôëá clean** rules, operator migration guidance, and a
+accepts, explicit **failed ≠ clean** rules, operator migration guidance, and a
 regression guard so agents do not improvise variants.
 
 ## Binding surface
@@ -86,7 +86,7 @@ This issue commits the repository to:
    scope and a custom review prompt as **mutually exclusive**, so passing both yields
    an argument-conflict exit (no findings produced). The wrapper MUST still scope the
    review to the base ref (the diff under review) AND deliver its review instructions
-   to Codex ÔÇö the planner chooses how to reconcile these within the CLI's contract
+   to Codex — the planner chooses how to reconcile these within the CLI's contract
    (e.g. which option carries scope vs. which carries instructions). The invocation
    MUST NOT fail with a CLI argument-parse / mutual-exclusion error on a clean
    reviewer workspace. The exact flag layout is the planner's choice; do not hardcode
@@ -97,23 +97,23 @@ This issue commits the repository to:
 
 ## Files in scope
 
-- `agent-orchestrator.yaml.example` ÔÇö extend **REVIEW_COMMAND** + failed-run clauses
+- `agent-orchestrator.yaml.example` — extend **REVIEW_COMMAND** + failed-run clauses
   in `orchestratorRules` (preserve Issue #55 launch-safe form).
-- `prompts/agent_rules.md` ÔÇö worker review-command and failed-run discipline.
-- `docs/migration_notes.md` ÔÇö new subsection (AO review preflight + failed runs +
+- `prompts/agent_rules.md` — worker review-command and failed-run discipline.
+- `docs/migration_notes.md` — new subsection (AO review preflight + failed runs +
   the Codex CLI review-invocation compatibility note + the Windows reviewer-sandbox
   operator note: the `op-rev-*` read-only sandbox must be able to spawn shell
   commands, or Codex returns an empty review without inspecting the diff).
-- `docs/issues_drafts/00-architecture-decisions.md` ÔÇö new subsection **I** (or next
-  letter) recording REVIEW_COMMAND preflight + failed Ôëá clean (sync to Issue #3 in
+- `docs/issues_drafts/00-architecture-decisions.md` — new subsection **I** (or next
+  letter) recording REVIEW_COMMAND preflight + failed ≠ clean (sync to Issue #3 in
   the same PR).
 - `scripts/check-review-command-preflight.ps1` (new) or extend an existing verify
-  script ÔÇö planner's choice; wire into `scripts/verify.ps1`.
+  script — planner's choice; wire into `scripts/verify.ps1`.
 - `plugins/ao-codex-pr-reviewer/bin/review.ps1` and/or
-  `plugins/ao-codex-pr-reviewer/lib/` ÔÇö the Codex `exec review` invocation the
+  `plugins/ao-codex-pr-reviewer/lib/` — the Codex `exec review` invocation the
   wrapper builds (binding surface item 6) and the clearer missing-deps error
   (item 7); planner's placement, minimal change.
-- `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md` ÔÇö this spec.
+- `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md` — this spec.
 
 ## Files out of scope
 
@@ -125,7 +125,7 @@ This issue commits the repository to:
   separately; may cross-reference only).
 - Retroactive fix of past failed `op-rev-*` runs in local AO state.
 - Operator Codex sandbox configuration (`~/.codex/config.toml`, e.g. Windows
-  `[windows] sandbox`) ÔÇö documented in `migration_notes.md` as environment guidance,
+  `[windows] sandbox`) — documented in `migration_notes.md` as environment guidance,
   not changed by this pack.
 
 ## Denylist
@@ -139,7 +139,7 @@ code-reviews/**
 ```
 
 Operator Codex config (`~/.codex/config.toml`) lives outside the repo and cannot be
-fenced by a repo-relative denylist ÔÇö it is addressed in prose under **Files out of
+fenced by a repo-relative denylist — it is addressed in prose under **Files out of
 scope** and `migration_notes.md` only; workers must not attempt to edit it.
 
 ## Acceptance criteria
@@ -164,9 +164,9 @@ scope** and `migration_notes.md` only; workers must not attempt to edit it.
    reviewer's installed Codex CLI **without an argument-parse / mutual-exclusion
    error** from passing base-ref scope and a custom prompt together. Provable from a
    **direct** wrapper run: the wrapper process does not exit on a Codex CLI usage
-   error and its stderr carries no CLI usage / `error:` argument-conflict text ÔÇö the
+   error and its stderr carries no CLI usage / `error:` argument-conflict text — the
    run reaches Codex and produces a review verdict. The run must also show it stayed
-   **scoped to the base-ref diff** under review (not an unscoped whole-repo review) ÔÇö
+   **scoped to the base-ref diff** under review (not an unscoped whole-repo review) —
    e.g. the captured run references the base ref / the diff range, so dropping scope
    to dodge the CLI conflict does not satisfy this criterion. (The `ao review run`
    fields `terminationReason` / `status` are exercised by criterion 7, not here, since
@@ -174,15 +174,15 @@ scope** and `migration_notes.md` only; workers must not attempt to edit it.
 7. Manual verification (record commands and observed JSON fields in PR notes): from a
    clean AO reviewer workspace for an open PR, one `ao review run` against the worker
    session, run with the canonical **REVIEW_COMMAND** value supplied through AO's
-   review `--command` option (REVIEW_COMMAND is a multi-token shell string ÔÇö reference
+   review `--command` option (REVIEW_COMMAND is a multi-token shell string — reference
    it as the documented value via a variable / config, not retyped or improvised
    inline), yields either `needs_triage` with `findingCount > 0` (then `ao review
-   send` is valid) or `clean` with `findingCount: 0` and status `clean` ÔÇö not
+   send` is valid) or `clean` with `findingCount: 0` and status `clean` — not
    `failed` with empty findings.
 8. Issue #55 quote-safety guard (`scripts/check-orchestrator-rules-quotes.ps1` or
    successor) still passes on the updated `orchestratorRules` literal.
 9. `docs/issues_drafts/00-architecture-decisions.md` has a new subsection recording
-   the REVIEW_COMMAND-with-preflight + Codex-CLI-invocation-shape + failed-Ôëá-clean
+   the REVIEW_COMMAND-with-preflight + Codex-CLI-invocation-shape + failed-≠-clean
    decision, and the corresponding Issue #3 body is re-synced in the same PR (PR
    notes link the updated section and the Issue #3 edit).
 10. When the pack wrapper is run without resolvable `tsx` / `node_modules`, it exits
@@ -197,7 +197,7 @@ scope** and `migration_notes.md` only; workers must not attempt to edit it.
 - No new repository secrets.
 - Preserves the NO_FINDINGS pack-wrapper review contract (file
   `docs/issues_drafts/06-codex-reviewer-scope-context.md`) and the pack wrapper's
-  review verdict semantics ÔÇö only the dependency preflight, the Codex CLI invocation
+  review verdict semantics — only the dependency preflight, the Codex CLI invocation
   shape, and operational discipline change.
 
 ## Verification
@@ -213,7 +213,7 @@ scope** and `migration_notes.md` only; workers must not attempt to edit it.
    (paste redacted `ao review list --json` showing `clean` or `needs_triage`, not
    `failed`).
 5. Invoke the pack wrapper directly against an open PR's checkout and show the Codex
-   run reaches a verdict ÔÇö capture the wrapper's process exit and stderr and show no
+   run reaches a verdict — capture the wrapper's process exit and stderr and show no
    Codex CLI usage / `error:` argument-conflict text (criterion 6). The `ao review
    run` JSON path (`terminationReason` / non-`failed` status) is covered by step 4.
 6. PR notes include a redacted example of a **failed** run JSON snippet (e.g. the
