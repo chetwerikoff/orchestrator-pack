@@ -5,7 +5,7 @@ import { aggregateChain } from '../lib/aggregate.js';
 import {
   computeConvergence,
   isIterationConverged,
-  NULL_ITERATION_KEY,
+  NULL_ITERATION_LABEL,
 } from '../lib/convergence.js';
 import { computeFindingSignature } from '../lib/finding_signature.js';
 import { readLedgerRows } from '../lib/writer.js';
@@ -132,9 +132,59 @@ describe('computeConvergence', () => {
 
     expect(report.total_iterations).toBe(1);
     expect(report.blocking_findings_by_iteration).toEqual([
-      { iteration_id: NULL_ITERATION_KEY, blocking_findings: 0 },
+      { iteration_id: NULL_ITERATION_LABEL, blocking_findings: 0 },
     ]);
     expect(report.final_state).toBe('converged');
+  });
+
+  it('keeps literal (none) iteration_id separate from the null bucket', () => {
+    const missing = {
+      total_rows: 2,
+      unavailable_cost_rows: 0,
+      sessions_without_cost: [],
+      iterations_without_cost: [],
+    };
+    const finding = {
+      type: 'quality',
+      code: 'unused-var',
+      severity: 'blocking',
+      path: 'plugins/demo/lib.ts',
+      summary: 'unused',
+      source: 'codex-local',
+    };
+    const defaults = { ...convergenceRowDefaults, chain_id: 'chain-literal-none' };
+    const report = computeConvergence(
+      [
+        row(
+          {
+            iteration_id: null,
+            event_kind: 'finished',
+            role: 'worker',
+            timestamp: '2026-05-02T10:00:00.000Z',
+          },
+          defaults,
+        ),
+        row(
+          {
+            iteration_id: '(none)',
+            event_kind: 'finding',
+            role: 'reviewer',
+            finding,
+            timestamp: '2026-05-02T10:30:00.000Z',
+          },
+          defaults,
+        ),
+      ],
+      'chain-literal-none',
+      { missingData: missing },
+    );
+
+    expect(report.total_iterations).toBe(2);
+    expect(report.blocking_findings_by_iteration).toEqual([
+      { iteration_id: NULL_ITERATION_LABEL, blocking_findings: 0 },
+      { iteration_id: '(none)', blocking_findings: 1 },
+    ]);
+    expect(report.final_state).toBe('abandoned');
   });
 });
 

@@ -12,11 +12,21 @@ import type {
 
 const DEFAULT_REPEATED_SIGNATURE_ITERATION_THRESHOLD = 2;
 
-/** Matches aggregate.ts bucketing for null iteration_id. */
-export const NULL_ITERATION_KEY = '(none)';
+/** Report label for null iteration_id rows (matches aggregate.ts display). */
+export const NULL_ITERATION_LABEL = '(none)';
+
+/** Internal bucket for null iteration_id; not a valid AO iteration id. */
+const NULL_ITERATION_BUCKET = '\0ledger:null-iteration';
 
 export function iterationKey(iterationId: string | null): string {
-  return iterationId ?? NULL_ITERATION_KEY;
+  if (iterationId === null) {
+    return NULL_ITERATION_BUCKET;
+  }
+  return iterationId;
+}
+
+export function displayIterationKey(bucketKey: string): string {
+  return bucketKey === NULL_ITERATION_BUCKET ? NULL_ITERATION_LABEL : bucketKey;
 }
 
 function signatureForFinding(finding: StructuredFinding): string {
@@ -58,11 +68,8 @@ function orderedIterationIds(rows: LedgerRow[]): string[] {
     .map(([id]) => id);
 }
 
-function rowsForIteration(rows: LedgerRow[], iterationId: string): LedgerRow[] {
-  if (iterationId === NULL_ITERATION_KEY) {
-    return rows.filter((row) => row.iteration_id === null);
-  }
-  return rows.filter((row) => row.iteration_id === iterationId);
+function rowsForIteration(rows: LedgerRow[], bucketKey: string): LedgerRow[] {
+  return rows.filter((row) => iterationKey(row.iteration_id) === bucketKey);
 }
 
 function iterationHasScopeViolation(rows: LedgerRow[]): boolean {
@@ -114,7 +121,7 @@ function detectRepeatedSignatures(rows: LedgerRow[]): RepeatedSignatureReport[] 
 
   return [...bySignature.entries()]
     .map(([signature, perIteration]) => {
-      const iterations = [...perIteration.keys()].sort();
+      const iterations = [...perIteration.keys()].sort().map(displayIterationKey);
       const occurrence_count = [...perIteration.values()].reduce((sum, count) => sum + count, 0);
       return { signature, iterations, occurrence_count };
     })
@@ -181,9 +188,9 @@ export function computeConvergence(
   const config = options.config ?? {};
 
   const blocking_findings_by_iteration: IterationBlockingFindings[] = iterationIds.map(
-    (iteration_id) => ({
-      iteration_id,
-      blocking_findings: iterationBlockingFindingCount(rowsForIteration(chainRows, iteration_id)),
+    (bucketKey) => ({
+      iteration_id: displayIterationKey(bucketKey),
+      blocking_findings: iterationBlockingFindingCount(rowsForIteration(chainRows, bucketKey)),
     }),
   );
 
