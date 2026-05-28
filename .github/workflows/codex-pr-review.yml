@@ -57,6 +57,10 @@ jobs:
   codex-review:
     name: Codex ${{ inputs.model }} PR review
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
     steps:
       - name: Checkout PR repository
         uses: actions/checkout@v4
