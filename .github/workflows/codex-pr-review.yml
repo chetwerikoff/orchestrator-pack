@@ -35,6 +35,13 @@ on:
         required: false
         type: string
         default: gpt-5.5
+      pack_ref:
+        description: >
+          orchestrator-pack git ref to checkout (optional). When empty, resolves from
+          the caller's uses @ref via github.workflow_ref / job.workflow_sha.
+        required: false
+        type: string
+        default: ''
     secrets:
       codex_auth_json:
         required: true
@@ -57,11 +64,27 @@ jobs:
       - name: Fetch base branch
         run: git fetch origin "${{ github.base_ref }}"
 
+      - name: Resolve orchestrator-pack checkout ref
+        id: pack-ref
+        run: |
+          if [ -n "${{ inputs.pack_ref }}" ]; then
+            ref="${{ inputs.pack_ref }}"
+          elif [ -n "${{ job.workflow_sha }}" ]; then
+            ref="${{ job.workflow_sha }}"
+          else
+            workflow_ref="${{ github.workflow_ref }}"
+            ref="${workflow_ref#*@}"
+            if [ -z "$ref" ]; then
+              ref="main"
+            fi
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout orchestrator-pack
         uses: actions/checkout@v4
         with:
           repository: chetwerikoff/orchestrator-pack
-          ref: ${{ github.action_ref }}
+          ref: ${{ steps.pack-ref.outputs.ref }}
           path: orchestrator-pack
 
       - name: Setup Node.js
@@ -91,19 +114,21 @@ jobs:
 
       - name: Run Codex review (scoped wrapper)
         id: review
+        working-directory: orchestrator-pack
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_REPO_ROOT: ${{ github.workspace }}
         run: |
           set -o pipefail
-          node --import tsx orchestrator-pack/plugins/ao-codex-pr-reviewer/bin/review.ts \
-            --repo-root . \
+          ./node_modules/.bin/tsx plugins/ao-codex-pr-reviewer/bin/review.ts \
+            --repo-root "$PR_REPO_ROOT" \
             --base "origin/${{ github.base_ref }}" \
             --pr-number "${{ github.event.pull_request.number }}" \
-            --pr-body-file pr-body.md \
+            --pr-body-file "$PR_REPO_ROOT/pr-body.md" \
             --model "${{ inputs.model }}" \
             --source codex-github-action \
-            --github-comment-file codex-review-comment.md \
-            > codex-ao-findings.json
+            --github-comment-file "$PR_REPO_ROOT/codex-review-comment.md" \
+            > "$PR_REPO_ROOT/codex-ao-findings.json"
 
       - name: Post review comment
         if: success()
