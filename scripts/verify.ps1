@@ -268,6 +268,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== run-pack-review CLI args (Issue #60) =='
+$runPackReviewArgsCheck = Join-Path $Root 'scripts/check-run-pack-review-args.ps1'
+if (Test-Path -LiteralPath $runPackReviewArgsCheck -PathType Leaf) {
+    & $runPackReviewArgsCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-run-pack-review-args.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-run-pack-review-args.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'run-pack-review.ps1 must parse --repo-root and --base'
+    }
+}
+else {
+    Write-Check 'scripts/check-run-pack-review-args.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing run-pack-review args check script'
+}
+
+Write-Host ''
 Write-Host '== Worker launch-failure detection (Issue #63) =='
 $launchFailureCheck = Join-Path $Root 'scripts/check-worker-launch-failure.ps1'
 $launchFixtureDir = Join-Path $Root 'tests/fixtures/worker-launch-failure'

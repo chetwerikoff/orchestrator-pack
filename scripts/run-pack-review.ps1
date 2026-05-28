@@ -1,14 +1,15 @@
 # Canonical AO review entrypoint: dependency preflight then pack Codex wrapper.
 # Referenced by REVIEW_COMMAND in agent-orchestrator.yaml.example (Issue #60).
+# Accepts the same CLI-style flags as review.ps1 (--repo-root, --base).
 #Requires -Version 5.1
-param(
-    [string]$RepoRoot = '.',
-    [string]$Base = 'origin/main'
-)
+param()
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 
-$resolvedRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$cli = Split-PackReviewCliArgs -Argv $args
+$resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
+
 Push-Location -LiteralPath $resolvedRoot
 try {
     npm ci --include=dev
@@ -21,7 +22,7 @@ try {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }
 
-    & $reviewScript --repo-root $resolvedRoot --base $Base @args
+    & $reviewScript --repo-root $resolvedRoot --base $cli.Base @cli.ForwardArgs
     exit $LASTEXITCODE
 }
 finally {
