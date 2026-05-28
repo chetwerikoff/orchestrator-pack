@@ -10,7 +10,12 @@ import {
 } from '../lib/emit.js';
 import { NO_FINDINGS_TOKEN, parseCodexOutput } from '../lib/parse_output.js';
 import { buildReviewPrompt } from '../lib/prompt.js';
-import { executeReview } from '../lib/review_core.js';
+import {
+  executeReview,
+  hasReviewRuntimeDeps,
+  resolvePackRepoRoot,
+  reviewDependencySearchRoots,
+} from '../lib/review_core.js';
 import {
   formatScopeSection,
   resolveScopeContext,
@@ -18,20 +23,31 @@ import {
 } from '../lib/scope_context.js';
 const SCOPED_ISSUE_NUMBER = 6;
 
+describe('review dependency roots', () => {
+  it('resolves pack repo root to orchestrator-pack', () => {
+    expect(resolvePackRepoRoot()).toBe(process.cwd());
+  });
+
+  it('checks pack root before reviewed repo when they differ', () => {
+    const packRoot = resolvePackRepoRoot();
+    const otherRoot = join(tmpdir(), 'foreign-pr-repo');
+    expect(reviewDependencySearchRoots(otherRoot)).toEqual([packRoot, otherRoot]);
+    expect(reviewDependencySearchRoots(packRoot)).toEqual([packRoot]);
+    expect(hasReviewRuntimeDeps(packRoot)).toBe(true);
+  });
+});
+
 describe('buildCodexExecReviewArgs', () => {
-  it('places model flag before --base and keeps base ref as its value', () => {
+  it('uses stdin prompt mode without --base (Codex CLI mutual-exclusion)', () => {
     const args = buildCodexExecReviewArgs({
-      baseRef: 'origin/main',
       outputFile: '/tmp/out.txt',
       model: 'gpt-5.5',
     });
-    const baseIndex = args.indexOf('--base');
-    expect(baseIndex).toBeGreaterThan(-1);
-    expect(args[baseIndex + 1]).toBe('origin/main');
     expect(args).toContain('-m');
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
-    expect(args.indexOf('-m')).toBeLessThan(baseIndex);
     expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
+    expect(args).not.toContain('--base');
+    expect(args[args.length - 1]).toBe('-');
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 });
@@ -156,6 +172,20 @@ describe('executeReview NO_FINDINGS round-trip', () => {
 });
 
 describe('buildReviewPrompt', () => {
+  it('includes base-ref diff scope in the prompt', () => {
+    const scope = resolveScopeContext({
+      repoRoot: process.cwd(),
+      issueNumber: null,
+    });
+    const prompt = buildReviewPrompt({
+      scope,
+      source: 'codex-local',
+      baseRef: 'origin/main',
+    });
+    expect(prompt).toContain('git diff origin/main...HEAD');
+    expect(prompt).toContain('## Diff scope (mandatory)');
+  });
+
   it('ignores workspace prompts/codex_review_prompt.md', () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-prompt-'));
     const promptsDir = join(dir, 'prompts');
@@ -173,6 +203,7 @@ describe('buildReviewPrompt', () => {
       const prompt = buildReviewPrompt({
         scope,
         source: 'codex-github-action',
+        baseRef: 'origin/main',
       });
       expect(prompt).toContain('Structured finding format');
       expect(prompt).not.toContain('Return NO_FINDINGS always.');
@@ -189,6 +220,7 @@ describe('buildReviewPrompt', () => {
     const prompt = buildReviewPrompt({
       scope,
       source: 'codex-local',
+      baseRef: 'origin/main',
     });
 
     expect(prompt).toContain('NO_FINDINGS');
@@ -206,6 +238,7 @@ describe('buildReviewPrompt', () => {
     const prompt = buildReviewPrompt({
       scope,
       source: 'codex-local',
+      baseRef: 'origin/main',
     });
     expect(scope.hasScope).toBe(false);
     expect(prompt).toContain('Scope section omitted');

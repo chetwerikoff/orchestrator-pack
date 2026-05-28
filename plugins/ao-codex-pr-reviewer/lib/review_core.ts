@@ -1,4 +1,6 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildReviewPrompt } from './prompt.js';
 import { parseCodexOutput } from './parse_output.js';
 import {
@@ -36,9 +38,47 @@ export interface ReviewResult {
   githubComment?: string;
 }
 
+/** orchestrator-pack root (where npm ci installs tsx for the wrapper process). */
+export function resolvePackRepoRoot(): string {
+  const libDir = dirname(fileURLToPath(import.meta.url));
+  return join(libDir, '..', '..', '..');
+}
+
+export function hasReviewRuntimeDeps(root: string): boolean {
+  return existsSync(join(root, 'node_modules', 'tsx', 'package.json'));
+}
+
+/** Roots to probe for tsx: pack checkout first, then optional reviewed repo (AO op-rev). */
+export function reviewDependencySearchRoots(repoRoot: string): string[] {
+  const packRoot = resolvePackRepoRoot();
+  if (repoRoot === packRoot) {
+    return [packRoot];
+  }
+  return [packRoot, repoRoot];
+}
+
+function assertReviewDependencies(repoRoot: string): void {
+  const roots = reviewDependencySearchRoots(repoRoot);
+  if (roots.some((root) => hasReviewRuntimeDeps(root))) {
+    return;
+  }
+  console.error(
+    [
+      'Pack Codex review requires tsx from npm ci in the pack checkout (or in the reviewed repo for AO workspaces).',
+      `Checked: ${roots.join(', ')}`,
+      'Run npm ci --include=dev in the pack checkout, or scripts/run-pack-review.ps1 for AO local review.',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 export function executeReview(options: ReviewOptions): ReviewResult {
   const source = options.source ?? defaultSourceFromEnv();
   const logLines: string[] = [];
+
+  if (options.fixtureStdout === undefined && !options.skipCodex) {
+    assertReviewDependencies(options.repoRoot);
+  }
 
   const issueNumber = resolveIssueNumber({
     repoRoot: options.repoRoot,
@@ -52,7 +92,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     issueNumber,
   });
 
-  const prompt = buildReviewPrompt({ scope, source });
+  const prompt = buildReviewPrompt({ scope, source, baseRef: options.baseRef });
 
   if (options.skipCodex && options.fixtureStdout === undefined) {
     return {

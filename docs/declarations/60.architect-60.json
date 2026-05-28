@@ -1,0 +1,45 @@
+{
+  "issue_number": 60,
+  "iteration_id": "architect-60",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T18:34:41.421Z",
+  "baseline": {
+    "commit_sha": "1fc91722544c69b48949127b59f53299a9e6513f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6c7838808050529d78a287882d43f2cea5181ef892001fea115e250a66b5ec46"
+  },
+  "declared_paths": [
+    "scripts/run-pack-review.ps1",
+    "scripts/check-review-command-preflight.ps1",
+    "scripts/check-run-pack-review-args.ps1",
+    "scripts/lib/Parse-PackReviewCliArgs.ps1",
+    "scripts/verify.ps1",
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md",
+    "prompts/codex_review_prompt.md",
+    "docs/migration_notes.md",
+    "plugins/ao-codex-pr-reviewer/lib/run_review.ts",
+    "plugins/ao-codex-pr-reviewer/lib/prompt.ts",
+    "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
+    "plugins/ao-codex-pr-reviewer/tests/review.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:9348da688522953e68ec3006f39edca0cfbe8d734caf0de791820c6345ed062b",
+      "new_active_scope_hash": "sha256:6c7838808050529d78a287882d43f2cea5181ef892001fea115e250a66b5ec46",
+      "changed": {
+        "added": [
+          "scripts/check-run-pack-review-args.ps1",
+          "scripts/lib/Parse-PackReviewCliArgs.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Codex review fixes: CLI arg parser and scope guard paths",
+      "actor": "architect-60",
+      "timestamp": "2026-05-28T18:55:53.808Z",
+      "applied": true
+    }
+  ]
+}
