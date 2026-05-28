@@ -1,0 +1,5 @@
+printf : The term 'printf' is not recognized as the name of a cmdlet, function, script file, or operable program.
+At line:1 char:145
++ ... worker-prompt-op-24.md'; printf '\n\n'; ...
+    + CategoryInfo          : ObjectNotFound: (printf:String) [], CommandNotFoundException
+error: unknown option '-ne'

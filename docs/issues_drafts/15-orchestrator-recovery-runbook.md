@@ -38,6 +38,11 @@ runbook must treat this as a distinct state, not lump it into "stuck".
 This issue is **runbook + minor helper**, not new runtime mechanism. No
 new plugin, no new event handling, no new YAML schema.
 
+**Related (Issue #63):** when a worker exits immediately after spawn with no PR,
+operators must use `docs/migration_notes.md` (worker prompt-delivery launch failure)
+instead of this orchestrator-stuck runbook. The shipped runbook at
+`docs/orchestrator-recovery-runbook.md` includes that pointer.
+
 ## Binding surface
 
 This issue commits the repository to:

@@ -15,6 +15,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Test-WorkerLaunchFailure.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -116,10 +117,29 @@ else {
     Write-Host '  (orchestrator session not found in ao status)'
 }
 
-$workers = @($sessions | Where-Object {
-        $_.role -eq 'worker' -and
+$allWorkers = @($sessions | Where-Object { $_.role -eq 'worker' })
+$workers = @($allWorkers | Where-Object {
         ($TerminalWorkerStatuses -notcontains $_.status)
     })
+
+function Test-LaunchFailureWorkerCandidate {
+    param($Worker)
+
+    $noPr = (-not $Worker.prNumber) -and (-not $Worker.pr)
+    if (-not $noPr) { return $false }
+    if (@('detecting', 'stuck', 'exited', 'errored') -contains $Worker.status) {
+        return $true
+    }
+    if ($Worker.activity -eq 'exited') {
+        return $true
+    }
+    return $false
+}
+
+$launchFailureWorkers = @(
+    $allWorkers | Where-Object { Test-LaunchFailureWorkerCandidate $_ } |
+        ForEach-Object { if ($_.name) { $_.name } else { $_.sessionId } }
+)
 
 Write-Host ''
 Write-Host ("-- Active workers ({0}) --" -f $workers.Count)
@@ -139,6 +159,20 @@ else {
         }
         Write-Host ("  {0,-18} status={1,-12} {2,-10} {3,-12} lastReport={4}" -f `
                 $wName, $w.status, $pr, $issue, $lastReport)
+    }
+}
+
+if ($launchFailureWorkers.Count -gt 0) {
+    Write-Host ''
+    Write-Host ("-- Possible worker launch-failure ({0}) --" -f $launchFailureWorkers.Count)
+    Write-Host '  Worker exited, errored, or detecting with no PR shortly after spawn may be'
+    Write-Host '  prompt-delivery failure (Signature A/B), not orchestrator stuck.'
+    Write-Host '  Inspect session terminal for: printf not recognized, unknown option -ne,'
+    Write-Host '  or command line is too long.'
+    Write-Host '  See docs/migration_notes.md (Worker prompt-delivery launch failure).'
+    Write-Host '  Offline: pwsh -File scripts/check-worker-launch-failure.ps1 -FixturePath <pty.txt>'
+    foreach ($name in $launchFailureWorkers) {
+        Write-Host ("  - {0}" -f $name)
     }
 }
 
