@@ -1,0 +1,20 @@
+{
+  "issue_number": 55,
+  "iteration_id": "op-23",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T13:05:00.000Z",
+  "baseline": {
+    "commit_sha": "84143c041adacd3c9249f1f1a868b669cee76e84",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4b3892284f05e6a264f12ef635982a48563a5df12561a5fa02c20ad7527a3359"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/migration_notes.md",
+    "scripts/check-orchestrator-rules-quotes.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
