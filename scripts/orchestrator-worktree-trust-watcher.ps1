@@ -9,6 +9,9 @@
   invokes scripts/trust-ao-worktree.ps1 for paths not yet recorded in local state.
 
   See docs/orchestrator-autoloop-go-live.md.
+
+  Stop the process by closing the terminal or ending the PowerShell job (no Ctrl+C
+  handler — avoids duplicating wake-listener shutdown logic).
 #>
 [CmdletBinding()]
 param(
@@ -61,34 +64,20 @@ catch {
 
 Write-WatcherLog "starting (project=$ProjectId, poll=${PollSeconds}s, root=$WorktreesRoot)"
 
-$cancelled = $false
-$onCancel = [ConsoleCancelEventHandler]{
-    param($sender, $eventArgs)
-    $script:cancelled = $true
-    $eventArgs.Cancel = $true
-}
-[Console]::add_CancelKeyPress($onCancel)
-
-try {
-    while (-not $cancelled) {
-        if (Test-Path -LiteralPath $WorktreesRoot -PathType Container) {
-            Get-ChildItem -LiteralPath $WorktreesRoot -Directory -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    $full = $_.FullName
-                    if (-not $known[$full]) {
-                        try {
-                            Register-TrustedPath -Path $full
-                        }
-                        catch {
-                            Write-WatcherLog "failed $full : $_"
-                        }
+while ($true) {
+    if (Test-Path -LiteralPath $WorktreesRoot -PathType Container) {
+        Get-ChildItem -LiteralPath $WorktreesRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $full = $_.FullName
+                if (-not $known[$full]) {
+                    try {
+                        Register-TrustedPath -Path $full
+                    }
+                    catch {
+                        Write-WatcherLog "failed $full : $_"
                     }
                 }
-        }
-        Start-Sleep -Seconds ([Math]::Max(3, $PollSeconds))
+            }
     }
-}
-finally {
-    [Console]::remove_CancelKeyPress($onCancel)
-    Write-WatcherLog 'stopped'
+    Start-Sleep -Seconds ([Math]::Max(3, $PollSeconds))
 }
