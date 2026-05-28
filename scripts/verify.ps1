@@ -212,6 +212,8 @@ $requiredFiles = @(
     'scripts/verify.ps1',
     'scripts/check-reusable.ps1',
     'scripts/install-git-hooks.ps1',
+    'scripts/lint-self-architect.ps1',
+    'scripts/lint-self-architect.config.json',
     'agent-orchestrator.yaml.example',
     '.github/workflows/scope-guard.yml'
 )

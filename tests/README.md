@@ -80,6 +80,9 @@ Invoke-Pester -Path tests/powershell
 - **Declaration schema** — validates committed snapshot JSON metadata.
 - **Synthetic git fixtures** — `createSyntheticGitRepo()` for future
   scope-guard integration tests without AO.
+- **Self-architect lint** — Pester runs `scripts/lint-self-architect.ps1` against
+  fixtures under `tests/fixtures/lint-self-architect/` (duplicate literal,
+  paired script/template divergence, and a negative case).
 - **Runner smoke** — Pester checks that `scripts/test-all.ps1` exists and
   exposes the expected parameters.
 
