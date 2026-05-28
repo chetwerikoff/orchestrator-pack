@@ -84,3 +84,28 @@ To adopt on an existing live `agent-orchestrator.yaml`:
 Until restart, the orchestrator and workers keep prior prompt text. The live YAML
 is gitignored — diff against the example when upgrading; do not hand-edit only
 the worker rules without updating `orchestratorRules`.
+
+## Orchestrator wake listener (webhook + local HTTP)
+
+Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
+when AO emits urgent/action notifications, without polling or schedulers.
+
+To adopt on an existing live `agent-orchestrator.yaml`:
+
+1. Merge the `notifiers.webhook` block from `agent-orchestrator.yaml.example`
+   (default URL `http://127.0.0.1:17487/ao-wake`).
+2. Merge `notificationRouting` so `urgent` and `action` include `webhook` (keep
+   your other notifier channels).
+3. Set `AO_ORCHESTRATOR_SESSION_ID` to your orchestrator session id (from
+   `ao status`) or pass `-OrchestratorSessionId` when starting the listener.
+4. In a separate terminal from the AO daemon, start the listener before or with
+   `ao start`:
+   `pwsh -File scripts/orchestrator-wake-listener.ps1`
+5. Verify reachability:
+   `Test-NetConnection -ComputerName 127.0.0.1 -Port 17487`
+6. Optional dry-run (logs forward decisions without calling `ao send`):
+   `pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun`
+
+Full operator steps, dedup window, and failure detection are in
+`docs/orchestrator-wake-runbook.md`. When the listener is stopped, AO and workers
+continue normally; only automatic orchestrator wakes stop.

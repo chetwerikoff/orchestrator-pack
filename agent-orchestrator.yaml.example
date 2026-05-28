@@ -14,6 +14,29 @@ defaults:
   workspace: worktree
   notifiers: [desktop]
 
+# Orchestrator wake listener (issue #39): AO webhook POSTs urgent/action notifications
+# to the local listener, which forwards `ao send` nudges to the orchestrator session.
+# Start scripts/orchestrator-wake-listener.ps1 alongside `ao start` — see
+# docs/orchestrator-wake-runbook.md.
+notifiers:
+  webhook:
+    plugin: webhook
+    url: http://127.0.0.1:17487/ao-wake
+    retries: 1
+    retryDelayMs: 500
+
+notificationRouting:
+  urgent:
+    - desktop
+    - webhook
+  action:
+    - desktop
+    - webhook
+  warning:
+    - desktop
+  info:
+    - desktop
+
 projects:
   example:
     repo: your-org/your-repo
