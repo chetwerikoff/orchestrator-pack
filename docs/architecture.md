@@ -13,6 +13,12 @@ The AO lifecycle remains upstream-owned. Local behavior is expressed as:
 
 No local code should modify upstream AO core.
 
+Local Codex PR review **is active**. AO drives it via `ao review run`, `send`,
+`list`, and `execute`; orchestration lives in `orchestratorRules` in
+`agent-orchestrator.yaml`. See [`README.md`](../README.md#local-codex-review-active),
+[`prompts/agent_rules.md`](../prompts/agent_rules.md), and
+[`docs/github_issues_cursor_codex_setup.md`](github_issues_cursor_codex_setup.md).
+
 ## Layout
 
 ```text
@@ -54,11 +60,11 @@ Rules for `vendor/agent-orchestrator`:
 - `agentRulesFile` pointing to `prompts/agent_rules.md`;
 - safe reactions that do not auto-merge.
 
-The current upstream AO schema supports `orchestrator` and `worker` role
-overrides. It does not expose a stable first-class `reviewer` role field in the
-YAML schema. Codex `gpt-5.5` review should therefore be added as an external
-plugin/workflow or explicit Codex review session, not as an unsupported YAML key
-and never as a core patch.
+Local Codex review is wired through `orchestratorRules` and the `ao review` CLI
+(see [Review paths](#review-paths)). The upstream AO schema supports
+`orchestrator` and `worker` role overrides. On AO 0.9.x there is no `reviewer:`
+YAML role that AO reads — adding `reviewer:` parses without error but is
+silently ignored; never patch AO core to add reviewer routing.
 
 ### Prompt layer
 
@@ -82,10 +88,16 @@ external state files. They must not patch AO core.
 
 ### Review paths
 
-The primary review path is AO's local built-in Codex review flow. Local Codex
-review runs through AO, writes findings to the AO dashboard, and can feed
-blocking feedback back to Cursor workers through AO reactions such as
+The primary review path is AO's **active** local Codex review flow. AO drives
+it through `ao review run`, `send`, `list`, and `execute`; orchestration and the
+autonomous loop live in `orchestratorRules` in `agent-orchestrator.yaml`.
+Discover current runs with `ao review list <project>` and the AO dashboard.
+Local Codex review writes findings to the dashboard and can feed blocking
+feedback back to Cursor workers through AO reactions such as
 `changes-requested -> send-to-agent`.
+
+On AO 0.9.x, a `reviewer:` YAML block is silently ignored — wire review through
+`orchestratorRules` and `ao review`, not a `reviewer:` key.
 
 GitHub Actions Codex review remains an optional path for PR comments, reusable
 workflow consumers, and external visibility. It must use the same prompt, scope

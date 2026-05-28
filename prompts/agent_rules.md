@@ -4,6 +4,21 @@ These rules are intended to be injected through Composio AO `agentRulesFile`.
 They must be portable across AO-supported agents and must not rely on local
 `ai-orchestrator` internals.
 
+## Local Codex review (active)
+
+Local Codex PR review **is active** in this pack. AO drives it through the
+first-class `ao review` CLI (`run`, `send`, `list`, `execute`). Wiring lives in
+`orchestratorRules` in `agent-orchestrator.yaml`. Discover runs via
+`ao review list <project>` and the AO dashboard.
+
+Review uses Codex CLI with `gpt-5.5`. On AO 0.9.x, a `reviewer:` YAML block is
+silently ignored (parsed without error; no code path reads it) — use
+`orchestratorRules` and configured AO/plugin/CI review paths, not invented YAML
+fields.
+
+See also: [`README.md`](../README.md#local-codex-review-active),
+[`docs/architecture.md`](../docs/architecture.md#review-paths).
+
 ## Tracker and role policy
 
 - GitHub Issues are the task source of truth for this pack's AO setup.
@@ -12,8 +27,6 @@ They must be portable across AO-supported agents and must not rely on local
   `Closes #N`, `Fixes #N`, or an explicit issue reference as appropriate.
 - Planning and coding sessions are expected to run through the Cursor CLI agent
   unless the AO config explicitly overrides the role.
-- Desired review model is Codex CLI with `gpt-5.5`, but do not invent unsupported
-  AO YAML fields for reviewers. Use only configured AO/plugin/CI review paths.
 - Do not use Vibe Kanban or Linear unless the config explicitly changes the tracker.
 
 ## Scope discipline

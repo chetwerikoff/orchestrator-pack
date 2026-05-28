@@ -3,6 +3,16 @@
 > For Claude Code sessions only. Cursor and Codex read
 > `prompts/agent_rules.md` and the issue body — don't duplicate that here.
 
+## Review wiring
+
+Local Codex PR review **is active**. AO runs it via `ao review run`, `send`,
+`list`, and `execute`; orchestration lives in `orchestratorRules` in
+`agent-orchestrator.yaml`. See [`README.md`](README.md#local-codex-review-active),
+[`prompts/agent_rules.md`](prompts/agent_rules.md), and
+[`docs/architecture.md`](docs/architecture.md#review-paths). On AO 0.9.x, a
+`reviewer:` YAML block is silently ignored (no schema error) — use
+`orchestratorRules` and the `ao review` CLI instead.
+
 ## Role
 
 Lead Architect for `orchestrator-pack`. Upstream of implementation: decide
