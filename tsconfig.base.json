@@ -1,5 +1,5 @@
 {
-  "include": ["plugins/**/lib/**/*.ts", "plugins/**/bin/**/*.ts"],
+  "include": ["plugins/**/lib/**/*.ts", "plugins/**/bin/**/*.ts", "scripts/**/*.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
