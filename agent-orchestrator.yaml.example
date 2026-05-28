@@ -66,8 +66,8 @@ projects:
       Never run bare `ao review run … --execute` without `--command` — built-in Codex
       wraps clean-review prose as a false `severity: warning` finding.
 
-      NAMED REVIEW_COMMAND (pack wrapper; run from the reviewed repo root; Windows):
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -File plugins/ao-codex-pr-reviewer/bin/review.ps1 --repo-root . --base origin/main
+      NAMED REVIEW_COMMAND (preflight + pack wrapper; run from the reviewed repo root; Windows):
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main
 
       RUNTIME INVOCATION (shell only — do NOT embed in orchestratorRules on Windows):
         At review time: ao review run <session-id> --execute
@@ -101,13 +101,17 @@ projects:
         queued / preparing / running — review in flight; poll on next turn.
         outdated — superseded by a newer worker commit; trigger a new review run using
           REVIEW_COMMAND (RUNTIME INVOCATION above; do not paste --command into rules text).
-        failed / cancelled — inspect terminationReason; notify human or retry once.
+        failed / cancelled — inspect terminationReason from ao review list --json;
+          NEVER treat as clean when findingCount is 0; NEVER ao review send on failed
+          runs; NEVER report or infer Codex review passed when status is failed or
+          cancelled; notify human or retry once after reading terminationReason.
 
       Do NOT invent statuses (e.g. awaiting_triage) — AO will never match them.
 
-      CLEANLINESS FROM COUNTS ONLY. Decide whether a review is clean solely from
-      ao review list --json field findingCount (0 means no open or sent findings).
-      Never read or pattern-match finding body prose (NO_FINDINGS contract).
+      CLEANLINESS FROM COUNTS ONLY. Decide whether a review is clean solely when
+      ao review list --json shows status clean (or needs_triage after a completed run).
+      findingCount 0 on failed or cancelled runs is NOT clean. Never read or
+      pattern-match finding body prose (NO_FINDINGS contract).
 
       TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports pr_created or
       ready_for_review on an open PR (visible in ao status --reports full), immediately run:

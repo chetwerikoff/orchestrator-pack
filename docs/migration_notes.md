@@ -123,6 +123,33 @@ argv and the orchestrator session fails at launch with `error: unknown option
 Regression guard: `scripts/check-orchestrator-rules-quotes.ps1` (also run from
 `scripts/verify.ps1`).
 
+### AO local review preflight and failed runs (Issue #60)
+
+AO reviewer workspaces (`code-reviews/workspaces/op-rev-*`) are fresh git
+checkouts without `node_modules`. The pack wrapper needs `tsx` from the reviewed
+repo root.
+
+**Canonical review command.** Copy **REVIEW_COMMAND** from
+`agent-orchestrator.yaml.example` — it runs `scripts/run-pack-review.ps1`, which
+executes `npm ci --include=dev` then `plugins/ao-codex-pr-reviewer/bin/review.ps1`.
+Do not improvise alternate `--command` chains (`&&`, nested `if`, or bare
+`review.ps1` without preflight).
+
+**Failed ≠ clean.** A run with `status: failed` or `cancelled` and
+`findingCount: 0` is **not** a clean review. Read `terminationReason` from
+`ao review list --json` before retry; do not `ao review send` on failed runs.
+
+**Codex CLI shape.** Installed Codex CLI treats `codex exec review --base` and a
+custom `[PROMPT]` as mutually exclusive. The pack wrapper scopes via prompt text
+(`git diff <base>...HEAD`) and stdin prompt mode, not `--base` plus stdin together.
+
+**Windows reviewer sandbox.** The `op-rev-*` read-only sandbox must allow shell
+spawns (operator `~/.codex/config.toml`, e.g. `[windows] sandbox = unelevated`).
+Otherwise Codex may return an empty review without inspecting the diff.
+
+Regression guards: `scripts/check-review-command-preflight.ps1`,
+`scripts/check-orchestrator-rules-quotes.ps1` (via `scripts/verify.ps1`).
+
 ### Worker prompt-delivery launch failure on Windows (Issue #63)
 
 On Windows, AO starts **worker** Cursor sessions with a launch command built by

@@ -250,6 +250,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== REVIEW_COMMAND preflight (Issue #60) =='
+$reviewPreflightCheck = Join-Path $Root 'scripts/check-review-command-preflight.ps1'
+if (Test-Path -LiteralPath $reviewPreflightCheck -PathType Leaf) {
+    & $reviewPreflightCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-command-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-command-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'REVIEW_COMMAND must include dependency preflight (Issue #60)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-command-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing REVIEW_COMMAND preflight check script'
+}
+
+Write-Host ''
 Write-Host '== Worker launch-failure detection (Issue #63) =='
 $launchFailureCheck = Join-Path $Root 'scripts/check-worker-launch-failure.ps1'
 $launchFixtureDir = Join-Path $Root 'tests/fixtures/worker-launch-failure'

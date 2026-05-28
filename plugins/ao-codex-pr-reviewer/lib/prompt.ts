@@ -25,12 +25,22 @@ export function loadPromptTemplate(): string {
 export function buildReviewPrompt(options: {
   scope: ResolvedScopeContext;
   source: ReviewSource;
+  baseRef: string;
 }): string {
   const template = loadPromptTemplate();
   const scopeSection = options.scope.hasScope
     ? formatScopeSection(options.scope)
     : '_Scope section omitted — no issue denylist fence and no declaration snapshot were available._';
+  const baseScopeSection = [
+    '## Diff scope (mandatory)',
+    '',
+    `Review **only** the changes between \`${options.baseRef}\` and \`HEAD\`.`,
+    `Use \`git diff ${options.baseRef}...HEAD\` (or equivalent) to bound inspection.`,
+    'Do not treat the full repository outside that diff as in scope for findings.',
+    '',
+  ].join('\n');
   return template
+    .replace('{{BASE_SCOPE_SECTION}}', baseScopeSection)
     .replace('{{SCOPE_SECTION}}', scopeSection)
     .replace(/\{\{SOURCE\}\}/g, options.source);
 }

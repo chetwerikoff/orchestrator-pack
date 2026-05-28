@@ -1,4 +1,5 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildReviewPrompt } from './prompt.js';
 import { parseCodexOutput } from './parse_output.js';
 import {
@@ -36,9 +37,28 @@ export interface ReviewResult {
   githubComment?: string;
 }
 
+function assertReviewDependencies(repoRoot: string): void {
+  const tsxModule = join(repoRoot, 'node_modules', 'tsx', 'package.json');
+  if (existsSync(tsxModule)) {
+    return;
+  }
+  console.error(
+    [
+      'Pack Codex review requires dev dependencies in the repo root (tsx from npm ci).',
+      'Run: npm ci --include=dev',
+      'Or invoke scripts/run-pack-review.ps1 (includes preflight before review.ps1).',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 export function executeReview(options: ReviewOptions): ReviewResult {
   const source = options.source ?? defaultSourceFromEnv();
   const logLines: string[] = [];
+
+  if (options.fixtureStdout === undefined && !options.skipCodex) {
+    assertReviewDependencies(options.repoRoot);
+  }
 
   const issueNumber = resolveIssueNumber({
     repoRoot: options.repoRoot,
@@ -52,7 +72,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     issueNumber,
   });
 
-  const prompt = buildReviewPrompt({ scope, source });
+  const prompt = buildReviewPrompt({ scope, source, baseRef: options.baseRef });
 
   if (options.skipCodex && options.fixtureStdout === undefined) {
     return {

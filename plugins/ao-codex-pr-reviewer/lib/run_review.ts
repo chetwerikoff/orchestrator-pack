@@ -49,8 +49,11 @@ function buildCodexSpawnEnv(source?: ReviewSource): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Codex CLI 0.13x treats `--base` and a custom [PROMPT] as mutually exclusive.
+ * Pack review uses stdin prompt mode (includes base-ref scope in the prompt text).
+ */
 export function buildCodexExecReviewArgs(options: {
-  baseRef: string;
   outputFile: string;
   model?: string;
 }): string[] {
@@ -58,13 +61,7 @@ export function buildCodexExecReviewArgs(options: {
   if (options.model) {
     args.push('-m', options.model);
   }
-  args.push(
-    '--base',
-    options.baseRef,
-    '--output-last-message',
-    options.outputFile,
-    '-',
-  );
+  args.push('--output-last-message', options.outputFile, '-');
   return args;
 }
 
@@ -78,7 +75,6 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
 
   try {
     const args = buildCodexExecReviewArgs({
-      baseRef: options.baseRef,
       outputFile,
       model: options.model,
     });

@@ -4,9 +4,11 @@ You are reviewing a pull request in an Agent Orchestrator managed repository.
 
 ## Your task
 
-1. Inspect the PR diff against the base ref (Codex supplies the diff context).
+1. Inspect the PR diff bounded by the base ref below (do not review out-of-diff files).
 2. Evaluate code quality, contract violations, and **scope compliance** when scope context is provided below.
 3. Emit findings in the structured format defined here — never free-form review prose.
+
+{{BASE_SCOPE_SECTION}}
 
 ## Scope context
 

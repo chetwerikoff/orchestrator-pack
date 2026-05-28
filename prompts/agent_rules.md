@@ -126,3 +126,13 @@ briefly allowing the orchestrator to `ao review send` if status is
 
 **Inspect before reporting.** Use `ao review list --json` to confirm run status
 and counts; do not infer cleanliness from finding prose.
+
+## AO review command and failed runs (workers)
+
+- Workers MUST NOT invent alternate `ao review run --command` strings. Only the
+  orchestrator drives review with the canonical **REVIEW_COMMAND** from project
+  config (`agent-orchestrator.yaml` / `agent-orchestrator.yaml.example`).
+- Workers MUST NOT treat a failed or cancelled review run as review completion,
+  even when `findingCount` is 0 or findings text is empty.
+- Workers MUST NOT report that Codex review passed when `ao review list --json`
+  shows only `failed` or `cancelled` runs for the current PR head.
