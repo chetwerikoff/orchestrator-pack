@@ -163,11 +163,16 @@ if ($reviewReports.Count -gt 0) {
 
 # --- review list ---
 Write-Host ''
-$reviewArgs = @('review', 'list', '--json')
+# ao review list takes [project] as a positional argument (not -p); place it before --json.
+$reviewArgs = @('review', 'list')
 if ($ProjectId) { $reviewArgs += $ProjectId }
+$reviewArgs += '--json'
 $reviewPayload = Invoke-AoJson -AoArgs $reviewArgs
 $runs = @($reviewPayload.runs)
 if (-not $runs -and $reviewPayload.data) { $runs = @($reviewPayload.data) }
+if ($ProjectId) {
+    $runs = @($runs | Where-Object { $_.projectId -eq $ProjectId })
+}
 
 $actionable = @($runs | Where-Object { $ActiveReviewStatuses -contains $_.status })
 $needsTriage = @($actionable | Where-Object { $_.status -eq 'needs_triage' })
