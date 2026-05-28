@@ -22,7 +22,13 @@ try {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }
 
-    & $reviewScript --repo-root $resolvedRoot --base $cli.Base @cli.ForwardArgs
+    $forwardArgs = @($cli.ForwardArgs)
+    if ($forwardArgs.Count -gt 0) {
+        & $reviewScript --repo-root $resolvedRoot --base $cli.Base @forwardArgs
+    }
+    else {
+        & $reviewScript --repo-root $resolvedRoot --base $cli.Base
+    }
     exit $LASTEXITCODE
 }
 finally {
