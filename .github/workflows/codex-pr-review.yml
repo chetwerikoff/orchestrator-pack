@@ -13,6 +13,8 @@ name: codex-pr-review
 #   jobs:
 #     codex-review:
 #       uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
+#       with:
+#         pack_ref: main
 #       secrets:
 #         codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
 #
@@ -38,11 +40,11 @@ on:
         default: gpt-5.5
       pack_ref:
         description: >
-          orchestrator-pack git ref to checkout (optional). When empty, resolves from
-          job.workflow_sha or job.workflow_ref (the called reusable workflow pin).
-        required: false
+          orchestrator-pack git ref to checkout. Required — set to the same ref as the
+          uses: ...@ref pin (e.g. main, v1.0.0, feat/issue-9). job.workflow_sha/ref are not
+          available in reusable workflow runs.
+        required: true
         type: string
-        default: ''
     secrets:
       codex_auth_json:
         required: true
@@ -73,18 +75,10 @@ jobs:
       - name: Resolve orchestrator-pack checkout ref
         id: pack-ref
         run: |
-          # github.workflow_ref is the *caller* workflow in workflow_call runs — do not use it.
-          # job.workflow_ref / job.workflow_sha identify this reusable workflow's uses: ...@pin.
-          if [ -n "${{ inputs.pack_ref }}" ]; then
-            ref="${{ inputs.pack_ref }}"
-          elif [ -n "${{ job.workflow_sha }}" ]; then
-            ref="${{ job.workflow_sha }}"
-          else
-            called_ref="${{ job.workflow_ref }}"
-            ref="${called_ref#*@}"
-            if [ -z "$ref" ]; then
-              ref="main"
-            fi
+          ref="${{ inputs.pack_ref }}"
+          if [ -z "$ref" ]; then
+            echo "::error::pack_ref input is required and must match the uses: ...@ref pin"
+            exit 1
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 

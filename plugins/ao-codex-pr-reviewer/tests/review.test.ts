@@ -31,8 +31,7 @@ describe('buildCodexExecReviewArgs', () => {
     expect(args).toContain('-m');
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
     expect(args.indexOf('-m')).toBeLessThan(baseIndex);
-    expect(args).toContain('--sandbox');
-    expect(args[args.indexOf('--sandbox') + 1]).toBe('read-only');
+    expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 });

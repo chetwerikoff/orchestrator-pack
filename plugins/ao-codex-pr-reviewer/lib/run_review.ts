@@ -54,13 +54,11 @@ export function buildCodexExecReviewArgs(options: {
   outputFile: string;
   model?: string;
 }): string[] {
-  const args = ['exec', 'review'];
+  const args = ['exec', '--sandbox', 'read-only', 'review'];
   if (options.model) {
     args.push('-m', options.model);
   }
   args.push(
-    '--sandbox',
-    'read-only',
     '--base',
     options.baseRef,
     '--output-last-message',

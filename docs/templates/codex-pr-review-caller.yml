@@ -9,5 +9,7 @@ permissions:
 jobs:
   codex-review:
     uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
+    with:
+      pack_ref: main
     secrets:
       codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}

@@ -136,7 +136,8 @@ uninstall options.
 
 Create `.github/workflows/pr-review.yml` in the target repository by copying
 `docs/templates/codex-pr-review-caller.yml` (caller permissions include
-`issues: read` so linked-issue scope fences resolve in CI).
+`issues: read` so linked-issue scope fences resolve in CI). Set `pack_ref` to
+the same ref as the `uses: ...@ref` pin (e.g. both `main` or both `v1.0.0`).
 
 Ensure `.github/workflows/scope-guard.yml` from the pack is present (copied in
 the preamble). It runs PR diff validation against the linked issue and committed
