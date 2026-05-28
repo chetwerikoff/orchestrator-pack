@@ -55,19 +55,37 @@ projects:
     orchestratorRules: |
       Use GitHub Issues as the task source of truth.
       Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent,
-      and keep PRs linked back to their source issues with "Closes #N" or "Fixes #N".
+      and keep PRs linked back to their source issues with Closes #N or Fixes #N in the PR body.
       Do not use Vibe Kanban or Linear for this project unless explicitly reconfigured.
       Do not add unsupported reviewer fields to this YAML — drive review through CLI.
 
+      REVIEW DRIVING — AO 0.9.x does not auto-trigger Codex review on PR open.
+      The orchestrator is responsible for jumping the gaps.
+
+      Always invoke review through the pack wrapper (Issue #9 / NO_FINDINGS contract).
+      Never run bare `ao review run … --execute` without `--command` — built-in Codex
+      wraps clean-review prose as a false `severity: warning` finding.
+
+      NAMED REVIEW_COMMAND (pack wrapper; run from the reviewed repo root; Windows):
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File plugins/ao-codex-pr-reviewer/bin/review.ps1 --repo-root . --base origin/main
+
+      RUNTIME INVOCATION (shell only — do NOT embed in orchestratorRules on Windows):
+        At review time: ao review run <session-id> --execute
+        Pass REVIEW_COMMAND above as the AO review command option value (--command on CLI).
+        Windows launch hazard: any double-quote character or an inline --command line in this
+        rules text breaks AO session start (PowerShell 5.1 prompt substitution leaks flags
+        into Cursor argv; symptom: error unknown option -NoProfile, session stuck or
+        probe_failure). Keep REVIEW_COMMAND here; supply --command only on the CLI.
+
       AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
-      "review" or "loop". On every orchestrator turn while any open PR has an active
+      review or loop. On every orchestrator turn while any open PR has an active
       review path, read these BEFORE any other planning work:
         ao review list --json
         ao status --json --reports full
         ao events list --json
 
-      WALL-CLOCK NOTE. Targets such as "~2 minutes for worker acknowledgement" and
-      "~3 minutes after ping before respawn" are operator guidance applied on the next
+      WALL-CLOCK NOTE. Targets such as ~2 minutes for worker acknowledgement and
+      ~3 minutes after ping before respawn are operator guidance applied on the next
       orchestrator turn, not independently enforced timers. There is no background
       watchdog. The 30-minute AO report-stale reaction is a long-tail backstop only.
 
@@ -81,7 +99,8 @@ projects:
           condition fires (do not re-send; findings are already with the worker).
         clean — findingCount: 0 for that run's target SHA (subsumes open and sent).
         queued / preparing / running — review in flight; poll on next turn.
-        outdated — superseded by a newer worker commit; trigger a new review run.
+        outdated — superseded by a newer worker commit; trigger a new review run using
+          REVIEW_COMMAND (RUNTIME INVOCATION above; do not paste --command into rules text).
         failed / cancelled — inspect terminationReason; notify human or retry once.
 
       Do NOT invent statuses (e.g. awaiting_triage) — AO will never match them.
@@ -90,10 +109,10 @@ projects:
       ao review list --json field findingCount (0 means no open or sent findings).
       Never read or pattern-match finding body prose (NO_FINDINGS contract).
 
-      TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports ready_for_review
-      on an open PR (visible in ao status --reports full), immediately run:
-        ao review run <worker-session-id> --execute
-      Do not wait for operator words "review" or "loop".
+      TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports pr_created or
+      ready_for_review on an open PR (visible in ao status --reports full), immediately run:
+        ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
+      Do not wait for operator words review or loop.
 
       NAMED PENDING STATE: waiting_worker_review_response.
       A PR enters this state after ao review send succeeds for a run in needs_triage,
@@ -115,9 +134,9 @@ projects:
       while still in waiting_worker_review_response, if there is no worker
       addressing_reviews report since the send timestamp and no new PR commit, and
       ao events list --json shows no prior ao send ping for this pending episode,
-      send exactly ONE message via ao send <session>:
-        "Check pending AO review findings (ao review list). Report
-         ao report addressing_reviews or report terminal failure with a reason."
+      send exactly ONE message via ao send <session> reminding the worker to check
+      pending AO review findings (ao review list), report ao report addressing_reviews,
+      or report terminal failure with a reason.
       Do NOT send a second ping before observing the next worker response or commit.
 
       RESPAWN DISCIPLINE. On a later orchestrator turn, if still in
@@ -129,7 +148,7 @@ projects:
 
       ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
       last review run's target SHA, immediately run ao review run <session> --execute
-      for the next round — do not ask the operator.
+      with --command set to REVIEW_COMMAND for the next round — do not ask the operator.
 
       ROUND LIMIT (prompt-level stop). Count completed review runs for the current PR
       from ao review list --json where findingCount > 0 OR openFindingCount > 0.

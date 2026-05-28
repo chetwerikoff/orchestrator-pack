@@ -232,6 +232,24 @@ Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md' @('chain_id', 'pl
 Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md' @('Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch')
 
 Write-Host ''
+Write-Host '== orchestratorRules quote safety =='
+$rulesQuoteCheck = Join-Path $Root 'scripts/check-orchestrator-rules-quotes.ps1'
+if (Test-Path -LiteralPath $rulesQuoteCheck -PathType Leaf) {
+    & $rulesQuoteCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'orchestratorRules literal must not contain double-quote characters'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestratorRules quote-safety check script'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {
