@@ -21,7 +21,7 @@ backstop) add resilience; this doc covers the shipped baseline.
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
 
-## Every session — two processes
+## Every session — three processes
 
 **Terminal A — AO**
 
@@ -35,7 +35,21 @@ ao start orchestrator-pack
 ```powershell
 cd <orchestrator-pack-root>
 $env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'   # your id from ao status
-pwsh -File scripts/orchestrator-wake-listener.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-listener.ps1
+```
+
+**Terminal C — worktree trust watcher** (Windows Cursor; avoids blocking
+`Workspace Trust Required` on each new `op-*` worktree)
+
+```powershell
+cd <orchestrator-pack-root>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-worktree-trust-watcher.ps1
+```
+
+One-shot trust for an existing session worktree:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/trust-ao-worktree.ps1 -SessionId op-35
 ```
 
 Verify:
@@ -45,7 +59,8 @@ Test-NetConnection -ComputerName 127.0.0.1 -Port 17487
 ```
 
 Expect listener log: `listening`. On wake events expect `accepted: <kind>` — not
-only `dropped: not_wake_relevant`.
+only `dropped: not_wake_relevant`. Trust watcher should log `trusted: ...\worktrees\op-*`
+when a worker spawns.
 
 ## Live config (`agent-orchestrator.yaml`, gitignored)
 
@@ -53,7 +68,15 @@ only `dropped: not_wake_relevant`.
    - `projects.<id>.orchestratorRules` (full block, including **COMMAND DISCIPLINE**)
    - top-level `reactions` (especially `report-stale`)
    - `notifiers.webhook` and `notificationRouting` (`urgent` / `action` → `webhook`)
-2. **Required reaction fix** — without this, CI-green / mergeable does not reach the webhook:
+2. **Cursor worker permissions** — under `projects.<id>.orchestrator` and `.worker`,
+   set `agentConfig.permissions: permissionless` so AO passes `--force --sandbox disabled`
+   to the Cursor CLI (see example YAML). Set `~/.cursor/cli-config.json`
+   `approvalMode` to `unrestricted` (not `allowlist`). Run the worktree trust watcher
+   above — AO worktrees are new paths each spawn and still need headless `--trust` once.
+   Do not add a broken `.cursor/cli.json` in this repo; project-level overrides must
+   match the Cursor CLI schema or `agent` refuses to start.
+
+3. **Required reaction fix** — without this, CI-green / mergeable does not reach the webhook:
 
    ```yaml
    approved-and-green:
@@ -65,7 +88,7 @@ only `dropped: not_wake_relevant`.
    A partial override without `priority` sends notifications desktop-only; the wake
    listener never sees `merge.ready`.
 
-3. **Review command at shell time only** — copy from rules (**REVIEW_COMMAND** or
+4. **Review command at shell time only** — copy from rules (**REVIEW_COMMAND** or
    **PACK_REVIEW_SHELL**), e.g.:
 
    ```powershell
@@ -75,7 +98,7 @@ only `dropped: not_wake_relevant`.
    Forbidden: bare `plugins/ao-codex-pr-reviewer/bin/review.ps1`, `cmd /c npm ci && …`,
    `ao review run --execute` without `--command`.
 
-4. Reload prompts and rules:
+5. Reload prompts and rules:
 
    ```powershell
    ao stop
