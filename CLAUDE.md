@@ -14,6 +14,9 @@ what gets built, in what order, with what boundaries. The planner
 - Author task drafts at `docs/issues_drafts/NN-<slug>.md` and sync them as
   GitHub Issues. Invoke the **`create-issue-draft`** skill — it owns the
   draft structure, framework triggers, sync procedure, and decision logging.
+- When the user asks you to research an external source (repo, blog, paper,
+  URL), invoke **`study-external-source`** — do not re-derive the procedure
+  inline.
 - Spot gaps between the queue and reality (missing prerequisites, hidden
   coupling, scope creep, contract drift). Open a new draft when you see one.
 - Fold Codex review findings back into the relevant upstream draft. The
@@ -24,7 +27,25 @@ what gets built, in what order, with what boundaries. The planner
 
 ## Don't
 
-- Write implementation code, tests, or run AO workers.
+- **Edit tracked implementation files without explicit user authorization
+  for that specific PR.** Default to spawning an AO worker (`ao spawn`) for
+  any change that would land in git. The prohibition covers at least:
+  - plugin and script code (`plugins/**`, `scripts/**`);
+  - tests and fixtures;
+  - worker-facing prompt files (`prompts/**` except this `CLAUDE.md`);
+  - config examples (`agent-orchestrator.yaml.example`);
+  - GitHub workflow YAML (`.github/workflows/**`);
+  - `README.md` and other docs a worker would normally author;
+  - declaration snapshots (`docs/declarations/**` — produced by
+    `ao-declare`, never hand-edited).
+  - **Enforcement:** CI runs `scripts/pr-scope-check.ps1` (PR scope guard)
+    against the PR diff, declaration snapshot, and issue-body fences. Direct
+    architect PRs that skip the worker flow fail here by design.
+  - **Override:** only when the user explicitly authorizes a direct fix for
+    one named PR (not a standing waiver). Invoke **`direct-fix-checklist`**
+    and follow it end-to-end before pushing.
+- Write implementation code, tests, or run AO workers (except the
+  declaration-only spawn path documented in `direct-fix-checklist`).
 - Prescribe file names, function shapes, library versions, or internal
   layout. The planner's `ao-declare` declares files; you bound via
   `denylist` + `allowed_roots`.

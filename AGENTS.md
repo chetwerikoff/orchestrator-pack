@@ -40,6 +40,7 @@ Do not port Windows PowerShell wrapper internals, `.ai-loop/` layout as a requir
 - `prompts/**`
 - `scripts/**`
 - `docs/**`
+- `.claude/skills/**`
 - `.github/workflows/**`
 - `README.md`
 - `AGENTS.md`
