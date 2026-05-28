@@ -101,6 +101,28 @@ Skipping the YAML merge leaves the orchestrator treating `waiting_update` as idl
 when only `sentFindingCount` is non-zero; skipping restart leaves workers on the
 old completion rule.
 
+### Windows `orchestratorRules` quote safety (Issue #55)
+
+On Windows, AO starts the Cursor agent through a PowerShell 5.1 prompt template that
+substitutes `orchestratorRules` text into the launch command. Any **double-quote
+character** in the `orchestratorRules:` literal (including inline `--command "…"`
+wrappers) is not escaped correctly; flags such as `-NoProfile` leak into Cursor's
+argv and the orchestrator session fails at launch with `error: unknown option
+'-NoProfile'` and observability `stuck` / `probe_failure`.
+
+**Safe adoption pattern:**
+
+1. Copy the `orchestratorRules` block from `agent-orchestrator.yaml.example` (Issue
+   #55+). The block defines **REVIEW_COMMAND** once (pack wrapper shell line) and
+   tells the orchestrator to pass it via `ao review run <id> --execute --command …`
+   at the shell — not embedded as a quoted `--command` line inside the rules text.
+2. Do not add `"` characters anywhere inside the `orchestratorRules:` literal when
+   merging into live `agent-orchestrator.yaml`.
+3. Restart AO after merge: `ao stop` then `ao start`.
+
+Regression guard: `scripts/check-orchestrator-rules-quotes.ps1` (also run from
+`scripts/verify.ps1`).
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
