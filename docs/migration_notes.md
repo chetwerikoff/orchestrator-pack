@@ -195,6 +195,22 @@ agent flag, not inline argv, and must not use POSIX `printf` on Windows.
 **Not launch failure:** `workspace.branch_collision` warnings during spawn are
 worktree hygiene; inspect separately.
 
+## Autoloop go-live (operator checklist)
+
+Issues #28, #39, and #60 are merged (#42, #47, #65): rules, wake listener, and
+`scripts/run-pack-review.ps1` are in the repo. Adoption is still manual — live
+`agent-orchestrator.yaml` is gitignored.
+
+**Start here:** [`docs/orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md)
+
+Minimum live YAML fixes not in older copies:
+
+1. Merge current `orchestratorRules` and **COMMAND DISCIPLINE** from
+   `agent-orchestrator.yaml.example`.
+2. Set `reactions.approved-and-green.priority: action` (otherwise mergeable events
+   never hit the webhook listener).
+3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-listener.ps1` alongside.
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
