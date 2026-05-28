@@ -250,6 +250,50 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Worker launch-failure detection (Issue #63) =='
+$launchFailureCheck = Join-Path $Root 'scripts/check-worker-launch-failure.ps1'
+$launchFixtureDir = Join-Path $Root 'tests/fixtures/worker-launch-failure'
+if ((Test-Path -LiteralPath $launchFailureCheck -PathType Leaf) -and
+    (Test-Path -LiteralPath $launchFixtureDir -PathType Container)) {
+    $fixtureCases = @(
+        @{ Name = 'signature-a'; File = 'signature-a-pty.txt'; ExpectMatch = $true },
+        @{ Name = 'signature-b'; File = 'signature-b-pty.txt'; ExpectMatch = $true },
+        @{ Name = 'healthy-pty'; File = 'healthy-pty.txt'; ExpectMatch = $false }
+    )
+    foreach ($case in $fixtureCases) {
+        $fixturePath = Join-Path $launchFixtureDir $case.File
+        if ($case.ExpectMatch) {
+            & $launchFailureCheck -FixturePath $fixturePath -ExpectMatch
+        }
+        else {
+            & $launchFailureCheck -FixturePath $fixturePath -ExpectNoMatch
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check "worker-launch-failure/$($case.Name)" 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure "Worker launch-failure fixture check failed: $($case.File)"
+        }
+        else {
+            Write-Check "worker-launch-failure/$($case.Name)" 'PASS' 'completed'
+        }
+    }
+    $quoteDense = Join-Path $launchFixtureDir 'quote-dense-issue-body.md'
+    if (Test-Path -LiteralPath $quoteDense -PathType Leaf) {
+        & $launchFailureCheck -FixturePath $quoteDense -ExpectNoMatch
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'worker-launch-failure/quote-dense-body' 'FAIL' 'quote-dense body falsely matched launch failure'
+            Add-Failure 'Quote-dense fixture must not trigger launch-failure detection'
+        }
+        else {
+            Write-Check 'worker-launch-failure/quote-dense-body' 'PASS' 'no false positive on quotes'
+        }
+    }
+}
+else {
+    Write-Check 'scripts/check-worker-launch-failure.ps1' 'FAIL' 'missing script or fixtures'
+    Add-Failure 'Missing worker launch-failure check or fixtures'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

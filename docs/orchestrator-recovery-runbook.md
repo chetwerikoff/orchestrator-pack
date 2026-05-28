@@ -13,6 +13,14 @@ resumes the autonomous review-loop decision procedure defined in
 For a **healthy orchestrator process that never reacts to CI/review events**, see
 `docs/orchestrator-wake-runbook.md` (wake listener) before killing sessions.
 
+For a **worker that exits within ~1 minute of spawn** with no PR, no
+`ao acknowledge`, and no Cursor chat, see
+`docs/migration_notes.md` (**Worker prompt-delivery launch failure on Windows,
+Issue #63**) first. Inspect the worker terminal for Signature A (`printf` not
+recognized / `unknown option '-ne'`) or Signature B (`command line is too long`).
+That is **not** orchestrator stuck — do not ping or kill `op-orchestrator` for it.
+`workspace.branch_collision` during spawn is a separate worktree-hygiene concern.
+
 ## When to use this runbook
 
 | Signal | Meaning |

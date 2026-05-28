@@ -15,6 +15,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Test-WorkerLaunchFailure.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -127,6 +128,7 @@ if ($workers.Count -eq 0) {
     Write-Host '  none'
 }
 else {
+    $launchFailureWorkers = New-Object System.Collections.Generic.List[string]
     foreach ($w in $workers) {
         $wName = if ($w.name) { $w.name } else { $w.sessionId }
         $pr = if ($w.prNumber) { "PR #$($w.prNumber)" } elseif ($w.pr) { $w.pr } else { '-' }
@@ -139,6 +141,29 @@ else {
         }
         Write-Host ("  {0,-18} status={1,-12} {2,-10} {3,-12} lastReport={4}" -f `
                 $wName, $w.status, $pr, $issue, $lastReport)
+
+        $noPr = (-not $w.prNumber) -and (-not $w.pr)
+        $suspectLaunch = $noPr -and @('detecting', 'stuck', 'exited', 'errored') -contains $w.status
+        if (-not $suspectLaunch -and $w.activity -eq 'exited' -and $noPr) {
+            $suspectLaunch = $true
+        }
+        if ($suspectLaunch) {
+            $launchFailureWorkers.Add($wName) | Out-Null
+        }
+    }
+
+    if ($launchFailureWorkers.Count -gt 0) {
+        Write-Host ''
+        Write-Host ("-- Possible worker launch-failure ({0}) --" -f $launchFailureWorkers.Count)
+        Write-Host '  Worker exited or detecting with no PR shortly after spawn may be'
+        Write-Host '  prompt-delivery failure (Signature A/B), not orchestrator stuck.'
+        Write-Host '  Inspect session terminal for: printf not recognized, unknown option -ne,'
+        Write-Host '  or command line is too long.'
+        Write-Host '  See docs/migration_notes.md (Worker prompt-delivery launch failure).'
+        Write-Host '  Offline: pwsh -File scripts/check-worker-launch-failure.ps1 -FixturePath <pty.log>'
+        foreach ($name in $launchFailureWorkers) {
+            Write-Host ("  - {0}" -f $name)
+        }
     }
 }
 

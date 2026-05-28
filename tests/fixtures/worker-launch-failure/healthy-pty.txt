@@ -1,0 +1,2 @@
+agent> Ready.
+Working on issue #60 implementation.

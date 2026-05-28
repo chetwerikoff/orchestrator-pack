@@ -123,6 +123,51 @@ argv and the orchestrator session fails at launch with `error: unknown option
 Regression guard: `scripts/check-orchestrator-rules-quotes.ps1` (also run from
 `scripts/verify.ps1`).
 
+### Worker prompt-delivery launch failure on Windows (Issue #63)
+
+On Windows, AO starts **worker** Cursor sessions with a launch command built by
+`@aoagents/ao-plugin-agent-cursor`: the worker system-prompt file and task prompt
+are inlined into the shell command via `$(cat …; printf …)`. That is separate
+from `orchestratorRules` quote safety (Issue #55), which only affects the
+orchestrator launch path.
+
+**Named condition:** worker **prompt-delivery launch failure** — the agent process
+exits within about a minute of `spawning → working`, with no PR, no
+`ao acknowledge`, and usually no Cursor chat. AO may show `working → detecting →
+stuck` and `agent_process_exited`. Do **not** treat this as orchestrator stuck;
+use this subsection instead of `docs/orchestrator-recovery-runbook.md` ping/kill
+for the orchestrator.
+
+**Signature A — POSIX builtin under PowerShell (default AO shell).** PTY shows:
+
+- `printf : The term 'printf' is not recognized …`
+- `error: unknown option '-ne'`
+
+**Signature B — command line too long (shell-independent).** PTY shows:
+
+- `The command line is too long.`
+
+Occurs when the inlined prompt exceeds the Windows argv limit (observed with
+~24 KB worker prompt files on issue #60). The orchestrator often survives
+because its launch uses `$(cat <file>)` only (no `printf`) and a smaller prompt.
+
+**`AO_SHELL=bash` is not a sufficient workaround.** Tested on this pack: bash
+clears Signature A but then `agent: command not found` (Git Bash does not run
+`agent.cmd` without a shim), and with a shim large prompts still hit Signature B.
+
+**Pack-side checks:** `scripts/check-worker-launch-failure.ps1` (PTY fixtures as
+`*.txt` under `tests/fixtures/worker-launch-failure/`), wired in
+`scripts/verify.ps1`.
+`scripts/orchestrator-diagnose.ps1` flags workers with no PR in
+`detecting`/`exited` as possible launch failures.
+
+**Upstream fix (escalation):** file against [ComposioHQ/agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) —
+`@aoagents/ao-plugin-agent-cursor` should pass the worker prompt via a file or
+agent flag, not inline argv, and must not use POSIX `printf` on Windows.
+
+**Not launch failure:** `workspace.branch_collision` warnings during spawn are
+worktree hygiene; inspect separately.
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
@@ -159,6 +204,10 @@ in-flight state first:
    kill orchestrator session → full `ao stop`/`ao start`).
 2. Optionally run `pwsh -File scripts/orchestrator-diagnose.ps1` for a read-only
    one-screen snapshot before escalation.
+
+If a **worker** (not the orchestrator) exits immediately after spawn with no PR,
+see **Worker prompt-delivery launch failure on Windows (Issue #63)** above — do not
+apply orchestrator stuck recovery to that worker.
 
 After recovery, the orchestrator re-applies `orchestratorRules` from your live
 YAML (see **Autonomous review loop** above). This path does not add automatic

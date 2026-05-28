@@ -222,9 +222,10 @@ a clean review. Orchestrator and worker rules MUST inspect `terminationReason`
 and MUST NOT treat zero findings alone as Codex approval. Only `clean` status or
 successful triage/send paths count as review progress.
 
-On Windows, `orchestratorRules` and GitHub Issue bodies used as spawn prompts
+On Windows, the `orchestratorRules:` literal in `agent-orchestrator.yaml.example`
 MUST stay launch-safe (no embedded `"` or inline `--command "` literals); see
-Issue #55 and `docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md`.
+Issue #55. Worker spawn uses a separate Cursor launch path; issue-body quote
+content does not cause worker launch failure — see §I and Issue #63.
 
 ## H. Review trigger reconciliation and orchestrator turn delivery
 
@@ -263,6 +264,29 @@ reconciliation the delivered turn has no state-derived trigger to act on. A
 third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
 on a command-approval prompt) is handled operationally in the recovery runbook,
 file `15-orchestrator-recovery-runbook.md`, not here.
+
+## I. Worker prompt-delivery launch failure on Windows
+
+Decision taken 2026-05-28 after repeated worker sessions (e.g. issue #60) exited
+within ~1 minute of spawn with no PR while the orchestrator remained healthy.
+
+1. **Root cause is upstream prompt delivery, not issue-body quotes.** AO
+   `@aoagents/ao-plugin-agent-cursor` inlines worker prompts into the Windows launch
+   command (`$(cat <file>; printf …)` under PowerShell). Signature A: `printf` not
+   recognized and `unknown option '-ne'`. Signature B: `command line is too long`
+   for large prompts (~24 KB observed). This is independent of `"` in GitHub Issue
+   bodies; Issue #55 covers `orchestratorRules` only.
+
+2. **Pack response is detection + documentation + escalation, not a core patch.**
+   Named condition, `scripts/check-worker-launch-failure.ps1`, migration notes, and
+   recovery-runbook routing. `AO_SHELL=bash` is documented as **not** a sufficient
+   workaround (agent.cmd resolution and argv limit remain).
+
+3. **Durable fix** belongs in ComposioHQ/agent-orchestrator / cursor agent plugin:
+   pass worker prompt via file or agent flag; no POSIX `printf` on Windows.
+
+See `docs/issues_drafts/25-worker-spawn-launch-safety.md` (Issue #63) and
+`docs/migration_notes.md`.
 
 ## Acceptance for this issue
 
