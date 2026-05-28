@@ -85,6 +85,22 @@ Until restart, the orchestrator and workers keep prior prompt text. The live YAM
 is gitignored — diff against the example when upgrading; do not hand-edit only
 the worker rules without updating `orchestratorRules`.
 
+### Patch: `sentFindingCount` pending-worker detection (Issue #45)
+
+Issue #45 corrects the review-loop contract after `ao review send`: findings move
+to `sent_to_agent`, so `openFindingCount` is 0 while `sentFindingCount > 0` and
+the run stays `waiting_update`. Operators must refresh both surfaces:
+
+1. Copy the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
+   into live `agent-orchestrator.yaml` (under `projects.<id>.orchestratorRules`).
+2. Ensure `agentRulesFile` points at the updated `prompts/agent_rules.md` (pull
+   the repo or sync that file into your deployment).
+3. Restart AO so prompts and rules reload: `ao stop` then `ao start`.
+
+Skipping the YAML merge leaves the orchestrator treating `waiting_update` as idle
+when only `sentFindingCount` is non-zero; skipping restart leaves workers on the
+old completion rule.
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn

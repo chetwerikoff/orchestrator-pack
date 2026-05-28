@@ -109,15 +109,20 @@ with a reason: `ao report completed --note "<reason>"` or `ao send` to the
 orchestrator session explaining the blocker. Do not disappear without a signal.
 
 **Forbidden `completed` while review is open.** Do NOT run `ao report completed`
-while, for the current PR head:
+(success termination) while, for the current PR head:
 
-- the latest review run has `openFindingCount > 0`, or
+- the latest review run has `openFindingCount > 0` or `sentFindingCount > 0`, or
 - any review run for that head is in `needs_triage` (findings not yet sent).
 
-Completion means nothing further to do; open findings or an unsent triage queue
-contradict that. Instead, run `ao report addressing_reviews` (after briefly
-allowing the orchestrator to `ao review send` if status is `needs_triage`), or
-report terminal failure with a reason.
+After `ao review send`, findings are `sent_to_agent` (`sentFindingCount > 0`,
+`openFindingCount: 0`); report `ao report addressing_reviews` until resolved.
+Terminal failure with a reason (`ao report completed --note "<reason>"` or
+`ao send`) remains permitted when you cannot address findings.
+
+Completion means nothing further to do; open or sent findings or an unsent
+triage queue contradict that. Instead, run `ao report addressing_reviews` (after
+briefly allowing the orchestrator to `ao review send` if status is
+`needs_triage`), or report terminal failure with a reason.
 
 **Inspect before reporting.** Use `ao review list --json` to confirm run status
 and counts; do not infer cleanliness from finding prose.
