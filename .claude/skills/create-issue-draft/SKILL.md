@@ -82,6 +82,58 @@ Any "yes" → loosen, re-author. The planner's `ao-declare` produces
 `declared_paths`; you bound it via `denylist` + `allowed_roots`, you do not
 enumerate it.
 
+## Codex review the draft (before sync, max 3 iterations)
+
+Run a **critical** Codex pass on the draft markdown **before** `gh issue create`
+or `gh issue edit`. Architect role: `CLAUDE.md`.
+
+**Focus areas for the reviewer:**
+
+- Planner-freedom (no prescribed signatures, paths, or library pins).
+- Observable acceptance criteria (provable without "looks good").
+- Command accuracy — real `ao` / `ao-declare` flags (`--declared-paths`,
+  `--declared-globs`, not `--paths`); PowerShell 5.1-valid snippets; session id
+  ≠ issue number (read from `ao status` / snapshot filename).
+- `denylist` + `allowed-roots` fence correctness.
+- Cross-draft consistency with `00-architecture-decisions.md` and related drafts.
+
+**Invocation (PowerShell 5.1 — no stdin `<` redirect):**
+
+```powershell
+$draft = Get-Content -Raw docs/issues_drafts/NN-<slug>.md
+$prompt = @"
+You are a critical reviewer for an orchestrator-pack GitHub Issue draft.
+Review the DRAFT below for planner-freedom, observable acceptance criteria,
+command accuracy, denylist/allowed-roots fences, and cross-draft consistency.
+Do not suggest implementation file names unless the draft already violates planner freedom.
+
+Tag valid issues P0, P1, or P2.
+If no concrete issues remain, respond with exactly NO_FINDINGS on its own line.
+
+--- DRAFT ---
+$draft
+"@
+codex review $prompt
+```
+
+Alternative when the draft is already saved and you are iterating locally:
+`codex review --uncommitted` only if the draft is the sole staged change and
+the review prompt is passed as the `PROMPT` argument as above.
+
+**Iteration discipline:**
+
+1. Revise the draft for valid P0/P1/P2 findings; rebut incorrect findings in
+   the draft or your notes.
+2. Re-run Codex (same prompt pattern).
+3. **Hard cap: 3 cycles.** After the third pass, sync only if clean (`NO_FINDINGS`)
+   or document remaining open questions in the draft **Prerequisite** or
+   **Verification** section before sync.
+
+**Sync gate:** do not run `gh issue create` / `gh issue edit` until Codex returns
+`NO_FINDINGS` or you have hit the 3-iteration cap and recorded open questions.
+
+Contract reference: `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
+
 ## Sync to GitHub Issue
 
 The draft body **minus the H1 heading** is the issue body. Use:

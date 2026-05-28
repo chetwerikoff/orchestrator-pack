@@ -19,17 +19,9 @@ import type {
   ParentSessionIdSource,
   StructuredFinding,
 } from './types.js';
+import { RECOGNIZED_EVENT_KINDS } from './event_kinds.js';
 
 export type { LedgerRow, LedgerCost, StructuredFinding } from './types.js';
-
-const RECOGNIZED_EVENT_KINDS = new Set([
-  'started',
-  'finished',
-  'finding',
-  'reaction',
-  'escalation',
-  'cost-observed',
-]);
 
 const ACTIVE_CHAIN_FILENAME = 'active-chain.json';
 const LEDGER_FILENAME = 'events.jsonl';

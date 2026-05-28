@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadLatestActiveDeclaration } from '../../ao-scope-guard/lib/declaration_loader.js';
+import {
+  findLatestMirrorIterationId,
+  loadActiveDeclaration,
+} from '../../ao-scope-guard/lib/declaration_loader.js';
 import { parseIssueBody, type IssueConstraints } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   extractLinkedIssueNumber,
@@ -146,16 +149,31 @@ export function resolveScopeContext(options: {
 
   let declaredPaths: string[] = [];
   let declaredGlobs: string[] = [];
-  const active = loadLatestActiveDeclaration(options.repoRoot, options.issueNumber);
-  if (active) {
-    declaredPaths = [...active.declared_paths];
-    declaredGlobs = [...active.declared_globs];
-  } else {
-    const committed = resolveLatestCommittedSnapshot(options.repoRoot, options.issueNumber);
+
+  const env = process.env;
+  const sessionId =
+    env.AO_SESSION_ID?.trim() ||
+    findLatestMirrorIterationId(options.repoRoot, options.issueNumber) ||
+    undefined;
+
+  let declaration =
+    sessionId !== undefined
+      ? loadActiveDeclaration(options.repoRoot, options.issueNumber, sessionId)
+      : null;
+
+  if (!declaration) {
+    const committed = resolveLatestCommittedSnapshot(
+      options.repoRoot,
+      options.issueNumber,
+    );
     if (committed.ok) {
-      declaredPaths = [...committed.snapshot.declared_paths];
-      declaredGlobs = [...committed.snapshot.declared_globs];
+      declaration = committed.snapshot;
     }
+  }
+
+  if (declaration) {
+    declaredPaths = [...declaration.declared_paths];
+    declaredGlobs = [...declaration.declared_globs];
   }
 
   const hasScope =

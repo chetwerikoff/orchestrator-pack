@@ -2,6 +2,7 @@
 # See README.md ("AO 0.9.2 Windows Codex review patch") for retirement conditions.
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Get-VersionFromText.ps1')
 
 $FixedAoVersion = [version]'0.9.3'
 $MinAffectedVersion = [version]'0.9.2'
@@ -14,17 +15,6 @@ $NewPattern = @'
 b$(w()?"cmd.exe":"codex",w()?["/c","codex","exec","review","--output-last-message",b,"--dangerously-bypass-approvals-and-sandbox",c]:["exec","review","--output-last-message",b,"--dangerously-bypass-approvals-and-sandbox",c],{cwd:a.workspacePath,timeout:6e5,maxBuffer:8388608,env:process.env,shell:false})
 '@.TrimEnd()
 
-function Get-AoVersionFromText {
-    param([string]$Text)
-    if ($Text -match '(\d+)\.(\d+)\.(\d+)') {
-        return [version](('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]))
-    }
-    if ($Text -match '(\d+)\.(\d+)') {
-        return [version](('{0}.{1}.0' -f $Matches[1], $Matches[2]))
-    }
-    return $null
-}
-
 function Get-InstalledAoVersion {
     $ao = Get-Command ao -ErrorAction SilentlyContinue
     if (-not $ao) { return $null }
@@ -33,7 +23,7 @@ function Get-InstalledAoVersion {
     if ($LASTEXITCODE -ne 0) { return $null }
 
     $text = (($output | Select-Object -First 3) -join ' ').Trim()
-    return Get-AoVersionFromText $text
+    return Get-VersionFromText $text
 }
 
 function Get-AoReviewChunkPath {

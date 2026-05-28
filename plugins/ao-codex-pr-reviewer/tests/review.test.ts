@@ -213,6 +213,72 @@ describe('buildReviewPrompt', () => {
   });
 });
 
+describe('resolveScopeContext committed snapshots', () => {
+  it('prefers chain head over lexicographically later iteration ids', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-scope-'));
+    const snapshotDir = join(dir, 'docs', 'declarations');
+    mkdirSync(snapshotDir, { recursive: true });
+
+    const baseline = 'abc123def4567890abc123def4567890abc12345';
+    const older = {
+      issue_number: 99,
+      iteration_id: 'op-2',
+      iteration_id_source: 'wrapper_generated',
+      supersedes: null,
+      created_at: '2026-05-27T00:00:00.000Z',
+      baseline: {
+        commit_sha: baseline,
+        worktree_dirty: false,
+        active_scope_hash: 'sha256:older',
+      },
+      declared_paths: ['README.md'],
+      declared_globs: [],
+      amendments: [],
+    };
+    const newer = {
+      ...older,
+      iteration_id: 'op-10',
+      supersedes: 'op-2',
+      created_at: '2026-05-28T00:00:00.000Z',
+      baseline: {
+        commit_sha: baseline,
+        worktree_dirty: false,
+        active_scope_hash: 'sha256:newer',
+      },
+      declared_paths: ['CLAUDE.md'],
+      declared_globs: [],
+    };
+
+    writeFileSync(
+      join(snapshotDir, '99.op-2.json'),
+      `${JSON.stringify(older, null, 2)}\n`,
+      'utf8',
+    );
+    writeFileSync(
+      join(snapshotDir, '99.op-10.json'),
+      `${JSON.stringify(newer, null, 2)}\n`,
+      'utf8',
+    );
+
+    const previousSession = process.env.AO_SESSION_ID;
+    delete process.env.AO_SESSION_ID;
+    try {
+      const scope = resolveScopeContext({
+        repoRoot: dir,
+        issueNumber: 99,
+      });
+      expect(scope.declaredPaths).toEqual(['CLAUDE.md']);
+    } finally {
+      if (previousSession) {
+        process.env.AO_SESSION_ID = previousSession;
+      } else {
+        delete process.env.AO_SESSION_ID;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('formatGithubComment', () => {
   it('surfaces scope warnings when clean is true but findings are present', () => {
     const comment = formatGithubComment({

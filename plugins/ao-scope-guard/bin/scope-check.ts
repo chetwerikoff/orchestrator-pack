@@ -1,8 +1,7 @@
 #!/usr/bin/env tsx
 
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import {
   checkScope,
   formatViolationReport,
@@ -138,22 +137,7 @@ export function runScopeCheck(options: ScopeCheckOptions): ScopeCheckResult {
   return checkScope(paths, declaration, denylist);
 }
 
-function isDirectExecution(): boolean {
-  const entryScript = process.argv[1];
-  if (!entryScript) {
-    return false;
-  }
-
-  try {
-    return (
-      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entryScript)
-    );
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectExecution()) {
+if (isDirectCliExecution(import.meta.url)) {
   try {
     const result = runScopeCheck(parseScopeCheckArgs(process.argv.slice(2)));
     if (!result.ok) {
