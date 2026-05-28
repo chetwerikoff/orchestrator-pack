@@ -27,6 +27,12 @@ what gets built, in what order, with what boundaries. The planner
 - When the user asks you to research an external source (repo, blog, paper,
   URL), invoke **`study-external-source`** — do not re-derive the procedure
   inline.
+- When the user asks for causes of a failure or recurrence (e.g. «разобраться с
+  причиной», «в чём причина», «что это», «разберись», «почему упал», «что
+  сломалось», «отладь», «что случилось», «почему не работает», «root cause»,
+  «why did», «figure out why», «investigate the cause», «wtf»), follow
+  [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md) (and
+  **`investigate-root-cause`** if loaded) — do not re-derive inline.
 - Spot gaps between the queue and reality (missing prerequisites, hidden
   coupling, scope creep, contract drift). Open a new draft when you see one.
 - Fold Codex review findings back into the relevant upstream draft. The

@@ -1,0 +1,24 @@
+{
+  "issue_number": 46,
+  "iteration_id": "op-17",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-28T09:52:50.564Z",
+  "baseline": {
+    "commit_sha": "1ad7dc9efac585058f9592ec54cf079ed04ef3ed",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:16dfca116749d3b3564e54c8786342bb5bdd0fcd088866849b47cfcb27b1d010"
+  },
+  "declared_paths": [
+    "prompts/investigate_root_cause.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "scripts/check-reusable.ps1",
+    "docs/issues_drafts/18-investigate-root-cause-skill.md"
+  ],
+  "declared_globs": [
+    ".cursor/skills/**",
+    ".claude/skills/investigate-root-cause/**"
+  ],
+  "amendments": []
+}

@@ -41,6 +41,8 @@ Do not port Windows PowerShell wrapper internals, `.ai-loop/` layout as a requir
 - `scripts/**`
 - `docs/**`
 - `.claude/skills/**`
+- `.cursor/skills/**`
+- `CLAUDE.md`
 - `.github/workflows/**`
 - `README.md`
 - `AGENTS.md`
@@ -79,3 +81,21 @@ When adding behavior, prefer this order:
 5. documentation
 
 Never choose a core patch unless the user explicitly asks for an upstream contribution plan.
+
+## Auto-invoke: root cause investigation
+
+When the user's message matches cause-investigation phrasing (best-effort discovery,
+not a deterministic gate), follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «разобраться с причиной», «в чём
+причина», «что это», «разберись», «почему упал», «что сломалось», «отладь»,
+«что случилось», «почему не работает»; «root cause», «why did», «figure out why»,
+«investigate the cause», «wtf».
+
+**Skip:** pure implementation; external adoption → `study-external-source`; one
+tracked issue already fully answers the ask.
+
+**Loader entry points (optional):** `.cursor/skills/investigate-root-cause/SKILL.md`,
+`.claude/skills/investigate-root-cause/SKILL.md` — thin wrappers that defer to the
+canonical file above.
