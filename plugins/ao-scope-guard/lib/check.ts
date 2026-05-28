@@ -22,7 +22,7 @@ export type ScopeCheckResult =
   | { ok: true; skipped_control_artifacts: string[]; checked_paths: string[] }
   | ScopeViolationReport;
 
-function pathInDeclaredScope(
+export function pathInDeclaredScope(
   path: string,
   declaredPaths: string[],
   declaredGlobs: string[],
@@ -31,6 +31,54 @@ function pathInDeclaredScope(
     return true;
   }
   return pathMatchesAnyPattern(path, declaredGlobs);
+}
+
+export interface ScopedPathClassification {
+  outOfScope: string[];
+  denied: string[];
+  invalidPaths: Array<{ path: string; reason: string }>;
+  checkedPaths: string[];
+}
+
+export function classifyScopedPaths(
+  scoped: string[],
+  options: {
+    denylist: string[];
+    declaredPaths: string[];
+    declaredGlobs: string[];
+  },
+): ScopedPathClassification {
+  const outOfScope: string[] = [];
+  const denied: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+  const checkedPaths: string[] = [];
+
+  for (const rawPath of scoped) {
+    const normalized = normalizePath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+      continue;
+    }
+
+    checkedPaths.push(normalized.path);
+
+    if (pathMatchesAnyPattern(normalized.path, options.denylist)) {
+      denied.push(normalized.path);
+      continue;
+    }
+
+    if (
+      !pathInDeclaredScope(
+        normalized.path,
+        options.declaredPaths,
+        options.declaredGlobs,
+      )
+    ) {
+      outOfScope.push(normalized.path);
+    }
+  }
+
+  return { outOfScope, denied, invalidPaths, checkedPaths };
 }
 
 /**
@@ -64,35 +112,14 @@ export function checkScope(
     };
   }
 
-  const outOfScope: string[] = [];
-  const denied: string[] = [];
-  const invalidPaths: Array<{ path: string; reason: string }> = [];
-  const checkedPaths: string[] = [];
-
-  for (const rawPath of scoped) {
-    const normalized = normalizePath(rawPath);
-    if (!normalized.ok) {
-      invalidPaths.push({ path: rawPath, reason: normalized.reason });
-      continue;
-    }
-
-    checkedPaths.push(normalized.path);
-
-    if (pathMatchesAnyPattern(normalized.path, denylist)) {
-      denied.push(normalized.path);
-      continue;
-    }
-
-    if (
-      !pathInDeclaredScope(
-        normalized.path,
-        declaration.declared_paths,
-        declaration.declared_globs,
-      )
-    ) {
-      outOfScope.push(normalized.path);
-    }
-  }
+  const { outOfScope, denied, invalidPaths, checkedPaths } = classifyScopedPaths(
+    scoped,
+    {
+      denylist,
+      declaredPaths: declaration.declared_paths,
+      declaredGlobs: declaration.declared_globs,
+    },
+  );
 
   if (invalidPaths.length > 0) {
     return {

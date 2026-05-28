@@ -7,15 +7,45 @@
   "baseline": {
     "commit_sha": "b8f416765977273ed14c52c925181ec1a51dd34a",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7b2c453568fff888a149a2c4c258eb20f8a709ee4ff55e6098c7a5057e871f15"
+    "active_scope_hash": "sha256:7ffaa62cf9ee6e1abe5f36fa27e377c24fe9b575a847afa827c4819495aacef9"
   },
   "declared_paths": [
     "CLAUDE.md",
-    "AGENTS.md"
+    "AGENTS.md",
+    "scripts/verify.ps1",
+    "scripts/patch-codex-review4.ps1"
   ],
   "declared_globs": [
     ".claude/skills/**",
-    "docs/issues_drafts/**"
+    "docs/issues_drafts/**",
+    "plugins/ao-codex-pr-reviewer/**",
+    "plugins/_shared/**",
+    "plugins/ao-scope-guard/**",
+    "plugins/ao-task-declaration/bin/**",
+    "plugins/ao-token-chain-ledger/**",
+    "scripts/lib/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:7b2c453568fff888a149a2c4c258eb20f8a709ee4ff55e6098c7a5057e871f15",
+      "new_active_scope_hash": "sha256:7ffaa62cf9ee6e1abe5f36fa27e377c24fe9b575a847afa827c4819495aacef9",
+      "changed": {
+        "added": [
+          "plugins/_shared/**",
+          "plugins/ao-codex-pr-reviewer/**",
+          "plugins/ao-scope-guard/**",
+          "plugins/ao-task-declaration/bin/**",
+          "plugins/ao-token-chain-ledger/**",
+          "scripts/lib/**",
+          "scripts/patch-codex-review4.ps1",
+          "scripts/verify.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "codex review: chain-aware scope + shared literal dedupe",
+      "actor": "op-10",
+      "timestamp": "2026-05-28T03:52:42.101Z",
+      "applied": true
+    }
+  ]
 }

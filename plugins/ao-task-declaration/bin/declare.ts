@@ -1,8 +1,7 @@
 #!/usr/bin/env tsx
 
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
@@ -276,22 +275,7 @@ export function runDeclare(argv: string[]): DeclarationSnapshot {
   return snapshot;
 }
 
-function isDirectExecution(): boolean {
-  const entryScript = process.argv[1];
-  if (!entryScript) {
-    return false;
-  }
-
-  try {
-    return (
-      realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entryScript)
-    );
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectExecution()) {
+if (isDirectCliExecution(import.meta.url)) {
   try {
     runDeclare(process.argv.slice(2));
   } catch (error) {

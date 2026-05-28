@@ -137,6 +137,14 @@ CLAUDE.md
 AGENTS.md
 .claude/skills/**
 docs/issues_drafts/**
+plugins/ao-codex-pr-reviewer/**
+plugins/_shared/**
+plugins/ao-scope-guard/**
+plugins/ao-task-declaration/bin/**
+plugins/ao-token-chain-ledger/**
+scripts/verify.ps1
+scripts/patch-codex-review4.ps1
+scripts/lib/**
 ```
 
 ## Acceptance criteria

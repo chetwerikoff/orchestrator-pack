@@ -1,4 +1,5 @@
 import { computeFindingSignature } from './finding_signature.js';
+import { RECOGNIZED_EVENT_KINDS } from './event_kinds.js';
 import type {
   ChainAggregateReport,
   FindingSignatureCount,
@@ -8,15 +9,6 @@ import type {
   MissingDataReport,
   RoleBreakdown,
 } from './types.js';
-
-const RECOGNIZED_EVENT_KINDS = new Set([
-  'started',
-  'finished',
-  'finding',
-  'reaction',
-  'escalation',
-  'cost-observed',
-]);
 
 function addNullable(current: number | null, delta: number | null): number | null {
   if (delta === null) {
