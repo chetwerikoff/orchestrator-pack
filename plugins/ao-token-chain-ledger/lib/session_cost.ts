@@ -93,7 +93,7 @@ const TOKEN_LINE =
 const OUTPUT_LINE =
   /(?:output[_\s-]?tokens?|completion[_\s-]?tokens?)\s*[:=]\s*(\d+(?:\.\d+)?)/i;
 const COST_LINE =
-  /(?:(?:estimated[_\s-]?)?cost(?:\s*\(usd\))?|total[_\s-]?cost)\s*[:=]\s*\$?(\d+(?:\.\d+)?)/i;
+  /(?:estimated_cost_usd|estimated[_\s-]?cost(?:\s*\(usd\))?|total[_\s-]?cost)\s*[:=]\s*\$?(\d+(?:\.\d+)?)/i;
 const COMBINED_TOKENS =
   /tokens?\s*[:=]\s*(\d+(?:\.\d+)?)\s*(?:in|input)\s*[/,]\s*(\d+(?:\.\d+)?)\s*(?:out|output)/i;
 

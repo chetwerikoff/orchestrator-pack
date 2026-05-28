@@ -1,0 +1,16 @@
+{
+  "name": "@orchestrator-pack/ao-codex-pr-reviewer",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ao-codex-review": "./bin/review.ts"
+  },
+  "dependencies": {
+    "@orchestrator-pack/ao-token-chain-ledger": "*",
+    "@orchestrator-pack/shared": "*",
+    "tsx": "^4.8.1"
+  },
+  "scripts": {
+    "test": "npm --prefix ../.. run test -- plugins/ao-codex-pr-reviewer/tests"
+  }
+}

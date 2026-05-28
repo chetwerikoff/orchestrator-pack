@@ -145,6 +145,24 @@ describe('writer', () => {
     expect(row.session_id).toBe('ao-sess-42');
   });
 
+  it('prefers AO_SESSION_ID over agentSessionId in session metadata', () => {
+    const repoRoot = makeRepo();
+    const row = prepareLedgerRow(
+      {
+        repoRoot,
+        issueNumber: 8,
+        event_kind: 'started',
+        role: 'worker',
+        task_id: '8',
+      },
+      {
+        sessionInfo: { agentSessionId: 'metadata-sess' },
+        env: { ...process.env, AO_SESSION_ID: 'explicit-sess' },
+      },
+    );
+    expect(row.session_id).toBe('explicit-sess');
+  });
+
   it('leaves cost unavailable on started events even when session info has cost', () => {
     const repoRoot = makeRepo();
     process.env.AO_SESSION_INFO_JSON = JSON.stringify({

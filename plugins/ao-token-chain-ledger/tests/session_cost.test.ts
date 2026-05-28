@@ -57,6 +57,16 @@ describe('session_cost', () => {
     expect(parsed.estimated_cost_usd).toBe(0.42);
   });
 
+  it('parses estimated_cost_usd snake_case field from agent stdout', () => {
+    const parsed = parseAgentOutputCost(
+      'Run complete\ninput_tokens: 42\noutput_tokens: 21\nestimated_cost_usd: 0.42\n',
+    );
+    expect(parsed.source).toBe('agent-output-parse');
+    expect(parsed.input_tokens).toBe(42);
+    expect(parsed.output_tokens).toBe(21);
+    expect(parsed.estimated_cost_usd).toBe(0.42);
+  });
+
   it('does not attach session cost to started events', () => {
     const resolved = resolveCostForEvent('started', {
       sessionInfo: { cost: { input_tokens: 100, output_tokens: 50, estimated_cost_usd: 1 } },

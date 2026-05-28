@@ -134,27 +134,10 @@ uninstall options.
 
 ### 6. Add Codex PR review workflow
 
-Create `.github/workflows/pr-review.yml` in the target repository, reusing the
-pack's reusable workflow:
-
-```yaml
-name: pr-review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  codex-review:
-    uses: chetwerikoff/orchestrator-pack/.github/workflows/codex-pr-review.yml@main
-    secrets:
-      codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
-```
-
-The template file is also at `docs/templates/codex-pr-review-caller.yml`.
+Create `.github/workflows/pr-review.yml` in the target repository by copying
+`docs/templates/codex-pr-review-caller.yml` (caller permissions include
+`issues: read` so linked-issue scope fences resolve in CI). Set `pack_ref` to
+the same ref as the `uses: ...@ref` pin (e.g. both `main` or both `v1.0.0`).
 
 Ensure `.github/workflows/scope-guard.yml` from the pack is present (copied in
 the preamble). It runs PR diff validation against the linked issue and committed
