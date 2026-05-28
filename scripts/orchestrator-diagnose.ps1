@@ -133,7 +133,7 @@ else {
         $issue = if ($w.issue) { "issue #$($w.issue)" } else { '-' }
         $lastReport = '-'
         if ($w.reports -and $w.reports.Count -gt 0) {
-            $last = $w.reports[-1]
+            $last = $w.reports[0]
             $lastReport = $last.reportState
             if (-not $lastReport) { $lastReport = $last.report_state }
         }
@@ -144,7 +144,7 @@ else {
 
 $reviewReports = @($workers | Where-Object {
         if (-not $_.reports) { return $false }
-        $last = $_.reports[-1]
+        $last = $_.reports[0]
         $state = $last.reportState
         if (-not $state) { $state = $last.report_state }
         return ($WorkerReviewReportStates -contains $state)
@@ -154,7 +154,7 @@ if ($reviewReports.Count -gt 0) {
     Write-Host ("-- Workers in review-related report state ({0}) --" -f $reviewReports.Count)
     foreach ($w in $reviewReports) {
         $wName = if ($w.name) { $w.name } else { $w.sessionId }
-        $last = $w.reports[-1]
+        $last = $w.reports[0]
         $state = $last.reportState
         if (-not $state) { $state = $last.report_state }
         Write-Host ("  {0}: {1}" -f $wName, $state)
