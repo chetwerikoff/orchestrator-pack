@@ -144,6 +144,7 @@ plugins/ao-token-chain-ledger/**
 scripts/verify.ps1
 scripts/patch-codex-review4.ps1
 scripts/pr-scope-check.ts
+scripts/lint-self-architect.config.json
 scripts/lib/**
 ```
 

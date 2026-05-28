@@ -11,6 +11,7 @@
     "vendor/**",
     "packages/core/**",
     ".ao/**",
+    "docs/declarations/**",
     "node_modules/**"
   ],
   "scriptExtensions": [".ps1", ".sh", ".bash", ".js", ".ts", ".mjs", ".cjs"],
