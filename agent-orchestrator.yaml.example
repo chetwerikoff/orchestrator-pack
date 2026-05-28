@@ -31,12 +31,85 @@ projects:
     agentRulesFile: prompts/agent_rules.md
     orchestratorRules: |
       Use GitHub Issues as the task source of truth.
-      Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent,
-      and keep PRs linked back to their source issues with "Closes #N" or "Fixes #N".
-      Do not use Vibe Kanban or Linear for this project unless explicitly reconfigured.
-      Current AO stable config exposes orchestrator and worker role overrides; do not add
-      an unsupported reviewer field to the YAML. Codex/gpt-5.5 review should be wired via
-      an external review plugin/workflow or an explicit Codex review session, not by patching AO core.
+      Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent.
+      Link PRs to source issues with "Closes #N" or "Fixes #N".
+      Do not add unsupported reviewer fields to this YAML — drive review through CLI.
+
+      REVIEW DRIVING — AO 0.9.x does not auto-trigger Codex review on PR open.
+      The orchestrator is responsible for jumping the gaps:
+
+      1. When a worker session reports `pr_created` or `ready_for_review`
+         (visible in `ao status` or via the worker's report), immediately run:
+             ao review run <worker-session-id> --execute
+         This requests and executes a local Codex reviewer run against the PR head.
+
+      2. Poll `ao review list <project>` after each worker push.
+         For every run in status `waiting_update` or `awaiting_triage` with
+         `openFindingCount > 0`, run:
+             ao review send <review-run-id>
+         This routes findings back to the linked worker so the auto-fix loop
+         can react via `reactions.changes-requested`.
+
+      3. Never run `gh pr merge` or click Merge. Wait for the
+         `approved-and-green` reaction to notify the human, who merges manually.
+
+      4. If `ao review list` shows a run already in `waiting_update` with
+         `openFindingCount: 0` and `sentFindingCount > 0`, the worker has
+         the findings — do not re-send. Only trigger a new review run after
+         the worker pushes a new commit (target SHA changes).
+
+      5. AUTONOMOUS ROUND PROGRESSION — do not pause for user confirmation
+         between review rounds. On every orchestrator turn while any PR has
+         open findings or is in a pending review state, first read
+         `ao review list <project>`, `ao status`, and recent
+         `ao events list` BEFORE any other planning work. Then, per PR:
+
+         a. If the worker's PR head SHA has advanced past the last review
+            run's target SHA (new commit landed via fix-loop or manual push),
+            immediately run `ao review run <session> --execute` for the next
+            round and return to step 2. Do not ask the operator.
+         b. If the worker is in `ready` state but the PR SHA has not changed
+            and no `addressing_reviews` was reported since the last
+            `ao review send`, send exactly ONE ping via `ao send <session>`
+            reminding the worker to read findings via `ao review list` and
+            report `addressing_reviews`. Track that the ping was sent for
+            this pending state.
+         c. If a ping has already been sent for the current pending state
+            and the worker still has not pushed or reported
+            `addressing_reviews` by the next turn, run
+            `ao session kill <session>` then `ao spawn --claim-pr <PR>`.
+            Reset the ping tracking for the new session.
+         d. The loop terminates for a PR only when ONE of:
+            - `ao review list` shows the latest run for the current PR head
+              with `findingCount: 0` and `openFindingCount: 0`, AND CI is
+              green on that head, AND the worker has reported
+              `ready_for_review` for the current head (or the clean review
+              ran after the worker's latest `ready_for_review` report with
+              no newer commits) → emit a `ready-for-human-merge`
+              notification with the PR number; stop the loop for this PR.
+            - The worker has reported a terminal failure with a reason →
+              emit a `worker-blocked` notification with the reason; stop.
+            - 20 review→fix rounds with `findingCount > 0` have completed
+              on the same PR (counted from `ao review list` filtered to
+              this PR) → emit a `round-limit-reached` notification; do not
+              respawn, do not continue.
+
+      6. NO USER CONFIRMATION REQUIRED FOR ROUND TRANSITIONS. Do not ask
+         the operator "Should I run round N?" or "Continue the loop until
+         clean?". The loop is autonomous within step 5's decision procedure.
+         Operator input is required ONLY when emitting one of the three
+         terminal notifications in step 5d.
+
+      7. NO MERGE BY ORCHESTRATOR. Even when step 5d reaches the clean
+         condition, never call `gh pr merge` or click Merge in any UI. The
+         operator decides every merge. Emit the notification and stop the
+         loop for that PR.
+
+      WALL-CLOCK NOTE. The targets in steps 5b/5c (one ping per pending
+      state, respawn after ping ignored) are decision rules applied on the
+      next orchestrator turn, not independently enforced timers. There is
+      no background watchdog. The 30-minute AO `report-stale` reaction
+      below is a long-tail backstop, not the SLA mechanism.
 
 # Review model policy:
 # - Desired reviewer: Codex CLI with model gpt-5.5.
@@ -56,6 +129,10 @@ reactions:
   approved-and-green:
     auto: false
     action: notify
+  report-stale:
+    auto: true
+    action: send-to-agent
+    message: "Worker idle. Check pending AO review findings via `ao review list` and report `addressing_reviews` via `ao report addressing_reviews`, or report a terminal failure with a reason."
 
 # Upgrade-safe extension notes:
 # - Implement task declaration, runtime scope guard, and token chain ledger through
