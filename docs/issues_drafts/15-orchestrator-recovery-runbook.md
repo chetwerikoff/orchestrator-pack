@@ -5,10 +5,10 @@
 - Issue #28 (file `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md`)
   must be merged. The runbook references #28's decision procedure as the
   expected behavior after recovery.
-- Issue #14 (file `docs/issues_drafts/14-orchestrator-wake-mechanism.md`)
-  SHOULD be merged. Without #14, the runbook also needs to cover "the
+- Issue #39 (file `docs/issues_drafts/14-orchestrator-wake-mechanism.md`)
+  SHOULD be merged. Without #39, the runbook also needs to cover "the
   orchestrator session is healthy but cannot receive wake events", which
-  is a #14 concern. With #14 merged, the runbook focuses on lifecycle
+  is a #39 concern. With #39 merged, the runbook focuses on lifecycle
   failures.
 
 ## Goal
@@ -77,7 +77,7 @@ This issue commits the repository to:
 - `prompts/codex_review_prompt.md` — owned by #9.
 - Any change to #28's `orchestratorRules` — the runbook references that
   procedure but does not modify it.
-- Any wake-event handling — that is #14.
+- Any wake-event handling — that is #39.
 - Automatic recovery / auto-respawn of the orchestrator. The runbook
   is **manual** by design; auto-recovery requires AO upstream changes
   and is explicitly excluded.
@@ -106,7 +106,7 @@ scripts/pr-scope-check.test.ts
 ```allowed-roots
 docs/orchestrator-recovery-runbook.md
 docs/migration_notes.md
-docs/issues_drafts/**
+docs/issues_drafts/15-orchestrator-recovery-runbook.md
 scripts/orchestrator-diagnose.ps1
 ```
 
