@@ -8,15 +8,15 @@ any open issue and does not block any other issue.
 
 Background:
 
-- **`direct-fix-checklist`** ├óÔé¼ÔÇØ PR #35 attempted a direct architect edit to
+- **`direct-fix-checklist`** — PR #35 attempted a direct architect edit to
   `agent-orchestrator.yaml.example` and was correctly blocked by the PR
   scope guard introduced in #5 / #6. The current `CLAUDE.md` "Don't write
   implementation code" line is too soft to prevent recurrence, and there
   is no documented checklist describing how to land an authorized direct
   fix through the existing guards (snapshot, PR body keyword, manual
   Codex review).
-- **`study-external-source`** ├óÔé¼ÔÇØ the architect is regularly asked
-  "├É┬©├É┬À├æãÆ├æÔÇí├É┬© <URL>" / "research this repo" and currently re-derives every
+- **`study-external-source`** — the architect is regularly asked
+  "изучи <URL>" / "research this repo" and currently re-derives every
   time how to evaluate fit, how to apply the 10-mode first-principles
   framework, how to involve Codex as a critical reviewer of the proposal,
   and where to put the proposal file. A skill captures the procedure and
@@ -32,16 +32,16 @@ sessions default to spawning workers rather than editing tracked files
 directly, **and** settle the architect-side skill surface covering the
 recurring workflows that today are re-derived per session:
 
-1. `direct-fix-checklist` (new) ├óÔé¼ÔÇØ the override path when the user
+1. `direct-fix-checklist` (new) — the override path when the user
    explicitly authorizes a direct file edit / PR. Lists the snapshot, PR
    body closing-keyword, pre-push self-check, and manual Codex review
    steps required to land cleanly.
-2. `study-external-source` (new) ├óÔé¼ÔÇØ the procedure when the user asks the
+2. `study-external-source` (new) — the procedure when the user asks the
    architect to research an external source (GitHub repo, blog, paper)
    and decide what is worth adopting. Applies the 10-mode framework,
    produces a transient proposal file, runs Codex as a critical reviewer
    with a hard 3-iteration cap, and ends in a plain-language summary.
-3. `create-issue-draft` (amend) ├óÔé¼ÔÇØ add a Codex-review step (hard
+3. `create-issue-draft` (amend) — add a Codex-review step (hard
    3-iteration cap) before an issue draft is synced to GitHub, so drafts
    are critically reviewed for planner-freedom, observable criteria,
    command accuracy, and cross-draft consistency before a worker
@@ -77,42 +77,42 @@ files; no runtime check is introduced by this issue.
 
 ## Files in scope
 
-- `CLAUDE.md` ├óÔé¼ÔÇØ tighten `## Don't` (and adjust `## Do` if needed) so the
+- `CLAUDE.md` — tighten `## Don't` (and adjust `## Do` if needed) so the
   prohibition is explicit per category and references the new
   `direct-fix-checklist` skill. May reference `study-external-source` in
   a separate Do-bullet about research requests if that improves
   discoverability.
-- `.claude/skills/<direct-fix-slug>/SKILL.md` (new) ├óÔé¼ÔÇØ the
+- `.claude/skills/<direct-fix-slug>/SKILL.md` (new) — the
   authorized-override checklist. Suggested slug: `direct-fix-checklist`;
   planner may rename if a better identifier exists, but `CLAUDE.md` must
   reference whatever slug is used.
-- `.claude/skills/<study-slug>/SKILL.md` (new) ├óÔé¼ÔÇØ the external-source
+- `.claude/skills/<study-slug>/SKILL.md` (new) — the external-source
   research procedure. Suggested slug: `study-external-source`; planner
   may rename.
-- `.claude/skills/create-issue-draft/SKILL.md` (modify) ├óÔé¼ÔÇØ add a
+- `.claude/skills/create-issue-draft/SKILL.md` (modify) — add a
   "Codex review the draft (before sync, max 3 iterations)" section so
   every new issue draft gets a critical Codex review before it is synced
   to GitHub. Do not rewrite the existing sections; this is an additive
   amendment.
-- `AGENTS.md` ├óÔé¼ÔÇØ add `.claude/skills/**` to the allowed-edit policy
+- `AGENTS.md` — add `.claude/skills/**` to the allowed-edit policy
   surface so it matches the `check-reusable.ps1` allowlist. Today
   `AGENTS.md` does not mention `.claude/` at all, so a worker editing a
   skill would treat it as out of bounds even though CI permits it. This
   is the policy-alignment half of shipping tracked skill files.
-- `docs/issues_drafts/12-architect-role-tighten.md` ├óÔé¼ÔÇØ this spec.
+- `docs/issues_drafts/12-architect-role-tighten.md` — this spec.
 
 ## Files out of scope
 
 - `packages/core/**`, `vendor/**`.
-- `prompts/agent_rules.md` ├óÔé¼ÔÇØ the worker-facing rules; this issue is
+- `prompts/agent_rules.md` — the worker-facing rules; this issue is
   architect-side only.
 - `agent-orchestrator.yaml` (local, gitignored) and
-  `agent-orchestrator.yaml.example` ├óÔé¼ÔÇØ review-loop rules belong to #28.
+  `agent-orchestrator.yaml.example` — review-loop rules belong to #28.
 - Any AO upstream change (e.g. native trust prompts, snapshot generation
   outside an AO session).
-- `scripts/pr-scope-check.*` ├óÔé¼ÔÇØ the guard implementation is owned by the
+- `scripts/pr-scope-check.*` — the guard implementation is owned by the
   scope-guard issues, not by this one.
-- `docs/first_principles_10_critical_framework.md` ├óÔé¼ÔÇØ the
+- `docs/first_principles_10_critical_framework.md` — the
   `study-external-source` skill references it but must not modify it.
 
 ## Denylist
@@ -166,7 +166,7 @@ scripts/lib/**
   `scripts/pr-scope-check.ps1` (or "the PR scope guard") as the
   enforcement mechanism so a future session understands why the rule
   exists at the contract level, not just at the policy level.
-- **CLAUDE.md ├óÔÇáÔÇØ skill links are bidirectional.** Reading `CLAUDE.md`
+- **CLAUDE.md ↔ skill links are bidirectional.** Reading `CLAUDE.md`
   makes the existence and trigger of both skills discoverable. Reading
   either skill makes the role context discoverable (either via direct
   link or via clear language pointing back at `CLAUDE.md`).
@@ -207,11 +207,11 @@ scripts/lib/**
   - `ao-declare` flags MUST match
     `plugins/ao-task-declaration/bin/declare.ts` (`--issue`,
     `--declared-paths`, `--declared-globs`, `--iteration-id`,
-    `--amend`/`--reason`/`--actor`, `--repo-root`) ├óÔé¼ÔÇØ not invented names
+    `--amend`/`--reason`/`--actor`, `--repo-root`) — not invented names
     like `--paths` / `--globs`.
   - Any `ao session kill` example MUST NOT assume the session id equals
     `op-<issue-number>`. AO assigns its own iteration id (e.g. issue #6
-    ├óÔÇáÔÇÖ snapshot `6.op-4.json`, session `op-4`). The skill MUST instruct
+    → snapshot `6.op-4.json`, session `op-4`). The skill MUST instruct
     reading the real session id from `ao status` or the snapshot
     filename. (Both lessons from the Codex review of the initial skill
     draft, 2026-05-28.)
@@ -221,7 +221,7 @@ scripts/lib/**
 - **Discoverability.** The skill file lives under
   `.claude/skills/<slug>/SKILL.md` with valid frontmatter. The
   `description` field names at least one explicit trigger phrase the user
-  might use ("├É╦£├É┬À├æãÆ├æÔÇí├É┬© <URL>", "research this repo", or equivalent) and the
+  might use ("изучи <URL>", "research this repo", or equivalent) and the
   skip condition (description-only requests, links to our own repo).
 - **Content coverage.** The skill body documents, each in its own
   clearly-named section:
@@ -232,11 +232,11 @@ scripts/lib/**
     study, with the modes in order and a one-sentence purpose for each.
     The reference to `docs/first_principles_10_critical_framework.md` is
     explicit.
-  - The triage buckets ├óÔé¼ÔÇØ Apply / Adapt / Skip ├óÔé¼ÔÇØ with the rule that if
+  - The triage buckets — Apply / Adapt / Skip — with the rule that if
     everything is Skip, the skill stops and reports that, without
     inventing a problem to justify adoption.
   - The proposal file location (transient, under `$env:TEMP` or
-    equivalent ├óÔé¼ÔÇØ not committed to repo) and its required sections
+    equivalent — not committed to repo) and its required sections
     (Source, Existing pain, Decision per item, Concrete suggestions,
     Risks).
   - The Codex critical-reviewer invocation: review run **without**
@@ -244,10 +244,10 @@ scripts/lib/**
     adoption decisions (not summarize the source). The prompt
     explicitly asks for `NO_FINDINGS` on clean reviews, P0/P1/P2
     severity tagging otherwise.
-  - The iteration discipline ├óÔé¼ÔÇØ **hard cap at 3 cycles**, surface
+  - The iteration discipline — **hard cap at 3 cycles**, surface
     remaining concerns as open questions instead of silent further
     revisions.
-  - The final-summary format: ├óÔÇ░┬ñ 400 words, in the user's language,
+  - The final-summary format: ≤ 400 words, in the user's language,
     structured as verdict / what we adopt / what we skip / open
     questions / next step.
   - A `Don't` section explicitly rejecting cargo-cult adoption,
@@ -278,7 +278,7 @@ scripts/lib/**
   - state the iteration discipline (revise valid findings, rebut wrong
     ones, stop at 3, surface remainder as open questions in the synced
     issue) and that sync happens only after convergence or cap.
-- **Existing sections preserved.** The amendment is additive ├óÔé¼ÔÇØ the draft
+- **Existing sections preserved.** The amendment is additive — the draft
   structure, planner-freedom checklist, sync procedure, decision logging,
   and fold-back sections remain intact.
 
@@ -308,38 +308,38 @@ scripts/lib/**
   pushing.
 - `CLAUDE.md` is allowlisted at the root level.
 - Neither skill introduces runtime hooks, scheduled tasks, or
-  `settings.json` edits ├óÔé¼ÔÇØ they are pure markdown instructions read by
+  `settings.json` edits — they are pure markdown instructions read by
   the Claude Code skill loader.
 
 ## Verification
 
-- **Static ├óÔé¼ÔÇØ CLAUDE.md prohibition.** Reading `CLAUDE.md` `## Don't`
+- **Static — CLAUDE.md prohibition.** Reading `CLAUDE.md` `## Don't`
   shows a single bullet (or contiguous bullets) that enumerate the
   prohibited file categories and condition the prohibition on "explicit
   user authorization" or equivalent unambiguous wording.
-- **Static ├óÔé¼ÔÇØ CLAUDE.md skill pointers.** Reading `CLAUDE.md` shows
+- **Static — CLAUDE.md skill pointers.** Reading `CLAUDE.md` shows
   explicit references to both new skill slugs, each with one short
   sentence describing when to invoke it.
-- **Static ├óÔé¼ÔÇØ both skills' frontmatter.** Reading each new `SKILL.md`
+- **Static — both skills' frontmatter.** Reading each new `SKILL.md`
   shows the required `name` and `description` frontmatter fields, with
   `description` mentioning both the trigger and the skip conditions.
-- **Static ├óÔé¼ÔÇØ `direct-fix-checklist` content sections.** Reading the
+- **Static — `direct-fix-checklist` content sections.** Reading the
   skill shows all the content topics enumerated in its acceptance
   criterion above, each under a recognizable heading.
-- **Static ├óÔé¼ÔÇØ `study-external-source` content sections.** Reading the
+- **Static — `study-external-source` content sections.** Reading the
   skill shows the framework-subset list, triage buckets, proposal file
   format, Codex prompt anatomy, 3-iteration cap, and final-summary
   format, each under a recognizable heading.
-- **Smoke ├óÔé¼ÔÇØ repository policy.** `scripts/verify.ps1` and
+- **Smoke — repository policy.** `scripts/verify.ps1` and
   `scripts/check-reusable.ps1` clean on the PR head. All three changed
   files fit the existing allowlist.
-- **Smoke ├óÔé¼ÔÇØ tests still green.** `scripts/test-all.ps1` passes; nothing
+- **Smoke — tests still green.** `scripts/test-all.ps1` passes; nothing
   in this PR alters runtime code, so this is a regression-only check.
-- **Manual ├óÔé¼ÔÇØ operator readability.** An operator following only
+- **Manual — operator readability.** An operator following only
   `CLAUDE.md` plus the two new skills can describe, without further
   consultation:
   - what to do when the user says "fix X yourself" (matches the
     `direct-fix-checklist` sections);
-  - what to do when the user says "├É┬©├É┬À├æãÆ├æÔÇí├É┬© <URL>" (matches the
+  - what to do when the user says "изучи <URL>" (matches the
     `study-external-source` sections).
 
