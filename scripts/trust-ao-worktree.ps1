@@ -96,12 +96,15 @@ function Invoke-AoWorktreeTrust {
 
     $trustFile = Write-CursorWorkspaceTrustedFile -Root $Root
 
+    # Best-effort only: the .workspace-trusted marker above is the mechanism that
+    # unblocks the worker. A failed bootstrap (rate limit, transient) must not undo
+    # that success, or the watcher retries this headless session every poll.
     if (Get-Command agent -ErrorAction SilentlyContinue) {
         $null = & agent -p --trust --force --sandbox disabled --approve-mcps `
             --workspace $Root `
             'workspace-trust-bootstrap: reply OK only.' 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "agent trust bootstrap failed for $Root (exit $LASTEXITCODE)"
+            Write-Warning "agent trust bootstrap failed for $Root (exit $LASTEXITCODE); marker already written"
         }
     }
 
