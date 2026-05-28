@@ -66,10 +66,10 @@ export function emitAoReviewPayload(findings: AoReviewFinding[]): string {
 export function formatGithubComment(options: {
   model: string;
   findings: StructuredFinding[];
-  /** True only when Codex returned NO_FINDINGS and there are zero findings to surface. */
+  /** True when Codex returned NO_FINDINGS (findings may still include scope warnings). */
   clean: boolean;
 }): string {
-  if (options.clean && options.findings.length === 0) {
+  if (options.findings.length === 0) {
     return ['## Codex Review — no findings', ''].join('\n');
   }
 

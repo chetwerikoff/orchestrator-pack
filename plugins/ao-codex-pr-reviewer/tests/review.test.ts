@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildCodexExecReviewArgs } from '../lib/run_review.js';
-import { emitAoReviewPayload, toAoFindings } from '../lib/emit.js';
+import {
+  emitAoReviewPayload,
+  formatGithubComment,
+  toAoFindings,
+} from '../lib/emit.js';
 import { NO_FINDINGS_TOKEN, parseCodexOutput } from '../lib/parse_output.js';
 import { buildReviewPrompt } from '../lib/prompt.js';
 import { executeReview } from '../lib/review_core.js';
@@ -181,6 +185,18 @@ describe('buildReviewPrompt', () => {
     expect(scope.hasScope).toBe(false);
     expect(prompt).toContain('Scope section omitted');
     expect(prompt).not.toContain('```denylist');
+  });
+});
+
+describe('formatGithubComment', () => {
+  it('surfaces scope warnings when clean is true but findings are present', () => {
+    const comment = formatGithubComment({
+      model: 'gpt-5.5',
+      findings: [scopeUnavailableWarningFinding('codex-github-action')],
+      clean: true,
+    });
+    expect(comment).toContain('scope-context-unavailable');
+    expect(comment).not.toBe('## Codex Review — no findings\n');
   });
 });
 

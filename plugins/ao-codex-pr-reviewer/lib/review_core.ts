@@ -107,7 +107,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
       ? formatGithubComment({
           model: options.model ?? 'gpt-5.5',
           findings,
-          clean: findings.length === 0,
+          clean: true,
         })
       : undefined;
 

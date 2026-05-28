@@ -38,7 +38,7 @@ on:
       pack_ref:
         description: >
           orchestrator-pack git ref to checkout (optional). When empty, resolves from
-          the caller's uses @ref via github.workflow_ref / job.workflow_sha.
+          job.workflow_sha or job.workflow_ref (the called reusable workflow pin).
         required: false
         type: string
         default: ''
@@ -67,15 +67,18 @@ jobs:
       - name: Resolve orchestrator-pack checkout ref
         id: pack-ref
         run: |
-          # github.workflow_ref belongs to the *caller* workflow in workflow_call runs;
-          # never use it to checkout orchestrator-pack. Prefer explicit pack_ref,
-          # then job.workflow_sha (commit of this reusable workflow file), else main.
+          # github.workflow_ref is the *caller* workflow in workflow_call runs — do not use it.
+          # job.workflow_ref / job.workflow_sha identify this reusable workflow's uses: ...@pin.
           if [ -n "${{ inputs.pack_ref }}" ]; then
             ref="${{ inputs.pack_ref }}"
           elif [ -n "${{ job.workflow_sha }}" ]; then
             ref="${{ job.workflow_sha }}"
           else
-            ref="main"
+            called_ref="${{ job.workflow_ref }}"
+            ref="${called_ref#*@}"
+            if [ -z "$ref" ]; then
+              ref="main"
+            fi
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
@@ -136,13 +139,26 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
-            let body = '## Codex Review — no findings\n';
+            let body;
             try {
               body = fs.readFileSync('codex-review-comment.md', 'utf8').trim();
             } catch {
               body = '_Codex review comment file not found._';
             }
-            if (!body) body = '## Codex Review — no findings\n';
+            if (!body) {
+              let hasWarnings = false;
+              try {
+                const payload = JSON.parse(
+                  fs.readFileSync('codex-ao-findings.json', 'utf8'),
+                );
+                hasWarnings = Array.isArray(payload.findings) && payload.findings.length > 0;
+              } catch {
+                hasWarnings = false;
+              }
+              body = hasWarnings
+                ? '_Codex review produced findings but no PR comment was written._'
+                : '## Codex Review — no findings\n';
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
