@@ -7,12 +7,12 @@
   "baseline": {
     "commit_sha": "2847f88e9bcad9ffb70a4c9bfc1743ead3edd73e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:d1ad58775ce88ddf6de354d7f6bc7c031a912f1feaf0e13a9c34728c8a6f7d29"
+    "active_scope_hash": "sha256:c710971ca3d648d7371edb30a50e4b371fd5e08b58a5a7f90419036e6dcbad48"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
     "docs/migration_notes.md",
-    "docs/orchestrator-wake-filter.ts",
+    "docs/orchestrator-wake-filter.mjs",
     "docs/orchestrator-wake-runbook.md",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/orchestrator-wake-listener.test.ts"

@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 
 $Script:DefaultPort = 17487
 $Script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$Script:FilterCli = Join-Path $Script:RepoRoot 'docs/orchestrator-wake-filter.ts'
+$Script:FilterCli = Join-Path $Script:RepoRoot 'docs/orchestrator-wake-filter.mjs'
 
 function Get-ListenerPort {
     if ($Port -gt 0) { return $Port }
@@ -54,7 +54,7 @@ function Invoke-WakeFilter {
 
     Push-Location $Script:RepoRoot
     try {
-        $output = $BodyJson | node --import tsx $Script:FilterCli evaluate 2>&1
+        $output = $BodyJson | node $Script:FilterCli evaluate 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "wake filter exited $LASTEXITCODE: $output"
         }

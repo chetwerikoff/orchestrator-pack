@@ -3,7 +3,7 @@ import {
   buildWakeMessage,
   evaluateWakePayload,
   type AoWebhookBody,
-} from '../docs/orchestrator-wake-filter.js';
+} from '../docs/orchestrator-wake-filter.mjs';
 
 function notificationEvent(
   overrides: Partial<NonNullable<AoWebhookBody['event']>> & {
