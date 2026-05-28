@@ -332,6 +332,39 @@ function Get-SlidingBlocks {
     return $blocks
 }
 
+function Get-RenameMap {
+    param(
+        [string]$Root,
+        [string]$BaseRef,
+        [string]$HeadRef
+    )
+
+    $map = @{}
+    Push-Location $Root
+    try {
+        $result = Invoke-GitQuiet -GitArgs @('diff', '--name-status', '-M', "${BaseRef}...${HeadRef}")
+        if ($result.ExitCode -ne 0) {
+            $result = Invoke-GitQuiet -GitArgs @('diff', '--name-status', '-M', $BaseRef, $HeadRef)
+        }
+
+        foreach ($line in $result.Output) {
+            if ($line -isnot [string]) { continue }
+            $parts = $line -split "`t"
+            if ($parts.Count -lt 3) { continue }
+            if ($parts[0] -notmatch '^R\d+$') { continue }
+
+            $oldPath = Normalize-RepoPath $parts[1]
+            $newPath = Normalize-RepoPath $parts[2]
+            $map[$newPath.ToLowerInvariant()] = $oldPath
+        }
+
+        return $map
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-BaseFileLines {
     param(
         [string]$Root,
@@ -384,15 +417,25 @@ function Test-IsBlockNovelAtPath {
         [string]$RelativePath,
         [string]$BlockText,
         [int]$Size,
-        [hashtable]$BaseLinesCache
+        [hashtable]$BaseLinesCache,
+        [hashtable]$RenameMap
     )
 
     $normalized = Normalize-RepoPath $RelativePath
+    $lookupKey = $normalized.ToLowerInvariant()
     if (-not $BaseLinesCache.ContainsKey($normalized)) {
         $baseLinesCache[$normalized] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $normalized
     }
 
     $baseLines = $baseLinesCache[$normalized]
+    if ($baseLines.Count -eq 0 -and $RenameMap -and $RenameMap.ContainsKey($lookupKey)) {
+        $renamedFrom = $RenameMap[$lookupKey]
+        if (-not $BaseLinesCache.ContainsKey($renamedFrom)) {
+            $baseLinesCache[$renamedFrom] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $renamedFrom
+        }
+        $baseLines = $baseLinesCache[$renamedFrom]
+    }
+
     if ($baseLines.Count -eq 0) {
         return $true
     }
@@ -421,11 +464,16 @@ function Find-DuplicateLiteralFindings {
         [hashtable]$Config,
         [string[]]$IntroducedInPaths = @(),
         [string]$Root,
-        [string]$BaseRef
+        [string]$BaseRef,
+        [string]$HeadRef
     )
 
     $findings = New-Object System.Collections.Generic.List[object]
     $minStrict = [int]$Config.duplicateLiteralMinLines
+    $renameMap = @{}
+    if ($BaseRef -and $HeadRef) {
+        $renameMap = Get-RenameMap -Root $Root -BaseRef $BaseRef -HeadRef $HeadRef
+    }
     $blockMap = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[object]]'
     $introduced = @{}
     foreach ($path in $IntroducedInPaths) {
@@ -486,7 +534,7 @@ function Find-DuplicateLiteralFindings {
                         $changedPath = Normalize-RepoPath $loc.file
                         if (-not $introduced.ContainsKey($changedPath.ToLowerInvariant())) { continue }
 
-                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $changedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache) {
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $changedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -RenameMap $renameMap) {
                             $shouldReport = $true
                             break
                         }
@@ -498,7 +546,7 @@ function Find-DuplicateLiteralFindings {
                         $introducedPath = Normalize-RepoPath $file
                         if (-not $introduced.ContainsKey($introducedPath.ToLowerInvariant())) { continue }
 
-                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $introducedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache) {
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $introducedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -RenameMap $renameMap) {
                             $novelIntroducedCount++
                         }
                     }
@@ -740,7 +788,7 @@ foreach ($relative in $scanPaths) {
 }
 
 $allFindings = New-Object System.Collections.Generic.List[object]
-foreach ($finding in (Find-DuplicateLiteralFindings -FileLines $fileLines -Config $Config -IntroducedInPaths $scanPaths -Root $Root -BaseRef $BaseRef)) {
+foreach ($finding in (Find-DuplicateLiteralFindings -FileLines $fileLines -Config $Config -IntroducedInPaths $scanPaths -Root $Root -BaseRef $BaseRef -HeadRef $HeadRef)) {
     $allFindings.Add($finding) | Out-Null
 }
 foreach ($finding in (Find-PairedEditFindings -FileLines $fileLines -ChangedPaths $changedPaths -Config $Config)) {
