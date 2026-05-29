@@ -20,6 +20,7 @@
   ],
   "declared_globs": [
     "docs/issues_drafts/*.md",
+    "docs/declarations/**",
     ".claude/skills/create-issue-draft/**"
   ],
   "amendments": []
