@@ -6,32 +6,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $Script:WrapperName = 'run-pack-review-claude.ps1'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
-
-function Get-AutoPrNumber {
-    param([string]$RepoRoot)
-
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        return $null
-    }
-
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $head = (git rev-parse HEAD 2>$null)
-        if (-not $head) { return $null }
-        $raw = (gh pr list --head $head --json number --jq '.[0].number' 2>$null)
-        if (-not $raw) { return $null }
-        $n = [int]$raw
-        if ($n -gt 0) { return $n }
-    }
-    catch {
-        return $null
-    }
-    finally {
-        Pop-Location
-    }
-
-    return $null
-}
+. (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
@@ -52,12 +27,14 @@ foreach ($arg in $cli.ForwardArgs) {
     $forwardArgs.Add($arg) | Out-Null
 }
 
-if ($forwardArgs -notcontains '--pr-number') {
-    $autoPr = Get-AutoPrNumber -RepoRoot $resolvedRoot
-    if ($autoPr) {
-        $forwardArgs.Add('--pr-number') | Out-Null
-        $forwardArgs.Add([string]$autoPr) | Out-Null
-    }
+$autoCtx = Get-AutoReviewPrContext -RepoRoot $resolvedRoot
+if ($autoCtx.PrNumber -and $forwardArgs -notcontains '--pr-number') {
+    $forwardArgs.Add('--pr-number') | Out-Null
+    $forwardArgs.Add([string]$autoCtx.PrNumber) | Out-Null
+}
+if ($autoCtx.IssueNumber -and $forwardArgs -notcontains '--issue') {
+    $forwardArgs.Add('--issue') | Out-Null
+    $forwardArgs.Add([string]$autoCtx.IssueNumber) | Out-Null
 }
 
 $workspacePrompt = Join-Path $resolvedRoot 'prompts\codex_review_prompt.md'

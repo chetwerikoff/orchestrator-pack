@@ -1,0 +1,15 @@
+{
+  "description": "REVIEW_COMMAND expects Codex wrapper but termination names Claude wrapper only",
+  "expectPass": false,
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main",
+  "runs": [
+    {
+      "status": "failed",
+      "findingCount": 0,
+      "openFindingCount": 0,
+      "sentFindingCount": 0,
+      "terminationReason": "scripts/run-pack-review-claude.ps1: claude --print exited 1",
+      "completedAt": "2026-05-29T12:11:00Z"
+    }
+  ]
+}

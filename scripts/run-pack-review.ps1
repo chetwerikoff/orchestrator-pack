@@ -6,9 +6,25 @@ param()
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
+
+$forwardArgs = [System.Collections.Generic.List[string]]::new()
+foreach ($arg in $cli.ForwardArgs) {
+    $forwardArgs.Add($arg) | Out-Null
+}
+
+$autoCtx = Get-AutoReviewPrContext -RepoRoot $resolvedRoot
+if ($autoCtx.PrNumber -and $forwardArgs -notcontains '--pr-number') {
+    $forwardArgs.Add('--pr-number') | Out-Null
+    $forwardArgs.Add([string]$autoCtx.PrNumber) | Out-Null
+}
+if ($autoCtx.IssueNumber -and $forwardArgs -notcontains '--issue') {
+    $forwardArgs.Add('--issue') | Out-Null
+    $forwardArgs.Add([string]$autoCtx.IssueNumber) | Out-Null
+}
 
 Push-Location -LiteralPath $resolvedRoot
 try {
@@ -22,9 +38,9 @@ try {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }
 
-    $forwardArgs = @($cli.ForwardArgs)
-    if ($forwardArgs.Count -gt 0) {
-        & $reviewScript --repo-root $resolvedRoot --base $cli.Base @forwardArgs
+    $forward = $forwardArgs.ToArray()
+    if ($forward.Count -gt 0) {
+        & $reviewScript --repo-root $resolvedRoot --base $cli.Base @forward
     }
     else {
         & $reviewScript --repo-root $resolvedRoot --base $cli.Base

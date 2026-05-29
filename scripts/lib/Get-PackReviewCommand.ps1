@@ -25,6 +25,20 @@ function Get-PackReviewCommandFromYaml {
     return $match.Groups[1].Value.Trim()
 }
 
+function Test-WrapperScriptInTerminationReason {
+    param(
+        [string]$Basename,
+        [string]$TerminationReason
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Basename) -or [string]::IsNullOrWhiteSpace($TerminationReason)) {
+        return $false
+    }
+
+    $pattern = [regex]::Escape($Basename)
+    return $TerminationReason -match $pattern
+}
+
 function Test-ReviewCommandInTerminationReason {
     param(
         [string]$ReviewCommand,
@@ -40,7 +54,7 @@ function Test-ReviewCommandInTerminationReason {
         $scriptName = $Matches[1]
     }
 
-    if ($scriptName -and $TerminationReason -notlike "*$scriptName*") {
+    if ($scriptName -and -not (Test-WrapperScriptInTerminationReason -Basename $scriptName -TerminationReason $TerminationReason)) {
         return $scriptName
     }
 
@@ -75,8 +89,16 @@ function Test-PackReviewForbiddenDrift {
         if ($TerminationReason -match '[/\\]review\.ps1\b') {
             return 'review.ps1'
         }
-        if ($TerminationReason -like '*run-pack-review.ps1*' -and $TerminationReason -notlike '*run-pack-review-claude.ps1*') {
+        if (Test-WrapperScriptInTerminationReason -Basename 'run-pack-review.ps1' -TerminationReason $TerminationReason) {
             return 'run-pack-review.ps1'
+        }
+    }
+    elseif ($ExpectedBasename -eq 'run-pack-review.ps1') {
+        if (Test-WrapperScriptInTerminationReason -Basename 'run-pack-review-claude.ps1' -TerminationReason $TerminationReason) {
+            return 'run-pack-review-claude.ps1'
+        }
+        if ($TerminationReason -match '[/\\]review\.ps1\b') {
+            return 'review.ps1'
         }
     }
 
