@@ -83,26 +83,13 @@ This issue commits the repository to:
 
 - Edit hygiene (size/section bounds, rejected-edit buffer mechanics) — owned by #81.
 - The output scorer and stored-output corpus — owned by #80.
-- The finding format / `NO_FINDINGS` contract — owned by #9.
-- Run-state discipline — owned by #79.
-- Any autonomous optimizer that edits prompts without operator acceptance.
-- `agent-orchestrator.yaml` / `.ao/**`, `packages/core/**`, `vendor/**`.
+- Shared SkillOpt pack boundaries — see draft 28 § Files out of scope.
 
 ## Denylist
 
-```denylist
-vendor/**
-packages/core/**
-code-reviews/**
-.ao/**
-```
-
-```allowed-roots
-scripts/**
-tests/**
-docs/**
-prompts/codex_review_prompt.md
-```
+Pack-wide fences for the SkillOpt trilogy: draft 28 § Denylist. This issue adds
+`prompts/codex_review_prompt.md` to **allowed_roots** when implementing the live gate
+and any demonstrated prompt edit.
 
 ## Acceptance criteria
 
