@@ -222,6 +222,12 @@ a clean review. Orchestrator and worker rules MUST inspect `terminationReason`
 and MUST NOT treat zero findings alone as Codex approval. Only `clean` status or
 successful triage/send paths count as review progress.
 
+The pack reviewer wrapper MUST copy reviewer-process failure text (Codex stderr,
+quota messages, missing-deps errors) into log lines AO records as
+`terminationReason`, not only `codex exec review exited N`. Operators use
+`scripts/orchestrator-diagnose.ps1` to list empty failed reviews and detect
+`REVIEW_COMMAND` drift (GitHub Issue #75).
+
 On Windows, the `orchestratorRules:` literal in `agent-orchestrator.yaml.example`
 MUST stay launch-safe (no embedded `"` or inline `--command "` literals); see
 Issue #55. Worker spawn uses a separate Cursor launch path; issue-body quote

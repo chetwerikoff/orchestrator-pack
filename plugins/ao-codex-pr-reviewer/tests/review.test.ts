@@ -15,6 +15,7 @@ import {
   hasReviewRuntimeDeps,
   resolvePackRepoRoot,
   reviewDependencySearchRoots,
+  summarizeReviewerProcessFailure,
 } from '../lib/review_core.js';
 import {
   formatScopeSection,
@@ -34,6 +35,27 @@ describe('review dependency roots', () => {
     expect(reviewDependencySearchRoots(otherRoot)).toEqual([packRoot, otherRoot]);
     expect(reviewDependencySearchRoots(packRoot)).toEqual([packRoot]);
     expect(hasReviewRuntimeDeps(packRoot)).toBe(true);
+  });
+});
+
+describe('summarizeReviewerProcessFailure', () => {
+  it('surfaces Codex quota and usage-limit errors', () => {
+    const lines = summarizeReviewerProcessFailure({
+      exitCode: 1,
+      stdout: 'NO_FINDINGS',
+      stderr: "ERROR: You've hit your usage limit.",
+    });
+    expect(lines[0]).toContain('exited 1');
+    expect(lines.join('\n')).toContain('usage limit');
+  });
+
+  it('reports missing output when stderr and stdout are empty', () => {
+    const lines = summarizeReviewerProcessFailure({
+      exitCode: 1,
+      stdout: '',
+      stderr: '',
+    });
+    expect(lines.join('\n')).toContain('no stderr/stdout');
   });
 });
 

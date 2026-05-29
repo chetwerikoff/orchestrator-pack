@@ -16,6 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Test-WorkerLaunchFailure.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -230,6 +231,65 @@ else {
     if ($actionable.Count -gt 12) {
         Write-Host ("  ... and {0} more" -f ($actionable.Count - 12))
     }
+}
+
+$failedEmpty = @(
+    $runs | Where-Object {
+            @('failed', 'cancelled') -contains $_.status -and
+            [int]$_.findingCount -eq 0 -and
+            [int]$_.openFindingCount -eq 0
+        } |
+        Sort-Object { [datetime]$_.completedAt } -Descending
+)
+
+Write-Host ''
+Write-Host ("-- Empty failed reviews (failed/cancelled, findingCount=0): {0} --" -f $failedEmpty.Count)
+if ($failedEmpty.Count -eq 0) {
+    Write-Host '  none — good (still verify latest head has status clean, not only absence of failures)'
+}
+else {
+    Write-Host '  NOT clean — reviewer command or Codex/Claude infra failed before findings were emitted.'
+    foreach ($r in $failedEmpty | Select-Object -First 6) {
+        $pr = if ($r.prNumber) { "PR #$($r.prNumber)" } else { '-' }
+        $reason = ($r.terminationReason -split "`n")[0]
+        if ($reason.Length -gt 100) { $reason = $reason.Substring(0, 97) + '...' }
+        Write-Host ("  {0}  {1,-10} {2}  worker={3}" -f $r.reviewerSessionId, $r.status, $pr, $r.linkedSessionId)
+        Write-Host ("           {0}" -f $reason)
+    }
+    if ($failedEmpty.Count -gt 6) {
+        Write-Host ("  ... and {0} more (ao review list --json, field terminationReason)" -f ($failedEmpty.Count - 6))
+    }
+}
+
+$packRoot = Split-Path -Parent $PSScriptRoot
+$liveYaml = Join-Path $packRoot 'agent-orchestrator.yaml'
+$exampleYaml = Join-Path $packRoot 'agent-orchestrator.yaml.example'
+$configPath = if (Test-Path -LiteralPath $liveYaml -PathType Leaf) { $liveYaml } else { $exampleYaml }
+$expectedCommand = Get-PackReviewCommandFromYaml -YamlPath $configPath
+$latestRun = $runs | Sort-Object { [datetime]$_.completedAt } -Descending | Select-Object -First 1
+
+Write-Host ''
+Write-Host '-- REVIEW_COMMAND alignment --'
+if ($expectedCommand) {
+    Write-Host ("  config: {0}" -f $configPath)
+    $cmdPreview = $expectedCommand
+    if ($cmdPreview.Length -gt 110) { $cmdPreview = $cmdPreview.Substring(0, 107) + '...' }
+    Write-Host ("  REVIEW_COMMAND: {0}" -f $cmdPreview)
+    if ($latestRun -and $latestRun.terminationReason) {
+        $drift = Test-ReviewCommandInTerminationReason -ReviewCommand $expectedCommand -TerminationReason $latestRun.terminationReason
+        if ($drift) {
+            Write-Host ("  WARN: latest run terminationReason does not mention expected script ({0}) — command drift?" -f $drift)
+        }
+        elseif (@('failed', 'cancelled') -contains $latestRun.status) {
+            Write-Host '  WARN: latest run failed — read full terminationReason; do not treat zero findings as clean.'
+        }
+        elseif ($latestRun.status -eq 'clean') {
+            Write-Host '  OK: latest run is clean.'
+        }
+    }
+}
+else {
+    Write-Host '  (could not parse REVIEW_COMMAND from YAML)'
 }
 
 # --- events: stuck ---

@@ -86,6 +86,12 @@ projects:
         Copy REVIEW_COMMAND verbatim into --command. Wrap the entire REVIEW_COMMAND value in one pair of double quotes on Windows.
         FORBIDDEN alternate commands: plugins/ao-codex-pr-reviewer/bin/review.ps1 without scripts/run-pack-review.ps1; cmd /c npm ci && …; bare cmd.exe; inventing npm ci preflight chains; ao review run --execute without --command (built-in Codex path).
         On failed or cancelled runs, read terminationReason before any retry; never treat findingCount 0 as clean.
+        Before merge or reporting review passed, run scripts/orchestrator-diagnose.ps1 and confirm the latest run for the PR head is status clean — not failed with zero findings.
+
+      EMPTY REVIEW TRAP — failed or cancelled with findingCount 0 is NEVER clean:
+        AO may list 0 open findings while status is failed — that means the reviewer command crashed or Codex/Claude exited non-zero, not a clean NO_FINDINGS review.
+        Always read terminationReason from ao review list --json first. Common causes: Codex usage limit (switch to Claude bridge per docs/reviewer-switch-runbook.md), missing npm ci preflight (forbidden bare review.ps1), or REVIEW_COMMAND drift (terminationReason shows a different script than live REVIEW_COMMAND).
+        Do not ao review send on failed runs. Do not tell the worker review is complete when only failed runs exist for the current head. Retry once with the live REVIEW_COMMAND after fixing the cause; if still failed, escalate to the operator.
 
       AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
       review or loop. On every orchestrator turn while any open PR has an active
