@@ -54,6 +54,22 @@ describe('extractLinkedIssueNumber', () => {
   it('uses the last closing reference in the body', () => {
     expect(extractLinkedIssueNumber('Closes #1\n\nResolves #6')).toBe(6);
   });
+
+  it('finds Closes after summary bullets that contain colons (PR #84 class)', () => {
+    const body = [
+      '## Summary',
+      '',
+      '- Adds tracked `scripts/run-pack-review-claude.ps1` (parallel to Codex `run-pack-review.ps1`): npm preflight off stdout.',
+      '- More bullets with paths and flags.',
+      '',
+      '## Test plan',
+      '',
+      '- [ ] Operator smoke: `ao review run ... --command` with tracked Claude wrapper',
+      '',
+      'Closes #79',
+    ].join('\n');
+    expect(extractLinkedIssueNumber(body)).toBe(79);
+  });
 });
 
 describe('resolveLatestCommittedSnapshot', () => {

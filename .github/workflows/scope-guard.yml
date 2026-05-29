@@ -51,7 +51,6 @@ jobs:
         shell: pwsh
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
