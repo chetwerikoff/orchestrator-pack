@@ -84,11 +84,26 @@ try {
         $promptArgs += $arg
     }
 
-    $prompt = (& node @promptArgs 2>&1 | Out-String).TrimEnd()
-    if ($LASTEXITCODE -ne 0) {
-        [Console]::Error.WriteLine("$Script:WrapperName: review.ts --prompt-only failed (exit $LASTEXITCODE)")
+    # review.ts --prompt-only logs 'prompt-only mode' to stderr; with 2>&1 + Stop that becomes
+    # a terminating ErrorRecord. Use Continue for this call and keep stdout only.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $promptRaw = @(& node @promptArgs 2>&1)
+        $promptExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+
+    $prompt = @(
+        $promptRaw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+    ) -join "`n"
+    $prompt = $prompt.TrimEnd()
+    if ($promptExit -ne 0) {
+        [Console]::Error.WriteLine("$Script:WrapperName: review.ts --prompt-only failed (exit $promptExit)")
         if ($prompt) { [Console]::Error.WriteLine($prompt) }
-        exit $LASTEXITCODE
+        exit $promptExit
     }
     if (-not $prompt) {
         [Console]::Error.WriteLine("$Script:WrapperName: empty prompt from review.ts --prompt-only")
@@ -114,14 +129,19 @@ try {
         [System.IO.File]::WriteAllText($promptFile, $prompt, [System.Text.UTF8Encoding]::new($false))
 
         $claudeArgs = @('--print', '--model', $model)
-        $claudeOut = Get-Content -LiteralPath $promptFile -Raw |
-            & claude @claudeArgs 2>&1 |
-            ForEach-Object {
-                if ($_ -is [string]) { $_ }
-                else { $_.ToString() }
-            }
-        $claudeOut = ($claudeOut -join "`n").TrimEnd()
-        $claudeExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Continue'
+        try {
+            $claudeRaw = @(Get-Content -LiteralPath $promptFile -Raw | & claude @claudeArgs 2>&1)
+            $claudeExit = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
+
+        $claudeOut = @(
+            $claudeRaw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+        ) -join "`n"
+        $claudeOut = $claudeOut.TrimEnd()
 
         if ($claudeExit -ne 0) {
             [Console]::Error.WriteLine("$Script:WrapperName: claude --print exited $claudeExit")
@@ -145,8 +165,16 @@ try {
             $parseArgs += $forwardArgs[$i]
         }
 
-        & node @parseArgs
-        exit $LASTEXITCODE
+        $ErrorActionPreference = 'Continue'
+        try {
+            & node @parseArgs
+            $parseExit = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
+
+        exit $parseExit
     }
     finally {
         Remove-Item -LiteralPath $promptFile, $claudeFile -Force -ErrorAction SilentlyContinue
