@@ -49,8 +49,12 @@ projects:
       plugin: github
     orchestrator:
       agent: cursor
+      agentConfig:
+        permissions: permissionless
     worker:
       agent: cursor
+      agentConfig:
+        permissions: permissionless
     agentRulesFile: prompts/agent_rules.md
     orchestratorRules: |
       Use GitHub Issues as the task source of truth.
