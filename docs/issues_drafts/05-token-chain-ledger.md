@@ -1,5 +1,7 @@
 # Implement ao-token-chain-ledger writer + aggregator
 
+GitHub Issue: #8
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue uses `chain_id`

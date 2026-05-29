@@ -1,5 +1,7 @@
 # Orchestrator recovery runbook — stuck / probe_failure handling
 
+GitHub Issue: #40
+
 ## Prerequisite
 
 - Issue #28 (file `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md`)

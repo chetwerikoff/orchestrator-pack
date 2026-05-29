@@ -22,9 +22,11 @@ Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks.
 
 Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
 
-1. **Prerequisite** — issues that must merge first. Reference draft filenames,
-   not just GitHub numbers: `Issue #3 (file docs/issues_drafts/00-architecture-decisions.md)`.
-   GitHub numbers can shift; draft filenames are stable.
+1. **Prerequisite** — issues that must merge first. Reference the **draft file
+   path** (stable) plus the GitHub number from
+   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) when known, e.g.
+   `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md` (GitHub #28).
+   Never cite a bare draft prefix as if it were a GitHub Issue number.
 2. **Goal** — one paragraph. Outcome, not method.
 3. **Binding surface** — what this issue commits the repository to. Concrete
    about contracts, deliberately vague about implementation.
@@ -133,6 +135,18 @@ the review prompt is passed as the `PROMPT` argument as above.
 `NO_FINDINGS` or you have hit the 3-iteration cap and recorded open questions.
 
 Contract reference: `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
+
+## Update the issue queue index
+
+Whenever you add a new draft or first sync a draft to GitHub:
+
+1. Add or update the draft's row in
+   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) (draft path →
+   GitHub Issue number, or explicit none yet).
+2. Set the draft's `GitHub Issue: #NN` line (or `GitHub Issue: TBD` before sync).
+
+Do not add open/closed/shipped columns to the registry — live state stays in
+GitHub (`gh issue view`).
 
 ## Sync to GitHub Issue
 

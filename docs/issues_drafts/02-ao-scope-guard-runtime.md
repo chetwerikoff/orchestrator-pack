@@ -1,5 +1,7 @@
 # Implement ao-scope-guard runtime
 
+GitHub Issue: #5
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue implements

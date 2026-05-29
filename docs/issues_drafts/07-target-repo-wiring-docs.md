@@ -1,5 +1,7 @@
 # End-to-end target-repo wiring docs + example
 
+GitHub Issue: #10
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`), #4, #5, and #6 must be

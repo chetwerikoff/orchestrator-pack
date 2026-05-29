@@ -1,6 +1,6 @@
 # Autonomous review loop — operator go-live checklist
 
-GitHub: [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68)
+GitHub Issue: #68
 
 ## Prerequisite
 

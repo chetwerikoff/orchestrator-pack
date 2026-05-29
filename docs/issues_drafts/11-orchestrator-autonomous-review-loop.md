@@ -1,5 +1,7 @@
 # Orchestrator: autonomous review loop with worker response contract
 
+GitHub Issue: #28
+
 ## Prerequisite
 
 - Issue #9 NO_FINDINGS contract (file `docs/issues_drafts/06-codex-reviewer-scope-context.md`) must be merged. This issue assumes

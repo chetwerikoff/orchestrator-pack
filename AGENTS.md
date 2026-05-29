@@ -6,6 +6,9 @@ This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestra
 
 It contains plugins, prompt fragments, config examples, scripts, and CI checks that port selected safety/accounting contracts from `ai-orchestrator` into Composio AO without modifying Composio core.
 
+Draft specs map to GitHub Issues via [`docs/issue_queue_index.md`](docs/issue_queue_index.md)
+(draft path ↔ `#N`; live state from `gh issue view`).
+
 ## Hard Rule
 
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages.

@@ -1,4 +1,6 @@
-﻿## Prerequisite
+﻿GitHub Issue: #46
+
+## Prerequisite
 
 - Draft `docs/issues_drafts/12-architect-role-tighten.md` (shipped as GitHub
   Issue #37, merged in commit #41) already provides the `.claude/skills/`

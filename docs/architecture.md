@@ -13,6 +13,13 @@ The AO lifecycle remains upstream-owned. Local behavior is expressed as:
 
 No local code should modify upstream AO core.
 
+## Task queue
+
+GitHub Issues are the live queue. Local specs live in `docs/issues_drafts/`.
+The draft filename prefix and the GitHub Issue number are **different schemes** —
+resolve mappings via [`issue_queue_index.md`](issue_queue_index.md) and read live
+state with `gh issue view`, never from draft-file presence alone.
+
 Local Codex PR review **is active**. AO drives it via `ao review run`, `send`,
 `list`, and `execute`; orchestration lives in `orchestratorRules` in
 `agent-orchestrator.yaml`. See [`README.md`](../README.md#local-codex-review-active),

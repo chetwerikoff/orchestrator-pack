@@ -4,6 +4,13 @@ Source migration note read read-only from:
 
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
 
+## Issue queue index (2026-05)
+
+Operators and architects resolving draft files to GitHub Issues should use
+[`issue_queue_index.md`](issue_queue_index.md). Draft filename prefixes are not
+GitHub Issue numbers; query live state with `gh issue view` rather than inferring
+from draft files in the repo.
+
 ## Goal
 
 Port only the safety contracts that stock Composio Agent Orchestrator does not

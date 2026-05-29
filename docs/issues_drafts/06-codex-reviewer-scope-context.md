@@ -1,5 +1,7 @@
 # Codex PR reviewer — integrate scope context
 
+GitHub Issue: #9
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`), #6 (CI PR diff validator), and #8 (ledger
