@@ -146,19 +146,18 @@ projects:
              gh pr list --state open --json number,headRefOid
         2. Cross-reference each PR number and headRefOid against ao review list
            --json (runs for that PR and target SHA).
-        3. Resolve the worker session for that PR from ao status --json --reports
-           full (PR/branch metadata on the session). If no live session is tied
-           to the PR, obtain one before review:
+        3. For each open PR, if the current head SHA already has a review run in
+           flight (queued, preparing, running) or any run recorded for that SHA,
+           skip to the next PR — do not spawn or start a new run here.
+        4. For each remaining open PR (no run for the current head SHA), resolve
+           the worker session from ao status --json --reports full; only if no
+           live session is tied to the PR:
              ao spawn --claim-pr <PR>
-           Use the returned session id as <worker-session-id> below.
-        4. For each open PR whose current head SHA has no review run and no run
-           in flight for that SHA, start review immediately — do not wait for
-           worker pr_created or ready_for_review:
+           Then start review immediately — do not wait for worker pr_created or
+           ready_for_review:
              ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
-           Do NOT start a second run while a run for the current head SHA is
-           queued, preparing, or running. When the head SHA advances past a prior
-           run, treat it as outdated and follow ROUND PROGRESSION below. Subject
-           to ROUND LIMIT below.
+           When the head SHA advances past a prior run, treat it as outdated and
+           follow ROUND PROGRESSION below. Subject to ROUND LIMIT below.
       This reconciliation runs only on orchestrator turns (no background process).
       Turn delivery during event silence is owned by the wake listener / heartbeat
       (Issues #39 / #59), not by this check.
