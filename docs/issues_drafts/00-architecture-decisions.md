@@ -296,6 +296,30 @@ within ~1 minute of spawn with no PR while the orchestrator remained healthy.
 See `docs/issues_drafts/25-worker-spawn-launch-safety.md` (Issue #63) and
 `docs/migration_notes.md`.
 
+## J. Tracked Claude review wrapper and strict review gate
+
+Decision taken 2026-05-29 after PR #78 command drift: live **REVIEW_COMMAND**
+pointed at gitignored `.ao/` while runs used forbidden bare `review.ps1` or Codex
+`run-pack-review.ps1`, yielding `failed` runs with `findingCount: 0`.
+
+1. **Claude executor is tracked beside Codex.** `scripts/run-pack-review-claude.ps1`
+   mirrors `scripts/run-pack-review.ps1` CLI flags, npm preflight (stdout-safe), PR-head
+   prompt via `AO_CODEX_REVIEW_PROMPT_FILE`, Claude `--print`, and pack parsing through
+   `plugins/ao-codex-pr-reviewer` (NO_FINDINGS contract unchanged). Switching reviewers
+   is a single **REVIEW_COMMAND** line swap between the two tracked basenames.
+
+2. **Strict gate is fixture-default for CI.** `scripts/invoke-pack-review-strict-gate.ps1`
+   evaluates committed AO-state fixtures in `verify.ps1` without `ao`, `gh`, or network.
+   `-Live` and `scripts/orchestrator-diagnose.ps1 -Strict` share
+   `Get-PackReviewGateViolations` in `scripts/lib/Get-PackReviewCommand.ps1` (basename
+   parsing from YAML prose remains best-effort).
+
+3. **Empty failed review and drift fail closed under `-Strict`.** `failed`/`cancelled`
+   with zero findings is never clean; `terminationReason` must name the configured wrapper
+   script, not bare `review.ps1` or the wrong `run-pack-review*.ps1`.
+
+See `docs/issues_drafts/27-tracked-claude-review-and-strict-gate.md` (Issue #79).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

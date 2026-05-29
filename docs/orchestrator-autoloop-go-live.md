@@ -132,7 +132,8 @@ worker: pr_created / ready_for_review (+ CI green)
 | Synthetic wake | POST from [wake runbook](orchestrator-wake-runbook.md) | Log: `accepted: …` |
 | Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
 | Review started | `ao review list <project> --json` | New run after worker `ready_for_review` |
-| Command correct | `terminationReason` on failed runs | Contains `run-pack-review.ps1`, not bare `review.ps1` alone |
+| Command correct | `terminationReason` on failed runs | Names active tracked wrapper (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
+| Strict gate (operator) | `pwsh -File scripts/orchestrator-diagnose.ps1 -Strict` | Exit 0 before human merge when AO is running |
 
 ## Troubleshooting routing
 
@@ -140,7 +141,7 @@ worker: pr_created / ready_for_review (+ CI green)
 |---------|------|
 | Listener only `dropped: not_wake_relevant` | This doc § live config (`approved-and-green.priority`); [wake runbook](orchestrator-wake-runbook.md) |
 | Orchestrator `stuck`, zero review runs | [Recovery runbook](orchestrator-recovery-runbook.md) step 1 ping |
-| Review runs `failed`, `findingCount: 0` (empty failed review) | `.\scripts\orchestrator-diagnose.ps1`; [migration_notes.md](migration_notes.md) § Issue #60 empty-review trap; [reviewer-switch-runbook.md](reviewer-switch-runbook.md) if Codex quota |
+| Review runs `failed`, `findingCount: 0` (empty failed review) | `.\scripts\orchestrator-diagnose.ps1 -Strict`; [migration_notes.md](migration_notes.md) § Issue #60 empty-review trap; [reviewer-switch-runbook.md](reviewer-switch-runbook.md) if Codex quota |
 | Change reviewer (Codex / Sonnet) | [reviewer-switch-runbook.md](reviewer-switch-runbook.md) |
 | Worker dies in ~1 min, no PR | [migration_notes.md](migration_notes.md) § Issue #63 |
 

@@ -15,7 +15,11 @@ verification), see [`docs/orchestrator-autoloop-go-live.md`](orchestrator-autolo
 
 When review runs show `failed` with `findingCount: 0`, run
 `.\scripts\orchestrator-diagnose.ps1` first — that pattern is an **empty failed
-review**, not a clean pass. See `docs/migration_notes.md` (empty-review trap).
+review**, not a clean pass. Before declaring mergeable, run
+`.\scripts\orchestrator-diagnose.ps1 -Strict` (live AO) so command drift and the
+empty-review trap fail closed. See `docs/migration_notes.md` (empty-review trap).
+When Claude is the active reviewer, `terminationReason` should name
+`run-pack-review-claude.ps1`; with Codex, `run-pack-review.ps1`.
 
 For a **healthy orchestrator process that never reacts to CI/review events**, see
 [`docs/orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) (wake listener) before killing sessions.

@@ -304,6 +304,35 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Strict review gate fixtures (Issue #79) =='
+$strictGate = Join-Path $Root 'scripts/invoke-pack-review-strict-gate.ps1'
+$aoCommandCheck = Join-Path $Root 'scripts/check-review-command-not-ao.ps1'
+if ((Test-Path -LiteralPath $strictGate -PathType Leaf) -and
+    (Test-Path -LiteralPath $aoCommandCheck -PathType Leaf)) {
+    & $strictGate
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/invoke-pack-review-strict-gate.ps1' 'PASS' 'fixture gate completed'
+    }
+    else {
+        Write-Check 'scripts/invoke-pack-review-strict-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Strict review gate failed on committed fixtures (Issue #79)'
+    }
+
+    & $aoCommandCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-command-not-ao.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-command-not-ao.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Example REVIEW_COMMAND must not use .ao/ as canonical path (Issue #79)'
+    }
+}
+else {
+    Write-Check 'strict review gate scripts' 'FAIL' 'missing gate or .ao check'
+    Add-Failure 'Missing strict review gate scripts (Issue #79)'
+}
+
+Write-Host ''
 Write-Host '== Worker launch-failure detection (Issue #63) =='
 $launchFailureCheck = Join-Path $Root 'scripts/check-worker-launch-failure.ps1'
 $launchFixtureDir = Join-Path $Root 'tests/fixtures/worker-launch-failure'
