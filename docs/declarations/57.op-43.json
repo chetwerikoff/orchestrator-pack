@@ -1,0 +1,26 @@
+{
+  "issue_number": 57,
+  "iteration_id": "op-43",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-29T04:01:03.122Z",
+  "baseline": {
+    "commit_sha": "61932e5e35acf773b8de5756dfa49d16237a8957",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ce4665db2cd7007340c02f0338d7aabc3ba9b770b404d13bc7c66d11b90f85b9"
+  },
+  "declared_paths": [
+    "docs/issue_queue_index.md",
+    "prompts/investigate_root_cause.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "docs/architecture.md",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/22-issue-draft-github-numbering.md"
+  ],
+  "declared_globs": [
+    "docs/issues_drafts/*.md",
+    ".claude/skills/create-issue-draft/**"
+  ],
+  "amendments": []
+}
