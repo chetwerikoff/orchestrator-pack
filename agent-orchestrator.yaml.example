@@ -153,13 +153,15 @@ projects:
            runs for the current head SHA are not terminal-clean; fall through to
            step 4 so reconciliation can retry them.
         4. For each remaining open PR (including when the only run for the current
-           head SHA is failed or cancelled), resolve
-           the worker session from ao status --json --reports full; only if no
-           live session is tied to the PR:
-             ao spawn --claim-pr <PR>
-           Then start review immediately — do not wait for worker pr_created or
-           ready_for_review:
-             ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
+           head SHA is failed or cancelled):
+           a. Resolve the worker session id from ao status --json --reports full
+              (PR/branch metadata on the session).
+           b. If no live session is tied to the PR, spawn one:
+                ao spawn --claim-pr <PR>
+              Use the returned session id as <worker-session-id>.
+           c. Start review using the resolved or newly spawned session — do not
+              wait for worker pr_created or ready_for_review:
+                ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
            When the head SHA advances past a prior run, treat it as outdated and
            follow ROUND PROGRESSION below. Subject to ROUND LIMIT below.
       This reconciliation runs only on orchestrator turns (no background process).
