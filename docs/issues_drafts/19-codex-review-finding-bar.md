@@ -97,6 +97,7 @@ docs/issues_drafts/06-codex-reviewer-scope-context.md
 ```allowed-roots
 prompts/codex_review_prompt.md
 docs/issues_drafts/19-codex-review-finding-bar.md
+docs/declarations/51.op-29.json
 ```
 
 ## Acceptance criteria
@@ -152,8 +153,9 @@ docs/issues_drafts/19-codex-review-finding-bar.md
   `{{SCOPE_SECTION}}`, `{{SOURCE}}`, and `scope-violation` are still present
   verbatim.
 - **Static — scope of diff.** `git diff --name-only` on the PR head lists only
-  `prompts/codex_review_prompt.md` and
-  `docs/issues_drafts/19-codex-review-finding-bar.md`.
+  `prompts/codex_review_prompt.md`,
+  `docs/issues_drafts/19-codex-review-finding-bar.md`, and the AO declaration
+  snapshot `docs/declarations/51.op-29.json` (required by PR scope guard).
 - **Smoke.** `scripts/verify.ps1`, `scripts/check-reusable.ps1`, and
   `scripts/test-all.ps1` are clean on PR head; the existing
   `plugins/ao-codex-pr-reviewer` tests still pass unchanged (the bar is prompt
