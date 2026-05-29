@@ -1,5 +1,7 @@
 # Implement ao-task-declaration state + validator
 
+GitHub Issue: #4
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue uses the

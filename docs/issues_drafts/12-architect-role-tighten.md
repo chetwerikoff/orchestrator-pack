@@ -1,5 +1,7 @@
 ﻿# Tighten architect role + ship architect-side meta skills
 
+GitHub Issue: #37
+
 ## Prerequisite
 
 None. This is a meta-update to Claude Code session instructions and adds

@@ -70,10 +70,23 @@ parallel loop here.
 Stop at **spec / contract / rule** level (issue body, draft, `prompts/agent_rules.md`,
 declaration, CI guard), not at symptom patches on merged code.
 
+### Resolve queue status (before planned/shipped claims)
+
+Before listing any task as **planned** or **shipped** in the report:
+
+1. Consult [`docs/issue_queue_index.md`](../docs/issue_queue_index.md) to map each
+   cited `docs/issues_drafts/NN-<slug>.md` path to its GitHub Issue number (never
+   treat the draft filename prefix as the GitHub `#`).
+2. For each GitHub number, read live state:
+   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title`.
+3. Do **not** infer open, closed, planned, or shipped from a draft file existing
+   or from draft presence in the repo alone.
+
 ### Search existing mitigations
 
-- Open and closed GitHub Issues; `docs/issues_drafts/`; `docs/architecture.md`
-  and `docs/issues_drafts/00-architecture-decisions.md`.
+- Open and closed GitHub Issues (via registry-resolved numbers and `gh issue view`);
+  `docs/issues_drafts/`; [`docs/issue_queue_index.md`](../docs/issue_queue_index.md);
+  `docs/architecture.md` and `docs/issues_drafts/00-architecture-decisions.md`.
 - Read-only scan of `prompts/`, `AGENTS.md`, `agent-orchestrator.yaml.example`,
   and relevant plugins/scripts **as evidence** — do not edit them during
   investigation unless the user authorized **`direct-fix-checklist`** for a
@@ -83,8 +96,10 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
 
 ### Search planned work
 
-- Open issues and drafts that already plan changes on this topic.
-- Summarize what each would change if merged.
+- Open GitHub Issues (state from `gh issue view`, numbers from the registry) and
+  drafts that already plan changes on this topic.
+- Summarize what each would change if merged. Label shipped vs planned from GitHub
+  state, not from draft filename or draft-file existence alone.
 
 ### Role boundary
 
@@ -144,6 +159,8 @@ Revise the memo for valid findings; stop after cycle 3 and list open questions.
 ## Don't
 
 - Invent causes without evidence from the bounded gather step.
+- List work as planned or shipped from draft-file existence or draft filename
+  prefix alone — use the registry and `gh issue view` first.
 - Skip queue, draft, or architecture search when the topic is in-repo behavior.
 - Duplicate **`study-external-source`** for external adoption asks.
 - Patch merged implementation code as the durable fix — fix spec, contract, or

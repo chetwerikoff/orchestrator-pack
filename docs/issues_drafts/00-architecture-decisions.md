@@ -1,5 +1,7 @@
 # 00 — Architecture decisions blocking #4–#9
 
+GitHub Issue: #3
+
 ## Status
 
 Approved 2026-05-26. Must be implemented as written before issues #4, #5, #6,

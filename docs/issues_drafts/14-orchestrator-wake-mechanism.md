@@ -1,5 +1,7 @@
 # Orchestrator wake mechanism — event-driven local listener
 
+GitHub Issue: #39
+
 ## Prerequisite
 
 - Issue #28 (file `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md`)

@@ -1,5 +1,7 @@
 # patch-codex-review4.ps1 retirement gate
 
+GitHub Issue: #20
+
 ## Prerequisite
 
 None. This is a compatibility cleanup for the existing Windows AO 0.9.2 local

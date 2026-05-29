@@ -1,5 +1,7 @@
 # Test harness for plugins
 
+GitHub Issue: #11
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue runs in parallel
