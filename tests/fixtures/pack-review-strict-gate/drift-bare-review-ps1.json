@@ -1,0 +1,15 @@
+{
+  "description": "REVIEW_COMMAND expects tracked wrapper but termination names bare review.ps1",
+  "expectPass": false,
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review-claude.ps1 --repo-root . --base origin/main",
+  "runs": [
+    {
+      "status": "failed",
+      "findingCount": 0,
+      "openFindingCount": 0,
+      "sentFindingCount": 0,
+      "terminationReason": "plugins/ao-codex-pr-reviewer/bin/review.ps1 exited 1",
+      "completedAt": "2026-05-29T12:04:00Z"
+    }
+  ]
+}

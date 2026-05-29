@@ -1,0 +1,15 @@
+{
+  "description": "cancelled with zero findings triggers empty-review trap",
+  "expectPass": false,
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main",
+  "runs": [
+    {
+      "status": "cancelled",
+      "findingCount": 0,
+      "openFindingCount": 0,
+      "sentFindingCount": 0,
+      "terminationReason": "run cancelled by operator",
+      "completedAt": "2026-05-29T12:02:00Z"
+    }
+  ]
+}

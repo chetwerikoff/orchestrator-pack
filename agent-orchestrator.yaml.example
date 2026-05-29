@@ -72,7 +72,9 @@ projects:
 
       NAMED REVIEW_COMMAND (preflight + pack wrapper; run from the reviewed repo root; Windows):
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main
-      Alternate local reviewer (Claude Sonnet bridge): docs/reviewer-switch-runbook.md — not a second line here; replace REVIEW_COMMAND in live YAML only.
+      Alternate local reviewer (Claude Sonnet): swap the line above to the tracked Claude wrapper only — do not add a second REVIEW_COMMAND line here:
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review-claude.ps1 --repo-root . --base origin/main
+      Gitignored .ao/run-pack-review-claude.ps1 is deprecated; use scripts/run-pack-review-claude.ps1 (see docs/reviewer-switch-runbook.md).
 
       RUNTIME INVOCATION (shell only — do NOT embed in orchestratorRules on Windows):
         At review time: ao review run <session-id> --execute
@@ -86,7 +88,7 @@ projects:
         Copy REVIEW_COMMAND verbatim into --command. Wrap the entire REVIEW_COMMAND value in one pair of double quotes on Windows.
         FORBIDDEN alternate commands: plugins/ao-codex-pr-reviewer/bin/review.ps1 without scripts/run-pack-review.ps1; cmd /c npm ci && …; bare cmd.exe; inventing npm ci preflight chains; ao review run --execute without --command (built-in Codex path).
         On failed or cancelled runs, read terminationReason before any retry; never treat findingCount 0 as clean.
-        Before merge or reporting review passed, run scripts/orchestrator-diagnose.ps1 and confirm the latest run for the PR head is status clean — not failed with zero findings.
+        Before merge or reporting review passed, run scripts/orchestrator-diagnose.ps1 -Strict (live) or scripts/invoke-pack-review-strict-gate.ps1 on fixtures in CI, and confirm the latest run for the PR head is status clean — not failed with zero findings.
 
       EMPTY REVIEW TRAP — failed or cancelled with findingCount 0 is NEVER clean:
         AO may list 0 open findings while status is failed — that means the reviewer command crashed or Codex/Claude exited non-zero, not a clean NO_FINDINGS review.

@@ -194,9 +194,17 @@ Regression guards: `scripts/check-review-command-preflight.ps1`,
 The canonical **REVIEW_COMMAND** in `agent-orchestrator.yaml.example` targets
 **Codex** via `scripts/run-pack-review.ps1` (tracked in the repo).
 
-For a temporary **Claude Sonnet** path, operators use a gitignored bridge under
-`<pack-root>/.ao/run-pack-review-claude.ps1` and an **absolute** path in live
-`agent-orchestrator.yaml` (AO `op-rev-*` workspaces do not contain `.ao/`).
+For a temporary **Claude Sonnet** path, swap **REVIEW_COMMAND** to the parallel
+tracked wrapper `scripts/run-pack-review-claude.ps1` (same relative
+`--repo-root . --base origin/main` flags). Gitignored
+`<pack-root>/.ao/run-pack-review-claude.ps1` is **deprecated** — optional
+one-release forwarder only; `op-rev-*` worktrees do not contain `.ao/`.
+
+**Strict gate (Issue #79).** CI runs `scripts/invoke-pack-review-strict-gate.ps1`
+on committed fixtures (no `ao` / `gh`). Operators run
+`scripts/orchestrator-diagnose.ps1 -Strict` before merge when AO is running live.
+Failed/cancelled runs with `findingCount: 0` and `terminationReason` naming a
+script other than **REVIEW_COMMAND** fail closed.
 
 Step-by-step switch instructions, preflight, smoke `ao review run`, and
 troubleshooting: [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).

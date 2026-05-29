@@ -11,7 +11,9 @@
 [CmdletBinding()]
 param(
     [string]$OrchestratorSessionId = '',
-    [string]$ProjectId = ''
+    [string]$ProjectId = '',
+    [switch]$Strict,
+    [string]$FixturePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,6 +86,56 @@ function Format-Ago {
 }
 
 $orchId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
+$packRoot = Split-Path -Parent $PSScriptRoot
+
+function Invoke-StrictGateExit {
+    param(
+        [array]$Runs,
+        [string]$ReviewCommand
+    )
+
+    $violations = Get-PackReviewGateViolations -Runs $Runs -ReviewCommand $ReviewCommand
+    if ($violations.Count -eq 0) {
+        Write-Host ''
+        Write-Host '[PASS] Strict gate: no empty-review trap or command drift on latest run'
+        return 0
+    }
+
+    Write-Host ''
+    Write-Host '[FAIL] Strict gate violations (same rules as invoke-pack-review-strict-gate.ps1):'
+    foreach ($v in $violations) {
+        Write-Host ("  [{0}] {1}" -f $v.Kind, $v.Message)
+    }
+
+    return 1
+}
+
+if ($FixturePath) {
+    $fixtureResolved = (Resolve-Path -LiteralPath $FixturePath).Path
+    $payload = Get-Content -LiteralPath $fixtureResolved -Raw | ConvertFrom-Json
+    $reviewCommand = [string]$payload.reviewCommand
+    $runs = @($payload.runs)
+
+    Write-Host '== Orchestrator recovery diagnostic (fixture) =='
+    Write-Host ("Fixture: {0}" -f $fixtureResolved)
+    Write-Host ''
+
+    if ($Strict) {
+        exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $reviewCommand)
+    }
+
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand
+    if ($violations.Count -eq 0) {
+        Write-Host 'Assessment: fixture latest run passes strict gate rules'
+    }
+    else {
+        foreach ($v in $violations) {
+            Write-Host ("WARN [{0}] {1}" -f $v.Kind, $v.Message)
+        }
+    }
+
+    exit 0
+}
 
 Write-Host '== Orchestrator recovery diagnostic (read-only) =='
 Write-Host ("Orchestrator session: {0}" -f $orchId)
@@ -261,7 +313,6 @@ else {
     }
 }
 
-$packRoot = Split-Path -Parent $PSScriptRoot
 $liveYaml = Join-Path $packRoot 'agent-orchestrator.yaml'
 $exampleYaml = Join-Path $packRoot 'agent-orchestrator.yaml.example'
 $configPath = if (Test-Path -LiteralPath $liveYaml -PathType Leaf) { $liveYaml } else { $exampleYaml }
@@ -356,3 +407,13 @@ else {
 
 Write-Host ''
 Write-Host 'Next: docs/orchestrator-recovery-runbook.md (read-only until step 3)'
+
+if ($Strict) {
+    if (-not $expectedCommand) {
+        Write-Host ''
+        Write-Host '[FAIL] Strict gate: could not parse REVIEW_COMMAND from YAML'
+        exit 1
+    }
+
+    exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $expectedCommand)
+}
