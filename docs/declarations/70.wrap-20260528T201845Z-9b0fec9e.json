@@ -1,0 +1,20 @@
+{
+  "issue_number": 70,
+  "iteration_id": "wrap-20260528T201845Z-9b0fec9e",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-05-28T20:18:45.493Z",
+  "baseline": {
+    "commit_sha": "f0e1d4da7324dc76779dbc562462b630120160e5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1e208c42eed2beb7c0e7ed984582177b062b3f6c351eeabc86ce1dd827c8c3d2"
+  },
+  "declared_paths": [
+    "scripts/trust-ao-worktree.ps1",
+    "scripts/orchestrator-worktree-trust-watcher.ps1",
+    "agent-orchestrator.yaml.example",
+    "docs/orchestrator-autoloop-go-live.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
