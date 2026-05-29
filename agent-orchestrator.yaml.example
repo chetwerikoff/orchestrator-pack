@@ -157,7 +157,7 @@ projects:
              ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
            Do NOT start a second run while a run for the current head SHA is
            queued, preparing, or running. When the head SHA advances past a prior
-           run, treat it as outdated and follow ROUND PROGRESSION above. Subject
+           run, treat it as outdated and follow ROUND PROGRESSION below. Subject
            to ROUND LIMIT below.
       This reconciliation runs only on orchestrator turns (no background process).
       Turn delivery during event silence is owned by the wake listener / heartbeat
