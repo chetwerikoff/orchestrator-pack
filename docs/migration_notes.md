@@ -92,6 +92,29 @@ Until restart, the orchestrator and workers keep prior prompt text. The live YAM
 is gitignored — diff against the example when upgrading; do not hand-edit only
 the worker rules without updating `orchestratorRules`.
 
+### State-derived review trigger (Issue #58)
+
+Issue #58 adds a **reconciliation** trigger to `orchestratorRules`: on each
+orchestrator turn the rules now instruct enumerating open PRs and head SHAs from
+GitHub (`gh pr list --state open --json number,headRefOid`), cross-referencing
+`ao review list --json`, resolving the worker session from `ao status --json
+--reports full` (or `ao spawn --claim-pr <PR>` when none exists), and starting
+review for any open PR head with no run and none in flight — even when the worker
+never reported `pr_created` or `ready_for_review`. This closes the PR #56 gap
+(report-only gating). No new AO daemon or poller is added; the check runs only
+when the orchestrator already has a turn.
+
+To adopt on an existing live `agent-orchestrator.yaml`:
+
+1. Copy the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
+   (look for STATE-DERIVED REVIEW TRIGGER and the gh pr list reconciliation steps).
+2. Keep `agentRulesFile: prompts/agent_rules.md` so workers retain the review
+   response contract.
+3. Restart AO so prompts reload: `ao stop` then `ao start`.
+
+Until restart, a missed `ready_for_review` report can still block review because
+the live orchestrator keeps the old report-only trigger text.
+
 ### Patch: `sentFindingCount` pending-worker detection (Issue #45)
 
 Issue #45 corrects the review-loop contract after `ao review send`: findings move
