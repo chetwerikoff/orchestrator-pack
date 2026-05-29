@@ -95,8 +95,43 @@ export type ParseCodexOutputResult =
   | { kind: 'findings'; findings: StructuredFinding[] }
   | { kind: 'error'; message: string };
 
+/** Unwrap Claude CLI JSON, fences, and leading prose before findings JSON. */
+export function normalizeReviewerStdout(rawOutput: string): string {
+  let value = rawOutput.trim();
+  if (!value) {
+    return value;
+  }
+
+  const wrapper = tryParseJson(value);
+  const wrapperRecord = asRecord(wrapper);
+  if (wrapperRecord && typeof wrapperRecord.result === 'string') {
+    value = wrapperRecord.result.trim();
+  }
+
+  value = stripMarkdownJsonFence(value);
+
+  const findingsStart = value.indexOf('{"findings"');
+  if (findingsStart > 0) {
+    value = value.slice(findingsStart);
+    const lastBrace = value.lastIndexOf('}');
+    if (lastBrace >= 0) {
+      value = value.slice(0, lastBrace + 1);
+    }
+  }
+
+  const noFindingsIdx = value.indexOf(NO_FINDINGS_TOKEN);
+  if (noFindingsIdx >= 0) {
+    const tail = value.slice(noFindingsIdx).trim();
+    if (tail === NO_FINDINGS_TOKEN || tail.startsWith(`${NO_FINDINGS_TOKEN}\n`)) {
+      return NO_FINDINGS_TOKEN;
+    }
+  }
+
+  return value.trim();
+}
+
 export function parseCodexOutput(rawOutput: string): ParseCodexOutputResult {
-  const trimmed = rawOutput.trim();
+  const trimmed = normalizeReviewerStdout(rawOutput);
 
   if (trimmed === NO_FINDINGS_TOKEN) {
     return { kind: 'clean' };

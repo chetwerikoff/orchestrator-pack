@@ -115,6 +115,28 @@ describe('parseCodexOutput', () => {
       expect(result.findings[0]!.type).toBe('scope-violation');
     }
   });
+
+  it('unwraps Claude CLI JSON result field', () => {
+    const wrapped = JSON.stringify({ result: NO_FINDINGS_TOKEN });
+    expect(parseCodexOutput(wrapped)).toEqual({ kind: 'clean' });
+  });
+
+  it('extracts findings JSON after leading prose', () => {
+    const payload = JSON.stringify({
+      findings: [
+        {
+          type: 'quality',
+          code: 'quality:example',
+          severity: 'non-blocking',
+          path: 'scripts/foo.ps1',
+          summary: 'Example finding',
+          source: 'codex-local',
+        },
+      ],
+    });
+    const result = parseCodexOutput(`Here is my review:\n\n${payload}`);
+    expect(result.kind).toBe('findings');
+  });
 });
 
 describe('executeReview NO_FINDINGS round-trip', () => {
