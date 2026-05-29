@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "c3659c77de84611f8e8c407c33ca5af9b92c6c09",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b03d48e287ed6f2da6a4832f39bb1d37d8376a8dc8a7b405094718a0e8d9be8a"
+    "active_scope_hash": "sha256:6831c283c3b8b1e1b41f282c71d2ae1b0a902b8742427d11d47b0958de532f8a"
   },
   "declared_paths": [
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
@@ -25,7 +25,23 @@
   ],
   "declared_globs": [
     "plugins/ao-codex-pr-reviewer/**",
-    "scripts/**"
+    "scripts/**",
+    "docs/declarations/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:b03d48e287ed6f2da6a4832f39bb1d37d8376a8dc8a7b405094718a0e8d9be8a",
+      "new_active_scope_hash": "sha256:6831c283c3b8b1e1b41f282c71d2ae1b0a902b8742427d11d47b0958de532f8a",
+      "changed": {
+        "added": [
+          "docs/declarations/**"
+        ],
+        "removed": []
+      },
+      "reason": "add docs/declarations glob keep paths",
+      "actor": "architect-75",
+      "timestamp": "2026-05-29T04:53:28.854Z",
+      "applied": true
+    }
+  ]
 }
