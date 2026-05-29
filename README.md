@@ -31,6 +31,7 @@ key.
 
 See also: [`prompts/agent_rules.md`](prompts/agent_rules.md),
 [`docs/architecture.md`](docs/architecture.md#review-paths),
+[`docs/reviewer-switch-runbook.md`](docs/reviewer-switch-runbook.md) (Codex ↔ Claude Sonnet),
 [`docs/github_issues_cursor_codex_setup.md`](docs/github_issues_cursor_codex_setup.md),
 and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/README.md).
 

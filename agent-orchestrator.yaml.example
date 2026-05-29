@@ -72,6 +72,7 @@ projects:
 
       NAMED REVIEW_COMMAND (preflight + pack wrapper; run from the reviewed repo root; Windows):
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main
+      Alternate local reviewer (Claude Sonnet bridge): docs/reviewer-switch-runbook.md — not a second line here; replace REVIEW_COMMAND in live YAML only.
 
       RUNTIME INVOCATION (shell only — do NOT embed in orchestratorRules on Windows):
         At review time: ao review run <session-id> --execute
