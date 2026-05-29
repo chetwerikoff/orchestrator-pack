@@ -18,7 +18,9 @@ $required = @(
 
 $missing = @($required | Where-Object { $text -notlike "*$_*" })
 if ($missing.Count -gt 0) {
-    Write-Error ("agent-orchestrator.yaml.example missing review empty-trap phrases: {0}" -f ($missing -join ', '))
+    Write-Host ("agent-orchestrator.yaml.example missing review empty-trap phrases: {0}" -f ($missing -join ', '))
+    exit 1
 }
 
 Write-Host '[PASS] orchestratorRules documents empty-review trap and diagnose routing'
+exit 0
