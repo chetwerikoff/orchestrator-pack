@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { executeReview } from '../plugins/ao-codex-pr-reviewer/lib/review_core.ts';
+import { finishReviewCli } from '../plugins/ao-codex-pr-reviewer/lib/review_cli.ts';
 
 function usage() {
   return [
@@ -85,18 +86,7 @@ try {
     fixtureStdout,
   });
 
-  for (const line of result.logLines) {
-    console.error(line);
-  }
-
-  if (result.aoStdout) {
-    process.stdout.write(result.aoStdout);
-    if (!result.aoStdout.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  }
-
-  process.exit(result.exitCode);
+  finishReviewCli(result);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);

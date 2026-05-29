@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { executeReview, type ReviewOptions } from './review_core.js';
+import { executeReview, type ReviewOptions, type ReviewResult } from './review_core.js';
 import type { ReviewSource } from './types.js';
 
 function usage(): string {
@@ -106,6 +106,35 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
   };
 }
 
+/** Write AO review payload to stdout with a trailing newline when missing. */
+export function writeAoReviewPayloadStdout(aoStdout: string): void {
+  process.stdout.write(aoStdout);
+  if (!aoStdout.endsWith('\n')) {
+    process.stdout.write('\n');
+  }
+}
+
+/** Emit executeReview logs and stdout; exit with the review process code. */
+export function finishReviewCli(
+  result: ReviewResult,
+  options: { promptOnly?: boolean } = {},
+): never {
+  for (const line of result.logLines) {
+    console.error(line);
+  }
+
+  if (options.promptOnly) {
+    process.stdout.write(`${result.aoStdout}\n`);
+    process.exit(0);
+  }
+
+  if (result.aoStdout) {
+    writeAoReviewPayloadStdout(result.aoStdout);
+  }
+
+  process.exit(result.exitCode);
+}
+
 export function runReviewCli(argv: string[]): void {
   let options: ReturnType<typeof parseReviewArgs>;
   try {
@@ -117,22 +146,5 @@ export function runReviewCli(argv: string[]): void {
   }
 
   const result = executeReview(options);
-
-  for (const line of result.logLines) {
-    console.error(line);
-  }
-
-  if (options.promptOnly) {
-    process.stdout.write(`${result.aoStdout}\n`);
-    process.exit(0);
-  }
-
-  if (result.aoStdout) {
-    process.stdout.write(result.aoStdout);
-    if (!result.aoStdout.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  }
-
-  process.exit(result.exitCode);
+  finishReviewCli(result, { promptOnly: options.promptOnly });
 }
