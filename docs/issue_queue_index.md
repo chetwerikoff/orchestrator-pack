@@ -58,3 +58,7 @@ task).
 | `24-ao-review-preflight-and-failed-run-discipline.md` | [#60](https://github.com/chetwerikoff/orchestrator-pack/issues/60) | Review preflight discipline |
 | `25-worker-spawn-launch-safety.md` | [#63](https://github.com/chetwerikoff/orchestrator-pack/issues/63) | Worker spawn launch safety |
 | `26-orchestrator-autoloop-go-live.md` | [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68) | Autoloop go-live checklist |
+| `27-tracked-claude-review-and-strict-gate.md` | [#79](https://github.com/chetwerikoff/orchestrator-pack/issues/79) | Tracked Claude wrapper + strict review gate |
+| `28-skill-eval-scorer-corpus.md` | [#80](https://github.com/chetwerikoff/orchestrator-pack/issues/80) | Contract-compliance scorer + eval corpus for codex review prompt |
+| `29-skill-eval-bounded-edit-preflight.md` | [#81](https://github.com/chetwerikoff/orchestrator-pack/issues/81) | Offline bounded-edit preflight (hygiene only, after #80) |
+| `30-skill-eval-live-behavior-gate.md` | none yet | Live prompt-behavior gate (after #80+#81; needs Codex auth) |
