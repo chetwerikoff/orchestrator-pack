@@ -245,10 +245,10 @@ $failedEmpty = @(
 Write-Host ''
 Write-Host ("-- Empty failed reviews (failed/cancelled, findingCount=0): {0} --" -f $failedEmpty.Count)
 if ($failedEmpty.Count -eq 0) {
-    Write-Host '  none — good (still verify latest head has status clean, not only absence of failures)'
+    Write-Host '  none - good (still verify latest head has status clean, not only absence of failures)'
 }
 else {
-    Write-Host '  NOT clean — reviewer command or Codex/Claude infra failed before findings were emitted.'
+    Write-Host '  NOT clean - reviewer command or Codex/Claude infra failed before findings were emitted.'
     foreach ($r in $failedEmpty | Select-Object -First 6) {
         $pr = if ($r.prNumber) { "PR #$($r.prNumber)" } else { '-' }
         $reason = ($r.terminationReason -split "`n")[0]
@@ -278,10 +278,10 @@ if ($expectedCommand) {
     if ($latestRun -and $latestRun.terminationReason) {
         $drift = Test-ReviewCommandInTerminationReason -ReviewCommand $expectedCommand -TerminationReason $latestRun.terminationReason
         if ($drift) {
-            Write-Host ("  WARN: latest run terminationReason does not mention expected script ({0}) — command drift?" -f $drift)
+            Write-Host ("  WARN: latest run terminationReason does not mention expected script ({0}) - command drift?" -f $drift)
         }
         elseif (@('failed', 'cancelled') -contains $latestRun.status) {
-            Write-Host '  WARN: latest run failed — read full terminationReason; do not treat zero findings as clean.'
+            Write-Host '  WARN: latest run failed - read full terminationReason; do not treat zero findings as clean.'
         }
         elseif ($latestRun.status -eq 'clean') {
             Write-Host '  OK: latest run is clean.'
