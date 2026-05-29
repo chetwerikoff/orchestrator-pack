@@ -83,13 +83,14 @@ This issue commits the repository to:
 
 - Edit hygiene (size/section bounds, rejected-edit buffer mechanics) — owned by #81.
 - The output scorer and stored-output corpus — owned by #80.
-- Shared SkillOpt pack boundaries — see draft 28 § Files out of scope.
+- Shared SkillOpt pack boundaries — see
+  [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md).
 
 ## Denylist
 
-Pack-wide fences for the SkillOpt trilogy: draft 28 § Denylist. This issue adds
-`prompts/codex_review_prompt.md` to **allowed_roots** when implementing the live gate
-and any demonstrated prompt edit.
+Pack-wide fences: [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md)
+§ Denylist. This issue adds `prompts/codex_review_prompt.md` to **allowed_roots** when
+implementing the live gate and any demonstrated prompt edit.
 
 ## Acceptance criteria
 

@@ -1,19 +1,20 @@
 {
-  "issue_number": 57,
+  "issue_number": 81,
   "iteration_id": "op-46",
   "iteration_id_source": "ao_session",
-  "supersedes": "op-43",
-  "created_at": "2026-05-29T10:35:00.000Z",
+  "supersedes": null,
+  "created_at": "2026-05-29T11:00:00.000Z",
   "baseline": {
     "commit_sha": "3702ea9afe341258d56ad2f2a79b7f483c1af85e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:6d4983dc8abd7b17594b6e167d3fc849092d472a2f6c814b4ce98040ba050edf"
+    "active_scope_hash": "sha256:dea15198ae5de79772ab5c443c3af6751348a684834271d118079c24d46d1056"
   },
   "declared_paths": [
     "docs/issue_queue_index.md",
     "docs/issues_drafts/28-skill-eval-scorer-corpus.md",
     "docs/issues_drafts/29-skill-eval-bounded-edit-preflight.md",
-    "docs/issues_drafts/30-skill-eval-live-behavior-gate.md"
+    "docs/issues_drafts/30-skill-eval-live-behavior-gate.md",
+    "docs/issues_drafts/skill-eval-shared-pack-boundaries.md"
   ],
   "declared_globs": [
     "docs/declarations/**"

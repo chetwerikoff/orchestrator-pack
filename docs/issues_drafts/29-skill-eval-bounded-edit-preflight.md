@@ -83,15 +83,14 @@ This issue commits the repository to:
 - The actual improvement measurement, two-mode acceptance rule, live Codex runs, and
   attempt-cap / overfitting guard — all belong to the live behavior gate (draft 30).
 - The corpus and scorer themselves (owned by #80).
-- Shared SkillOpt pack boundaries (finding contract #9, run-state #79, autonomous prompt
-  optimizer prohibition, gitignored live AO config, `packages/core/**`, `vendor/**`) —
-  see draft 28 § Files out of scope.
+- Shared SkillOpt pack boundaries — see
+  [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md).
 
 ## Denylist
 
-Pack-wide fences for the SkillOpt trilogy: draft 28 § Denylist. This issue adds
-`prompts/codex_review_prompt.md` to **allowed_roots** when implementing the bounded
-edit demonstration.
+Pack-wide fences: [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md)
+§ Denylist. This issue adds `prompts/codex_review_prompt.md` to **allowed_roots** when
+implementing the bounded edit demonstration.
 
 ## Acceptance criteria
 

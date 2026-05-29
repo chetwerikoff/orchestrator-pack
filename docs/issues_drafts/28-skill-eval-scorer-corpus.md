@@ -97,30 +97,17 @@ This issue commits the repository to:
 - The bounded-edit acceptance gate, "textual learning rate" bound, rejected-edit
   buffer, anti-bloat bound, maintenance-edit mode, and worked accept/reject examples
   — split across follow-up drafts 29 (offline preflight) and 30 (live behavior gate).
-- The finding format / `NO_FINDINGS` contract itself (owned by GitHub #9) — reused,
-  not changed.
-- Run-state discipline (failed/cancelled run ≠ clean) — owned by GitHub #79.
 - Scoring reviewer **judgment quality** (did the review catch the real bug) — needs a
   labeled corpus; out of scope.
 - Eval harnesses for other skills (`create-issue-draft`, `agent_rules.md`,
   `direct-fix-checklist`, `investigate_root_cause.md`) — separate follow-up drafts.
-- `agent-orchestrator.yaml` / `.ao/**` (gitignored live files).
-- `packages/core/**`, `vendor/**`, AO upstream schema or CLI changes.
+- Shared SkillOpt pack boundaries — see
+  [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md).
 
 ## Denylist
 
-```denylist
-vendor/**
-packages/core/**
-code-reviews/**
-.ao/**
-```
-
-```allowed-roots
-scripts/**
-tests/**
-docs/**
-```
+Pack-wide fences: [`skill-eval-shared-pack-boundaries.md`](./skill-eval-shared-pack-boundaries.md)
+§ Denylist (canonical fenced literals for the trilogy).
 
 ## Acceptance criteria
 
