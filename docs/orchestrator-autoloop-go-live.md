@@ -17,6 +17,7 @@ backstop) add resilience; this doc covers the shipped baseline.
 | Autonomous loop rules | `agent-orchestrator.yaml.example` → `orchestratorRules` |
 | Worker review contract | `prompts/agent_rules.md` |
 | Pack review command | `scripts/run-pack-review.ps1` (**REVIEW_COMMAND** / **PACK_REVIEW_SHELL**) |
+| Switch Codex ↔ Claude Sonnet | [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Wake listener | `scripts/orchestrator-wake-listener.ps1`, `docs/orchestrator-wake-filter.mjs` |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
@@ -140,6 +141,7 @@ worker: pr_created / ready_for_review (+ CI green)
 | Listener only `dropped: not_wake_relevant` | This doc § live config (`approved-and-green.priority`); [wake runbook](orchestrator-wake-runbook.md) |
 | Orchestrator `stuck`, zero review runs | [Recovery runbook](orchestrator-recovery-runbook.md) step 1 ping |
 | Review runs `failed`, `findingCount: 0` | `terminationReason`; [migration_notes.md](migration_notes.md) § Issue #60 |
+| Change reviewer (Codex / Sonnet) | [reviewer-switch-runbook.md](reviewer-switch-runbook.md) |
 | Worker dies in ~1 min, no PR | [migration_notes.md](migration_notes.md) § Issue #63 |
 
 ## Optional until #59

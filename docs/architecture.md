@@ -107,6 +107,10 @@ independent review schema.
 The common finding format and signature rules are defined in
 `docs/issues_drafts/00-architecture-decisions.md` section F.
 
+Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
+bridge (gitignored `.ao/` scripts) instead of Codex; see
+[`reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
+
 ### CI layer
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on

@@ -150,6 +150,21 @@ Otherwise Codex may return an empty review without inspecting the diff.
 Regression guards: `scripts/check-review-command-preflight.ps1`,
 `scripts/check-orchestrator-rules-quotes.ps1` (via `scripts/verify.ps1`).
 
+### Switching local reviewer: Codex ↔ Claude Sonnet
+
+The canonical **REVIEW_COMMAND** in `agent-orchestrator.yaml.example` targets
+**Codex** via `scripts/run-pack-review.ps1` (tracked in the repo).
+
+For a temporary **Claude Sonnet** path, operators use a gitignored bridge under
+`<pack-root>/.ao/run-pack-review-claude.ps1` and an **absolute** path in live
+`agent-orchestrator.yaml` (AO `op-rev-*` workspaces do not contain `.ao/`).
+
+Step-by-step switch instructions, preflight, smoke `ao review run`, and
+troubleshooting: [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
+
+After any **REVIEW_COMMAND** change, restart AO (`ao stop` then `ao start`) so
+`orchestratorRules` reload.
+
 ### Worker prompt-delivery launch failure on Windows (Issue #63)
 
 On Windows, AO starts **worker** Cursor sessions with a launch command built by
