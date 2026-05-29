@@ -122,9 +122,11 @@ bridge (gitignored `.ao/` scripts) instead of Codex; see
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on
 `pull_request` events, `scripts/pr-scope-check.ps1` — the third guard layer from
-#3.C. The check reads the linked issue body, the latest committed declaration
-snapshot on the PR head, and `gh pr diff --name-only`, then enforces the #3.A
-validation formula (with fork fail-closed policy and opt-in degraded mode).
+#3.C. The check reads the PR body via `gh pr view` (not workflow `env` injection
+of `pull_request.body`, which truncates multiline text with colons), the linked
+issue body, the latest committed declaration snapshot on the PR head, and
+`gh pr diff --name-only`, then enforces the #3.A validation formula (with fork
+fail-closed policy and opt-in degraded mode).
 
 CI is the third line of defense. Runtime scope guard and the pre-commit hook
 remain mandatory because an agent can mutate the working tree and index before a

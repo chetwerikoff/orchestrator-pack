@@ -41,6 +41,30 @@ Legitimate idle (no recovery): no active workers, no review runs in
 worker stuck in `addressing_reviews` / `fixing_ci` / `ready_for_review` with an
 open review path. The orchestrator may simply have nothing to do.
 
+## Scope guard `missing_issue_link` with `Closes #N` visible on GitHub
+
+When **only** the **PR scope guard** job fails and the Actions log says the PR
+description must include `Closes #N` / `Fixes #N`, but the PR page already shows
+that reference:
+
+1. Confirm the closing line targets the **task** issue (not a docs-only sibling).
+2. Confirm `Closes #N` is in the PR body (not only the branch name or a comment).
+3. Re-run the failed workflow on the current head. Scope guard reads the full body
+   via `gh pr view` (not `github.event.pull_request.body` in workflow `env`).
+4. If CI is still red, have the worker move `Closes #N` directly under
+   `## Summary`, push, and report `ao report fixing_ci` → `ready_for_review`.
+5. Nudge the orchestrator if the session stays idle after green CI:
+
+```powershell
+ao send <worker-session-id> @'
+PR scope guard is green. Report fixing_ci if needed, then ready_for_review.
+Orchestrator: resume review loop for this PR head per orchestratorRules.
+'@
+```
+
+Do not kill the orchestrator for this pattern alone — it is a **CI / PR-body**
+problem, not probe failure.
+
 ## Stuck vs legitimately idle
 
 Run these **before** any kill or full restart. Optionally use the one-screen

@@ -147,13 +147,10 @@ if (-not $prNumber -or -not $repository) {
     Write-Error 'PR_NUMBER and GITHUB_REPOSITORY are required for pr-scope-check.ps1'
 }
 
-if (Test-Path Env:PR_BODY) {
-    $prBody = Normalize-PrBody -Body $env:PR_BODY
-}
-else {
-    $prJson = gh pr view $prNumber --json body | ConvertFrom-Json
-    $prBody = Normalize-PrBody -Body ([string]$prJson.body)
-}
+# Always read the PR body via gh — do not pass github.event.pull_request.body through
+# workflow env (PR_BODY). Multiline bodies with colons truncate in GHA env injection.
+$prJson = gh pr view $prNumber --repo $repository --json body | ConvertFrom-Json
+$prBody = Normalize-PrBody -Body ([string]$prJson.body)
 
 $issueNumber = Get-LinkedIssueNumber -PrBody $prBody
 

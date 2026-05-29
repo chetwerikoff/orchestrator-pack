@@ -23,8 +23,15 @@ See also: [`README.md`](../README.md#local-codex-review-active),
 
 - GitHub Issues are the task source of truth for this pack's AO setup.
 - Treat every GitHub Issue assigned to AO as the task specification.
-- Link every branch and PR back to its source issue; PR bodies should include
-  `Closes #N`, `Fixes #N`, or an explicit issue reference as appropriate.
+- Link every branch and PR back to its source issue; PR bodies must include
+  `Closes #N`, `Fixes #N`, or `Resolves #N` for the task issue.
+- Put the closing reference in the **first few lines** of the PR description
+  (immediately under `## Summary`), not only at the end of a long body. Scope
+  guard reads the full body via `gh`; early placement avoids operator confusion
+  when debugging CI.
+- If **PR scope guard** fails with `missing_issue_link` but the PR already shows
+  `Closes #N` in GitHub, re-check the closing line is present and re-run CI — do
+  not broaden scope or rewrite the declaration to bypass the guard.
 - Planning and coding sessions are expected to run through the Cursor CLI agent
   unless the AO config explicitly overrides the role.
 - Do not use Vibe Kanban or Linear unless the config explicitly changes the tracker.
