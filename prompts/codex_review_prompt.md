@@ -26,6 +26,8 @@ Report only **material** findings — issues that matter for correctness, contra
 
 **Severity unchanged:** `blocking` and `non-blocking` still apply as defined below. The bar removes cosmetic and speculative noise only — not substantive `non-blocking` issues.
 
+**Output contract:** The finding bar governs finding *content* only. Your final reply must still be exactly `NO_FINDINGS` or the single JSON object in **Response format** below — never summary prose, checklists, or commentary outside that contract.
+
 ## Structured finding format
 
 Each finding MUST be a JSON object with these **mandatory** fields:
