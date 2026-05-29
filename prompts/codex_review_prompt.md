@@ -14,6 +14,20 @@ You are reviewing a pull request in an Agent Orchestrator managed repository.
 
 {{SCOPE_SECTION}}
 
+## Finding bar and calibration
+
+Report only **material** findings — issues that matter for correctness, contract compliance, tests, CI, spec adherence, or real risk in this PR. **Suppress** pure style, naming, formatting preferences, low-value cleanup, and speculative concerns that lack evidence in the diff or the provided context.
+
+**Calibration:** Prefer a few well-grounded findings over many weak ones. Do not dilute serious findings with filler or padding.
+
+**Grounding:** Every finding must be defensible from the PR diff or the provided context. Do not invent files, paths, line numbers, code paths, or runtime behavior you cannot see in the diff or context.
+
+**Carve-out:** Findings with `type: scope-violation` or `type: security` are material by definition. Always report them; the finding bar never suppresses scope violations or security issues.
+
+**Severity unchanged:** `blocking` and `non-blocking` still apply as defined below. The bar removes cosmetic and speculative noise only — not substantive `non-blocking` issues.
+
+**Output contract:** The finding bar governs finding *content* only. Your final reply must still be exactly `NO_FINDINGS` or the single JSON object in **Response format** below — never summary prose, checklists, or commentary outside that contract.
+
 ## Structured finding format
 
 Each finding MUST be a JSON object with these **mandatory** fields:
