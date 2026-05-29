@@ -147,9 +147,13 @@ projects:
         2. Cross-reference each PR number and headRefOid against ao review list
            --json (runs for that PR and target SHA).
         3. For each open PR, if the current head SHA already has a review run in
-           flight (queued, preparing, running) or any run recorded for that SHA,
-           skip to the next PR — do not spawn or start a new run here.
-        4. For each remaining open PR (no run for the current head SHA), resolve
+           flight (queued, preparing, running), a terminal clean run (status clean),
+           or a run in needs_triage or waiting_update for that SHA, skip to the
+           next PR — do not spawn or start a new run here. Failed or cancelled
+           runs for the current head SHA are not terminal-clean; fall through to
+           step 4 so reconciliation can retry them.
+        4. For each remaining open PR (including when the only run for the current
+           head SHA is failed or cancelled), resolve
            the worker session from ao status --json --reports full; only if no
            live session is tied to the PR:
              ao spawn --claim-pr <PR>
