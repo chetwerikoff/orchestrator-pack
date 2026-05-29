@@ -27,15 +27,7 @@ foreach ($arg in $cli.ForwardArgs) {
     $forwardArgs.Add($arg) | Out-Null
 }
 
-$autoCtx = Get-AutoReviewPrContext -RepoRoot $resolvedRoot
-if ($autoCtx.PrNumber -and $forwardArgs -notcontains '--pr-number') {
-    $forwardArgs.Add('--pr-number') | Out-Null
-    $forwardArgs.Add([string]$autoCtx.PrNumber) | Out-Null
-}
-if ($autoCtx.IssueNumber -and $forwardArgs -notcontains '--issue') {
-    $forwardArgs.Add('--issue') | Out-Null
-    $forwardArgs.Add([string]$autoCtx.IssueNumber) | Out-Null
-}
+Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
 $workspacePrompt = Join-Path $resolvedRoot 'prompts\codex_review_prompt.md'
 if (Test-Path -LiteralPath $workspacePrompt -PathType Leaf) {

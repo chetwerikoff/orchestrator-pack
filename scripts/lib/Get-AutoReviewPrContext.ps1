@@ -51,3 +51,22 @@ function Get-AutoReviewPrContext {
         Pop-Location
     }
 }
+
+function Add-PackReviewAutoForwardArgs {
+    param(
+        [System.Collections.Generic.List[string]]$ForwardArgs,
+        [string]$RepoRoot
+    )
+
+    $autoCtx = Get-AutoReviewPrContext -RepoRoot $RepoRoot
+    if ($autoCtx.PrNumber -and $ForwardArgs -notcontains '--pr-number') {
+        $ForwardArgs.Add('--pr-number') | Out-Null
+        $ForwardArgs.Add([string]$autoCtx.PrNumber) | Out-Null
+    }
+    if ($autoCtx.IssueNumber -and $ForwardArgs -notcontains '--issue') {
+        $ForwardArgs.Add('--issue') | Out-Null
+        $ForwardArgs.Add([string]$autoCtx.IssueNumber) | Out-Null
+    }
+
+    return $autoCtx
+}
