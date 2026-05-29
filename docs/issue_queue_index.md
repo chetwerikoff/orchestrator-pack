@@ -62,3 +62,4 @@ task).
 | `28-skill-eval-scorer-corpus.md` | [#80](https://github.com/chetwerikoff/orchestrator-pack/issues/80) | Contract-compliance scorer + eval corpus for codex review prompt |
 | `29-skill-eval-bounded-edit-preflight.md` | [#81](https://github.com/chetwerikoff/orchestrator-pack/issues/81) | Offline bounded-edit preflight (hygiene only, after #80) |
 | `30-skill-eval-live-behavior-gate.md` | none yet | Live prompt-behavior gate (after #80+#81; needs Codex auth) |
+| `31-deterministic-reviewer-selection.md` | [#86](https://github.com/chetwerikoff/orchestrator-pack/issues/86) | Reviewer-agnostic entrypoint + explicit selector; deterministic reviewer choice, AO layer preserved (after #79) |
