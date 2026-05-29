@@ -14,8 +14,46 @@ import {
   resolveScopeContext,
   scopeUnavailableWarningFinding,
 } from './scope_context.js';
-import { runCodexReview } from './run_review.js';
+import { runCodexReview, type RunCodexReviewResult } from './run_review.js';
 import type { ReviewSource, StructuredFinding } from './types.js';
+
+const REVIEW_FAILURE_LINE =
+  /^(ERROR:|error:|Fatal|review-failure:)/i;
+const REVIEW_FAILURE_HINT = /usage limit|ERR_MODULE_NOT_FOUND|mutually exclusive|exited 1/i;
+
+/** Build log lines AO should capture in terminationReason when the reviewer process fails. */
+export function summarizeReviewerProcessFailure(codex: RunCodexReviewResult): string[] {
+  const lines: string[] = [`codex exec review exited ${codex.exitCode}`];
+  const combined = [codex.stderr, codex.stdout]
+    .map((chunk) => chunk?.trim() ?? '')
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+
+  if (!combined) {
+    lines.push(
+      'reviewer produced no stderr/stdout — check Codex auth, quota, sandbox, and REVIEW_COMMAND preflight',
+    );
+    return lines;
+  }
+
+  const notable = combined
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && (REVIEW_FAILURE_LINE.test(line) || REVIEW_FAILURE_HINT.test(line)));
+
+  if (notable.length > 0) {
+    for (const line of notable.slice(-4)) {
+      lines.push(line);
+    }
+    return lines;
+  }
+
+  const oneLine = combined.replace(/\s+/g, ' ');
+  const snippet = oneLine.length > 400 ? `${oneLine.slice(0, 400)}...` : oneLine;
+  lines.push(`reviewer output: ${snippet}`);
+  return lines;
+}
 
 export interface ReviewOptions {
   repoRoot: string;
@@ -113,7 +151,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
   });
 
   if (codex.exitCode !== 0) {
-    logLines.push(`codex exec review exited ${codex.exitCode}`);
+    logLines.push(...summarizeReviewerProcessFailure(codex));
     return {
       exitCode: codex.exitCode || 1,
       logLines,

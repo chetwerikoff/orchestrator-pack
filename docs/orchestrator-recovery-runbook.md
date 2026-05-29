@@ -13,6 +13,10 @@ resumes the autonomous review-loop decision procedure defined in
 For first-time setup and the full autoloop checklist (processes, live YAML,
 verification), see [`docs/orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
 
+When review runs show `failed` with `findingCount: 0`, run
+`.\scripts\orchestrator-diagnose.ps1` first — that pattern is an **empty failed
+review**, not a clean pass. See `docs/migration_notes.md` (empty-review trap).
+
 For a **healthy orchestrator process that never reacts to CI/review events**, see
 [`docs/orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) (wake listener) before killing sessions.
 

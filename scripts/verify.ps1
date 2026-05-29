@@ -268,6 +268,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== orchestrator empty-review trap (Issue #75) =='
+$emptyTrapCheck = Join-Path $Root 'scripts/check-orchestrator-review-empty-trap.ps1'
+if (Test-Path -LiteralPath $emptyTrapCheck -PathType Leaf) {
+    & $emptyTrapCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-review-empty-trap.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-review-empty-trap.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'orchestratorRules must document empty-review trap (Issue #75)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-review-empty-trap.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing empty-review trap check script'
+}
+
+Write-Host ''
 Write-Host '== run-pack-review CLI args (Issue #60) =='
 $runPackReviewArgsCheck = Join-Path $Root 'scripts/check-run-pack-review-args.ps1'
 if (Test-Path -LiteralPath $runPackReviewArgsCheck -PathType Leaf) {

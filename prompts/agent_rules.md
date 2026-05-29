@@ -136,3 +136,6 @@ and counts; do not infer cleanliness from finding prose.
   even when `findingCount` is 0 or findings text is empty.
 - Workers MUST NOT report that Codex review passed when `ao review list --json`
   shows only `failed` or `cancelled` runs for the current PR head.
+- A run with `findingCount: 0` and `status: failed` or `cancelled` is an **empty
+  failed review** (reviewer infra/command failure), not a clean review. Read
+  `terminationReason`; do not infer success from zero findings alone.

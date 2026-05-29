@@ -146,6 +146,15 @@ Do not improvise alternate `--command` chains (`&&`, nested `if`, or bare
 `findingCount: 0` is **not** a clean review. Read `terminationReason` from
 `ao review list --json` before retry; do not `ao review send` on failed runs.
 
+**Empty-review trap.** When `findingCount` is 0 but `status` is `failed`, the
+reviewer process failed before emitting `NO_FINDINGS` or JSON findings — AO is
+not saying the PR is clean. The pack wrapper now copies Codex/CLI error lines
+into stderr so `terminationReason` often includes `usage limit`, `ERR_MODULE_NOT_FOUND`,
+or `review.ps1` without preflight. Run `.\scripts\orchestrator-diagnose.ps1` before
+declaring mergeable; compare `terminationReason` to live **REVIEW_COMMAND** (script
+name must match). Use the Claude bridge when Codex quota is exhausted — see
+[reviewer-switch-runbook.md](reviewer-switch-runbook.md).
+
 **Codex CLI shape.** Installed Codex CLI treats `codex exec review --base` and a
 custom `[PROMPT]` as mutually exclusive. The pack wrapper scopes via prompt text
 (`git diff <base>...HEAD`) and stdin prompt mode, not `--base` plus stdin together.
