@@ -120,6 +120,12 @@ if ($TrustWorktreesRoot) {
     if (Test-Path -LiteralPath $root -PathType Container) {
         $targets.Add((Resolve-Path -LiteralPath $root).Path)
     }
+    elseif (-not $WorkspacePath -and -not $SessionId) {
+        if (-not $Quiet) {
+            Write-Host "[trust-ao-worktree] worktrees root does not exist yet ($root)"
+        }
+        return
+    }
 }
 
 if ($WorkspacePath -or $SessionId) {
