@@ -73,11 +73,12 @@ what gets built, in what order, with what boundaries. The planner
 ## Sources of truth (priority order)
 
 1. **GitHub Issues** — live task queue.
-2. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
-3. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
-4. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
-5. **`prompts/agent_rules.md`** — universal rules every agent sees.
-6. **`ao review list`** + `code-reviews/findings/` — freshest reviewer signal.
+2. **`docs/issue_queue_index.md`** — draft path ↔ GitHub Issue map (no live status).
+3. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
+4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
+5. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
+6. **`prompts/agent_rules.md`** — universal rules every agent sees.
+7. **`ao review list`** + `code-reviews/findings/` — freshest reviewer signal.
 
 ## Planner freedom (non-negotiable)
 

@@ -1,5 +1,7 @@
 # Implement scope-guard CI step (PR diff validator)
 
+GitHub Issue: #6
+
 ## Status
 
 Implemented in `.github/workflows/scope-guard.yml` via `scripts/pr-scope-check.ps1`

@@ -1,5 +1,7 @@
 # Add self-architect mechanical lint
 
+GitHub Issue: #7
+
 ## Prerequisite
 
 Issue #3 — Architecture decisions (file `docs/issues_drafts/00-architecture-decisions.md`) must be merged. This issue does not
