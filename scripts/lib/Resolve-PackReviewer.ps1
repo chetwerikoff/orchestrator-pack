@@ -4,6 +4,7 @@
   Canonical PACK_REVIEWER selector: claude | codex (single source of truth).
 #>
 $Script:PackReviewerEnvVar = 'PACK_REVIEWER'
+$Script:PackReviewScriptsRoot = Split-Path -Parent $PSScriptRoot
 
 $Script:PackReviewerWrapperById = @{
     codex  = 'run-pack-review.ps1'
@@ -52,7 +53,7 @@ function Get-PackReviewWrapperPathForReviewer {
         [Parameter(Mandatory)]
         [ValidateSet('claude', 'codex')]
         [string]$Reviewer,
-        [string]$ScriptsRoot = $PSScriptRoot + '\..'
+        [string]$ScriptsRoot = $Script:PackReviewScriptsRoot
     )
 
     $basename = Get-PackReviewWrapperBasenameForReviewer -Reviewer $Reviewer

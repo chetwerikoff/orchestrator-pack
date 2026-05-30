@@ -116,6 +116,42 @@ function Get-IssueNumberFromDeclarationSnapshots {
     return $null
 }
 
+function Get-IssueNumberFromPrDiff {
+    param(
+        [string]$RepoRoot,
+        [int]$PrNumber
+    )
+
+    if ($PrNumber -le 0 -or -not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $issueNumbers = [System.Collections.Generic.HashSet[int]]::new()
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $files = @(gh pr diff $PrNumber --name-only 2>$null)
+        foreach ($file in $files) {
+            if ([string]::IsNullOrWhiteSpace($file)) {
+                continue
+            }
+
+            $n = Get-IssueNumberFromDeclarationFilename -RelativePath ($file.Replace('\', '/'))
+            if ($n) {
+                [void]$issueNumbers.Add($n)
+            }
+        }
+
+        if ($issueNumbers.Count -eq 1) {
+            return @($issueNumbers)[0]
+        }
+
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-GhPrContextFromView {
     param(
         [string]$RepoRoot,
@@ -275,6 +311,13 @@ function Get-AutoReviewPrContext {
                     }
                 }
             }
+        }
+    }
+
+    if (-not $result.IssueNumber -and $result.PrNumber) {
+        $fromPrDiff = Get-IssueNumberFromPrDiff -RepoRoot $RepoRoot -PrNumber $result.PrNumber
+        if ($fromPrDiff) {
+            $result.IssueNumber = $fromPrDiff
         }
     }
 
