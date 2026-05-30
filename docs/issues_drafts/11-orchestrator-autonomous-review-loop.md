@@ -1,6 +1,6 @@
 # Orchestrator: autonomous review loop with worker response contract
 
-GitHub Issue: #28 (baseline merged). State-derived reconciliation trigger: #58.
+GitHub Issue: #28
 
 ## Prerequisite
 
