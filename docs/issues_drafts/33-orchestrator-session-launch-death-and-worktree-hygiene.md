@@ -87,7 +87,8 @@ prompts/**
 - [ ] Upstream escalation note mentions orchestrator surface on ComposioHQ/agent-orchestrator#2072 (or successor issue) without claiming pack fixes vendor launch.
 - [ ] Recovery/preflight helper (if shipped) exits **non-zero** unless orchestrator stays `working` with `runtime=alive` for **≥3 consecutive checks** spaced **≥20s** over **≥60s** (no single-poll false success).
 - [ ] Runbook or migration notes state that **`restoreFallbackReason: cursor.getRestoreCommand returned null` is normal** for Cursor restore (fresh `getLaunchCommand` launch), not a standalone defect.
-- [ ] At least one **orchestrator** PTY fixture or captured log line documents Signature A or B before the spec claims launch death vs idle/stuck for that class (correlation with prompt byte count alone is insufficient).
+- [x] Detection regression: orchestrator Signature A/B fixtures under `tests/fixtures/orchestrator-launch-failure/` (synthetic; labeled as such — live orchestrator PTY capture still open per investigation log).
+- [ ] **Evidence (still open):** live orchestrator PTY or logged argv line showing Signature A or B before claiming launch death vs idle/stuck (prompt byte count alone is insufficient).
 
 ## Upgrade-safety check
 
