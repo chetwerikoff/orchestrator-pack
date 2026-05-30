@@ -250,9 +250,40 @@ clears Signature A but then `agent: command not found` (Git Bash does not run
 `scripts/orchestrator-diagnose.ps1` flags workers with no PR in
 `detecting`/`exited` as possible launch failures.
 
-**Upstream fix (escalation):** file against [ComposioHQ/agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) —
-`@aoagents/ao-plugin-agent-cursor` should pass the worker prompt via a file or
-agent flag, not inline argv, and must not use POSIX `printf` on Windows.
+**Mechanism (verified from plugin source).** In `@aoagents/ao-plugin-agent-cursor`
+`dist/index.js` `getLaunchCommand`, the **worker** path inlines the task prompt:
+`"$(cat <systemPromptFile>; printf '\n\n'; printf %s '<prompt>')"`. The
+**orchestrator** (and any session with no separate task prompt) takes the
+**cat-only** path `"$(cat <systemPromptFile>)"`, which survives because `cat` is
+a PowerShell alias for `Get-Content` while `printf` does not exist. So the
+`printf %s '<prompt>'` tail is the single source of **both** signatures: A
+(`printf` absent) and B (the whole prompt lands in argv). The systemPromptFile is
+**already** delivered via a file — only the task prompt is inlined.
+
+**Upstream fix (escalation, FILED):**
+[ComposioHQ/agent-orchestrator#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074).
+The durable fix: deliver the task prompt the same way the system prompt already
+is — write it to a file and `cat` it (mirror the cat-only path), removing the
+POSIX `printf` dependency and keeping the prompt out of argv. No new agent CLI
+flag is required; the positional `$(cat …)` substitution is proven on Windows by
+the surviving orchestrator path. Still present byte-identical in `0.9.1`
+(`latest`), `0.9.3-nightly`, and `0.10.1-nightly` as of 2026-05-30 — do **not**
+expect an `ao` upgrade to fix it yet.
+
+**Local workaround (this machine, until upstream ships).** The globally installed
+plugin (`$(npm root -g)/@aoagents/ao/node_modules/@aoagents/ao-plugin-agent-cursor/dist/index.js`)
+is patched, Windows-only (`if (isWindows())`), to write `config.prompt` to a temp
+file and `cat` it instead of `printf`-inlining it — the exact shape proposed in
+#2074. The original is backed up alongside as `index.js.orig`. This is **not** a
+tracked repo change (vendor package outside the repo) and is **lost on plugin
+reinstall/upgrade** (`npm i -g @aoagents/ao@…`). To re-apply after an upgrade:
+in `getLaunchCommand`, guard the `printf` line with `if (isWindows())`, and in the
+Windows branch write the prompt (`"\n\n" + config.prompt`) to
+`join(tmpdir(), 'ao-worker-prompt-<sessionId>.txt')` and emit
+`"$(cat <systemPromptFile>; cat <thatFile>)"` (add `writeFileSync`/`tmpdir`
+imports). Verify with `node --check` and that the built command contains no
+`printf` and two `cat` calls. Remove the workaround once #2074 ships and pin the
+fixed plugin version in `docs/orchestrator-autoloop-go-live.md`.
 
 **Not launch failure:** `workspace.branch_collision` warnings during spawn are
 worktree hygiene; inspect separately.
