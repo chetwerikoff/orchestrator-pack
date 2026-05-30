@@ -129,48 +129,15 @@ projects:
       Do NOT invent statuses (e.g. awaiting_triage) — AO will never match them.
 
       CLEANLINESS FROM COUNTS ONLY. A review is clean only when ao review list --json
-      shows a terminal completed status (e.g. clean) for the current PR head with
-      findingCount: 0 and openFindingCount: 0. needs_triage is NOT clean — findings
-      exist but were not sent; run ao review send. findingCount 0 on failed or
-      cancelled runs is NOT clean. Never read or pattern-match finding body prose
-      (NO_FINDINGS contract).
+      shows status clean with findingCount: 0 for the current PR head. needs_triage
+      is NOT clean — it means findings exist but were not sent; run ao review send.
+      findingCount 0 on failed or cancelled runs is NOT clean. Never read or
+      pattern-match finding body prose (NO_FINDINGS contract).
 
-      TRIGGER REVIEW WITHOUT HUMAN PROMPT (report-driven). Whenever a worker
-      reports pr_created or ready_for_review on an open PR (visible in ao status
-      --reports full), immediately run:
+      TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports pr_created or
+      ready_for_review on an open PR (visible in ao status --reports full), immediately run:
         ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
       Do not wait for operator words review or loop.
-
-      STATE-DERIVED REVIEW TRIGGER (reconciliation — not report-gated). On every
-      orchestrator turn, after the three CLI reads above, reconcile open PRs from
-      GitHub against review coverage even when no worker reported pr_created or
-      ready_for_review:
-        1. Enumerate open PRs and each current head SHA from GitHub (the open-PR
-           set exists regardless of worker reports):
-             gh pr list --state open --json number,headRefOid
-        2. Cross-reference each PR number and headRefOid against ao review list
-           --json (runs for that PR and target SHA).
-        3. For each open PR, if the current head SHA already has a review run in
-           flight (queued, preparing, running), a terminal clean run (status clean),
-           or a run in needs_triage or waiting_update for that SHA, skip to the
-           next PR — do not spawn or start a new run here. Failed or cancelled
-           runs for the current head SHA are not terminal-clean; fall through to
-           step 4 so reconciliation can retry them.
-        4. For each remaining open PR (including when the only run for the current
-           head SHA is failed or cancelled):
-           a. Resolve the worker session id from ao status --json --reports full
-              (PR/branch metadata on the session).
-           b. If no live session is tied to the PR, spawn one:
-                ao spawn --claim-pr <PR>
-              Use the returned session id as <worker-session-id>.
-           c. Start review using the resolved or newly spawned session — do not
-              wait for worker pr_created or ready_for_review:
-                ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
-           When the head SHA advances past a prior run, treat it as outdated and
-           follow ROUND PROGRESSION below. Subject to ROUND LIMIT below.
-      This reconciliation runs only on orchestrator turns (no background process).
-      Turn delivery during event silence is owned by the wake listener / heartbeat
-      (Issues #39 / #59), not by this check.
 
       NAMED PENDING STATE: waiting_worker_review_response.
       A PR enters this state after ao review send succeeds for a run in needs_triage,
@@ -199,10 +166,8 @@ projects:
 
       RESPAWN DISCIPLINE. On a later orchestrator turn, if still in
       waiting_worker_review_response with no addressing_reviews, no new commit, and
-      a ping was already sent for this episode (visible in ao events list), read the
-      worker session id from ao status --json --reports full (never infer from PR or
-      issue number), then run:
-        ao session kill <worker-session-id>
+      a ping was already sent for this episode (visible in ao events list), run:
+        ao session kill <session>
         ao spawn --claim-pr <PR>
       Reset ping tracking for the new session.
 
@@ -218,9 +183,8 @@ projects:
 
       NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge.
       Emit ready-for-human-merge notification only when ALL are true:
-        - Latest AO-local review run for current PR head is terminal completed
-          (e.g. clean — not queued, preparing, running, or outdated) with
-          findingCount: 0 and openFindingCount: 0;
+        - Latest AO-local review run for current PR head has findingCount: 0
+          (no open or sent findings remain);
         - PR is open with green CI on the same head SHA;
         - Worker reported ready_for_review for current head, OR the latest clean
           review completed after the worker's latest ready_for_review with no newer

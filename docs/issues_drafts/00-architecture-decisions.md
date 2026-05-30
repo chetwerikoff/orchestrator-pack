@@ -241,7 +241,7 @@ Two coupled decisions, taken 2026-05-28 after the PR #56 incident: a worker was
 mergeable but never reported `ready_for_review`; `ao review list` showed zero
 runs and the orchestrator went `stuck` — review never started.
 
-1. **Review triggering is state-derived, not worker-report-gated.** The
+1. **Review triggering is state-derived, not worker-report-gated.** ~~The
    orchestrator MUST start a review run from the observable existence of an
    unreviewed open PR, not solely from a worker `pr_created` /
    `ready_for_review` report. The open-PR set and each PR's current head SHA
@@ -250,7 +250,12 @@ runs and the orchestrator went `stuck` — review never started.
    NOT be able to block review. This is a reconciliation (observe-and-converge)
    trigger, not an event/push trigger: it runs as part of the orchestrator's
    turn-opening inspection and adds no background process. (Issue #28 / #58,
-   file `11-orchestrator-autonomous-review-loop.md`.)
+   file `11-orchestrator-autonomous-review-loop.md`.)~~ **Superseded / rolled
+   back 2026-05-30** after PR #97 split-brain: `ao spawn --claim-pr` from
+   reconciliation while a live Cursor worker still held the branch caused
+   duplicate workers. `agent-orchestrator.yaml.example` again uses **report-driven**
+   review trigger only until a safer reconciliation design ships (see Issue #98
+   for post-respawn review hygiene, not auto-spawn).
 
 2. **The wake mechanism's strict no-polling invariant is relaxed for a
    low-frequency heartbeat.** Issue #39 (file
@@ -265,10 +270,12 @@ runs and the orchestrator went `stuck` — review never started.
    state remains out of scope. (Issue #39 / #59.)
 
 These compose: decision 2 guarantees the orchestrator gets turns even in event
-silence; decision 1 defines what it does on each such turn (reconcile open PRs
-against review-run coverage and trigger review). Neither is sufficient alone —
-without the heartbeat the reconciliation never runs in silence; without
-reconciliation the delivered turn has no state-derived trigger to act on. A
+silence. ~~Decision 1 defined what it does on each such turn (reconcile open PRs
+against review-run coverage and trigger review). Neither was sufficient alone —
+without the heartbeat the reconciliation never ran in silence; without
+reconciliation the delivered turn had no state-derived trigger to act on.~~ With
+decision 1 rolled back, heartbeat turns rely on report-driven review triggers and
+other orchestratorRules discipline until reconciliation is re-specified. A
 third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
 on a command-approval prompt) is handled operationally in the recovery runbook,
 file `15-orchestrator-recovery-runbook.md`, not here.
