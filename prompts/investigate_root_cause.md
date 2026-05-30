@@ -70,17 +70,48 @@ parallel loop here.
 Stop at **spec / contract / rule** level (issue body, draft, `prompts/agent_rules.md`,
 declaration, CI guard), not at symptom patches on merged code.
 
-### Resolve queue status (before planned/shipped claims)
+### Resolve queue status (before §3 / §4 claims)
 
-Before listing any task as **planned** or **shipped** in the report:
+Before listing anything under **§3 Already done** or **§4 Planned**:
 
 1. Consult [`docs/issue_queue_index.md`](../docs/issue_queue_index.md) to map each
    cited `docs/issues_drafts/NN-<slug>.md` path to its GitHub Issue number (never
    treat the draft filename prefix as the GitHub `#`).
-2. For each GitHub number, read live state:
-   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title`.
+2. For each candidate issue, read live metadata (at minimum):
+   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt`.
 3. Do **not** infer open, closed, planned, or shipped from a draft file existing
    or from draft presence in the repo alone.
+
+### Verify §4 (planned) — ship check (mandatory)
+
+**§4 is where false positives hurt most.** Treat every candidate issue/draft as
+*guilty until proven still outstanding*. Do not copy issue titles or draft summaries
+into §4 without completing the ship check below.
+
+**Build §3 before §4.** List mitigations and shipped work in §3 first; only then
+consider open issues for §4.
+
+For **each** issue/draft you might put in §4:
+
+| Step | Check | If true → |
+|------|--------|-----------|
+| A | `gh issue view` → `state` is **closed** | **Exclude from §4.** If the outcome matters to the investigation, one line in **§3** (worked / partial / failed) with close reason or merged PR ref. |
+| B | Merged PR linked to the issue (`gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "closes #N"` or issue timeline / comments) | **Exclude from §4** unless the PR clearly did *not* implement the scoped acceptance criteria. |
+| C | Acceptance criteria from the issue body (or linked draft) already satisfied on **`main`** — files/paths exist, behavior present, `git log -n 5 -- <paths>` shows merge after issue open | **Exclude from §4**; record in **§3** as shipped (note **open issue, work on main** if `state` is still open). |
+| D | `docs/declarations/*.json` or merged worker PR scope matches the issue’s declared outcome for this topic | **Exclude from §4**; **§3** instead. |
+| E | Issue is **open** but only tracks spec/ops follow-up while implementation is already on `main` | **§3** for what shipped; **§4** only if you state the *remaining* gap in one line (not the whole original issue scope). |
+| F | Issue is **open**, no merged PR, and criteria are **not** on `main` | **May list in §4** — status only: `#N` open, one sentence on what would change when done. |
+
+When in doubt, **spot-check `main`** (read files, run a narrow grep, or `git log`
+on paths named in the issue) rather than trusting the open issue or an old draft.
+
+**§4 may be empty.** Write explicitly that no open queue items remain for this
+topic (e.g. «Нет открытых задач в очереди по этой теме»). Prefer an empty §4
+over listing work that is already shipped.
+
+**Dedupe §3 ↔ §4:** the same outcome must not appear in both sections. If it is
+on `main` or in a merged PR, it belongs in **§3**, not **§4**, regardless of
+issue state.
 
 ### Search existing mitigations
 
@@ -94,12 +125,15 @@ Before listing any task as **planned** or **shipped** in the report:
 
 Record what was tried, whether it worked, partially worked, or failed / was wrong.
 
-### Search planned work
+### Search planned work (for §4 only)
 
-- Open GitHub Issues (state from `gh issue view`, numbers from the registry) and
-  drafts that already plan changes on this topic.
-- Summarize what each would change if merged. Label shipped vs planned from GitHub
-  state, not from draft filename or draft-file existence alone.
+- Find *candidates* via registry + topic search in open issues and
+  `docs/issues_drafts/`.
+- Run **Verify §4 (planned) — ship check** on every candidate before writing §4.
+- Include in §4 **only** survivors: open issues whose scoped work is **not** already
+  on `main`. One line each: `#N` + what remains outstanding (not the full issue
+  essay).
+- Shipped or closed items discovered here belong in **§3**, not §4.
 
 ### Role boundary
 
@@ -112,21 +146,33 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
 
 ## Report template
 
-Deliver to the user in **their language**, **fixed section order**, **≤ 600 words**
+Deliver to the user in **their language**, **fixed section order**, **≤ 900 words**
 unless they asked for depth. Put long tables or raw dumps in `$env:TEMP` (or OS
 temp) and link paths in the memo — do not paste huge tables in chat.
 
-1. **Причины** — evidence-backed root cause(s); include 5 Whys summary when the
-   ask was about a failure.
-2. **Что уже сделано** — mitigations in the repo; label each: worked / partial /
-   failed or wrong.
-3. **Что будет сделано** — open GitHub Issues and `docs/issues_drafts/` that
-   already plan work; what each would change if merged.
-4. **Что лучше всего ещё сделать** — ranked gaps not covered by (2)–(3); durable
-   fixes are specs/rules/issues, not patches to merged code.
+**Always include sections 1–6 in every report.** Do not stop after technical
+causes or a single “best next step” paragraph. The user should not need a
+follow-up ask for a plain-language summary, immediate steps, or prevention —
+those are mandatory parts of this template.
 
-(English sessions may use equivalent headings: **Causes**, **Already done**,
-**Planned**, **Best next steps** — same order and content.)
+**Every recommended action** (including optional improvements, follow-up
+drafts, and trade-offs) must appear as a numbered step in **§5** (now) or **§6**
+(prevention/stability). There is **no** separate “best further steps” section.
+
+### Section rules
+
+| # | Heading (RU) | Heading (EN) | Content |
+|---|----------------|--------------|---------|
+| 1 | **Простыми словами** | **In plain terms** | 2–4 short paragraphs: what broke or misbehaved, what actually caused it (no jargon, or jargon explained in parentheses), and what it means for the user right now. No file paths unless the user needs to open one. |
+| 2 | **Причины** | **Causes** | Evidence-backed root cause(s) for **another agent** or a follow-up task: facts, artifact refs (`gh` #, PR, log path), 5 Whys chain when the ask was about a failure. Structured bullets; precise enough to implement from. |
+| 3 | **Что уже сделано** | **Already done** | Mitigations in the repo; label each: worked / partial / failed or wrong. |
+| 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `main`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
+| 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, `ao spawn`, operator). |
+| 6 | **Чтобы не повторялось** / **Чтобы работало стабильно** | **So it does not recur** / **So it stays stable** | **Numbered steps** (1., 2., …): everything **durable** — spec/draft/issue, `prompts/agent_rules.md`, CI guard, config contract, follow-up drafts, ranked gaps not covered by §3 and §4; not one-off patches to merged code. Skip items already fully covered by §4 unless you add a net-new step. Pick the heading that matches the ask (recurrence vs steady-state correctness); use both headings only if both apply. |
+
+Sections **5** and **6** must be actionable checklists, not prose summaries. If a step
+belongs in a worker PR, say so (`ao spawn` / open draft) instead of implying a
+direct architect patch unless **`direct-fix-checklist`** was authorized.
 
 ---
 
@@ -140,7 +186,8 @@ redirect.
 $memo = Get-Content -Raw $env:TEMP\orchestrator-pack-rca-memo.md
 $prompt = @"
 You are a critical reviewer for a root-cause investigation memo.
-Challenge unsupported claims, missing queue/architecture search, and patches
+Challenge unsupported claims, missing queue/architecture search, items listed
+under Planned (§4) that are closed, merged, or already on main, and patches
 proposed as durable fixes. Tag valid issues P0/P1/P2.
 If no concrete issues remain, respond with exactly:
 NO_FINDINGS
@@ -160,7 +207,11 @@ Revise the memo for valid findings; stop after cycle 3 and list open questions.
 
 - Invent causes without evidence from the bounded gather step.
 - List work as planned or shipped from draft-file existence or draft filename
-  prefix alone — use the registry and `gh issue view` first.
+  prefix alone — use the registry, `gh issue view`, merged PR search, and
+  spot-checks on `main` first.
+- Put closed, merged, or already-shipped work in **§4 Planned** — that belongs
+  in **§3 Already done** (see **Verify §4 — ship check**).
+- Pad **§4** with open issues you did not verify against `main` and linked PRs.
 - Skip queue, draft, or architecture search when the topic is in-repo behavior.
 - Duplicate **`study-external-source`** for external adoption asks.
 - Patch merged implementation code as the durable fix — fix spec, contract, or

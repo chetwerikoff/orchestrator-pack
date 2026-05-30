@@ -22,8 +22,10 @@ what gets built, in what order, with what boundaries. The planner
 ## Do
 
 - Author task drafts at `docs/issues_drafts/NN-<slug>.md` and sync them as
-  GitHub Issues. Invoke the **`create-issue-draft`** skill — it owns the
-  draft structure, framework triggers, sync procedure, and decision logging.
+ GitHub Issues. Invoke the **`create-issue-draft`** skill — it owns the
+ draft structure, framework triggers, sync procedure, and decision logging.
+ Then invoke **`publish-issue-draft`** (default) to commit, PR, and merge the
+ spec to `main` unless the user opts out.
 - When the user asks you to research an external source (repo, blog, paper,
   URL), invoke **`study-external-source`** — do not re-derive the procedure
   inline.
