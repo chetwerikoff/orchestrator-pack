@@ -202,39 +202,39 @@ function Get-PackReviewGateViolations {
 
     $reason = [string]$latest.terminationReason
     $entryBasename = Get-ReviewScriptBasenameFromCommand -ReviewCommand $ReviewCommand
-    $expectedReviewer = Get-ExpectedPackReviewer -ExpectedReviewer $ExpectedReviewer -ReviewCommand $ReviewCommand -FixtureMode:$FixtureMode
+    $resolvedReviewer = Get-ExpectedPackReviewer -ExpectedReviewer $ExpectedReviewer -ReviewCommand $ReviewCommand -FixtureMode:$FixtureMode
     $usesSelector = ($entryBasename -eq $Script:PackReviewAgnosticEntryBasename) -or
         -not [string]::IsNullOrWhiteSpace($ExpectedReviewer)
 
-    if ($usesSelector -and -not $expectedReviewer) {
+    if ($usesSelector -and -not $resolvedReviewer) {
         $violations.Add([pscustomobject]@{
                 Kind    = 'selector-mismatch'
                 Message = 'PACK_REVIEWER (or fixture expectedReviewer) must be claude or codex for reviewer-agnostic REVIEW_COMMAND'
                 Run     = $latest
             }) | Out-Null
     }
-    elseif ($usesSelector -and $expectedReviewer -and [string]::IsNullOrWhiteSpace($reason)) {
+    elseif ($usesSelector -and $resolvedReviewer -and [string]::IsNullOrWhiteSpace($reason)) {
         $violations.Add([pscustomobject]@{
                 Kind    = 'selector-mismatch'
-                Message = ('terminationReason is blank; cannot verify PACK_REVIEWER={0} matched executed wrapper' -f $expectedReviewer)
+                Message = ('terminationReason is blank; cannot verify PACK_REVIEWER={0} matched executed wrapper' -f $resolvedReviewer)
                 Run     = $latest
             }) | Out-Null
     }
     elseif (-not [string]::IsNullOrWhiteSpace($reason)) {
         if ($usesSelector) {
-            $expectedWrapper = Get-PackReviewWrapperBasenameForReviewer -Reviewer $expectedReviewer
+            $expectedWrapper = Get-PackReviewWrapperBasenameForReviewer -Reviewer $resolvedReviewer
             $executedReviewer = Get-ReviewerFromTerminationReason -TerminationReason $reason
             if (-not $executedReviewer) {
                 $violations.Add([pscustomobject]@{
                         Kind    = 'selector-mismatch'
-                        Message = ('terminationReason does not name a tracked wrapper for PACK_REVIEWER={0}' -f $expectedReviewer)
+                        Message = ('terminationReason does not name a tracked wrapper for PACK_REVIEWER={0}' -f $resolvedReviewer)
                         Run     = $latest
                     }) | Out-Null
             }
-            elseif ($executedReviewer -ne $expectedReviewer) {
+            elseif ($executedReviewer -ne $resolvedReviewer) {
                 $violations.Add([pscustomobject]@{
                         Kind    = 'selector-mismatch'
-                        Message = ('terminationReason executed {0} but PACK_REVIEWER (or fixture) expects {1}' -f $executedReviewer, $expectedReviewer)
+                        Message = ('terminationReason executed {0} but PACK_REVIEWER (or fixture) expects {1}' -f $executedReviewer, $resolvedReviewer)
                         Run     = $latest
                     }) | Out-Null
             }
