@@ -51,15 +51,18 @@ function Test-WorkerLaunchFailurePtyLog {
     return $result.IsLaunchFailure
 }
 
-function Get-WorkerPromptLaunchFeasibilityWarning {
+function Get-PromptLaunchFeasibilityWarning {
     <#
     .SYNOPSIS
-      Warn when a worker prompt file is large enough to risk Signature B on Windows.
+      Warn when a session prompt file may risk Signature B on Windows (worker or orchestrator).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$PromptFilePath,
+        [ValidateSet('Worker', 'Orchestrator')]
+        [string]$Role = 'Worker',
+        [int]$IssueNumber = 63,
         [int]$ArgvLimitBytes = 8000
     )
 
@@ -72,5 +75,23 @@ function Get-WorkerPromptLaunchFeasibilityWarning {
         return $null
     }
 
-    return "Worker prompt file is $size bytes (empirical Windows argv risk above ~$ArgvLimitBytes). AO may inline it into the launch command and fail with 'command line is too long' (Signature B). See docs/migration_notes.md (Issue #63)."
+    $launchNote = if ($Role -eq 'Orchestrator') {
+        'Cursor launch uses $(cat <file>)'
+    }
+    else {
+        'AO may inline it into the launch command'
+    }
+
+    return "$Role prompt file is $size bytes (empirical Windows argv risk above ~$ArgvLimitBytes). $launchNote; may fail with 'command line is too long' (Signature B). See docs/migration_notes.md (Issue #$IssueNumber)."
+}
+
+function Get-WorkerPromptLaunchFeasibilityWarning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PromptFilePath,
+        [int]$ArgvLimitBytes = 8000
+    )
+
+    return Get-PromptLaunchFeasibilityWarning -PromptFilePath $PromptFilePath `
+        -Role Worker -IssueNumber 63 -ArgvLimitBytes $ArgvLimitBytes
 }

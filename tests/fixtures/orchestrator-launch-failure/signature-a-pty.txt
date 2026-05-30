@@ -1,0 +1,4 @@
+# SessionRole: orchestrator
+# Synthetic pattern for detection regression (Issue #91) — not yet observed on live orchestrator PTY; see draft 33 investigation log.
+printf : The term 'printf' is not recognized as the name of a cmdlet, function, script file, or operable program.
+error: unknown option '-ne'

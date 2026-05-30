@@ -1,0 +1,3 @@
+# SessionRole: orchestrator
+# Synthetic pattern for detection regression (Issue #91) — not yet observed on live orchestrator PTY; see draft 33 investigation log.
+The command line is too long.

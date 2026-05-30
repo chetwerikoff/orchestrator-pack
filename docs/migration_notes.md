@@ -288,6 +288,38 @@ fixed plugin version in `docs/orchestrator-autoloop-go-live.md`.
 **Not launch failure:** `workspace.branch_collision` warnings during spawn are
 worktree hygiene; inspect separately.
 
+### Orchestrator prompt-delivery launch failure on Windows (Issue #91)
+
+The **orchestrator** Cursor session uses the same vendor launch path as workers
+(`@aoagents/ao-plugin-agent-cursor`: `$(cat <orchestrator-prompt-file>)` under
+PowerShell). Signatures A and B match Issue #63 but apply to the **orchestrator**
+PTY and lifecycle (`spawning → working → detecting → stuck` /
+`agent_process_exited` on the orchestrator id).
+
+**Operator routing:** worker spawn death → worker PTY + this doc (worker subsection
+above). Orchestrator `stuck` / `probe_failure` right after `ao start` or
+`ao session kill` + respawn → orchestrator PTY + `docs/orchestrator-recovery-runbook.md`
+(decision table). Do not kill the orchestrator for worker-only launch failure.
+
+**Stale `orchestrator/*` worktree/branch:** after `ao session kill`, a leftover
+`orchestrator/op-orchestrator` branch or AO worktree dir can cause
+`workspace.branch_collision` on respawn. Pack hygiene (not vendor #2072 template):
+`scripts/orchestrator-worktree-preflight.ps1` before `ao start`; also surfaced in
+`scripts/orchestrator-diagnose.ps1`.
+
+**Pack-side checks:** `scripts/check-orchestrator-launch-failure.ps1` (fixtures under
+`tests/fixtures/orchestrator-launch-failure/`), wired in `scripts/verify.ps1`.
+`scripts/wait-orchestrator-launch.ps1` requires **4×20s** sustained
+`working` + alive runtime before declaring launch success.
+
+**Upstream:** durable fix remains ComposioHQ/agent-orchestrator /
+`@aoagents/ao-plugin-agent-cursor` — file or flag for prompt delivery
+([#2072](https://github.com/ComposioHQ/agent-orchestrator/issues/2072)); orchestrator
+surface documented in pack escalation, not fixed in-tree.
+
+**Restore metadata:** `restoreFallbackReason: cursor.getRestoreCommand returned null`
+is normal for Cursor restore (fresh `getLaunchCommand`); not root cause alone.
+
 ## Autoloop go-live (operator checklist)
 
 Issues #28, #39, and #60 are merged (#42, #47, #65): rules, wake listener, and

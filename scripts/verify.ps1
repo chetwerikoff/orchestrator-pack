@@ -377,6 +377,39 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Orchestrator launch-failure detection (Issue #91) =='
+$orchLaunchCheck = Join-Path $Root 'scripts/check-orchestrator-launch-failure.ps1'
+$orchLaunchFixtureDir = Join-Path $Root 'tests/fixtures/orchestrator-launch-failure'
+if ((Test-Path -LiteralPath $orchLaunchCheck -PathType Leaf) -and
+    (Test-Path -LiteralPath $orchLaunchFixtureDir -PathType Container)) {
+    $orchFixtureCases = @(
+        @{ Name = 'signature-a'; File = 'signature-a-pty.txt'; ExpectMatch = $true },
+        @{ Name = 'signature-b'; File = 'signature-b-pty.txt'; ExpectMatch = $true },
+        @{ Name = 'healthy-pty'; File = 'healthy-pty.txt'; ExpectMatch = $false }
+    )
+    foreach ($case in $orchFixtureCases) {
+        $fixturePath = Join-Path $orchLaunchFixtureDir $case.File
+        if ($case.ExpectMatch) {
+            & $orchLaunchCheck -FixturePath $fixturePath -ExpectMatch
+        }
+        else {
+            & $orchLaunchCheck -FixturePath $fixturePath -ExpectNoMatch
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check "orchestrator-launch-failure/$($case.Name)" 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure "Orchestrator launch-failure fixture check failed: $($case.File)"
+        }
+        else {
+            Write-Check "orchestrator-launch-failure/$($case.Name)" 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-launch-failure.ps1' 'FAIL' 'missing script or fixtures'
+    Add-Failure 'Missing orchestrator launch-failure check or fixtures'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

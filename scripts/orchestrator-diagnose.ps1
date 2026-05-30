@@ -17,8 +17,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$packRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'lib/Test-WorkerLaunchFailure.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-OrchestratorWorktreeHygiene.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-OrchestratorLaunchHealth.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -86,7 +89,6 @@ function Format-Ago {
 }
 
 $orchId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
-$packRoot = Split-Path -Parent $PSScriptRoot
 
 function Invoke-StrictGateExit {
     param(
@@ -168,6 +170,39 @@ if ($orch) {
 }
 else {
     Write-Host '  (orchestrator session not found in ao status)'
+}
+
+$orchPaths = Get-OrchestratorAoProjectPaths -SessionId $orchId
+$orchPromptWarn = Get-OrchestratorPromptLaunchFeasibilityWarning -PromptFilePath $orchPaths.PromptPath
+if ($orchPromptWarn) {
+    Write-Host ''
+    Write-Host '-- Orchestrator prompt size --'
+    Write-Host "  WARN $orchPromptWarn"
+}
+
+if (Test-OrchestratorLaunchFailureCandidate -OrchestratorSession $orch) {
+    Write-Host ''
+    Write-Host '-- Possible orchestrator launch-failure --'
+    Write-Host '  Orchestrator detecting/stuck/exited shortly after ao start or restore may be'
+    Write-Host '  prompt-delivery failure (Signature A/B), not idle orchestrator.'
+    Write-Host '  Inspect orchestrator PTY for: printf not recognized, unknown option -ne,'
+    Write-Host '  or command line is too long.'
+    Write-Host '  restoreFallbackReason: cursor.getRestoreCommand returned null is expected for Cursor.'
+    Write-Host '  See docs/migration_notes.md (Orchestrator prompt-delivery launch failure, Issue #91).'
+    Write-Host '  Offline: pwsh -File scripts/check-orchestrator-launch-failure.ps1 -FixturePath <pty.txt>'
+    Write-Host '  After cleanup: pwsh -File scripts/wait-orchestrator-launch.ps1'
+}
+
+$hygiene = Get-OrchestratorStaleWorktreeFindings -RepoRoot $packRoot -SessionId $orchId
+if ($hygiene.Findings.Count -gt 0) {
+    Write-Host ''
+    Write-Host ("-- Stale orchestrator worktree/branch ({0}) --" -f $hygiene.Findings.Count)
+    Write-Host '  Run before ao start if spawn logs show workspace.branch_collision:'
+    Write-Host '  pwsh -File scripts/orchestrator-worktree-preflight.ps1'
+    foreach ($f in $hygiene.Findings) {
+        Write-Host ("  [{0}] {1}" -f $f.Kind, $f.Detail)
+        Write-Host ("         {0}" -f $f.Command)
+    }
 }
 
 $allWorkers = @($sessions | Where-Object { $_.role -eq 'worker' })

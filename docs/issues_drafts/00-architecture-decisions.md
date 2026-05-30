@@ -320,6 +320,28 @@ pointed at gitignored `.ao/` while runs used forbidden bare `review.ps1` or Code
 
 See `docs/issues_drafts/27-tracked-claude-review-and-strict-gate.md` (Issue #79).
 
+## K. Orchestrator launch death and worktree hygiene
+
+Decision taken 2026-05-30 after orchestrator `op-orchestrator` repeatedly reached
+`detecting` / `stuck` on Windows while workers followed the Issue #63 runbook.
+
+1. **Orchestrator launch failure is not worker-only routing.** Signatures A/B
+   apply to the orchestrator PTY as well as workers. The recovery runbook decision
+   table and `docs/migration_notes.md` (Issue #91) route operators to the correct
+   session PTY; worker #63 docs remain authoritative for **worker** spawn death.
+
+2. **Stale `orchestrator/*` worktree/branch is pack-side hygiene.** Repeated
+   `workspace.branch_collision` after kill+respawn is cleaned with
+   `scripts/orchestrator-worktree-preflight.ps1` before `ao start`, not attributed
+   to vendor launch templates alone.
+
+3. **Pack response:** detection fixtures, diagnose/preflight scripts, runbook
+   amendment, sustained `wait-orchestrator-launch.ps1` poll — not AO core changes.
+   Upstream durable fix remains agent-orchestrator#2072.
+
+See `docs/issues_drafts/33-orchestrator-session-launch-death-and-worktree-hygiene.md`
+(Issue #91).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
