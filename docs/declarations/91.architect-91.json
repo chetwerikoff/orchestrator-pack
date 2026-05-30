@@ -3,9 +3,9 @@
   "iteration_id": "architect-91",
   "iteration_id_source": "wrapper_generated",
   "supersedes": null,
-  "created_at": "2026-05-30T05:00:00.000Z",
+  "created_at": "2026-05-30T05:00:00Z",
   "baseline": {
-    "commit_sha": "4c02d1289e1f566fd47b5d2825d535eb6bffc5e3",
+    "commit_sha": "464abe743a5f8cc351cb659f170dd94cc61ad74a",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:architect-91-direct-pr"
   },
@@ -18,6 +18,7 @@
     "docs/orchestrator-recovery-runbook.md",
     "scripts/check-launch-failure.ps1",
     "scripts/check-orchestrator-launch-failure.ps1",
+    "scripts/check-worker-launch-failure.ps1",
     "scripts/lib/Get-OrchestratorLaunchHealth.ps1",
     "scripts/lib/Get-OrchestratorWorktreeHygiene.ps1",
     "scripts/lib/Invoke-LaunchFailureFixtureCheck.ps1",
