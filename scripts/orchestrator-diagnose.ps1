@@ -93,13 +93,14 @@ $orchId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
 function Invoke-StrictGateExit {
     param(
         [array]$Runs,
-        [string]$ReviewCommand
+        [string]$ReviewCommand,
+        [string]$ExpectedReviewer = ''
     )
 
-    $violations = Get-PackReviewGateViolations -Runs $Runs -ReviewCommand $ReviewCommand
+    $violations = Get-PackReviewGateViolations -Runs $Runs -ReviewCommand $ReviewCommand -ExpectedReviewer $ExpectedReviewer
     if ($violations.Count -eq 0) {
         Write-Host ''
-        Write-Host '[PASS] Strict gate: no empty-review trap or command drift on latest run'
+        Write-Host '[PASS] Strict gate: no empty-review trap, command drift, or selector mismatch on latest run'
         return 0
     }
 
@@ -122,11 +123,12 @@ if ($FixturePath) {
     Write-Host ("Fixture: {0}" -f $fixtureResolved)
     Write-Host ''
 
+    $fixtureExpectedReviewer = [string]$payload.expectedReviewer
     if ($Strict) {
-        exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $reviewCommand)
+        exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $fixtureExpectedReviewer)
     }
 
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $fixtureExpectedReviewer
     if ($violations.Count -eq 0) {
         Write-Host 'Assessment: fixture latest run passes strict gate rules'
     }
@@ -450,5 +452,6 @@ if ($Strict) {
         exit 1
     }
 
-    exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $expectedCommand)
+    $expectedReviewer = Get-PackReviewerFromSelector
+    exit (Invoke-StrictGateExit -Runs $runs -ReviewCommand $expectedCommand -ExpectedReviewer $expectedReviewer)
 }

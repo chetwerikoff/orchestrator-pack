@@ -82,7 +82,8 @@ function Test-SingleFixtureGate {
     }
 
     $runs = @($payload.runs)
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand
+    $expectedReviewer = [string]$payload.expectedReviewer
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer
     $shouldPass = $true
     if ($null -ne $payload.expectPass) {
         $shouldPass = [bool]$payload.expectPass
@@ -130,9 +131,10 @@ function Invoke-LiveGate {
         $runs = @($runs | Where-Object { $_.projectId -eq $Project })
     }
 
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand
+    $expectedReviewer = Get-PackReviewerFromSelector
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer
     if ($violations.Count -eq 0) {
-        Write-Host '[PASS] Live strict gate: no empty-review trap or command drift on latest run'
+        Write-Host '[PASS] Live strict gate: no empty-review trap, command drift, or selector mismatch on latest run'
         return $true
     }
 

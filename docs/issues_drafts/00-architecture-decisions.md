@@ -342,6 +342,24 @@ Decision taken 2026-05-30 after orchestrator `op-orchestrator` repeatedly reache
 See `docs/issues_drafts/33-orchestrator-session-launch-death-and-worktree-hygiene.md`
 (Issue #91).
 
+## L. Deterministic reviewer selection (reviewer-agnostic entrypoint)
+
+Decision taken 2026-05-30 after PR #84 executor drift: the orchestrator assembled
+`--command` from rules prose and AO defaulted to built-in Codex when omitted.
+
+1. **Single REVIEW_COMMAND.** `scripts/invoke-pack-review.ps1` is the only
+   script basename in **REVIEW_COMMAND**; it does not encode `claude` or `codex`.
+
+2. **Canonical selector.** `PACK_REVIEWER` (`codex` | `claude`) is the single
+   operator-controlled source of truth. The entrypoint, strict gate (`-Live` /
+   fixtures), and diagnose `-Strict` derive expected reviewer from this value
+   (fixture field `expectedReviewer` in CI). Unset/unknown selector fails closed.
+
+3. **AO layer unchanged.** Reviews still run via `ao review run --execute
+   --command <entrypoint>`; per-reviewer wrappers remain dispatch targets only.
+
+See `docs/issues_drafts/31-deterministic-reviewer-selection.md` (Issue #86).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

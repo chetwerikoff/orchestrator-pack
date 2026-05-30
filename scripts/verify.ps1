@@ -304,6 +304,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== PACK_REVIEWER selector and entrypoint (Issue #86) =='
+$selectorCheck = Join-Path $Root 'scripts/check-pack-reviewer-selector.ps1'
+if (Test-Path -LiteralPath $selectorCheck -PathType Leaf) {
+    & $selectorCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-pack-reviewer-selector.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-pack-reviewer-selector.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'PACK_REVIEWER selector and invoke-pack-review entrypoint checks failed (Issue #86)'
+    }
+}
+else {
+    Write-Check 'scripts/check-pack-reviewer-selector.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing PACK_REVIEWER selector check script (Issue #86)'
+}
+
+Write-Host ''
 Write-Host '== Strict review gate fixtures (Issue #79) =='
 $strictGate = Join-Path $Root 'scripts/invoke-pack-review-strict-gate.ps1'
 $aoCommandCheck = Join-Path $Root 'scripts/check-review-command-not-ao.ps1'

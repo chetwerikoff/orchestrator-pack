@@ -1,15 +1,16 @@
 {
-  "description": "failed with zero findings triggers empty-review trap",
+  "description": "Empty failed review trap with Claude selector",
   "expectPass": false,
-  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review-claude.ps1 --repo-root . --base origin/main",
+  "expectedReviewer": "claude",
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
   "runs": [
     {
       "status": "failed",
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "plugins/ao-codex-pr-reviewer/bin/review.ps1: npm ERR",
-      "completedAt": "2026-05-29T12:01:00Z"
+      "terminationReason": "scripts/run-pack-review-claude.ps1: claude --print exited 1",
+      "completedAt": "2026-05-29T12:12:00Z"
     }
   ]
 }

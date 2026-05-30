@@ -189,28 +189,28 @@ Otherwise Codex may return an empty review without inspecting the diff.
 Regression guards: `scripts/check-review-command-preflight.ps1`,
 `scripts/check-orchestrator-rules-quotes.ps1` (via `scripts/verify.ps1`).
 
-### Switching local reviewer: Codex ↔ Claude Sonnet
+### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 
-The canonical **REVIEW_COMMAND** in `agent-orchestrator.yaml.example` targets
-**Codex** via `scripts/run-pack-review.ps1` (tracked in the repo).
+**REVIEW_COMMAND** is reviewer-agnostic: `scripts/invoke-pack-review.ps1` (see
+`agent-orchestrator.yaml.example`). The operator sets **`PACK_REVIEWER`** to
+`codex` or `claude` before `ao start`; the entrypoint dispatches to
+`scripts/run-pack-review.ps1` or `scripts/run-pack-review-claude.ps1`.
+Unset/invalid `PACK_REVIEWER` fails closed (no reviewer run, no Codex default).
 
-For a temporary **Claude Sonnet** path, swap **REVIEW_COMMAND** to the parallel
-tracked wrapper `scripts/run-pack-review-claude.ps1` (same relative
-`--repo-root . --base origin/main` flags). Gitignored
-`<pack-root>/.ao/run-pack-review-claude.ps1` is **deprecated** — optional
-one-release forwarder only; `op-rev-*` worktrees do not contain `.ao/`.
+**Operator migration from Issue #79.** If live `agent-orchestrator.yaml` still
+names `run-pack-review.ps1` or `run-pack-review-claude.ps1` in **REVIEW_COMMAND**,
+copy the **NAMED REVIEW_COMMAND** line from the example (`invoke-pack-review.ps1`)
+and set `PACK_REVIEWER` to match the reviewer you were using. Gitignored
+`.ao/run-pack-review-claude.ps1` remains deprecated.
 
-**Strict gate (Issue #79).** CI runs `scripts/invoke-pack-review-strict-gate.ps1`
-on committed fixtures (no `ao` / `gh`). Operators run
-`scripts/orchestrator-diagnose.ps1 -Strict` before merge when AO is running live.
-Failed/cancelled runs with `findingCount: 0` and `terminationReason` naming a
-script other than **REVIEW_COMMAND** fail closed.
+**Strict gate (Issue #79 + #86).** CI runs `scripts/invoke-pack-review-strict-gate.ps1`
+on fixtures (no `ao` / `gh`). The gate checks empty-failed trap and
+**selector mismatch** (executed wrapper vs `PACK_REVIEWER` / fixture
+`expectedReviewer`). Operators run `scripts/orchestrator-diagnose.ps1 -Strict`
+when AO is live.
 
-Step-by-step switch instructions, preflight, smoke `ao review run`, and
-troubleshooting: [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
-
-After any **REVIEW_COMMAND** change, restart AO (`ao stop` then `ao start`) so
-`orchestratorRules` reload.
+Step-by-step: [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
+After **PACK_REVIEWER** or YAML changes, restart AO (`ao stop` then `ao start`).
 
 ### Worker prompt-delivery launch failure on Windows (Issue #63)
 
