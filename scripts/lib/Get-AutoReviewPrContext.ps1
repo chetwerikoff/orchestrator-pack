@@ -155,21 +155,17 @@ function Get-IssueNumberFromPrDiff {
 function Get-GhPrContextFromView {
     param(
         [string]$RepoRoot,
-        [int]$PrNumber = 0
+        [Parameter(Mandatory)]
+        [int]$PrNumber
     )
 
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    if ($PrNumber -le 0 -or -not (Get-Command gh -ErrorAction SilentlyContinue)) {
         return $null
     }
 
     Push-Location -LiteralPath $RepoRoot
     try {
-        $args = @('pr', 'view', '--json', 'number,body')
-        if ($PrNumber -gt 0) {
-            $args = @('pr', 'view', [string]$PrNumber, '--json', 'number,body')
-        }
-
-        $raw = (gh @args --jq '{number: .number, body: .body}' 2>$null)
+        $raw = (gh pr view ([string]$PrNumber) --json 'number,body' --jq '{number: .number, body: .body}' 2>$null)
         if (-not $raw) {
             return $null
         }
@@ -178,6 +174,36 @@ function Get-GhPrContextFromView {
     }
     finally {
         Pop-Location
+    }
+}
+
+function Set-AutoReviewResultFromPrView {
+    param(
+        [pscustomobject]$Result,
+        $PrView
+    )
+
+    if (-not $PrView -or -not $PrView.number) {
+        return
+    }
+
+    $Result.PrNumber = [int]$PrView.number
+    $body = [string]$PrView.body
+    if (-not $body -or $Result.IssueNumber) {
+        return
+    }
+
+    $matches = [regex]::Matches(
+        $body,
+        '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
+    )
+    if ($matches.Count -eq 0) {
+        return
+    }
+
+    $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
+    if ($issueNumber -gt 0) {
+        $Result.IssueNumber = $issueNumber
     }
 }
 
@@ -261,55 +287,24 @@ function Get-AutoReviewPrContext {
     }
 
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $prView = $null
+        # Never call bare `gh pr view` — AO review workspaces use detached HEAD.
         if ($prFromEnv -gt 0) {
             $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $prFromEnv
-        }
-        if (-not $prView) {
-            $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot
-        }
-
-        if ($prView -and $prView.number) {
-            $result.PrNumber = [int]$prView.number
-            $body = [string]$prView.body
-            if ($body) {
-                $matches = [regex]::Matches(
-                    $body,
-                    '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
-                )
-                if ($matches.Count -gt 0) {
-                    $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
-                    if ($issueNumber -gt 0) {
-                        $result.IssueNumber = $issueNumber
-                    }
-                }
-            }
+            Set-AutoReviewResultFromPrView -Result $result -PrView $prView
         }
 
         if (-not $result.PrNumber) {
-            $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $branch
-            if (-not $prNumber -and $headSha) {
+            $prNumber = $null
+            if ($headSha) {
                 $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $headSha
+            }
+            if (-not $prNumber -and $branch -and $branch -ne 'HEAD') {
+                $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $branch
             }
 
             if ($prNumber) {
                 $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $prNumber
-                if ($prView -and $prView.number) {
-                    $result.PrNumber = [int]$prView.number
-                    $body = [string]$prView.body
-                    if ($body -and -not $result.IssueNumber) {
-                        $matches = [regex]::Matches(
-                            $body,
-                            '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
-                        )
-                        if ($matches.Count -gt 0) {
-                            $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
-                            if ($issueNumber -gt 0) {
-                                $result.IssueNumber = $issueNumber
-                            }
-                        }
-                    }
-                }
+                Set-AutoReviewResultFromPrView -Result $result -PrView $prView
             }
         }
     }
