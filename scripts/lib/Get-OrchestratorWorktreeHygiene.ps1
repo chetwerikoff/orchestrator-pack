@@ -65,7 +65,8 @@ function Get-OrchestratorStaleWorktreeFindings {
                         $wtBranch = $Matches[1]
                     }
                 }
-                if ($wtBranch -eq $paths.BranchName -or $wtPath -like "*\$SessionId") {
+                $pathMatchesSession = ($wtPath -like "*\$SessionId") -or ($wtPath -like "*/$SessionId")
+                if ($wtBranch -eq $paths.BranchName -or $pathMatchesSession) {
                     $branchLabel = if ($wtBranch) { $wtBranch } else { 'detached' }
                     $findings.Add([pscustomobject]@{
                             Kind    = 'git-worktree'

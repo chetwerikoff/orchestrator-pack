@@ -5,13 +5,13 @@
 
 .DESCRIPTION
   Exits 0 only when the orchestrator session is working with alive runtime for
-  PollCount consecutive checks spaced IntervalSec apart (default 3 x 20s).
+  PollCount consecutive checks spaced IntervalSec apart (default 4 x 20s = 60s window).
 #>
 [CmdletBinding()]
 param(
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
-    [int]$PollCount = 3,
+    [int]$PollCount = 4,
     [int]$IntervalSec = 20
 )
 

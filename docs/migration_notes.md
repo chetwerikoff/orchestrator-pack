@@ -309,7 +309,7 @@ above). Orchestrator `stuck` / `probe_failure` right after `ao start` or
 
 **Pack-side checks:** `scripts/check-orchestrator-launch-failure.ps1` (fixtures under
 `tests/fixtures/orchestrator-launch-failure/`), wired in `scripts/verify.ps1`.
-`scripts/wait-orchestrator-launch.ps1` requires **3×20s** sustained
+`scripts/wait-orchestrator-launch.ps1` requires **4×20s** sustained
 `working` + alive runtime before declaring launch success.
 
 **Upstream:** durable fix remains ComposioHQ/agent-orchestrator /
