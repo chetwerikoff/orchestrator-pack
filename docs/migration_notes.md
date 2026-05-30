@@ -285,6 +285,45 @@ imports). Verify with `node --check` and that the built command contains no
 `printf` and two `cat` calls. Remove the workaround once #2074 ships and pin the
 fixed plugin version in `docs/orchestrator-autoloop-go-live.md`.
 
+#### After `ao` upgrade — verify worker #2074 patch (Windows)
+
+**When:** after every `npm i -g @aoagents/ao@…` (or any global AO install that
+reinstalls `@aoagents/ao-plugin-agent-cursor`). Upgrades **do not** apply the patch
+automatically until upstream [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074)
+ships in the pinned plugin.
+
+**Pass criteria** in `dist/index.js` `getLaunchCommand` (Windows worker path with
+`config.prompt`):
+
+- contains `ao-worker-prompt-` (temp task prompt file);
+- emits **two** `cat` calls (`systemPromptFile` + `taskPromptFile`), not
+  `printf %s` with the task prompt inlined into argv.
+
+The non-Windows `else` branch may still use `printf %s` — that is expected. A
+failed upgrade removes the `ao-worker-prompt-` block entirely.
+
+```powershell
+$plugin = Join-Path (npm root -g) "@aoagents\ao\node_modules\@aoagents\ao-plugin-agent-cursor\dist\index.js"
+if (-not (Test-Path -LiteralPath $plugin)) {
+  throw "cursor plugin not found: $plugin"
+}
+$src = Get-Content -LiteralPath $plugin -Raw
+$hasPatch = $src -match 'ao-worker-prompt-' -and $src -match 'cat \$\{shellEscape\(taskPromptFile\)\}'
+if (-not $hasPatch) {
+  throw @"
+Worker #2074 patch missing in:
+  $plugin
+Expected: ao-worker-prompt- temp file + two cat calls (no printf %s for config.prompt on Windows).
+Re-apply the 'Local workaround' steps above, then run node --check on this file.
+"@
+}
+node --check $plugin
+Write-Host "OK: worker #2074 file-delivery patch present"
+```
+
+If workers again show Signature A (`printf` not recognized) or B (`command line is
+too long`) right after an `ao` upgrade, run this check before re-spawning.
+
 **Not launch failure:** `workspace.branch_collision` warnings during spawn are
 worktree hygiene; inspect separately.
 
@@ -352,7 +391,9 @@ cat-only `$(cat <file>)`).
    ```
 
 4. **Workers on Windows** — durable fix is [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074);
-   do not reintroduce `~/.ao/bin/agent` as a standing workaround.
+   do not reintroduce `~/.ao/bin/agent` as a standing workaround. After every
+   `npm i -g @aoagents/ao@…`, run the **After `ao` upgrade — verify worker #2074
+   patch** check above (`ao-worker-prompt-` + two `cat`, not reverted `printf %s`).
 
 #### Recovery sequence (EPERM or dead orchestrator)
 
