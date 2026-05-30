@@ -1,0 +1,24 @@
+{
+  "issue_number": 99,
+  "iteration_id": "architect-revert-58",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-30T15:27:30.201Z",
+  "baseline": {
+    "commit_sha": "824727ff397b3fa878122bce8be027b1c07c061c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ad863931d84b28c69c12e1e0d6dca75988b2a13f5d935de57349598fab46856c"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/11-orchestrator-autonomous-review-loop.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/34-review-layer-resilience-after-worker-respawn.md"
+  ],
+  "declared_globs": [
+    "docs/**"
+  ],
+  "amendments": []
+}
