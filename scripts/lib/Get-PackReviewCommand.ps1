@@ -208,6 +208,13 @@ function Get-PackReviewGateViolations {
                 Run     = $latest
             }) | Out-Null
     }
+    elseif ($usesSelector -and $expectedReviewer -and [string]::IsNullOrWhiteSpace($reason)) {
+        $violations.Add([pscustomobject]@{
+                Kind    = 'selector-mismatch'
+                Message = ('terminationReason is blank; cannot verify PACK_REVIEWER={0} matched executed wrapper' -f $expectedReviewer)
+                Run     = $latest
+            }) | Out-Null
+    }
     elseif (-not [string]::IsNullOrWhiteSpace($reason)) {
         if ($usesSelector) {
             $expectedWrapper = Get-PackReviewWrapperBasenameForReviewer -Reviewer $expectedReviewer

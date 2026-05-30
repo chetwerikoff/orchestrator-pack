@@ -1,0 +1,16 @@
+{
+  "description": "Valid expectedReviewer with blank terminationReason fails closed (unverifiable execution)",
+  "expectPass": false,
+  "expectedReviewer": "codex",
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
+  "runs": [
+    {
+      "status": "clean",
+      "findingCount": 0,
+      "openFindingCount": 0,
+      "sentFindingCount": 0,
+      "terminationReason": "",
+      "completedAt": "2026-05-30T11:00:00Z"
+    }
+  ]
+}
