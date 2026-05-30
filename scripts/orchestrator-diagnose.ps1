@@ -17,7 +17,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$packRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$packRoot = [string](Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'lib/Test-WorkerLaunchFailure.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorWorktreeHygiene.ps1')

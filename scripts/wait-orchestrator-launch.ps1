@@ -28,11 +28,11 @@ function Get-OrchestratorFromStatus {
 
     $args = @('status', '--json', '--reports', 'full')
     if ($Proj) { $args += @('-p', $Proj) }
-    $raw = & ao @args 2>&1
+    $raw = & ao @args 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "ao status failed: $raw"
     }
-    $payload = $raw | ConvertFrom-Json
+    $payload = ($raw | Out-String).Trim() | ConvertFrom-Json
     $sessions = @($payload.data)
     if (-not $sessions -and $payload.sessions) { $sessions = @($payload.sessions) }
     $orch = $sessions | Where-Object { $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
