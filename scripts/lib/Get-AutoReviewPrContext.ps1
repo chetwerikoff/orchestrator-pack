@@ -4,11 +4,75 @@
   Resolve PR number and linked GitHub issue from the reviewed repo (gh + git).
 #>
 
+function Get-IssueNumberFromDeclarationFilename {
+    param([string]$RelativePath)
+
+    if ($RelativePath -match '(?:^|[\\/])docs[\\/]declarations[\\/](\d+)\.[^\\/]+\.json$') {
+        $n = [int]$Matches[1]
+        if ($n -gt 0) {
+            return $n
+        }
+    }
+
+    return $null
+}
+
+function Get-IssueNumberFromBranchDeclarationDiff {
+    param([string]$RepoRoot)
+
+    $issueNumbers = [System.Collections.Generic.HashSet[int]]::new()
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $diffRanges = @(
+            'origin/main...HEAD',
+            'main...HEAD'
+        )
+
+        $mergeBase = (git merge-base HEAD origin/main 2>$null)
+        if ($mergeBase) {
+            $diffRanges += "$mergeBase..HEAD"
+        }
+
+        $mergeBaseMain = (git merge-base HEAD main 2>$null)
+        if ($mergeBaseMain) {
+            $diffRanges += "$mergeBaseMain..HEAD"
+        }
+
+        foreach ($range in $diffRanges) {
+            $files = @(git diff --name-only $range -- 'docs/declarations/*.json' 2>$null)
+            foreach ($file in $files) {
+                if ([string]::IsNullOrWhiteSpace($file)) {
+                    continue
+                }
+
+                $n = Get-IssueNumberFromDeclarationFilename -RelativePath ($file.Replace('\', '/'))
+                if ($n) {
+                    [void]$issueNumbers.Add($n)
+                }
+            }
+        }
+
+        if ($issueNumbers.Count -eq 1) {
+            return @($issueNumbers)[0]
+        }
+
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-IssueNumberFromDeclarationSnapshots {
     param(
         [string]$RepoRoot,
         [string]$SessionId
     )
+
+    $fromBranch = Get-IssueNumberFromBranchDeclarationDiff -RepoRoot $RepoRoot
+    if ($fromBranch) {
+        return $fromBranch
+    }
 
     $declDir = Join-Path $RepoRoot 'docs\declarations'
     if (-not (Test-Path -LiteralPath $declDir -PathType Container)) {
@@ -50,6 +114,35 @@ function Get-IssueNumberFromDeclarationSnapshots {
     }
 
     return $null
+}
+
+function Get-GhPrContextFromView {
+    param(
+        [string]$RepoRoot,
+        [int]$PrNumber = 0
+    )
+
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $args = @('pr', 'view', '--json', 'number,body')
+        if ($PrNumber -gt 0) {
+            $args = @('pr', 'view', [string]$PrNumber, '--json', 'number,body')
+        }
+
+        $raw = (gh @args --jq '{number: .number, body: .body}' 2>$null)
+        if (-not $raw) {
+            return $null
+        }
+
+        return ($raw | ConvertFrom-Json)
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 function Get-GhPrNumberForHead {
@@ -120,33 +213,67 @@ function Get-AutoReviewPrContext {
         Pop-Location
     }
 
+    $prFromEnv = 0
+    if ($env:AO_PR_NUMBER) {
+        $prFromEnv = [int]$env:AO_PR_NUMBER
+    }
+    elseif ($env:GITHUB_PULL_REQUEST_NUMBER) {
+        $prFromEnv = [int]$env:GITHUB_PULL_REQUEST_NUMBER
+    }
+    elseif ($env:GITHUB_PR_NUMBER) {
+        $prFromEnv = [int]$env:GITHUB_PR_NUMBER
+    }
+
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $branch
-        if (-not $prNumber -and $headSha) {
-            $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $headSha
+        $prView = $null
+        if ($prFromEnv -gt 0) {
+            $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $prFromEnv
+        }
+        if (-not $prView) {
+            $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot
         }
 
-        if ($prNumber) {
-            $result.PrNumber = $prNumber
-
-            Push-Location -LiteralPath $RepoRoot
-            try {
-                $body = (gh pr view $prNumber --json body --jq '.body' 2>$null)
-                if ($body) {
-                    $matches = [regex]::Matches(
-                        $body,
-                        '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
-                    )
-                    if ($matches.Count -gt 0) {
-                        $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
-                        if ($issueNumber -gt 0) {
-                            $result.IssueNumber = $issueNumber
-                        }
+        if ($prView -and $prView.number) {
+            $result.PrNumber = [int]$prView.number
+            $body = [string]$prView.body
+            if ($body) {
+                $matches = [regex]::Matches(
+                    $body,
+                    '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
+                )
+                if ($matches.Count -gt 0) {
+                    $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
+                    if ($issueNumber -gt 0) {
+                        $result.IssueNumber = $issueNumber
                     }
                 }
             }
-            finally {
-                Pop-Location
+        }
+
+        if (-not $result.PrNumber) {
+            $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $branch
+            if (-not $prNumber -and $headSha) {
+                $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $headSha
+            }
+
+            if ($prNumber) {
+                $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $prNumber
+                if ($prView -and $prView.number) {
+                    $result.PrNumber = [int]$prView.number
+                    $body = [string]$prView.body
+                    if ($body -and -not $result.IssueNumber) {
+                        $matches = [regex]::Matches(
+                            $body,
+                            '(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b'
+                        )
+                        if ($matches.Count -gt 0) {
+                            $issueNumber = [int]$matches[$matches.Count - 1].Groups[1].Value
+                            if ($issueNumber -gt 0) {
+                                $result.IssueNumber = $issueNumber
+                            }
+                        }
+                    }
+                }
             }
         }
     }

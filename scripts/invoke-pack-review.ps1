@@ -5,6 +5,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Resolve-PackReviewer.ps1')
+. (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 
 $reviewer = Get-PackReviewerFromSelector
 if (-not $reviewer) {
@@ -19,5 +21,15 @@ if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
     exit 1
 }
 
-& $wrapperPath @args
+$cli = Split-PackReviewCliArgs -Argv $args
+$resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
+$forwardArgs = [System.Collections.Generic.List[string]]::new()
+foreach ($arg in $cli.ForwardArgs) {
+    $forwardArgs.Add($arg) | Out-Null
+}
+
+Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
+
+$wrapperArgs = @('--repo-root', $resolvedRoot, '--base', $cli.Base) + $forwardArgs.ToArray()
+& $wrapperPath @wrapperArgs
 exit $LASTEXITCODE
