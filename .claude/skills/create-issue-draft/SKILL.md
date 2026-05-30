@@ -161,6 +161,17 @@ gh issue edit <N> --repo chetwerikoff/orchestrator-pack --body-file $body
 
 For new issues: `gh issue create ... --body-file $body --title "<title>"`.
 
+## Publish to main (required by default)
+
+After sync, the draft must not stay uncommitted on disk. Unless the user opts out
+(«только драфт», «без PR», «не мержи»), immediately invoke
+[`publish-issue-draft`](../publish-issue-draft/SKILL.md):
+
+1. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
+2. Open PR (`docs: draft NN — … (#N spec)`).
+3. Merge when CI is green (and manual Codex review if the user expects it).
+4. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
+
 ## Cross-issue contract changes
 
 When a change affects ≥ 2 drafts (example: NO_FINDINGS contract touching #9

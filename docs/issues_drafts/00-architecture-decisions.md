@@ -367,6 +367,31 @@ Decision taken 2026-05-30 after PR #84 executor drift: the orchestrator assemble
 
 See `docs/issues_drafts/31-deterministic-reviewer-selection.md` (Issue #86).
 
+## M. Operator adoption handoff (post-PR settings)
+
+Decision taken 2026-05-30: merged PRs often ship operator-facing wiring in
+`agent-orchestrator.yaml.example` and docs while live config, listeners, and
+restarts stay stale — adoption was documented but not assigned to a role or
+enforced at handoff time.
+
+1. **Three roles.** Architect specs operator adoption in the issue draft when
+   operator-facing surfaces change. Worker documents the same checklist in the
+   PR (`## Operator adoption`, near the top) and in `docs/migration_notes.md`
+   before `completed`. Operator executes the checklist after merge (live yaml,
+   env, long-running scripts, `ao stop`/`ao start`).
+
+2. **Workers document, not operate.** Listeners, secrets, and machine-local CLI
+   config are operator-owned. Workers MUST NOT treat adoption as done silently.
+   Optional live-yaml merge only in the primary checkout when the issue explicitly
+   asks — never assumed from an AO worktree.
+
+3. **Enforcement.** PRs that change `agent-orchestrator.yaml.example` MUST also
+   change `docs/migration_notes.md` or carry the exact PR-body waiver
+   `No operator adoption required`. `orchestratorRules` reminds the operator on
+   merge-ready PRs to run the checklist from the PR.
+
+See `docs/issues_drafts/35-operator-adoption-handoff-contract.md`.
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
