@@ -19,7 +19,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorWorktreeHygiene.ps1')
 
 if (-not $RepoRoot) {
-    $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    $RepoRoot = [string](Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+}
+else {
+    $RepoRoot = [string]$RepoRoot
 }
 
 $orchId = $OrchestratorSessionId

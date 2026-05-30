@@ -288,37 +288,157 @@ fixed plugin version in `docs/orchestrator-autoloop-go-live.md`.
 **Not launch failure:** `workspace.branch_collision` warnings during spawn are
 worktree hygiene; inspect separately.
 
-### Orchestrator prompt-delivery launch failure on Windows (Issue #91)
+### Dead orchestrator vs `ao spawn` (operator)
 
-The **orchestrator** Cursor session uses the same vendor launch path as workers
-(`@aoagents/ao-plugin-agent-cursor`: `$(cat <orchestrator-prompt-file>)` under
-PowerShell). Signatures A and B match Issue #63 but apply to the **orchestrator**
-PTY and lifecycle (`spawning → working → detecting → stuck` /
-`agent_process_exited` on the orchestrator id).
+`ao spawn <issue>` starts or revives **worker** sessions only. It does **not**
+restart a dead orchestrator. If `op-orchestrator` is already `detecting` /
+`exited` / `stuck` with `runtime=exited` or `process_missing`, repeated
+`ao spawn` only bumps probe counters against a corpse — it is not a recovery step.
 
-**Operator routing:** worker spawn death → worker PTY + this doc (worker subsection
-above). Orchestrator `stuck` / `probe_failure` right after `ao start` or
-`ao session kill` + respawn → orchestrator PTY + `docs/orchestrator-recovery-runbook.md`
-(decision table). Do not kill the orchestrator for worker-only launch failure.
+**Restart the orchestrator explicitly:**
 
-**Stale `orchestrator/*` worktree/branch:** after `ao session kill`, a leftover
-`orchestrator/op-orchestrator` branch or AO worktree dir can cause
-`workspace.branch_collision` on respawn. Pack hygiene (not vendor #2072 template):
-`scripts/orchestrator-worktree-preflight.ps1` before `ao start`; also surfaced in
-`scripts/orchestrator-diagnose.ps1`.
+```powershell
+ao session kill op-orchestrator   # when a stale session record exists
+ao start                          # recreates orchestrator when the daemon is up
+# or: ao stop; ao start
+pwsh -File scripts/wait-orchestrator-launch.ps1
+```
 
-**Pack-side checks:** `scripts/check-orchestrator-launch-failure.ps1` (fixtures under
-`tests/fixtures/orchestrator-launch-failure/`), wired in `scripts/verify.ps1`.
-`scripts/wait-orchestrator-launch.ps1` requires **4×20s** sustained
-`working` + alive runtime before declaring launch success.
+Attach within the first ~20s for live PTY output:
+`ao session attach op-orchestrator`.
 
-**Upstream:** durable fix remains ComposioHQ/agent-orchestrator /
-`@aoagents/ao-plugin-agent-cursor` — file or flag for prompt delivery
-([#2072](https://github.com/ComposioHQ/agent-orchestrator/issues/2072)); orchestrator
-surface documented in pack escalation, not fixed in-tree.
+### Windows orchestrator prevention — `~/.ao/bin/agent` shim and worktree EPERM (RCA 2026-05-30)
+
+**Observed:** `op-orchestrator` exits instantly (`runtime=exited`, `process_missing`,
+empty PTY / `alive:false`); or `ao start` fails with `EPERM` on
+`worktrees/op-orchestrator` while reproducing the same launch command in isolation
+stays resident.
+
+**Root causes (two layers, often together):**
+
+1. **Bash `agent` shim in `~/.ao/bin`** — AO prepends that directory on every spawn
+   (`buildAgentPath` in `@aoagents/ao-core`). AO installs only **`gh` / `git`**
+   wrappers there (`.cjs` + `.cmd` on Windows), **never** `agent`. A manual
+   `~/.ao/bin/agent` bash script (historically created for `AO_SHELL=bash` worker
+   experiments — Git Bash cannot resolve `agent.cmd`) makes **pwsh** resolve
+   `agent` to the shim → immediate exit **0**, no cursor-agent child.
+2. **Orphan ConPTY children** — `pwsh` + `cursor-agent` under the orchestrator
+   worktree survive `ao session kill` / `ao stop` and hold directory handles. With
+   `orchestratorSessionStrategy: delete`, the next `ao start` runs `rmSync` on the
+   worktree → **`EPERM`**.
+
+**Ruled out for the instant-exit signature:** JediTerm env alone, prompt size,
+`unref` on pty-host stdio, cursor-plugin #2074 worker patch (orchestrator uses
+cat-only `$(cat <file>)`).
+
+#### Do not repeat (operator checklist)
+
+1. **Do not place `~/.ao/bin\agent`** (or any bash shim) in the directory AO always
+   prepends to `PATH`. For Windows workers use upstream
+   [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074) (task
+   prompt via temp file in the patched cursor plugin), not a permanent shim in
+   `~/.ao/bin`.
+2. **After `ao session kill`, failed spawn, or `EPERM`** — clear orphans before the
+   next `ao start`. Use [Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle)
+   on the worktree path → `taskkill /T /F /PID <pid>` for each holder. **Do not**
+   run `Get-Process node | Stop-Process` (kills the IDE / this Cursor session).
+   Pack helper: `scripts/unlock-op-orchestrator-worktree.ps1` (external PowerShell).
+3. **Before every `ao start` on Windows:**
+
+   ```powershell
+   if (Test-Path "$env:USERPROFILE\.ao\bin\agent") {
+     Write-Error "Remove ~/.ao/bin/agent before ao start (see migration_notes.md)"
+   }
+   ```
+
+4. **Workers on Windows** — durable fix is [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074);
+   do not reintroduce `~/.ao/bin/agent` as a standing workaround.
+
+#### Recovery sequence (EPERM or dead orchestrator)
+
+```powershell
+pwsh -NoProfile -File scripts/unlock-op-orchestrator-worktree.ps1
+# or: preflight -Apply after handle-based kill; then ao stop; ao start
+pwsh -File scripts/wait-orchestrator-launch.ps1
+node $env:TEMP\ao-pipe-read.cjs   # trust pipe: alive:true + orchestrator scrollback
+```
+
+See also `docs/orchestrator-recovery-runbook.md` (step 2b) and
+`scripts/orchestrator-worktree-preflight.ps1`.
+
+### Orchestrator trust-bootstrap loop / missing full prompt (Issue #91)
+
+**Named condition:** **trust-bootstrap-only launch** — the orchestrator PTY (or its
+Cursor transcript) receives only `workspace-trust-bootstrap: reply OK only.` (~68 B),
+not the full orchestrator prompt (~13 KB at
+`~/.agent-orchestrator/projects/<project>/orchestrator-prompt-op-orchestrator.md`).
+The agent answers `OK` and exits; AO then reports `working → detecting → stuck` /
+`probe_failure` with `detectingEvidenceHash` e.g. `9f6adba924ef` and
+`lifecycleEvidence` like `signal_disagreement runtime=alive process=dead` (PTY host
+may stay up while the cursor child is gone).
+
+**Not the model:** cursor-agent is **not** inherently one-turn-only when the full
+prompt is delivered — orchestrator transcripts through **2026-05-29** and
+**2026-05-30 ~06:45** show many turns with the full “orchestrator agent” prompt. A
+misleading “turn-exit” hypothesis came from a diagnostic run with an explicit
+“Reply READY then stop” prompt and closed stdin; do not use that as production
+behavior.
+
+**Regression window (observed):** full-prompt sessions through early **2026-05-30**;
+from **~09:22** onward, trust-bootstrap-only transcripts dominate while the on-disk
+orchestrator prompt file remains correct (~13 KB). Correlates with **2026-05-30**
+morning changes (plugin #2074 patch timing, `agentRulesFile` → missing spawn-stub
+after pull, repeated `ao session kill` / `branch_collision` on `orchestrator/*`) —
+exact “bootstrap replaces launch” mechanism in AO/plugin is still open; confirm
+with `ao session attach op-orchestrator` in the first ~20s after `ao start`.
+
+**Separate from headless trust jsonl:** `scripts/trust-ao-worktree.ps1` runs a
+**separate** `agent -p` with the bootstrap text to write `.workspace-trusted`.
+`orchestrator-worktree-trust-watcher.ps1` does this for each new worktree. Those
+runs create small bootstrap transcripts under `~/.cursor/projects/.../agent-transcripts/`
+— **do not** treat them as the orchestrator PTY without checking mtime and first
+user message (full prompt starts with `# orchestrator-pack Orchestrator` / `You are
+the **orchestrator agent**`).
+
+**Orchestrator vs worker (2026-05-30):**
+
+| Surface | Typical failure today | Fix layer |
+|---------|---------------------|-----------|
+| **Orchestrator** | Bootstrap-only or dead session after kill/collision; `ao spawn` does not revive | This section + worktree preflight + explicit `ao stop`/`ao start`; attach PTY |
+| **Worker** | Missing `agentRulesFile` target (e.g. `prompts/agent_rules_spawn_stub.md` removed by pull while live YAML still references it) | Set `agentRulesFile: prompts/agent_rules.md` in live YAML; worker #2074 file patch |
+
+Plugin #2074 diff touches **worker** `printf` inlining only; orchestrator uses
+cat-only launch. A/B revert of `index.js` → `.orig` did not restore full-prompt
+transcripts by itself — bootstrap loop is not explained by worker argv patch alone.
+
+**Operator routing:** Signature A/B → Issue #63 when the **first** PTY line shows
+`printf` / `command line is too long` before any cursor turn. Bootstrap-only /
+`probe_failure` with full prompt file present → this section and
+`docs/orchestrator-recovery-runbook.md` (orchestrator `probe_failure` = missing full
+launch or post-kill corpse, **not** “idle orchestrator”). Do not use `ao spawn` to
+revive a dead orchestrator (see **Dead orchestrator vs `ao spawn`**).
+
+**Remediation order (operator, live `agent-orchestrator.yaml`):**
+
+1. `agentRulesFile: prompts/agent_rules.md` (do not point at a stub that is not on disk).
+2. Stop `orchestrator-worktree-trust-watcher.ps1` during diagnosis if it is running.
+3. `pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply` for `branch_collision`.
+4. `ao stop` then `ao start`; optional `pwsh -File scripts/wait-orchestrator-launch.ps1` (stderr from notifiers breaks JSON — use `2>$null` or fix script).
+5. `ao session attach op-orchestrator` within ~20s — first screen must be full orchestrator text, not bootstrap only.
+
+**Stale `orchestrator/*` worktree/branch:** after `ao session kill`, leftover
+`orchestrator/op-orchestrator` branch or worktree dir causes `workspace.branch_collision`
+on respawn. Pack hygiene: `scripts/orchestrator-worktree-preflight.ps1` before `ao start`.
+
+**Pack-side checks:** `scripts/check-orchestrator-launch-failure.ps1` — Signature A/B
+PTY fixtures only.
+
+**Upstream ask:** [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074)
+(prompt file delivery) plus clarification: orchestrator launch must deliver the full
+`orchestrator-prompt-*.md` in the PTY session, not stop after trust bootstrap.
 
 **Restore metadata:** `restoreFallbackReason: cursor.getRestoreCommand returned null`
-is normal for Cursor restore (fresh `getLaunchCommand`); not root cause alone.
+is normal for Cursor restore; not root cause alone.
 
 ## Autoloop go-live (operator checklist)
 
@@ -373,9 +493,10 @@ in-flight state first:
 2. Optionally run `pwsh -File scripts/orchestrator-diagnose.ps1` for a read-only
    one-screen snapshot before escalation.
 
-If a **worker** (not the orchestrator) exits immediately after spawn with no PR,
-see **Worker prompt-delivery launch failure on Windows (Issue #63)** above — do not
-apply orchestrator stuck recovery to that worker.
+If a **worker** (not the orchestrator) exits within ~1–2 minutes of spawn with no
+PR, see **Worker prompt-delivery launch failure (Issue #63)** and check live
+`agentRulesFile` points at an on-disk file — do not apply orchestrator stuck
+recovery to that worker.
 
 After recovery, the orchestrator re-applies `orchestratorRules` from your live
 YAML (see **Autonomous review loop** above). This path does not add automatic

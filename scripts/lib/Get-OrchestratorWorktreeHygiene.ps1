@@ -93,6 +93,6 @@ function Get-OrchestratorStaleWorktreeFindings {
 
     return [pscustomobject]@{
         Paths    = $paths
-        Findings = @($findings)
+        Findings = [object[]]$findings.ToArray()
     }
 }
