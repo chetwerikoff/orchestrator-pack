@@ -107,10 +107,15 @@ op-3` manual rebind, and fresh review run on current head.
 
 ## Denylist
 
+Same vendor/core/runtime guards as
+`docs/issues_drafts/24-ao-review-preflight-and-failed-run-discipline.md`, plus runtime
+session exports:
+
 ```denylist
-vendor/**
 packages/core/**
+vendor/**
 .ao/**
+sessions/**
 agent-orchestrator.yaml
 code-reviews/**
 ```
