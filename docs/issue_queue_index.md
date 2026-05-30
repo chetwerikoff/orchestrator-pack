@@ -66,4 +66,5 @@ task).
 | `32-worker-acknowledge-pickup-contract.md` | [#88](https://github.com/chetwerikoff/orchestrator-pack/issues/88) | Mandatory `ao acknowledge` in worker agent rules (no_acknowledge / stuck prevention) |
 | `33-orchestrator-session-launch-death-and-worktree-hygiene.md` | [#91](https://github.com/chetwerikoff/orchestrator-pack/issues/91) | Orchestrator launch death + orchestrator/* worktree preflight |
 | `34-review-layer-resilience-after-worker-respawn.md` | [#98](https://github.com/chetwerikoff/orchestrator-pack/issues/98) | Idempotent review runs, orphan-run reap path, detached-HEAD-safe PR context, stale-workspace guard (after #60, #28, #91) |
+| `35-operator-adoption-handoff-contract.md` | [#101](https://github.com/chetwerikoff/orchestrator-pack/issues/101) | Operator adoption handoff: architect specs, worker documents, operator executes; CI guard for .example ↔ migration_notes |
 | _(revert; no draft file)_ | [#99](https://github.com/chetwerikoff/orchestrator-pack/issues/99) | Revert #58 state-derived reconciliation (PR #97 split-brain); closed when revert PR merges |
