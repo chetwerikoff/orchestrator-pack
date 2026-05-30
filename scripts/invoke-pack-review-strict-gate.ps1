@@ -132,7 +132,7 @@ function Invoke-LiveGate {
     }
 
     $expectedReviewer = Get-PackReviewerFromSelector
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer -FixtureMode
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer
     if ($violations.Count -eq 0) {
         Write-Host '[PASS] Live strict gate: no empty-review trap, command drift, or selector mismatch on latest run'
         return $true
