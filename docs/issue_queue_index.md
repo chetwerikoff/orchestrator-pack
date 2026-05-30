@@ -63,4 +63,5 @@ task).
 | `29-skill-eval-bounded-edit-preflight.md` | [#81](https://github.com/chetwerikoff/orchestrator-pack/issues/81) | Offline bounded-edit preflight (hygiene only, after #80) |
 | `30-skill-eval-live-behavior-gate.md` | none yet | Live prompt-behavior gate (after #80+#81; needs Codex auth) |
 | `31-deterministic-reviewer-selection.md` | [#86](https://github.com/chetwerikoff/orchestrator-pack/issues/86) | Reviewer-agnostic entrypoint + explicit selector; deterministic reviewer choice, AO layer preserved (after #79) |
+| `32-worker-acknowledge-pickup-contract.md` | [#88](https://github.com/chetwerikoff/orchestrator-pack/issues/88) | Mandatory `ao acknowledge` in worker agent rules (no_acknowledge / stuck prevention) |
 | `33-orchestrator-session-launch-death-and-worktree-hygiene.md` | [#91](https://github.com/chetwerikoff/orchestrator-pack/issues/91) | Orchestrator launch death + orchestrator/* worktree preflight |
