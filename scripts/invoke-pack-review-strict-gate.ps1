@@ -83,7 +83,7 @@ function Test-SingleFixtureGate {
 
     $runs = @($payload.runs)
     $expectedReviewer = [string]$payload.expectedReviewer
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer -FixtureMode
     $shouldPass = $true
     if ($null -ne $payload.expectPass) {
         $shouldPass = [bool]$payload.expectPass
@@ -132,7 +132,7 @@ function Invoke-LiveGate {
     }
 
     $expectedReviewer = Get-PackReviewerFromSelector
-    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer
+    $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer -FixtureMode
     if ($violations.Count -eq 0) {
         Write-Host '[PASS] Live strict gate: no empty-review trap, command drift, or selector mismatch on latest run'
         return $true

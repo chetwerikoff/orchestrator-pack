@@ -28,7 +28,8 @@ function Get-ReviewerFromTerminationReason {
 function Get-ExpectedPackReviewer {
     param(
         [string]$ExpectedReviewer,
-        [string]$ReviewCommand
+        [string]$ReviewCommand,
+        [switch]$FixtureMode
     )
 
     if (-not [string]::IsNullOrWhiteSpace($ExpectedReviewer)) {
@@ -40,6 +41,9 @@ function Get-ExpectedPackReviewer {
 
     $entryBasename = Get-ReviewScriptBasenameFromCommand -ReviewCommand $ReviewCommand
     if ($entryBasename -eq $Script:PackReviewAgnosticEntryBasename) {
+        if ($FixtureMode) {
+            return $null
+        }
         return Get-PackReviewerFromSelector
     }
 
@@ -164,7 +168,8 @@ function Get-PackReviewGateViolations {
         [array]$Runs,
         [Parameter(Mandatory)]
         [string]$ReviewCommand,
-        [string]$ExpectedReviewer = ''
+        [string]$ExpectedReviewer = '',
+        [switch]$FixtureMode
     )
 
     $violations = [System.Collections.Generic.List[object]]::new()
@@ -197,7 +202,7 @@ function Get-PackReviewGateViolations {
 
     $reason = [string]$latest.terminationReason
     $entryBasename = Get-ReviewScriptBasenameFromCommand -ReviewCommand $ReviewCommand
-    $expectedReviewer = Get-ExpectedPackReviewer -ExpectedReviewer $ExpectedReviewer -ReviewCommand $ReviewCommand
+    $expectedReviewer = Get-ExpectedPackReviewer -ExpectedReviewer $ExpectedReviewer -ReviewCommand $ReviewCommand -FixtureMode:$FixtureMode
     $usesSelector = ($entryBasename -eq $Script:PackReviewAgnosticEntryBasename) -or
         -not [string]::IsNullOrWhiteSpace($ExpectedReviewer)
 
