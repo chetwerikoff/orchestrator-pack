@@ -29,6 +29,7 @@ For a **healthy orchestrator process that never reacts to CI/review events**, se
 | Symptom | Inspect first | Pack pointer |
 |---------|---------------|--------------|
 | **Worker** exits within ~1 minute of spawn, no PR, no `ao acknowledge` | Worker session PTY | `docs/migration_notes.md` — **Worker** prompt-delivery launch failure (Issue #63) |
+| Workers fail at spawn with Signature A/B **right after** `npm i -g @aoagents/ao@…` | `@aoagents/ao-plugin-agent-cursor` `dist/index.js` | `docs/migration_notes.md` — **After `ao` upgrade — verify worker #2074 patch** (`ao-worker-prompt-`, two `cat`) |
 | **Orchestrator** `stuck` / `probe_failure` / `detecting` within ~1 minute of `ao start`, `ao session kill` + respawn, or restore | Orchestrator session PTY (`op-orchestrator`) | `docs/migration_notes.md` — **Orchestrator** prompt-delivery launch failure (Issue #91) |
 | Spawn logs show `workspace.branch_collision` on `orchestrator/*` | Stale branch/worktree before kill/restart | `scripts/orchestrator-worktree-preflight.ps1` (Issue #91) |
 | `ao start` → `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/unlock-op-orchestrator-worktree.ps1`; `docs/migration_notes.md` (Windows prevention) |
