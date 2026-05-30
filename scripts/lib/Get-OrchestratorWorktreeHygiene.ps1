@@ -58,15 +58,19 @@ function Get-OrchestratorStaleWorktreeFindings {
             $line = $worktreeList[$i]
             if ($line -match '^worktree (.+)$') {
                 $wtPath = $Matches[1]
-                $branchLine = $worktreeList[$i + 1]
                 $wtBranch = $null
-                if ($branchLine -match '^branch refs/heads/(.+)$') {
-                    $wtBranch = $Matches[1]
+                if (($i + 2) -lt $worktreeList.Count) {
+                    $branchLine = $worktreeList[$i + 2]
+                    if ($branchLine -match '^branch refs/heads/(.+)$') {
+                        $wtBranch = $Matches[1]
+                    }
                 }
                 if ($wtBranch -eq $paths.BranchName -or $wtPath -like "*\$SessionId") {
+                    $branchLabel = if ($wtBranch) { $wtBranch } else { 'detached' }
                     $findings.Add([pscustomobject]@{
                             Kind    = 'git-worktree'
-                            Detail  = "$wtPath ($wtBranch)"
+                            Path    = $wtPath
+                            Detail  = "$wtPath ($branchLabel)"
                             Command = "git worktree remove --force `"$wtPath`""
                         }) | Out-Null
                 }

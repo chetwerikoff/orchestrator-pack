@@ -53,7 +53,7 @@ try {
         if (-not $PSCmdlet.ShouldProcess($f.Detail, $f.Kind)) { continue }
         switch ($f.Kind) {
             'git-worktree' {
-                $wtPath = ($f.Detail -split ' ')[0]
+                $wtPath = $f.Path
                 Write-Host ">> git worktree remove --force `"$wtPath`""
                 & git worktree remove --force $wtPath
                 if ($LASTEXITCODE -ne 0) { throw "git worktree remove failed for $wtPath" }
