@@ -1,7 +1,8 @@
 {
-  "description": "REVIEW_COMMAND expects tracked wrapper but termination names bare review.ps1",
+  "description": "PACK_REVIEWER=claude but termination names bare review.ps1 (forbidden path)",
   "expectPass": false,
-  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review-claude.ps1 --repo-root . --base origin/main",
+  "expectedReviewer": "claude",
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
   "runs": [
     {
       "status": "failed",
@@ -9,7 +10,7 @@
       "openFindingCount": 0,
       "sentFindingCount": 0,
       "terminationReason": "plugins/ao-codex-pr-reviewer/bin/review.ps1 exited 1",
-      "completedAt": "2026-05-29T12:04:00Z"
+      "completedAt": "2026-05-29T12:14:00Z"
     }
   ]
 }

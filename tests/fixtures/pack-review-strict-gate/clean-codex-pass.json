@@ -1,7 +1,8 @@
 {
-  "description": "Latest clean run with terminationReason naming tracked Codex wrapper",
+  "description": "Latest clean run with terminationReason naming tracked Codex wrapper (PACK_REVIEWER=codex)",
   "expectPass": true,
-  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main",
+  "expectedReviewer": "codex",
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
   "runs": [
     {
       "status": "clean",

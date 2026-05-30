@@ -16,8 +16,8 @@ backstop) add resilience; this doc covers the shipped baseline.
 |------------|--------|
 | Autonomous loop rules | `agent-orchestrator.yaml.example` → `orchestratorRules` |
 | Worker review contract | `prompts/agent_rules.md` |
-| Pack review command | `scripts/run-pack-review.ps1` (**REVIEW_COMMAND** / **PACK_REVIEW_SHELL**) |
-| Switch Codex ↔ Claude Sonnet | [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
+| Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
+| Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Wake listener | `scripts/orchestrator-wake-listener.ps1`, `docs/orchestrator-wake-filter.mjs` |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
@@ -93,7 +93,7 @@ when a worker spawns.
    **PACK_REVIEW_SHELL**), e.g.:
 
    ```powershell
-   ao review run <worker-session-id> --execute --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main"
+   ao review run <worker-session-id> --execute --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main"
    ```
 
    Forbidden: bare `plugins/ao-codex-pr-reviewer/bin/review.ps1`, `cmd /c npm ci && …`,
@@ -132,7 +132,7 @@ worker: pr_created / ready_for_review (+ CI green)
 | Synthetic wake | POST from [wake runbook](orchestrator-wake-runbook.md) | Log: `accepted: …` |
 | Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
 | Review started | `ao review list <project> --json` | New run after worker `ready_for_review` |
-| Command correct | `terminationReason` on failed runs | Names active tracked wrapper (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
+| Command correct | `terminationReason` on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
 | Strict gate (operator) | `pwsh -File scripts/orchestrator-diagnose.ps1 -Strict` | Exit 0 before human merge when AO is running |
 
 ## Troubleshooting routing

@@ -1,7 +1,8 @@
 {
-  "description": "Latest clean run with terminationReason naming tracked Claude wrapper",
+  "description": "Latest clean run with terminationReason naming tracked Claude wrapper (PACK_REVIEWER=claude)",
   "expectPass": true,
-  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review-claude.ps1 --repo-root . --base origin/main",
+  "expectedReviewer": "claude",
+  "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
   "runs": [
     {
       "status": "clean",
@@ -9,7 +10,7 @@
       "openFindingCount": 0,
       "sentFindingCount": 0,
       "terminationReason": "scripts/run-pack-review-claude.ps1 completed",
-      "completedAt": "2026-05-29T12:00:00Z"
+      "completedAt": "2026-05-29T12:10:30Z"
     }
   ]
 }

@@ -36,11 +36,13 @@ $rulesText = ($rulesLines -join "`n")
 
 $hasWrapper =
     $rulesText -match 'review\.ps1' -or
-    $rulesText -match 'run-pack-review\.ps1'
+    $rulesText -match 'run-pack-review\.ps1' -or
+    $rulesText -match 'invoke-pack-review\.ps1'
 
 $hasPreflight =
     $rulesText -match 'npm ci' -or
-    $rulesText -match 'run-pack-review\.ps1'
+    $rulesText -match 'run-pack-review\.ps1' -or
+    $rulesText -match 'invoke-pack-review\.ps1'
 
 if (-not $hasWrapper) {
     Write-Host '[FAIL] orchestratorRules must name the pack review wrapper (review.ps1 or run-pack-review.ps1)'
@@ -52,7 +54,7 @@ if (-not $hasPreflight) {
     exit 1
 }
 
-if ($rulesText -match 'REVIEW_COMMAND' -and $rulesText -notmatch 'run-pack-review\.ps1' -and $rulesText -notmatch 'npm ci') {
+if ($rulesText -match 'REVIEW_COMMAND' -and $rulesText -notmatch 'run-pack-review\.ps1' -and $rulesText -notmatch 'invoke-pack-review\.ps1' -and $rulesText -notmatch 'npm ci') {
     Write-Host '[FAIL] REVIEW_COMMAND regressed to wrapper-only without documented preflight'
     exit 1
 }
