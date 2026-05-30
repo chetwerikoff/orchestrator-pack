@@ -102,3 +102,31 @@ tracked issue already fully answers the ask.
 **Loader entry points (optional):** `.cursor/skills/investigate-root-cause/SKILL.md`,
 `.claude/skills/investigate-root-cause/SKILL.md` — thin wrappers that defer to the
 canonical file above.
+
+## Auto-invoke: merge with local adoption
+
+When the user asks to merge a ready task/PR (best-effort discovery, not a
+deterministic gate), follow
+[`.claude/skills/merge-with-local-adoption/SKILL.md`](.claude/skills/merge-with-local-adoption/SKILL.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «мерж», «мерж и пул», «смерж»,
+«смержи», «замержи»; «merge», «merge and pull», «merge the PR».
+
+**Skip:** merge policy discussion without a concrete PR; user explicitly says not
+to merge yet.
+
+**Loader entry points (optional):** `.cursor/skills/merge-with-local-adoption/SKILL.md`,
+`.claude/skills/merge-with-local-adoption/SKILL.md`.
+
+## Auto-invoke: publish issue draft
+
+After [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) completes (Codex
+`NO_FINDINGS`, GitHub issue synced, registry updated), follow
+[`.claude/skills/publish-issue-draft/SKILL.md`](.claude/skills/publish-issue-draft/SKILL.md)
+by default — commit, PR, merge to `main`, reopen the implementation issue if auto-closed.
+
+**Also invoke when the user says:** «опубликуй драфт», «закоммить драфт», «pr для драфта»,
+«publish draft», «смержи драфт» (spec land, not implementation).
+
+**Skip:** user opts out of PR/merge; unrelated work on the branch.
