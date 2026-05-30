@@ -24,13 +24,24 @@ When Claude is the active reviewer, `terminationReason` should name
 For a **healthy orchestrator process that never reacts to CI/review events**, see
 [`docs/orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) (wake listener) before killing sessions.
 
-For a **worker that exits within ~1 minute of spawn** with no PR, no
-`ao acknowledge`, and no Cursor chat, see
-`docs/migration_notes.md` (**Worker prompt-delivery launch failure on Windows,
-Issue #63**) first. Inspect the worker terminal for Signature A (`printf` not
-recognized / `unknown option '-ne'`) or Signature B (`command line is too long`).
-That is **not** orchestrator stuck — do not ping or kill `op-orchestrator` for it.
-`workspace.branch_collision` during spawn is a separate worktree-hygiene concern.
+### Launch failure vs orchestrator stuck (decision table)
+
+| Symptom | Inspect first | Pack pointer |
+|---------|---------------|--------------|
+| **Worker** exits within ~1 minute of spawn, no PR, no `ao acknowledge` | Worker session PTY | `docs/migration_notes.md` — **Worker** prompt-delivery launch failure (Issue #63) |
+| **Orchestrator** `stuck` / `probe_failure` / `detecting` within ~1 minute of `ao start`, `ao session kill` + respawn, or restore | Orchestrator session PTY (`op-orchestrator`) | `docs/migration_notes.md` — **Orchestrator** prompt-delivery launch failure (Issue #91) |
+| Spawn logs show `workspace.branch_collision` on `orchestrator/*` | Stale branch/worktree before kill/restart | `scripts/orchestrator-worktree-preflight.ps1` (Issue #91) |
+
+**Signatures A/B** (worker **and** orchestrator on Windows): Signature A — `printf` not
+recognized / `unknown option '-ne'`; Signature B — `command line is too long`.
+Do **not** ping or kill `op-orchestrator` for a **worker-only** spawn death.
+Do **not** treat worker launch failure as orchestrator stuck.
+
+**Cursor restore metadata:** `restoreFallbackReason: cursor.getRestoreCommand returned null`
+is **expected** — AO falls back to `getLaunchCommand`. It is not a standalone defect.
+
+`workspace.branch_collision` on workers (`feat/*`) is separate hygiene; orchestrator
+preflight targets **`orchestrator/<session-id>`** only.
 
 ## When to use this runbook
 
@@ -198,14 +209,32 @@ This snapshot is your baseline for step 3 **after** checks.
 
 ---
 
+## Step 2b — Orchestrator worktree hygiene (before step 3)
+
+When spawn or event logs mention `workspace.branch_collision` on
+`orchestrator/op-orchestrator` (or your configured orchestrator id), or
+`scripts/orchestrator-diagnose.ps1` lists stale orchestrator worktrees/branches,
+clean up **before** step 3:
+
+```powershell
+pwsh -File scripts/orchestrator-worktree-preflight.ps1
+# optional destructive apply:
+pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply
+```
+
+Then `ao start` and confirm no repeated `branch_collision` in spawn logs.
+
 ## Step 3 — Kill orchestrator session and restart AO
 
 Respawns **only** the orchestrator agent session; workers and review state remain
 in AO storage.
 
+Run step **2b** first when stale `orchestrator/*` worktree/branch exists.
+
 ```powershell
 ao session kill op-orchestrator
 ao start
+pwsh -File scripts/wait-orchestrator-launch.ps1
 ```
 
 Use your orchestrator id. `ao start` recreates the orchestrator per project

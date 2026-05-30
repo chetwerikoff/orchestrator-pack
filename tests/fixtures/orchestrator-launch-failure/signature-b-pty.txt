@@ -1,0 +1,3 @@
+# SessionRole: orchestrator
+# Captured pattern: Windows CreateProcess argv limit (Signature B, Issue #91)
+The command line is too long.

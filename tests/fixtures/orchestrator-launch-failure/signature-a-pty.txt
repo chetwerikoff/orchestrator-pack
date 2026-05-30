@@ -1,0 +1,4 @@
+# SessionRole: orchestrator
+# Captured pattern: POSIX printf under PowerShell (Signature A, Issue #91)
+printf : The term 'printf' is not recognized as the name of a cmdlet, function, script file, or operable program.
+error: unknown option '-ne'
