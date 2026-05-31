@@ -236,12 +236,47 @@ Write-Host '== Operator adoption example guard (Issue #101) =='
 $operatorAdoptionCheck = Join-Path $Root 'scripts/check-operator-adoption-example.ps1'
 if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
     & $operatorAdoptionCheck -ChangedPaths @('prompts/agent_rules.md') -PrBody ''
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-operator-adoption-example.ps1' 'PASS' 'script runnable'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'operator-adoption/skip-no-example' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Operator adoption guard: expected pass when example not in diff'
     }
     else {
-        Write-Check 'scripts/check-operator-adoption-example.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'Operator adoption example guard failed sanity check'
+        Write-Check 'operator-adoption/skip-no-example' 'PASS' 'completed'
+    }
+
+    & $operatorAdoptionCheck -ChangedPaths @(
+        'agent-orchestrator.yaml.example',
+        'docs/migration_notes.md'
+    ) -PrBody ''
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'operator-adoption/paired-migration-notes' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Operator adoption guard: expected pass when migration_notes in diff'
+    }
+    else {
+        Write-Check 'operator-adoption/paired-migration-notes' 'PASS' 'completed'
+    }
+
+    $waiverBody = @"
+## Summary
+
+No operator adoption required
+"@
+    & $operatorAdoptionCheck -ChangedPaths @('agent-orchestrator.yaml.example') -PrBody $waiverBody
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'operator-adoption/waiver-line' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Operator adoption guard: expected pass for exact waiver line'
+    }
+    else {
+        Write-Check 'operator-adoption/waiver-line' 'PASS' 'completed'
+    }
+
+    & $operatorAdoptionCheck -ChangedPaths @('agent-orchestrator.yaml.example') -PrBody '## Summary'
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'operator-adoption/missing-pairing' 'FAIL' 'expected failure without migration_notes or waiver'
+        Add-Failure 'Operator adoption guard: expected fail when example changes without pairing'
+    }
+    else {
+        Write-Check 'operator-adoption/missing-pairing' 'PASS' 'completed'
     }
 }
 else {
