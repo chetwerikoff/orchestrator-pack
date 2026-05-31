@@ -427,6 +427,69 @@ Expected behavior:
 Nothing in this runbook auto-merges PRs or kills workers; that stays in
 `orchestratorRules`.
 
+## Orphan review run after worker respawn
+
+When a worker session is **terminated**, **killed**, or stuck in **detecting** and
+AO respawns a replacement (`ao spawn --claim-pr` or automatic respawn), review runs
+linked to the **dead** session become **orphans**: they remain in `ao review list`
+but `ao review send` cannot deliver findings to a live worker.
+
+### Identify an orphan run
+
+```powershell
+ao review list orchestrator-pack --json
+ao status --json --reports full
+```
+
+From `ao review list --json`, inspect each run for the PR:
+
+| Field | Orphan signal |
+|-------|----------------|
+| `linkedSessionId` | Matches a worker session in `terminated`, `killed`, or long `detecting` |
+| `status` | `needs_triage` with `openFindingCount > 0`, or `waiting_update` with findings never acked |
+| `openFindingCount` | Non-zero on a dead linked session blocks merge until resolved |
+
+Do **not** run `ao review send` on an orphan run whose `linkedSessionId` is dead —
+delivery fails silently or errors; the worker will never see those findings.
+
+### CLI-first recovery (canonical)
+
+1. **Rebind the PR** to the new live worker session:
+
+   ```powershell
+   ao session claim-pr <pr-number> <new-worker-session-id>
+   ```
+
+   Example: `ao session claim-pr 97 op-3` after `op-1` died and `op-3` replaced it.
+
+2. **Clear stale reviewer workspace** when the last failed run shows
+   `worktree add` / `already exists` in `terminationReason`:
+
+   ```powershell
+   pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .
+   ```
+
+3. **Fresh review** on the live session (after `orchestratorRules` idempotency check —
+   no `running` / `reviewing` run on the current head sha):
+
+   ```powershell
+   ao review run <new-worker-session-id> --execute --command "<REVIEW_COMMAND from agent-orchestrator.yaml>"
+   ```
+
+   Copy **REVIEW_COMMAND** verbatim from live `agent-orchestrator.yaml` /
+   `agent-orchestrator.yaml.example` — do not improvise alternate commands.
+
+4. When the new run reaches `needs_triage` with findings, the orchestrator (or you)
+   may `ao review send <new-run-id>` — only on the **live** linked session.
+
+### Manual escape hatch (UI dismiss)
+
+When orphan runs still hold `openFindingCount > 0` and triage cannot reach the dead
+session, dismiss findings in the AO dashboard: **Reviews → TRIAGE → resolve/dismiss**
+for that run. Label this path **manual** in operator notes; it is not `ao review send`.
+
+See also `docs/migration_notes.md` (**Respawn-induced review disarray**, Issue #98).
+
 ## After manual PR merge
 
 When a worker PR is merged on GitHub (human merge per repo policy), AO 0.9.x

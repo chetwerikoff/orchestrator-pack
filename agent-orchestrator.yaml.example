@@ -200,8 +200,23 @@ projects:
       findingCount 0 on failed or cancelled runs is NOT clean. Never read or
       pattern-match finding body prose (NO_FINDINGS contract).
 
+      REVIEW RUN IDEMPOTENCY (Issue #98 — additive to EMPTY REVIEW TRAP). Before calling
+      ao review run for a worker session, read ao review list --json and check the current
+      current PR head sha (from gh pr view or the worker PR ref). If any run for that head sha is
+      in status running or reviewing, do not spawn a new run — poll on the next turn until
+      that run completes or the head sha advances. Only start a new ao review run after the
+      active run finishes or the PR head moves forward.
+
+      STALE REVIEWER WORKSPACE (Issue #98). Before ao review run when the prior attempt for
+      the same PR head failed with terminationReason containing worktree add and already
+      exists, or when retrying after a failed reviewer infra run, run from the pack repo root:
+        pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .
+      That removes an orphan code-reviews/workspaces path so AO git worktree add can succeed.
+      See docs/orchestrator-recovery-runbook.md (Orphan review run after worker respawn).
+
       TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports pr_created or
-      ready_for_review on an open PR (visible in ao status --reports full), immediately run:
+      ready_for_review on an open PR (visible in ao status --reports full), apply REVIEW RUN
+      IDEMPOTENCY and STALE REVIEWER WORKSPACE above, then run:
         ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
       Do not wait for operator words review or loop.
 

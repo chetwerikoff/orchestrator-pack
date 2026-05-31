@@ -339,6 +339,60 @@ else {
 }
 
 Write-Host ''
+Write-Host '== orchestrator review-run idempotency (Issue #98) =='
+$reviewIdempotencyCheck = Join-Path $Root 'scripts/check-orchestrator-review-idempotency.ps1'
+if (Test-Path -LiteralPath $reviewIdempotencyCheck -PathType Leaf) {
+    & $reviewIdempotencyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-review-idempotency.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-review-idempotency.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'orchestratorRules must document review-run idempotency (Issue #98)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-review-idempotency.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-run idempotency check script (Issue #98)'
+}
+
+Write-Host ''
+Write-Host '== detached-HEAD PR context (Issue #98) =='
+$autoReviewContextCheck = Join-Path $Root 'scripts/check-auto-review-pr-context.ps1'
+if (Test-Path -LiteralPath $autoReviewContextCheck -PathType Leaf) {
+    & $autoReviewContextCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-auto-review-pr-context.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-auto-review-pr-context.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Get-AutoReviewPrContext must resolve PR by headRefOid (Issue #98)'
+    }
+}
+else {
+    Write-Check 'scripts/check-auto-review-pr-context.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing detached-HEAD PR context check script (Issue #98)'
+}
+
+Write-Host ''
+Write-Host '== reviewer workspace preflight (Issue #98) =='
+$reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
+if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {
+    & $reviewerWorkspaceCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-reviewer-workspace-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-reviewer-workspace-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'reviewer-workspace-preflight must clear orphan directories (Issue #98)'
+    }
+}
+else {
+    Write-Check 'scripts/check-reviewer-workspace-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing reviewer workspace preflight check script (Issue #98)'
+}
+
+Write-Host ''
 Write-Host '== run-pack-review CLI args (Issue #60) =='
 $runPackReviewArgsCheck = Join-Path $Root 'scripts/check-run-pack-review-args.ps1'
 if (Test-Path -LiteralPath $runPackReviewArgsCheck -PathType Leaf) {

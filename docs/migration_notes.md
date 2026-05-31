@@ -209,6 +209,46 @@ Otherwise Codex may return an empty review without inspecting the diff.
 Regression guards: `scripts/check-review-command-preflight.ps1`,
 `scripts/check-orchestrator-rules-quotes.ps1` (via `scripts/verify.ps1`).
 
+### Respawn-induced review disarray (Issue #98)
+
+After a worker is lost and replaced, the AO-local review layer can misbehave in
+five recognizable ways. Recovery is CLI-first; see
+`docs/orchestrator-recovery-runbook.md` (**Orphan review run after worker respawn**).
+
+| Signature | Symptom | Pack fix / operator action |
+|-----------|---------|----------------------------|
+| **Run-storm** | Multiple `ao review run` on the same PR head sha within minutes | `orchestratorRules` **REVIEW RUN IDEMPOTENCY**: check `ao review list --json` for `running` / `reviewing` on current head sha before spawning |
+| **Orphan `needs_triage`** | Open findings on a run whose `linkedSessionId` is `terminated` / `killed` | `ao session claim-pr <pr> <new-session>` then fresh review; do not `ao review send` to dead session |
+| **Detached-HEAD `gh` error** | `gh: could not determine current branch: not on any branch` in reviewer workspace | Pack resolves PR via `headRefOid` / `AO_PR_NUMBER` — not bare `gh pr view`; see `scripts/lib/Get-AutoReviewPrContext.ps1` |
+| **Stale-workspace `worktree add`** | `git worktree add … already exists`, `findingCount: 0`, `status: failed` | `pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .` before retry |
+| **Silent `ao review send` failure** | Findings never reach worker after respawn | Orphan run on dead session — use claim-pr + new run, or UI dismiss (manual) |
+
+**Canonical respawn recovery entry point:**
+
+```powershell
+ao session claim-pr <pr-number> <new-worker-session-id>
+pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .
+# then ao review run on the new session when idempotency allows
+```
+
+Inspect runs with:
+
+```powershell
+ao review list orchestrator-pack --json
+```
+
+Fields: `linkedSessionId`, `status`, `openFindingCount`, `terminationReason`.
+
+To adopt Issue #98:
+
+1. Merge updated `orchestratorRules` (**REVIEW RUN IDEMPOTENCY**, **STALE REVIEWER
+   WORKSPACE**) from `agent-orchestrator.yaml.example` into live yaml.
+2. Restart AO: `ao stop` then `ao start`.
+
+Regression guards: `scripts/check-orchestrator-review-idempotency.ps1`,
+`scripts/check-auto-review-pr-context.ps1`, `scripts/check-reviewer-workspace-preflight.ps1`
+(via `scripts/verify.ps1`).
+
 ### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 
 **REVIEW_COMMAND** is reviewer-agnostic: `scripts/invoke-pack-review.ps1` (see

@@ -435,6 +435,35 @@ merge, the worker session correctly reached `merged` and was torn down, but
 
 See `docs/issues_drafts/21-post-merge-review-run-lifecycle.md` (GitHub #54).
 
+## O. Review-layer resilience after worker respawn
+
+Decision taken 2026-05-31 (Issue #98, incident PR #97): after worker respawn,
+duplicate review runs, orphan triage on dead sessions, detached-HEAD `gh` failures,
+and stale `code-reviews/workspaces` blocked merge.
+
+1. **Run identity.** AO-local review runs are keyed to `(linkedSessionId, target sha)`.
+   A respawned worker gets a new session id and inherits the PR claim but not prior
+   run records on the dead session.
+
+2. **Orphans are operator-owned.** AO does not auto-reap review runs when
+   `linkedSessionId` terminates. Operators use `ao session claim-pr`, fresh
+   `ao review run` on the live session, or manual UI dismiss for orphan triage.
+
+3. **Idempotency is pack policy.** Before `ao review run`, `orchestratorRules`
+   require checking `ao review list --json` for `running` / `reviewing` on the
+   current PR head sha — not an AO core scheduler change.
+
+4. **Detached-HEAD PR context.** The pack reviewer path resolves PR number via
+   explicit env (`AO_PR_NUMBER`), `gh pr view <n>`, or open PR list filtered by
+   `headRefOid` — never bare `gh pr view` or branch-only lookup in reviewer
+   workspaces.
+
+5. **Stale workspace preflight.** `scripts/reviewer-workspace-preflight.ps1`
+   removes orphan `code-reviews/workspaces/op-rev-*` paths before retry when
+   `worktree add … already exists` would otherwise fail the run.
+
+See `docs/issues_drafts/34-review-layer-resilience-after-worker-respawn.md` (GitHub #98).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

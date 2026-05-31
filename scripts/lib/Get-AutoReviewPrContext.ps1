@@ -207,26 +207,59 @@ function Set-AutoReviewResultFromPrView {
     }
 }
 
-function Get-GhPrNumberForHead {
+function Get-GhPrNumberForBranch {
     param(
         [string]$RepoRoot,
-        [string]$HeadRef
+        [string]$BranchName
     )
 
+    if ([string]::IsNullOrWhiteSpace($BranchName) -or $BranchName -eq 'HEAD') {
+        return $null
+    }
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         return $null
     }
 
     Push-Location -LiteralPath $RepoRoot
     try {
-        foreach ($head in @($HeadRef)) {
-            if ([string]::IsNullOrWhiteSpace($head)) {
-                continue
+        $prRaw = (gh pr list --head $BranchName --json number --jq '.[0].number' 2>$null)
+        if ($prRaw) {
+            $prNumber = [int]$prRaw
+            if ($prNumber -gt 0) {
+                return $prNumber
             }
+        }
 
-            $prRaw = (gh pr list --head $head --json number --jq '.[0].number' 2>$null)
-            if ($prRaw) {
-                $prNumber = [int]$prRaw
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Get-GhPrNumberForHeadSha {
+    param(
+        [string]$RepoRoot,
+        [string]$HeadSha
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HeadSha) -or -not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        # Detached HEAD: branch-based gh pr list/--head fails; match open PRs by headRefOid.
+        # Parse JSON in PowerShell — inline --jq with embedded SHA breaks on Windows (gh/gojq).
+        $json = gh pr list --state open --json number,headRefOid --limit 200 2>$null
+        if (-not $json) {
+            return $null
+        }
+
+        $prs = @($json | ConvertFrom-Json)
+        foreach ($pr in $prs) {
+            if ([string]$pr.headRefOid -eq $HeadSha) {
+                $prNumber = [int]$pr.number
                 if ($prNumber -gt 0) {
                     return $prNumber
                 }
@@ -296,10 +329,10 @@ function Get-AutoReviewPrContext {
         if (-not $result.PrNumber) {
             $prNumber = $null
             if ($headSha) {
-                $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $headSha
+                $prNumber = Get-GhPrNumberForHeadSha -RepoRoot $RepoRoot -HeadSha $headSha
             }
-            if (-not $prNumber -and $branch -and $branch -ne 'HEAD') {
-                $prNumber = Get-GhPrNumberForHead -RepoRoot $RepoRoot -HeadRef $branch
+            if (-not $prNumber -and $branch) {
+                $prNumber = Get-GhPrNumberForBranch -RepoRoot $RepoRoot -BranchName $branch
             }
 
             if ($prNumber) {
