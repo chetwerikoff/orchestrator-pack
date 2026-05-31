@@ -92,6 +92,29 @@ Until restart, the orchestrator and workers keep prior prompt text. The live YAM
 is gitignored — diff against the example when upgrading; do not hand-edit only
 the worker rules without updating `orchestratorRules`.
 
+### CI failure ping before report-stale (Issue #109)
+
+Issue #109 adds turn-aware **CI failure discipline** to `orchestratorRules` (orchestrator
+`ao send` on each turn that sees red required CI, with episode dedupe) and worker **CI
+gate** rules in `prompts/agent_rules.md` (no `ready_for_review` on red CI; self-fix in
+`fixing_ci`). `reactions.report-stale` and `reactions.ci-failed` stay unchanged as upstream
+long-tail backstops.
+
+To adopt:
+
+1. Merge the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
+   (REQUIRED CI, CI FAILURE DISCIPLINE, and review-loop ordering) into live
+   `agent-orchestrator.yaml`.
+2. Pull the merged repo and confirm `prompts/agent_rules.md` includes the Required CI
+   and Worker CI gate sections (git-tracked — no manual copy). Ensure live
+   `agentRulesFile` points at that path.
+3. Restart AO: `ao stop` then `ao start`.
+
+Behavioural acceptance: on the next real red-CI PR episode, confirm in
+`ao events list --json` that the worker self-fixed without a false `ready_for_review`, or
+that an orchestrator `ao send` appeared before `report-stale` (~30 min). See
+`docs/orchestrator-recovery-runbook.md` (Red CI with idle worker).
+
 ### Patch: `sentFindingCount` pending-worker detection (Issue #45)
 
 Issue #45 corrects the review-loop contract after `ao review send`: findings move

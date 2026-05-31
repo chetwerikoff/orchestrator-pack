@@ -1,0 +1,20 @@
+{
+  "issue_number": 109,
+  "iteration_id": "op-7",
+  "iteration_id_source": "ao_session",
+  "supersedes": "architect-draft-37",
+  "created_at": "2026-05-31T04:24:36.104Z",
+  "baseline": {
+    "commit_sha": "836a381b4f5fc45c764b6e44dbb9f82522a6b0f3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:fbd73669785e51f45d317a85ade62a9e0da9c576ed1fd09836b2e36847495178"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "agent-orchestrator.yaml.example",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
