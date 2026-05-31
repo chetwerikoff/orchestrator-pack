@@ -144,9 +144,12 @@ The same wake kind + worker session + PR/run id within **30 seconds** produces o
 with `-DedupWindowSeconds` if needed.
 
 Listener and heartbeat share dedup state in `%TEMP%\orchestrator-wake-dedup.json`
-(override with `AO_WAKE_DEDUP_STATE`). A global key prevents **any** second
-orchestrator wake within the window — including a heartbeat immediately after an
-event-driven wake (or the reverse).
+(override with `AO_WAKE_DEDUP_STATE`), coordinated by an exclusive sidecar
+`orchestrator-wake-dedup.json.lock` during each read-modify-write. A global key
+prevents **any** second orchestrator wake within the window — including a heartbeat
+immediately after an event-driven wake (or the reverse). If the lock cannot be
+acquired within 500 ms, the wake is skipped (`dedup_lock_timeout`) rather than
+risking a double `ao send`.
 
 ## Detect listener / AO problems
 

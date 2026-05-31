@@ -13,6 +13,10 @@ export const HEARTBEAT_WAKE_KIND = 'heartbeat.reconcile';
 /** Cross-process dedup: any orchestrator wake within the window blocks another. */
 export const GLOBAL_ORCHESTRATOR_WAKE_KEY = '__orchestrator_wake__';
 export const HEARTBEAT_DEDUPE_KEY = `${HEARTBEAT_WAKE_KIND}|orchestrator`;
+/** Stale lock removal when a subprocess died without releasing `.lock`. */
+export const DEDUP_LOCK_STALE_MS = 5_000;
+/** Max wait for the exclusive dedup lock before skipping the wake (fail closed). */
+export const DEDUP_LOCK_WAIT_MS = 500;
 
 export const WAKE_RELEVANT_KINDS = new Set([
   'review.needs_triage',
@@ -297,6 +301,93 @@ function parseIntFlag(args, name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+export function dedupLockPath(stateFilePath) {
+  return `${stateFilePath}.lock`;
+}
+
+function sleepMs(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    // short busy wait under lock contention (subprocess hold time is tiny)
+  }
+}
+
+/**
+ * Exclusive lock for read-modify-write on the shared dedup JSON (listener + heartbeat).
+ * @returns {{ fd: number, lockPath: string } | null}
+ */
+export function acquireDedupStateLock(stateFilePath, options = {}) {
+  const maxWaitMs = options.maxWaitMs ?? DEDUP_LOCK_WAIT_MS;
+  const staleMs = options.staleMs ?? DEDUP_LOCK_STALE_MS;
+  const lockPath = dedupLockPath(stateFilePath);
+  fs.mkdirSync(path.dirname(stateFilePath), { recursive: true });
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      try {
+        fs.writeFileSync(fd, `${process.pid}\n`, 'utf8');
+      } catch (writeErr) {
+        fs.closeSync(fd);
+        throw writeErr;
+      }
+      return { fd, lockPath };
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
+      if (code !== 'EEXIST') {
+        throw err;
+      }
+      try {
+        const stat = fs.statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > staleMs) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        // lock removed by peer — retry
+      }
+      sleepMs(5);
+    }
+  }
+  return null;
+}
+
+export function releaseDedupStateLock(lock) {
+  if (!lock) {
+    return;
+  }
+  try {
+    fs.closeSync(lock.fd);
+  } catch {
+    // ignore
+  }
+  try {
+    fs.unlinkSync(lock.lockPath);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * @template T
+ * @param {string} stateFilePath
+ * @param {() => T} fn
+ * @param {{ maxWaitMs?: number, staleMs?: number }} [options]
+ * @returns {T | { ok: false, reason: 'dedup_lock_timeout' }}
+ */
+export function withDedupStateFileLock(stateFilePath, fn, options = {}) {
+  const lock = acquireDedupStateLock(stateFilePath, options);
+  if (!lock) {
+    return { ok: false, reason: 'dedup_lock_timeout' };
+  }
+  try {
+    return fn();
+  } finally {
+    releaseDedupStateLock(lock);
+  }
+}
+
 export function loadDedupStateFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) {
@@ -317,8 +408,55 @@ export function loadDedupStateFile(filePath) {
 }
 
 export function saveDedupStateFile(filePath, state) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(state)}\n`, 'utf8');
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmpPath, `${JSON.stringify(state)}\n`, 'utf8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+export function applyDedupTry({ filePath, dedupeKey, dedupWindowMs, nowMs }) {
+  return withDedupStateFileLock(filePath, () => {
+    const loaded = loadDedupStateFile(filePath);
+    const decision = evaluateOrchestratorWakeSend({
+      dedupeKey,
+      nowMs,
+      dedupWindowMs,
+      entries: loaded.entries,
+    });
+    if (decision.ok) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      });
+    }
+    return decision;
+  });
+}
+
+export function applyHeartbeatTick({ filePath, intervalMs, dedupWindowMs, nowMs }) {
+  return withDedupStateFileLock(filePath, () => {
+    const loaded = loadDedupStateFile(filePath);
+    const decision = evaluateHeartbeatTick({
+      nowMs,
+      intervalMs,
+      lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      entries: loaded.entries,
+      dedupWindowMs,
+    });
+    if (decision.ok) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: decision.lastHeartbeatSentMs,
+      });
+    } else if (decision.entries) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      });
+    }
+    return decision;
+  });
 }
 
 async function main() {
@@ -335,19 +473,12 @@ async function main() {
       process.exit(2);
       return;
     }
-    const loaded = loadDedupStateFile(filePath);
-    const decision = evaluateOrchestratorWakeSend({
+    const decision = applyDedupTry({
+      filePath,
       dedupeKey,
-      nowMs,
       dedupWindowMs: windowMs,
-      entries: loaded.entries,
+      nowMs,
     });
-    if (decision.ok) {
-      saveDedupStateFile(filePath, {
-        entries: decision.entries,
-        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
-      });
-    }
     process.stdout.write(`${JSON.stringify(decision)}\n`);
     return;
   }
@@ -362,25 +493,12 @@ async function main() {
       process.exit(2);
       return;
     }
-    const loaded = loadDedupStateFile(filePath);
-    const decision = evaluateHeartbeatTick({
-      nowMs,
+    const decision = applyHeartbeatTick({
+      filePath,
       intervalMs,
-      lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
-      entries: loaded.entries,
       dedupWindowMs: windowMs,
+      nowMs,
     });
-    if (decision.ok) {
-      saveDedupStateFile(filePath, {
-        entries: decision.entries,
-        lastHeartbeatSentMs: decision.lastHeartbeatSentMs,
-      });
-    } else if (decision.entries) {
-      saveDedupStateFile(filePath, {
-        entries: decision.entries,
-        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
-      });
-    }
     process.stdout.write(`${JSON.stringify(decision)}\n`);
     return;
   }

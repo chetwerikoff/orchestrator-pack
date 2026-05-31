@@ -1,13 +1,76 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_WAKE_DEDUP_WINDOW_MS,
   HEARTBEAT_WAKE_KIND,
+  applyDedupTry,
   buildHeartbeatWakeMessage,
+  dedupLockPath,
   evaluateHeartbeatTick,
   evaluateOrchestratorWakeSend,
   GLOBAL_ORCHESTRATOR_WAKE_KEY,
+  releaseDedupStateLock,
+  acquireDedupStateLock,
 } from '../docs/orchestrator-wake-filter.mjs';
+
+describe('dedup state file lock', () => {
+  const tmpDirs = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function tempStateFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-dedup-test-'));
+    tmpDirs.push(dir);
+    return path.join(dir, 'orchestrator-wake-dedup.json');
+  }
+
+  it('applyDedupTry serializes a second wake within the global window', () => {
+    const stateFile = tempStateFile();
+    const now = 6_000_000;
+    const first = applyDedupTry({
+      filePath: stateFile,
+      dedupeKey: 'ci.failing|op-1||',
+      dedupWindowMs: DEFAULT_WAKE_DEDUP_WINDOW_MS,
+      nowMs: now,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = applyDedupTry({
+      filePath: stateFile,
+      dedupeKey: 'heartbeat.reconcile|orchestrator',
+      dedupWindowMs: DEFAULT_WAKE_DEDUP_WINDOW_MS,
+      nowMs: now + 1_000,
+    });
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.reason).toBe('global_deduped');
+    }
+    expect(fs.existsSync(dedupLockPath(stateFile))).toBe(false);
+  });
+
+  it('returns dedup_lock_timeout when the lock is held', () => {
+    const stateFile = tempStateFile();
+    const held = acquireDedupStateLock(stateFile);
+    expect(held).not.toBeNull();
+
+    const blocked = applyDedupTry({
+      filePath: stateFile,
+      dedupeKey: 'ci.failing|op-9||',
+      dedupWindowMs: DEFAULT_WAKE_DEDUP_WINDOW_MS,
+      nowMs: Date.now(),
+    });
+    expect(blocked).toEqual({ ok: false, reason: 'dedup_lock_timeout' });
+
+    releaseDedupStateLock(held);
+  });
+});
 
 describe('buildHeartbeatWakeMessage', () => {
   it('is distinguishable from event-driven wake messages', () => {
