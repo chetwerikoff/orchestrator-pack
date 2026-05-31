@@ -1,0 +1,18 @@
+{
+  "issue_number": 109,
+  "iteration_id": "architect-draft-37",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-31T04:07:54.464Z",
+  "baseline": {
+    "commit_sha": "c33d97b6567277cf1df1355ba2d5782254d3feb0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ebd64b2b5cbe3263b5c9bb22c25dfc4b406f53e3dc23175bb75e998e4950674b"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/37-ci-failed-ping-before-report-stale-backstop.md",
+    "docs/issue_queue_index.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

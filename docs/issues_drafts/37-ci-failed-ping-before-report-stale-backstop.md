@@ -152,18 +152,10 @@ into live `agent-orchestrator.yaml`; restart AO (`ao stop` / `ao start`). No new
 
 ## Denylist
 
-```denylist
-vendor/**
-packages/core/**
-code-reviews/**
-.ao/**
-```
-
-```allowed-roots
-prompts/**
-docs/**
-agent-orchestrator.yaml.example
-```
+Pack-wide fences match
+[`27-tracked-claude-review-and-strict-gate.md`](./27-tracked-claude-review-and-strict-gate.md)
+§ Denylist (`vendor/**`, `packages/core/**`, `code-reviews/**`) plus `.ao/**` in
+denylist and `allowed-roots` for `prompts/**`, `docs/**`, `agent-orchestrator.yaml.example` only.
 
 ## Acceptance criteria
 
