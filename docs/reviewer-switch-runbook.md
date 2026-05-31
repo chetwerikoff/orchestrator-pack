@@ -6,8 +6,12 @@ orchestrator executes `ao review run … --execute --command …`.
 AO 0.9.x does not read a `reviewer:` YAML block. **REVIEW_COMMAND** is a single
 reviewer-agnostic line (`scripts/invoke-pack-review.ps1`). Which executor runs
 is set only by the **`PACK_REVIEWER`** environment variable (`codex` or
-`claude`). Set it before `ao start` (or in the same shell profile AO inherits)
-and restart AO after changing it.
+`claude`). **User-level** `PACK_REVIEWER` (Windows User environment) is
+sufficient for AO review spawn: `invoke-pack-review.ps1` reads persistent User
+and Machine layers when process scope is empty. Set process-level export before
+`ao start` when the **daemon** must see other variables at boot; restart AO after
+changing selector or YAML. Restart the IDE when its integrated terminal must
+pick up profile changes unrelated to review spawn.
 
 Both paths use the same pack contract (`prompts/codex_review_prompt.md`,
 `NO_FINDINGS`, structured JSON findings, `plugins/ao-codex-pr-reviewer` parser).
@@ -24,8 +28,13 @@ Only the **dispatch target** behind `invoke-pack-review.ps1` changes.
 
 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main`
 
-Unset or invalid `PACK_REVIEWER`: the entrypoint exits non-zero and runs **no**
-reviewer (fail-closed; no silent Codex default).
+Unset or invalid `PACK_REVIEWER` in **all** consulted layers: the entrypoint
+exits non-zero and runs **no** reviewer (fail-closed; no silent Codex default).
+
+**Layer precedence (Windows):** Process → User → Machine. When process scope is
+unset, User wins over Machine for the same name (e.g. User `claude` + Machine
+`codex` resolves `claude`). Non-Windows hosts use process scope only in this
+pack — no persistent-env fallback; unset process scope remains fail-closed.
 
 Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
 -Strict` (live AO) or rely on CI `scripts/invoke-pack-review-strict-gate.ps1`
@@ -99,7 +108,7 @@ not use `.ao/` in **REVIEW_COMMAND**.
 
 | Symptom | Likely cause | Action |
 |---------|----------------|--------|
-| Review exits immediately, PACK_REVIEWER message | Selector unset/invalid | Set `PACK_REVIEWER` to `codex` or `claude`; restart AO |
+| Review exits immediately, PACK_REVIEWER message | Selector unset/invalid in all layers | Set User or process `PACK_REVIEWER` to `codex` or `claude` |
 | Wrong model ran | Selector not set before `ao start` | Fix env, restart AO; check `terminationReason` vs `PACK_REVIEWER` |
 | Strict gate selector-mismatch | Drift or wrong env | Align `PACK_REVIEWER` with wrapper named in `terminationReason` |
 | Codex usage limit | Quota | Set `PACK_REVIEWER=claude` temporarily |

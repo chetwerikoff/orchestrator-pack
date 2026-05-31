@@ -322,6 +322,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== PACK_REVIEWER persistent-env fallback (Issue #106) =='
+$persistentEnvCheck = Join-Path $Root 'scripts/check-pack-reviewer-persistent-env.ps1'
+if (Test-Path -LiteralPath $persistentEnvCheck -PathType Leaf) {
+    & $persistentEnvCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-pack-reviewer-persistent-env.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-pack-reviewer-persistent-env.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'PACK_REVIEWER persistent-env fallback checks failed (Issue #106)'
+    }
+}
+else {
+    Write-Check 'scripts/check-pack-reviewer-persistent-env.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing PACK_REVIEWER persistent-env check script (Issue #106)'
+}
+
+Write-Host ''
 Write-Host '== Strict review gate fixtures (Issue #79) =='
 $strictGate = Join-Path $Root 'scripts/invoke-pack-review-strict-gate.ps1'
 $aoCommandCheck = Join-Path $Root 'scripts/check-review-command-not-ao.ps1'

@@ -11,10 +11,64 @@ $Script:PackReviewerWrapperById = @{
     claude = 'run-pack-review-claude.ps1'
 }
 
+function Test-IsWindowsHost {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $IsWindows
+    }
+
+    return ($env:OS -match 'Windows')
+}
+
+function Get-PackReviewerLayerValue {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Process', 'User', 'Machine')]
+        [string]$Target,
+        [hashtable]$OverrideLayers
+    )
+
+    if ($OverrideLayers -and $OverrideLayers.ContainsKey($Target)) {
+        return $OverrideLayers[$Target]
+    }
+
+    return [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, $Target)
+}
+
+function Get-PackReviewerSelectorValue {
+    <#
+    .SYNOPSIS
+      Resolves PACK_REVIEWER from process scope, then Windows User/Machine persistent layers.
+      Precedence: Process > User > Machine (User overrides Machine when process is unset).
+    .PARAMETER OverrideLayers
+      Optional test hook: keys Process, User, Machine override registry reads for that layer.
+    #>
+    param(
+        [hashtable]$OverrideLayers
+    )
+
+    foreach ($target in @('Process', 'User', 'Machine')) {
+        if ($target -ne 'Process' -and -not (Test-IsWindowsHost)) {
+            continue
+        }
+
+        $value = Get-PackReviewerLayerValue -Target $target -OverrideLayers $OverrideLayers
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return $null
+}
+
 function Get-PackReviewerFromSelector {
     param(
-        [string]$SelectorValue = $env:PACK_REVIEWER
+        [hashtable]$OverrideLayers,
+        [string]$SelectorValue
     )
+
+    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
+        $SelectorValue = Get-PackReviewerSelectorValue -OverrideLayers $OverrideLayers
+    }
 
     if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
         return $null
@@ -29,13 +83,20 @@ function Get-PackReviewerFromSelector {
 }
 
 function Get-PackReviewerSelectorErrorMessage {
-  param([string]$SelectorValue = $env:PACK_REVIEWER)
+    param(
+        [hashtable]$OverrideLayers,
+        [string]$SelectorValue
+    )
 
-  if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
-    return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to claude or codex before running pack review (see docs/reviewer-switch-runbook.md).'
-  }
+    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
+        $SelectorValue = Get-PackReviewerSelectorValue -OverrideLayers $OverrideLayers
+    }
 
-  return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to claude or codex." -f $SelectorValue.Trim())
+    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
+        return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to claude or codex before running pack review (see docs/reviewer-switch-runbook.md).'
+    }
+
+    return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to claude or codex." -f $SelectorValue.Trim())
 }
 
 function Get-PackReviewWrapperBasenameForReviewer {

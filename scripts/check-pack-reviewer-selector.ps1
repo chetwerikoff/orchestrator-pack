@@ -42,15 +42,8 @@ if ($yamlText -notmatch 'PACK_REVIEWER') {
     exit 1
 }
 
-$saved = $env:PACK_REVIEWER
+$savedProcess = $env:PACK_REVIEWER
 try {
-    $env:PACK_REVIEWER = ''
-    & $entrypoint --repo-root $Root --base origin/main 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host '[FAIL] invoke-pack-review.ps1 must fail closed when PACK_REVIEWER is unset'
-        exit 1
-    }
-
     $env:PACK_REVIEWER = 'not-a-reviewer'
     & $entrypoint --repo-root $Root --base origin/main 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -59,11 +52,11 @@ try {
     }
 }
 finally {
-    if ($null -eq $saved) {
+    if ($null -eq $savedProcess) {
         Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
     }
     else {
-        $env:PACK_REVIEWER = $saved
+        $env:PACK_REVIEWER = $savedProcess
     }
 }
 

@@ -1,0 +1,9 @@
+{
+  "description": "When process PACK_REVIEWER is unset, User claude wins over Machine codex (Issue #106)",
+  "layers": {
+    "process": null,
+    "user": "claude",
+    "machine": "codex"
+  },
+  "expectedReviewer": "claude"
+}
