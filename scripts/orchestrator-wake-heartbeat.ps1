@@ -26,17 +26,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Script:DefaultIntervalMinutes = 15
-$Script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$Script:FilterCli = Join-Path $Script:RepoRoot 'docs/orchestrator-wake-filter.mjs'
+. (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
 
-function Get-OrchestratorSessionId {
-    param([string]$CliValue)
-    if ($CliValue) { return $CliValue.Trim() }
-    $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
-    if ($fromEnv) { return $fromEnv.Trim() }
-    throw 'Orchestrator session id required: -OrchestratorSessionId or AO_ORCHESTRATOR_SESSION_ID'
-}
+$Script:DefaultIntervalMinutes = 15
 
 function Get-HeartbeatIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -47,16 +39,9 @@ function Get-HeartbeatIntervalMinutes {
     return $Script:DefaultIntervalMinutes
 }
 
-function Get-DedupStatePath {
-    $fromEnv = $env:AO_WAKE_DEDUP_STATE
-    if ($fromEnv) { return $fromEnv }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-wake-dedup.json'
-}
-
 function Write-HeartbeatLog {
     param([string]$Message)
-    $ts = (Get-Date).ToString('o')
-    Write-Host "[$ts] $Message"
+    Write-OrchestratorWakeLog -Message $Message
 }
 
 function Invoke-HeartbeatTick {
@@ -66,35 +51,9 @@ function Invoke-HeartbeatTick {
         [int]$WindowMs
     )
 
-    Push-Location $Script:RepoRoot
-    try {
-        $output = & node $Script:FilterCli heartbeat tick --file $DedupFile --interval-ms $IntervalMs --window-ms $WindowMs 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "heartbeat tick exited ${LASTEXITCODE}: $output"
-        }
-        return ($output | Out-String).Trim() | ConvertFrom-Json
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-function Send-HeartbeatWake {
-    param(
-        [string]$OrchestratorId,
-        [string]$Message
+    return Invoke-OrchestratorWakeFilterCli -NodeArguments @(
+        'heartbeat', 'tick', '--file', $DedupFile, '--interval-ms', $IntervalMs, '--window-ms', $WindowMs
     )
-
-    if ($DryRun) {
-        Write-HeartbeatLog "dry-run: ao send $OrchestratorId $Message"
-        return
-    }
-
-    & ao send $OrchestratorId $Message
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao send failed with exit code $LASTEXITCODE"
-    }
-    Write-HeartbeatLog "forwarded heartbeat: ao send $OrchestratorId"
 }
 
 $orchestratorId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
@@ -102,26 +61,20 @@ $intervalMinutes = Get-HeartbeatIntervalMinutes
 $intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
 $dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
-$dedupFile = Get-DedupStatePath
+$dedupFile = Get-OrchestratorWakeDedupStatePath
 
 Write-HeartbeatLog "orchestrator-wake-heartbeat starting (orchestrator=$orchestratorId, interval=${intervalMinutes}m, dedup=${DedupWindowSeconds}s, dedupFile=$dedupFile, dryRun=$DryRun, once=$Once)"
 
-$cancelled = $false
-$onCancel = [ConsoleCancelEventHandler]{
-    param($sender, $eventArgs)
-    $script:cancelled = $true
-    $eventArgs.Cancel = $true
-}
-[Console]::add_CancelKeyPress($onCancel)
+Register-OrchestratorWakeCancelHandler
 
 try {
     do {
-        if ($cancelled) { break }
+        if (Test-OrchestratorWakeCancelled) { break }
 
         try {
             $tick = Invoke-HeartbeatTick -DedupFile $dedupFile -IntervalMs $intervalMs -WindowMs $dedupWindowMs
             if ($tick.ok) {
-                Send-HeartbeatWake -OrchestratorId $orchestratorId -Message $tick.wakeMessage
+                Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $tick.wakeMessage -DryRun:$DryRun -LogSuffix 'heartbeat'
                 Write-HeartbeatLog "heartbeat accepted: $($tick.wakeKind)"
             }
             else {
@@ -133,12 +86,12 @@ try {
         }
 
         if ($Once) { break }
-        if ($cancelled) { break }
+        if (Test-OrchestratorWakeCancelled) { break }
 
         Start-Sleep -Milliseconds $pollMs
     } while ($true)
 }
 finally {
-    [Console]::remove_CancelKeyPress($onCancel)
+    Unregister-OrchestratorWakeCancelHandler
     Write-HeartbeatLog 'stopped'
 }
