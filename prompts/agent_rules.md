@@ -4,6 +4,24 @@ These rules are intended to be injected through Composio AO `agentRulesFile`.
 They must be portable across AO-supported agents and must not rely on local
 `ai-orchestrator` internals.
 
+## First action (AO pickup)
+
+After reading the initial task prompt, your **mandatory first action** in the
+AO worktree is:
+
+```powershell
+ao acknowledge
+```
+
+Run this within **60 seconds** of session start — before `ao-declare`, file
+edits, research, commits, or PR work. AO's `reportWatcher` treats a missing
+pickup as `no_acknowledge` and marks the session `stuck` while the process is
+still alive.
+
+Skipping acknowledge blocks the orchestrator review loop and may trigger
+operator recovery or session kill per
+[`docs/orchestrator-recovery-runbook.md`](../docs/orchestrator-recovery-runbook.md).
+
 ## Local Codex review (active)
 
 Local Codex PR review **is active** in this pack. AO drives it through the
