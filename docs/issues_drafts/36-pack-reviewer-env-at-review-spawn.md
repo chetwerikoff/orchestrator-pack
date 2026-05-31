@@ -88,18 +88,10 @@ Optional verification: trigger one review and confirm `terminationReason` does n
 
 ## Denylist
 
-```denylist
-vendor/**
-packages/core/**
-code-reviews/**
-.ao/**
-```
-
-```allowed-roots
-scripts/**
-tests/**
-docs/**
-```
+Pack-wide fences match
+[`27-tracked-claude-review-and-strict-gate.md`](./27-tracked-claude-review-and-strict-gate.md)
+§ Denylist (`vendor/**`, `packages/core/**`, `code-reviews/**`) plus `.ao/**` in
+denylist and `allowed-roots` for `scripts/**`, `tests/**`, `docs/**` only.
 
 ## Acceptance criteria
 
