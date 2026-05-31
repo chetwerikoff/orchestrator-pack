@@ -3,6 +3,8 @@ export declare const DEFAULT_HEARTBEAT_INTERVAL_MS: number;
 export declare const HEARTBEAT_WAKE_KIND: 'heartbeat.reconcile';
 export declare const GLOBAL_ORCHESTRATOR_WAKE_KEY: '__orchestrator_wake__';
 export declare const HEARTBEAT_DEDUPE_KEY: string;
+export declare const DEDUP_LOCK_STALE_MS: number;
+export declare const DEDUP_LOCK_WAIT_MS: number;
 
 export declare const WAKE_RELEVANT_KINDS: ReadonlySet<string>;
 
@@ -140,3 +142,42 @@ export declare function saveDedupStateFile(
   filePath: string,
   state: { entries: Record<string, number>; lastHeartbeatSentMs?: number },
 ): void;
+
+export interface DedupStateLockHandle {
+  fd: number;
+  lockPath: string;
+}
+
+export interface DedupLockTimeout {
+  ok: false;
+  reason: 'dedup_lock_timeout';
+}
+
+export declare function dedupLockPath(stateFilePath: string): string;
+
+export declare function acquireDedupStateLock(
+  stateFilePath: string,
+  options?: { maxWaitMs?: number; staleMs?: number },
+): DedupStateLockHandle | null;
+
+export declare function releaseDedupStateLock(lock: DedupStateLockHandle | null): void;
+
+export declare function withDedupStateFileLock<T>(
+  stateFilePath: string,
+  fn: () => T,
+  options?: { maxWaitMs?: number; staleMs?: number },
+): T | DedupLockTimeout;
+
+export declare function applyDedupTry(args: {
+  filePath: string;
+  dedupeKey: string;
+  dedupWindowMs: number;
+  nowMs: number;
+}): OrchestratorWakeSendResult | DedupLockTimeout;
+
+export declare function applyHeartbeatTick(args: {
+  filePath: string;
+  intervalMs: number;
+  dedupWindowMs: number;
+  nowMs: number;
+}): HeartbeatTickResult | DedupLockTimeout;

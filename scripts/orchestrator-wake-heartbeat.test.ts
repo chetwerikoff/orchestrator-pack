@@ -17,7 +17,7 @@ import {
 } from '../docs/orchestrator-wake-filter.mjs';
 
 describe('dedup state file lock', () => {
-  const tmpDirs = [];
+  const tmpDirs: string[] = [];
 
   afterEach(() => {
     for (const dir of tmpDirs.splice(0)) {
