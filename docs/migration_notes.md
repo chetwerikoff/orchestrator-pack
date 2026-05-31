@@ -105,7 +105,9 @@ To adopt:
 1. Merge the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
    (REQUIRED CI, CI FAILURE DISCIPLINE, and review-loop ordering) into live
    `agent-orchestrator.yaml`.
-2. Sync `prompts/agent_rules.md` (Required CI + Worker CI gate sections).
+2. Pull the merged repo and confirm `prompts/agent_rules.md` includes the Required CI
+   and Worker CI gate sections (git-tracked — no manual copy). Ensure live
+   `agentRulesFile` points at that path.
 3. Restart AO: `ao stop` then `ao start`.
 
 Behavioural acceptance: on the next real red-CI PR episode, confirm in
