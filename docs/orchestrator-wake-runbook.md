@@ -1,7 +1,11 @@
-# Orchestrator wake listener runbook
+# Orchestrator wake listener and heartbeat runbook
 
-Event-driven local bridge: AO `webhook` notifier → loopback HTTP POST →
+**Event path:** AO `webhook` notifier → loopback HTTP POST →
 `ao send <orchestrator-session-id> <wake message>`.
+
+**Heartbeat path (issue #59):** separate process
+`scripts/orchestrator-wake-heartbeat.ps1` → periodic labelled `ao send` on a
+low-frequency interval, independent of webhook traffic.
 
 For the full autonomous review-loop go-live checklist (live YAML, review command,
 verification), see [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
@@ -26,10 +30,12 @@ and affected worker session / PR.
 | Path | `/ao-wake` | `-Path` |
 | Bind address | `127.0.0.1` only | not configurable (by design) |
 | Webhook URL in example | `http://127.0.0.1:17487/ao-wake` | `notifiers.webhook.url` in local YAML |
-| Dedup window | 30 seconds | `-DedupWindowSeconds` |
+| Dedup window | 30 seconds | `-DedupWindowSeconds` (listener and heartbeat) |
+| Heartbeat interval | 15 minutes | `-IntervalMinutes`, `AO_WAKE_HEARTBEAT_INTERVAL_MINUTES` |
+| Shared dedup state file | `%TEMP%\orchestrator-wake-dedup.json` | `AO_WAKE_DEDUP_STATE` |
 | Orchestrator session | — | `-OrchestratorSessionId`, `AO_ORCHESTRATOR_SESSION_ID` |
 
-## Start
+## Start (event listener)
 
 ```powershell
 cd <orchestrator-pack-root>
@@ -44,6 +50,38 @@ Dry-run (no `ao send`):
 
 ```powershell
 pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun
+```
+
+## Start (heartbeat backstop)
+
+Run in a **third** terminal, separate from the webhook listener:
+
+```powershell
+cd <orchestrator-pack-root>
+$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
+pwsh -File scripts/orchestrator-wake-heartbeat.ps1
+```
+
+The heartbeat does not bind a port and does not read webhook POSTs. Stopping the
+listener does **not** stop the heartbeat; stopping AO notification delivery does
+**not** stop the heartbeat.
+
+Dry-run (logs `ao send` decisions without calling AO):
+
+```powershell
+pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -DryRun
+```
+
+One-shot tick (smoke test):
+
+```powershell
+pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -Once -DryRun
+```
+
+Heartbeat wake message format (distinct from events):
+
+```text
+wake heartbeat.reconcile periodic=reconcile
 ```
 
 ## Verify reachability
@@ -105,6 +143,14 @@ The same wake kind + worker session + PR/run id within **30 seconds** produces o
 `ao send`. AO webhook retries therefore do not storm the orchestrator. Adjust
 with `-DedupWindowSeconds` if needed.
 
+Listener and heartbeat share dedup state in `%TEMP%\orchestrator-wake-dedup.json`
+(override with `AO_WAKE_DEDUP_STATE`), coordinated by an exclusive sidecar
+`orchestrator-wake-dedup.json.lock` during each read-modify-write. A global key
+prevents **any** second orchestrator wake within the window — including a heartbeat
+immediately after an event-driven wake (or the reverse). If the lock cannot be
+acquired within 500 ms, the wake is skipped (`dedup_lock_timeout`) rather than
+risking a double `ao send`.
+
 ## Detect listener / AO problems
 
 | Symptom | What to check |
@@ -115,6 +161,9 @@ with `-DedupWindowSeconds` if needed.
 | `rejected: missing session id` | Malformed AO payload |
 | `ao send failed` | Orchestrator session id wrong or session not running |
 | Port bind failure | Another process on 17487 — change port in YAML and listener |
+| No heartbeat log lines | Heartbeat process not running — start `orchestrator-wake-heartbeat.ps1` |
+| `heartbeat skipped: interval_not_elapsed` | Normal between 15-minute ticks |
+| `heartbeat skipped: global_deduped` | Recent event wake within 30s — expected |
 
 ## Webhook authentication
 
@@ -124,8 +173,9 @@ headers in local `agent-orchestrator.yaml` only; do not commit secrets.
 
 ## Stop
 
-Press Ctrl+C in the listener terminal. AO and worker sessions are unaffected;
-only automatic orchestrator wakes stop until the listener is started again.
+Press Ctrl+C in each wake terminal. AO and worker sessions are unaffected;
+only automatic orchestrator wakes stop until the processes are started again.
+Stopping the listener alone leaves the heartbeat path active (and vice versa).
 
 ## See also
 

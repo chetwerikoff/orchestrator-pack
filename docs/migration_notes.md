@@ -472,12 +472,14 @@ Minimum live YAML fixes not in older copies:
    `agent-orchestrator.yaml.example`.
 2. Set `reactions.approved-and-green.priority: action` (otherwise mergeable events
    never hit the webhook listener).
-3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-listener.ps1` alongside.
+3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-listener.ps1` and
+   `scripts/orchestrator-wake-heartbeat.ps1` alongside (separate terminals).
 
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
-when AO emits urgent/action notifications, without polling or schedulers.
+when AO emits urgent/action notifications. Issue #59 adds a separate low-frequency
+heartbeat process so the orchestrator still gets turns during event silence.
 
 To adopt on an existing live `agent-orchestrator.yaml`:
 
@@ -490,14 +492,19 @@ To adopt on an existing live `agent-orchestrator.yaml`:
 4. In a separate terminal from the AO daemon, start the listener before or with
    `ao start`:
    `pwsh -File scripts/orchestrator-wake-listener.ps1`
-5. Verify reachability:
+5. In another terminal, start the heartbeat backstop (issue #59; default 15-minute
+   interval, independent of webhook POSTs):
+   `pwsh -File scripts/orchestrator-wake-heartbeat.ps1`
+6. Verify reachability:
    `Test-NetConnection -ComputerName 127.0.0.1 -Port 17487`
-6. Optional dry-run (logs forward decisions without calling `ao send`):
+7. Optional dry-run (logs forward decisions without calling `ao send`):
    `pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun`
+   `pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -DryRun -Once`
 
-Full operator steps, dedup window, and failure detection are in
+Full operator steps, dedup window, heartbeat interval, and failure detection are in
 `docs/orchestrator-wake-runbook.md`. When the listener is stopped, AO and workers
-continue normally; only automatic orchestrator wakes stop.
+continue normally; the heartbeat still delivers periodic orchestrator turns until
+it is stopped too (and vice versa).
 
 ## Orchestrator stuck / probe_failure recovery
 

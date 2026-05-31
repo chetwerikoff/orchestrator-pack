@@ -22,9 +22,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
+
 $Script:DefaultPort = 17487
-$Script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$Script:FilterCli = Join-Path $Script:RepoRoot 'docs/orchestrator-wake-filter.mjs'
 
 function Get-ListenerPort {
     if ($Port -gt 0) { return $Port }
@@ -35,26 +35,17 @@ function Get-ListenerPort {
     return $Script:DefaultPort
 }
 
-function Get-OrchestratorSessionId {
-    param([string]$CliValue)
-    if ($CliValue) { return $CliValue.Trim() }
-    $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
-    if ($fromEnv) { return $fromEnv.Trim() }
-    throw 'Orchestrator session id required: -OrchestratorSessionId or AO_ORCHESTRATOR_SESSION_ID'
-}
-
 function Write-ListenerLog {
     param([string]$Message)
-    $ts = (Get-Date).ToString('o')
-    Write-Host "[$ts] $Message"
+    Write-OrchestratorWakeLog -Message $Message
 }
 
 function Invoke-WakeFilter {
     param([string]$BodyJson)
 
-    Push-Location $Script:RepoRoot
+    Push-Location $Script:OrchestratorWakeRepoRoot
     try {
-        $output = $BodyJson | node $Script:FilterCli evaluate 2>&1
+        $output = $BodyJson | node $Script:OrchestratorWakeFilterCli evaluate 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "wake filter exited ${LASTEXITCODE}: $output"
         }
@@ -79,30 +70,21 @@ function Test-LoopbackRemoteEndPoint {
     return $false
 }
 
-function Send-WakeMessage {
-    param(
-        [string]$OrchestratorId,
-        [string]$Message
+function Test-AndRecordWakeDedup {
+    param([string]$DedupeKey)
+
+    $dedupFile = Get-OrchestratorWakeDedupStatePath
+    $windowMs = $script:dedupWindowMs
+    return Invoke-OrchestratorWakeFilterCli -NodeArguments @(
+        'dedup', 'try', '--file', $dedupFile, '--key', $DedupeKey, '--window-ms', $windowMs
     )
-
-    if ($DryRun) {
-        Write-ListenerLog "dry-run: ao send $OrchestratorId $Message"
-        return
-    }
-
-    & ao send $OrchestratorId $Message
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao send failed with exit code $LASTEXITCODE"
-    }
-    Write-ListenerLog "forwarded: ao send $OrchestratorId"
 }
 
 $listenerPort = Get-ListenerPort
 $orchestratorId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
 $normalizedPath = if ($Path.StartsWith('/')) { $Path } else { "/$Path" }
 $prefix = "http://127.0.0.1:${listenerPort}/"
-$dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
-$recentWakes = @{}
+$script:dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $lastAcceptedAt = $null
 $quietCheckSeconds = 300
 
@@ -120,27 +102,21 @@ catch {
 
 Write-ListenerLog "listening (loopback only via 127.0.0.1 prefix)"
 
-$cancelled = $false
-$onCancel = [ConsoleCancelEventHandler]{
-    param($sender, $eventArgs)
-    $script:cancelled = $true
-    $eventArgs.Cancel = $true
-}
-[Console]::add_CancelKeyPress($onCancel)
+Register-OrchestratorWakeCancelHandler
 
 try {
-    while (-not $cancelled) {
+    while (-not (Test-OrchestratorWakeCancelled)) {
         if ($httpListener.IsListening) {
             $async = $httpListener.BeginGetContext($null, $null)
             while (-not $async.IsCompleted) {
-                if ($cancelled) { break }
+                if (Test-OrchestratorWakeCancelled) { break }
                 Start-Sleep -Milliseconds 100
                 if ($lastAcceptedAt -and ((Get-Date) - $lastAcceptedAt).TotalSeconds -ge $quietCheckSeconds) {
                     Write-ListenerLog "quiet-period: no accepted wake events in ${quietCheckSeconds}s (AO may not be POSTing)"
                     $lastAcceptedAt = Get-Date
                 }
             }
-            if ($cancelled) { break }
+            if (Test-OrchestratorWakeCancelled) { break }
 
             $context = $httpListener.EndGetContext($async)
             $request = $context.Request
@@ -184,22 +160,15 @@ try {
                     continue
                 }
 
-                $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                $cutoff = $now - $dedupWindowMs
-                $pruneKeys = @($recentWakes.Keys | Where-Object { $recentWakes[$_] -lt $cutoff })
-                foreach ($key in $pruneKeys) {
-                    $recentWakes.Remove($key) | Out-Null
-                }
-
-                if ($recentWakes.ContainsKey($filterResult.dedupeKey)) {
-                    Write-ListenerLog "deduped: $($filterResult.wakeKind) $($filterResult.sessionId)"
+                $dedupDecision = Test-AndRecordWakeDedup -DedupeKey $filterResult.dedupeKey
+                if (-not $dedupDecision.ok) {
+                    Write-ListenerLog "deduped ($($dedupDecision.reason)): $($filterResult.wakeKind) $($filterResult.sessionId)"
                     $response.StatusCode = 204
                     $response.Close()
                     continue
                 }
 
-                $recentWakes[$filterResult.dedupeKey] = $now
-                Send-WakeMessage -OrchestratorId $orchestratorId -Message $filterResult.wakeMessage
+                Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $filterResult.wakeMessage -DryRun:$DryRun
                 $lastAcceptedAt = Get-Date
                 Write-ListenerLog "accepted: $($filterResult.wakeKind) worker=$($filterResult.sessionId)"
                 $response.StatusCode = 204
@@ -219,7 +188,7 @@ try {
     }
 }
 finally {
-    [Console]::remove_CancelKeyPress($onCancel)
+    Unregister-OrchestratorWakeCancelHandler
     if ($httpListener.IsListening) {
         $httpListener.Stop()
     }
