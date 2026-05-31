@@ -131,6 +131,26 @@ Skipping the YAML merge leaves the orchestrator treating `waiting_update` as idl
 when only `sentFindingCount` is non-zero; skipping restart leaves workers on the
 old completion rule.
 
+### Post-merge review run terminal (Issue #54)
+
+After a worker PR is merged, AO 0.9.x may leave `code-reviews/` entries in
+`needs_triage` or `waiting_update` while the worker session is gone. Issue #54
+adds **MERGED PR — REVIEW LOOP TERMINAL** to `orchestratorRules` so the
+orchestrator does not send, re-run review, or review-loop ping/respawn on merged
+PRs.
+
+To adopt:
+
+1. Merge the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
+   into live `agent-orchestrator.yaml` (MERGED PR section and EXIT condition 5).
+2. Restart AO: `ao stop` then `ao start`.
+3. If you use the wake listener, restart `scripts/orchestrator-wake-listener.ps1`
+   (and heartbeat if used) in their terminals — no wake-filter code change ships
+   with this issue.
+
+Operator reference: `docs/orchestrator-recovery-runbook.md` (**After manual PR merge**)
+and `docs/orchestrator-wake-runbook.md` (merged-PR wakes).
+
 ### Windows `orchestratorRules` quote safety (Issue #55)
 
 On Windows, AO starts the Cursor agent through a PowerShell 5.1 prompt template that

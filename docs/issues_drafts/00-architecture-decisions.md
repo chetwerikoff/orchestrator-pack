@@ -412,6 +412,29 @@ Decision taken 2026-05-31 after op-rev-5 / op-rev-1 failures on PR #105 and #104
 
 See `docs/issues_drafts/36-pack-reviewer-env-at-review-spawn.md`.
 
+## J. AO-local review runs vs PR merge (post-merge terminal)
+
+Decision taken 2026-05-31 (Issue #54, incident PR #53 / op-17): after human PR
+merge, the worker session correctly reached `merged` and was torn down, but
+`code-reviews/` entries for the same PR remained in `needs_triage` /
+`waiting_update` and the orchestrator still attempted review-loop actions on wake.
+
+1. **AO 0.9.x does not lifecycle-couple review runs to merge.** Worker merge
+   cleanup removes the worker worktree/session; existing AO-local review runs
+   persist until superseded by a new run on a different SHA or until upstream adds
+   cancel/outdate-on-merge. Dashboard cards for merged PRs may look active; that
+   is storage/UI persistence, not proof the loop is stuck.
+
+2. **Pack policy is orchestrator inaction + operator docs, not core patch.** Live
+   `orchestratorRules` (**MERGED PR — REVIEW LOOP TERMINAL**) require GitHub merge
+   verification (`gh pr view` class), forbid `ao review send`, new `ao review run`,
+   and review-loop ping/respawn on merged PRs, and treat linked PR merged as an
+   EXIT from `waiting_worker_review_response`. Wake listener/filter unchanged:
+   stateless filter cannot see merge state; suppression happens on the orchestrator
+   turn. No `ao review cancel` in this pack — document upstream gap only.
+
+See `docs/issues_drafts/21-post-merge-review-run-lifecycle.md` (GitHub #54).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

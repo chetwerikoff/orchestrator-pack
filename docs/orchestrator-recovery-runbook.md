@@ -413,10 +413,12 @@ ao events list --json
 Expected behavior:
 
 - Runs in **`needs_triage`** with `openFindingCount > 0` should receive
-  `ao review send <run-id>` when the orchestrator runs the loop again.
+  `ao review send <run-id>` when the orchestrator runs the loop again — **except**
+  when the linked PR is already merged on GitHub (see [After manual PR merge](#after-manual-pr-merge)).
 - Runs in **`waiting_update`** resume **waiting_worker_review_response**; the
   orchestrator applies ping/respawn discipline — it does not re-send findings
-  unless a new review round is required.
+  unless a new review round is required — **unless** the linked PR is merged
+  (terminal; no ping or respawn for review on that PR).
 - Workers in **`addressing_reviews`** / **`fixing_ci`** should be left alone
   unless the loop rules say otherwise.
 - Wake listener (if used) is separate — restart it if you run
@@ -424,6 +426,38 @@ Expected behavior:
 
 Nothing in this runbook auto-merges PRs or kills workers; that stays in
 `orchestratorRules`.
+
+## After manual PR merge
+
+When a worker PR is merged on GitHub (human merge per repo policy), AO 0.9.x
+**worker** merge cleanup and **AO-local review** persistence are **decoupled**:
+
+| Layer | After merge |
+|-------|-------------|
+| Worker session / worktree | AO tears down the worker session and worktree as usual |
+| `code-reviews/` / `ao review list` | Runs often **remain** (`needs_triage`, `waiting_update`, etc.) |
+
+That split is **expected**. AO core does not today cancel or mark review runs
+`outdated` solely because the PR merged; upstream may add that later. This pack
+does not require hand-editing review-run JSON under `.agent-orchestrator/`.
+
+**Stale kanban cards are not stuck orchestration.** If `ao review list` still
+shows active-looking runs for a **merged** PR, the orchestrator must **not**
+treat them as backlog: `orchestratorRules` **MERGED PR — REVIEW LOOP TERMINAL**
+(Issue #54) forbids `ao review send`, new `ao review run`, review-loop
+`ao send` pings, and review-loop `ao session kill` / `ao spawn --claim-pr` on
+that PR. Focus recovery and planning on **open** PRs only.
+
+**Do not** `ao review send` to a worker session that is already `merged` or
+`terminated` for that PR — findings cannot reach a live worker. Do not use
+recovery step 1 ping text to force triage on merged PRs.
+
+**No `ao review cancel`.** The AO CLI has no review cancel/dismiss command
+today; document the gap, do not invent one in this pack.
+
+**Wake listener:** review-related webhook wakes for a merged PR may still reach
+the listener; suppression is on the orchestrator turn via `orchestratorRules`
+(see `docs/orchestrator-wake-runbook.md`), not by editing wake-filter code.
 
 ## Quick reference — safety checks
 

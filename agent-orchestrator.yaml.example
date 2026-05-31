@@ -141,6 +141,32 @@ projects:
       so pack rules cannot ping. Expect only report-stale (~30 min), reactions.ci-failed,
       or operator ao send / kill-respawn per docs/orchestrator-recovery-runbook.md.
 
+      MERGED PR — REVIEW LOOP TERMINAL (Issue #54). On EVERY orchestrator turn,
+      BEFORE autonomous review-loop reads below, for each PR that has entries in
+      ao review list --json or an open worker session with a PR ref:
+        Verify that PR merge state on GitHub (e.g. gh pr view <n> --json state,mergedAt).
+        Key off the linked PR merge state, NOT solely ao status session merged or
+        terminated — merge cleanup may kill the worker session while code-reviews/
+        runs persist, so session-only checks miss this case. A visible merged or
+        terminated worker session is sufficient but not necessary.
+
+      When the linked worker PR is merged on GitHub (human merge per repo policy):
+        Treat all AO-local review runs for that PR as historical, not queue work.
+        MUST NOT ao review send for any run linked to that PR.
+        MUST NOT ao review run for a new round on that PR.
+        MUST NOT ao send ping, ao session kill, or ao spawn --claim-pr for review-loop
+        purposes on that PR.
+        MUST NOT treat needs_triage or waiting_update runs for that PR as blocking
+        other work or as requiring autonomous-loop recovery.
+        Linked PR merged is an additional EXIT for waiting_worker_review_response
+        (see EXIT list below) — leave that state; do not ping or respawn for review.
+        MAY proceed to other open issues and PRs normally.
+
+      AO 0.9.x does not cancel or archive review runs on PR merge; stale dashboard
+      cards are expected until upstream adds cancel or outdate-on-merge. Pack policy
+      is orchestrator inaction and operator docs — not hand-editing code-reviews/ JSON.
+      There is no ao review cancel CLI today; see docs/orchestrator-recovery-runbook.md.
+
       AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
       review or loop. On every orchestrator turn after CI failure discipline above,
       while any open PR has an active review path, read these BEFORE any other planning
@@ -194,6 +220,8 @@ projects:
            or ao send to orchestrator explaining the blocker).
         4. Orchestrator observed the worker session is unavailable, killed it, and
            respawned via ao spawn --claim-pr <PR> (ping/respawn discipline below).
+        5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL
+           above; verify via gh pr view, not session status alone).
 
       PING DISCIPLINE (one ping per pending episode). On the next orchestrator turn
       while still in waiting_worker_review_response, if there is no worker

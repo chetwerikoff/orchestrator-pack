@@ -14,6 +14,26 @@ The orchestrator applies its `orchestratorRules` decision procedure on the next
 AO-message-induced turn; the wake message is only a nudge naming the event kind
 and affected worker session / PR.
 
+## Merged PR — review wakes are not triage work
+
+Review-related wakes (`review.needs_triage`, `ready_for_review`, `merge.ready`,
+etc.) may still be **accepted** by the listener and delivered as `ao send` to the
+orchestrator. That is expected: the wake path only schedules a turn.
+
+When the linked worker PR is **already merged on GitHub**, the orchestrator MUST
+**not** act on that wake as review backlog — no `ao review send`, no new
+`ao review run`, no review-loop ping or respawn for that PR. Suppression is
+entirely in **`orchestratorRules`** (**MERGED PR — REVIEW LOOP TERMINAL**, Issue
+#54), applied on the next orchestrator turn after verifying merge via GitHub
+(e.g. `gh pr view`), not from `ao status` session state alone.
+
+`docs/orchestrator-wake-filter.mjs` (`evaluateWakePayload`) is a **stateless**
+function over one payload; it cannot know PR merge state. Do **not** add
+merge-state logic to the filter for this issue — a future listener-level guard
+would be a separate change. After merge, operators may ignore stale review cards
+on the dashboard for that PR; see
+[`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md#after-manual-pr-merge).
+
 ## Prerequisites
 
 - AO configured with `notifiers.webhook` and `notificationRouting` for `urgent`
