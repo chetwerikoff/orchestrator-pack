@@ -83,6 +83,66 @@ Orchestrator: resume review loop for this PR head per orchestratorRules.
 Do not kill the orchestrator for this pattern alone — it is a **CI / PR-body**
 problem, not probe failure.
 
+## Red CI with idle worker (Issue #109)
+
+**Required CI** matches `prompts/agent_rules.md` and `orchestratorRules` in
+`agent-orchestrator.yaml.example`: GitHub **required status checks** for the PR base
+when branch protection lists them; otherwise all pack merge-contract checks on the
+PR head (`scope-guard` jobs: Verify orchestrator-pack structure, PR scope guard, Run
+pack contract tests, Self-architect lint).
+
+### Op-6 class (false `ready_for_review`, then idle)
+
+Symptoms: required CI red on the PR head; worker `reportState` is `ready_for_review` or
+was recently; worker idle with no new commits; long gap before any fix.
+
+1. Confirm red CI: `gh pr checks <pr> --repo chetwerikoff/orchestrator-pack` (or your
+   project repo).
+2. Inspect turns and pings — did the orchestrator act on the **catching turn**?
+
+```powershell
+ao events list --json
+ao status --reports full
+```
+
+Look for an early orchestrator `ao send` with CI-fix context **before** only
+`report-stale` (~30 minutes since last report) or a late `ci-failed` reaction. In the
+2026-05-31 op-6 episode, the catching turn was the worker `ready_for_review` report while
+CI was still red; pack rules expect an orchestrator ping on that turn, not ~30 minutes
+later.
+
+3. **Manual unblock** — ping the worker (do not assume a separate architect session woke
+   it):
+
+```powershell
+ao send <worker-session-id> @'
+Required CI is still red on this PR head. Run gh pr checks, ao report fixing_ci, fix CI,
+then ready_for_review only when required CI is green. Do not treat the task as done on red CI.
+'@
+```
+
+4. If the worker stays idle after ping, use review-loop respawn discipline in
+   `orchestratorRules` or `ao spawn --claim-pr <n>` per runbook #40.
+
+Upstream note: first lifecycle `ci_failed` transition may show `recoveryAction: null` —
+that is AO core behaviour; this pack closes the gap on **orchestrator turns**, not on
+CI-event-driven turns alone.
+
+### Gated + silently idle (residual risk)
+
+Symptoms: worker **never** reported `ready_for_review` on red CI (gate worked or worker
+stayed in `fixing_ci`), but session is idle with red required CI and no commits.
+
+Pack `orchestratorRules` are **turn-driven** — no worker report and no other wake means
+no orchestrator turn, so pack CI ping rules do not run. Expect only:
+
+- `reactions.report-stale` (~30 minutes), then `send-to-agent`, and/or
+- `reactions.ci-failed` when AO delivers it, and/or
+- operator `ao send` or kill-respawn (steps below).
+
+Do not wait indefinitely; manual `ao send` as in op-6 class or escalate per
+[Escalation overview](#escalation-overview).
+
 ## Stuck vs legitimately idle
 
 Run these **before** any kill or full restart. Optionally use the one-screen

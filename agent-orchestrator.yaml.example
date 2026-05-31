@@ -98,17 +98,56 @@ projects:
         Always read terminationReason from ao review list --json first. Common causes: Codex usage limit (set PACK_REVIEWER=claude per docs/reviewer-switch-runbook.md), missing PACK_REVIEWER, missing npm preflight (forbidden bare review.ps1), or selector mismatch (terminationReason shows a different wrapper than PACK_REVIEWER).
         Do not ao review send on failed runs. Do not tell the worker review is complete when only failed runs exist for the current head. Retry once with the live REVIEW_COMMAND after fixing the cause; if still failed, escalate to the operator.
 
-      AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
-      review or loop. On every orchestrator turn while any open PR has an active
-      review path, read these BEFORE any other planning work:
-        ao review list --json
-        ao status --json --reports full
-        ao events list --json
-
       WALL-CLOCK NOTE. Targets such as ~2 minutes for worker acknowledgement and
       ~3 minutes after ping before respawn are operator guidance applied on the next
       orchestrator turn, not independently enforced timers. There is no background
       watchdog. The 30-minute AO report-stale reaction is a long-tail backstop only.
+
+      REQUIRED CI (CI green) — same definition as prompts/agent_rules.md:
+        Preferred: GitHub required status checks for the PR base branch when branch
+        protection lists them.
+        Fallback: when no required checks are configured, all checks on the PR head
+        that belong to this pack merge contract — scope-guard workflow jobs
+        Verify orchestrator-pack structure, PR scope guard, Run pack contract tests,
+        Self-architect lint — not every optional third-party check unless the repo
+        already treats it as merge-blocking.
+
+      CI FAILURE DISCIPLINE (turn-driven; Issue #109). A failing GitHub check does NOT
+      by itself schedule an orchestrator turn. Pack rules apply on the next orchestrator
+      turn only (worker ao report, webhook wake, operator activity). If nothing creates
+      a turn, reactions.report-stale (~30 minutes) and reactions.ci-failed remain
+      upstream backstops — not replaced by pack prose.
+
+      On EVERY orchestrator turn, BEFORE the autonomous review-loop reads below, for each
+      open worker PR whose current head has red required CI per the definition above
+      (gh pr checks, enrichment, or ao status — pick one consistent source):
+        If the worker is visibly active on CI fix this turn (same-turn fixing_ci or
+        addressing_reviews report, or a new commit on the PR branch since this red-CI
+        episode began), do NOT ao send — worker self-fix is primary.
+        Else if ao events list --json shows no prior ao send CI-failure ping for this
+        episode (same PR head SHA and failing required-check set), ao send the worker
+        with CI failure context: failing job names, scope-guard log hints, missing
+        Closes #N, declaration snapshot paths. Remind: ao report fixing_ci, fix required
+        CI, never ao report ready_for_review while required CI is red.
+        Do NOT send a second ping for the same episode before the worker reports
+        fixing_ci, pushes a new commit, or required CI turns green.
+
+      Operator target: within ~3 minutes after the next orchestrator turn that observes
+      red CI — NOT within ~3 minutes of CI failure wall-clock. Op-6 class: catching turn
+      was worker ready_for_review while CI still red; orchestrator should have pinged then.
+
+      RESIDUAL RISK (gated + silently idle). Worker never reports ready_for_review on red
+      CI but stays idle in fixing_ci with no commits and no further reports — no turn,
+      so pack rules cannot ping. Expect only report-stale (~30 min), reactions.ci-failed,
+      or operator ao send / kill-respawn per docs/orchestrator-recovery-runbook.md.
+
+      AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type
+      review or loop. On every orchestrator turn after CI failure discipline above,
+      while any open PR has an active review path, read these BEFORE any other planning
+      work:
+        ao review list --json
+        ao status --json --reports full
+        ao events list --json
 
       REVIEW RUN STATUSES (AO 0.9.x — use only these exact values from ao review list):
         needs_triage — run finished; findings exist but were not sent to the worker.
@@ -186,7 +225,7 @@ projects:
       Emit ready-for-human-merge notification only when ALL are true:
         - Latest AO-local review run for current PR head has findingCount: 0
           (no open or sent findings remain);
-        - PR is open with green CI on the same head SHA;
+        - PR is open with required CI green on the same head SHA (see REQUIRED CI);
         - Worker reported ready_for_review for current head, OR the latest clean
           review completed after the worker's latest ready_for_review with no newer
           commits;

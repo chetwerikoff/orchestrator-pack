@@ -99,6 +99,40 @@ scope:
 - If upstream behavior appears missing, write a contract or wrapper first and
   escalate the need for a proper plugin/API only after confirming the gap.
 
+## Required CI (CI green)
+
+Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use
+**one** definition of which checks must pass:
+
+- **Preferred:** GitHub **required status checks** for the PR's base branch (branch
+  protection), when configured for this repository.
+- **Fallback:** when branch protection does not list required checks, **all checks**
+  reported for the PR head that belong to this pack's merge contract — workflow
+  `scope-guard` jobs such as **Verify orchestrator-pack structure**, **PR scope
+  guard**, **Run pack contract tests**, and **Self-architect lint** (see
+  `.github/workflows/scope-guard.yml`) — not every optional or third-party check on
+  the PR unless the repo already treats them as merge-blocking.
+
+Inspect with `gh pr checks <pr>` (or equivalent) against the **current PR head**.
+Do not treat the PR as CI-green while any required check is `fail`, `pending`, or
+missing for that head.
+
+## Worker CI gate (`ready_for_review` and self-fix)
+
+**Self-fix is primary;** orchestrator `ao send` on red CI is recovery when the worker
+has gone idle — not a substitute for fixing CI yourself.
+
+- Do **not** run `ao report ready_for_review` (or treat the task as done) while
+  required CI for the PR head is not green per the definition above.
+- **Before** every `ao report ready_for_review`, check required CI for the current
+  head; if any check is red or still running, stay in or move to
+  `ao report fixing_ci` and fix — push, re-run local verification, wait for green CI.
+- If CI was green when you reported but fails on a later push, or you discover red CI
+  after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
+  **without waiting** for `ci-failed`, `report-stale`, or operator ping.
+- While actively fixing CI, keep reporting `fixing_ci` as needed; do not go idle on a
+  red-CI PR expecting the orchestrator to drive the fix unless you are blocked.
+
 ## Review feedback handling
 
 When AO sends review feedback through `changes-requested` or `ci-failed`:
@@ -122,7 +156,8 @@ or the `report-stale` backstop), the worker MUST NOT go idle silently.
    (mandatory after findings are delivered; do not wait for a human ping).
 2. `ao report fixing_ci` — optional, while fixing CI triggered by review fixes.
 3. `ao report ready_for_review` — after pushing fixes and local verification,
-   when the PR is ready for the next orchestrator-driven review round.
+   when required CI for the PR head is green (see **Required CI**) and the PR is ready
+   for the next orchestrator-driven review round.
 
 Use underscore state names (`addressing_reviews`, `fixing_ci`, `ready_for_review`)
 so `ao status --reports full` matches what orchestratorRules watches; hyphenated
