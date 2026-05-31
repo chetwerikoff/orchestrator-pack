@@ -403,7 +403,9 @@ Decision taken 2026-05-31 after op-rev-5 / op-rev-1 failures on PR #105 and #104
 
 2. **Persistent-env read fallback.** When process-scoped `PACK_REVIEWER` is unset, the pack
    resolver consults operator-persistent environment layers (Windows User/Machine registry for
-   the same variable) before fail-closed. This is not a second config file or YAML key.
+   the same variable) before fail-closed. Precedence: Process → User → Machine (User overrides
+   Machine when process is unset). Non-Windows hosts keep process-only / fail-closed. This is
+   not a second config file or YAML key.
 
 3. **AO unchanged.** Reviews still use `ao review run --execute --command` with
    `invoke-pack-review.ps1`; upstream AO env injection is out of scope.

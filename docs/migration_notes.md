@@ -170,9 +170,14 @@ Regression guards: `scripts/check-review-command-preflight.ps1`,
 
 **REVIEW_COMMAND** is reviewer-agnostic: `scripts/invoke-pack-review.ps1` (see
 `agent-orchestrator.yaml.example`). The operator sets **`PACK_REVIEWER`** to
-`codex` or `claude` before `ao start`; the entrypoint dispatches to
-`scripts/run-pack-review.ps1` or `scripts/run-pack-review-claude.ps1`.
-Unset/invalid `PACK_REVIEWER` fails closed (no reviewer run, no Codex default).
+`codex` or `claude`. On Windows, **User-level** `PACK_REVIEWER` is enough for
+review spawn when AO children lack process-scoped inheritance; process-level
+export before `ao start` remains recommended for daemon boot env. Layer
+precedence: Process → User → Machine (User overrides Machine when process is
+unset). Non-Windows: process scope only — no persistent-env fallback in this
+pack. The entrypoint dispatches to `scripts/run-pack-review.ps1` or
+`scripts/run-pack-review-claude.ps1`. Unset/invalid `PACK_REVIEWER` in all
+consulted layers fails closed (no reviewer run, no Codex default).
 
 **Operator migration from Issue #79.** If live `agent-orchestrator.yaml` still
 names `run-pack-review.ps1` or `run-pack-review-claude.ps1` in **REVIEW_COMMAND**,

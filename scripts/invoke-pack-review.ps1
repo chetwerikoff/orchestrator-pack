@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $reviewer = Get-PackReviewerFromSelector
 if (-not $reviewer) {
     $message = Get-PackReviewerSelectorErrorMessage
-    [Console]::Error.WriteLine($message)
+    Write-Error $message -ErrorAction Continue
     exit 1
 }
 
