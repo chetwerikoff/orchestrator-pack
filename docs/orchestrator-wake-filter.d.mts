@@ -1,4 +1,8 @@
 export declare const DEFAULT_WAKE_DEDUP_WINDOW_MS: 30000;
+export declare const DEFAULT_HEARTBEAT_INTERVAL_MS: number;
+export declare const HEARTBEAT_WAKE_KIND: 'heartbeat.reconcile';
+export declare const GLOBAL_ORCHESTRATOR_WAKE_KEY: '__orchestrator_wake__';
+export declare const HEARTBEAT_DEDUPE_KEY: string;
 
 export declare const WAKE_RELEVANT_KINDS: ReadonlySet<string>;
 
@@ -57,6 +61,82 @@ export declare function buildWakeMessage(
   },
 ): string;
 
+export declare function buildHeartbeatWakeMessage(): string;
+
+export declare function pruneDedupEntries(
+  entries: Record<string, number>,
+  nowMs: number,
+  windowMs: number,
+): Record<string, number>;
+
+export declare function isDeduped(
+  entries: Record<string, number>,
+  dedupeKey: string,
+  nowMs: number,
+  windowMs: number,
+): boolean;
+
+export type OrchestratorWakeSendRejectReason = 'global_deduped' | 'deduped';
+
+export interface OrchestratorWakeSendAccept {
+  ok: true;
+  entries: Record<string, number>;
+}
+
+export interface OrchestratorWakeSendReject {
+  ok: false;
+  reason: OrchestratorWakeSendRejectReason;
+  entries: Record<string, number>;
+}
+
+export type OrchestratorWakeSendResult = OrchestratorWakeSendAccept | OrchestratorWakeSendReject;
+
+export declare function evaluateOrchestratorWakeSend(args: {
+  dedupeKey: string;
+  nowMs?: number;
+  dedupWindowMs?: number;
+  entries?: Record<string, number>;
+}): OrchestratorWakeSendResult;
+
+export type HeartbeatTickRejectReason =
+  | 'interval_not_elapsed'
+  | OrchestratorWakeSendRejectReason;
+
+export interface HeartbeatTickAccept {
+  ok: true;
+  wakeKind: typeof HEARTBEAT_WAKE_KIND;
+  wakeMessage: string;
+  dedupeKey: string;
+  entries: Record<string, number>;
+  lastHeartbeatSentMs: number;
+}
+
+export interface HeartbeatTickReject {
+  ok: false;
+  reason: HeartbeatTickRejectReason;
+  entries: Record<string, number>;
+}
+
+export type HeartbeatTickResult = HeartbeatTickAccept | HeartbeatTickReject;
+
+export declare function evaluateHeartbeatTick(args: {
+  nowMs?: number;
+  intervalMs?: number;
+  lastHeartbeatSentMs?: number;
+  entries?: Record<string, number>;
+  dedupWindowMs?: number;
+}): HeartbeatTickResult;
+
 export declare function evaluateWakePayload(body: unknown): WakeFilterResult;
 
 export declare function parseWebhookJson(raw: string): unknown;
+
+export declare function loadDedupStateFile(filePath: string): {
+  entries: Record<string, number>;
+  lastHeartbeatSentMs?: number;
+};
+
+export declare function saveDedupStateFile(
+  filePath: string,
+  state: { entries: Record<string, number>; lastHeartbeatSentMs?: number },
+): void;

@@ -1,9 +1,18 @@
 /**
  * AO webhook payload → orchestrator wake decision (plain ESM for node without tsx).
- * Vitest coverage: scripts/orchestrator-wake-listener.test.ts
+ * Vitest coverage: scripts/orchestrator-wake-listener.test.ts,
+ * scripts/orchestrator-wake-heartbeat.test.ts
  */
+import fs from 'node:fs';
+import path from 'node:path';
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
+/** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
+export const HEARTBEAT_WAKE_KIND = 'heartbeat.reconcile';
+/** Cross-process dedup: any orchestrator wake within the window blocks another. */
+export const GLOBAL_ORCHESTRATOR_WAKE_KEY = '__orchestrator_wake__';
+export const HEARTBEAT_DEDUPE_KEY = `${HEARTBEAT_WAKE_KIND}|orchestrator`;
 
 export const WAKE_RELEVANT_KINDS = new Set([
   'review.needs_triage',
@@ -112,6 +121,89 @@ export function buildWakeMessage(wakeKind, parts) {
   return `wake ${wakeKind} ${formatIdentifier(parts)}`;
 }
 
+/** Periodic nudge — distinct from event-driven `wake <kind> session=…` messages. */
+export function buildHeartbeatWakeMessage() {
+  return `wake ${HEARTBEAT_WAKE_KIND} periodic=reconcile`;
+}
+
+export function pruneDedupEntries(entries, nowMs, windowMs) {
+  if (!isRecord(entries)) return {};
+  const cutoff = nowMs - windowMs;
+  const pruned = {};
+  for (const [key, ts] of Object.entries(entries)) {
+    if (typeof ts === 'number' && ts >= cutoff) {
+      pruned[key] = ts;
+    }
+  }
+  return pruned;
+}
+
+export function isDeduped(entries, dedupeKey, nowMs, windowMs) {
+  if (!isRecord(entries)) return false;
+  const last = entries[dedupeKey];
+  if (typeof last !== 'number') return false;
+  return nowMs - last < windowMs;
+}
+
+/**
+ * Returns whether an orchestrator wake may be sent and the updated dedup map.
+ * Honors per-key dedup and a global key so heartbeat and events do not double-send.
+ */
+export function evaluateOrchestratorWakeSend({
+  dedupeKey,
+  nowMs = Date.now(),
+  dedupWindowMs = DEFAULT_WAKE_DEDUP_WINDOW_MS,
+  entries = {},
+}) {
+  const pruned = pruneDedupEntries(entries, nowMs, dedupWindowMs);
+  if (isDeduped(pruned, GLOBAL_ORCHESTRATOR_WAKE_KEY, nowMs, dedupWindowMs)) {
+    return { ok: false, reason: 'global_deduped', entries: pruned };
+  }
+  if (isDeduped(pruned, dedupeKey, nowMs, dedupWindowMs)) {
+    return { ok: false, reason: 'deduped', entries: pruned };
+  }
+  const next = { ...pruned, [dedupeKey]: nowMs, [GLOBAL_ORCHESTRATOR_WAKE_KEY]: nowMs };
+  return { ok: true, entries: next };
+}
+
+/**
+ * Heartbeat tick decision (interval + shared dedup). Does not depend on webhook traffic.
+ */
+export function evaluateHeartbeatTick({
+  nowMs = Date.now(),
+  intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
+  lastHeartbeatSentMs,
+  entries = {},
+  dedupWindowMs = DEFAULT_WAKE_DEDUP_WINDOW_MS,
+}) {
+  if (
+    typeof lastHeartbeatSentMs === 'number' &&
+    nowMs - lastHeartbeatSentMs < intervalMs
+  ) {
+    return { ok: false, reason: 'interval_not_elapsed', entries: pruneDedupEntries(entries, nowMs, dedupWindowMs) };
+  }
+
+  const sendDecision = evaluateOrchestratorWakeSend({
+    dedupeKey: HEARTBEAT_DEDUPE_KEY,
+    nowMs,
+    dedupWindowMs,
+    entries,
+  });
+
+  if (!sendDecision.ok) {
+    return { ok: false, reason: sendDecision.reason, entries: sendDecision.entries };
+  }
+
+  return {
+    ok: true,
+    wakeKind: HEARTBEAT_WAKE_KIND,
+    wakeMessage: buildHeartbeatWakeMessage(),
+    dedupeKey: HEARTBEAT_DEDUPE_KEY,
+    entries: sendDecision.entries,
+    lastHeartbeatSentMs: nowMs,
+  };
+}
+
 export function evaluateWakePayload(body) {
   if (!isRecord(body)) {
     return { ok: false, reason: 'malformed_payload', detail: 'body is not an object' };
@@ -191,9 +283,107 @@ function readStdin() {
   });
 }
 
+function parseFlag(args, name, fallback) {
+  const idx = args.indexOf(name);
+  if (idx >= 0 && args[idx + 1] !== undefined) {
+    return args[idx + 1];
+  }
+  return fallback;
+}
+
+function parseIntFlag(args, name, fallback) {
+  const raw = parseFlag(args, name, String(fallback));
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export function loadDedupStateFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { entries: {}, lastHeartbeatSentMs: undefined };
+    }
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return { entries: {}, lastHeartbeatSentMs: undefined };
+    }
+    const entries = isRecord(parsed.entries) ? parsed.entries : {};
+    const lastHeartbeatSentMs =
+      typeof parsed.lastHeartbeatSentMs === 'number' ? parsed.lastHeartbeatSentMs : undefined;
+    return { entries, lastHeartbeatSentMs };
+  } catch {
+    return { entries: {}, lastHeartbeatSentMs: undefined };
+  }
+}
+
+export function saveDedupStateFile(filePath, state) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(state)}\n`, 'utf8');
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0] ?? 'evaluate';
+
+  if (command === 'dedup' && args[1] === 'try') {
+    const filePath = parseFlag(args, '--file', '');
+    const dedupeKey = parseFlag(args, '--key', '');
+    const windowMs = parseIntFlag(args, '--window-ms', DEFAULT_WAKE_DEDUP_WINDOW_MS);
+    const nowMs = parseIntFlag(args, '--now-ms', Date.now());
+    if (!filePath || !dedupeKey) {
+      console.error('dedup try requires --file and --key');
+      process.exit(2);
+      return;
+    }
+    const loaded = loadDedupStateFile(filePath);
+    const decision = evaluateOrchestratorWakeSend({
+      dedupeKey,
+      nowMs,
+      dedupWindowMs: windowMs,
+      entries: loaded.entries,
+    });
+    if (decision.ok) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      });
+    }
+    process.stdout.write(`${JSON.stringify(decision)}\n`);
+    return;
+  }
+
+  if (command === 'heartbeat' && args[1] === 'tick') {
+    const filePath = parseFlag(args, '--file', '');
+    const intervalMs = parseIntFlag(args, '--interval-ms', DEFAULT_HEARTBEAT_INTERVAL_MS);
+    const windowMs = parseIntFlag(args, '--window-ms', DEFAULT_WAKE_DEDUP_WINDOW_MS);
+    const nowMs = parseIntFlag(args, '--now-ms', Date.now());
+    if (!filePath) {
+      console.error('heartbeat tick requires --file');
+      process.exit(2);
+      return;
+    }
+    const loaded = loadDedupStateFile(filePath);
+    const decision = evaluateHeartbeatTick({
+      nowMs,
+      intervalMs,
+      lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      entries: loaded.entries,
+      dedupWindowMs: windowMs,
+    });
+    if (decision.ok) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: decision.lastHeartbeatSentMs,
+      });
+    } else if (decision.entries) {
+      saveDedupStateFile(filePath, {
+        entries: decision.entries,
+        lastHeartbeatSentMs: loaded.lastHeartbeatSentMs,
+      });
+    }
+    process.stdout.write(`${JSON.stringify(decision)}\n`);
+    return;
+  }
 
   if (command === 'evaluate') {
     const jsonFlag = args.indexOf('--json');

@@ -79,6 +79,30 @@ function Test-LoopbackRemoteEndPoint {
     return $false
 }
 
+function Get-DedupStatePath {
+    $fromEnv = $env:AO_WAKE_DEDUP_STATE
+    if ($fromEnv) { return $fromEnv }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-wake-dedup.json'
+}
+
+function Test-AndRecordWakeDedup {
+    param([string]$DedupeKey)
+
+    $dedupFile = Get-DedupStatePath
+    $windowMs = $script:dedupWindowMs
+    Push-Location $Script:RepoRoot
+    try {
+        $output = & node $Script:FilterCli dedup try --file $dedupFile --key $DedupeKey --window-ms $windowMs 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "dedup try exited ${LASTEXITCODE}: $output"
+        }
+        return ($output | Out-String).Trim() | ConvertFrom-Json
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Send-WakeMessage {
     param(
         [string]$OrchestratorId,
@@ -101,8 +125,7 @@ $listenerPort = Get-ListenerPort
 $orchestratorId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
 $normalizedPath = if ($Path.StartsWith('/')) { $Path } else { "/$Path" }
 $prefix = "http://127.0.0.1:${listenerPort}/"
-$dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
-$recentWakes = @{}
+$script:dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $lastAcceptedAt = $null
 $quietCheckSeconds = 300
 
@@ -184,21 +207,14 @@ try {
                     continue
                 }
 
-                $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                $cutoff = $now - $dedupWindowMs
-                $pruneKeys = @($recentWakes.Keys | Where-Object { $recentWakes[$_] -lt $cutoff })
-                foreach ($key in $pruneKeys) {
-                    $recentWakes.Remove($key) | Out-Null
-                }
-
-                if ($recentWakes.ContainsKey($filterResult.dedupeKey)) {
-                    Write-ListenerLog "deduped: $($filterResult.wakeKind) $($filterResult.sessionId)"
+                $dedupDecision = Test-AndRecordWakeDedup -DedupeKey $filterResult.dedupeKey
+                if (-not $dedupDecision.ok) {
+                    Write-ListenerLog "deduped ($($dedupDecision.reason)): $($filterResult.wakeKind) $($filterResult.sessionId)"
                     $response.StatusCode = 204
                     $response.Close()
                     continue
                 }
 
-                $recentWakes[$filterResult.dedupeKey] = $now
                 Send-WakeMessage -OrchestratorId $orchestratorId -Message $filterResult.wakeMessage
                 $lastAcceptedAt = Get-Date
                 Write-ListenerLog "accepted: $($filterResult.wakeKind) worker=$($filterResult.sessionId)"
