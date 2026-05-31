@@ -392,6 +392,24 @@ enforced at handoff time.
 
 See `docs/issues_drafts/35-operator-adoption-handoff-contract.md`.
 
+## N. PACK_REVIEWER persistent-env fallback (review spawn)
+
+Decision taken 2026-05-31 after op-rev-5 / op-rev-1 failures on PR #105 and #104: User-level
+`PACK_REVIEWER=claude` was set, but AO review children saw an empty process-scoped variable and
+`invoke-pack-review.ps1` failed closed in under one second.
+
+1. **Same selector.** `PACK_REVIEWER` remains the only name and the only source of truth; values
+   are still `claude` | `codex` only.
+
+2. **Persistent-env read fallback.** When process-scoped `PACK_REVIEWER` is unset, the pack
+   resolver consults operator-persistent environment layers (Windows User/Machine registry for
+   the same variable) before fail-closed. This is not a second config file or YAML key.
+
+3. **AO unchanged.** Reviews still use `ao review run --execute --command` with
+   `invoke-pack-review.ps1`; upstream AO env injection is out of scope.
+
+See `docs/issues_drafts/36-pack-reviewer-env-at-review-spawn.md`.
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
