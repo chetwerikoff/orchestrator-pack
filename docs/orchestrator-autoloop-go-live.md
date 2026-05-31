@@ -9,6 +9,11 @@ Follow-up [#58](https://github.com/chetwerikoff/orchestrator-pack/issues/58)
 (reconciliation via `gh` open PRs) adds resilience; heartbeat backstop #59 is
 documented below alongside the event listener.
 
+After each merged worker PR, run that PR's **`## Operator adoption`** checklist
+and the matching steps in
+[`docs/migration_notes.md`](migration_notes.md#operator-adoption-contract)
+(three-role contract — architect specs, worker documents, operator executes).
+
 ## What is already in the repo
 
 | Capability | Where |

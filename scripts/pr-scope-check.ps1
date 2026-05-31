@@ -193,6 +193,21 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "gh pr diff failed for PR #$prNumber"
 }
 
+$operatorAdoptionCheck = Join-Path $PSScriptRoot 'check-operator-adoption-example.ps1'
+if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
+    & $operatorAdoptionCheck -ChangedPaths $prPaths -PrBody $prBody
+    if ($LASTEXITCODE -ne 0) {
+        $adoptionFailure = [pscustomobject]@{
+            ok      = $false
+            reason  = 'operator_adoption_handoff'
+            message = 'agent-orchestrator.yaml.example changed without docs/migration_notes.md or PR-body waiver (No operator adoption required)'
+        }
+        Write-ScopeGuardComment -Body (Format-ScopeGuardComment -Result $adoptionFailure) -PrNumber $prNumber
+        Write-Host $adoptionFailure.message
+        exit 1
+    }
+}
+
 $input = @{
     repoRoot     = $PrRoot
     issueNumber  = $issueNumber

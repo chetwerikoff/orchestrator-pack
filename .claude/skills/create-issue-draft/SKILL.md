@@ -30,6 +30,13 @@ Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
 2. **Goal** — one paragraph. Outcome, not method.
 3. **Binding surface** — what this issue commits the repository to. Concrete
    about contracts, deliberately vague about implementation.
+   - **Operator adoption** (required when **Files in scope** include
+     operator-facing surfaces: `agent-orchestrator.yaml.example`, runbooks or
+     go-live docs that introduce new operator processes, documented operator env
+     vars, machine-local config outside the repo, or `orchestratorRules` /
+     `reactions` requiring `ao stop` / `ao start`): add a bullet listing
+     post-PR steps the operator must run (yaml merge, processes, env, restart,
+     verification). Omit when the task does not touch those surfaces.
 4. **Files in scope** — coarse-grained directories or specific new files.
    Mark new files `(new)`. Avoid prescribing function names / signatures.
 5. **Files out of scope** — explicit list.

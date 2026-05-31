@@ -506,6 +506,30 @@ PTY fixtures only.
 **Restore metadata:** `restoreFallbackReason: cursor.getRestoreCommand returned null`
 is normal for Cursor restore; not root cause alone.
 
+## Operator adoption contract
+
+Merged worker PRs often change `agent-orchestrator.yaml.example` and docs while
+live yaml, listeners, and restarts stay stale. This pack assigns **who documents,
+who executes, and when**:
+
+| Role | Responsibility | Timing |
+|------|----------------|--------|
+| **Architect (issue spec)** | When a task touches operator-facing surfaces, the draft includes an **Operator adoption** subsection under Binding surface listing post-PR steps (yaml merge, processes, env, restart, verification). | Before implementation starts. |
+| **Worker** | Before successful completion: add the same checklist to the PR under `## Operator adoption` (near the top) and add or update a matching subsection here. Workers document; they do not treat listeners, secrets, or live yaml merge as done unless the operator confirms. | PR ready (verification green, review clean). |
+| **Operator (human)** | Execute the checklist after merge (or before local end-to-end test). Owns gitignored config and long-running processes. | After PR merge. |
+
+**Operator-facing surfaces** (trigger the contract): `agent-orchestrator.yaml.example`;
+runbooks that introduce new operator processes; documented operator env vars;
+machine-local config outside the repo; `orchestratorRules` or `reactions` changes
+requiring `ao stop` / `ao start`.
+
+Umbrella go-live checklist:
+[`docs/orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
+
+**Waiver:** cosmetic-only `.example` edits with zero operator follow-up may omit
+`migration_notes.md` when the PR body contains this exact line on its own:
+`No operator adoption required` (CI enforces; misuse should fail review).
+
 ## Autoloop go-live (operator checklist)
 
 Issues #28, #39, and #60 are merged (#42, #47, #65): rules, wake listener, and

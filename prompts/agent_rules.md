@@ -199,3 +199,35 @@ and counts; do not infer cleanliness from finding prose.
 - A run with `findingCount: 0` and `status: failed` or `cancelled` is an **empty
   failed review** (reviewer infra/command failure), not a clean review. Read
   `terminationReason`; do not infer success from zero findings alone.
+
+## Operator adoption handoff
+
+When a task changes **operator-facing surfaces** — `agent-orchestrator.yaml.example`
+(any block operators must mirror into live yaml), runbooks or go-live docs that
+introduce new operator processes (listeners, watchers, schedulers), documented
+operator env vars, machine-local config called out in the issue, or
+`orchestratorRules` / `reactions` that require `ao stop` / `ao start` — before
+reporting successful completion:
+
+- Add **`## Operator adoption`** to the PR body (near the top, under `## Summary`)
+  with the post-merge checklist the operator must run.
+- Add or update a matching subsection in **`docs/migration_notes.md`**.
+- Do **not** run `ao report completed` (or treat the task as done) while the PR
+  lacks `## Operator adoption` when `.example` or operator-process docs changed
+  in scope.
+
+Workers **document** adoption; they do **not** execute it by default. Do not start
+listeners, edit secrets, or merge live `agent-orchestrator.yaml` from an AO
+worktree — worktree copies are not the operator checkout. Do not assume adoption
+is done unless the operator confirms.
+
+**Optional helper only:** if the worker session runs in the **primary pack
+checkout** (not an `op-*` worktree) and the issue explicitly asks, the worker
+**may** merge `.example` deltas into live yaml and note that in the PR — still
+not a substitute for the operator checklist.
+
+Cosmetic-only `.example` edits with zero operator follow-up may use the exact PR-body
+waiver line on its own: `No operator adoption required` (CI enforces pairing;
+misuse should fail review). See **`docs/migration_notes.md`** (Operator adoption
+contract) and **`docs/orchestrator-autoloop-go-live.md`** for the umbrella
+operator checklist.
