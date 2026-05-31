@@ -249,6 +249,15 @@ projects:
       human notification (notify-class action) with PR number and round count; do
       not respawn or continue the loop.
 
+      OPERATOR ADOPTION HANDOFF (Issue #101). When a worker PR is merge-ready or
+      mergeable per the rules below (required CI green, clean review, worker
+      ready_for_review), before assuming the autonomous loop is fully live for the
+      next spawn, remind the operator: execute the ## Operator adoption checklist
+      from that PR body and the matching docs/migration_notes.md subsection.
+      Workers document adoption; the operator owns live agent-orchestrator.yaml,
+      listeners, env, and ao stop / ao start. Do not treat merged example YAML or
+      migration prose as executed until the operator confirms.
+
       NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge.
       Emit ready-for-human-merge notification only when ALL are true:
         - Latest AO-local review run for current PR head has findingCount: 0

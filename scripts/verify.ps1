@@ -232,6 +232,24 @@ Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md' @('chain_id', 'pl
 Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md' @('Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch')
 
 Write-Host ''
+Write-Host '== Operator adoption example guard (Issue #101) =='
+$operatorAdoptionCheck = Join-Path $Root 'scripts/check-operator-adoption-example.ps1'
+if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
+    & $operatorAdoptionCheck -ChangedPaths @('prompts/agent_rules.md') -PrBody ''
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-operator-adoption-example.ps1' 'PASS' 'script runnable'
+    }
+    else {
+        Write-Check 'scripts/check-operator-adoption-example.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Operator adoption example guard failed sanity check'
+    }
+}
+else {
+  Write-Check 'scripts/check-operator-adoption-example.ps1' 'FAIL' 'missing'
+  Add-Failure 'Missing operator adoption example guard script (Issue #101)'
+}
+
+Write-Host ''
 Write-Host '== orchestratorRules quote safety =='
 $rulesQuoteCheck = Join-Path $Root 'scripts/check-orchestrator-rules-quotes.ps1'
 if (Test-Path -LiteralPath $rulesQuoteCheck -PathType Leaf) {
