@@ -145,18 +145,30 @@ function Clear-ReviewerWorkspacePath {
 $resolvedRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $projectRoot = Get-ProjectRootFromRepoRoot -Root $resolvedRoot
 $gitMain = Get-GitWorktreeMainRepo -RepoRoot $resolvedRoot
-if (-not $gitMain) {
-    Write-Error "Could not resolve git main repo from $resolvedRoot"
-}
 
 $cleared = 0
 
 if ($WorkspacePath) {
     $target = (Resolve-Path -LiteralPath $WorkspacePath -ErrorAction Stop).Path
+    if (-not $gitMain) {
+        if ($WhatIf) {
+            Write-Host "[WhatIf] Remove-Item -Recurse -Force `"$target`""
+        }
+        elseif (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
+            Write-Host "[OK] Cleared stale reviewer workspace: $target"
+        }
+        exit 0
+    }
+
     if (Clear-ReviewerWorkspacePath -Path $target -GitMainRepo $gitMain -WhatIf:$WhatIf) {
         $cleared = 1
     }
     exit 0
+}
+
+if (-not $gitMain) {
+    Write-Error "Could not resolve git main repo from $resolvedRoot"
 }
 
 $workspacesRoot = Get-ReviewerWorkspacesRoot -ProjectRoot $projectRoot
