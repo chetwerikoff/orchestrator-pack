@@ -250,15 +250,19 @@ function Get-GhPrNumberForHeadSha {
     Push-Location -LiteralPath $RepoRoot
     try {
         # Detached HEAD: branch-based gh pr list/--head fails; match open PRs by headRefOid.
-        $prRaw = (
-            gh pr list --state open --json number,headRefOid --limit 200 --jq (
-                ".[] | select(.headRefOid == `"$HeadSha`") | .number"
-            ) 2>$null | Select-Object -First 1
-        )
-        if ($prRaw) {
-            $prNumber = [int]$prRaw
-            if ($prNumber -gt 0) {
-                return $prNumber
+        # Parse JSON in PowerShell — inline --jq with embedded SHA breaks on Windows (gh/gojq).
+        $json = gh pr list --state open --json number,headRefOid --limit 200 2>$null
+        if (-not $json) {
+            return $null
+        }
+
+        $prs = @($json | ConvertFrom-Json)
+        foreach ($pr in $prs) {
+            if ([string]$pr.headRefOid -eq $HeadSha) {
+                $prNumber = [int]$pr.number
+                if ($prNumber -gt 0) {
+                    return $prNumber
+                }
             }
         }
 

@@ -11,6 +11,7 @@ $text = Get-Content -LiteralPath $contextScript -Raw
 $required = @(
     'Get-GhPrNumberForHeadSha',
     'headRefOid',
+    'ConvertFrom-Json',
     'Never call bare',
     'gh pr view'
 )
