@@ -45,7 +45,16 @@ Optional: `details`, `suggested_fix`.
 
 Scope violations (`type: scope-violation`) MUST be distinct from code-quality findings. You may prefix summaries with markers like `[scope-violation]` for readability.
 
-When scope context is present, flag any changed file that falls outside `declared_paths` / `declared_globs`, intersects `denylist`, or (when `allowed_roots` is set) lies outside allowed roots.
+When scope context is present, flag any changed file that falls outside
+`declared_paths` / `declared_globs`, intersects `denylist`, or (when
+`allowed_roots` is set) lies outside allowed roots.
+
+**Control-artifact carve-out:** Do **not** report `scope-violation` for AO
+control artifacts — paths under `docs/declarations/**` or `.ao/**`
+(committed declaration snapshots and runtime mirrors). Scope guard and runtime
+guards exclude these by convention (#3.C); they are expected in worker PRs even
+when absent from `declared_paths` or outside `allowed_roots`. Still report
+control-artifact paths that intersect `denylist`.
 
 ## Response format
 

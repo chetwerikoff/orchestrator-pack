@@ -1,0 +1,33 @@
+{
+  "issue_number": 88,
+  "iteration_id": "op-4",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-05-31T00:12:30.842Z",
+  "baseline": {
+    "commit_sha": "468a5536ca49dd96c9f5e50ded8ae11b5188132c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8df2c8934a3933b2ba61c2dfbe6d71f1645723edbc55e9604fb8b7f615482670"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "prompts/codex_review_prompt.md"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c3369baadf92ea5a265e57464ace0788e8de5b4429ffa7cfa75ed7390eae4574",
+      "new_active_scope_hash": "sha256:8df2c8934a3933b2ba61c2dfbe6d71f1645723edbc55e9604fb8b7f615482670",
+      "changed": {
+        "added": [
+          "prompts/codex_review_prompt.md"
+        ],
+        "removed": []
+      },
+      "reason": "include codex review prompt for control-artifact scope carve-out",
+      "actor": "op-4",
+      "timestamp": "2026-05-31T00:19:27.998Z",
+      "applied": true
+    }
+  ]
+}
