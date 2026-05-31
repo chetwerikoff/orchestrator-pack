@@ -118,6 +118,14 @@ Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
 bridge (gitignored `.ao/` scripts) instead of Codex; see
 [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
 
+**Post-merge lifecycle (AO 0.9.x).** PR merge triggers AO **worker** session and
+worktree cleanup; it does **not** lifecycle-couple existing `code-reviews/` runs
+(observed: runs persist in `needs_triage` / `waiting_update` until a new review
+targets a different SHA or upstream adds cancel/outdate-on-merge). Pack policy
+until upstream enhancement: `orchestratorRules` **MERGED PR — REVIEW LOOP
+TERMINAL** (Issue #54) — verify merge via GitHub, then orchestrator inaction on
+stale runs plus operator runbooks; not hand-editing review-run JSON.
+
 ### CI layer
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on
