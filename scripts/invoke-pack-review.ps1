@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 
+Clear-StalePackReviewerProcessScope
 $reviewer = Get-PackReviewerFromSelector
 if (-not $reviewer) {
     $message = Get-PackReviewerSelectorErrorMessage

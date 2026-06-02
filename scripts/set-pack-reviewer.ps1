@@ -35,10 +35,26 @@ if ($RestartAo) {
         Write-Host 'Restarting AO (orchestrator-pack)...'
         & ao stop 2>&1 | ForEach-Object { Write-Host $_ }
         Start-Sleep -Seconds 2
-        & ao start orchestrator-pack 2>&1 | ForEach-Object { Write-Host $_ }
+        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+        $escapedRoot = $repoRoot.Replace("'", "''")
+        Start-Process -FilePath 'pwsh' -ArgumentList @(
+            '-NoProfile',
+            '-Command',
+            "Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        ) -WorkingDirectory $repoRoot | Out-Null
+        Write-Host 'AO start launched in background via clean shell (dashboard may take a few seconds).'
     }
 }
 
-$statusScript = Join-Path $PSScriptRoot 'show-pack-reviewer-status.ps1'
-& $statusScript -Expected $Reviewer
-exit $LASTEXITCODE
+function Invoke-PackReviewerStatusCheck {
+    param([string]$ExpectedReviewer)
+
+    Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
+    $statusScript = Join-Path $PSScriptRoot 'show-pack-reviewer-status.ps1'
+    $quotedScript = $statusScript.Replace("'", "''")
+    $quotedExpected = $ExpectedReviewer.Replace("'", "''")
+    & pwsh -NoProfile -Command "& { Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; & '$quotedScript' -Expected '$quotedExpected' }"
+    return $LASTEXITCODE
+}
+
+exit (Invoke-PackReviewerStatusCheck -ExpectedReviewer $Reviewer)

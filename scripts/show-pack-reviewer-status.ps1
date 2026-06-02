@@ -12,8 +12,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
 $libRoot = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libRoot 'Resolve-PackReviewer.ps1')
+
+Clear-StalePackReviewerProcessScope
 
 function Get-LayerDisplayValue {
     param([string]$Target)
