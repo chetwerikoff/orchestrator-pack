@@ -5,8 +5,10 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$Script:WrapperName = 'run-pack-review.ps1'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
+. (Join-Path $PSScriptRoot 'lib/Install-PackReviewDependencies.ps1')
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
@@ -20,10 +22,7 @@ Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot 
 
 Push-Location -LiteralPath $resolvedRoot
 try {
-    npm ci --include=dev
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
     $reviewScript = Join-Path $PSScriptRoot '..\plugins\ao-codex-pr-reviewer\bin\review.ps1'
     if (-not (Test-Path -LiteralPath $reviewScript -PathType Leaf)) {

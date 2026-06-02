@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $Script:WrapperName = 'run-pack-review-claude.ps1'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
+. (Join-Path $PSScriptRoot 'lib/Install-PackReviewDependencies.ps1')
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
@@ -36,12 +37,7 @@ if (Test-Path -LiteralPath $workspacePrompt -PathType Leaf) {
 
 Push-Location -LiteralPath $resolvedRoot
 try {
-    # AO treats review-command stdout as findings — keep npm off stdout.
-    npm ci --include=dev 1>$null
-    if ($LASTEXITCODE -ne 0) {
-        [Console]::Error.WriteLine("$Script:WrapperName: npm ci failed (exit $LASTEXITCODE)")
-        exit $LASTEXITCODE
-    }
+    Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
     $promptArgs = @(
         '--import', 'tsx', $reviewTs,
