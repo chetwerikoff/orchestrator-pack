@@ -130,3 +130,21 @@ by default — commit, PR, merge to `main`, reopen the implementation issue if a
 «publish draft», «смержи драфт» (spec land, not implementation).
 
 **Skip:** user opts out of PR/merge; unrelated work on the branch.
+
+## Auto-invoke: switch pack reviewer
+
+When the user asks to switch local pack review between Codex and Claude, fix
+`PACK_REVIEWER` drift (global User vs session Process), or verify which reviewer
+will run, follow
+[`.claude/skills/switch-pack-reviewer/SKILL.md`](.claude/skills/switch-pack-reviewer/SKILL.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «переключи ревьюера», «поставь codex»,
+«поставь claude», «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude»,
+«используется claude вместо codex», «глобально codex».
+
+**Skip:** architecture-only discussion with no machine change; implementation
+tasks that belong in a GitHub issue draft.
+
+**Loader entry points (optional):** `.cursor/skills/switch-pack-reviewer/SKILL.md`,
+`.claude/skills/switch-pack-reviewer/SKILL.md`.

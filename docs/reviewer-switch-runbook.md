@@ -114,6 +114,17 @@ not use `.ao/` in **REVIEW_COMMAND**.
 | Codex usage limit | Quota | Set `PACK_REVIEWER=claude` temporarily |
 | Orchestrator never picks new reviewer | No restart | `ao stop` / `ao start` after selector change |
 
+## Operator scripts (checklist + verify)
+
+From pack repo root:
+
+```powershell
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
+pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer codex -RestartAo
+```
+
+Agent skill: `.claude/skills/switch-pack-reviewer/SKILL.md` (full checklist).
+
 ## Related docs
 
 - [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md)
