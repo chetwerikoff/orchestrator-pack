@@ -1,0 +1,20 @@
+{
+  "issue_number": 127,
+  "iteration_id": "op-12",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T08:32:00.000Z",
+  "baseline": {
+    "commit_sha": "e859c6171a28fbb8bba344e1b9502e429cc90e5c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6795630a087d7758951c85ebd359898b1e5668b507c10d4a5bd0bde70fb75573"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/06-codex-reviewer-scope-context.md",
+    "docs/issues_drafts/44-codex-review-jsonl-verdict-source.md"
+  ],
+  "declared_globs": [
+    "plugins/ao-codex-pr-reviewer/**"
+  ],
+  "amendments": []
+}
