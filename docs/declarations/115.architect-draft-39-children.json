@@ -1,0 +1,21 @@
+{
+  "issue_number": 115,
+  "iteration_id": "architect-draft-39-children",
+  "iteration_id_source": "ao_session",
+  "supersedes": "architect-draft-39",
+  "created_at": "2026-06-02T02:26:23.452Z",
+  "baseline": {
+    "commit_sha": "9b2fe85c455d17355b7c32779bcd763ecdbbe199",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3f4bdf5099bb513a52fe03f7854978444e8e7128d515d3397f4d54b87e95f3dd"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/39-ubuntu-linux-only-port.md",
+    "docs/issues_drafts/40-ubuntu-config-readme-docs.md",
+    "docs/issues_drafts/41-ubuntu-scripts-portability.md",
+    "docs/issues_drafts/42-ubuntu-ci-runner.md",
+    "docs/issue_queue_index.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
