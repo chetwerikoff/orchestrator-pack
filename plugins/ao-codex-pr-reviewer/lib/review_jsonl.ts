@@ -1,7 +1,11 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { NO_FINDINGS_TOKEN, parseCodexOutput } from './parse_output.js';
+import {
+  extractStrictPackFindingsArray,
+  NO_FINDINGS_TOKEN,
+  normalizeStructuredPackFindings,
+} from './parse_output.js';
 import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
 
 /** Fail-closed message when JSONL has empty findings[] and non-clean overall verdict. */
@@ -521,57 +525,26 @@ function tryParsePackFindingsFromSecondaryText(
     return { kind: 'clean' };
   }
 
-  const lastMessageParsed = parseCodexOutput(trimmed);
-  if (lastMessageParsed.kind === 'clean') {
-    return { kind: 'clean' };
-  }
-  if (lastMessageParsed.kind === 'findings') {
-    return { kind: 'findings', findings: lastMessageParsed.findings };
+  const rawFindings = extractStrictPackFindingsArray(trimmed);
+  if (!rawFindings) {
+    return null;
   }
 
-  const rawFindings = extractRawFindingsArray(trimmed);
-  if (rawFindings) {
-    const codexNative = parseCodexReviewOutput(
-      {
-        findings: rawFindings,
-        overall_correctness: 'patch is incorrect',
-      },
-      source,
-      repoRoot,
-    );
-    if (codexNative.kind === 'findings') {
-      return { kind: 'findings', findings: codexNative.findings };
-    }
+  const structured = normalizeStructuredPackFindings(rawFindings);
+  if (structured) {
+    return { kind: 'findings', findings: structured };
   }
 
-  return null;
-}
-
-function extractRawFindingsArray(text: string): unknown[] | null {
-  const candidates = [text.trim()];
-  const findingsStart = text.indexOf('{"findings"');
-  if (findingsStart >= 0) {
-    let slice = text.slice(findingsStart);
-    const lastBrace = slice.lastIndexOf('}');
-    if (lastBrace >= 0) {
-      slice = slice.slice(0, lastBrace + 1);
-      candidates.push(slice);
-    }
-  }
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-      const record = asRecord(parsed);
-      if (Array.isArray(record?.findings)) {
-        return record.findings as unknown[];
-      }
-    } catch {
-      // continue
-    }
+  const codexNative = parseCodexReviewOutput(
+    {
+      findings: rawFindings,
+      overall_correctness: 'patch is incorrect',
+    },
+    source,
+    repoRoot,
+  );
+  if (codexNative.kind === 'findings') {
+    return { kind: 'findings', findings: codexNative.findings };
   }
 
   return null;

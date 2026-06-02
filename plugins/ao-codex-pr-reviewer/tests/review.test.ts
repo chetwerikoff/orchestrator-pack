@@ -9,7 +9,11 @@ import {
   formatGithubComment,
   toAoFindings,
 } from '../lib/emit.js';
-import { NO_FINDINGS_TOKEN, parseCodexOutput } from '../lib/parse_output.js';
+import {
+  extractStrictPackFindingsArray,
+  NO_FINDINGS_TOKEN,
+  parseCodexOutput,
+} from '../lib/parse_output.js';
 import { buildReviewPrompt } from '../lib/prompt.js';
 import {
   executeReview,
@@ -506,6 +510,38 @@ describe('review-mode JSONL verdict', () => {
       }
     });
 
+    it('fails closed when secondary channel is NO_FINDINGS with trailing prose', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: `${NO_FINDINGS_TOKEN}\nextra prose must not be treated as clean`,
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
     it('recovers clean from exact NO_FINDINGS in overall_explanation', () => {
       const sessionJsonl = readFixture('session-split-channel-no-findings.jsonl');
       const verdict = selectReviewVerdict({
@@ -748,6 +784,11 @@ describe('executeReview JSONL round-trip', () => {
 describe('parseCodexOutput', () => {
   it('treats exact NO_FINDINGS as clean', () => {
     expect(parseCodexOutput(NO_FINDINGS_TOKEN)).toEqual({ kind: 'clean' });
+  });
+
+  it('strict pack extraction rejects NO_FINDINGS with trailing prose', () => {
+    expect(extractStrictPackFindingsArray(`${NO_FINDINGS_TOKEN}\nextra`)).toBeNull();
+    expect(parseCodexOutput(`${NO_FINDINGS_TOKEN}\nextra`)).toEqual({ kind: 'clean' });
   });
 
   it('rejects empty stdout', () => {
