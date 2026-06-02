@@ -66,16 +66,20 @@ format. GitHub Actions review must not define an independent schema.
 - Backward-compatible behavior: when neither issue body fences nor snapshot
   exist, the scope section is omitted from the prompt and the review output
   includes a non-blocking warning finding.
-- **Clean-review contract (event-first, `NO_FINDINGS` fallback):**
+- **Clean-review contract (event-first, native hydration + `NO_FINDINGS` fallback):**
   - For live `codex exec review` runs with `--json`, the wrapper treats Codex
     review-mode machine output (`exited_review_mode.review_output` in the
     persisted session JSONL) as the primary clean/finding verdict when present
     and valid. The `--output-last-message` channel is fallback and diagnostics,
     not the primary authority for clean reviews in JSONL-enabled runs.
-  - The prompt MUST still instruct Codex: when no concrete bugs, contract
-    violations, or scope violations are identified, emit the single token
-    `NO_FINDINGS` on its own line as the entire response body for older or
-    non-JSON-compatible runs. No prose narration such as
+  - The prompt instructs **native** review-mode output (empty `findings[]` and
+    `overall_correctness: patch is correct` for clean reviews; populated native
+    findings for finding reviews) so CLI hydration is reliable (#136). Pack JSON
+    and exact `NO_FINDINGS` are not the primary review-mode reply; they remain
+    recoverable via split-channel secondary parsing (#135) when JSONL `findings[]`
+    is empty.
+  - When review-mode output is unavailable, the prompt-compatible fallback is
+    exact `NO_FINDINGS` on its own line. No prose narration such as
     "No concrete bugs were identified" — that text is forbidden as a sole
     verdict source.
   - The reviewer wrapper (`plugins/ao-codex-pr-reviewer/bin/review.*`) MUST

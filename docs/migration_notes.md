@@ -206,7 +206,17 @@ The wrapper recovers findings or clean from those secondary channels only (#135)
 broad “any JSONL error → lastMessage” fallback remains forbidden. If
 `terminationReason` still shows `reports no findings but overall_correctness is not
 "patch is correct"` with no recoverable secondary payload, treat as failed review
-(not clean) and inspect Codex CLI / prompt alignment (sibling prevention: GitHub #136).
+(not clean) and inspect Codex CLI / prompt alignment.
+
+**Native review output alignment (#136, prevention).** Root cause when the prompt
+required pack JSON or exact `NO_FINDINGS`: Codex review-mode often leaves
+`review_output.findings[]` empty and dumps pack JSON into `overall_explanation`
+(split-channel). **Prevention:** `prompts/codex_review_prompt.md` now requires
+native review-mode output so CLI 0.133.x hydrates `findings[]` and
+`overall_correctness`; the pack maps only hydrated structured fields via
+`review_jsonl.ts` (no prose scraping). **Recovery** for legacy split-channel runs
+remains #135. After merge, re-run a live `codex exec review --json` on a PR with
+and without findings to confirm hydrated `review_output` before trusting clean runs.
 
 **Codex CLI shape.** Installed Codex CLI treats `codex exec review --base` and a
 custom `[PROMPT]` as mutually exclusive. The pack wrapper scopes via prompt text

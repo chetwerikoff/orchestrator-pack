@@ -12,6 +12,10 @@ import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
 export const SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE =
   'review-mode JSONL reports no findings but overall_correctness is not "patch is correct" — refusing to mark run as clean';
 
+/** Fail-closed when a hydrated finding anchors a path the wrapper cannot relativize. */
+export const UNNORMALIZABLE_CODE_LOCATION_MESSAGE =
+  'review-mode JSONL finding code_location.absolute_file_path cannot be normalized to a repo-relative path — refusing to mark run as clean';
+
 const VALID_FINDING_TYPES: FindingType[] = [
   'scope-violation',
   'spec',
@@ -486,6 +490,21 @@ export function parseCodexReviewOutput(
       kind: 'error',
       message: 'review-mode JSONL findings missing mandatory fields (title/body)',
     };
+  }
+
+  for (const raw of rawFindings) {
+    const record = asRecord(raw);
+    const codeLocation = asRecord(record?.code_location);
+    const absolutePath =
+      typeof codeLocation?.absolute_file_path === 'string'
+        ? codeLocation.absolute_file_path.trim()
+        : '';
+    if (absolutePath && toRepoRelativePath(absolutePath, repoRoot) === null) {
+      return {
+        kind: 'error',
+        message: UNNORMALIZABLE_CODE_LOCATION_MESSAGE,
+      };
+    }
   }
 
   const patchCorrect = isPatchCorrectVerdict(reviewOutput.overall_correctness);
