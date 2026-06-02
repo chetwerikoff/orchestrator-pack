@@ -317,6 +317,11 @@ describe('review-mode JSONL verdict', () => {
     });
     expect(verdict.kind).toBe('error');
     expect(verdict.verdictSource).toBe('review_mode_jsonl');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('valid review_output');
+      expect(verdict.message).toContain('diagnostic:');
+      expect(verdict.message).toContain('exited_review_mode');
+    }
   });
 
   it('parseReviewModeFromChannels returns null without session JSONL', () => {

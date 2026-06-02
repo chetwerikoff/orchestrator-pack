@@ -41,8 +41,22 @@ export function selectReviewVerdict(
   });
 
   if (jsonlResult) {
+    const converted = reviewModeToCodexResult(jsonlResult);
+    if (converted.kind === 'error') {
+      const snippet = diagnosticSnippet(
+        channels.sessionJsonl ??
+          channels.processJsonl ??
+          channels.lastMessage ??
+          channels.stderr,
+      );
+      return {
+        kind: 'error',
+        message: `${converted.message} (diagnostic: ${snippet})`,
+        verdictSource: 'review_mode_jsonl',
+      };
+    }
     return {
-      ...reviewModeToCodexResult(jsonlResult),
+      ...converted,
       verdictSource: 'review_mode_jsonl',
     };
   }
