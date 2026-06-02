@@ -208,11 +208,27 @@ export function parseExitedReviewModeFromSessionJsonl(
   return { status: 'absent' };
 }
 
-export function isPatchCorrectVerdict(overallCorrectness: string | undefined): boolean {
-  if (!overallCorrectness?.trim()) {
+export function isPatchCorrectVerdict(overallCorrectness: unknown): boolean {
+  if (typeof overallCorrectness !== 'string') {
     return false;
   }
-  return /^patch is correct$/i.test(overallCorrectness.trim());
+  const trimmed = overallCorrectness.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^patch is correct$/i.test(trimmed);
+}
+
+/** Split-channel recovery (#135) requires an explicit non-clean machine verdict string. */
+export function isExplicitNonCleanVerdict(overallCorrectness: unknown): boolean {
+  if (typeof overallCorrectness !== 'string') {
+    return false;
+  }
+  const trimmed = overallCorrectness.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return !/^patch is correct$/i.test(trimmed);
 }
 
 function parseBracketedPriority(title: string): number | null {
@@ -479,6 +495,13 @@ export function parseCodexReviewOutput(
   }
 
   if (findings.length === 0 && !patchCorrect) {
+    if (!isExplicitNonCleanVerdict(reviewOutput.overall_correctness)) {
+      return {
+        kind: 'error',
+        message:
+          'review-mode JSONL review_output is missing explicit overall_correctness — refusing to mark run as clean',
+      };
+    }
     return {
       kind: 'error',
       message: SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
@@ -652,7 +675,7 @@ export function isSplitChannelRecoveryCandidate(
   if (!Array.isArray(reviewOutput.findings) || reviewOutput.findings.length > 0) {
     return false;
   }
-  return !isPatchCorrectVerdict(reviewOutput.overall_correctness);
+  return isExplicitNonCleanVerdict(reviewOutput.overall_correctness);
 }
 
 /**
@@ -665,6 +688,10 @@ export function attemptSplitChannelRecovery(
   source: ReviewSource,
   repoRoot: string,
 ): ParseReviewOutputResult | null {
+  if (!isExplicitNonCleanVerdict(reviewOutput.overall_correctness)) {
+    return null;
+  }
+
   const explanation = reviewOutput.overall_explanation?.trim() ?? '';
   const lastMsg = lastMessage.trim();
 
