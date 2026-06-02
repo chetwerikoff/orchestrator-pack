@@ -511,6 +511,11 @@ function isExactNoFindingsSecondary(text: string): boolean {
   return text.trim() === NO_FINDINGS_TOKEN;
 }
 
+/**
+ * Split-channel secondary parser (#135). Must not call `parseCodexOutput` — its
+ * stdout normalization treats "Review complete" plus NO_FINDINGS and similar forms
+ * as clean; recovery accepts only exact trimmed `NO_FINDINGS` or strict pack JSON.
+ */
 function tryParsePackFindingsFromSecondaryText(
   text: string,
   source: ReviewSource,

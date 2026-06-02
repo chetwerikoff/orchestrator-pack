@@ -510,6 +510,41 @@ describe('review-mode JSONL verdict', () => {
       }
     });
 
+    it('fails closed when secondary channel has leading prose before NO_FINDINGS', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: `Review complete\n${NO_FINDINGS_TOKEN}`,
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).toBeNull();
+      expect(parseCodexOutput(reviewOutput.overall_explanation!)).toEqual({
+        kind: 'clean',
+      });
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
     it('fails closed when secondary channel is NO_FINDINGS with trailing prose', () => {
       const reviewOutput = {
         findings: [] as unknown[],
@@ -789,6 +824,13 @@ describe('parseCodexOutput', () => {
   it('strict pack extraction rejects NO_FINDINGS with trailing prose', () => {
     expect(extractStrictPackFindingsArray(`${NO_FINDINGS_TOKEN}\nextra`)).toBeNull();
     expect(parseCodexOutput(`${NO_FINDINGS_TOKEN}\nextra`)).toEqual({ kind: 'clean' });
+  });
+
+  it('strict pack extraction rejects leading prose before NO_FINDINGS', () => {
+    expect(extractStrictPackFindingsArray(`Review complete\n${NO_FINDINGS_TOKEN}`)).toBeNull();
+    expect(parseCodexOutput(`Review complete\n${NO_FINDINGS_TOKEN}`)).toEqual({
+      kind: 'clean',
+    });
   });
 
   it('rejects empty stdout', () => {
