@@ -496,7 +496,7 @@ describe('review-mode JSONL verdict', () => {
       const sessionJsonl = readFixture('session-split-channel-pack-json.jsonl');
       const verdict = selectReviewVerdict({
         processJsonl: readFixture('process-clean.jsonl'),
-        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        lastMessage: '',
         stderr: '',
         repoRoot: REPO_ROOT,
         sessionJsonl,
@@ -581,7 +581,7 @@ describe('review-mode JSONL verdict', () => {
       const sessionJsonl = readFixture('session-split-channel-no-findings.jsonl');
       const verdict = selectReviewVerdict({
         processJsonl: readFixture('process-clean.jsonl'),
-        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        lastMessage: '',
         stderr: '',
         repoRoot: REPO_ROOT,
         sessionJsonl,
@@ -648,6 +648,38 @@ describe('review-mode JSONL verdict', () => {
       if (verdict.kind === 'error') {
         expect(verdict.message).toContain(SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE);
       }
+    });
+
+    it('fails closed when other channel has non-shape prose without priority marker', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: NO_FINDINGS_TOKEN,
+        overall_confidence_score: 0.5,
+      };
+      const proseFinding =
+        'Critical scope bug in the guard logic must not be ignored during sole recovery.';
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, proseFinding, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: proseFinding,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
     });
 
     it('fails closed on prose [P1] markers in overall_explanation', () => {

@@ -548,7 +548,7 @@ function isMalformedNoFindingsSecondaryChannel(text: string): boolean {
   return trimmed.includes(NO_FINDINGS_TOKEN);
 }
 
-/** Prose priority markers in a non-recoverable secondary channel (#135 forbidden). */
+/** Non-empty secondary text that is not exact NO_FINDINGS or strict pack JSON (#135). */
 function isForbiddenProseSecondaryChannel(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
@@ -557,7 +557,7 @@ function isForbiddenProseSecondaryChannel(text: string): boolean {
   if (extractStrictPackFindingsArray(trimmed)) {
     return false;
   }
-  return /\[[Pp]\d+\]/.test(trimmed);
+  return true;
 }
 
 /** Bare `[...]` findings JSON in a secondary channel (#135 pack-object shape only). */
