@@ -219,7 +219,7 @@ export function isPatchCorrectVerdict(overallCorrectness: unknown): boolean {
   return /^patch is correct$/i.test(trimmed);
 }
 
-/** Split-channel recovery (#135) requires an explicit non-clean machine verdict string. */
+/** Split-channel recovery (#135) requires explicit `patch is incorrect` machine verdict. */
 export function isExplicitNonCleanVerdict(overallCorrectness: unknown): boolean {
   if (typeof overallCorrectness !== 'string') {
     return false;
@@ -228,7 +228,7 @@ export function isExplicitNonCleanVerdict(overallCorrectness: unknown): boolean 
   if (!trimmed) {
     return false;
   }
-  return !/^patch is correct$/i.test(trimmed);
+  return /^patch is incorrect$/i.test(trimmed);
 }
 
 function parseBracketedPriority(title: string): number | null {

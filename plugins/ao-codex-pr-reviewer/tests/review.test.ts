@@ -878,6 +878,46 @@ describe('review-mode JSONL verdict', () => {
       ).toBeNull();
     });
 
+    it.each(['unknown', 'patch is correct.'])(
+      'does not recover when overall_correctness is unrecognized (%s)',
+      (overallCorrectness) => {
+        const reviewOutput = {
+          findings: [] as unknown[],
+          overall_correctness: overallCorrectness,
+          overall_explanation: NO_FINDINGS_TOKEN,
+          overall_confidence_score: 0.5,
+        };
+        const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+        expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(false);
+        expect(
+          attemptSplitChannelRecovery(
+            reviewOutput,
+            NO_FINDINGS_TOKEN,
+            'codex-local',
+            REPO_ROOT,
+          ),
+        ).toBeNull();
+
+        const verdict = selectReviewVerdict({
+          processJsonl: readFixture('process-clean.jsonl'),
+          lastMessage: NO_FINDINGS_TOKEN,
+          stderr: '',
+          repoRoot: REPO_ROOT,
+          sessionJsonl: [
+            JSON.stringify({
+              type: 'event_msg',
+              payload: {
+                type: 'exited_review_mode',
+                review_output: reviewOutput,
+              },
+            }),
+          ].join('\n'),
+          source: 'codex-local',
+        });
+        expect(verdict.kind).toBe('error');
+      },
+    );
+
     it('does not throw when overall_explanation is not a string', () => {
       const reviewOutput = {
         findings: [] as unknown[],
