@@ -44,8 +44,8 @@ function Write-NoOp {
     exit 0
 }
 
-if ($env:OS -notmatch 'Windows' -and -not $IsWindows) {
-    Write-NoOp 'this patch applies only on Windows.'
+if ($PSVersionTable.Platform -ne 'Win32NT') {
+    Write-NoOp 'this patch applies only on Windows hosts.'
 }
 
 $aoVersion = Get-InstalledAoVersion

@@ -43,7 +43,9 @@ if ($yamlText -notmatch 'PACK_REVIEWER') {
 }
 
 $savedProcess = $env:PACK_REVIEWER
+$savedUser = [Environment]::GetEnvironmentVariable('PACK_REVIEWER', 'User')
 try {
+    [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $null, 'User')
     $env:PACK_REVIEWER = 'not-a-reviewer'
     & $entrypoint --repo-root $Root --base origin/main 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -52,6 +54,7 @@ try {
     }
 }
 finally {
+    [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $savedUser, 'User')
     if ($null -eq $savedProcess) {
         Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
     }

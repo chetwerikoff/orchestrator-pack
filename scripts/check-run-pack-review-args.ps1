@@ -3,13 +3,15 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 
+$fixtureRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
 $parsed = Split-PackReviewCliArgs -Argv @(
-    '--repo-root', 'C:\work',
+    '--repo-root', $fixtureRoot,
     '--base', 'origin/develop',
     '--prompt-only'
 )
 
-if ($parsed.RepoRoot -ne 'C:\work') {
+if ($parsed.RepoRoot -ne $fixtureRoot) {
     Write-Host "[FAIL] --repo-root not parsed (got $($parsed.RepoRoot))"
     exit 1
 }

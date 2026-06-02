@@ -13,13 +13,14 @@ function Get-OrchestratorAoProjectPaths {
         if (-not $ProjectSlug) { $ProjectSlug = 'orchestrator-pack' }
     }
 
-    $projectRoot = Join-Path $env:USERPROFILE ".agent-orchestrator\projects\$ProjectSlug"
+    $userHome = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+    $projectRoot = Join-Path $userHome '.agent-orchestrator' 'projects' $ProjectSlug
     return [pscustomobject]@{
         ProjectSlug    = $ProjectSlug
         SessionId      = $SessionId
         BranchName     = "orchestrator/$SessionId"
-        AoWorktreePath = Join-Path $projectRoot "worktrees\$SessionId"
-        PromptPath     = Join-Path $projectRoot "prompts\orchestrator-prompt-$SessionId.md"
+        AoWorktreePath = Join-Path $projectRoot 'worktrees' $SessionId
+        PromptPath     = Join-Path $projectRoot 'prompts' "orchestrator-prompt-$SessionId.md"
     }
 }
 

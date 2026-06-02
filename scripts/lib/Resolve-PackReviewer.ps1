@@ -11,14 +11,6 @@ $Script:PackReviewerWrapperById = @{
     claude = 'run-pack-review-claude.ps1'
 }
 
-function Test-IsWindowsHost {
-    if ($PSVersionTable.PSVersion.Major -ge 6) {
-        return $IsWindows
-    }
-
-    return ($env:OS -match 'Windows')
-}
-
 function Get-PackReviewerLayerValue {
     param(
         [Parameter(Mandatory)]
@@ -51,7 +43,7 @@ function Clear-StalePackReviewerProcessScope {
 function Get-PackReviewerSelectorValue {
     <#
     .SYNOPSIS
-      Resolves PACK_REVIEWER from process scope, then Windows User/Machine persistent layers.
+      Resolves PACK_REVIEWER from process scope, then User/Machine persistent layers.
       Precedence: Process > User > Machine (User overrides Machine when process is unset).
     .PARAMETER OverrideLayers
       Optional test hook: keys Process, User, Machine override registry reads for that layer.
@@ -61,10 +53,6 @@ function Get-PackReviewerSelectorValue {
     )
 
     foreach ($target in @('Process', 'User', 'Machine')) {
-        if ($target -ne 'Process' -and -not (Test-IsWindowsHost)) {
-            continue
-        }
-
         $value = Get-PackReviewerLayerValue -Target $target -OverrideLayers $OverrideLayers
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             return $value

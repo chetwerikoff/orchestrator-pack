@@ -18,10 +18,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if ($env:OS -notmatch 'Windows') {
-    Write-Error 'Persistent User scope is applied via Windows registry. On non-Windows, set PACK_REVIEWER in the shell profile or service unit and clear process scope manually.'
-}
-
 [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $Reviewer, 'User')
 Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
 
