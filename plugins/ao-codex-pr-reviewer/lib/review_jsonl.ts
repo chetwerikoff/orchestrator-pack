@@ -560,6 +560,27 @@ function isForbiddenProseSecondaryChannel(text: string): boolean {
   return /\[[Pp]\d+\]/.test(trimmed);
 }
 
+/** Bare `[...]` findings JSON in a secondary channel (#135 pack-object shape only). */
+function isBareFindingsArraySecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  let jsonText = trimmed;
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (entireFence?.[1]) {
+    jsonText = entireFence[1].trim();
+  }
+  if (!jsonText.startsWith('[')) {
+    return false;
+  }
+  try {
+    return Array.isArray(JSON.parse(jsonText));
+  } catch {
+    return true;
+  }
+}
+
 /** Trimmed secondary text (after optional whole-line fence) is a pack `{"findings":...}` object. */
 function channelTextLooksLikePackFindingsObject(text: string): boolean {
   const trimmed = text.trim();
@@ -605,6 +626,7 @@ function otherChannelBlocksSoleRecovery(
   }
   return (
     isMalformedNoFindingsSecondaryChannel(text) ||
+    isBareFindingsArraySecondaryChannel(text) ||
     isForbiddenProseSecondaryChannel(text) ||
     isMalformedPackFindingsSecondaryChannel(text, source, repoRoot)
   );

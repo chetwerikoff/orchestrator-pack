@@ -991,6 +991,46 @@ describe('review-mode JSONL verdict', () => {
       ).toBeNull();
     });
 
+    it('fails closed when other channel is a bare findings array', () => {
+      const bareArray = JSON.stringify([
+        {
+          type: 'quality',
+          code: 'quality:bare-array-other-channel',
+          severity: 'non-blocking',
+          path: 'scripts/foo.ps1',
+          summary: 'Bare array in other channel must block sole recovery',
+          source: 'codex-local',
+        },
+      ]);
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: NO_FINDINGS_TOKEN,
+        overall_confidence_score: 0.5,
+      };
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, bareArray, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: bareArray,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
     it('does not recover from spurious JSON-like text in explanation', () => {
       const reviewOutput = {
         findings: [] as unknown[],
