@@ -1,0 +1,18 @@
+{
+  "issue_number": 119,
+  "iteration_id": "op-19",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T20:05:25.331Z",
+  "baseline": {
+    "commit_sha": "a1cdcf3be52bf5204efa7fc304916ed43620a740",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:984ec5d0251e31ef55c897b7d3f0ec857541e06635db55b0a7ccb5cd8a354144"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    ".github/workflows/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}
