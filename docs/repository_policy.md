@@ -64,3 +64,46 @@ bypass the guard:
 
 CI is the server-side backstop. The local `.gitignore` and `check-reusable.ps1`
 are the developer-side backstop.
+
+## Spec-only docs PRs
+
+Use this path when landing **spec drafts** to `main` (for example
+`docs/issues_drafts/**` and `docs/issue_queue_index.md`) without closing the
+implementation GitHub Issue and without a declaration snapshot.
+
+### PR body contract
+
+1. **Spec-only signal** — include this HTML comment on its own line near the top
+   of the PR description (machine-detectable; does not render in the GitHub UI):
+
+   ```html
+   <!-- pr-type: spec-only -->
+   ```
+
+2. **Non-closing issue reference** — link the implementation issue with a form
+   GitHub will **not** auto-close on merge, for example `Refs #N`. Accepted
+   keywords: `Ref`, `Refs`, `See`, `Related to` (case-insensitive, `#` required).
+
+3. **Do not** use `Closes`, `Fixes`, `Resolves`, or other GitHub closing
+   keywords on spec-only PRs. Scope guard fails if both the spec-only signal and
+   a closing keyword are present.
+
+### Spec-docs allowlist (runtime)
+
+Every changed path in the PR diff must match **one** of:
+
+- `docs/issues_drafts/**`
+- `docs/issue_queue_index.md`
+- `docs/architecture.md`
+- `docs/issues_drafts/00-architecture-decisions.md`
+
+Paths outside this list (including `scripts/**`, `plugins/**`, `.github/**`,
+skills, `README.md`, `agent-orchestrator.yaml.example`, and
+`docs/declarations/**`) cause scope guard to fail. No committed declaration
+snapshot is required for this PR shape.
+
+### Implementation PRs (unchanged)
+
+Worker and direct-fix PRs still require `Closes #N` / `Fixes #N` /
+`Resolves #N`, a committed snapshot under `docs/declarations/<N>.*.json`, and
+validation against the issue-body fences.

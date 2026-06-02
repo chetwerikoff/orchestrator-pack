@@ -62,11 +62,9 @@ architecture wave) or the registry needs to land. One PR, one CI run, one merge
 for the whole set.
 
 1. Pre-flight + branch from `main` (see Common steps).
-2. For **each** draft in the batch, declaration snapshot with its implementation
-   issue number (see Common steps → snapshot).
-3. Stage all drafts + one `docs/issue_queue_index.md` update + all snapshots.
-4. One commit, one PR covering the set (list every `#N` in the body), one CI run, one merge.
-5. Per-issue reopen check (Common steps → reopen) for each `#N` the PR closed.
+2. Stage all drafts + one `docs/issue_queue_index.md` update (plus
+   `docs/issues_drafts/00-architecture-decisions.md` when changed).
+3. One commit, one PR covering the set (spec-only body template below), one CI run, one merge.
 
 Prefer batch over N single-draft PRs whenever drafts are related.
 
@@ -98,37 +96,13 @@ Include **only** what the draft session touched:
 - `docs/issues_drafts/NN-<slug>.md`
 - `docs/issue_queue_index.md`
 - `docs/issues_drafts/00-architecture-decisions.md` (if decision log updated)
-- `docs/declarations/<N>.architect-draft-<slug>.json` (declaration snapshot — required for scope guard)
 - `.claude/skills/**` or `.cursor/skills/**` only when the draft itself required skill changes
 
 Do **not** bundle unrelated local edits (other skills, `agent-orchestrator.yaml`, WIP code).
 
-### Declaration snapshot (scope guard)
-
-Commit a snapshot **before** or with the docs commit. Use the **implementation**
-issue number **N**.
-
-```powershell
-$env:AO_ISSUE_NUMBER = '<N>'
-$env:AO_SESSION_ID = 'architect-draft-NN'   # stable label; not op-<N>
-npx ao-declare --issue <N> `
-  --declared-paths docs/issues_drafts/NN-<slug>.md,docs/issue_queue_index.md `
-  --iteration-id architect-draft-NN `
-  --actor architect-draft-NN `
-  --repo-root .
-```
-
-Add `docs/issues_drafts/00-architecture-decisions.md` to `--declared-paths` when it changed.
-
-If `ao-declare` fails issue-constraint validation, widen the **draft's**
-`allowed-roots` in the issue body (via `gh issue edit`) so
-`docs/issues_drafts/**` and `docs/issue_queue_index.md` are allowed, then
-re-declare — do not bypass scope guard.
-
-> The declaration-snapshot + `Closes #N` + auto-close/reopen dance is the heavy
-> part of this flow. Lifting it for pure spec-only docs PRs is tracked as a
-> separate CI reform — see [`docs/issues_drafts/`](../../../docs/issues_drafts/)
-> (spec-only scope-guard story). Until that lands, the steps below stay required.
+Spec-only docs PRs use the **spec-only scope-guard path** (no declaration
+snapshot, no `Closes #N`, no reopen step). See
+[`docs/repository_policy.md`](../../../docs/repository_policy.md#spec-only-docs-prs).
 
 ### Local checks
 
@@ -143,7 +117,7 @@ Fix `[STRICT]` findings before push.
 ### Commit and push
 
 ```powershell
-git add docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md docs/declarations/<N>.architect-draft-NN.json
+git add docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md
 # plus 00-architecture-decisions.md if applicable
 git commit -m "docs: draft NN — <short title> (#N spec)"
 git push -u origin HEAD
@@ -151,36 +125,38 @@ git push -u origin HEAD
 
 ### Open PR
 
-Body template (replace placeholders):
+Body template (replace placeholders). Use the **spec-only signal** and a
+**non-closing** issue reference so GitHub keeps #N open:
 
 ```markdown
-Closes #N
+<!-- pr-type: spec-only -->
+
+Refs #N
 
 ## Summary
 
 - Add canonical draft `docs/issues_drafts/NN-<slug>.md` (GitHub #N).
 - Update `docs/issue_queue_index.md`.
-- Declaration snapshot `docs/declarations/N.architect-draft-NN.json`.
 
-**Spec only** — does not implement #N. If GitHub auto-closes #N on merge, reopen the issue immediately.
+**Spec only** — does not implement #N.
 
 ## Test plan
 
-- [x] Docs-only under `docs/`
+- [x] Docs-only under spec-docs allowlist (`docs/issues_drafts/**`, `docs/issue_queue_index.md`, …)
 - [x] `.\scripts\verify.ps1`
 - [x] `.\scripts\check-reusable.ps1`
 - [x] `.\scripts\lint-self-architect.ps1 -Strict` (CI)
 - [ ] CI: scope guard + self-architect lint
 ```
 
+For a **batch** PR, list every implementation issue: `Refs #N1`, `Refs #N2`, …
+on separate lines (scope guard uses the last non-closing reference).
+
 ```powershell
 gh pr create --repo chetwerikoff/orchestrator-pack `
   --title "docs: draft NN — <short title> (#N spec)" `
   --body-file $env:TEMP\publish-draft-pr-body.md
 ```
-
-`Closes #N` is currently required for scope guard (same **N** as the snapshot
-`issue_number`). The summary must state spec-only.
 
 ### Review and merge
 
@@ -199,20 +175,11 @@ git checkout main
 git pull origin main
 ```
 
-### Reopen implementation issue if auto-closed
-
-```powershell
-$state = gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state --jq .state
-if ($state -eq 'CLOSED') {
-  gh issue reopen <N> --repo chetwerikoff/orchestrator-pack `
-    --comment "Reopened: spec merged to main in PR #<pr>; implementation still open."
-}
-```
-
 ### Report
 
 Tell the user: PR URL, merge commit, draft path on `main`, and that issue **#N**
-(each `#N` for batch) remains **open** for `ao spawn`.
+(each `#N` for batch) remains **open** for `ao spawn` (non-closing `Refs #N` —
+no reopen step).
 
 ## Operator adoption
 

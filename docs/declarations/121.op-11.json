@@ -1,0 +1,38 @@
+{
+  "issue_number": 121,
+  "iteration_id": "op-11",
+  "iteration_id_source": "ao_session",
+  "supersedes": "architect-draft-batch-38-43",
+  "created_at": "2026-06-02T03:39:40.045Z",
+  "baseline": {
+    "commit_sha": "2bd3a59d7d0c09c0ee3e5c496fdafa81695505e3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:68fd93f511b3b5058140ed19c0d3eb02ab5b33bf2aae2261472b8f7fb7bb1464"
+  },
+  "declared_paths": [
+    "scripts/pr-scope-contract.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-check.test.ts",
+    "scripts/pr-scope-check.ps1"
+  ],
+  "declared_globs": [
+    "plugins/ao-scope-guard/**",
+    ".claude/skills/**",
+    ".cursor/skills/**",
+    "docs/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:68fd93f511b3b5058140ed19c0d3eb02ab5b33bf2aae2261472b8f7fb7bb1464",
+      "new_active_scope_hash": "sha256:68fd93f511b3b5058140ed19c0d3eb02ab5b33bf2aae2261472b8f7fb7bb1464",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "review follow-up: CLI parity test and regex hygiene",
+      "actor": "op-11",
+      "timestamp": "2026-06-02T04:10:28.181Z",
+      "applied": true
+    }
+  ]
+}

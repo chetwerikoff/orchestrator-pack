@@ -14,16 +14,30 @@ import {
   normalizeIssueConstraints,
   validateDeclaredScope,
 } from '../plugins/ao-task-declaration/lib/validate.js';
+import {
+  classifySpecDocsPaths,
+  extractClosingIssueNumber,
+  extractNonClosingIssueNumber,
+  hasClosingIssueReference,
+  hasSpecOnlySignal,
+  ISSUE_LINK_PATTERN,
+  resolveIssueNumberForFetch,
+  SPEC_DOCS_ALLOWLIST,
+} from './pr-scope-contract.js';
+
+export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
 
 const SNAPSHOT_DIR = join('docs', 'declarations');
 
-/** GitHub-supported closing keywords; keep in sync with pr-scope-check.ps1 */
-export const ISSUE_LINK_PATTERN =
-  /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b/gi;
+/** Re-export for backward compatibility. */
+export {
+  extractClosingIssueNumber as extractLinkedIssueNumber,
+  ISSUE_LINK_PATTERN,
+} from './pr-scope-contract.js';
 
 export interface PrScopeCheckInput {
   repoRoot: string;
-  issueNumber: number;
+  prBody: string;
   issueBody: string | null;
   prPaths: string[];
   degradedMode: boolean;
@@ -33,7 +47,9 @@ export interface PrScopeCheckInput {
 export type PrScopeCheckResult =
   | {
       ok: true;
-      snapshot: DeclarationSnapshot;
+      mode: 'implementation' | 'spec-only';
+      snapshot?: DeclarationSnapshot;
+      issueNumber: number;
       checkedPaths: string[];
       skippedControlArtifacts: string[];
       unverifiedIssueConstraints: boolean;
@@ -43,6 +59,9 @@ export type PrScopeCheckResult =
       ok: false;
       reason:
         | 'missing_issue_link'
+        | 'missing_spec_issue_reference'
+        | 'spec_only_with_closing_keyword'
+        | 'spec_docs_scope_violation'
         | 'missing_snapshot'
         | 'snapshot_chain_inconsistency'
         | 'issue_unreadable'
@@ -82,21 +101,6 @@ type PrPathSnapshotCheckResult =
 interface LoadedSnapshot {
   iterationId: string;
   snapshot: DeclarationSnapshot;
-}
-
-export function extractLinkedIssueNumber(prBody: string): number | null {
-  const normalizedBody = prBody.replace(/^\uFEFF/, '').trim();
-  const matches = [...normalizedBody.matchAll(ISSUE_LINK_PATTERN)];
-  if (matches.length === 0) {
-    return null;
-  }
-
-  const issueNumber = Number(matches[matches.length - 1]![1]);
-  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-    return null;
-  }
-
-  return issueNumber;
 }
 
 function iterationIdFromFilename(issueNumber: number, filename: string): string | null {
@@ -287,8 +291,82 @@ function checkPrPathsAgainstSnapshot(
   return { ok: true, checkedPaths, skippedControlArtifacts: control };
 }
 
-export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  const snapshotResult = resolveLatestCommittedSnapshot(input.repoRoot, input.issueNumber);
+function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  if (hasClosingIssueReference(input.prBody)) {
+    return {
+      ok: false,
+      reason: 'spec_only_with_closing_keyword',
+      message:
+        'spec-only PRs must not use GitHub closing keywords (Closes/Fixes/Resolves #N); use a non-closing reference such as Refs #N so the implementation issue stays open',
+    };
+  }
+
+  const issueNumber = extractNonClosingIssueNumber(input.prBody);
+  if (issueNumber === null) {
+    return {
+      ok: false,
+      reason: 'missing_spec_issue_reference',
+      message:
+        'spec-only PR description must include a non-closing issue reference such as Refs #N (See #N and Related to #N are also accepted)',
+    };
+  }
+
+  if (input.issueBody === null) {
+    return {
+      ok: false,
+      reason: 'issue_unreadable',
+      message: input.forkPr
+        ? 'spec-only PR: linked issue could not be read (verify Refs #N refers to an open issue and workflow permissions allow gh issue view)'
+        : `spec-only PR: linked issue #${issueNumber} could not be read (verify Refs #${issueNumber} refers to an existing issue)`,
+    };
+  }
+
+  const pathCheck = classifySpecDocsPaths(input.prPaths);
+  if (!pathCheck.ok) {
+    if (pathCheck.invalidPaths.length > 0) {
+      return {
+        ok: false,
+        reason: 'invalid_path',
+        message: 'one or more PR diff paths failed normalization',
+        violations: {
+          outOfScope: [],
+          denied: [],
+          declarationErrors: [],
+          invalidPaths: pathCheck.invalidPaths,
+        },
+      };
+    }
+
+    return {
+      ok: false,
+      reason: 'spec_docs_scope_violation',
+      message:
+        'spec-only PR diff includes paths outside the spec-docs allowlist (docs-only surfaces such as docs/issues_drafts/** and docs/issue_queue_index.md)',
+      violations: {
+        outOfScope: pathCheck.outOfAllowlist,
+        denied: [],
+        declarationErrors: [],
+        invalidPaths: [],
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    mode: 'spec-only',
+    issueNumber,
+    checkedPaths: pathCheck.checkedPaths,
+    skippedControlArtifacts: [],
+    unverifiedIssueConstraints: false,
+    warnings: [],
+  };
+}
+
+function checkImplementationPrScope(
+  input: PrScopeCheckInput,
+  issueNumber: number,
+): PrScopeCheckResult {
+  const snapshotResult = resolveLatestCommittedSnapshot(input.repoRoot, issueNumber);
   if (!snapshotResult.ok) {
     return {
       ok: false,
@@ -377,7 +455,9 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
   return {
     ok: true,
+    mode: 'implementation',
     snapshot,
+    issueNumber,
     checkedPaths: pathCheck.checkedPaths,
     skippedControlArtifacts: pathCheck.skippedControlArtifacts,
     unverifiedIssueConstraints,
@@ -385,12 +465,43 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   };
 }
 
+export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  if (hasSpecOnlySignal(input.prBody)) {
+    return checkSpecOnlyPrScope(input);
+  }
+
+  const issueNumber = extractClosingIssueNumber(input.prBody);
+  if (issueNumber === null) {
+    return {
+      ok: false,
+      reason: 'missing_issue_link',
+      message:
+        'PR description must include a closing issue reference such as Closes #N, Fixes #N, or Resolves #N',
+    };
+  }
+
+  return checkImplementationPrScope(input, issueNumber);
+}
+
 export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   if (result.ok) {
+    if (result.mode === 'spec-only') {
+      const lines = [
+        '## Scope guard — passed (spec-only)',
+        '',
+        `Referenced issue: #${result.issueNumber} (non-closing; issue stays open on merge)`,
+        `Checked paths: ${result.checkedPaths.length} (spec-docs allowlist)`,
+      ];
+      for (const warning of result.warnings) {
+        lines.push('', `> ${warning}`);
+      }
+      return lines.join('\n');
+    }
+
     const lines = [
       '## Scope guard — passed',
       '',
-      `Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``,
+      `Active snapshot: \`docs/declarations/${result.snapshot!.issue_number}.${result.snapshot!.iteration_id}.json\``,
       `Checked paths: ${result.checkedPaths.length}`,
     ];
     if (result.skippedControlArtifacts.length > 0) {
@@ -430,6 +541,34 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     );
   }
 
+  if (result.reason === 'missing_spec_issue_reference') {
+    lines.push(
+      '',
+      'Spec-only PRs need a non-closing reference, for example:',
+      '',
+      '```',
+      '<!-- pr-type: spec-only -->',
+      '',
+      'Refs #123',
+      '```',
+    );
+  }
+
+  if (result.reason === 'spec_only_with_closing_keyword') {
+    lines.push(
+      '',
+      'Remove closing keywords (`Closes` / `Fixes` / `Resolves`) and use `Refs #N` instead.',
+    );
+  }
+
+  if (result.reason === 'spec_docs_scope_violation') {
+    lines.push(
+      '',
+      'Allowed paths for spec-only PRs:',
+      ...SPEC_DOCS_ALLOWLIST.map((pattern) => `- \`${pattern}\``),
+    );
+  }
+
   if (result.violations) {
     if (result.violations.outOfScope.length > 0) {
       lines.push('', '### Out of scope (PR diff)', ...result.violations.outOfScope.map((p) => `- \`${p}\``));
@@ -462,11 +601,21 @@ function readJsonInput(): PrScopeCheckInput {
     inputIndex >= 0
       ? readFileSync(process.argv[inputIndex + 1] ?? '', 'utf8')
       : readFileSync(0, 'utf8');
-  const parsed = JSON.parse(raw) as PrScopeCheckInput;
-  if (!parsed.repoRoot || !parsed.issueNumber || !Array.isArray(parsed.prPaths)) {
-    throw new Error('input JSON must include repoRoot, issueNumber, and prPaths');
+  const parsed = JSON.parse(raw) as PrScopeCheckInput & { issueNumber?: number };
+  if (!parsed.repoRoot || !Array.isArray(parsed.prPaths)) {
+    throw new Error('input JSON must include repoRoot and prPaths');
   }
-  return parsed;
+  if (typeof parsed.prBody !== 'string') {
+    throw new Error('input JSON must include prBody');
+  }
+  return {
+    repoRoot: parsed.repoRoot,
+    prBody: parsed.prBody,
+    issueBody: parsed.issueBody ?? null,
+    prPaths: parsed.prPaths,
+    degradedMode: Boolean(parsed.degradedMode),
+    forkPr: Boolean(parsed.forkPr),
+  };
 }
 
 export function runPrScopeCheckFromStdin(): PrScopeCheckResult {
@@ -479,6 +628,21 @@ function isDirectExecution(): boolean {
 
 if (isDirectExecution()) {
   try {
+    if (process.argv.includes('--resolve-issue-number')) {
+      const inputIndex = process.argv.indexOf('--input');
+      const raw =
+        inputIndex >= 0
+          ? readFileSync(process.argv[inputIndex + 1] ?? '', 'utf8')
+          : readFileSync(0, 'utf8');
+      const parsed = JSON.parse(raw) as { prBody?: string };
+      if (typeof parsed.prBody !== 'string') {
+        throw new Error('input JSON must include prBody');
+      }
+      const issueNumber = resolveIssueNumberForFetch(parsed.prBody);
+      process.stdout.write(`${JSON.stringify({ issueNumber })}\n`);
+      process.exit(0);
+    }
+
     if (process.argv.includes('--format-comment')) {
       const inputIndex = process.argv.indexOf('--input');
       const raw =
