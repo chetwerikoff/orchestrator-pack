@@ -33,9 +33,9 @@ recognised PR shapes:
 
 2. **Spec-only PR (new):** passes scope guard **without** a committed declaration
    snapshot when **all** of the following hold:
-   - the PR carries an unambiguous, machine-detectable **spec-only signal** that
-     a reader and the guard agree on (the planner chooses its concrete form;
-     it must be documented where contributors will see it);
+   - the PR carries the canonical **spec-only signal**
+     `<!-- pr-type: spec-only -->` (documented in
+     [`docs/repository_policy.md`](../repository_policy.md#spec-only-docs-prs));
    - every changed path lies inside a bounded, documented **spec-docs
      allowlist** (at minimum `docs/issues_drafts/**` and
      `docs/issue_queue_index.md`; `docs/architecture.md` and

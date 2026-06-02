@@ -35,14 +35,17 @@ From `.github/workflows/scope-guard.yml` (job `name` fields):
 All four must be green before merge. AO does **not** auto-run Codex review on
 architect-direct PRs — run manual review (below).
 
-## PR body closing keyword
+## PR body issue reference
 
-The PR description **must** include a closing reference the scope guard parses:
+**Implementation** direct PRs **must** include a closing reference the scope
+guard parses:
 
 - `Closes #N`, `Fixes #N`, or `Resolves #N` (case-insensitive, `#` required).
 
-`Refs #N` / `See #N` are **not** sufficient — the guard cannot resolve the
-linked issue or load denylist/allowed_roots fences.
+**Spec-only docs** direct PRs (draft publish to `main`) use the lighter path
+documented in [`docs/repository_policy.md`](../../../docs/repository_policy.md#spec-only-docs-prs):
+`<!-- pr-type: spec-only -->` plus a non-closing `Refs #N` (no snapshot, issue
+stays open). Do not use closing keywords on spec-only PRs.
 
 ## Declaration snapshot
 

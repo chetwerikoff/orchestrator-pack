@@ -37,6 +37,10 @@ that behavior is explicitly configured by the user.
 The GitHub Action checks the PR diff against the same active scope. It blocks
 merge if out-of-scope files appear in the PR.
 
+**Spec-only docs PRs** (draft publish) use a separate, lighter CI branch: no
+declaration snapshot, non-closing `Refs #N`, and a narrow docs allowlist. See
+[`docs/repository_policy.md`](../../docs/repository_policy.md#spec-only-docs-prs).
+
 CI is audit/enforcement after the fact. It is not a replacement for runtime
 guarding because an agent can mutate the working tree and index before CI runs.
 

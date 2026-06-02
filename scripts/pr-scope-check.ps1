@@ -67,23 +67,6 @@ function Normalize-PrBody {
     return $text
 }
 
-function Get-LinkedIssueNumber {
-    param([string]$PrBody)
-
-    $normalizedBody = Normalize-PrBody -Body $PrBody
-    $matches = [regex]::Matches(
-        $normalizedBody,
-        '\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b',
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-    )
-
-    if ($matches.Count -eq 0) {
-        return $null
-    }
-
-    return [int]$matches[$matches.Count - 1].Groups[1].Value
-}
-
 function Test-DegradedLabelAuthorized {
     param(
         [string]$Repository,
@@ -152,32 +135,50 @@ if (-not $prNumber -or -not $repository) {
 $prJson = gh pr view $prNumber --repo $repository --json body | ConvertFrom-Json
 $prBody = Normalize-PrBody -Body ([string]$prJson.body)
 
-$issueNumber = Get-LinkedIssueNumber -PrBody $prBody
+function Get-ScopeGuardIssueNumber {
+    param([string]$Body)
 
-if (-not $issueNumber) {
-    $failure = [pscustomobject]@{
-        ok      = $false
-        reason  = 'missing_issue_link'
-        message = 'PR description must include a closing issue reference such as Closes #N, Fixes #N, or Resolves #N'
+    $payloadFile = New-TemporaryFile
+    try {
+        (@{ prBody = $Body } | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
+        Push-Location $TrustedRoot
+        try {
+            $output = node --import tsx $CheckScript --resolve-issue-number --input $payloadFile.FullName
+        }
+        finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+        $parsed = $output | ConvertFrom-Json
+        if ($null -eq $parsed.issueNumber) {
+            return $null
+        }
+        return [int]$parsed.issueNumber
     }
-    Write-ScopeGuardComment -Body (Format-ScopeGuardComment -Result $failure) -PrNumber $prNumber
-    Write-Host $failure.message
-    exit 1
+    finally {
+        Remove-Item -LiteralPath $payloadFile.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $issueBody = $null
 $issueReadFailed = $false
-$issueViewOutput = gh issue view $issueNumber --json body 2>&1
-if ($LASTEXITCODE -ne 0) {
-    $issueReadFailed = $true
-}
-else {
-    try {
-        $issueJson = $issueViewOutput | ConvertFrom-Json
-        $issueBody = [string]$issueJson.body
-    }
-    catch {
+$linkedIssueNumber = Get-ScopeGuardIssueNumber -Body $prBody
+
+if ($linkedIssueNumber) {
+    $issueViewOutput = gh issue view $linkedIssueNumber --json body 2>&1
+    if ($LASTEXITCODE -ne 0) {
         $issueReadFailed = $true
+    }
+    else {
+        try {
+            $issueJson = $issueViewOutput | ConvertFrom-Json
+            $issueBody = [string]$issueJson.body
+        }
+        catch {
+            $issueReadFailed = $true
+        }
     }
 }
 
@@ -210,7 +211,7 @@ if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
 
 $input = @{
     repoRoot     = $PrRoot
-    issueNumber  = $issueNumber
+    prBody       = $prBody
     issueBody    = if ($issueReadFailed) { $null } else { $issueBody }
     prPaths      = $prPaths
     degradedMode = $degradedMode
