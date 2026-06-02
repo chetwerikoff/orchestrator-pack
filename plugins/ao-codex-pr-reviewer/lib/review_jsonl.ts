@@ -523,7 +523,7 @@ function isForbiddenProseSecondaryChannel(text: string): boolean {
   return /\[[Pp]\d+\]/.test(trimmed);
 }
 
-/** Trimmed secondary text (after optional whole-line fence) starts with pack `{"findings"`. */
+/** Trimmed secondary text (after optional whole-line fence) is a pack `{"findings":...}` object. */
 function channelTextLooksLikePackFindingsObject(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -534,7 +534,11 @@ function channelTextLooksLikePackFindingsObject(text: string): boolean {
   if (entireFence?.[1]) {
     jsonText = entireFence[1].trim();
   }
-  return jsonText.startsWith('{"findings"');
+  if (jsonText.startsWith('{"findings"')) {
+    return true;
+  }
+  // Pretty-printed pack object, e.g. `{\n  "findings": [` (must not match prose mid-string).
+  return /^\{\s*"findings"\s*[:[]/.test(jsonText);
 }
 
 /** Pack `{"findings":[...]}` present but syntactically invalid or entries fail normalization — fail closed. */

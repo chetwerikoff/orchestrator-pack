@@ -758,6 +758,37 @@ describe('review-mode JSONL verdict', () => {
       expect(verdict.kind).toBe('error');
     });
 
+    it('fails closed when other channel has pretty-printed invalid pack JSON', () => {
+      const truncatedPackJson = '{\n  "findings": [';
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: truncatedPackJson,
+        overall_confidence_score: 0.5,
+      };
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, NO_FINDINGS_TOKEN, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: NO_FINDINGS_TOKEN,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
     it('fails closed when last message has prose [P2] but explanation is exact NO_FINDINGS', () => {
       const reviewOutput = {
         findings: [] as unknown[],
