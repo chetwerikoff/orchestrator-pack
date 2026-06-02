@@ -33,7 +33,7 @@ $machineRaw = [Environment]::GetEnvironmentVariable('PACK_REVIEWER', 'Machine')
 $effective = Get-PackReviewerFromSelector
 $wrapper = if ($effective) { Get-PackReviewWrapperBasenameForReviewer -Reviewer $effective } else { '(none)' }
 
-Write-Host 'PACK_REVIEWER layers (Windows: Process overrides User overrides Machine):'
+Write-Host 'PACK_REVIEWER layers (Process overrides User overrides Machine):'
 Write-Host ('  Process:  {0}' -f (Get-LayerDisplayValue -Target 'Process'))
 Write-Host ('  User:     {0}' -f (Get-LayerDisplayValue -Target 'User'))
 Write-Host ('  Machine:  {0}' -f (Get-LayerDisplayValue -Target 'Machine'))

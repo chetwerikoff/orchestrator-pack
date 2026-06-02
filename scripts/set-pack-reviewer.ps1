@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Set operator-global PACK_REVIEWER (User scope) and clear session override (Process).
+  Set PACK_REVIEWER for pack review (User scope on Win32NT; Process scope elsewhere).
 .PARAMETER Reviewer
   codex | claude
 .PARAMETER RestartAo
@@ -17,15 +17,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Resolve-PackReviewer.ps1')
 
-if ($env:OS -notmatch 'Windows') {
-    Write-Error 'Persistent User scope is applied via Windows registry. On non-Windows, set PACK_REVIEWER in the shell profile or service unit and clear process scope manually.'
+if (Test-PackReviewerPersistentLayersAvailable) {
+    [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $Reviewer, 'User')
+    Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
+    Write-Host "Set User PACK_REVIEWER=$Reviewer and cleared Process override in this session."
 }
-
-[Environment]::SetEnvironmentVariable('PACK_REVIEWER', $Reviewer, 'User')
-Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
-
-Write-Host "Set User PACK_REVIEWER=$Reviewer and cleared Process override in this session."
+else {
+    $env:PACK_REVIEWER = $Reviewer
+    Write-Host "Set Process PACK_REVIEWER=$Reviewer for this session (non-Win32NT: process-only per architecture section N)."
+    Write-Host 'For persistence across shells, export PACK_REVIEWER in your shell profile or service unit (see docs/reviewer-switch-runbook.md).'
+}
 
 if ($RestartAo) {
     if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
@@ -37,10 +40,17 @@ if ($RestartAo) {
         Start-Sleep -Seconds 2
         $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
         $escapedRoot = $repoRoot.Replace("'", "''")
+        if (Test-PackReviewerPersistentLayersAvailable) {
+            $startCommand = "Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        }
+        else {
+            $escapedReviewer = $Reviewer.Replace("'", "''")
+            $startCommand = "`$env:PACK_REVIEWER='$escapedReviewer'; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        }
         Start-Process -FilePath 'pwsh' -ArgumentList @(
             '-NoProfile',
             '-Command',
-            "Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+            $startCommand
         ) -WorkingDirectory $repoRoot | Out-Null
         Write-Host 'AO start launched in background via clean shell (dashboard may take a few seconds).'
     }
@@ -49,11 +59,15 @@ if ($RestartAo) {
 function Invoke-PackReviewerStatusCheck {
     param([string]$ExpectedReviewer)
 
-    Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
     $statusScript = Join-Path $PSScriptRoot 'show-pack-reviewer-status.ps1'
-    $quotedScript = $statusScript.Replace("'", "''")
-    $quotedExpected = $ExpectedReviewer.Replace("'", "''")
-    & pwsh -NoProfile -Command "& { Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; & '$quotedScript' -Expected '$quotedExpected' }"
+    if (Test-PackReviewerPersistentLayersAvailable) {
+        $quotedScript = $statusScript.Replace("'", "''")
+        $quotedExpected = $ExpectedReviewer.Replace("'", "''")
+        & pwsh -NoProfile -Command "& { Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; & '$quotedScript' -Expected '$quotedExpected' }"
+    }
+    else {
+        & $statusScript -Expected $ExpectedReviewer
+    }
     return $LASTEXITCODE
 }
 

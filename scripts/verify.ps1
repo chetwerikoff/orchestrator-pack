@@ -3,6 +3,13 @@ param(
     [switch]$StrictPrereqs
 )
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host '[FAIL] orchestrator-pack scripts require PowerShell 7+ (pwsh). Windows PowerShell 5.1 is not supported.'
+    Write-Host ("  Detected: {0} ({1})" -f $PSVersionTable.PSVersion, $PSVersionTable.PSEdition)
+    Write-Host '  Install: https://aka.ms/powershell'
+    exit 1
+}
+
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'lib/Get-VersionFromText.ps1')
 $Root = Split-Path -Parent $PSScriptRoot

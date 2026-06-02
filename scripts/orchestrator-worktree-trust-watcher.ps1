@@ -26,8 +26,18 @@ if (-not (Test-Path -LiteralPath $TrustScript -PathType Leaf)) {
     throw "Missing $TrustScript"
 }
 
-$WorktreesRoot = Join-Path $env:USERPROFILE ".agent-orchestrator\projects\$ProjectId\worktrees"
-$StateFile = Join-Path $env:LOCALAPPDATA 'orchestrator-pack-trusted-worktrees.txt'
+$userHome = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+$stateBase = if (-not [string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) {
+    $env:XDG_STATE_HOME
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $env:LOCALAPPDATA
+}
+else {
+    Join-Path $userHome '.local' 'state'
+}
+$WorktreesRoot = Join-Path $userHome '.agent-orchestrator' 'projects' $ProjectId 'worktrees'
+$StateFile = Join-Path $stateBase 'orchestrator-pack-trusted-worktrees.txt'
 $known = @{}
 
 if (Test-Path -LiteralPath $StateFile -PathType Leaf) {

@@ -11,14 +11,6 @@ $Script:PackReviewerWrapperById = @{
     claude = 'run-pack-review-claude.ps1'
 }
 
-function Test-IsWindowsHost {
-    if ($PSVersionTable.PSVersion.Major -ge 6) {
-        return $IsWindows
-    }
-
-    return ($env:OS -match 'Windows')
-}
-
 function Get-PackReviewerLayerValue {
     param(
         [Parameter(Mandatory)]
@@ -34,12 +26,25 @@ function Get-PackReviewerLayerValue {
     return [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, $Target)
 }
 
+function Test-PackReviewerPersistentLayersAvailable {
+    <#
+    .SYNOPSIS
+      Windows registry-backed User/Machine layers (decision section N). Non-Win32NT hosts
+      stay process-only for review spawn; do not use $IsWindows.
+    #>
+    return ($PSVersionTable.Platform -eq 'Win32NT')
+}
+
 function Clear-StalePackReviewerProcessScope {
     <#
     .SYNOPSIS
       Drop process-scoped PACK_REVIEWER when User is configured so global operator choice wins.
       IDE/agent parents often inject process values; AO review dispatch should follow User/Machine.
     #>
+    if (-not (Test-PackReviewerPersistentLayersAvailable)) {
+        return
+    }
+
     $userValue = Get-PackReviewerLayerValue -Target 'User' -OverrideLayers $null
     if ([string]::IsNullOrWhiteSpace($userValue)) {
         return
@@ -51,7 +56,7 @@ function Clear-StalePackReviewerProcessScope {
 function Get-PackReviewerSelectorValue {
     <#
     .SYNOPSIS
-      Resolves PACK_REVIEWER from process scope, then Windows User/Machine persistent layers.
+      Resolves PACK_REVIEWER from process scope, then User/Machine persistent layers.
       Precedence: Process > User > Machine (User overrides Machine when process is unset).
     .PARAMETER OverrideLayers
       Optional test hook: keys Process, User, Machine override registry reads for that layer.
@@ -60,11 +65,14 @@ function Get-PackReviewerSelectorValue {
         [hashtable]$OverrideLayers
     )
 
-    foreach ($target in @('Process', 'User', 'Machine')) {
-        if ($target -ne 'Process' -and -not (Test-IsWindowsHost)) {
-            continue
-        }
+    $targets = if (Test-PackReviewerPersistentLayersAvailable) {
+        @('Process', 'User', 'Machine')
+    }
+    else {
+        @('Process')
+    }
 
+    foreach ($target in $targets) {
         $value = Get-PackReviewerLayerValue -Target $target -OverrideLayers $OverrideLayers
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             return $value

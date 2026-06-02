@@ -21,27 +21,38 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-PackUserHome {
+    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) {
+        return $env:HOME
+    }
+    return [Environment]::GetFolderPath('UserProfile')
+}
+
 function Get-AoWorktreesRoot {
     param([string]$Id)
-    Join-Path $env:USERPROFILE ".agent-orchestrator\projects\$Id\worktrees"
+    Join-Path (Get-PackUserHome) '.agent-orchestrator' 'projects' $Id 'worktrees'
 }
 
 function Get-CursorProjectsDir {
-    Join-Path $env:USERPROFILE '.cursor\projects'
+    Join-Path (Get-PackUserHome) '.cursor' 'projects'
 }
 
 function Get-CursorProjectSlugFromWorkspace {
     param([string]$FullPath)
     $full = [System.IO.Path]::GetFullPath($FullPath)
-    if ($full -match '^([A-Za-z]):\\(.*)$') {
+    if ($full -match '^([A-Za-z]):[\\/]+(.*)$') {
         # cursor-agent keeps leading dots in segments (e.g. .agent-orchestrator);
         # stripping them writes the marker where the interactive worker never looks.
-        $segments = $Matches[2] -split '\\' |
+        $segments = $Matches[2] -split '[\\/]' |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ }
         return ('{0}-{1}' -f $Matches[1], ($segments -join '-'))
     }
-    return ($full -replace '\\', '-')
+    $trimmed = $full.TrimStart([char[]]@('/', '\'))
+    $segments = $trimmed -split '[\\/]' |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+    return ($segments -join '-')
 }
 
 function Resolve-AoWorkspacePath {

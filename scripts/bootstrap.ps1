@@ -74,6 +74,6 @@ if ($TargetRepo) {
 else {
     Write-Host 'No -TargetRepo supplied. This script will not run AO against a real repository.'
     Write-Host 'When ready, run one of:'
-    Write-Host '  ao start C:\Users\che\Documents\Projects\your-target-repo'
+    Write-Host '  ao start ~/projects/your-target-repo'
     Write-Host '  ao start https://github.com/your-org/your-repo'
 }

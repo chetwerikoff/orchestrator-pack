@@ -76,8 +76,8 @@ if ($invalidMessage -notmatch "unrecognized value 'not-a-reviewer'") {
     exit 1
 }
 
-if (-not (Test-IsWindowsHost)) {
-    Write-Host '[PASS] PACK_REVIEWER resolver fixture checks (non-Windows: no registry integration)'
+if ($PSVersionTable.Platform -ne 'Win32NT') {
+    Write-Host '[PASS] PACK_REVIEWER resolver fixture checks (non-Win32NT: process-only; no registry integration)'
     exit 0
 }
 
