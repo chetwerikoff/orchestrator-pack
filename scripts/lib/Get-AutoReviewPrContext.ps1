@@ -74,7 +74,7 @@ function Get-IssueNumberFromDeclarationSnapshots {
         return $fromBranch
     }
 
-    $declDir = Join-Path $RepoRoot 'docs\declarations'
+    $declDir = Join-Path $RepoRoot 'docs/declarations'
     if (-not (Test-Path -LiteralPath $declDir -PathType Container)) {
         return $null
     }

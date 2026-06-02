@@ -12,8 +12,8 @@ $Script:WrapperName = 'run-pack-review-claude.ps1'
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
 $packRoot = Split-Path -Parent $PSScriptRoot
-$reviewTs = Join-Path $packRoot 'plugins\ao-codex-pr-reviewer\bin\review.ts'
-$fixtureRunner = Join-Path $packRoot 'scripts\run-pack-review-fixture.mjs'
+$reviewTs = Join-Path $packRoot 'plugins/ao-codex-pr-reviewer/bin/review.ts'
+$fixtureRunner = Join-Path $packRoot 'scripts/run-pack-review-fixture.mjs'
 $defaultModel = 'claude-sonnet-4-6'
 
 if (-not (Test-Path -LiteralPath $reviewTs -PathType Leaf)) {
@@ -30,7 +30,7 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
-$workspacePrompt = Join-Path $resolvedRoot 'prompts\codex_review_prompt.md'
+$workspacePrompt = Join-Path $resolvedRoot 'prompts/codex_review_prompt.md'
 if (Test-Path -LiteralPath $workspacePrompt -PathType Leaf) {
     $env:AO_CODEX_REVIEW_PROMPT_FILE = $workspacePrompt
 }

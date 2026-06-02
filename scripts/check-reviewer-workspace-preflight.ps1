@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $preflight -PathType Leaf)) {
 }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("op98-ws-" + [Guid]::NewGuid().ToString('n'))
-$workspaces = Join-Path $tempRoot 'code-reviews\workspaces'
+$workspaces = Join-Path $tempRoot 'code-reviews/workspaces'
 $stale = Join-Path $workspaces 'op-rev-stale-test'
 New-Item -ItemType Directory -Path $stale -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $stale 'marker.txt') -Value 'stale'

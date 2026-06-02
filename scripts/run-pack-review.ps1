@@ -24,7 +24,7 @@ Push-Location -LiteralPath $resolvedRoot
 try {
     Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
-    $reviewScript = Join-Path $PSScriptRoot '..\plugins\ao-codex-pr-reviewer\bin\review.ps1'
+    $reviewScript = Join-Path $PSScriptRoot '../plugins/ao-codex-pr-reviewer/bin/review.ps1'
     if (-not (Test-Path -LiteralPath $reviewScript -PathType Leaf)) {
         Write-Error "Pack review wrapper not found at $reviewScript"
     }
