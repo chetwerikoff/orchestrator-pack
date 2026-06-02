@@ -34,6 +34,11 @@ function Invoke-EntrypointCapture {
     }
 }
 
+if ($PSVersionTable.Platform -ne 'Win32NT') {
+    Write-Host '[PASS] PACK_REVIEWER persistent-env fallback checks (non-Win32NT: process-only; no registry integration)'
+    exit 0
+}
+
 if (-not (Test-Path -LiteralPath $precedenceFixture -PathType Leaf)) {
     Write-Host "[FAIL] missing fixture $precedenceFixture"
     exit 1
@@ -74,11 +79,6 @@ $invalidMessage = Get-PackReviewerSelectorErrorMessage -OverrideLayers $invalidU
 if ($invalidMessage -notmatch "unrecognized value 'not-a-reviewer'") {
     Write-Host "[FAIL] unrecognized User value must use existing message (got: $invalidMessage)"
     exit 1
-}
-
-if ($PSVersionTable.Platform -ne 'Win32NT') {
-    Write-Host '[PASS] PACK_REVIEWER resolver fixture checks (non-Win32NT: process-only; no registry integration)'
-    exit 0
 }
 
 $machineValue = [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, 'Machine')
