@@ -260,6 +260,58 @@ describe('review-mode JSONL verdict', () => {
     }
   });
 
+  it('maps bracketed title priority to blocking when numeric priority is omitted', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P0] Critical regression in scope guard',
+            body: 'Urgent issue without numeric priority field.',
+            code_location: {
+              absolute_file_path: 'plugins/ao-scope-guard/lib/check.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Blocking severity contract test.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.severity).toBe('blocking');
+    }
+  });
+
+  it('maps bracketed P2 title to non-blocking when numeric priority is omitted', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Minor style issue',
+            body: 'Lower priority without numeric priority field.',
+            code_location: {
+              absolute_file_path: 'plugins/ao-scope-guard/lib/check.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Non-blocking severity contract test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.severity).toBe('non-blocking');
+    }
+  });
+
   it('preserves explicit type and code from review_output findings', () => {
     const parsed = parseCodexReviewOutput(
       {

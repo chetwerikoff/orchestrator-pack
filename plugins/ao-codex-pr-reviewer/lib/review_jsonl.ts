@@ -173,9 +173,22 @@ export function isPatchCorrectVerdict(overallCorrectness: string | undefined): b
   return /^patch is correct$/i.test(overallCorrectness.trim());
 }
 
-function priorityToSeverity(priority: unknown): 'blocking' | 'non-blocking' {
-  if (typeof priority === 'number' && priority <= 1) {
-    return 'blocking';
+function parseBracketedPriority(title: string): number | null {
+  const match = title.match(/^\[P(\d+)\]/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number.parseInt(match[1]!, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function priorityToSeverity(priority: unknown, title: string): 'blocking' | 'non-blocking' {
+  if (typeof priority === 'number' && !Number.isNaN(priority)) {
+    return priority <= 1 ? 'blocking' : 'non-blocking';
+  }
+  const bracketed = parseBracketedPriority(title);
+  if (bracketed !== null) {
+    return bracketed <= 1 ? 'blocking' : 'non-blocking';
   }
   return 'non-blocking';
 }
@@ -362,7 +375,7 @@ function normalizeReviewFinding(
   }
 
   const priority = record.priority;
-  const severity = priorityToSeverity(priority);
+  const severity = priorityToSeverity(priority, title);
   const type = resolveFindingType(record, title, body);
   const explicitCode = typeof record.code === 'string' ? record.code.trim() : '';
   const codeBase = slugify(title.replace(/^\[P\d\]\s*/i, '')) || `finding-${index + 1}`;
