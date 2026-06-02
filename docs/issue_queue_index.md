@@ -75,4 +75,5 @@ task).
 | `41-ubuntu-scripts-portability.md` | [#118](https://github.com/chetwerikoff/orchestrator-pack/issues/118) | Child B of #115: `$HOME`/path portability, retire Windows-only scripts, fix `check-pack-reviewer-persistent-env.ps1`, enforce pwsh 7+ |
 | `42-ubuntu-ci-runner.md` | [#119](https://github.com/chetwerikoff/orchestrator-pack/issues/119) | Child C of #115: migrate `scope-guard.yml` jobs `windows-latest`→`ubuntu-latest` (after #118) |
 | `43-spec-only-scope-guard-docs-prs.md` | [#121](https://github.com/chetwerikoff/orchestrator-pack/issues/121) | Spec-only scope-guard mode: docs-only draft PRs pass via `Refs #N` + bounded docs allowlist, no declaration snapshot / close-reopen dance |
+| `44-codex-review-jsonl-verdict-source.md` | [#127](https://github.com/chetwerikoff/orchestrator-pack/issues/127) | Codex reviewer event-first verdict: parse `codex exec review --json` review_output before last-message fallback |
 | _(revert; no draft file)_ | [#99](https://github.com/chetwerikoff/orchestrator-pack/issues/99) | Revert #58 state-derived reconciliation (PR #97 split-brain); closed when revert PR merges |
