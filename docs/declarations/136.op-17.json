@@ -1,0 +1,19 @@
+{
+  "issue_number": 136,
+  "iteration_id": "op-17",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T18:09:28.887Z",
+  "baseline": {
+    "commit_sha": "44575eb42af2a4716ef6992b60435b3b62d97afa",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ebb5b38c3b49759b9c28c492d2cee6fb71e187c7efd5562f7adbe6a1b8adb32f"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/06-codex-reviewer-scope-context.md"
+  ],
+  "declared_globs": [
+    "plugins/ao-codex-pr-reviewer/**"
+  ],
+  "amendments": []
+}
