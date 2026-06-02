@@ -1,4 +1,4 @@
-import { existsSync, globSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ReviewSource, StructuredFinding } from './types.js';
@@ -57,16 +57,44 @@ export function extractThreadIdFromProcessJsonl(processJsonl: string): string | 
   return null;
 }
 
+function findSessionJsonlUnderDir(dir: string, sessionId: string): string | null {
+  const suffix = `${sessionId}.jsonl`;
+  let latest: string | null = null;
+
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(suffix)) {
+        latest = fullPath;
+      }
+    }
+  }
+
+  return latest;
+}
+
 export function findPersistedSessionJsonlPath(
   sessionId: string,
   codexHome = resolveCodexHome(),
 ): string | null {
-  const pattern = join(codexHome, 'sessions', '**', `rollout-*-${sessionId}.jsonl`);
-  const matches = globSync(pattern);
-  if (matches.length === 0) {
+  const sessionsRoot = join(codexHome, 'sessions');
+  if (!existsSync(sessionsRoot)) {
     return null;
   }
-  return matches.sort().at(-1) ?? null;
+  return findSessionJsonlUnderDir(sessionsRoot, sessionId);
 }
 
 export function readPersistedSessionJsonl(
