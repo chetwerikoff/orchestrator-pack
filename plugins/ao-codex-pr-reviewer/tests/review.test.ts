@@ -664,6 +664,49 @@ describe('review-mode JSONL verdict', () => {
       ).toBeNull();
     });
 
+    it('fails closed when other channel is NO_FINDINGS with trailing prose', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: NO_FINDINGS_TOKEN,
+        overall_confidence_score: 0.5,
+      };
+      const malformedLast = `${NO_FINDINGS_TOKEN}\nextra prose must block sole recovery`;
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, malformedLast, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: malformedLast,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
+    it('fails closed when explanation is NO_FINDINGS with trailing prose but last message is exact', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: `${NO_FINDINGS_TOKEN}\nextra prose must block sole recovery`,
+        overall_confidence_score: 0.5,
+      };
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, NO_FINDINGS_TOKEN, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+    });
+
     it('fails closed when explanation has prose [P1] but last message is exact NO_FINDINGS', () => {
       const reviewOutput = {
         findings: [] as unknown[],

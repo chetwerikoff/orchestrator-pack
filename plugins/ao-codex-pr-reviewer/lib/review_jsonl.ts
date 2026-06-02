@@ -539,6 +539,15 @@ function secondaryChannelText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** `NO_FINDINGS` present but not the sole trimmed channel payload (#135 exact token). */
+function isMalformedNoFindingsSecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  return trimmed.includes(NO_FINDINGS_TOKEN);
+}
+
 /** Prose priority markers in a non-recoverable secondary channel (#135 forbidden). */
 function isForbiddenProseSecondaryChannel(text: string): boolean {
   const trimmed = text.trim();
@@ -595,6 +604,7 @@ function otherChannelBlocksSoleRecovery(
     return false;
   }
   return (
+    isMalformedNoFindingsSecondaryChannel(text) ||
     isForbiddenProseSecondaryChannel(text) ||
     isMalformedPackFindingsSecondaryChannel(text, source, repoRoot)
   );
