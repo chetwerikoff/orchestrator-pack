@@ -523,7 +523,21 @@ function isForbiddenProseSecondaryChannel(text: string): boolean {
   return /\[[Pp]\d+\]/.test(trimmed);
 }
 
-/** Pack `{"findings":[...]}` present but entries fail normalization — fail closed. */
+/** Trimmed secondary text (after optional whole-line fence) starts with pack `{"findings"`. */
+function channelTextLooksLikePackFindingsObject(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  let jsonText = trimmed;
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (entireFence?.[1]) {
+    jsonText = entireFence[1].trim();
+  }
+  return jsonText.startsWith('{"findings"');
+}
+
+/** Pack `{"findings":[...]}` present but syntactically invalid or entries fail normalization — fail closed. */
 function isMalformedPackFindingsSecondaryChannel(
   text: string,
   source: ReviewSource,
@@ -533,10 +547,11 @@ function isMalformedPackFindingsSecondaryChannel(
   if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
     return false;
   }
-  if (!extractStrictPackFindingsArray(trimmed)) {
-    return false;
+  const strictFindings = extractStrictPackFindingsArray(trimmed);
+  if (strictFindings) {
+    return tryParsePackFindingsFromSecondaryText(text, source, repoRoot) === null;
   }
-  return tryParsePackFindingsFromSecondaryText(text, source, repoRoot) === null;
+  return channelTextLooksLikePackFindingsObject(trimmed);
 }
 
 function otherChannelBlocksSoleRecovery(
