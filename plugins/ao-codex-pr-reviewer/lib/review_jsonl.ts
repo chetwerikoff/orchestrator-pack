@@ -182,6 +182,8 @@ function slugify(value: string): string {
     .slice(0, 48);
 }
 
+const WINDOWS_DRIVE_ABS = /^[a-zA-Z]:[\\/]/;
+
 /** Map Codex absolute paths to repository-relative paths for AO payloads. */
 export function toRepoRelativePath(filePath: string, repoRoot: string): string | null {
   const trimmed = filePath.trim();
@@ -189,7 +191,11 @@ export function toRepoRelativePath(filePath: string, repoRoot: string): string |
     return null;
   }
 
-  if (!isAbsolute(trimmed)) {
+  if (WINDOWS_DRIVE_ABS.test(trimmed)) {
+    if (process.platform !== 'win32') {
+      return null;
+    }
+  } else if (!isAbsolute(trimmed)) {
     return trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
   }
 

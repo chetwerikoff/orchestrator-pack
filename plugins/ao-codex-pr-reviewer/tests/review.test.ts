@@ -204,6 +204,8 @@ describe('review-mode JSONL verdict', () => {
   });
 
   it('toRepoRelativePath returns null for paths outside the repo', () => {
+    const outside = join(REPO_ROOT, '..', 'outside-repo-file.ts');
+    expect(toRepoRelativePath(outside, REPO_ROOT)).toBeNull();
     expect(toRepoRelativePath('C:\\outside\\other\\file.ts', REPO_ROOT)).toBeNull();
   });
 
