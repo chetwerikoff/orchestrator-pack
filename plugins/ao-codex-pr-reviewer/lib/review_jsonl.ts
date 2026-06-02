@@ -511,6 +511,18 @@ function isExactNoFindingsSecondary(text: string): boolean {
   return text.trim() === NO_FINDINGS_TOKEN;
 }
 
+/** Prose priority markers in a non-recoverable secondary channel (#135 forbidden). */
+function isForbiddenProseSecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  if (extractStrictPackFindingsArray(trimmed)) {
+    return false;
+  }
+  return /\[[Pp]\d+\]/.test(trimmed);
+}
+
 /**
  * Split-channel secondary parser (#135). Must not call `parseCodexOutput` — its
  * stdout normalization treats "Review complete" plus NO_FINDINGS and similar forms
@@ -632,6 +644,12 @@ export function attemptSplitChannelRecovery(
   if (!sole) {
     return null;
   }
+
+  const otherChannelText = explanationPayload ? lastMsg : explanation;
+  if (otherChannelText && isForbiddenProseSecondaryChannel(otherChannelText)) {
+    return null;
+  }
+
   if (sole.kind === 'clean') {
     return { kind: 'clean' };
   }
