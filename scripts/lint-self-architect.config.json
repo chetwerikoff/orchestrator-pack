@@ -4,7 +4,8 @@
     "scripts/**",
     "plugins/**",
     "docs/**",
-    ".github/**"
+    ".github/**",
+    ".cursor/skills/**"
   ],
   "excludePaths": [
     "tests/fixtures/**",
