@@ -32,7 +32,8 @@ For a **healthy orchestrator process that never reacts to CI/review events**, se
 | Workers fail at spawn with Signature A/B **right after** `npm i -g @aoagents/ao@…` | `@aoagents/ao-plugin-agent-cursor` `dist/index.js` | `docs/migration_notes.md` — **After `ao` upgrade — verify worker #2074 patch** (`ao-worker-prompt-`, two `cat`) |
 | **Orchestrator** `stuck` / `probe_failure` / `detecting` within ~1 minute of `ao start`, `ao session kill` + respawn, or restore | Orchestrator session PTY (`op-orchestrator`) | `docs/migration_notes.md` — **Orchestrator** prompt-delivery launch failure (Issue #91) |
 | Spawn logs show `workspace.branch_collision` on `orchestrator/*` | Stale branch/worktree before kill/restart | `scripts/orchestrator-worktree-preflight.ps1` (Issue #91) |
-| `ao start` → `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/unlock-op-orchestrator-worktree.ps1`; `docs/migration_notes.md` (Windows prevention) |
+| `ao start` → `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/orchestrator-worktree-preflight.ps1 -Apply`; `docs/migration_notes.md` |
+| Same on **legacy native Windows** (retired) | Orphan processes + 9P locks | **Do not use** `unlock-op-orchestrator-worktree.ps1` on Linux — see migration_notes (legacy) |
 | Orchestrator PTY empty, `alive:false`, exit **0** under ~1s | `~/.ao/bin/agent` bash shim shadows real `agent` | Remove shim; `Test-Path ~/.ao/bin/agent` must be **False** before `ao start` |
 
 **Signatures A/B** (worker **and** orchestrator on Windows): Signature A — `printf` not
@@ -287,7 +288,24 @@ pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply
 
 Then `ao start` and confirm no repeated `branch_collision` in spawn logs.
 
-### Step 2c — Windows: `~/.ao/bin/agent` shim and worktree `EPERM` (before step 3)
+### Step 2c — Worktree `EPERM` and `~/.ao/bin/agent` shim (before step 3)
+
+**Linux / WSL2 (supported):** clear orphan processes holding the orchestrator
+worktree, then preflight:
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -Apply
+```
+
+See `docs/ubuntu-setup-runbook.md` (ext4 paths) and `docs/migration_notes.md`.
+
+**Legacy — native Windows only (retired):** the subsection below documents
+historical Windows-only prevention. Do **not** run
+`scripts/unlock-op-orchestrator-worktree.ps1` on Ubuntu/WSL2 (script retirement
+is Issue #41).
+
+<details>
+<summary>Legacy native Windows (retired)</summary>
 
 Run from **external PowerShell** (not the Cursor agent terminal) when:
 
@@ -301,16 +319,10 @@ targeted `taskkill /T`; confirm `Test-Path "$env:USERPROFILE\.ao\bin\agent"` is
 **False** before `ao start`; use [#2074](https://github.com/ComposioHQ/agent-orchestrator/issues/2074)
 for workers, not a standing bash shim in `~/.ao/bin`.
 
-**One-shot recovery:**
+**One-shot recovery (legacy, do not use on Linux):** formerly
+`scripts/unlock-op-orchestrator-worktree.ps1` (retired with the Ubuntu port).
 
-```powershell
-pwsh -NoProfile -File scripts/unlock-op-orchestrator-worktree.ps1
-```
-
-Optional: install Handle once — `winget install --id Microsoft.Sysinternals.Handle -e`.
-
-Verify after ~15s: `node $env:TEMP\ao-pipe-read.cjs` → `"alive":true` and full
-orchestrator prompt text (not trust-bootstrap only).
+</details>
 
 ## Step 3 — Kill orchestrator session and restart AO
 

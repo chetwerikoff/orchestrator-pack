@@ -446,7 +446,10 @@ cat-only `$(cat <file>)`).
    next `ao start`. Use [Sysinternals Handle](https://learn.microsoft.com/en-us/sysinternals/downloads/handle)
    on the worktree path → `taskkill /T /F /PID <pid>` for each holder. **Do not**
    run `Get-Process node | Stop-Process` (kills the IDE / this Cursor session).
-   Pack helper: `scripts/unlock-op-orchestrator-worktree.ps1` (external PowerShell).
+   **Legacy (native Windows, retired):** `scripts/unlock-op-orchestrator-worktree.ps1`
+   — do not use on Ubuntu/WSL2; script removal is tracked in the scripts port
+   (Issue #41). On Linux, use `scripts/orchestrator-worktree-preflight.ps1` and
+   process hygiene per the recovery runbook.
 3. **Before every `ao start` on Windows:**
 
    ```powershell
@@ -462,12 +465,18 @@ cat-only `$(cat <file>)`).
 
 #### Recovery sequence (EPERM or dead orchestrator)
 
+**Linux / WSL2:**
+
 ```powershell
-pwsh -NoProfile -File scripts/unlock-op-orchestrator-worktree.ps1
-# or: preflight -Apply after handle-based kill; then ao stop; ao start
+pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -Apply
+ao stop
+ao start
 pwsh -File scripts/wait-orchestrator-launch.ps1
-node $env:TEMP\ao-pipe-read.cjs   # trust pipe: alive:true + orchestrator scrollback
 ```
+
+**Legacy (native Windows only, retired):** `scripts/unlock-op-orchestrator-worktree.ps1`
+was the Windows Handle-based helper — not supported on the Linux-only port; do
+not run it on Ubuntu/WSL2.
 
 See also `docs/orchestrator-recovery-runbook.md` (step 2b) and
 `scripts/orchestrator-worktree-preflight.ps1`.
@@ -545,6 +554,28 @@ PTY fixtures only.
 
 **Restore metadata:** `restoreFallbackReason: cursor.getRestoreCommand returned null`
 is normal for Cursor restore; not root cause alone.
+
+### Ubuntu / Linux-first config and docs (Issue #117)
+
+Issue #117 makes `agent-orchestrator.yaml.example` and operator-facing docs
+**Linux-first** (Ubuntu / WSL2 Ubuntu, pwsh 7+). Native Windows is no longer a
+runtime target (decision §P).
+
+**Operator adoption** — after merge:
+
+1. Merge `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`,
+   including the updated `orchestratorRules` (pwsh **REVIEW_COMMAND**, no retired
+   Windows PowerShell 5.1 launch-hazard prose).
+2. Set `projects.*.path` to target repos on **ext4** (`/home/...`). Move clones
+   and AO state off **`/mnt/c`** if you used WSL with Windows paths.
+3. Provision the environment per
+   [`docs/ubuntu-setup-runbook.md`](ubuntu-setup-runbook.md) (snap npm prefix,
+   `/snap/bin` on `PATH`, `appendWindowsPath=false` in `/etc/wsl.conf`, agent
+   CLIs).
+4. Restart AO: `ao stop` then `ao start` (and wake listener/heartbeat if used).
+
+See also [`README.md`](../README.md) (Linux baseline) and decision §P in
+[`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
 
 ## Operator adoption contract
 

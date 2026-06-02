@@ -36,7 +36,7 @@ and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/READ
 
 ## What this pack adds
 
-- `agent-orchestrator.yaml.example` — Windows-friendly AO config example.
+- `agent-orchestrator.yaml.example` — Linux-first AO config example (Ubuntu / WSL2, pwsh 7+).
 - `prompts/agent_rules.md` — portable safety rules injected through
   `agentRulesFile`.
 - `prompts/self_architect_check.md` — concise self-review block for agents.
@@ -50,9 +50,9 @@ and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/READ
   literals and paired script/template drift (see `prompts/self_architect_check.md`).
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
-- `scripts/patch-codex-review4.ps1` — temporary Windows compatibility patch for
-  AO 0.9.2 built-in Codex review (wrong subcommand + shell argument splitting).
-  Safe to re-run; no-ops once AO ships the upstream fix.
+- `scripts/patch-codex-review4.ps1` — **legacy (retired on Linux):** temporary
+  patch for AO 0.9.2 built-in Codex review on native Windows only. Not used on
+  Ubuntu/WSL2; removal tracked separately.
 - `docs/github_issues_cursor_codex_setup.md` — GitHub Issues + Cursor CLI
   planner/worker + Codex reviewer setup notes.
 - `.gitignore` — keeps local AO configs, runtime state, target repos, vendor
@@ -62,53 +62,23 @@ and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/READ
 
 ## Official AO baseline
 
+**Platform:** Ubuntu 22.04+ or **WSL2 Ubuntu** only. Native Windows is not a
+supported runtime — use WSL2 and keep repos on the Linux filesystem (`/home/...`,
+ext4), never `/mnt/c`. See
+[`docs/ubuntu-setup-runbook.md`](docs/ubuntu-setup-runbook.md).
+
 Recommended install:
 
-```powershell
+```bash
 npm install -g @aoagents/ao
 ```
 
-Windows baseline:
+Linux baseline:
 
-- Use `defaults.runtime: process` (native ConPTY/process runtime).
-- `tmux` is not required on Windows.
-- PowerShell 7+ is recommended for AO usage, but the verification scripts avoid
-  requiring secrets or elevated privileges.
-
-### AO 0.9.2 Windows Codex review patch
-
-**Why it exists:** AO 0.9.2 calls the wrong Codex subcommand on Windows and passes
-arguments with `shell: true`, which splits multi-word flags incorrectly. The patch
-rewrites the bundled review chunk so AO invokes `codex exec review` reliably.
-
-**Affected version:** `@aoagents/ao` **0.9.2** on Windows only. AO **0.9.3+** is
-expected to include the upstream fix; the script detects the installed version and
-exits 0 with a no-op message when patching is unnecessary.
-
-**Apply or re-check after upgrades:**
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
-```
-
-Re-run after every `npm install -g @aoagents/ao`. The script is idempotent on 0.9.2
-(already-patched installs report a no-op and exit 0).
-
-**Verify whether you still need it:**
-
-1. `ao --version` — if the output is **0.9.3 or newer**, the patch should no-op.
-2. Run the script — it prints whether it patched, was already applied, or is not
-   needed for your AO version.
-3. Confirm built-in review works: create or open a PR in AO and check that the
-   dashboard **Reviews** board shows Codex output (not a failed review run).
-
-**Removal condition:** delete `scripts/patch-codex-review4.ps1` and remove README
-references once AO **≥ 0.9.3** is released, verified on Windows, and the no-op path
-has been confirmed on a clean `npm install -g @aoagents/ao` without manual edits to
-`node_modules`.
-
-After patching on 0.9.2, AO calls `codex exec review` locally when a PR is created.
-Review results appear in the AO dashboard under "Reviews".
+- Run pack scripts with **pwsh 7+** (`pwsh -NoProfile -File scripts/...`).
+- Use `defaults.runtime: process` (or `tmux` if you prefer AO’s tmux runtime).
+- Install `cursor-agent` / `agent` and `codex` on `PATH` for worker and review
+  paths — see the Ubuntu setup runbook.
 
 Required external prerequisites for a real AO run:
 
@@ -119,16 +89,10 @@ Required external prerequisites for a real AO run:
 
 ## Run environment and pack verification
 
-From this directory:
+From this directory (Ubuntu or WSL2):
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
-```
-
-If `pwsh` is not available, Windows PowerShell also works:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/verify.ps1
 ```
 
 The verifier is read-only. It prints:
@@ -148,7 +112,7 @@ can be installed later.
 For a stricter local prerequisite check:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -StrictPrereqs
+pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
 ```
 
 ## Repository publishing policy
@@ -168,9 +132,9 @@ worktrees/clones, generated logs/databases, or upstream AO checkouts.
 Before pushing, run:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-reusable.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
+pwsh -NoProfile -File scripts/lint-self-architect.ps1
 ```
 
 ### Self-architect lint
@@ -179,8 +143,8 @@ The lint scans staged changes by default (add `-WithWorkingTree` to include unst
 and untracked files). It depends only on Git and PowerShell.
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -Strict
+pwsh -NoProfile -File scripts/lint-self-architect.ps1
+pwsh -NoProfile -File scripts/lint-self-architect.ps1 -Strict
 ```
 
 `-Strict` is used in CI and exits 1 only for:
@@ -209,7 +173,7 @@ After this directory is initialized as a Git repo, install the local pre-push
 hook:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1
+pwsh -NoProfile -File scripts/install-git-hooks.ps1
 ```
 
 The same reusable-content guard runs in GitHub Actions. After creating the
@@ -223,7 +187,7 @@ Full policy: `docs/repository_policy.md`.
 Default mode is safe and read-only apart from console output:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
+pwsh -NoProfile -File scripts/bootstrap.ps1
 ```
 
 It delegates to `scripts/verify.ps1`, prints the same versions/status checks, and
@@ -240,12 +204,17 @@ running with elevated privileges.
 To explicitly install AO CLI through npm:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -InstallAO
+pwsh -NoProfile -File scripts/bootstrap.ps1 -InstallAO
 ```
 
 If `ao` is already installed, both scripts check `ao --version`.
 
 ## Configure AO for a target repository
+
+**First-time Ubuntu / WSL2 environment** (snap npm prefix, PATH, `wsl.conf`,
+agent CLIs):
+
+- [`docs/ubuntu-setup-runbook.md`](docs/ubuntu-setup-runbook.md)
 
 End-to-end adoption checklist (pre-commit hook, Codex CI workflow, first scoped
 issue, `ao-declare`, and scope-guard smoke tests):
@@ -258,7 +227,7 @@ Copy the example config and edit the project block for the real target repo:
 
 ```powershell
 Copy-Item agent-orchestrator.yaml.example agent-orchestrator.yaml
-notepad agent-orchestrator.yaml
+# edit with your preferred editor, e.g. nano or $EDITOR on Linux
 ```
 
 Keep this line in the project block so AO injects the pack's portable rules:
@@ -290,13 +259,13 @@ This pack does not run AO against a real repository by default.
 
 After you have selected a target repository, run one of these explicitly:
 
-```powershell
-# Local repository
-cd C:\Users\che\Documents\Projects\your-target-repo
+```bash
+# Local repository (path on ext4, e.g. /home/you/projects/your-target-repo)
+cd /home/you/projects/your-target-repo
 ao start
 
 # Or pass a local path from anywhere
-ao start C:\Users\che\Documents\Projects\your-target-repo
+ao start /home/you/projects/your-target-repo
 
 # Or pass a GitHub URL
 ao start https://github.com/your-org/your-repo
@@ -306,7 +275,7 @@ You can also ask the bootstrap script to print the exact next command without
 starting AO:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -TargetRepo C:\Users\che\Documents\Projects\your-target-repo
+pwsh -NoProfile -File scripts/bootstrap.ps1 -TargetRepo /home/you/projects/your-target-repo
 ```
 
 ## Secrets policy
