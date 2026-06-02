@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ReviewSource, StructuredFinding } from './types.js';
 
 export interface CodexReviewOutput {
@@ -184,6 +184,15 @@ function slugify(value: string): string {
 
 const WINDOWS_DRIVE_ABS = /^[a-zA-Z]:[\\/]/;
 
+function isPathInsideRepo(filePath: string, repoRoot: string): boolean {
+  const resolvedRoot = resolve(repoRoot);
+  const resolvedPath = resolve(filePath);
+  const rootPrefix = resolvedRoot.endsWith(sep) ? resolvedRoot : `${resolvedRoot}${sep}`;
+  const pathLower = resolvedPath.toLowerCase();
+  const rootLower = rootPrefix.toLowerCase();
+  return pathLower === resolvedRoot.toLowerCase() || pathLower.startsWith(rootLower);
+}
+
 /** Map Codex absolute paths to repository-relative paths for AO payloads. */
 export function toRepoRelativePath(filePath: string, repoRoot: string): string | null {
   const trimmed = filePath.trim();
@@ -191,18 +200,22 @@ export function toRepoRelativePath(filePath: string, repoRoot: string): string |
     return null;
   }
 
-  if (WINDOWS_DRIVE_ABS.test(trimmed)) {
-    if (process.platform !== 'win32') {
-      return null;
-    }
-  } else if (!isAbsolute(trimmed)) {
+  if (WINDOWS_DRIVE_ABS.test(trimmed) && process.platform !== 'win32') {
+    return null;
+  }
+
+  if (!isAbsolute(trimmed) && !WINDOWS_DRIVE_ABS.test(trimmed)) {
     return trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+  }
+
+  if (!isPathInsideRepo(trimmed, repoRoot)) {
+    return null;
   }
 
   const resolvedRoot = resolve(repoRoot);
   const resolvedPath = resolve(trimmed);
   const rel = relative(resolvedRoot, resolvedPath).replace(/\\/g, '/');
-  if (!rel || rel === '.' || rel.startsWith('..')) {
+  if (!rel || rel === '.') {
     return null;
   }
 
