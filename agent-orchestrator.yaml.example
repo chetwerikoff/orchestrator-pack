@@ -1,11 +1,12 @@
 $schema: https://raw.githubusercontent.com/ComposioHQ/agent-orchestrator/main/schema/config.schema.json
-# Windows-friendly Composio Agent Orchestrator example for orchestrator-pack.
+# Linux-first Composio Agent Orchestrator example for orchestrator-pack.
 # Copy to agent-orchestrator.yaml and edit the project block before running AO.
+# Supported on Ubuntu / WSL2 Ubuntu (pwsh 7+). Native Windows is not a runtime target.
 
 port: 3000
 
 defaults:
-  runtime: process        # Windows: native process/ConPTY runtime; tmux is not required.
+  runtime: process        # Linux: native process runtime; tmux optional if you prefer AO tmux mode.
   agent: cursor           # Primary agent plugin: Cursor CLI.
   orchestrator:
     agent: cursor         # Planner/orchestrator role: Cursor CLI.
@@ -41,7 +42,7 @@ notificationRouting:
 projects:
   example:
     repo: your-org/your-repo
-    path: C:/Users/che/Documents/Projects/your-target-repo
+    path: /home/you/projects/your-target-repo
     defaultBranch: main
     sessionPrefix: ex
     tracker:
@@ -76,19 +77,17 @@ projects:
         Unset or unrecognized PACK_REVIEWER: invoke-pack-review.ps1 exits non-zero and runs no reviewer (fail-closed; no Codex default).
         Switch reviewers by changing PACK_REVIEWER only — do not edit REVIEW_COMMAND. See docs/reviewer-switch-runbook.md.
         Gitignored .ao paths are deprecated; never use .ao/ in REVIEW_COMMAND.
-      NAMED REVIEW_COMMAND (reviewer-agnostic entrypoint; run from the reviewed repo root; Windows):
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
+      NAMED REVIEW_COMMAND (reviewer-agnostic entrypoint; run from the reviewed repo root):
+        pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
 
-      RUNTIME INVOCATION (shell only — do NOT embed in orchestratorRules on Windows):
+      RUNTIME INVOCATION (shell only — do NOT embed --command in orchestratorRules):
         At review time: ao review run <session-id> --execute
         Pass REVIEW_COMMAND above as the AO review command option value (--command on CLI).
-        Windows launch hazard: any double-quote character or an inline --command line in this
-        rules text breaks AO session start (PowerShell 5.1 prompt substitution leaks flags
-        into Cursor argv; symptom: error unknown option -NoProfile, session stuck or
-        probe_failure). Keep REVIEW_COMMAND here; supply --command only on the CLI.
+        Do not add double-quote characters inside this orchestratorRules literal.
+        Keep REVIEW_COMMAND here; supply --command only on the CLI.
 
       COMMAND DISCIPLINE — non-negotiable at shell time:
-        Copy REVIEW_COMMAND verbatim into --command. Wrap the entire REVIEW_COMMAND value in one pair of double quotes on Windows.
+        Copy REVIEW_COMMAND verbatim into --command. Quote the value per your shell when needed.
         FORBIDDEN alternate commands: plugins/ao-codex-pr-reviewer/bin/review.ps1 without invoke-pack-review.ps1; per-reviewer run-pack-review*.ps1 as REVIEW_COMMAND; cmd /c npm ci && …; bare cmd.exe; inventing npm ci preflight chains; ao review run --execute without --command (built-in Codex path).
         On failed or cancelled runs, read terminationReason before any retry; never treat findingCount 0 as clean.
         Before merge or reporting review passed, run scripts/orchestrator-diagnose.ps1 -Strict (live) or scripts/invoke-pack-review-strict-gate.ps1 on fixtures in CI, and confirm the latest run for the PR head is status clean — not failed with zero findings.
