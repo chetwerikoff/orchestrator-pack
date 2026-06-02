@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { NO_FINDINGS_TOKEN, parseCodexOutput } from './parse_output.js';
 import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
+
+/** Fail-closed message when JSONL has empty findings[] and non-clean overall verdict. */
+export const SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE =
+  'review-mode JSONL reports no findings but overall_correctness is not "patch is correct" — refusing to mark run as clean';
 
 const VALID_FINDING_TYPES: FindingType[] = [
   'scope-violation',
@@ -472,8 +477,7 @@ export function parseCodexReviewOutput(
   if (findings.length === 0 && !patchCorrect) {
     return {
       kind: 'error',
-      message:
-        'review-mode JSONL reports no findings but overall_correctness is not "patch is correct" — refusing to mark run as clean',
+      message: SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
     };
   }
 
@@ -495,9 +499,168 @@ export function parseCodexReviewOutput(
   };
 }
 
+type SecondaryChannelPayload =
+  | { kind: 'clean' }
+  | { kind: 'findings'; findings: StructuredFinding[] };
+
+function isExactNoFindingsSecondary(text: string): boolean {
+  return text.trim() === NO_FINDINGS_TOKEN;
+}
+
+function tryParsePackFindingsFromSecondaryText(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): SecondaryChannelPayload | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (isExactNoFindingsSecondary(trimmed)) {
+    return { kind: 'clean' };
+  }
+
+  const lastMessageParsed = parseCodexOutput(trimmed);
+  if (lastMessageParsed.kind === 'clean') {
+    return { kind: 'clean' };
+  }
+  if (lastMessageParsed.kind === 'findings') {
+    return { kind: 'findings', findings: lastMessageParsed.findings };
+  }
+
+  const rawFindings = extractRawFindingsArray(trimmed);
+  if (rawFindings) {
+    const codexNative = parseCodexReviewOutput(
+      {
+        findings: rawFindings,
+        overall_correctness: 'patch is incorrect',
+      },
+      source,
+      repoRoot,
+    );
+    if (codexNative.kind === 'findings') {
+      return { kind: 'findings', findings: codexNative.findings };
+    }
+  }
+
+  return null;
+}
+
+function extractRawFindingsArray(text: string): unknown[] | null {
+  const candidates = [text.trim()];
+  const findingsStart = text.indexOf('{"findings"');
+  if (findingsStart >= 0) {
+    let slice = text.slice(findingsStart);
+    const lastBrace = slice.lastIndexOf('}');
+    if (lastBrace >= 0) {
+      slice = slice.slice(0, lastBrace + 1);
+      candidates.push(slice);
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+      const record = asRecord(parsed);
+      if (Array.isArray(record?.findings)) {
+        return record.findings as unknown[];
+      }
+    } catch {
+      // continue
+    }
+  }
+
+  return null;
+}
+
+function findingSignature(findings: StructuredFinding[]): string {
+  return findings
+    .map(
+      (finding) =>
+        `${finding.type}|${finding.code}|${finding.path ?? ''}|${finding.summary}|${finding.severity}`,
+    )
+    .sort()
+    .join('\n');
+}
+
+function secondaryPayloadsAgree(
+  left: SecondaryChannelPayload,
+  right: SecondaryChannelPayload,
+): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === 'clean') {
+    return true;
+  }
+  return findingSignature(left.findings) === findingSignature(right.findings);
+}
+
+export function isSplitChannelRecoveryCandidate(
+  reviewOutput: CodexReviewOutput,
+  parsed: ParseReviewOutputResult,
+): boolean {
+  if (parsed.kind !== 'error' || parsed.message !== SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE) {
+    return false;
+  }
+  if (!Array.isArray(reviewOutput.findings) || reviewOutput.findings.length > 0) {
+    return false;
+  }
+  return !isPatchCorrectVerdict(reviewOutput.overall_correctness);
+}
+
+/**
+ * Shape-gated recovery for split-channel Codex review-mode output: empty JSONL
+ * findings[] with pack JSON or exact NO_FINDINGS in secondary channels only.
+ */
+export function attemptSplitChannelRecovery(
+  reviewOutput: CodexReviewOutput,
+  lastMessage: string,
+  source: ReviewSource,
+  repoRoot: string,
+): ParseReviewOutputResult | null {
+  const explanation = reviewOutput.overall_explanation?.trim() ?? '';
+  const lastMsg = lastMessage.trim();
+
+  const explanationPayload = explanation
+    ? tryParsePackFindingsFromSecondaryText(explanation, source, repoRoot)
+    : null;
+  const lastMessagePayload = lastMsg
+    ? tryParsePackFindingsFromSecondaryText(lastMsg, source, repoRoot)
+    : null;
+
+  if (!explanationPayload && !lastMessagePayload) {
+    return null;
+  }
+
+  if (explanationPayload && lastMessagePayload) {
+    if (!secondaryPayloadsAgree(explanationPayload, lastMessagePayload)) {
+      return null;
+    }
+    if (explanationPayload.kind === 'clean') {
+      return { kind: 'clean' };
+    }
+    return { kind: 'findings', findings: explanationPayload.findings };
+  }
+
+  const sole = explanationPayload ?? lastMessagePayload;
+  if (!sole) {
+    return null;
+  }
+  if (sole.kind === 'clean') {
+    return { kind: 'clean' };
+  }
+  return { kind: 'findings', findings: sole.findings };
+}
+
 export function parseReviewModeFromChannels(options: {
   processJsonl: string;
   sessionJsonl?: string | null;
+  lastMessage?: string;
   source: ReviewSource;
   repoRoot: string;
   codexHome?: string;
@@ -522,7 +685,22 @@ export function parseReviewModeFromChannels(options: {
     return null;
   }
 
-  return parseCodexReviewOutput(exited.reviewOutput, options.source, options.repoRoot);
+  const parsed = parseCodexReviewOutput(exited.reviewOutput, options.source, options.repoRoot);
+  if (
+    isSplitChannelRecoveryCandidate(exited.reviewOutput, parsed) &&
+    options.lastMessage !== undefined
+  ) {
+    const recovered = attemptSplitChannelRecovery(
+      exited.reviewOutput,
+      options.lastMessage,
+      options.source,
+      options.repoRoot,
+    );
+    if (recovered) {
+      return recovered;
+    }
+  }
+  return parsed;
 }
 
 export function diagnosticSnippet(text: string, maxLen = 200): string {

@@ -24,10 +24,13 @@ import {
   scopeUnavailableWarningFinding,
 } from '../lib/scope_context.js';
 import {
+  attemptSplitChannelRecovery,
   extractThreadIdFromProcessJsonl,
+  isSplitChannelRecoveryCandidate,
   parseCodexReviewOutput,
   parseExitedReviewModeFromSessionJsonl,
   parseReviewModeFromChannels,
+  SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
   toRepoRelativePath,
 } from '../lib/review_jsonl.js';
 import { selectReviewVerdict } from '../lib/verdict.js';
@@ -482,6 +485,179 @@ describe('review-mode JSONL verdict', () => {
         source: 'codex-local',
       }),
     ).toBeNull();
+  });
+
+  describe('split-channel secondary recovery (#135)', () => {
+    it('recovers pack JSON findings from overall_explanation (op-rev-28 class)', () => {
+      const sessionJsonl = readFixture('session-split-channel-pack-json.jsonl');
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl,
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('findings');
+      expect(verdict.verdictSource).toBe('review_mode_jsonl');
+      if (verdict.kind === 'findings') {
+        expect(verdict.findings).toHaveLength(1);
+        expect(verdict.findings[0]!.summary).toContain('generated review artifact');
+      }
+    });
+
+    it('recovers clean from exact NO_FINDINGS in overall_explanation', () => {
+      const sessionJsonl = readFixture('session-split-channel-no-findings.jsonl');
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl,
+        source: 'codex-local',
+      });
+      expect(verdict).toMatchObject({ kind: 'clean', verdictSource: 'review_mode_jsonl' });
+    });
+
+    it('recovers sub-shape B from last message when explanation is empty', () => {
+      const sessionJsonl = [
+        JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'exited_review_mode',
+            review_output: {
+              findings: [],
+              overall_correctness: 'patch is incorrect',
+              overall_explanation: '',
+              overall_confidence_score: 0.5,
+            },
+          },
+        }),
+      ].join('\n');
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: NO_FINDINGS_TOKEN,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl,
+        source: 'codex-local',
+      });
+      expect(verdict).toMatchObject({ kind: 'clean', verdictSource: 'review_mode_jsonl' });
+    });
+
+    it('still fails closed on contradictory JSONL (non-empty findings + patch correct)', () => {
+      const sessionJsonl = readFixture('session-contradictory-clean-verdict.jsonl');
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: NO_FINDINGS_TOKEN,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl,
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+      expect(verdict.verdictSource).toBe('review_mode_jsonl');
+      if (verdict.kind === 'error') {
+        expect(verdict.message).toContain('contradictory');
+      }
+    });
+
+    it('fails closed when split-channel has prose-only explanation', () => {
+      const sessionJsonl = readFixture('session-contradictory-empty-findings.jsonl');
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl,
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+      if (verdict.kind === 'error') {
+        expect(verdict.message).toContain(SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE);
+      }
+    });
+
+    it('fails closed on prose [P1] markers in overall_explanation', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: '[P1] Critical bug in scope guard logic.',
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, PROSE_CLEAN_LAST_MESSAGE, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+    });
+
+    it('fails closed when secondary channels yield conflicting findings', () => {
+      const findingA = JSON.stringify({
+        findings: [
+          {
+            type: 'quality',
+            code: 'quality:alpha',
+            severity: 'non-blocking',
+            path: 'a.ts',
+            summary: 'Alpha finding',
+            source: 'codex-local',
+          },
+        ],
+      });
+      const findingB = JSON.stringify({
+        findings: [
+          {
+            type: 'quality',
+            code: 'quality:beta',
+            severity: 'non-blocking',
+            path: 'b.ts',
+            summary: 'Beta finding',
+            source: 'codex-local',
+          },
+        ],
+      });
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: findingA,
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, findingB, 'codex-local', REPO_ROOT),
+      ).toBeNull();
+    });
+
+    it('does not recover from spurious JSON-like text in explanation', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'The patch looks {"findings": almost right but not valid JSON.',
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).toBeNull();
+    });
+
+    it('does not run split-channel recovery when JSONL is absent', () => {
+      const verdict = selectReviewVerdict({
+        processJsonl: '',
+        lastMessage: NO_FINDINGS_TOKEN,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        source: 'codex-local',
+      });
+      expect(verdict).toMatchObject({
+        kind: 'clean',
+        verdictSource: 'last_message_fallback',
+      });
+    });
   });
 });
 

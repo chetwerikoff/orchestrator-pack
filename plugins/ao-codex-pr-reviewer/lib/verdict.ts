@@ -35,6 +35,7 @@ export function selectReviewVerdict(
   const jsonlResult = parseReviewModeFromChannels({
     processJsonl: channels.processJsonl,
     sessionJsonl: channels.sessionJsonl,
+    lastMessage: channels.lastMessage,
     source: channels.source,
     repoRoot: channels.repoRoot,
     codexHome: channels.codexHome,
