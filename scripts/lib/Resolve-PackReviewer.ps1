@@ -26,12 +26,25 @@ function Get-PackReviewerLayerValue {
     return [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, $Target)
 }
 
+function Test-PackReviewerPersistentLayersAvailable {
+    <#
+    .SYNOPSIS
+      Windows registry-backed User/Machine layers (decision section N). Non-Win32NT hosts
+      stay process-only for review spawn; do not use $IsWindows.
+    #>
+    return ($PSVersionTable.Platform -eq 'Win32NT')
+}
+
 function Clear-StalePackReviewerProcessScope {
     <#
     .SYNOPSIS
       Drop process-scoped PACK_REVIEWER when User is configured so global operator choice wins.
       IDE/agent parents often inject process values; AO review dispatch should follow User/Machine.
     #>
+    if (-not (Test-PackReviewerPersistentLayersAvailable)) {
+        return
+    }
+
     $userValue = Get-PackReviewerLayerValue -Target 'User' -OverrideLayers $null
     if ([string]::IsNullOrWhiteSpace($userValue)) {
         return
@@ -52,7 +65,14 @@ function Get-PackReviewerSelectorValue {
         [hashtable]$OverrideLayers
     )
 
-    foreach ($target in @('Process', 'User', 'Machine')) {
+    $targets = if (Test-PackReviewerPersistentLayersAvailable) {
+        @('Process', 'User', 'Machine')
+    }
+    else {
+        @('Process')
+    }
+
+    foreach ($target in $targets) {
         $value = Get-PackReviewerLayerValue -Target $target -OverrideLayers $OverrideLayers
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             return $value

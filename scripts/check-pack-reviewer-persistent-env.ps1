@@ -76,21 +76,8 @@ if ($invalidMessage -notmatch "unrecognized value 'not-a-reviewer'") {
     exit 1
 }
 
-function Test-PackReviewerUserScopeWritable {
-    $probeName = "PACK_REVIEWER_PROBE_$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
-    try {
-        [Environment]::SetEnvironmentVariable($probeName, '1', 'User')
-        $read = [Environment]::GetEnvironmentVariable($probeName, 'User')
-        [Environment]::SetEnvironmentVariable($probeName, $null, 'User')
-        return ($read -eq '1')
-    }
-    catch {
-        return $false
-    }
-}
-
-if (-not (Test-PackReviewerUserScopeWritable)) {
-    Write-Host '[PASS] PACK_REVIEWER resolver fixture checks (persistent User scope unavailable; process-only)'
+if ($PSVersionTable.Platform -ne 'Win32NT') {
+    Write-Host '[PASS] PACK_REVIEWER resolver fixture checks (non-Win32NT: process-only; no registry integration)'
     exit 0
 }
 
