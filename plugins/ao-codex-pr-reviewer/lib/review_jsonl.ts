@@ -523,6 +523,36 @@ function isForbiddenProseSecondaryChannel(text: string): boolean {
   return /\[[Pp]\d+\]/.test(trimmed);
 }
 
+/** Pack `{"findings":[...]}` present but entries fail normalization — fail closed. */
+function isMalformedPackFindingsSecondaryChannel(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  if (!extractStrictPackFindingsArray(trimmed)) {
+    return false;
+  }
+  return tryParsePackFindingsFromSecondaryText(text, source, repoRoot) === null;
+}
+
+function otherChannelBlocksSoleRecovery(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  return (
+    isForbiddenProseSecondaryChannel(text) ||
+    isMalformedPackFindingsSecondaryChannel(text, source, repoRoot)
+  );
+}
+
 /**
  * Split-channel secondary parser (#135). Must not call `parseCodexOutput` — its
  * stdout normalization treats "Review complete" plus NO_FINDINGS and similar forms
@@ -646,7 +676,7 @@ export function attemptSplitChannelRecovery(
   }
 
   const otherChannelText = explanationPayload ? lastMsg : explanation;
-  if (otherChannelText && isForbiddenProseSecondaryChannel(otherChannelText)) {
+  if (otherChannelText && otherChannelBlocksSoleRecovery(otherChannelText, source, repoRoot)) {
     return null;
   }
 
