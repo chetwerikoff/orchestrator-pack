@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildReviewPrompt } from './prompt.js';
-import { parseCodexOutput } from './parse_output.js';
+import { selectReviewVerdict } from './verdict.js';
 import {
   defaultSourceFromEnv,
   emitAoReviewPayload,
@@ -24,7 +24,7 @@ const REVIEW_FAILURE_HINT = /usage limit|ERR_MODULE_NOT_FOUND|mutually exclusive
 /** Build log lines AO should capture in terminationReason when the reviewer process fails. */
 export function summarizeReviewerProcessFailure(codex: RunCodexReviewResult): string[] {
   const lines: string[] = [`codex exec review exited ${codex.exitCode}`];
-  const combined = [codex.stderr, codex.stdout]
+  const combined = [codex.stderr, codex.lastMessage, codex.processJsonl]
     .map((chunk) => chunk?.trim() ?? '')
     .filter(Boolean)
     .join('\n')
@@ -64,6 +64,8 @@ export interface ReviewOptions {
   prNumber?: number;
   prBodyFile?: string;
   fixtureStdout?: string;
+  fixtureProcessJsonl?: string;
+  fixtureSessionJsonl?: string;
   githubCommentFile?: string;
   skipCodex?: boolean;
 }
@@ -148,6 +150,8 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     model: options.model,
     source,
     fixtureStdout: options.fixtureStdout,
+    fixtureProcessJsonl: options.fixtureProcessJsonl,
+    fixtureSessionJsonl: options.fixtureSessionJsonl,
   });
 
   if (codex.exitCode !== 0) {
@@ -160,7 +164,13 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     };
   }
 
-  const parsed = parseCodexOutput(codex.stdout);
+  const parsed = selectReviewVerdict({
+    processJsonl: codex.processJsonl,
+    lastMessage: codex.lastMessage,
+    stderr: codex.stderr,
+    sessionJsonl: options.fixtureSessionJsonl,
+    source,
+  });
 
   if (parsed.kind === 'error') {
     logLines.push(parsed.message);

@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildCodexExecReviewArgs } from '../lib/run_review.js';
 import {
@@ -22,7 +23,23 @@ import {
   resolveScopeContext,
   scopeUnavailableWarningFinding,
 } from '../lib/scope_context.js';
+import {
+  extractThreadIdFromProcessJsonl,
+  parseCodexReviewOutput,
+  parseExitedReviewModeFromSessionJsonl,
+  parseReviewModeFromChannels,
+} from '../lib/review_jsonl.js';
+import { selectReviewVerdict } from '../lib/verdict.js';
+
 const SCOPED_ISSUE_NUMBER = 6;
+const FIXTURES_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures');
+
+function readFixture(name: string): string {
+  return readFileSync(join(FIXTURES_DIR, name), 'utf8');
+}
+
+const PROSE_CLEAN_LAST_MESSAGE =
+  'The change adds a straightforward subtract function. No regressions or actionable bugs were identified.';
 
 describe('review dependency roots', () => {
   it('resolves pack repo root to orchestrator-pack', () => {
@@ -69,8 +86,162 @@ describe('buildCodexExecReviewArgs', () => {
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
     expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
     expect(args).not.toContain('--base');
+    expect(args).toContain('--json');
     expect(args[args.length - 1]).toBe('-');
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+});
+
+describe('review-mode JSONL verdict', () => {
+  it('extracts thread id from process JSONL stdout', () => {
+    const processJsonl = readFixture('process-clean.jsonl');
+    expect(extractThreadIdFromProcessJsonl(processJsonl)).toBe(
+      '019e8713-cb1a-7b02-b3e0-ca7410a4dc83',
+    );
+  });
+
+  it('parses clean exited_review_mode from session JSONL', () => {
+    const sessionJsonl = readFixture('session-clean.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited?.reviewOutput.overall_correctness).toBe('patch is correct');
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    expect(parsed).toEqual({ kind: 'clean' });
+  });
+
+  it('parses findings from session JSONL review_output', () => {
+    const sessionJsonl = readFixture('session-findings.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings).toHaveLength(1);
+      expect(parsed.findings[0]!.summary).toContain('Remove generated review artifact');
+    }
+  });
+
+  it('fails closed on contradictory empty findings with incorrect verdict', () => {
+    const sessionJsonl = readFixture('session-contradictory-empty-findings.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('overall_correctness');
+    }
+  });
+
+  it('fails closed on contradictory findings with correct verdict', () => {
+    const sessionJsonl = readFixture('session-contradictory-clean-verdict.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('contradictory');
+    }
+  });
+
+  it('selects JSONL clean verdict over legacy prose last message', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+      stderr: '',
+      sessionJsonl: readFixture('session-clean.jsonl'),
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('clean');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
+  });
+
+  it('falls back to NO_FINDINGS when review-mode output is unavailable', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: '',
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      source: 'codex-local',
+    });
+    expect(verdict).toMatchObject({ kind: 'clean', verdictSource: 'last_message_fallback' });
+  });
+
+  it('falls back to structured JSON findings in last message', () => {
+    const payload = JSON.stringify({
+      findings: [
+        {
+          type: 'quality',
+          code: 'quality:example',
+          severity: 'non-blocking',
+          path: 'scripts/foo.ps1',
+          summary: 'Example finding',
+          source: 'codex-local',
+        },
+      ],
+    });
+    const verdict = selectReviewVerdict({
+      processJsonl: '{"type":"thread.started","thread_id":"missing-session"}',
+      lastMessage: payload,
+      stderr: '',
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('findings');
+    expect(verdict.verdictSource).toBe('last_message_fallback');
+  });
+
+  it('rejects prose-only last message when JSONL verdict is missing', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: '',
+      lastMessage: 'No concrete bugs were identified in this change.',
+      stderr: '',
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('legacy clean-review prose');
+      expect(verdict.message).toContain('diagnostic:');
+    }
+  });
+
+  it('parseReviewModeFromChannels returns null without session JSONL', () => {
+    expect(
+      parseReviewModeFromChannels({
+        processJsonl:
+          '{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}',
+        sessionJsonl: null,
+        codexHome: join(tmpdir(), 'nonexistent-codex-home-for-tests'),
+        source: 'codex-local',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('executeReview JSONL round-trip', () => {
+  it('returns clean AO result when JSONL is clean but last message is prose', () => {
+    const result = executeReview({
+      repoRoot: process.cwd(),
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: readFixture('session-clean.jsonl'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.aoStdout).toBe('');
+    expect(result.structuredFindings).toHaveLength(0);
+  });
+
+  it('maps JSONL findings to AO structured payload', () => {
+    const result = executeReview({
+      repoRoot: process.cwd(),
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: readFixture('session-findings.jsonl'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
+    expect(payload.findings.length).toBeGreaterThan(0);
   });
 });
 
