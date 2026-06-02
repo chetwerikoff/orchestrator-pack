@@ -34,25 +34,8 @@ function Invoke-EntrypointCapture {
     }
 }
 
-if ($PSVersionTable.Platform -ne 'Win32NT') {
-    Write-Host '[PASS] PACK_REVIEWER persistent-env fallback checks (non-Win32NT: process-only; no registry integration)'
-    exit 0
-}
-
 if (-not (Test-Path -LiteralPath $precedenceFixture -PathType Leaf)) {
     Write-Host "[FAIL] missing fixture $precedenceFixture"
-    exit 1
-}
-
-$fixture = Get-Content -LiteralPath $precedenceFixture -Raw | ConvertFrom-Json
-$overrideLayers = @{
-    Process = $fixture.layers.process
-    User    = $fixture.layers.user
-    Machine = $fixture.layers.machine
-}
-$resolved = Get-PackReviewerFromSelector -OverrideLayers $overrideLayers
-if ($resolved -ne $fixture.expectedReviewer) {
-    Write-Host ("[FAIL] fixture precedence: expected {0}, got {1}" -f $fixture.expectedReviewer, $resolved)
     exit 1
 }
 
@@ -66,22 +49,69 @@ if ($null -ne (Get-PackReviewerFromSelector -OverrideLayers $allUnset)) {
     exit 1
 }
 
-$invalidUser = @{
-    Process = $null
-    User    = 'not-a-reviewer'
+$invalidProcess = @{
+    Process = 'not-a-reviewer'
+    User    = $null
     Machine = $null
 }
-if ($null -ne (Get-PackReviewerFromSelector -OverrideLayers $invalidUser)) {
-    Write-Host '[FAIL] unrecognized User PACK_REVIEWER must not resolve to a reviewer (override probe)'
+if ($null -ne (Get-PackReviewerFromSelector -OverrideLayers $invalidProcess)) {
+    Write-Host '[FAIL] unrecognized process PACK_REVIEWER must not resolve to a reviewer (override probe)'
     exit 1
 }
-$invalidMessage = Get-PackReviewerSelectorErrorMessage -OverrideLayers $invalidUser
-if ($invalidMessage -notmatch "unrecognized value 'not-a-reviewer'") {
-    Write-Host "[FAIL] unrecognized User value must use existing message (got: $invalidMessage)"
+$invalidProcessMessage = Get-PackReviewerSelectorErrorMessage -OverrideLayers $invalidProcess
+if ($invalidProcessMessage -notmatch "unrecognized value 'not-a-reviewer'") {
+    Write-Host "[FAIL] unrecognized process value must use existing message (got: $invalidProcessMessage)"
     exit 1
 }
 
+if ($PSVersionTable.Platform -eq 'Win32NT') {
+    $fixture = Get-Content -LiteralPath $precedenceFixture -Raw | ConvertFrom-Json
+    $overrideLayers = @{
+        Process = $fixture.layers.process
+        User    = $fixture.layers.user
+        Machine = $fixture.layers.machine
+    }
+    $resolved = Get-PackReviewerFromSelector -OverrideLayers $overrideLayers
+    if ($resolved -ne $fixture.expectedReviewer) {
+        Write-Host ("[FAIL] fixture precedence: expected {0}, got {1}" -f $fixture.expectedReviewer, $resolved)
+        exit 1
+    }
+
+    $invalidUser = @{
+        Process = $null
+        User    = 'not-a-reviewer'
+        Machine = $null
+    }
+    if ($null -ne (Get-PackReviewerFromSelector -OverrideLayers $invalidUser)) {
+        Write-Host '[FAIL] unrecognized User PACK_REVIEWER must not resolve to a reviewer (override probe)'
+        exit 1
+    }
+    $invalidUserMessage = Get-PackReviewerSelectorErrorMessage -OverrideLayers $invalidUser
+    if ($invalidUserMessage -notmatch "unrecognized value 'not-a-reviewer'") {
+        Write-Host "[FAIL] unrecognized User value must use existing message (got: $invalidUserMessage)"
+        exit 1
+    }
+}
+else {
+    $processPrecedence = @{
+        Process = 'claude'
+        User    = 'codex'
+        Machine = 'codex'
+    }
+    $resolved = Get-PackReviewerFromSelector -OverrideLayers $processPrecedence
+    if ($resolved -ne 'claude') {
+        Write-Host ("[FAIL] process-scope precedence: expected claude, got {0}" -f $resolved)
+        exit 1
+    }
+    Write-Host '[PASS] resolver fixture checks (non-Win32NT: process-only; User/Machine registry probes skipped)'
+}
+
 $machineValue = [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, 'Machine')
+if ($PSVersionTable.Platform -ne 'Win32NT') {
+    Write-Host '[PASS] PACK_REVIEWER persistent-env fallback checks (Issue #106)'
+    exit 0
+}
+
 if (-not [string]::IsNullOrWhiteSpace($machineValue)) {
     Write-Host "[SKIP] entrypoint fail-closed probe: Machine PACK_REVIEWER is set ($machineValue); cannot clear without elevation"
 }
