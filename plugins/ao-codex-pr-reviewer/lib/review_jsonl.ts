@@ -16,6 +16,10 @@ export const SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE =
 export const UNNORMALIZABLE_CODE_LOCATION_MESSAGE =
   'review-mode JSONL finding code_location.absolute_file_path cannot be normalized to a repo-relative path — refusing to mark run as clean';
 
+/** Fail-closed when code_location.absolute_file_path is present but empty or whitespace-only. */
+export const EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE =
+  'review-mode JSONL finding has code_location.absolute_file_path set but empty — refusing to mark run as clean';
+
 const VALID_FINDING_TYPES: FindingType[] = [
   'scope-violation',
   'spec',
@@ -495,15 +499,20 @@ export function parseCodexReviewOutput(
   for (const raw of rawFindings) {
     const record = asRecord(raw);
     const codeLocation = asRecord(record?.code_location);
-    const absolutePath =
-      typeof codeLocation?.absolute_file_path === 'string'
-        ? codeLocation.absolute_file_path.trim()
-        : '';
-    if (absolutePath && toRepoRelativePath(absolutePath, repoRoot) === null) {
-      return {
-        kind: 'error',
-        message: UNNORMALIZABLE_CODE_LOCATION_MESSAGE,
-      };
+    if (codeLocation && 'absolute_file_path' in codeLocation) {
+      const rawPath = codeLocation.absolute_file_path;
+      if (typeof rawPath !== 'string' || !rawPath.trim()) {
+        return {
+          kind: 'error',
+          message: EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE,
+        };
+      }
+      if (toRepoRelativePath(rawPath.trim(), repoRoot) === null) {
+        return {
+          kind: 'error',
+          message: UNNORMALIZABLE_CODE_LOCATION_MESSAGE,
+        };
+      }
     }
   }
 

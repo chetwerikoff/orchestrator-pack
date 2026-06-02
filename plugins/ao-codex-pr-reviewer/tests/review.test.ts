@@ -35,6 +35,7 @@ import {
   parseExitedReviewModeFromSessionJsonl,
   parseReviewModeFromChannels,
   SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
+  EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE,
   UNNORMALIZABLE_CODE_LOCATION_MESSAGE,
   toRepoRelativePath,
 } from '../lib/review_jsonl.js';
@@ -178,6 +179,56 @@ describe('review-mode JSONL verdict', () => {
     expect(parsed.kind).toBe('error');
     if (parsed.kind === 'error') {
       expect(parsed.message).toContain('title/body');
+    }
+  });
+
+  it('fails closed when code_location.absolute_file_path is present but empty', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Empty file anchor',
+            body: 'code_location.absolute_file_path must not be whitespace-only.',
+            priority: 2,
+            code_location: {
+              absolute_file_path: '   ',
+              line_range: { start: 1, end: 1 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Empty hydrated code_location path contract test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toBe(EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE);
+    }
+  });
+
+  it('allows repo-level findings without code_location', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Policy-level scope concern',
+            body: 'No single file anchor; repo-wide contract issue.',
+            priority: 2,
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Repo-level finding without code_location.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.path).toBeNull();
     }
   });
 
