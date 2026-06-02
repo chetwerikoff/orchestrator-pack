@@ -62,7 +62,7 @@ export function findPersistedSessionJsonlPath(
   codexHome = resolveCodexHome(),
 ): string | null {
   const pattern = join(codexHome, 'sessions', '**', `rollout-*-${sessionId}.jsonl`);
-  const matches = globSync(pattern, { nodir: true });
+  const matches = globSync(pattern);
   if (matches.length === 0) {
     return null;
   }
