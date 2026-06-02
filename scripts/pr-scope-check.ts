@@ -311,6 +311,16 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
     };
   }
 
+  if (input.issueBody === null) {
+    return {
+      ok: false,
+      reason: 'issue_unreadable',
+      message: input.forkPr
+        ? 'spec-only PR: linked issue could not be read (verify Refs #N refers to an open issue and workflow permissions allow gh issue view)'
+        : `spec-only PR: linked issue #${issueNumber} could not be read (verify Refs #${issueNumber} refers to an existing issue)`,
+    };
+  }
+
   const pathCheck = classifySpecDocsPaths(input.prPaths);
   if (!pathCheck.ok) {
     if (pathCheck.invalidPaths.length > 0) {

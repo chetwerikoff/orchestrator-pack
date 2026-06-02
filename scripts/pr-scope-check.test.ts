@@ -165,12 +165,12 @@ describe('resolve-issue-number CLI (PowerShell entrypoint parity)', () => {
 describe('checkPrScope — spec-only', () => {
   const repoRoot = join(tmpdir(), `scope-guard-spec-${randomUUID()}`);
 
-  it('passes without a declaration snapshot when signal, Refs, and allowlisted paths hold', () => {
+  it('passes without a declaration snapshot when signal, Refs, allowlisted paths, and issue body hold', () => {
     const prBody = [SPEC_SIGNAL, '', 'Refs #121', '', '## Summary', 'Spec-only draft publish.'].join('\n');
     const result = checkPrScope({
       repoRoot,
       prBody,
-      issueBody: null,
+      issueBody: 'GitHub Issue: #121\n\n```denylist\nvendor/**\n```',
       prPaths: ['docs/issues_drafts/43-spec-only-scope-guard-docs-prs.md', 'docs/issue_queue_index.md'],
       degradedMode: false,
       forkPr: false,
@@ -179,6 +179,22 @@ describe('checkPrScope — spec-only', () => {
       ok: true,
       mode: 'spec-only',
       issueNumber: 121,
+    });
+  });
+
+  it('fails when the referenced issue body could not be read', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #999999'].join('\n');
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: null,
+      prPaths: ['docs/issue_queue_index.md'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'issue_unreadable',
     });
   });
 
@@ -204,7 +220,7 @@ describe('checkPrScope — spec-only', () => {
     const result = checkPrScope({
       repoRoot,
       prBody,
-      issueBody: null,
+      issueBody: 'GitHub Issue: #121',
       prPaths: ['scripts/pr-scope-check.ts'],
       degradedMode: false,
       forkPr: false,
