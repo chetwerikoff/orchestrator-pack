@@ -14,7 +14,7 @@ permissions:
 jobs:
   verify-pack:
     name: Verify orchestrator-pack structure
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -32,7 +32,7 @@ jobs:
   pr-scope-guard:
     name: PR scope guard
     if: github.event_name == 'pull_request'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -83,7 +83,7 @@ jobs:
 
   tests:
     name: Run pack contract tests
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -118,7 +118,7 @@ jobs:
   self-architect-lint:
     name: Self-architect lint
     if: github.event_name == 'pull_request'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
