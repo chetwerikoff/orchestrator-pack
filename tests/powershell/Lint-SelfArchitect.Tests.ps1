@@ -1,8 +1,8 @@
 Describe 'scripts/lint-self-architect.ps1' {
     BeforeAll {
-        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-        $script:LintScript = Join-Path $script:RepoRoot 'scripts\lint-self-architect.ps1'
-        $script:FixtureRoot = Join-Path $script:RepoRoot 'tests\fixtures\lint-self-architect'
+        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+        $script:LintScript = Join-Path $script:RepoRoot 'scripts/lint-self-architect.ps1'
+        $script:FixtureRoot = Join-Path $script:RepoRoot 'tests/fixtures/lint-self-architect'
 
         $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
         if ($pwsh) {
