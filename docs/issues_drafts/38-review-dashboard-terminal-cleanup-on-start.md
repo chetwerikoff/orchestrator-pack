@@ -158,6 +158,7 @@ orchestratorRules; TRIAGE UI ≠ CLEAN/FAILED archive.
 ## Denylist
 
 ```denylist
+# issue 122 — review dashboard terminal cleanup
 vendor/**
 packages/core/**
 .ao/**

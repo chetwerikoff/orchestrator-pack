@@ -82,6 +82,7 @@ fix one and leave the other.
 ## Denylist
 
 ```denylist
+# issue 121 — spec-only scope-guard mode
 vendor/**
 packages/core/**
 .ao/**
