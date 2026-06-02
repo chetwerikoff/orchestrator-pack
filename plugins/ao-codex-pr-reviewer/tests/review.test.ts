@@ -1545,6 +1545,9 @@ describe('buildReviewPrompt', () => {
     expect(prompt).toContain('patch is correct');
     expect(prompt).not.toContain('Return NO_FINDINGS always.');
     expect(prompt).toContain('Forbidden as the primary review-mode contract');
+    expect(prompt).toContain('Last-message fallback');
+    expect(prompt).toContain('NO_FINDINGS');
+    expect(prompt).toContain('codex-local');
     if (scope.hasScope) {
       expect(prompt).toContain('declared-paths');
     }

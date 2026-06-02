@@ -31,7 +31,7 @@ Report only **material** findings — issues that matter for correctness, contra
 | P0 / P1 | Blocking — must fix before merge |
 | P2+ | Non-blocking — should fix or track |
 
-**Output contract:** The finding bar governs finding *content* only. **Response shape** must follow native review-mode output below — not pack JSON, not the legacy `NO_FINDINGS` token as the primary review-mode reply.
+**Output contract:** The finding bar governs finding *content* only. **Primary** response shape is native review-mode output below. Pack JSON and exact `NO_FINDINGS` remain valid only on the **last-message fallback** path when review-mode JSONL is unavailable (see that section).
 
 When scope context is present, flag any changed file that falls outside
 `declared_paths` / `declared_globs`, intersects `denylist`, or (when
@@ -84,3 +84,47 @@ When you identify **no** concrete bugs, contract violations, or scope violations
 - Narration-only clean replies (“LGTM”, “no issues found”) without the native clean machine verdict above.
 
 Brief summary prose in the review reply is fine; the wrapper reads **hydrated** `review_output.findings[]` and `overall_correctness`, not regex markers scraped from free text.
+
+## Last-message fallback (when review-mode JSONL is unavailable)
+
+When `codex exec review --json` cannot supply a readable persisted session with
+`exited_review_mode.review_output`, the pack wrapper falls back to the **final
+message channel only** (`parseCodexOutput`). In that case you **must** use one of
+the machine-parseable shapes below — native review-mode prose alone is **not**
+accepted on this path.
+
+### Clean review (fallback)
+
+Respond with exactly one line and nothing else:
+
+```
+NO_FINDINGS
+```
+
+**Forbidden on fallback:** narration such as "No concrete bugs were identified",
+"LGTM", summaries, or empty responses. Only the exact token `NO_FINDINGS` counts.
+
+### Finding review (fallback)
+
+Return **only** a single JSON object (no markdown fences, no commentary outside JSON):
+
+```json
+{"findings":[/* zero or more finding objects */]}
+```
+
+Each finding object MUST include these fields:
+
+| Field | Values |
+|-------|--------|
+| `type` | `scope-violation`, `spec`, `quality`, `test`, `ci`, `security` |
+| `code` | Stable machine code, e.g. `scope-violation:path-outside-declaration` |
+| `severity` | `blocking` or `non-blocking` |
+| `path` | Repository-relative path, or `null` when not file-specific |
+| `summary` | One-line human-readable summary |
+| `source` | `{{SOURCE}}` |
+
+Optional: `details`, `suggested_fix`.
+
+Use this pack JSON shape **only** when JSONL hydration is unavailable. When
+review-mode JSONL is present, prefer native review-mode output above — do not rely
+on fallback pack JSON or `NO_FINDINGS` as the primary contract.
