@@ -10,14 +10,23 @@ export interface RunCodexReviewOptions {
   prompt: string;
   model?: string;
   source?: ReviewSource;
-  /** When set, skip Codex and use this stdout instead (tests). */
+  /** When set, skip Codex and use this as last-message output (tests). */
   fixtureStdout?: string;
+  /** When set with fixtureStdout, supplies Codex `--json` process stdout (tests). */
+  fixtureProcessJsonl?: string;
+  /** When set with fixtureStdout, supplies persisted session JSONL (tests). */
+  fixtureSessionJsonl?: string;
 }
 
 export interface RunCodexReviewResult {
   exitCode: number;
-  stdout: string;
+  /** Codex `--json` process stdout (JSONL events). */
+  processJsonl: string;
+  /** Final message from `--output-last-message` (fallback/diagnostic channel). */
+  lastMessage: string;
   stderr: string;
+  /** @deprecated Use {@link lastMessage}. */
+  stdout: string;
 }
 
 const CODEX_SPAWN_ENV_STRIP = [
@@ -61,13 +70,20 @@ export function buildCodexExecReviewArgs(options: {
   if (options.model) {
     args.push('-m', options.model);
   }
-  args.push('--output-last-message', options.outputFile, '-');
+  args.push('--json', '--output-last-message', options.outputFile, '-');
   return args;
 }
 
 export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewResult {
   if (options.fixtureStdout !== undefined) {
-    return { exitCode: 0, stdout: options.fixtureStdout, stderr: '' };
+    const lastMessage = options.fixtureStdout;
+    return {
+      exitCode: 0,
+      processJsonl: options.fixtureProcessJsonl ?? '',
+      lastMessage,
+      stdout: lastMessage,
+      stderr: '',
+    };
   }
 
   const tempDir = mkdtempSync(join(tmpdir(), 'ao-codex-review-'));
@@ -100,13 +116,15 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
     }
 
     const stderr = (result.stderr ?? '').toString();
-    const stdout = (result.stdout ?? '').toString();
+    const processJsonl = (result.stdout ?? '').toString();
     const fromFile = readOutputFile(outputFile);
-    const combined = (fromFile ?? stdout).trim() || stderr.trim();
+    const lastMessage = (fromFile ?? '').trim();
 
     return {
       exitCode: result.status ?? 1,
-      stdout: combined,
+      processJsonl,
+      lastMessage,
+      stdout: lastMessage,
       stderr,
     };
   } finally {

@@ -16,8 +16,12 @@ The reviewer wrapper must stay on `codex exec review` and must treat Codex revie
 
 This issue updates the prior clean-review contract from prose/token-first to event-first:
 
-- Codex `--json` / JSONL output is parsed for review-mode completion data.
-- The review-mode `review_output` payload determines whether the run is clean or contains findings when that payload is present and valid.
+- Codex `--json` stdout captures the parent thread/session id and ordinary public
+  events, but is not assumed to contain the review-mode verdict payload.
+- The Codex persisted session JSONL under `CODEX_HOME` / `~/.codex/sessions/**` is
+  parsed for `event_msg.payload.type == "exited_review_mode"` with
+  `payload.review_output`; that payload determines clean vs findings when present
+  and valid.
 - Exact `NO_FINDINGS` in the final message remains supported as fallback behavior for older/non-JSON-compatible runs.
 - Legacy clean prose alone must not be accepted as clean. Prose may help diagnostics, but it is not a verdict source unless corroborated by valid review-mode output.
 - Pack-added scope warnings still use the existing behavior when authoritative scope context is unavailable.
