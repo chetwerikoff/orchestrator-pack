@@ -132,8 +132,8 @@ export function normalizeReviewerStdout(rawOutput: string): string {
 
 /**
  * Strict pack JSON for split-channel recovery (#135): entire trimmed channel must
- * be a JSON object/array with a non-empty findings list. No legacy stdout
- * normalization or substring extraction.
+ * be a pack-format `{"findings":[...]}` object with a non-empty findings array.
+ * Bare JSON arrays and legacy stdout normalization are not accepted here.
  */
 export function extractStrictPackFindingsArray(text: string): unknown[] | null {
   const trimmed = text.trim();
@@ -150,11 +150,9 @@ export function extractStrictPackFindingsArray(text: string): unknown[] | null {
   try {
     const parsed = JSON.parse(jsonText) as unknown;
     const record = asRecord(parsed);
-    const rawFindings = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray(record?.findings)
-        ? (record.findings as unknown[])
-        : null;
+    const rawFindings = Array.isArray(record?.findings)
+      ? (record.findings as unknown[])
+      : null;
     return rawFindings && rawFindings.length > 0 ? rawFindings : null;
   } catch {
     return null;

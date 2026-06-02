@@ -702,6 +702,30 @@ describe('review-mode JSONL verdict', () => {
       ).toBeNull();
     });
 
+    it('fails closed when secondary channel is a bare findings array', () => {
+      const bareArray = JSON.stringify([
+        {
+          type: 'quality',
+          code: 'quality:bare-array',
+          severity: 'non-blocking',
+          path: 'scripts/foo.ps1',
+          summary: 'Bare array must not recover',
+          source: 'codex-local',
+        },
+      ]);
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: bareArray,
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).toBeNull();
+    });
+
     it('does not recover from spurious JSON-like text in explanation', () => {
       const reviewOutput = {
         findings: [] as unknown[],
@@ -831,6 +855,21 @@ describe('parseCodexOutput', () => {
     expect(parseCodexOutput(`Review complete\n${NO_FINDINGS_TOKEN}`)).toEqual({
       kind: 'clean',
     });
+  });
+
+  it('strict pack extraction rejects bare JSON array (pack object only)', () => {
+    const bareArray = JSON.stringify([
+      {
+        type: 'quality',
+        code: 'quality:example',
+        severity: 'non-blocking',
+        path: 'a.ts',
+        summary: 'Example',
+        source: 'codex-local',
+      },
+    ]);
+    expect(extractStrictPackFindingsArray(bareArray)).toBeNull();
+    expect(parseCodexOutput(bareArray).kind).toBe('findings');
   });
 
   it('rejects empty stdout', () => {
