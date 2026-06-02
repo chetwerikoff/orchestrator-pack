@@ -597,7 +597,10 @@ function secondaryPayloadsAgree(
   if (left.kind === 'clean') {
     return true;
   }
-  return findingSignature(left.findings) === findingSignature(right.findings);
+  if (left.kind === 'findings' && right.kind === 'findings') {
+    return findingSignature(left.findings) === findingSignature(right.findings);
+  }
+  return false;
 }
 
 export function isSplitChannelRecoveryCandidate(
