@@ -42,10 +42,15 @@ if ($yamlText -notmatch 'PACK_REVIEWER') {
     exit 1
 }
 
+. (Join-Path $Root 'scripts/lib/Resolve-PackReviewer.ps1')
+
 $savedProcess = $env:PACK_REVIEWER
-$savedUser = [Environment]::GetEnvironmentVariable('PACK_REVIEWER', 'User')
 try {
-    [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $null, 'User')
+    if (Test-PackReviewerPersistentLayersAvailable) {
+        $savedUser = [Environment]::GetEnvironmentVariable('PACK_REVIEWER', 'User')
+        [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $null, 'User')
+    }
+
     $env:PACK_REVIEWER = 'not-a-reviewer'
     & $entrypoint --repo-root $Root --base origin/main 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -54,7 +59,10 @@ try {
     }
 }
 finally {
-    [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $savedUser, 'User')
+    if (Test-PackReviewerPersistentLayersAvailable) {
+        [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $savedUser, 'User')
+    }
+
     if ($null -eq $savedProcess) {
         Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
     }
@@ -63,5 +71,10 @@ finally {
     }
 }
 
-Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks'
+if (Test-PackReviewerPersistentLayersAvailable) {
+    Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks'
+}
+else {
+    Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks (non-Win32NT: process-only)'
+}
 exit 0
