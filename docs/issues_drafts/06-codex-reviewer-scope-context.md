@@ -66,13 +66,21 @@ format. GitHub Actions review must not define an independent schema.
 - Backward-compatible behavior: when neither issue body fences nor snapshot
   exist, the scope section is omitted from the prompt and the review output
   includes a non-blocking warning finding.
-- **Clean-review contract (`NO_FINDINGS` token):**
-  - The prompt MUST instruct Codex: when no concrete bugs, contract violations,
-    or scope violations are identified, emit the single token `NO_FINDINGS` on
-    its own line as the entire response body. No prose narration such as
-    "No concrete bugs were identified" — that text is forbidden.
+- **Clean-review contract (event-first, `NO_FINDINGS` fallback):**
+  - For live `codex exec review` runs with `--json`, the wrapper treats Codex
+    review-mode machine output (`exited_review_mode.review_output` in the
+    persisted session JSONL) as the primary clean/finding verdict when present
+    and valid. The `--output-last-message` channel is fallback and diagnostics,
+    not the primary authority for clean reviews in JSONL-enabled runs.
+  - The prompt MUST still instruct Codex: when no concrete bugs, contract
+    violations, or scope violations are identified, emit the single token
+    `NO_FINDINGS` on its own line as the entire response body for older or
+    non-JSON-compatible runs. No prose narration such as
+    "No concrete bugs were identified" — that text is forbidden as a sole
+    verdict source.
   - The reviewer wrapper (`plugins/ao-codex-pr-reviewer/bin/review.*`) MUST
-    treat trimmed stdout **exactly equal to** `NO_FINDINGS` as **zero findings**.
+    treat trimmed last-message output **exactly equal to** `NO_FINDINGS` as
+    **zero findings** when no valid review-mode output is available.
     No finding record is created, written to disk, or surfaced to AO or to the
     GitHub Actions comment step.
   - **Empty stdout is NOT a clean review.** If trimmed stdout is empty while

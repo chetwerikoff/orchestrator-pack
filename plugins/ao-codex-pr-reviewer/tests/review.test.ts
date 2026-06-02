@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildCodexExecReviewArgs } from '../lib/run_review.js';
 import {
@@ -22,7 +23,25 @@ import {
   resolveScopeContext,
   scopeUnavailableWarningFinding,
 } from '../lib/scope_context.js';
+import {
+  extractThreadIdFromProcessJsonl,
+  parseCodexReviewOutput,
+  parseExitedReviewModeFromSessionJsonl,
+  parseReviewModeFromChannels,
+  toRepoRelativePath,
+} from '../lib/review_jsonl.js';
+import { selectReviewVerdict } from '../lib/verdict.js';
+
 const SCOPED_ISSUE_NUMBER = 6;
+const FIXTURES_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures');
+
+function readFixture(name: string): string {
+  return readFileSync(join(FIXTURES_DIR, name), 'utf8');
+}
+
+const PROSE_CLEAN_LAST_MESSAGE =
+  'The change adds a straightforward subtract function. No regressions or actionable bugs were identified.';
+const REPO_ROOT = process.cwd();
 
 describe('review dependency roots', () => {
   it('resolves pack repo root to orchestrator-pack', () => {
@@ -69,8 +88,484 @@ describe('buildCodexExecReviewArgs', () => {
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
     expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
     expect(args).not.toContain('--base');
+    expect(args).toContain('--json');
     expect(args[args.length - 1]).toBe('-');
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+});
+
+describe('review-mode JSONL verdict', () => {
+  it('extracts thread id from process JSONL stdout', () => {
+    const processJsonl = readFixture('process-clean.jsonl');
+    expect(extractThreadIdFromProcessJsonl(processJsonl)).toBe(
+      '019e8713-cb1a-7b02-b3e0-ca7410a4dc83',
+    );
+  });
+
+  it('parses clean exited_review_mode from session JSONL', () => {
+    const sessionJsonl = readFixture('session-clean.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    expect(exited.reviewOutput.overall_correctness).toBe('patch is correct');
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed).toEqual({ kind: 'clean' });
+  });
+
+  it('parses findings from session JSONL review_output', () => {
+    const sessionJsonl = readFixture('session-findings.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings).toHaveLength(1);
+      expect(parsed.findings[0]!.summary).toContain('Remove generated review artifact');
+      expect(parsed.findings[0]!.path).toBe('review-events.jsonl');
+    }
+  });
+
+  it('maps absolute code_location paths to repo-relative paths', () => {
+    const absolutePath = join(REPO_ROOT, 'plugins', 'ao-codex-pr-reviewer', 'lib', 'run_review.ts');
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Example absolute path',
+            body: 'Body text.',
+            priority: 2,
+            code_location: {
+              absolute_file_path: absolutePath,
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Example.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.path).toBe('plugins/ao-codex-pr-reviewer/lib/run_review.ts');
+    }
+  });
+
+  it('rejects review_output without a findings array', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        overall_correctness: 'patch is correct',
+        overall_explanation: 'Missing findings key.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('missing required findings array');
+    }
+  });
+
+  it('rejects review_output when findings is not an array', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: 'not-an-array',
+        overall_correctness: 'patch is correct',
+        overall_explanation: 'Malformed findings.',
+        overall_confidence_score: 0.9,
+      } as unknown as Parameters<typeof parseCodexReviewOutput>[0],
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('findings must be an array');
+    }
+  });
+
+  it('fails closed on contradictory empty findings with incorrect verdict', () => {
+    const sessionJsonl = readFixture('session-contradictory-empty-findings.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('overall_correctness');
+    }
+  });
+
+  it('fails closed on contradictory findings with correct verdict', () => {
+    const sessionJsonl = readFixture('session-contradictory-clean-verdict.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('contradictory');
+    }
+  });
+
+  it('toRepoRelativePath returns null for paths outside the repo', () => {
+    const outside = join(REPO_ROOT, '..', 'outside-repo-file.ts');
+    expect(toRepoRelativePath(outside, REPO_ROOT)).toBeNull();
+    expect(toRepoRelativePath('C:\\outside\\other\\file.ts', REPO_ROOT)).toBeNull();
+    expect(toRepoRelativePath('../../outside/file.ts', REPO_ROOT)).toBeNull();
+  });
+
+  it('toRepoRelativePath resolves in-repo relative paths against repo root', () => {
+    expect(toRepoRelativePath('plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts', REPO_ROOT)).toBe(
+      'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts',
+    );
+  });
+
+  it('derives scope-violation type without scope in the title', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P1] Modify vendored AO core',
+            body: 'Changes under packages/core violate the pack denylist and allowed_roots contract.',
+            priority: 1,
+            code_location: {
+              absolute_file_path: 'packages/core/foo.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Scope breach.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.type).toBe('scope-violation');
+      expect(parsed.findings[0]!.code).toMatch(/^scope-violation:/);
+    }
+  });
+
+  it('maps bracketed title priority to blocking when numeric priority is omitted', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P0] Critical regression in scope guard',
+            body: 'Urgent issue without numeric priority field.',
+            code_location: {
+              absolute_file_path: 'plugins/ao-scope-guard/lib/check.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Blocking severity contract test.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.severity).toBe('blocking');
+    }
+  });
+
+  it('maps bracketed P2 title to non-blocking when numeric priority is omitted', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Minor style issue',
+            body: 'Lower priority without numeric priority field.',
+            code_location: {
+              absolute_file_path: 'plugins/ao-scope-guard/lib/check.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Non-blocking severity contract test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.severity).toBe('non-blocking');
+    }
+  });
+
+  it('preserves explicit type and code from review_output findings', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P1] Denylisted path touched',
+            body: 'Worker changed vendor/agent-orchestrator without declaration.',
+            priority: 1,
+            type: 'scope-violation',
+            code: 'scope-violation:path-outside-declaration',
+            code_location: {
+              absolute_file_path: 'vendor/agent-orchestrator/foo.ts',
+              line_range: { start: 1, end: 1 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Out of scope.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.type).toBe('scope-violation');
+      expect(parsed.findings[0]!.code).toBe('scope-violation:path-outside-declaration');
+    }
+  });
+
+  it('selects JSONL clean verdict over legacy prose last message', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      sessionJsonl: readFixture('session-clean.jsonl'),
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('clean');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
+  });
+
+  it('falls back to NO_FINDINGS when review-mode output is unavailable', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: '',
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(verdict).toMatchObject({ kind: 'clean', verdictSource: 'last_message_fallback' });
+  });
+
+  it('falls back to structured JSON findings in last message', () => {
+    const payload = JSON.stringify({
+      findings: [
+        {
+          type: 'quality',
+          code: 'quality:example',
+          severity: 'non-blocking',
+          path: 'scripts/foo.ps1',
+          summary: 'Example finding',
+          source: 'codex-local',
+        },
+      ],
+    });
+    const verdict = selectReviewVerdict({
+      processJsonl: '{"type":"thread.started","thread_id":"missing-session"}',
+      lastMessage: payload,
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('findings');
+    expect(verdict.verdictSource).toBe('last_message_fallback');
+  });
+
+  it('rejects prose-only last message when JSONL verdict is missing', () => {
+    const verdict = selectReviewVerdict({
+      processJsonl: '',
+      lastMessage: 'No concrete bugs were identified in this change.',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('legacy clean-review prose');
+      expect(verdict.message).toContain('diagnostic:');
+    }
+  });
+
+  it('fails closed on malformed exited_review_mode without review_output', () => {
+    const sessionJsonl = [
+      JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'exited_review_mode', review_output: null },
+      }),
+    ].join('\n');
+
+    const result = parseReviewModeFromChannels({
+      processJsonl: readFixture('process-clean.jsonl'),
+      sessionJsonl,
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(result?.kind).toBe('error');
+    if (result?.kind === 'error') {
+      expect(result.message).toContain('exited_review_mode');
+    }
+
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      sessionJsonl,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('exited_review_mode');
+      expect(verdict.message).toContain('diagnostic:');
+    }
+  });
+
+  it('fails closed on unparseable exited_review_mode JSONL line', () => {
+    const sessionJsonl = [
+      '{"type":"event_msg","payload":{"type":"exited_review_mode","review_output":{',
+    ].join('\n');
+
+    const result = parseReviewModeFromChannels({
+      processJsonl: readFixture('process-clean.jsonl'),
+      sessionJsonl,
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(result?.kind).toBe('error');
+    if (result?.kind === 'error') {
+      expect(result.message).toContain('malformed or incomplete exited_review_mode');
+    }
+
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      sessionJsonl,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('diagnostic:');
+    }
+  });
+
+  it('parseReviewModeFromChannels returns null without session JSONL', () => {
+    expect(
+      parseReviewModeFromChannels({
+        processJsonl:
+          '{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}',
+        sessionJsonl: null,
+        repoRoot: REPO_ROOT,
+        codexHome: join(tmpdir(), 'nonexistent-codex-home-for-tests'),
+        source: 'codex-local',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('executeReview JSONL round-trip', () => {
+  it('returns clean AO result when JSONL is clean but last message is prose', () => {
+    const result = executeReview({
+      repoRoot: process.cwd(),
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: readFixture('session-clean.jsonl'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.aoStdout).toBe('');
+    expect(result.structuredFindings).toHaveLength(0);
+  });
+
+  it('maps JSONL findings to AO structured payload', () => {
+    const result = executeReview({
+      repoRoot: process.cwd(),
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: readFixture('session-findings.jsonl'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
+    expect(payload.findings.length).toBeGreaterThan(0);
+  });
+
+  it('emits repo-relative paths in AO payload for absolute JSONL code_location', () => {
+    const repoRoot = process.cwd();
+    const absolutePath = join(repoRoot, 'plugins', 'ao-codex-pr-reviewer', 'lib', 'review_jsonl.ts');
+    const expectedRelative = 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts';
+    const sessionJsonl = [
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'exited_review_mode',
+          review_output: {
+            findings: [
+              {
+                title: '[P2] Normalize paths in AO payload',
+                body: 'Absolute code_location must not leak into AO filePath.',
+                priority: 2,
+                code_location: {
+                  absolute_file_path: absolutePath,
+                  line_range: { start: 1, end: 2 },
+                },
+              },
+            ],
+            overall_correctness: 'patch is incorrect',
+            overall_explanation: 'Path normalization contract test.',
+            overall_confidence_score: 0.8,
+          },
+        },
+      }),
+    ].join('\n');
+
+    const result = executeReview({
+      repoRoot,
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: sessionJsonl,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.structuredFindings[0]!.path).toBe(expectedRelative);
+
+    const payload = JSON.parse(result.aoStdout) as {
+      findings: Array<{ body: string; filePath?: string }>;
+    };
+    expect(payload.findings[0]!.filePath).toBe(expectedRelative);
+    expect(payload.findings[0]!.body).toContain(`path: ${expectedRelative}`);
+    expect(payload.findings[0]!.body).not.toContain(absolutePath);
   });
 });
 

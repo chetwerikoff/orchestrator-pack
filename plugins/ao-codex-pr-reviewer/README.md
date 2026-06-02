@@ -120,21 +120,33 @@ ao review run <worker-session-id> --execute --command `
   "pwsh -NoProfile -File plugins/ao-codex-pr-reviewer/bin/review.ps1 --repo-root . --base origin/main"
 ```
 
-Wrapper contract:
+Wrapper contract (event-first verdict selection):
 
-| Codex stdout (trimmed) | Wrapper exit | AO / worker effect |
-|------------------------|--------------|-------------------|
-| Exactly `NO_FINDINGS` | 0, empty stdout | `findingCount: 0`, run `clean` |
-| Empty | non-zero | Run `failed`; log: `reviewer produced empty output` |
-| Legacy prose (“No concrete bugs…”) | non-zero | Run `failed`; no warning-finding noise |
-| JSON `{"findings":[…]}` | 0 | Structured findings parsed into AO store |
+Live `codex exec review` runs pass `--json` so the wrapper captures process JSONL
+stdout, the persisted Codex session JSONL under `CODEX_HOME` / `~/.codex/sessions/**`,
+and the `--output-last-message` file as separate channels. When a valid
+`exited_review_mode` event with `review_output` is present in the persisted session,
+that machine payload is the verdict source. The last-message file is fallback and
+diagnostics only for JSONL-enabled runs.
+
+| Verdict source | Condition | Wrapper exit | AO / worker effect |
+|----------------|-----------|--------------|-------------------|
+| Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0, empty stdout | `findingCount: 0`, run `clean` |
+| Review-mode JSONL | `review_output` with findings | 0 | Structured findings parsed into AO store (paths repo-relative) |
+| Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0, empty stdout | `findingCount: 0`, run `clean` |
+| Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Structured findings parsed into AO store |
+| Last message | Empty (no valid review-mode output) | non-zero | Run `failed`; log: `reviewer produced empty output` |
+| Last message | Legacy prose only (no valid review-mode output) | non-zero | Run `failed`; diagnostic snippet in log |
+| Review-mode JSONL | Missing, malformed, or contradictory `review_output` | non-zero | Run `failed`; diagnostic snippet in log |
 
 The wrapper always loads the pack-bundled `prompts/codex_review_prompt.md` (never
 a copy in the reviewed workspace), injects scope from the linked
 issue (`denylist`, `allowed_roots`) and the active declaration snapshot
 (`docs/declarations/{issue}.{iteration}.json` via `_shared` / scope-guard loaders),
 and maps findings to architecture §F (`type`, `code`, `severity`, `path`,
-`summary`, `source`, signature).
+`summary`, `source`, signature). JSONL `code_location.absolute_file_path` values
+are relativized against `--repo-root` before emission so AO `filePath` and finding
+signatures use stable repository paths (or `null` when outside the repo).
 
 Resolve the issue number from `AO_ISSUE_NUMBER`, `--issue`, or the PR body
 (`Closes #N`). When neither issue fences nor a snapshot exist, the prompt omits
@@ -147,7 +159,8 @@ Both the local AO path and the optional GitHub Actions workflow use:
 
 - `prompts/codex_review_prompt.md` — single prompt contract
 - `plugins/ao-codex-pr-reviewer/bin/review.{ts,ps1}` — scope assembly, Codex
-  invocation (`codex exec review`), `NO_FINDINGS` filtering, structured output
+  invocation (`codex exec review` with `--json`), review-mode JSONL verdict
+  selection, `NO_FINDINGS` / structured last-message fallback, structured output
 - Architecture §F finding format and signatures (`plugins/ao-token-chain-ledger`)
 
 The reusable workflow calls the same wrapper; it posts
