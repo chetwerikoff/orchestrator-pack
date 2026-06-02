@@ -223,6 +223,71 @@ describe('review-mode JSONL verdict', () => {
     const outside = join(REPO_ROOT, '..', 'outside-repo-file.ts');
     expect(toRepoRelativePath(outside, REPO_ROOT)).toBeNull();
     expect(toRepoRelativePath('C:\\outside\\other\\file.ts', REPO_ROOT)).toBeNull();
+    expect(toRepoRelativePath('../../outside/file.ts', REPO_ROOT)).toBeNull();
+  });
+
+  it('toRepoRelativePath resolves in-repo relative paths against repo root', () => {
+    expect(toRepoRelativePath('plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts', REPO_ROOT)).toBe(
+      'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts',
+    );
+  });
+
+  it('derives scope-violation type without scope in the title', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P1] Modify vendored AO core',
+            body: 'Changes under packages/core violate the pack denylist and allowed_roots contract.',
+            priority: 1,
+            code_location: {
+              absolute_file_path: 'packages/core/foo.ts',
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Scope breach.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.type).toBe('scope-violation');
+      expect(parsed.findings[0]!.code).toMatch(/^scope-violation:/);
+    }
+  });
+
+  it('preserves explicit type and code from review_output findings', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P1] Denylisted path touched',
+            body: 'Worker changed vendor/agent-orchestrator without declaration.',
+            priority: 1,
+            type: 'scope-violation',
+            code: 'scope-violation:path-outside-declaration',
+            code_location: {
+              absolute_file_path: 'vendor/agent-orchestrator/foo.ts',
+              line_range: { start: 1, end: 1 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Out of scope.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.type).toBe('scope-violation');
+      expect(parsed.findings[0]!.code).toBe('scope-violation:path-outside-declaration');
+    }
   });
 
   it('selects JSONL clean verdict over legacy prose last message', () => {

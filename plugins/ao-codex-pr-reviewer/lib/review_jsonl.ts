@@ -1,7 +1,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { ReviewSource, StructuredFinding } from './types.js';
+import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
+
+const VALID_FINDING_TYPES: FindingType[] = [
+  'scope-violation',
+  'spec',
+  'quality',
+  'test',
+  'ci',
+  'security',
+];
 
 export interface CodexReviewOutput {
   findings?: unknown[];
@@ -171,7 +180,55 @@ function priorityToSeverity(priority: unknown): 'blocking' | 'non-blocking' {
   return 'non-blocking';
 }
 
-function inferTypeFromTitle(title: string): string {
+function normalizeFindingType(value: unknown): FindingType | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const lowered = value.trim().toLowerCase();
+  return VALID_FINDING_TYPES.includes(lowered as FindingType)
+    ? (lowered as FindingType)
+    : null;
+}
+
+function isScopeViolationFindingText(text: string): boolean {
+  const lowered = text.toLowerCase();
+  if (lowered.includes('scope-violation') || lowered.includes('scope violation')) {
+    return true;
+  }
+  if (/\bout[- ]of[- ]scope\b/.test(lowered)) {
+    return true;
+  }
+  if (/\boutside (the )?(declared|allowed)\b/.test(lowered)) {
+    return true;
+  }
+  if (/\bdenylist\b/.test(lowered)) {
+    return true;
+  }
+  if (/\ballowed[_ ]roots?\b/.test(lowered)) {
+    return true;
+  }
+  if (/\bnot (in|within) (the )?declared\b/.test(lowered)) {
+    return true;
+  }
+  if (/\bpath[- ]outside[- ]declaration\b/.test(lowered)) {
+    return true;
+  }
+  if (/\btouches?\b.*\bdenylisted\b/.test(lowered)) {
+    return true;
+  }
+  if (/\bmodify\b.*\bvendored\b/.test(lowered)) {
+    return true;
+  }
+  if (
+    /\bvendored?\b/.test(lowered) &&
+    /\b(ao |agent-orchestrator|packages\/core|vendor\/)/.test(lowered)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function inferTypeFromTitle(title: string): FindingType {
   const lowered = title.toLowerCase();
   if (lowered.includes('scope')) {
     return 'scope-violation';
@@ -189,6 +246,36 @@ function inferTypeFromTitle(title: string): string {
     return 'spec';
   }
   return 'quality';
+}
+
+function resolveFindingType(
+  record: Record<string, unknown>,
+  title: string,
+  body: string,
+): FindingType {
+  const explicitType = normalizeFindingType(record.type);
+  if (explicitType) {
+    return explicitType;
+  }
+
+  const code = typeof record.code === 'string' ? record.code.trim() : '';
+  if (code) {
+    const prefix = code.split(':')[0];
+    const fromCode = normalizeFindingType(prefix);
+    if (fromCode) {
+      return fromCode;
+    }
+  }
+
+  if (/\[scope-violation\]/i.test(title)) {
+    return 'scope-violation';
+  }
+
+  if (isScopeViolationFindingText(`${title}\n${body}`)) {
+    return 'scope-violation';
+  }
+
+  return inferTypeFromTitle(title);
 }
 
 function slugify(value: string): string {
@@ -222,7 +309,15 @@ export function toRepoRelativePath(filePath: string, repoRoot: string): string |
   }
 
   if (!isAbsolute(trimmed) && !WINDOWS_DRIVE_ABS.test(trimmed)) {
-    return trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+    const resolvedPath = resolve(repoRoot, trimmed);
+    if (!isPathInsideRepo(resolvedPath, repoRoot)) {
+      return null;
+    }
+    const rel = relative(resolve(repoRoot), resolvedPath).replace(/\\/g, '/');
+    if (!rel || rel === '.' || rel.startsWith('..')) {
+      return null;
+    }
+    return rel;
   }
 
   if (!isPathInsideRepo(trimmed, repoRoot)) {
@@ -268,12 +363,14 @@ function normalizeReviewFinding(
 
   const priority = record.priority;
   const severity = priorityToSeverity(priority);
-  const type = inferTypeFromTitle(title);
+  const type = resolveFindingType(record, title, body);
+  const explicitCode = typeof record.code === 'string' ? record.code.trim() : '';
   const codeBase = slugify(title.replace(/^\[P\d\]\s*/i, '')) || `finding-${index + 1}`;
+  const code = explicitCode || `${type}:${codeBase}`;
 
   return {
     type,
-    code: `${type}:${codeBase}`,
+    code,
     severity,
     path,
     summary: title,
