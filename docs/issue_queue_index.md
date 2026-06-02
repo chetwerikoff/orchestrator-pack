@@ -69,4 +69,5 @@ task).
 | `35-operator-adoption-handoff-contract.md` | [#101](https://github.com/chetwerikoff/orchestrator-pack/issues/101) | Operator adoption handoff: architect specs, worker documents, operator executes; CI guard for .example ↔ migration_notes |
 | `36-pack-reviewer-env-at-review-spawn.md` | [#106](https://github.com/chetwerikoff/orchestrator-pack/issues/106) | PACK_REVIEWER User/Machine env fallback when AO review spawn lacks process-scoped var (after #86) |
 | `37-ci-failed-ping-before-report-stale-backstop.md` | [#109](https://github.com/chetwerikoff/orchestrator-pack/issues/109) | Turn-aware CI-failure worker gate + orchestrator ping; report-stale backstop only (op-6 class) |
+| `39-ubuntu-linux-only-port.md` | [#115](https://github.com/chetwerikoff/orchestrator-pack/issues/115) | Ubuntu/Linux-only port epic (decision §P): Linux-first yaml, retire Windows-only scripts, $HOME path portability, Ubuntu setup runbook, Linux CI job |
 | _(revert; no draft file)_ | [#99](https://github.com/chetwerikoff/orchestrator-pack/issues/99) | Revert #58 state-derived reconciliation (PR #97 split-brain); closed when revert PR merges |

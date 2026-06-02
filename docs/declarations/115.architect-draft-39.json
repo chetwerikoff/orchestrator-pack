@@ -1,0 +1,19 @@
+{
+  "issue_number": 115,
+  "iteration_id": "architect-draft-39",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T01:44:46.446Z",
+  "baseline": {
+    "commit_sha": "b7912cc79e7abd5b66c681ca11c33f20de64ab79",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:63acdcc857f3433bb2f710c4699e5560fd66cbf2411df28dd3c09cb076d804c5"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/39-ubuntu-linux-only-port.md",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/00-architecture-decisions.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
