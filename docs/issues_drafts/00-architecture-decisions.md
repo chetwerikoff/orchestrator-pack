@@ -464,6 +464,49 @@ and stale `code-reviews/workspaces` blocked merge.
 
 See `docs/issues_drafts/34-review-layer-resilience-after-worker-respawn.md` (GitHub #98).
 
+## P. Ubuntu / Linux-only port target
+
+Decision taken 2026-06-01 after a live WSL2 Ubuntu polygon validated the pack
+(pwsh runs all scripts; `verify` + `test-all` green; `ao doctor` healthy;
+`ao start --no-orchestrator` boots the dashboard on the tmux runtime; `ao stop`
+tears down cleanly). The pack moves off native Windows.
+
+1. **Linux is the only supported target; WSL is the only Windows path.** Native
+   Windows is no longer a runtime target — operators on Windows run inside WSL2
+   Ubuntu. Windows-only code paths and `$IsWindows` branches are deleted rather
+   than wrapped, to minimize bug surface. Windows PowerShell 5.1-specific
+   hazards (e.g. the `orchestratorRules` launch-safety prose, §G/§I) no longer
+   constrain the Linux-first config; pwsh 7 on Linux is unaffected.
+
+2. **Same repository, one branch chain.** The port lands on `feat/ubuntu-port`
+   merging into `main`, NOT a separate `orchestrator-pack-ubuntu` repo: a fork
+   would duplicate scripts/rules/docs the `lint-self-architect` duplicate-literal
+   rule guards against and split the live GitHub Issues queue (source of truth).
+   One **Linux-first** `agent-orchestrator.yaml.example`; no parallel
+   `windows.yaml.example`.
+
+3. **Environment invariant: ext4, never `/mnt/c`.** Target repos and AO
+   worktrees MUST live on the Linux filesystem (`/home/...`, ext4). `/mnt/c`
+   reintroduces Windows file-locks, slow git/npm over 9P, and broken inotify
+   watchers. After `$env:USERPROFILE` → `$HOME`, AO state lands on ext4
+   automatically; only the clone path and `projects.*.path` need operator care.
+   This invariant is operator-owned (lives in the gitignored live yaml + setup),
+   not enforced by a tracked guard.
+
+4. **Scripting language stays PowerShell; no bash rewrite.** Pack scripts remain
+   `.ps1` run via `pwsh` on Linux. Bash glue is allowed only where a non-pwsh
+   entrypoint is unavoidable (e.g. git hooks). A `.sh`-per-`.ps1` rewrite is
+   rejected — it would duplicate logic and double the maintenance/test surface.
+   See [[pwsh-keep]] (memory) for the validated rationale.
+
+5. **Boundary: workers code, operators set up the environment.** Code changes
+   (tracked files) go through AO workers in the normal PR flow, drivable from
+   the still-Windows orchestrator during the transition. Environment
+   provisioning, the live gitignored `agent-orchestrator.yaml`, and Ubuntu
+   end-to-end validation are operator-manual and outside the worker/PR scope.
+
+See `docs/issues_drafts/39-ubuntu-linux-only-port.md` (GitHub #115).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
