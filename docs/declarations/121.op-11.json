@@ -21,5 +21,18 @@
     ".cursor/skills/**",
     "docs/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:68fd93f511b3b5058140ed19c0d3eb02ab5b33bf2aae2261472b8f7fb7bb1464",
+      "new_active_scope_hash": "sha256:68fd93f511b3b5058140ed19c0d3eb02ab5b33bf2aae2261472b8f7fb7bb1464",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "review follow-up: CLI parity test and regex hygiene",
+      "actor": "op-11",
+      "timestamp": "2026-06-02T04:10:28.181Z",
+      "applied": true
+    }
+  ]
 }
