@@ -77,4 +77,5 @@ task).
 | `43-spec-only-scope-guard-docs-prs.md` | [#121](https://github.com/chetwerikoff/orchestrator-pack/issues/121) | Spec-only scope-guard mode: docs-only draft PRs pass via `Refs #N` + bounded docs allowlist, no declaration snapshot / close-reopen dance |
 | `44-codex-review-jsonl-verdict-source.md` | [#127](https://github.com/chetwerikoff/orchestrator-pack/issues/127) | Codex reviewer event-first verdict: parse `codex exec review --json` review_output before last-message fallback |
 | `45-codex-review-jsonl-explanation-findings-recovery.md` | [#135](https://github.com/chetwerikoff/orchestrator-pack/issues/135) | Split-channel recovery: pack JSON / NO_FINDINGS in `overall_explanation` or last message when JSONL `findings[]` is empty |
+| `46-codex-review-native-output-format-alignment.md` | [#136](https://github.com/chetwerikoff/orchestrator-pack/issues/136) | Native review-mode prompt + hardened hydrated JSONL → pack mapper (#135 recovery unchanged) |
 | _(revert; no draft file)_ | [#99](https://github.com/chetwerikoff/orchestrator-pack/issues/99) | Revert #58 state-derived reconciliation (PR #97 split-brain); closed when revert PR merges |

@@ -35,6 +35,8 @@ import {
   parseExitedReviewModeFromSessionJsonl,
   parseReviewModeFromChannels,
   SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
+  EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE,
+  UNNORMALIZABLE_CODE_LOCATION_MESSAGE,
   toRepoRelativePath,
 } from '../lib/review_jsonl.js';
 import { selectReviewVerdict } from '../lib/verdict.js';
@@ -119,6 +121,143 @@ describe('review-mode JSONL verdict', () => {
     expect(exited.reviewOutput.overall_correctness).toBe('patch is correct');
     const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed).toEqual({ kind: 'clean' });
+  });
+
+  it('maps op-rev-26-class native hydrated findings to pack findings', () => {
+    const sessionJsonl = readFixture('session-native-findings-op-rev-26.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    expect(exited.reviewOutput.overall_correctness).toBe('patch is incorrect');
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings).toHaveLength(1);
+      expect(parsed.findings[0]!.summary).toContain('Remove generated review artifact');
+      expect(parsed.findings[0]!.path).toBe(
+        'plugins/ao-codex-pr-reviewer/tests/fixtures/review-events.jsonl',
+      );
+      expect(parsed.findings[0]!.severity).toBe('non-blocking');
+    }
+  });
+
+  it('maps op-rev-27-class native clean hydrated review to clean verdict', () => {
+    const sessionJsonl = readFixture('session-native-clean-op-rev-27.jsonl');
+    const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    expect(exited.reviewOutput.findings).toEqual([]);
+    expect(exited.reviewOutput.overall_correctness).toBe('patch is correct');
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(parsed).toEqual({ kind: 'clean' });
+  });
+
+  it('fails closed on incomplete hydrated finding (missing title or body)', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '',
+            body: 'Body without title.',
+            priority: 2,
+            code_location: {
+              absolute_file_path: 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts',
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Incomplete entry test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('title/body');
+    }
+  });
+
+  it('fails closed when code_location.absolute_file_path is present but empty', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Empty file anchor',
+            body: 'code_location.absolute_file_path must not be whitespace-only.',
+            priority: 2,
+            code_location: {
+              absolute_file_path: '   ',
+              line_range: { start: 1, end: 1 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Empty hydrated code_location path contract test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toBe(EMPTY_HYDRATED_CODE_LOCATION_PATH_MESSAGE);
+    }
+  });
+
+  it('allows repo-level findings without code_location', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Policy-level scope concern',
+            body: 'No single file anchor; repo-wide contract issue.',
+            priority: 2,
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Repo-level finding without code_location.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.path).toBeNull();
+    }
+  });
+
+  it('fails closed when file-specific absolute_file_path cannot be normalized', () => {
+    const outside = join(REPO_ROOT, '..', 'outside-repo', 'secret.ts');
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P1] Path outside repository',
+            body: 'Finding anchors a path the wrapper cannot relativize.',
+            priority: 1,
+            code_location: {
+              absolute_file_path: outside,
+              line_range: { start: 1, end: 1 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Unnormalizable path contract test.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toBe(UNNORMALIZABLE_CODE_LOCATION_MESSAGE);
+    }
   });
 
   it('parses findings from session JSONL review_output', () => {
@@ -492,6 +631,22 @@ describe('review-mode JSONL verdict', () => {
   });
 
   describe('split-channel secondary recovery (#135)', () => {
+    it('documents op-rev-28 split shape: empty JSONL findings, pack JSON in explanation (#135 recovery)', () => {
+      const sessionJsonl = readFixture('session-split-channel-pack-json.jsonl');
+      const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
+      expect(exited.status).toBe('valid');
+      if (exited.status !== 'valid') {
+        return;
+      }
+      expect(exited.reviewOutput.findings).toEqual([]);
+      expect(exited.reviewOutput.overall_correctness).toBe('patch is incorrect');
+      const primary = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
+      expect(primary.kind).toBe('error');
+      if (primary.kind === 'error') {
+        expect(primary.message).toBe(SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE);
+      }
+    });
+
     it('recovers pack JSON findings from overall_explanation (op-rev-28 class)', () => {
       const sessionJsonl = readFixture('session-split-channel-pack-json.jsonl');
       const verdict = selectReviewVerdict({
@@ -1419,7 +1574,7 @@ describe('buildReviewPrompt', () => {
         source: 'codex-github-action',
         baseRef: 'origin/main',
       });
-      expect(prompt).toContain('Structured finding format');
+      expect(prompt).toContain('Native finding shape');
       expect(prompt).not.toContain('Return NO_FINDINGS always.');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1437,6 +1592,11 @@ describe('buildReviewPrompt', () => {
       baseRef: 'origin/main',
     });
 
+    expect(prompt).toContain('native review-mode');
+    expect(prompt).toContain('patch is correct');
+    expect(prompt).not.toContain('Return NO_FINDINGS always.');
+    expect(prompt).toContain('Forbidden as the primary review-mode contract');
+    expect(prompt).toContain('Last-message fallback');
     expect(prompt).toContain('NO_FINDINGS');
     expect(prompt).toContain('codex-local');
     if (scope.hasScope) {

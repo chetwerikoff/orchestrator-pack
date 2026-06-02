@@ -104,8 +104,10 @@ Caller workflow for a target repository: copy
 
 ### Scoped reviewer wrapper (local AO primary path)
 
-Use the pack-owned wrapper so Codex receives declaration scope and returns
-structured findings (or the `NO_FINDINGS` clean-review token):
+Use the pack-owned wrapper so Codex receives declaration scope and emits
+**native review-mode** output (hydrated `review_output` when `--json` is enabled;
+`NO_FINDINGS` / pack JSON remain **fallback** channels for split-channel recovery
+per #135, not the primary prompt contract per #136):
 
 ```powershell
 # From the repository root (reviewer workspace or target repo checkout)
@@ -124,10 +126,20 @@ Wrapper contract (event-first verdict selection):
 
 Live `codex exec review` runs pass `--json` so the wrapper captures process JSONL
 stdout, the persisted Codex session JSONL under `CODEX_HOME` / `~/.codex/sessions/**`,
-and the `--output-last-message` file as separate channels. When a valid
-`exited_review_mode` event with `review_output` is present in the persisted session,
-that machine payload is the verdict source. The last-message file is fallback and
-diagnostics only for JSONL-enabled runs.
+and the `--output-last-message` file as separate channels.
+
+**Native prompt → CLI hydration → existing mapper (#136):** `prompts/codex_review_prompt.md`
+asks Codex for native review-mode findings (`title`, `body`, `priority`,
+`code_location`) and machine verdicts (`patch is correct` / `patch is incorrect`).
+Codex CLI hydrates that into `exited_review_mode.review_output`; the pack maps
+hydrated fields through `plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts`
+(`parseCodexReviewOutput` / `normalizeReviewFinding`) to architecture §F
+findings. The wrapper does **not** scrape `[P1]`/`[P2]` or paths from
+`overall_explanation` or last-message prose for verdict selection.
+
+When a valid `exited_review_mode` event with `review_output` is present in the
+persisted session, that hydrated machine payload is the verdict source. The
+last-message file is fallback and diagnostics only for JSONL-enabled runs.
 
 | Verdict source | Condition | Wrapper exit | AO / worker effect |
 |----------------|-----------|--------------|-------------------|
