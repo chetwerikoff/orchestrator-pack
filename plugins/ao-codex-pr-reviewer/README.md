@@ -133,11 +133,13 @@ diagnostics only for JSONL-enabled runs.
 |----------------|-----------|--------------|-------------------|
 | Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0, empty stdout | `findingCount: 0`, run `clean` |
 | Review-mode JSONL | `review_output` with findings | 0 | Structured findings parsed into AO store (paths repo-relative) |
+| Review-mode JSONL | Split-channel recovery: empty `findings[]`, non-clean overall, pack JSON or exact `NO_FINDINGS` in `overall_explanation` and/or last message (shape-gated; see #135) | 0 | Findings or clean from secondary channel; broad JSONL-error → last-message fallback is **forbidden** |
+| Review-mode JSONL | Contradictory `review_output` (e.g. non-empty `findings[]` with patch-is-correct overall) | non-zero | Run `failed`; recovery **must not** run |
 | Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0, empty stdout | `findingCount: 0`, run `clean` |
 | Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Structured findings parsed into AO store |
 | Last message | Empty (no valid review-mode output) | non-zero | Run `failed`; log: `reviewer produced empty output` |
 | Last message | Legacy prose only (no valid review-mode output) | non-zero | Run `failed`; diagnostic snippet in log |
-| Review-mode JSONL | Missing, malformed, or contradictory `review_output` | non-zero | Run `failed`; diagnostic snippet in log |
+| Review-mode JSONL | Missing, malformed, split-channel without recoverable secondary payload, or conflicting secondary channels | non-zero | Run `failed`; diagnostic snippet in log |
 
 The wrapper always loads the pack-bundled `prompts/codex_review_prompt.md` (never
 a copy in the reviewed workspace), injects scope from the linked

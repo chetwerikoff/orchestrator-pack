@@ -130,6 +130,45 @@ export function normalizeReviewerStdout(rawOutput: string): string {
   return value.trim();
 }
 
+/**
+ * Strict pack JSON for split-channel recovery (#135): entire trimmed channel must
+ * be a pack-format `{"findings":[...]}` object with a non-empty findings array.
+ * Bare JSON arrays and legacy stdout normalization are not accepted here.
+ */
+export function extractStrictPackFindingsArray(text: string): unknown[] | null {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === NO_FINDINGS_TOKEN) {
+    return null;
+  }
+
+  let jsonText = trimmed;
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (entireFence?.[1]) {
+    jsonText = entireFence[1].trim();
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    const record = asRecord(parsed);
+    const rawFindings = Array.isArray(record?.findings)
+      ? (record.findings as unknown[])
+      : null;
+    return rawFindings && rawFindings.length > 0 ? rawFindings : null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeStructuredPackFindings(
+  rawFindings: unknown[],
+): StructuredFinding[] | null {
+  const findings = rawFindings
+    .map((entry, index) => normalizeFinding(entry, index))
+    .filter((entry): entry is StructuredFinding => entry !== null);
+
+  return findings.length === rawFindings.length ? findings : null;
+}
+
 export function parseCodexOutput(rawOutput: string): ParseCodexOutputResult {
   const trimmed = normalizeReviewerStdout(rawOutput);
 

@@ -1,0 +1,21 @@
+{
+  "issue_number": 135,
+  "iteration_id": "op-15",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-02T13:16:06.387Z",
+  "baseline": {
+    "commit_sha": "5d28b8c95b416d6a7a4f21c75f6aeef3fbaa2b0f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:724691e83ea4945321526234f84ca88f23bb84eca4242a6cc4c58e79d1e5ce69"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/issues_drafts/45-codex-review-jsonl-explanation-findings-recovery.md",
+    "docs/issue_queue_index.md"
+  ],
+  "declared_globs": [
+    "plugins/ao-codex-pr-reviewer/**"
+  ],
+  "amendments": []
+}

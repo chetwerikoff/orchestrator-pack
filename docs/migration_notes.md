@@ -198,6 +198,16 @@ declaring mergeable; compare `terminationReason` to live **REVIEW_COMMAND** (scr
 name must match). Use the Claude bridge when Codex quota is exhausted — see
 [reviewer-switch-runbook.md](reviewer-switch-runbook.md).
 
+**Split-channel empty JSONL findings (Codex review-mode).** Signature: valid
+`exited_review_mode` with `review_output.findings: []`, non-clean
+`overall_correctness`, and pack-format `{"findings":[…]}` or exact `NO_FINDINGS`
+in `overall_explanation` and/or the last-message file — not prose `[P1]` markers.
+The wrapper recovers findings or clean from those secondary channels only (#135);
+broad “any JSONL error → lastMessage” fallback remains forbidden. If
+`terminationReason` still shows `reports no findings but overall_correctness is not
+"patch is correct"` with no recoverable secondary payload, treat as failed review
+(not clean) and inspect Codex CLI / prompt alignment (sibling prevention: GitHub #136).
+
 **Codex CLI shape.** Installed Codex CLI treats `codex exec review --base` and a
 custom `[PROMPT]` as mutually exclusive. The pack wrapper scopes via prompt text
 (`git diff <base>...HEAD`) and stdin prompt mode, not `--base` plus stdin together.

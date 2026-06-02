@@ -1,7 +1,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  extractStrictPackFindingsArray,
+  NO_FINDINGS_TOKEN,
+  normalizeStructuredPackFindings,
+} from './parse_output.js';
 import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
+
+/** Fail-closed message when JSONL has empty findings[] and non-clean overall verdict. */
+export const SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE =
+  'review-mode JSONL reports no findings but overall_correctness is not "patch is correct" — refusing to mark run as clean';
 
 const VALID_FINDING_TYPES: FindingType[] = [
   'scope-violation',
@@ -199,11 +208,27 @@ export function parseExitedReviewModeFromSessionJsonl(
   return { status: 'absent' };
 }
 
-export function isPatchCorrectVerdict(overallCorrectness: string | undefined): boolean {
-  if (!overallCorrectness?.trim()) {
+export function isPatchCorrectVerdict(overallCorrectness: unknown): boolean {
+  if (typeof overallCorrectness !== 'string') {
     return false;
   }
-  return /^patch is correct$/i.test(overallCorrectness.trim());
+  const trimmed = overallCorrectness.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^patch is correct$/i.test(trimmed);
+}
+
+/** Split-channel recovery (#135) requires explicit `patch is incorrect` machine verdict. */
+export function isExplicitNonCleanVerdict(overallCorrectness: unknown): boolean {
+  if (typeof overallCorrectness !== 'string') {
+    return false;
+  }
+  const trimmed = overallCorrectness.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^patch is incorrect$/i.test(trimmed);
 }
 
 function parseBracketedPriority(title: string): number | null {
@@ -470,10 +495,16 @@ export function parseCodexReviewOutput(
   }
 
   if (findings.length === 0 && !patchCorrect) {
+    if (!isExplicitNonCleanVerdict(reviewOutput.overall_correctness)) {
+      return {
+        kind: 'error',
+        message:
+          'review-mode JSONL review_output is missing explicit overall_correctness — refusing to mark run as clean',
+      };
+    }
     return {
       kind: 'error',
-      message:
-        'review-mode JSONL reports no findings but overall_correctness is not "patch is correct" — refusing to mark run as clean',
+      message: SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE,
     };
   }
 
@@ -495,9 +526,253 @@ export function parseCodexReviewOutput(
   };
 }
 
+type SecondaryChannelPayload =
+  | { kind: 'clean' }
+  | { kind: 'findings'; findings: StructuredFinding[] };
+
+function isExactNoFindingsSecondary(text: string): boolean {
+  return text.trim() === NO_FINDINGS_TOKEN;
+}
+
+/** Raw JSONL may coerce non-string secondary channel fields; never call string methods on them. */
+function secondaryChannelText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** `NO_FINDINGS` present but not the sole trimmed channel payload (#135 exact token). */
+function isMalformedNoFindingsSecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  return trimmed.includes(NO_FINDINGS_TOKEN);
+}
+
+/** Non-empty secondary text that is not exact NO_FINDINGS or strict pack JSON (#135). */
+function isForbiddenProseSecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  if (extractStrictPackFindingsArray(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
+/** Bare `[...]` findings JSON in a secondary channel (#135 pack-object shape only). */
+function isBareFindingsArraySecondaryChannel(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  let jsonText = trimmed;
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (entireFence?.[1]) {
+    jsonText = entireFence[1].trim();
+  }
+  if (!jsonText.startsWith('[')) {
+    return false;
+  }
+  try {
+    return Array.isArray(JSON.parse(jsonText));
+  } catch {
+    return true;
+  }
+}
+
+/** Trimmed secondary text (after optional whole-line fence) is a pack `{"findings":...}` object. */
+function channelTextLooksLikePackFindingsObject(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  let jsonText = trimmed;
+  const entireFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (entireFence?.[1]) {
+    jsonText = entireFence[1].trim();
+  }
+  if (jsonText.startsWith('{"findings"')) {
+    return true;
+  }
+  // Pretty-printed pack object, e.g. `{\n  "findings": [` (must not match prose mid-string).
+  return /^\{\s*"findings"\s*[:[]/.test(jsonText);
+}
+
+/** Pack `{"findings":[...]}` present but syntactically invalid or entries fail normalization — fail closed. */
+function isMalformedPackFindingsSecondaryChannel(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || isExactNoFindingsSecondary(trimmed)) {
+    return false;
+  }
+  const strictFindings = extractStrictPackFindingsArray(trimmed);
+  if (strictFindings) {
+    return tryParsePackFindingsFromSecondaryText(text, source, repoRoot) === null;
+  }
+  return channelTextLooksLikePackFindingsObject(trimmed);
+}
+
+function otherChannelBlocksSoleRecovery(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  return (
+    isMalformedNoFindingsSecondaryChannel(text) ||
+    isBareFindingsArraySecondaryChannel(text) ||
+    isForbiddenProseSecondaryChannel(text) ||
+    isMalformedPackFindingsSecondaryChannel(text, source, repoRoot)
+  );
+}
+
+/**
+ * Split-channel secondary parser (#135). Must not call `parseCodexOutput` — its
+ * stdout normalization treats "Review complete" plus NO_FINDINGS and similar forms
+ * as clean; recovery accepts only exact trimmed `NO_FINDINGS` or strict pack JSON.
+ */
+function tryParsePackFindingsFromSecondaryText(
+  text: string,
+  source: ReviewSource,
+  repoRoot: string,
+): SecondaryChannelPayload | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (isExactNoFindingsSecondary(trimmed)) {
+    return { kind: 'clean' };
+  }
+
+  const rawFindings = extractStrictPackFindingsArray(trimmed);
+  if (!rawFindings) {
+    return null;
+  }
+
+  const structured = normalizeStructuredPackFindings(rawFindings);
+  if (structured) {
+    return { kind: 'findings', findings: structured };
+  }
+
+  const codexNative = parseCodexReviewOutput(
+    {
+      findings: rawFindings,
+      overall_correctness: 'patch is incorrect',
+    },
+    source,
+    repoRoot,
+  );
+  if (codexNative.kind === 'findings') {
+    return { kind: 'findings', findings: codexNative.findings };
+  }
+
+  return null;
+}
+
+function findingSignature(findings: StructuredFinding[]): string {
+  return findings
+    .map(
+      (finding) =>
+        `${finding.type}|${finding.code}|${finding.path ?? ''}|${finding.summary}|${finding.severity}`,
+    )
+    .sort()
+    .join('\n');
+}
+
+function secondaryPayloadsAgree(
+  left: SecondaryChannelPayload,
+  right: SecondaryChannelPayload,
+): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === 'clean') {
+    return true;
+  }
+  if (left.kind === 'findings' && right.kind === 'findings') {
+    return findingSignature(left.findings) === findingSignature(right.findings);
+  }
+  return false;
+}
+
+export function isSplitChannelRecoveryCandidate(
+  reviewOutput: CodexReviewOutput,
+  parsed: ParseReviewOutputResult,
+): boolean {
+  if (parsed.kind !== 'error' || parsed.message !== SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE) {
+    return false;
+  }
+  if (!Array.isArray(reviewOutput.findings) || reviewOutput.findings.length > 0) {
+    return false;
+  }
+  return isExplicitNonCleanVerdict(reviewOutput.overall_correctness);
+}
+
+/**
+ * Shape-gated recovery for split-channel Codex review-mode output: empty JSONL
+ * findings[] with pack JSON or exact NO_FINDINGS in secondary channels only.
+ */
+export function attemptSplitChannelRecovery(
+  reviewOutput: CodexReviewOutput,
+  lastMessage: string,
+  source: ReviewSource,
+  repoRoot: string,
+): ParseReviewOutputResult | null {
+  if (!isExplicitNonCleanVerdict(reviewOutput.overall_correctness)) {
+    return null;
+  }
+
+  const explanation = secondaryChannelText(reviewOutput.overall_explanation);
+  const lastMsg = lastMessage.trim();
+
+  const explanationPayload = explanation
+    ? tryParsePackFindingsFromSecondaryText(explanation, source, repoRoot)
+    : null;
+  const lastMessagePayload = lastMsg
+    ? tryParsePackFindingsFromSecondaryText(lastMsg, source, repoRoot)
+    : null;
+
+  if (!explanationPayload && !lastMessagePayload) {
+    return null;
+  }
+
+  if (explanationPayload && lastMessagePayload) {
+    if (!secondaryPayloadsAgree(explanationPayload, lastMessagePayload)) {
+      return null;
+    }
+    if (explanationPayload.kind === 'clean') {
+      return { kind: 'clean' };
+    }
+    return { kind: 'findings', findings: explanationPayload.findings };
+  }
+
+  const sole = explanationPayload ?? lastMessagePayload;
+  if (!sole) {
+    return null;
+  }
+
+  const otherChannelText = explanationPayload ? lastMsg : explanation;
+  if (otherChannelText && otherChannelBlocksSoleRecovery(otherChannelText, source, repoRoot)) {
+    return null;
+  }
+
+  if (sole.kind === 'clean') {
+    return { kind: 'clean' };
+  }
+  return { kind: 'findings', findings: sole.findings };
+}
+
 export function parseReviewModeFromChannels(options: {
   processJsonl: string;
   sessionJsonl?: string | null;
+  lastMessage?: string;
   source: ReviewSource;
   repoRoot: string;
   codexHome?: string;
@@ -522,7 +797,22 @@ export function parseReviewModeFromChannels(options: {
     return null;
   }
 
-  return parseCodexReviewOutput(exited.reviewOutput, options.source, options.repoRoot);
+  const parsed = parseCodexReviewOutput(exited.reviewOutput, options.source, options.repoRoot);
+  if (
+    isSplitChannelRecoveryCandidate(exited.reviewOutput, parsed) &&
+    options.lastMessage !== undefined
+  ) {
+    const recovered = attemptSplitChannelRecovery(
+      exited.reviewOutput,
+      options.lastMessage,
+      options.source,
+      options.repoRoot,
+    );
+    if (recovered) {
+      return recovered;
+    }
+  }
+  return parsed;
 }
 
 export function diagnosticSnippet(text: string, maxLen = 200): string {
