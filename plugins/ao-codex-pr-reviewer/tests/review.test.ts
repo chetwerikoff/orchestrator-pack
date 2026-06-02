@@ -421,7 +421,7 @@ describe('review-mode JSONL verdict', () => {
     });
     expect(result?.kind).toBe('error');
     if (result?.kind === 'error') {
-      expect(result.message).toContain('valid review_output');
+      expect(result.message).toContain('exited_review_mode');
     }
 
     const verdict = selectReviewVerdict({
@@ -435,9 +435,39 @@ describe('review-mode JSONL verdict', () => {
     expect(verdict.kind).toBe('error');
     expect(verdict.verdictSource).toBe('review_mode_jsonl');
     if (verdict.kind === 'error') {
-      expect(verdict.message).toContain('valid review_output');
-      expect(verdict.message).toContain('diagnostic:');
       expect(verdict.message).toContain('exited_review_mode');
+      expect(verdict.message).toContain('diagnostic:');
+    }
+  });
+
+  it('fails closed on unparseable exited_review_mode JSONL line', () => {
+    const sessionJsonl = [
+      '{"type":"event_msg","payload":{"type":"exited_review_mode","review_output":{',
+    ].join('\n');
+
+    const result = parseReviewModeFromChannels({
+      processJsonl: readFixture('process-clean.jsonl'),
+      sessionJsonl,
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(result?.kind).toBe('error');
+    if (result?.kind === 'error') {
+      expect(result.message).toContain('malformed or incomplete exited_review_mode');
+    }
+
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      sessionJsonl,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
+    if (verdict.kind === 'error') {
+      expect(verdict.message).toContain('diagnostic:');
     }
   });
 

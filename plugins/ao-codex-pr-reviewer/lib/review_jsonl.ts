@@ -45,10 +45,34 @@ export function parseJsonlLines(raw: string): unknown[] {
     try {
       events.push(JSON.parse(trimmed));
     } catch {
-      // skip malformed lines
+      // skip malformed lines (process JSONL only; session review-mode uses stricter parsing)
     }
   }
   return events;
+}
+
+function lineLooksLikeExitedReviewMode(line: string): boolean {
+  return /exited_review_mode/i.test(line);
+}
+
+type SessionJsonlLine =
+  | { kind: 'skip' }
+  | { kind: 'malformed_review_mode' }
+  | { kind: 'event'; value: unknown };
+
+function parseSessionJsonlLine(line: string): SessionJsonlLine {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return { kind: 'skip' };
+  }
+  try {
+    return { kind: 'event', value: JSON.parse(trimmed) };
+  } catch {
+    if (lineLooksLikeExitedReviewMode(trimmed)) {
+      return { kind: 'malformed_review_mode' };
+    }
+    return { kind: 'skip' };
+  }
 }
 
 /** Extract parent thread/session id from Codex `--json` process stdout. */
@@ -136,8 +160,17 @@ export function parseExitedReviewModeFromSessionJsonl(
   let latestValid: CodexReviewOutput | null = null;
   let sawMalformed = false;
 
-  for (const event of parseJsonlLines(sessionJsonl)) {
-    const record = asRecord(event);
+  for (const line of sessionJsonl.split(/\r?\n/)) {
+    const parsedLine = parseSessionJsonlLine(line);
+    if (parsedLine.kind === 'skip') {
+      continue;
+    }
+    if (parsedLine.kind === 'malformed_review_mode') {
+      sawMalformed = true;
+      continue;
+    }
+
+    const record = asRecord(parsedLine.value);
     if (record?.type !== 'event_msg') {
       continue;
     }
@@ -160,7 +193,7 @@ export function parseExitedReviewModeFromSessionJsonl(
     return {
       status: 'malformed',
       message:
-        'review-mode JSONL contained exited_review_mode without a valid review_output object — refusing to mark run as clean',
+        'review-mode JSONL contained malformed or incomplete exited_review_mode output — refusing to mark run as clean',
     };
   }
   return { status: 'absent' };
