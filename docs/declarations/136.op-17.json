@@ -13,7 +13,8 @@
     "prompts/codex_review_prompt.md",
     "docs/migration_notes.md",
     "docs/issue_queue_index.md",
-    "docs/issues_drafts/06-codex-reviewer-scope-context.md"
+    "docs/issues_drafts/06-codex-reviewer-scope-context.md",
+    "docs/issues_drafts/46-codex-review-native-output-format-alignment.md"
   ],
   "declared_globs": [
     "plugins/ao-codex-pr-reviewer/**"
