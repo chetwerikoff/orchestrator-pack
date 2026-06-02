@@ -34,11 +34,22 @@ sudo apt update
 sudo apt install -y git curl build-essential
 ```
 
-Install **PowerShell 7** (required for all pack scripts):
+Install **PowerShell 7** (required for all pack scripts). On a clean Ubuntu/WSL2
+image the `powershell` package is not in the default apt indexes — register the
+Microsoft repository first ([install guide](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu)):
 
 ```bash
-# Microsoft package repo — see https://learn.microsoft.com/powershell/scripting/install/install-ubuntu
-sudo apt install -y powershell
+sudo apt-get update
+sudo apt-get install -y wget apt-transport-https software-properties-common
+
+# Register packages.microsoft.com for this Ubuntu release
+source /etc/os-release
+wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+sudo dpkg -i packages-microsoft-prod.deb
+rm packages-microsoft-prod.deb
+sudo apt-get update
+
+sudo apt-get install -y powershell
 pwsh -Version
 ```
 
