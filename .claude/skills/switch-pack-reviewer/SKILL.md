@@ -75,9 +75,15 @@ ao start orchestrator-pack
 
 ### 4. Verify effective reviewer (required)
 
+`set-pack-reviewer.ps1` verifies in a child `pwsh` with process scope cleared (Cursor/agent parents often inject `PACK_REVIEWER`).
+
+Standalone check:
+
 ```powershell
 pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <codex|claude>
 ```
+
+The status script clears process scope before resolving so **User** wins when global is set.
 
 **PASS** = exit code 0, line `Effective` matches target, no override warning.
 

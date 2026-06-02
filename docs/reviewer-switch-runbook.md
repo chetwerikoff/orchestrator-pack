@@ -123,7 +123,8 @@ pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
 pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer codex -RestartAo
 ```
 
-Agent skill: `.claude/skills/switch-pack-reviewer/SKILL.md` (full checklist).
+Agent skill: `.claude/skills/switch-pack-reviewer/SKILL.md` (full checklist).  
+Human-readable copy: [`switch-pack-reviewer-checklist.md`](switch-pack-reviewer-checklist.md).
 
 ## Related docs
 

@@ -12,6 +12,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Cursor/agent parent shells may inject process-scoped PACK_REVIEWER; report User-first effective value.
+Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
+
 $libRoot = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $libRoot 'Resolve-PackReviewer.ps1')
 
