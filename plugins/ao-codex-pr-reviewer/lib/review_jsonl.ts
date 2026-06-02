@@ -534,6 +534,11 @@ function isExactNoFindingsSecondary(text: string): boolean {
   return text.trim() === NO_FINDINGS_TOKEN;
 }
 
+/** Raw JSONL may coerce non-string secondary channel fields; never call string methods on them. */
+function secondaryChannelText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /** Prose priority markers in a non-recoverable secondary channel (#135 forbidden). */
 function isForbiddenProseSecondaryChannel(text: string): boolean {
   const trimmed = text.trim();
@@ -692,7 +697,7 @@ export function attemptSplitChannelRecovery(
     return null;
   }
 
-  const explanation = reviewOutput.overall_explanation?.trim() ?? '';
+  const explanation = secondaryChannelText(reviewOutput.overall_explanation);
   const lastMsg = lastMessage.trim();
 
   const explanationPayload = explanation

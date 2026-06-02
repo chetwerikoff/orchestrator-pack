@@ -803,6 +803,41 @@ describe('review-mode JSONL verdict', () => {
       ).toBeNull();
     });
 
+    it('does not throw when overall_explanation is not a string', () => {
+      const reviewOutput = {
+        findings: [] as unknown[],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 42,
+        overall_confidence_score: 0.5,
+      };
+      const parsed = parseCodexReviewOutput(reviewOutput, 'codex-local', REPO_ROOT);
+      expect(isSplitChannelRecoveryCandidate(reviewOutput, parsed)).toBe(true);
+      expect(() =>
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).not.toThrow();
+      expect(
+        attemptSplitChannelRecovery(reviewOutput, '', 'codex-local', REPO_ROOT),
+      ).toBeNull();
+
+      const verdict = selectReviewVerdict({
+        processJsonl: readFixture('process-clean.jsonl'),
+        lastMessage: PROSE_CLEAN_LAST_MESSAGE,
+        stderr: '',
+        repoRoot: REPO_ROOT,
+        sessionJsonl: [
+          JSON.stringify({
+            type: 'event_msg',
+            payload: {
+              type: 'exited_review_mode',
+              review_output: reviewOutput,
+            },
+          }),
+        ].join('\n'),
+        source: 'codex-local',
+      });
+      expect(verdict.kind).toBe('error');
+    });
+
     it('fails closed when other channel has pretty-printed invalid pack JSON', () => {
       const truncatedPackJson = '{\n  "findings": [';
       const reviewOutput = {
