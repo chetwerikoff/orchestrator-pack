@@ -132,7 +132,7 @@ diagnostics only for JSONL-enabled runs.
 | Verdict source | Condition | Wrapper exit | AO / worker effect |
 |----------------|-----------|--------------|-------------------|
 | Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0, empty stdout | `findingCount: 0`, run `clean` |
-| Review-mode JSONL | `review_output` with findings | 0 | Structured findings parsed into AO store |
+| Review-mode JSONL | `review_output` with findings | 0 | Structured findings parsed into AO store (paths repo-relative) |
 | Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0, empty stdout | `findingCount: 0`, run `clean` |
 | Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Structured findings parsed into AO store |
 | Last message | Empty (no valid review-mode output) | non-zero | Run `failed`; log: `reviewer produced empty output` |
@@ -144,7 +144,9 @@ a copy in the reviewed workspace), injects scope from the linked
 issue (`denylist`, `allowed_roots`) and the active declaration snapshot
 (`docs/declarations/{issue}.{iteration}.json` via `_shared` / scope-guard loaders),
 and maps findings to architecture §F (`type`, `code`, `severity`, `path`,
-`summary`, `source`, signature).
+`summary`, `source`, signature). JSONL `code_location.absolute_file_path` values
+are relativized against `--repo-root` before emission so AO `filePath` and finding
+signatures use stable repository paths (or `null` when outside the repo).
 
 Resolve the issue number from `AO_ISSUE_NUMBER`, `--issue`, or the PR body
 (`Closes #N`). When neither issue fences nor a snapshot exist, the prompt omits
