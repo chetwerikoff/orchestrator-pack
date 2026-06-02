@@ -318,6 +318,56 @@ describe('executeReview JSONL round-trip', () => {
     const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
     expect(payload.findings.length).toBeGreaterThan(0);
   });
+
+  it('emits repo-relative paths in AO payload for absolute JSONL code_location', () => {
+    const repoRoot = process.cwd();
+    const absolutePath = join(repoRoot, 'plugins', 'ao-codex-pr-reviewer', 'lib', 'review_jsonl.ts');
+    const expectedRelative = 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts';
+    const sessionJsonl = [
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'exited_review_mode',
+          review_output: {
+            findings: [
+              {
+                title: '[P2] Normalize paths in AO payload',
+                body: 'Absolute code_location must not leak into AO filePath.',
+                priority: 2,
+                code_location: {
+                  absolute_file_path: absolutePath,
+                  line_range: { start: 1, end: 2 },
+                },
+              },
+            ],
+            overall_correctness: 'patch is incorrect',
+            overall_explanation: 'Path normalization contract test.',
+            overall_confidence_score: 0.8,
+          },
+        },
+      }),
+    ].join('\n');
+
+    const result = executeReview({
+      repoRoot,
+      baseRef: 'origin/main',
+      issueNumber: SCOPED_ISSUE_NUMBER,
+      source: 'codex-local',
+      fixtureStdout: PROSE_CLEAN_LAST_MESSAGE,
+      fixtureProcessJsonl: readFixture('process-clean.jsonl'),
+      fixtureSessionJsonl: sessionJsonl,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.structuredFindings[0]!.path).toBe(expectedRelative);
+
+    const payload = JSON.parse(result.aoStdout) as {
+      findings: Array<{ body: string; filePath?: string }>;
+    };
+    expect(payload.findings[0]!.filePath).toBe(expectedRelative);
+    expect(payload.findings[0]!.body).toContain(`path: ${expectedRelative}`);
+    expect(payload.findings[0]!.body).not.toContain(absolutePath);
+  });
 });
 
 describe('parseCodexOutput', () => {
