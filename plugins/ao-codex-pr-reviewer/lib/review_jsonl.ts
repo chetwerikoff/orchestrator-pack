@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { ReviewSource, StructuredFinding } from './types.js';
 
 export interface CodexReviewOutput {
@@ -182,10 +182,32 @@ function slugify(value: string): string {
     .slice(0, 48);
 }
 
+/** Map Codex absolute paths to repository-relative paths for AO payloads. */
+export function toRepoRelativePath(filePath: string, repoRoot: string): string | null {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (!isAbsolute(trimmed)) {
+    return trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+  }
+
+  const resolvedRoot = resolve(repoRoot);
+  const resolvedPath = resolve(trimmed);
+  const rel = relative(resolvedRoot, resolvedPath).replace(/\\/g, '/');
+  if (!rel || rel === '.' || rel.startsWith('..')) {
+    return null;
+  }
+
+  return rel;
+}
+
 function normalizeReviewFinding(
   raw: unknown,
   index: number,
   source: ReviewSource,
+  repoRoot: string,
 ): StructuredFinding | null {
   const record = asRecord(raw);
   if (!record) {
@@ -205,7 +227,7 @@ function normalizeReviewFinding(
       ? codeLocation.absolute_file_path.trim()
       : '';
   if (absolutePath) {
-    path = absolutePath.replace(/\\/g, '/');
+    path = toRepoRelativePath(absolutePath, repoRoot);
   }
 
   const priority = record.priority;
@@ -232,10 +254,27 @@ export type ParseReviewOutputResult =
 export function parseCodexReviewOutput(
   reviewOutput: CodexReviewOutput,
   source: ReviewSource,
+  repoRoot: string,
 ): ParseReviewOutputResult {
-  const rawFindings = Array.isArray(reviewOutput.findings) ? reviewOutput.findings : [];
+  if (!('findings' in reviewOutput)) {
+    return {
+      kind: 'error',
+      message:
+        'review-mode JSONL review_output is missing required findings array — refusing to mark run as clean',
+    };
+  }
+
+  if (!Array.isArray(reviewOutput.findings)) {
+    return {
+      kind: 'error',
+      message:
+        'review-mode JSONL review_output findings must be an array — refusing to mark run as clean',
+    };
+  }
+
+  const rawFindings = reviewOutput.findings;
   const findings = rawFindings
-    .map((entry, index) => normalizeReviewFinding(entry, index, source))
+    .map((entry, index) => normalizeReviewFinding(entry, index, source, repoRoot))
     .filter((entry): entry is StructuredFinding => entry !== null);
 
   if (findings.length !== rawFindings.length) {
@@ -281,6 +320,7 @@ export function parseReviewModeFromChannels(options: {
   processJsonl: string;
   sessionJsonl?: string | null;
   source: ReviewSource;
+  repoRoot: string;
   codexHome?: string;
 }): ParseReviewOutputResult | null {
   const sessionId = extractThreadIdFromProcessJsonl(options.processJsonl);
@@ -300,7 +340,7 @@ export function parseReviewModeFromChannels(options: {
     return null;
   }
 
-  return parseCodexReviewOutput(exited.reviewOutput, options.source);
+  return parseCodexReviewOutput(exited.reviewOutput, options.source, options.repoRoot);
 }
 
 export function diagnosticSnippet(text: string, maxLen = 200): string {

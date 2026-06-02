@@ -28,6 +28,7 @@ import {
   parseCodexReviewOutput,
   parseExitedReviewModeFromSessionJsonl,
   parseReviewModeFromChannels,
+  toRepoRelativePath,
 } from '../lib/review_jsonl.js';
 import { selectReviewVerdict } from '../lib/verdict.js';
 
@@ -40,6 +41,7 @@ function readFixture(name: string): string {
 
 const PROSE_CLEAN_LAST_MESSAGE =
   'The change adds a straightforward subtract function. No regressions or actionable bugs were identified.';
+const REPO_ROOT = process.cwd();
 
 describe('review dependency roots', () => {
   it('resolves pack repo root to orchestrator-pack', () => {
@@ -104,25 +106,87 @@ describe('review-mode JSONL verdict', () => {
     const sessionJsonl = readFixture('session-clean.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
     expect(exited?.reviewOutput.overall_correctness).toBe('patch is correct');
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed).toEqual({ kind: 'clean' });
   });
 
   it('parses findings from session JSONL review_output', () => {
     const sessionJsonl = readFixture('session-findings.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('findings');
     if (parsed.kind === 'findings') {
       expect(parsed.findings).toHaveLength(1);
       expect(parsed.findings[0]!.summary).toContain('Remove generated review artifact');
+      expect(parsed.findings[0]!.path).toBe('review-events.jsonl');
+    }
+  });
+
+  it('maps absolute code_location paths to repo-relative paths', () => {
+    const absolutePath = join(REPO_ROOT, 'plugins', 'ao-codex-pr-reviewer', 'lib', 'run_review.ts');
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: [
+          {
+            title: '[P2] Example absolute path',
+            body: 'Body text.',
+            priority: 2,
+            code_location: {
+              absolute_file_path: absolutePath,
+              line_range: { start: 1, end: 2 },
+            },
+          },
+        ],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'Example.',
+        overall_confidence_score: 0.5,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('findings');
+    if (parsed.kind === 'findings') {
+      expect(parsed.findings[0]!.path).toBe('plugins/ao-codex-pr-reviewer/lib/run_review.ts');
+    }
+  });
+
+  it('rejects review_output without a findings array', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        overall_correctness: 'patch is correct',
+        overall_explanation: 'Missing findings key.',
+        overall_confidence_score: 0.9,
+      },
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('missing required findings array');
+    }
+  });
+
+  it('rejects review_output when findings is not an array', () => {
+    const parsed = parseCodexReviewOutput(
+      {
+        findings: 'not-an-array',
+        overall_correctness: 'patch is correct',
+        overall_explanation: 'Malformed findings.',
+        overall_confidence_score: 0.9,
+      } as unknown as Parameters<typeof parseCodexReviewOutput>[0],
+      'codex-local',
+      REPO_ROOT,
+    );
+    expect(parsed.kind).toBe('error');
+    if (parsed.kind === 'error') {
+      expect(parsed.message).toContain('findings must be an array');
     }
   });
 
   it('fails closed on contradictory empty findings with incorrect verdict', () => {
     const sessionJsonl = readFixture('session-contradictory-empty-findings.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('error');
     if (parsed.kind === 'error') {
       expect(parsed.message).toContain('overall_correctness');
@@ -132,11 +196,15 @@ describe('review-mode JSONL verdict', () => {
   it('fails closed on contradictory findings with correct verdict', () => {
     const sessionJsonl = readFixture('session-contradictory-clean-verdict.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local');
+    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('error');
     if (parsed.kind === 'error') {
       expect(parsed.message).toContain('contradictory');
     }
+  });
+
+  it('toRepoRelativePath returns null for paths outside the repo', () => {
+    expect(toRepoRelativePath('C:\\outside\\other\\file.ts', REPO_ROOT)).toBeNull();
   });
 
   it('selects JSONL clean verdict over legacy prose last message', () => {
@@ -144,6 +212,7 @@ describe('review-mode JSONL verdict', () => {
       processJsonl: readFixture('process-clean.jsonl'),
       lastMessage: PROSE_CLEAN_LAST_MESSAGE,
       stderr: '',
+      repoRoot: REPO_ROOT,
       sessionJsonl: readFixture('session-clean.jsonl'),
       source: 'codex-local',
     });
@@ -156,6 +225,7 @@ describe('review-mode JSONL verdict', () => {
       processJsonl: '',
       lastMessage: 'NO_FINDINGS',
       stderr: '',
+      repoRoot: REPO_ROOT,
       source: 'codex-local',
     });
     expect(verdict).toMatchObject({ kind: 'clean', verdictSource: 'last_message_fallback' });
@@ -178,6 +248,7 @@ describe('review-mode JSONL verdict', () => {
       processJsonl: '{"type":"thread.started","thread_id":"missing-session"}',
       lastMessage: payload,
       stderr: '',
+      repoRoot: REPO_ROOT,
       source: 'codex-local',
     });
     expect(verdict.kind).toBe('findings');
@@ -189,6 +260,7 @@ describe('review-mode JSONL verdict', () => {
       processJsonl: '',
       lastMessage: 'No concrete bugs were identified in this change.',
       stderr: '',
+      repoRoot: REPO_ROOT,
       source: 'codex-local',
     });
     expect(verdict.kind).toBe('error');
@@ -204,6 +276,7 @@ describe('review-mode JSONL verdict', () => {
         processJsonl:
           '{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}',
         sessionJsonl: null,
+        repoRoot: REPO_ROOT,
         codexHome: join(tmpdir(), 'nonexistent-codex-home-for-tests'),
         source: 'codex-local',
       }),

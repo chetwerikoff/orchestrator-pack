@@ -168,6 +168,7 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     processJsonl: codex.processJsonl,
     lastMessage: codex.lastMessage,
     stderr: codex.stderr,
+    repoRoot: options.repoRoot,
     sessionJsonl: options.fixtureSessionJsonl,
     source,
   });

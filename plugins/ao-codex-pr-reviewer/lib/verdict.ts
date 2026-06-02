@@ -10,6 +10,7 @@ export interface ReviewVerdictChannels {
   processJsonl: string;
   lastMessage: string;
   stderr: string;
+  repoRoot: string;
   sessionJsonl?: string | null;
   codexHome?: string;
 }
@@ -35,6 +36,7 @@ export function selectReviewVerdict(
     processJsonl: channels.processJsonl,
     sessionJsonl: channels.sessionJsonl,
     source: channels.source,
+    repoRoot: channels.repoRoot,
     codexHome: channels.codexHome,
   });
 
