@@ -105,15 +105,23 @@ describe('review-mode JSONL verdict', () => {
   it('parses clean exited_review_mode from session JSONL', () => {
     const sessionJsonl = readFixture('session-clean.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    expect(exited?.reviewOutput.overall_correctness).toBe('patch is correct');
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    expect(exited.reviewOutput.overall_correctness).toBe('patch is correct');
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed).toEqual({ kind: 'clean' });
   });
 
   it('parses findings from session JSONL review_output', () => {
     const sessionJsonl = readFixture('session-findings.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('findings');
     if (parsed.kind === 'findings') {
       expect(parsed.findings).toHaveLength(1);
@@ -186,7 +194,11 @@ describe('review-mode JSONL verdict', () => {
   it('fails closed on contradictory empty findings with incorrect verdict', () => {
     const sessionJsonl = readFixture('session-contradictory-empty-findings.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('error');
     if (parsed.kind === 'error') {
       expect(parsed.message).toContain('overall_correctness');
@@ -196,7 +208,11 @@ describe('review-mode JSONL verdict', () => {
   it('fails closed on contradictory findings with correct verdict', () => {
     const sessionJsonl = readFixture('session-contradictory-clean-verdict.jsonl');
     const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-    const parsed = parseCodexReviewOutput(exited!.reviewOutput, 'codex-local', REPO_ROOT);
+    expect(exited.status).toBe('valid');
+    if (exited.status !== 'valid') {
+      return;
+    }
+    const parsed = parseCodexReviewOutput(exited.reviewOutput, 'codex-local', REPO_ROOT);
     expect(parsed.kind).toBe('error');
     if (parsed.kind === 'error') {
       expect(parsed.message).toContain('contradictory');
@@ -270,6 +286,37 @@ describe('review-mode JSONL verdict', () => {
       expect(verdict.message).toContain('legacy clean-review prose');
       expect(verdict.message).toContain('diagnostic:');
     }
+  });
+
+  it('fails closed on malformed exited_review_mode without review_output', () => {
+    const sessionJsonl = [
+      JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'exited_review_mode', review_output: null },
+      }),
+    ].join('\n');
+
+    const result = parseReviewModeFromChannels({
+      processJsonl: readFixture('process-clean.jsonl'),
+      sessionJsonl,
+      repoRoot: REPO_ROOT,
+      source: 'codex-local',
+    });
+    expect(result?.kind).toBe('error');
+    if (result?.kind === 'error') {
+      expect(result.message).toContain('valid review_output');
+    }
+
+    const verdict = selectReviewVerdict({
+      processJsonl: readFixture('process-clean.jsonl'),
+      lastMessage: 'NO_FINDINGS',
+      stderr: '',
+      repoRoot: REPO_ROOT,
+      sessionJsonl,
+      source: 'codex-local',
+    });
+    expect(verdict.kind).toBe('error');
+    expect(verdict.verdictSource).toBe('review_mode_jsonl');
   });
 
   it('parseReviewModeFromChannels returns null without session JSONL', () => {

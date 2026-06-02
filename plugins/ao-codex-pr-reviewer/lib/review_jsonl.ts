@@ -115,11 +115,17 @@ export function readPersistedSessionJsonl(
   }
 }
 
+export type ParseExitedReviewModeResult =
+  | { status: 'absent' }
+  | { status: 'valid'; reviewOutput: CodexReviewOutput }
+  | { status: 'malformed'; message: string };
+
 /** Last `exited_review_mode` event with `review_output` in persisted session JSONL. */
 export function parseExitedReviewModeFromSessionJsonl(
   sessionJsonl: string,
-): ParsedReviewModeEvent | null {
-  let latest: ParsedReviewModeEvent | null = null;
+): ParseExitedReviewModeResult {
+  let latestValid: CodexReviewOutput | null = null;
+  let sawMalformed = false;
 
   for (const event of parseJsonlLines(sessionJsonl)) {
     const record = asRecord(event);
@@ -132,12 +138,23 @@ export function parseExitedReviewModeFromSessionJsonl(
     }
     const reviewOutput = asRecord(payload.review_output);
     if (!reviewOutput) {
+      sawMalformed = true;
       continue;
     }
-    latest = { reviewOutput: reviewOutput as CodexReviewOutput };
+    latestValid = reviewOutput as CodexReviewOutput;
   }
 
-  return latest;
+  if (latestValid) {
+    return { status: 'valid', reviewOutput: latestValid };
+  }
+  if (sawMalformed) {
+    return {
+      status: 'malformed',
+      message:
+        'review-mode JSONL contained exited_review_mode without a valid review_output object — refusing to mark run as clean',
+    };
+  }
+  return { status: 'absent' };
 }
 
 export function isPatchCorrectVerdict(overallCorrectness: string | undefined): boolean {
@@ -355,7 +372,10 @@ export function parseReviewModeFromChannels(options: {
   }
 
   const exited = parseExitedReviewModeFromSessionJsonl(sessionJsonl);
-  if (!exited) {
+  if (exited.status === 'malformed') {
+    return { kind: 'error', message: exited.message };
+  }
+  if (exited.status === 'absent') {
     return null;
   }
 
