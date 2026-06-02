@@ -34,6 +34,20 @@ function Get-PackReviewerLayerValue {
     return [Environment]::GetEnvironmentVariable($Script:PackReviewerEnvVar, $Target)
 }
 
+function Clear-StalePackReviewerProcessScope {
+    <#
+    .SYNOPSIS
+      Drop process-scoped PACK_REVIEWER when User is configured so global operator choice wins.
+      IDE/agent parents often inject process values; AO review dispatch should follow User/Machine.
+    #>
+    $userValue = Get-PackReviewerLayerValue -Target 'User' -OverrideLayers $null
+    if ([string]::IsNullOrWhiteSpace($userValue)) {
+        return
+    }
+
+    Remove-Item Env:$Script:PackReviewerEnvVar -ErrorAction SilentlyContinue
+}
+
 function Get-PackReviewerSelectorValue {
     <#
     .SYNOPSIS

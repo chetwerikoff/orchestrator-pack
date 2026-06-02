@@ -36,8 +36,13 @@ if ($RestartAo) {
         & ao stop 2>&1 | ForEach-Object { Write-Host $_ }
         Start-Sleep -Seconds 2
         $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-        Start-Process -FilePath 'ao' -ArgumentList 'start', 'orchestrator-pack' -WorkingDirectory $repoRoot | Out-Null
-        Write-Host 'AO start launched in background (dashboard may take a few seconds).'
+        $escapedRoot = $repoRoot.Replace("'", "''")
+        Start-Process -FilePath 'pwsh' -ArgumentList @(
+            '-NoProfile',
+            '-Command',
+            "Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        ) -WorkingDirectory $repoRoot | Out-Null
+        Write-Host 'AO start launched in background via clean shell (dashboard may take a few seconds).'
     }
 }
 
