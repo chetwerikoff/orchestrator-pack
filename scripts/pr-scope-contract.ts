@@ -53,7 +53,9 @@ export function hasSpecOnlySignal(prBody: string): boolean {
 export function hasClosingIssueReference(prBody: string): boolean {
   const normalized = normalizePrBody(prBody);
   ISSUE_LINK_PATTERN.lastIndex = 0;
-  return ISSUE_LINK_PATTERN.test(normalized);
+  const found = ISSUE_LINK_PATTERN.test(normalized);
+  ISSUE_LINK_PATTERN.lastIndex = 0;
+  return found;
 }
 
 export function extractClosingIssueNumber(prBody: string): number | null {

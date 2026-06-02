@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -119,6 +119,46 @@ describe('PowerShell must not duplicate closing-keyword regex', () => {
   it('NON_CLOSING_ISSUE_REF_PATTERN stays aligned with documented Refs form', () => {
     expect(NON_CLOSING_ISSUE_REF_PATTERN.test('Refs #1')).toBe(true);
     expect(NON_CLOSING_ISSUE_REF_PATTERN.test('Closes #1')).toBe(false);
+  });
+});
+
+describe('resolve-issue-number CLI (PowerShell entrypoint parity)', () => {
+  const checkScript = join('scripts', 'pr-scope-check.ts');
+
+  function resolveViaCli(prBody: string): number | null {
+    const payloadPath = join(tmpdir(), `scope-guard-cli-${randomUUID()}.json`);
+    writeFileSync(payloadPath, JSON.stringify({ prBody }), 'utf8');
+    try {
+      const output = execFileSync(
+        process.execPath,
+        ['--import', 'tsx', checkScript, '--resolve-issue-number', '--input', payloadPath],
+        {
+          encoding: 'utf8',
+          cwd: process.cwd(),
+        },
+      );
+      const parsed = JSON.parse(output) as { issueNumber: number | null };
+      return parsed.issueNumber;
+    } finally {
+      try {
+        unlinkSync(payloadPath);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+
+  it.each([
+    ['Closes #6', 6],
+    ['Fixes #6', 6],
+    [`${SPEC_ONLY_SIGNAL_LITERAL}\nRefs #121`, 121],
+  ])('CLI agrees with TypeScript for %s', (body, expected) => {
+    expect(resolveViaCli(body)).toBe(expected);
+    if (hasSpecOnlySignal(body)) {
+      expect(extractNonClosingIssueNumber(body)).toBe(expected);
+    } else {
+      expect(extractClosingIssueNumber(body)).toBe(expected);
+    }
   });
 });
 
