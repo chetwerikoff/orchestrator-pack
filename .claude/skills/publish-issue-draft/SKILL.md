@@ -1,35 +1,97 @@
 ---
 name: publish-issue-draft
 description: >-
-  After create-issue-draft finishes (Codex NO_FINDINGS, GitHub issue synced),
-  commit draft files, open a PR, and merge to main. Use when the user asks to
-  publish or ship an issue draft, commit the draft, open a PR for the draft, or
-  says the draft should not stay uncommitted — including right after creating a
-  draft and issue. Chains from create-issue-draft; skip if the user says not to
-  merge or only wants the local draft.
+  After create-issue-draft finishes (Codex draft review done, GitHub issue
+  synced), decide how the local draft is persisted. DEFAULT is sync-only: the
+  GitHub Issue is the queue; the draft file stays local and is NOT committed or
+  PR'd. Only open a PR to main on explicit request (batch a series, or full
+  publish of one draft). Use when the user asks to publish, commit, batch, or
+  ship a draft. Chains from create-issue-draft.
 ---
 
-# Publish issue draft to main
+# Publish issue draft
 
-Land **spec-only** changes (draft markdown, registry, architecture decision log)
-so `main` matches the GitHub Issue the worker will implement. This is **not**
-implementation — do not close the queue item permanently.
+The GitHub **Issue** is the live queue and the source of truth a worker reads
+(`ao spawn`, scope guard, planner all read the issue body). Landing the local
+draft *file* in `main` is a separate, optional act of repo snapshotting.
+
+This skill picks **how** a draft is persisted after `create-issue-draft`:
+
+| Mode | Issue synced | Draft file PR'd to main | Snapshot + CI | When |
+|------|--------------|-------------------------|---------------|------|
+| **sync-only** (default) | yes | **no** | no | normal impl tasks; issue body is the full spec |
+| **batch** | yes | one PR for several drafts | one run | epic+children, arch waves, registry refresh |
+| **full-publish** | yes | one PR for this draft | yes | user says "commit/merge this draft"; spec must live in main before impl; audit |
+
+Codex review is **unchanged**: draft-quality review happens in
+`create-issue-draft` (before sync); for any PR opened here, an optional manual
+Codex pass runs per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md).
 
 **Prerequisite:** [`create-issue-draft`](../create-issue-draft/SKILL.md) completed:
 
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).
-- Codex draft review returned `NO_FINDINGS` (or 3-iteration cap with open questions recorded).
+- Codex draft review done (`NO_FINDINGS` or 3-iteration cap with open questions recorded).
 - `gh issue create` / `gh issue edit` synced the body.
-- `docs/issue_queue_index.md` row updated.
+- `docs/issue_queue_index.md` row updated **locally**.
 
-## When to invoke
+---
 
-- Immediately after `create-issue-draft` unless the user opts out.
-- User: «опубликуй драфт», «закоммить драфт», «pr для драфта», «publish draft», «смержи драфт».
+## Mode A — sync-only (DEFAULT)
 
-**Skip:** user wants draft/issue only locally; implementation PR already in flight; unrelated git work on the branch.
+Use unless the user explicitly asks for a PR/merge or batch. The draft is a
+working artifact; the issue carries everything the worker needs.
 
-## Files in the publish commit
+1. Confirm the issue body matches the local draft (re-`gh issue edit` if the
+   draft changed after the last sync).
+2. Confirm the draft header records `GitHub Issue: #N`.
+3. Ensure the local `docs/issue_queue_index.md` row exists (local edit only — not committed).
+4. **Stop.** Do not open a PR, do not run `ao-declare`, do not run scope checks.
+5. Report to the user:
+   - Issue URL and number **N** (open for `ao spawn`).
+   - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in `main`."
+
+**Accepted risk:** `main` will lag the local draft. If a *future* draft's
+prerequisites reference this draft by its `docs/issues_drafts/...` path on
+`main`, that path won't resolve until a batch/full publish runs. Mitigate by
+keeping the full spec in the issue body and a self-reference (draft path) inside it.
+
+## Mode B — batch publish
+
+Use when several related drafts have accumulated (epic + children, an
+architecture wave) or the registry needs to land. One PR, one CI run, one merge
+for the whole set.
+
+1. Pre-flight + branch from `main` (see Common steps).
+2. For **each** draft in the batch, declaration snapshot with its implementation
+   issue number (see Common steps → snapshot).
+3. Stage all drafts + one `docs/issue_queue_index.md` update + all snapshots.
+4. One commit, one PR covering the set (list every `#N` in the body), one CI run, one merge.
+5. Per-issue reopen check (Common steps → reopen) for each `#N` the PR closed.
+
+Prefer batch over N single-draft PRs whenever drafts are related.
+
+## Mode C — full-publish (single draft, on request)
+
+Use when the user explicitly says "commit / merge this draft", the spec must be
+in `main` before implementation, or there's an audit/compliance reason. This is
+the full heavy flow. Run the Common steps end-to-end for the one draft.
+
+---
+
+## Common steps (Modes B and C only)
+
+### Pre-flight
+
+```powershell
+git status -sb
+git fetch origin
+```
+
+Branch from current `main`: `git checkout main` → `git pull origin main` →
+`git checkout -b architect/draft-NN-<slug>` (or stay on a clean branch already
+cut for this draft). Record implementation issue number **N** from the draft header.
+
+### Files in the publish commit
 
 Include **only** what the draft session touched:
 
@@ -41,22 +103,10 @@ Include **only** what the draft session touched:
 
 Do **not** bundle unrelated local edits (other skills, `agent-orchestrator.yaml`, WIP code).
 
-## Workflow
+### Declaration snapshot (scope guard)
 
-### 1. Pre-flight
-
-```powershell
-git status -sb
-git fetch origin
-```
-
-- Branch from current `main`: `git checkout main` → `git pull origin main` →
-  `git checkout -b architect/draft-NN-<slug>` (or stay on a clean branch already cut for this draft).
-- Record implementation issue number **N** from the draft header.
-
-### 2. Declaration snapshot (scope guard)
-
-Commit a snapshot **before** or with the docs commit. Use the **implementation** issue number **N**.
+Commit a snapshot **before** or with the docs commit. Use the **implementation**
+issue number **N**.
 
 ```powershell
 $env:AO_ISSUE_NUMBER = '<N>'
@@ -69,11 +119,18 @@ npx ao-declare --issue <N> `
 ```
 
 Add `docs/issues_drafts/00-architecture-decisions.md` to `--declared-paths` when it changed.
-Add `docs/declarations/**` to `--declared-globs` if the declare tool accepts amending snapshot paths in a follow-up `--amend`.
 
-If `ao-declare` fails issue-constraint validation, widen the **draft's** `allowed-roots` in the issue body (via `gh issue edit`) so `docs/issues_drafts/**` and `docs/issue_queue_index.md` are allowed, then re-declare — do not bypass scope guard.
+If `ao-declare` fails issue-constraint validation, widen the **draft's**
+`allowed-roots` in the issue body (via `gh issue edit`) so
+`docs/issues_drafts/**` and `docs/issue_queue_index.md` are allowed, then
+re-declare — do not bypass scope guard.
 
-### 3. Local checks
+> The declaration-snapshot + `Closes #N` + auto-close/reopen dance is the heavy
+> part of this flow. Lifting it for pure spec-only docs PRs is tracked as a
+> separate CI reform — see [`docs/issues_drafts/`](../../../docs/issues_drafts/)
+> (spec-only scope-guard story). Until that lands, the steps below stay required.
+
+### Local checks
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -WithWorkingTree
@@ -83,7 +140,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -W
 
 Fix `[STRICT]` findings before push.
 
-### 4. Commit and push
+### Commit and push
 
 ```powershell
 git add docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md docs/declarations/<N>.architect-draft-NN.json
@@ -92,7 +149,7 @@ git commit -m "docs: draft NN — <short title> (#N spec)"
 git push -u origin HEAD
 ```
 
-### 5. Open PR
+### Open PR
 
 Body template (replace placeholders):
 
@@ -105,9 +162,7 @@ Closes #N
 - Update `docs/issue_queue_index.md`.
 - Declaration snapshot `docs/declarations/N.architect-draft-NN.json`.
 
-**Spec only** — does not implement #N. If GitHub auto-closes #N on merge, reopen the issue immediately (step 7).
-
-Refs #N
+**Spec only** — does not implement #N. If GitHub auto-closes #N on merge, reopen the issue immediately.
 
 ## Test plan
 
@@ -124,16 +179,18 @@ gh pr create --repo chetwerikoff/orchestrator-pack `
   --body-file $env:TEMP\publish-draft-pr-body.md
 ```
 
-`Closes #N` is required for scope guard (same **N** as the snapshot `issue_number`). The summary must state spec-only.
+`Closes #N` is currently required for scope guard (same **N** as the snapshot
+`issue_number`). The summary must state spec-only.
 
-### 6. Review and merge
+### Review and merge
 
-Architect PRs do not get AO auto-review. Either:
+Architect PRs do not get AO auto-review. Either wait for CI green then merge, or
+run manual pack review per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md)
+if the user expects a Codex pass before merge.
 
-- Wait for CI green, then merge; or
-- Run manual pack review per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md) if the user expects Codex pass before merge.
-
-When the user asked to merge (e.g. «смерж» after publish), follow [`merge-with-local-adoption`](../merge-with-local-adoption/SKILL.md): adoption is usually **none** for docs-only drafts unless the draft changed `.example` or runbooks.
+When the user asked to merge, follow
+[`merge-with-local-adoption`](../merge-with-local-adoption/SKILL.md): adoption is
+usually **none** for docs-only drafts unless the draft changed `.example` or runbooks.
 
 ```powershell
 gh pr checks <pr> --repo chetwerikoff/orchestrator-pack
@@ -142,7 +199,7 @@ git checkout main
 git pull origin main
 ```
 
-### 7. Reopen implementation issue if auto-closed
+### Reopen implementation issue if auto-closed
 
 ```powershell
 $state = gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state --jq .state
@@ -152,17 +209,20 @@ if ($state -eq 'CLOSED') {
 }
 ```
 
-### 8. Report
+### Report
 
-Tell the user: PR URL, merge commit, draft path on `main`, and that issue **#N** remains **open** for `ao spawn`.
+Tell the user: PR URL, merge commit, draft path on `main`, and that issue **#N**
+(each `#N` for batch) remains **open** for `ao spawn`.
 
 ## Operator adoption
 
-Docs-only draft publishes normally need **no** local operator steps. If the draft touched `agent-orchestrator.yaml.example`, run the adoption scan from `merge-with-local-adoption` even when merging a spec PR.
+Docs-only draft publishes normally need **no** local operator steps. If a draft
+touched `agent-orchestrator.yaml.example`, run the adoption scan from
+`merge-with-local-adoption` even when merging a spec PR.
 
 ## Do not
 
+- Open a PR in sync-only mode — that is the whole point of the default.
 - Merge with failing scope guard or self-architect `-Strict`.
 - Use `gh pr merge --admin` to skip checks unless the user explicitly requests it.
-- Leave the draft only on disk after issue sync without publishing (default is to publish).
 - Commit secrets or `agent-orchestrator.yaml` (gitignored).
