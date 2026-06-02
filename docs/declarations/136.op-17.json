@@ -10,6 +10,9 @@
     "active_scope_hash": "sha256:ebb5b38c3b49759b9c28c492d2cee6fb71e187c7efd5562f7adbe6a1b8adb32f"
   },
   "declared_paths": [
+    "prompts/codex_review_prompt.md",
+    "docs/migration_notes.md",
+    "docs/issue_queue_index.md",
     "docs/issues_drafts/06-codex-reviewer-scope-context.md"
   ],
   "declared_globs": [
