@@ -126,6 +126,37 @@ until upstream enhancement: `orchestratorRules` **MERGED PR — REVIEW LOOP
 TERMINAL** (Issue #54) — verify merge via GitHub, then orchestrator inaction on
 stale runs plus operator runbooks; not hand-editing review-run JSON.
 
+### Finding-routing enactment — Gate 0 (AO 0.9.2, 2026-06-02)
+
+Spike for draft `docs/issues_drafts/50-finding-routing-selective-send-enactment.md`
+(pack finding router: `forward` / `backlog` / `drop`). Environment: `ao` **0.9.2**
+(`@aoagents/ao`), project `orchestrator-pack`, store under
+`~/.agent-orchestrator/projects/orchestrator-pack/code-reviews/`.
+
+| Capability | Question | Result |
+|------------|----------|--------|
+| **A — selective send** | Can orchestration send a subset of open findings on a run? | **No.** `ao review send <run>` has no per-finding filter. `@aoagents/ao-core` `sendCodeReviewFindingsToAgent` loads **all** `status: "open"` findings, one worker message, bulk `sent_to_agent`. CLI: `run \| execute \| send \| list` only. |
+| **A′ — terminal non-forward** | Can backlog/drop clear `openFindingCount > 0` without send? | **No for automated enactment.** Finding statuses: `open` \| `dismissed` \| `sent_to_agent` \| `resolved` (`code-review-store.d.ts`). `openFindingCount` counts only `open`. No `backlogged` / `dropped`. `dismissed` would clear the predicate, but **no** `ao review dismiss` (or equivalent) — UI dismiss only (recovery runbook). Classifier backlog/drop that leaves findings `open` **re-triggers** pack rules (`needs_triage` + `openFindingCount > 0` → send). Same upstream class as #122. |
+| **B — `prior_sent`** | Is send history visible at the routing decision point? | **No.** `ao review list --json` exposes run aggregates only. Per-finding JSON on disk (`fingerprint`, `status`, `linkedSessionId`, `sentToAgentAt`) is **not** an orchestrator/CLI contract. `ao-token-chain-ledger` finding signatures require explicit append — **not** wired to `ao review send`. |
+
+**Verdict:** Per-finding routing **enactment** in production is **upstream-blocked**
+(A + A′). Pack read-hook over `code-reviews/findings/` can compute B offline but
+cannot enact routes without supported AO transitions; hand-editing `code-reviews/`
+is forbidden. **Offline** trilogy (drafts 47–49) remains unblocked.
+
+**Upstream tracking (pack [#140](https://github.com/chetwerikoff/orchestrator-pack/issues/140)) — two tracks:**
+
+| Track | Issues | Role |
+|-------|--------|------|
+| **Pipeline (preferred)** | [#1631](https://github.com/ComposioHQ/agent-orchestrator/issues/1631) router, [#1346](https://github.com/ComposioHQ/agent-orchestrator/issues/1346) `ao artifact dismiss\|send`, [#1345](https://github.com/ComposioHQ/agent-orchestrator/issues/1345) | Native classifier domain: command stage (findings JSON) + router + A′ |
+| **Legacy fallback** | [#2088](https://github.com/ComposioHQ/agent-orchestrator/issues/2088) | `ao review` 0.9.x per-finding send + dismiss CLI |
+| **Delivery trust** | [#1943](https://github.com/ComposioHQ/agent-orchestrator/issues/1943), [#614](https://github.com/ComposioHQ/agent-orchestrator/issues/614) | `forward` ≠ delivered; need skipped-reason observability |
+| **Backlog sink candidate** | [#1494](https://github.com/ComposioHQ/agent-orchestrator/issues/1494) | Native `ao backlog` vs pack `docs/` file (#139) |
+
+Classifier defaults to **pipeline command / findings JSON**, not legacy-only. Pack: tracking
++ docs (#122 discipline); no prod wiring until A + A′ on chosen track. Queue: §Q —
+**#139 + #140 now**; **#141/#142 deferred**.
+
 ### CI layer
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on
