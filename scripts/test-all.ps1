@@ -72,7 +72,7 @@ if (-not $SkipPester) {
     }
     else {
         Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
-        $pesterRoot = Join-Path $Root 'tests\powershell'
+        $pesterRoot = Join-Path $Root 'tests/powershell'
         $result = Invoke-Pester -Path $pesterRoot -PassThru
         if ($result.FailedCount -gt 0) {
             Write-Track 'pester' 'FAIL' ("failed={0}" -f $result.FailedCount)

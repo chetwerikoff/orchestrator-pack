@@ -1,7 +1,7 @@
 Describe 'scripts/test-all.ps1' {
     BeforeAll {
-        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-        $script:TestAllScript = Join-Path $script:RepoRoot 'scripts\test-all.ps1'
+        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+        $script:TestAllScript = Join-Path $script:RepoRoot 'scripts/test-all.ps1'
     }
 
     It 'exists at the repository scripts path' {
@@ -31,8 +31,8 @@ Describe 'scripts/test-all.ps1' {
 
 Describe 'scripts/verify.ps1' {
     BeforeAll {
-        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-        $script:VerifyScript = Join-Path $script:RepoRoot 'scripts\verify.ps1'
+        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+        $script:VerifyScript = Join-Path $script:RepoRoot 'scripts/verify.ps1'
     }
 
     It 'exists for pack structure verification' {

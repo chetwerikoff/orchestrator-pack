@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
-$DefaultFixtureDir = Join-Path $PackRoot 'tests\fixtures\pack-review-strict-gate'
+$DefaultFixtureDir = Join-Path $PackRoot 'tests/fixtures/pack-review-strict-gate'
 
 function Invoke-AoReviewListJson {
     param([string]$Project)
