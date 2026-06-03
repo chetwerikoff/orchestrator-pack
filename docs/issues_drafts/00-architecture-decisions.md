@@ -507,6 +507,37 @@ tears down cleanly). The pack moves off native Windows.
 
 See `docs/issues_drafts/39-ubuntu-linux-only-port.md` (GitHub #115).
 
+## Q. Finding-routing eval queue sequencing (post Gate 0, AO 0.9.2)
+
+**Context:** Gate 0 spike (2026-06-02, `ao` 0.9.2) confirmed production enactment of
+`forward` / `backlog` / `drop` is **upstream-blocked** — capabilities A (selective send)
+and A′ (terminal non-forward status via CLI, not UI-only `dismissed`) are both missing;
+B (`prior_sent` at routing point) is also missing. Same class as §J / draft 38 (GitHub
+#122): pack does not hand-edit `code-reviews/` or ship noops.
+
+**Cost-rule sequencing (orchestrator-pack queue):**
+
+| Draft | Role | Queue status |
+|-------|------|----------------|
+| `47-finding-routing-scorer-corpus.md` | Gold corpus + offline scorer on recorded routes | **Active** — build now; dataset supports upstream ask + same-day wiring when API lands |
+| `50-finding-routing-selective-send-enactment.md` | Upstream issue + tracking (#122 discipline) | **Active (blocked upstream)** — Gate 0 done; deliverable is Composio issue link, not pack wiring |
+| `48-finding-routing-bounded-edit-preflight.md` | Classifier edit hygiene | **Deferred** — valid offline, but promote path blocked |
+| `49-finding-routing-live-behavior-gate.md` | Live judge accept vs gold | **Deferred** — tuning stand without deploy target is over-investment |
+
+**Upstream — two tracks (2026-06-02 catalog):**
+
+- **Preferred:** pipeline [#1631](https://github.com/ComposioHQ/agent-orchestrator/issues/1631)
+  (`builtin/router`) + [#1346](https://github.com/ComposioHQ/agent-orchestrator/issues/1346)
+  (`ao artifact dismiss|send`). Classifier = `command` stage with findings JSON stdout.
+- **Legacy fallback:** [#2088](https://github.com/ComposioHQ/agent-orchestrator/issues/2088)
+  for `ao review` 0.9.x only — do not design classifier architecture solely on this path.
+- **Delivery prerequisites:** [#1943](https://github.com/ComposioHQ/agent-orchestrator/issues/1943),
+  [#614](https://github.com/ComposioHQ/agent-orchestrator/issues/614) — `forward` requires
+  observable skip reasons before prod accept.
+- **Backlog sink candidate:** [#1494](https://github.com/ComposioHQ/agent-orchestrator/issues/1494).
+
+Record Gate 0 + two-track table in [`docs/architecture.md`](../architecture.md#finding-routing-enactment--gate-0-ao-092-2026-06-02).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.
