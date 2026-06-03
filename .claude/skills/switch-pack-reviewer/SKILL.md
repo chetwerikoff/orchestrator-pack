@@ -27,7 +27,7 @@ Canonical docs: [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switc
 
 ## Core rule (tell the user if confused)
 
-- **User** = permanent operator choice (Windows «переменные среды» пользователя).
+- **User** = permanent operator choice (User-level env var / shell profile).
 - **Process** = sticker on this terminal/session; **wins over User** while set.
 - **Do not** copy User → Process on every boot — clear Process instead.
 - **Do not** set `$env:PACK_REVIEWER` in profiles/IDE unless intentional one-shot override.

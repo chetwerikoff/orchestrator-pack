@@ -119,6 +119,24 @@ to merge yet.
 **Loader entry points (optional):** `.cursor/skills/merge-with-local-adoption/SKILL.md`,
 `.claude/skills/merge-with-local-adoption/SKILL.md`.
 
+## Auto-invoke: create issue draft
+
+When authoring or rewriting a task draft (`docs/issues_drafts/NN-<slug>.md`) or
+syncing a new GitHub Issue spec, follow
+[`.claude/skills/create-issue-draft/SKILL.md`](.claude/skills/create-issue-draft/SKILL.md)
+immediately.
+
+**Loader entry points (optional):** `.cursor/skills/create-issue-draft/SKILL.md`,
+`.claude/skills/create-issue-draft/SKILL.md`.
+
+## Auto-invoke: study external source
+
+When the user asks to study an external repo/URL for adoption, follow
+[`.claude/skills/study-external-source/SKILL.md`](.claude/skills/study-external-source/SKILL.md).
+
+**Loader entry points (optional):** `.cursor/skills/study-external-source/SKILL.md`,
+`.claude/skills/study-external-source/SKILL.md`.
+
 ## Auto-invoke: publish issue draft
 
 After [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) completes (Codex

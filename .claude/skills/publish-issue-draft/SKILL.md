@@ -30,7 +30,7 @@ Codex pass runs per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md).
 **Prerequisite:** [`create-issue-draft`](../create-issue-draft/SKILL.md) completed:
 
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).
-- Codex draft review done (`NO_FINDINGS` or 3-iteration cap with open questions recorded).
+- Codex draft review done (`NO_FINDINGS` or 5-iteration cap with open questions recorded).
 - `gh issue create` / `gh issue edit` synced the body.
 - `docs/issue_queue_index.md` row updated **locally**.
 
@@ -107,9 +107,9 @@ snapshot, no `Closes #N`, no reopen step). See
 ### Local checks
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/lint-self-architect.ps1 -WithWorkingTree
-.\scripts\verify.ps1
-.\scripts\check-reusable.ps1
+pwsh -NoProfile -File scripts/lint-self-architect.ps1 -WithWorkingTree
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
 Fix `[STRICT]` findings before push.

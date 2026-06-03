@@ -179,11 +179,24 @@ direct architect patch unless **`direct-fix-checklist`** was authorized.
 ## Optional Codex self-check (architect-only)
 
 Not a merge gate. After drafting the memo, you may run Codex CLI on the memo text
-(max **3** iterations). Use PowerShell string composition — **no** stdin `<`
-redirect.
+(max **3** iterations).
+
+**Command discipline:** `codex review` or
+`scripts/review-architect-artifact.ps1 -Kind rca-memo` only — never `codex exec`.
+Do not pipe stdout through `tail` or `head`.
+
+**Preferred (Linux / WSL2 / pwsh 7+):**
 
 ```powershell
-$memo = Get-Content -Raw $env:TEMP\orchestrator-pack-rca-memo.md
+pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
+  -ArtifactPath $env:TEMP/orchestrator-pack-rca-memo.md `
+  -Kind rca-memo
+```
+
+**Manual equivalent (pwsh string composition — no stdin `<` redirect):**
+
+```powershell
+$memo = Get-Content -Raw $env:TEMP/orchestrator-pack-rca-memo.md
 $prompt = @"
 You are a critical reviewer for a root-cause investigation memo.
 Challenge unsupported claims, missing queue/architecture search, items listed
