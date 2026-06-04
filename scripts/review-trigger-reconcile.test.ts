@@ -87,7 +87,7 @@ describe('planReconcileActions', () => {
   it('accepts PowerShell single-object openPrs (not a JSON array)', () => {
     const fixture = loadFixture('uncovered-no-report.json');
     const actions = planReconcileActions({
-      openPrs: fixture.openPrs[0],
+      openPrs: fixture.openPrs[0] as unknown as typeof fixture.openPrs,
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
     });
