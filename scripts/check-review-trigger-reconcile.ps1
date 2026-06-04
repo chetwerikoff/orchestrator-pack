@@ -36,8 +36,8 @@ if ($missing.Count -gt 0) {
 }
 
 $mjs = Get-Content -LiteralPath $reconcileMjs -Raw
-if ($mjs -notmatch 'DEFAULT_RECONCILE_INTERVAL_MS = 20 \* 60 \* 1000') {
-    Write-Host 'docs/review-trigger-reconcile.mjs must default to 20-minute interval'
+if ($mjs -notmatch 'DEFAULT_RECONCILE_INTERVAL_MS = 10 \* 60 \* 1000') {
+    Write-Host 'docs/review-trigger-reconcile.mjs must default to 10-minute interval'
     exit 1
 }
 

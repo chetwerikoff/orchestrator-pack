@@ -69,7 +69,7 @@ before — `scripts/orchestrator-wake-listener.ps1` and
 `scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
 Use when debugging one path in isolation.
 
-**Terminal C — review-trigger reconciliation** (default 20 min; independent of orchestrator turns)
+**Terminal D — review-trigger reconciliation** (default 10 min; independent of orchestrator turns)
 
 ```powershell
 cd <orchestrator-pack-root>
@@ -83,7 +83,7 @@ One-shot dry-run (no `ao review run`):
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
 ```
 
-**Terminal D — worktree trust watcher** (Windows Cursor; avoids blocking
+**Terminal E — worktree trust watcher** (Windows Cursor; avoids blocking
 `Workspace Trust Required` on each new `op-*` worktree)
 
 ```powershell

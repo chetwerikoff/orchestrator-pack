@@ -226,7 +226,7 @@ projects:
       STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
       low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
         pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1
-      Default cadence: 20 minutes (tens of minutes). Override with
+      Default cadence: 10 minutes (tens of minutes). Override with
       AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES or -IntervalMinutes. State file:
       AO_REVIEW_TRIGGER_RECONCILE_STATE or %TEMP%\orchestrator-review-reconcile-state.json.
       Each tick:

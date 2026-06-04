@@ -465,7 +465,7 @@ Confirm a run appears after an uncovered head exists:
 ao review list orchestrator-pack --json
 ```
 
-Default cadence is **20 minutes** (`AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
+Default cadence is **10 minutes** (`AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
 overrides). PRs without a linked worker session in `ao status --json --reports full`
 are skipped until respawn discipline creates one — the reconcile process must not
 call `ao spawn --claim-pr` (PR #97 split-brain guard).
