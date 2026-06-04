@@ -1,0 +1,23 @@
+{
+  "description": "Burst of pairs in 8s during AO restart — span below threshold, must not flag",
+  "nowMs": 3000000,
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2992000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2992500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2993000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2993500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2994000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2994500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2995000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2995500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2996000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2996500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2997000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2997500, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2998000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2998500, "data": { "subscriberCount": 1 } }
+  ],
+  "expect": {
+    "flagged": false
+  }
+}

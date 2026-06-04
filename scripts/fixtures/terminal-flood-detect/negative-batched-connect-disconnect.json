@@ -1,0 +1,21 @@
+{
+  "description": "Six connects then six disconnects (balanced counts, no alternating cycles) — must not flag",
+  "nowMs": 3000000,
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2940000 },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2941000 },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2942000 },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2943000 },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2944000 },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 2945000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2980000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2981000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2982000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2983000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2984000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 2985000, "data": { "subscriberCount": 1 } }
+  ],
+  "expect": {
+    "flagged": false
+  }
+}

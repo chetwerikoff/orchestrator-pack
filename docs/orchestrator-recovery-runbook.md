@@ -523,7 +523,7 @@ is orphan), the process logs:
 **Operator remedy:**
 
 1. Open the worker session terminal — look for a flooded mux, stuck approval prompt, or
-   unsubmitted paste (see Issue #173 / upstream terminal-flood work).
+   unsubmitted paste (see **Terminal Device-Attributes flood** below).
 2. Confirm `ao status --json --reports full`: linked session must be **live** and still
    on the PR. If `terminated` / `killed` / long `detecting`, do **not** `ao review send`
    into the orphan run — follow **Orphan review run after worker respawn** below.
@@ -534,6 +534,82 @@ is orphan), the process logs:
 
 Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
 runs and never contacts workers.
+
+## Terminal Device-Attributes flood (Issue #173)
+
+**Queue status:** `active-blocked-upstream` — the durable fix (terminal reset/sanitize on
+mux-attach + reconnect-loop throttle) is tracked at
+[ComposioHQ/agent-orchestrator#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094).
+The pack does **not** patch AO core; this section is operator mitigation only.
+
+### Symptoms
+
+Recognise the flood before re-sending findings:
+
+- Worker session is otherwise idle but **CPU stays high** (dashboard terminal re-rendering).
+- `ao events list` shows sustained **`ui.terminal_connected` / `ui.terminal_disconnected`**
+  cycling for the affected session (pack signature `terminal_mux_paired_flap`).
+- Injected `ao send` / `ao review send` text appears in the worker pane as an **unsubmitted**
+  `[Pasted text]` block — the agent never starts a turn.
+- Review loop stalls with green CI and **0 open findings** while delivery confirmation
+  (Issue #171) may show **unconfirmed** / **escalated** runs.
+
+Read-only diagnostic (safe defaults: **60**-second window, **6** paired connect/disconnect
+cycles minimum, **30**-second minimum span):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>
+```
+
+Fixture mode (no live `ao`):
+
+```powershell
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -FixturePath scripts/fixtures/terminal-flood-detect/positive-sustained-paired-flap.json
+```
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Detection window | **60** seconds | `AO_TERMINAL_FLOOD_WINDOW_SECONDS` |
+| Minimum paired mux cycles | **6** | `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` |
+| Events fetch lookback | **5** minutes (`-SinceMinutes`) | — |
+
+Exit code **2** means the signature fired for the requested session. The detector uses
+**only** `ao events` JSON — it does **not** scrape tmux panes for `ESC[` sequences.
+
+### Stop the reconnect loop
+
+On the **dashboard client** (mux side), close the terminal view that is driving the
+reconnect loop — typically the flooded worker session tab/panel. Do **not** kill the
+worker session yet; stopping the flapping client is the first step.
+
+### Post-stop verification
+
+Re-run the diagnostic for that session and confirm the signature has **subsided** below
+threshold (no `terminal_mux_paired_flap` flag):
+
+```powershell
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>
+```
+
+If churn **does not drop** within a few minutes (wrong tab closed, stale browser tab, or
+external reconnect source), **recycle the session** (`ao session kill <id>` and respawn
+per your normal worker discipline, or operator recycle policy) before attempting delivery
+again.
+
+### Re-deliver after verified quiet
+
+Only **after** the channel is verified quiet:
+
+1. Prefer Issue **#171** evidence — use the **unconfirmed** or **escalated** review run id
+   from `scripts/review-finding-delivery-confirm.ps1` logs or
+   `AO_REVIEW_DELIVERY_CONFIRM_STATE`, not a blind resend.
+2. Confirm the linked worker is **live** and owns the PR head (`ao status --json --reports full`).
+3. `ao review send <run-id>` once to the live session, or start a fresh review round if the
+   run is orphan (see **Orphan review run after worker respawn** above).
+
+Do not re-deliver while the mux signature is still flagged — duplicates and silent loss
+are both possible.
 
 ## Orphan review run after worker respawn
 
