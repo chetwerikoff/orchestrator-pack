@@ -167,7 +167,7 @@ describe('classifyReviewReadySnapshot shape', () => {
   it('early exit returns full ReviewReadyClassification fields', () => {
     const result = classifyReviewReadySnapshot({
       session: {},
-      openPr: {},
+      openPr: { number: 0, headRefOid: '' },
       reviewRuns: [],
       ciChecks: [],
     });
