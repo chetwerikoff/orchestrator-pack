@@ -9,6 +9,14 @@ It contains plugins, prompt fragments, config examples, scripts, and CI checks t
 Draft specs map to GitHub Issues via [`docs/issue_queue_index.md`](docs/issue_queue_index.md)
 (draft path ↔ `#N`; live state from `gh issue view`).
 
+## Coworker CLI delegation (canonical policy)
+
+Before shelling out to the external `coworker` CLI, read and follow the **Coworker CLI
+delegation** section in [`prompts/agent_rules.md`](prompts/agent_rules.md) (single source of
+truth: triggers, `--profile` usage, anti-delegation, reviewer carve-out, provider-input fence).
+Do not duplicate that policy here. Architecture: §S in
+[`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
+
 ## Hard Rule
 
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages.
@@ -19,6 +27,7 @@ All custom behavior must live in one of:
 - `prompts/`
 - `scripts/`
 - `.github/workflows/`
+- `.cursor/rules/` (always-applied Cursor project rules; thin pointers only)
 - config examples such as `agent-orchestrator.yaml.example`
 - `docs/`
 
@@ -45,6 +54,7 @@ Do not port Windows PowerShell wrapper internals, `.ai-loop/` layout as a requir
 - `docs/**`
 - `.claude/skills/**`
 - `.cursor/skills/**`
+- `.cursor/rules/**`
 - `CLAUDE.md`
 - `.github/workflows/**`
 - `README.md`
