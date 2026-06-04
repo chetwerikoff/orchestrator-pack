@@ -5,12 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  classifySpecDocsPaths,
   CLOSING_KEYWORD_ALTERNATION,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
   hasClosingIssueReference,
   hasSpecOnlySignal,
   NON_CLOSING_ISSUE_REF_PATTERN,
+  SPEC_DOCS_ALLOWLIST,
   SPEC_ONLY_SIGNAL_LITERAL,
 } from './pr-scope-contract.js';
 import {
@@ -231,6 +233,58 @@ describe('checkPrScope — spec-only', () => {
     });
   });
 
+  it('passes for skill-markdown-only diff without a declaration snapshot', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #159', '', '## Summary', 'Skill instruction edit.'].join('\n');
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: 'GitHub Issue: #159\n\n```denylist\nvendor/**\n```',
+      prPaths: [
+        '.claude/skills/create-issue-draft/SKILL.md',
+        '.cursor/skills/create-issue-draft/SKILL.md',
+      ],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'spec-only',
+      issueNumber: 159,
+    });
+  });
+
+  it('fails when spec-only skill markdown is mixed with an out-of-allowlist path', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #159'].join('\n');
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: 'GitHub Issue: #159',
+      prPaths: ['.claude/skills/create-issue-draft/SKILL.md', 'scripts/pr-scope-check.ts'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'spec_docs_scope_violation',
+    });
+  });
+
+  it('fails when a non-markdown file under a skill directory is in the diff', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #159'].join('\n');
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: 'GitHub Issue: #159',
+      prPaths: ['.claude/skills/create-issue-draft/run.sh'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'spec_docs_scope_violation',
+    });
+  });
+
   it('fails without a non-closing issue reference', () => {
     const result = checkPrScope({
       repoRoot,
@@ -277,6 +331,38 @@ describe('checkPrScope — implementation', () => {
       ok: false,
       reason: 'missing_snapshot',
     });
+  });
+});
+
+describe('classifySpecDocsPaths — skill markdown boundary', () => {
+  it('accepts markdown under canonical and pointer skill surfaces', () => {
+    const result = classifySpecDocsPaths([
+      '.claude/skills/foo/SKILL.md',
+      '.cursor/skills/foo/SKILL.md',
+    ]);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('rejects non-markdown files under skill directories', () => {
+    const result = classifySpecDocsPaths(['.claude/skills/foo/helper.sh']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.outOfAllowlist).toContain('.claude/skills/foo/helper.sh');
+    }
+  });
+});
+
+describe('repository_policy.md documents the runtime spec-docs allowlist', () => {
+  it('lists every SPEC_DOCS_ALLOWLIST pattern (or skill markdown boundary prose)', () => {
+    const policy = readFileSync(join('docs', 'repository_policy.md'), 'utf8');
+    for (const pattern of SPEC_DOCS_ALLOWLIST) {
+      if (pattern.endsWith('/**/*.md')) {
+        expect(policy).toContain('markdown only');
+        expect(policy).toContain(pattern.replace('/**/*.md', ''));
+        continue;
+      }
+      expect(policy).toContain(`\`${pattern}\``);
+    }
   });
 });
 

@@ -341,7 +341,7 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
       ok: false,
       reason: 'spec_docs_scope_violation',
       message:
-        'spec-only PR diff includes paths outside the spec-docs allowlist (docs-only surfaces such as docs/issues_drafts/** and docs/issue_queue_index.md)',
+        'spec-only PR diff includes paths outside the spec-docs allowlist (docs surfaces, or markdown-only under .claude/skills/** and .cursor/skills/**; see docs/repository_policy.md)',
       violations: {
         outOfScope: pathCheck.outOfAllowlist,
         denied: [],

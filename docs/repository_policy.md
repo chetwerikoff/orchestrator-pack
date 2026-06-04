@@ -84,9 +84,10 @@ are the developer-side backstop.
 
 ## Spec-only docs PRs
 
-Use this path when landing **spec drafts** to `main` (for example
-`docs/issues_drafts/**` and `docs/issue_queue_index.md`) without closing the
-implementation GitHub Issue and without a declaration snapshot.
+Use this path when landing **spec drafts** or **skill instruction markdown** to
+`main` (for example `docs/issues_drafts/**`, `docs/issue_queue_index.md`, or
+`.claude/skills/**/SKILL.md`) without closing the implementation GitHub Issue
+and without a declaration snapshot.
 
 ### PR body contract
 
@@ -113,11 +114,23 @@ Every changed path in the PR diff must match **one** of:
 - `docs/issue_queue_index.md`
 - `docs/architecture.md`
 - `docs/issues_drafts/00-architecture-decisions.md`
+- **Skill instruction markdown** (markdown only):
+  - `.claude/skills/**/*.md` — canonical skill source
+  - `.cursor/skills/**/*.md` — generated pointer surface
 
-Paths outside this list (including `scripts/**`, `plugins/**`, `.github/**`,
-skills, `README.md`, `agent-orchestrator.yaml.example`, and
-`docs/declarations/**`) cause scope guard to fail. No committed declaration
-snapshot is required for this PR shape.
+**Markdown-only skill boundary:** only `.md` files under the skill directories
+above qualify. A non-markdown file under `.claude/skills/**` or
+`.cursor/skills/**` (script, binary, or other asset) does **not** match the
+allowlist and must use the implementation PR path.
+
+Paths outside this combined list (including `scripts/**`, `plugins/**`,
+`.github/**`, non-markdown skill assets, `README.md`,
+`agent-orchestrator.yaml.example`, and `docs/declarations/**`) cause scope guard
+to fail. No committed declaration snapshot is required for this PR shape.
+
+The skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
+`scripts/verify.ps1`) still applies on spec-only skill PRs — canonical/pointer
+mismatch or a hand-edited pointer fails CI independently of this allowlist.
 
 ### Implementation PRs (unchanged)
 
