@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
-const fixtureDir = path.join(repoRoot, 'tests/fixtures/orchestrator-wake-supervisor');
+const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 const aoStub = path.join(fixtureDir, 'ao-stub.sh');
 
 const tmpRoots: string[] = [];

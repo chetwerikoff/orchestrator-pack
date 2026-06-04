@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "781448f25e887a725ec2f28dacfea0c8d857dbe7",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:54be81e9667a0840e31dce3a4fb23f85e936726d13712cd71aba82bf4b4b562b"
+    "active_scope_hash": "sha256:e34b428460e51021baf2929a630a21b101eb115b9ceed080f04433ec39636a6e"
   },
   "declared_paths": [
     "docs/migration_notes.md",
@@ -20,7 +20,7 @@
     "scripts/orchestrator-wake-supervisor.test.ts"
   ],
   "declared_globs": [
-    "tests/fixtures/orchestrator-wake-supervisor/**"
+    "scripts/fixtures/orchestrator-wake-supervisor/**"
   ],
   "amendments": []
 }
