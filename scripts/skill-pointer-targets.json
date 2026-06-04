@@ -1,0 +1,9 @@
+{
+  "canonicalRoot": ".claude/skills",
+  "targets": [
+    {
+      "root": ".cursor/skills",
+      "canonicalLinkPrefix": "../../../.claude/skills"
+    }
+  ]
+}
