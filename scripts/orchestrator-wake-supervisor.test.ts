@@ -502,7 +502,30 @@ describe('orchestrator-wake-supervisor', () => {
       expect(script).not.toMatch(/-ProjectId proj&/);
       expect(script).not.toMatch(/nohup pwsh -NoProfile /);
 
+      const apostropheDir = makeStateDir();
+      const apostropheProject = "team's-pack";
+      const startApostrophe = runSupervisor([
+        '-Action',
+        'Start',
+        '-TestMode',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'op-apostrophe',
+        '-ProjectId',
+        apostropheProject,
+        '-StateDir',
+        apostropheDir,
+        '-PollSeconds',
+        '1',
+      ]);
+      expect(startApostrophe.status).toBe(0);
+      const launcherApostrophe = path.join(apostropheDir, 'launch-supervisor.sh');
+      const apostropheScript = fs.readFileSync(launcherApostrophe, 'utf8');
+      expect(apostropheScript).toContain(`'-ProjectId' 'team'\\''s-pack'`);
+      expect(apostropheScript).not.toContain("'\\\\''");
+
       runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+      runSupervisor(['-Action', 'Stop', '-StateDir', apostropheDir]);
     },
   );
 });

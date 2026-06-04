@@ -584,7 +584,8 @@ function Get-OrchestratorWakeSupervisorStatusReport {
 
 function Format-UnixShellSingleQuotedArgument {
     param([string]$Value)
-    return "'" + ($Value -replace "'", "'\\''") + "'"
+    # POSIX single-quote wrap: close quote, escaped literal quote, reopen (writes as '\'').
+    return "'" + ($Value -replace "'", "'\''") + "'"
 }
 
 function Start-OrchestratorWakeSupervisorDaemon {
