@@ -607,10 +607,30 @@ Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only 
    - Standalone Cursor CLI — always-applied [`.cursor/rules/`](../../.cursor/rules/) rule.
    - Architect (Claude Code) — [`CLAUDE.md`](../../CLAUDE.md) coworker delegation section.
 
-3. **Advisory enforcement.** Delegation remains prompt-level guidance; review and operator
-   judgment are the backstop. No `beforeShellExecution` or Claude Code hook mandates coworker use.
+3. **Advisory enforcement of a mandatory obligation.** Amended 2026-06-04 (#148 rewrite): read
+   delegation is a **mandatory floor** — when an ask trigger fires, the corpus is fence-clean, and the
+   work is not an excepted reasoning step, the worker **MUST** delegate the read rather than inline it
+   on the reasoning model ("delegate I/O, keep reasoning" is the law, not an option). The MUST is a
+   **prompt-level obligation**: enforcement stays advisory — the backstops are the worker's
+   visible-delegation-outcome status, reviewer judgment, and operator observation. No
+   `beforeShellExecution` or Claude Code hook mandates coworker use. "Mandatory" raises the default
+   from *may* to *must*; it does not claim machine enforcement.
 
-See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149).
+4. **Fence gates on sensitivity, not file origin.** Amended 2026-06-04 (#148 rewrite): the
+   provider-input fence no longer restricts to *repo-originating* material. The two hard prohibitions,
+   **regardless of origin**, are (a) secrets/credentials and (b) personal or third-party private data
+   (unless the issue authorizes). Subject to those, this system's own out-of-tree operational evidence
+   (runtime logs, process/tmux output, AO activity-DB query results) **is** sendable after the worker
+   scrubs both classes and sends the minimal excerpt. **Rationale:** the prior origin fence blocked the
+   highest-value cheap reads (bulk runtime logs during investigation), pushing heavy corpora onto the
+   reasoning model — the exact waste the policy exists to prevent. **Residual risk:** widening the
+   sendable surface to local operational data increases what can reach the third-party provider; it is
+   mitigated by the two-class prohibition, the minimal-excerpt rule, "when in doubt treat as
+   prohibited", and the visible-outcome backstop — not by a hard gate. Accepted as the cheaper-sufficient
+   trade-off; revisit if a leak of non-secret-but-sensitive data is observed.
+
+See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149) and
+`docs/issues_drafts/52-coworker-cli-delegation-policy.md` (GitHub #148).
 
 ## R. Coworker RTK: passthrough-first adoption on worker hosts (Issue #145)
 
