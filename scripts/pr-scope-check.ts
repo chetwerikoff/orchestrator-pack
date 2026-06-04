@@ -523,6 +523,8 @@ function checkImplementationPrScope(
 }
 
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  // Path-based no-ceremony wins over the spec-only signal: a markdown-only union diff
+  // must reject issue links even when the body also carries <!-- pr-type: spec-only --> and Refs #N.
   if (isNoCeremonyPr(input.prPaths)) {
     return checkNoCeremonyPrScope(input);
   }
