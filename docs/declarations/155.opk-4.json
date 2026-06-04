@@ -7,12 +7,33 @@
   "baseline": {
     "commit_sha": "8a1d0097b89833db25810a444a64e71161966693",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:aeabd4941fa1717417dd4cc54a8d293e3739249e9cd011371b7254da75ff9e53"
+    "active_scope_hash": "sha256:ff457b6c5ac0964bb44ed0e8a9bf2728dfe9ca4d6ed3ce6b92c38adc19b4744c"
   },
-  "declared_paths": [],
-  "declared_globs": [
-    ".github/**",
-    "docs/**"
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "docs/architecture.md",
+    "docs/issues_drafts/54-ci-path-filter-markdown-only.md"
   ],
-  "amendments": []
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:aeabd4941fa1717417dd4cc54a8d293e3739249e9cd011371b7254da75ff9e53",
+      "new_active_scope_hash": "sha256:ff457b6c5ac0964bb44ed0e8a9bf2728dfe9ca4d6ed3ce6b92c38adc19b4744c",
+      "changed": {
+        "added": [
+          ".github/workflows/scope-guard.yml",
+          "docs/architecture.md",
+          "docs/issues_drafts/54-ci-path-filter-markdown-only.md"
+        ],
+        "removed": [
+          ".github/**",
+          "docs/**"
+        ]
+      },
+      "reason": "Declare explicit PR paths per scope guard",
+      "actor": "opk-4",
+      "timestamp": "2026-06-04T03:36:57.968Z",
+      "applied": true
+    }
+  ]
 }
