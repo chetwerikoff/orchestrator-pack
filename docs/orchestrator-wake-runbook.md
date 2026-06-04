@@ -55,7 +55,33 @@ on the dashboard for that PR; see
 | Shared dedup state file | `%TEMP%\orchestrator-wake-dedup.json` | `AO_WAKE_DEDUP_STATE` |
 | Orchestrator session | — | `-OrchestratorSessionId`, `AO_ORCHESTRATOR_SESSION_ID` |
 
-## Start (event listener)
+## Start (supervisor — preferred, Issue #168)
+
+Single entry point for **both** the listener and heartbeat (two separate processes).
+The supervisor resolves the orchestrator session id (override or `ao status`),
+restarts children on exit, and re-targets both when the session id changes.
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
+```
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+```
+
+| Supervisor env | Default | Purpose |
+|----------------|---------|---------|
+| `AO_ORCHESTRATOR_SESSION_ID` | — | Pin orchestrator session (honoured by supervisor and passed to children) |
+| `AO_WAKE_SUPERVISOR_WAIT_SECONDS` | `120` | Max wait for orchestrator session before actionable exit |
+| `AO_WAKE_SUPERVISOR_POLL_SECONDS` | `5` | Supervisor poll interval |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | OS state dir | PID/log/state root |
+| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `orchestrator-pack` | Project for `ao status` resolution |
+
+Per-child logs: `<state-dir>/listener.log`, `<state-dir>/heartbeat.log`.
+
+## Start (event listener — manual fallback)
 
 ```powershell
 cd <orchestrator-pack-root>
@@ -72,9 +98,9 @@ Dry-run (no `ao send`):
 pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun
 ```
 
-## Start (heartbeat backstop)
+## Start (heartbeat backstop — manual fallback)
 
-Run in a **third** terminal, separate from the webhook listener:
+Run in a **separate** terminal from the webhook listener (or use the supervisor above):
 
 ```powershell
 cd <orchestrator-pack-root>

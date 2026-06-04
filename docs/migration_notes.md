@@ -654,9 +654,29 @@ Minimum live YAML fixes not in older copies:
    `agent-orchestrator.yaml.example`.
 2. Set `reactions.approved-and-green.priority: action` (otherwise mergeable events
    never hit the webhook listener).
-3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-listener.ps1`,
-   `scripts/orchestrator-wake-heartbeat.ps1`, and
-   `scripts/review-trigger-reconcile.ps1` alongside (separate terminals).
+3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+   (preferred — Issue #168) or the manual listener + heartbeat pair in separate
+   terminals, and `scripts/review-trigger-reconcile.ps1` in another terminal.
+
+## Orchestrator wake supervisor (Issue #168)
+
+After merge, replace the two-terminal wake startup with the supervisor:
+
+1. Stop any manual `orchestrator-wake-listener.ps1` / `orchestrator-wake-heartbeat.ps1`
+   processes (Ctrl+C or close those terminals).
+2. From the pack root, with `ao start orchestrator-pack` running:
+   `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Confirm: `... orchestrator-wake-supervisor.ps1 -Action Status` shows listener and
+   heartbeat running.
+4. Optional: set `AO_ORCHESTRATOR_SESSION_ID` before Start to pin the session id;
+   otherwise the supervisor resolves from `ao status` and re-targets on change.
+
+State, PID files, and per-child logs live under
+`%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
+`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`). Stop with `-Action Stop`.
+
+Manual two-script startup remains documented as fallback in
+`docs/orchestrator-wake-runbook.md`.
 
 ## State-derived review-trigger reconciliation (Issue #163)
 
@@ -694,11 +714,10 @@ To adopt on an existing live `agent-orchestrator.yaml`:
    your other notifier channels).
 3. Set `AO_ORCHESTRATOR_SESSION_ID` to your orchestrator session id (from
    `ao status`) or pass `-OrchestratorSessionId` when starting the listener.
-4. In a separate terminal from the AO daemon, start the listener before or with
-   `ao start`:
-   `pwsh -File scripts/orchestrator-wake-listener.ps1`
-5. In another terminal, start the heartbeat backstop (issue #59; default 15-minute
-   interval, independent of webhook POSTs):
+4. Prefer the supervisor (Issue #168):
+   `pwsh -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+   **Manual fallback:** start the listener and heartbeat in separate terminals:
+   `pwsh -File scripts/orchestrator-wake-listener.ps1` and
    `pwsh -File scripts/orchestrator-wake-heartbeat.ps1`
 6. Verify reachability:
    `Test-NetConnection -ComputerName 127.0.0.1 -Port 17487`
