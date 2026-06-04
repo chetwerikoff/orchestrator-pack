@@ -38,6 +38,13 @@ export interface AoSession {
   prNumber?: number | null;
   pr?: string | null;
   status?: string;
+  reports?: Array<{
+    reportState?: string;
+    report_state?: string;
+    reportedAt?: string;
+    timestamp?: string;
+    createdAt?: string;
+  }>;
 }
 
 export interface StartReviewAction {

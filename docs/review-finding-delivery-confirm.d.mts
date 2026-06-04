@@ -20,22 +20,7 @@ export interface ReviewRun {
   updatedAt?: string;
 }
 
-export interface AoSession {
-  name?: string;
-  sessionId?: string;
-  id?: string;
-  role?: string;
-  prNumber?: number | null;
-  pr?: string | null;
-  status?: string;
-  reports?: Array<{
-    reportState?: string;
-    report_state?: string;
-    reportedAt?: string;
-    timestamp?: string;
-    createdAt?: string;
-  }>;
-}
+export type { AoSession } from './review-trigger-reconcile.d.mts';
 
 export interface RunDeliveryRecord {
   deliveryState?: string;
