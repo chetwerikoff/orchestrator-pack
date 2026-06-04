@@ -4,7 +4,9 @@ import type {
   ReviewRun as ReconcileReviewRun,
 } from './review-trigger-reconcile.d.mts';
 
+export declare const DEFAULT_GRACE_MINUTES: number;
 export declare const DEFAULT_GRACE_MS: number;
+export declare const GRACE_MINUTES_ENV_VAR: string;
 export declare const PACK_MERGE_CONTRACT_CHECK_NAMES: readonly string[];
 export declare const FALSE_STUCK_SESSION_STATUSES: ReadonlySet<string>;
 export declare const BLIND_RECOVERY_FORBIDDEN: readonly RegExp[];
@@ -85,6 +87,7 @@ export interface StuckGuardPlanResult {
 }
 
 export declare function isRuntimeAlive(session: AoSession): boolean;
+export declare function resolveGraceMs(config?: { graceMs?: number }): number;
 export declare function normalizeCiState(raw: string | undefined): string;
 export declare function isCiCheckSuccess(check: CiCheck): boolean;
 export declare function isCiCheckPending(check: CiCheck): boolean;

@@ -1,17 +1,20 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   BLIND_RECOVERY_FORBIDDEN,
   DEFAULT_GRACE_MS,
+  GRACE_MINUTES_ENV_VAR,
   classifyReviewReadySnapshot,
   findBlindRecoveryViolations,
   getGraceAnchorMs,
   graceTrackingKey,
   isMergeContractCiGreen,
+  isRuntimeAlive,
   isWithinGrace,
   planStuckGuardReaction,
+  resolveGraceMs,
 } from '../docs/review-ready-stuck-guard.mjs';
 
 const fixturesDir = path.join(
@@ -62,6 +65,50 @@ function planFromFixture(name: string) {
     graceMs: fixture.graceMs,
   });
 }
+
+describe('isRuntimeAlive (explicit runtime only)', () => {
+  it('is true only for runtime alive', () => {
+    expect(isRuntimeAlive({ runtime: 'alive' })).toBe(true);
+    expect(isRuntimeAlive({ runtime: 'ALIVE' })).toBe(true);
+  });
+
+  it('fails closed when runtime is missing or unrecognized', () => {
+    expect(isRuntimeAlive({ status: 'working' })).toBe(false);
+    expect(isRuntimeAlive({ runtime: 'exited' })).toBe(false);
+    expect(isRuntimeAlive({ runtime: 'detecting' })).toBe(false);
+    expect(isRuntimeAlive({ runtime: '' })).toBe(false);
+  });
+});
+
+describe('resolveGraceMs', () => {
+  const previousEnv = process.env[GRACE_MINUTES_ENV_VAR];
+
+  beforeEach(() => {
+    delete process.env[GRACE_MINUTES_ENV_VAR];
+  });
+
+  afterEach(() => {
+    if (previousEnv === undefined) {
+      delete process.env[GRACE_MINUTES_ENV_VAR];
+    } else {
+      process.env[GRACE_MINUTES_ENV_VAR] = previousEnv;
+    }
+  });
+
+  it('uses DEFAULT_GRACE_MS when unset', () => {
+    expect(resolveGraceMs({})).toBe(DEFAULT_GRACE_MS);
+  });
+
+  it('honors AO_REVIEW_READY_STUCK_GRACE_MINUTES', () => {
+    process.env[GRACE_MINUTES_ENV_VAR] = '30';
+    expect(resolveGraceMs({})).toBe(30 * 60 * 1000);
+  });
+
+  it('prefers explicit graceMs over env minutes', () => {
+    process.env[GRACE_MINUTES_ENV_VAR] = '30';
+    expect(resolveGraceMs({ graceMs: 120_000 })).toBe(120_000);
+  });
+});
 
 describe('isMergeContractCiGreen', () => {
   it('requires all pack merge-contract checks success', () => {
@@ -125,6 +172,19 @@ describe('consistent-snapshot classification (AC1)', () => {
     const result = classifyFromFixture('negative-pending-ci.json');
     expect(result.reviewReady).toBe(false);
     expect(result.reasons).toContain('ci_not_green');
+  });
+
+  it('missing runtime is not review-ready (fail closed)', () => {
+    const fixture = loadFixture('positive-review-ready-alive.json');
+    const result = classifyReviewReadySnapshot({
+      session: { ...fixture.session, runtime: undefined },
+      openPr: fixture.openPr,
+      reviewRuns: fixture.reviewRuns,
+      ciChecks: fixture.ciChecks,
+      sessions: [fixture.session],
+    });
+    expect(result.reviewReady).toBe(false);
+    expect(result.reasons).toContain('runtime_not_alive');
   });
 });
 

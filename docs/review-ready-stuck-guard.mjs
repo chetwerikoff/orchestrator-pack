@@ -13,7 +13,6 @@ import {
 import {
   findSessionById,
   getSessionIdentifier,
-  isLiveWorkerSession,
   normalizeSha,
   sessionMatchesIdentifier,
   sessionMatchesPr,
@@ -21,7 +20,11 @@ import {
 } from './review-trigger-reconcile.mjs';
 
 /** Default bounded grace after first false stuck for (session, PR head). */
-export const DEFAULT_GRACE_MS = 15 * 60 * 1000;
+export const DEFAULT_GRACE_MINUTES = 15;
+export const DEFAULT_GRACE_MS = DEFAULT_GRACE_MINUTES * 60 * 1000;
+
+/** Operator override documented in orchestratorRules / runbook. */
+export const GRACE_MINUTES_ENV_VAR = 'AO_REVIEW_READY_STUCK_GRACE_MINUTES';
 
 /** Pack merge-contract check names (fallback when branch protection is unset). */
 export const PACK_MERGE_CONTRACT_CHECK_NAMES = [
@@ -46,17 +49,50 @@ export const BLIND_RECOVERY_FORBIDDEN = [/\bao\s+spawn\b/i, /--claim-pr\b/i];
 /** @typedef {{ reachabilityFailed?: boolean, deliveryEscalated?: boolean, floodNotCleared?: boolean }} UnreachabilityEvidence */
 
 /**
+ * Review-ready protection requires affirmative `runtime: alive` only.
+ * Missing or unrecognized runtime values fail closed (no session-status fallback).
+ *
  * @param {AoSession} session
  */
 export function isRuntimeAlive(session) {
-  const runtime = String(session?.runtime ?? '').toLowerCase();
-  if (runtime === 'alive') {
-    return true;
+  return String(session?.runtime ?? '').trim().toLowerCase() === 'alive';
+}
+
+/**
+ * @param {unknown} value
+ * @param {number} defaultValue
+ * @param {number} [min]
+ */
+function resolveBoundedPositiveNumber(value, defaultValue, min = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return defaultValue;
   }
-  if (runtime === 'exited' || runtime === 'dead' || runtime === 'process_missing') {
-    return false;
+  return Math.max(min, parsed);
+}
+
+/**
+ * Resolve grace window: JSON `graceMs` overrides env minutes, then default.
+ *
+ * @param {{ graceMs?: number }} [config]
+ */
+export function resolveGraceMs(config = {}) {
+  const explicitMs = Number(config.graceMs);
+  if (Number.isFinite(explicitMs) && explicitMs > 0) {
+    return resolveBoundedPositiveNumber(explicitMs, DEFAULT_GRACE_MS);
   }
-  return isLiveWorkerSession(session);
+
+  const env = typeof process !== 'undefined' ? process.env?.[GRACE_MINUTES_ENV_VAR] : undefined;
+  if (env !== undefined && String(env).trim() !== '') {
+    const minutes = resolveBoundedPositiveNumber(
+      env,
+      DEFAULT_GRACE_MINUTES,
+      1,
+    );
+    return minutes * 60 * 1000;
+  }
+
+  return DEFAULT_GRACE_MS;
 }
 
 /**
@@ -437,7 +473,7 @@ export function planStuckGuardReaction({
     };
   }
 
-  const resolvedGraceMs = Math.max(1, Number(graceMs) || DEFAULT_GRACE_MS);
+  const resolvedGraceMs = resolveGraceMs({ graceMs });
   const anchorMs = getGraceAnchorMs(
     tracking ?? { snapshots: {} },
     classification.sessionId,

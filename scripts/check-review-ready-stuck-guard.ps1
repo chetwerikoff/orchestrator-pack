@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $mjsPath -PathType Leaf)) {
 }
 
 $mjs = Get-Content -LiteralPath $mjsPath -Raw
-if ($mjs -notmatch 'DEFAULT_GRACE_MS = 15 \* 60 \* 1000') {
+if ($mjs -notmatch 'DEFAULT_GRACE_MINUTES = 15') {
     Write-Host 'docs/review-ready-stuck-guard.mjs must default to 15-minute grace window'
     exit 1
 }
@@ -28,6 +28,16 @@ if ($mjs -notmatch "status !== 'clean'") {
 
 if ($mjs -notmatch 'hold_grace') {
     Write-Host 'docs/review-ready-stuck-guard.mjs must implement hold_grace action'
+    exit 1
+}
+
+if ($mjs -notmatch "GRACE_MINUTES_ENV_VAR = 'AO_REVIEW_READY_STUCK_GRACE_MINUTES'") {
+    Write-Host 'docs/review-ready-stuck-guard.mjs must define AO_REVIEW_READY_STUCK_GRACE_MINUTES env override'
+    exit 1
+}
+
+if ($mjs -notmatch "=== 'alive'") {
+    Write-Host 'docs/review-ready-stuck-guard.mjs must require explicit runtime alive (fail closed)'
     exit 1
 }
 
