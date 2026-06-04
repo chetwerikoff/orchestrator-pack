@@ -359,6 +359,43 @@ function Test-OrchestratorWakeSupervisorManagedProcess {
     return $matchedScript
 }
 
+function Test-OrchestratorWakeSupervisorDaemonRunning {
+    param(
+        [int]$ProcessId,
+        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [string]$Role
+    )
+
+    return (Test-ProcessAlive -ProcessId $ProcessId) -and
+    (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $ProcessId -Role $Role)
+}
+
+function Clear-OrchestratorWakeSupervisorStalePidIfNeeded {
+    param(
+        [int]$ProcessId,
+        [string]$PidFile,
+        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [string]$Role,
+        [string]$LogPath = ''
+    )
+
+    if ($ProcessId -le 0) {
+        if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
+            Remove-OrchestratorWakeSupervisorPidFile -Path $PidFile
+        }
+        return
+    }
+
+    if (Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $ProcessId -Role $Role) {
+        return
+    }
+
+    if (Test-ProcessAlive -ProcessId $ProcessId) {
+        Write-OrchestratorWakeSupervisorLog -Message "clearing stale $Role pid file (pid=$ProcessId unrelated)" -LogPath $LogPath
+    }
+    Remove-OrchestratorWakeSupervisorPidFile -Path $PidFile
+}
+
 function Stop-OrchestratorWakeSupervisorProcess {
     param(
         [int]$ProcessId,
@@ -524,10 +561,8 @@ function Get-OrchestratorWakeSupervisorChildStatus {
     return @{
         ListenerPid    = $listenerPid
         HeartbeatPid   = $heartbeatPid
-        ListenerAlive  = (Test-ProcessAlive -ProcessId $listenerPid) -and
-        (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $listenerPid -Role 'listener')
-        HeartbeatAlive = (Test-ProcessAlive -ProcessId $heartbeatPid) -and
-        (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $heartbeatPid -Role 'heartbeat')
+        ListenerAlive  = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $listenerPid -Role 'listener'
+        HeartbeatAlive = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $heartbeatPid -Role 'heartbeat'
     }
 }
 
@@ -665,7 +700,7 @@ function Get-OrchestratorWakeSupervisorStatusReport {
     )
 
     $supervisorPid = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
-    $supervisorAlive = Test-ProcessAlive -ProcessId $supervisorPid
+    $supervisorAlive = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $supervisorPid -Role 'supervisor'
     $children = Get-OrchestratorWakeSupervisorChildStatus -Paths $Paths
     $state = Read-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson
     $sessionId = if ($state) { [string]$state.orchestratorSessionId } else { '' }

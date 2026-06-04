@@ -51,6 +51,9 @@ if (-not (Test-Path -LiteralPath $paths.Root)) {
 
 switch ($Action) {
     'Status' {
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid) -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.ListenerPid) -PidFile $paths.ListenerPid -Role 'listener' -LogPath $paths.SupervisorLog
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.HeartbeatPid) -PidFile $paths.HeartbeatPid -Role 'heartbeat' -LogPath $paths.SupervisorLog
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
         if ($report.SupervisorAlive -and $report.ListenerAlive -and $report.HeartbeatAlive) {
@@ -76,7 +79,9 @@ switch ($Action) {
 
     'Start' {
         $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
-        if ((Test-ProcessAlive -ProcessId $existingPid) -and -not $Foreground -and -not $SupervisorLoop) {
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId $existingPid -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
+        $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
+        if ((Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $existingPid -Role 'supervisor') -and -not $Foreground -and -not $SupervisorLoop) {
             Write-OrchestratorWakeSupervisorLog -Message "supervisor already running (pid=$existingPid)"
             $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
             Write-OrchestratorWakeSupervisorStatusOutput -Report $report
