@@ -278,11 +278,14 @@ try {
         else {
             try {
                 $count = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml -DryRunMode:$DryRun
-                Set-ReconcileState -Path $statePath -LastTickMs $nowMs
                 Write-ReconcileLog "tick complete (started=$count)"
             }
             catch {
                 Write-ReconcileLog "tick error: $_"
+            }
+            finally {
+                # Advance last tick even on failure so the next attempt waits the full interval.
+                Set-ReconcileState -Path $statePath -LastTickMs $nowMs
             }
         }
 

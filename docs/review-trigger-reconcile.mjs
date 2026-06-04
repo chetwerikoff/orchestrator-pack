@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 /** @typedef {{ number: number, headRefOid: string }} OpenPr */
 /** @typedef {{ prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number }} ReviewRun */
-/** @typedef {{ name?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
 
 /** Default cadence: 20 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 20 * 60 * 1000;
@@ -101,6 +101,39 @@ export function isLiveWorkerSession(session) {
 }
 
 /**
+ * @param {AoSession} session
+ */
+export function getSessionIdentifier(session) {
+  const name = String(session?.name ?? '').trim();
+  if (name) {
+    return name;
+  }
+  const sessionId = String(session?.sessionId ?? '').trim();
+  if (sessionId) {
+    return sessionId;
+  }
+  const id = String(session?.id ?? '').trim();
+  if (id) {
+    return id;
+  }
+  return null;
+}
+
+/**
+ * @param {AoSession} session
+ * @param {number} prNumber
+ */
+function sessionMatchesPr(session, prNumber) {
+  if (Number(session?.prNumber) === prNumber) {
+    return true;
+  }
+  const prField = String(session?.pr ?? '');
+  return Boolean(
+    prField && (prField === String(prNumber) || prField === `#${prNumber}`),
+  );
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {number} prNumber
  */
@@ -111,14 +144,12 @@ export function resolveWorkerSessionId(sessions, prNumber) {
   });
 
   for (const session of workers) {
-    if (Number(session?.prNumber) === prNumber && session?.name) {
-      return String(session.name);
+    if (!sessionMatchesPr(session, prNumber)) {
+      continue;
     }
-    const prField = String(session?.pr ?? '');
-    if (prField && (prField === String(prNumber) || prField === `#${prNumber}`)) {
-      if (session?.name) {
-        return String(session.name);
-      }
+    const identifier = getSessionIdentifier(session);
+    if (identifier) {
+      return identifier;
     }
   }
 

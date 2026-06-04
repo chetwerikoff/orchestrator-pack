@@ -9,6 +9,7 @@ import {
   findForbiddenLifecycleCommands,
   isHeadCovered,
   isRunCoveringHead,
+  getSessionIdentifier,
   isLiveWorkerSession,
   planReconcileActions,
   resolveWorkerSessionId,
@@ -136,7 +137,54 @@ describe('isLiveWorkerSession', () => {
   });
 });
 
+describe('getSessionIdentifier', () => {
+  it('prefers name, then sessionId, then id', () => {
+    expect(getSessionIdentifier({ name: 'op-a' })).toBe('op-a');
+    expect(getSessionIdentifier({ sessionId: 'op-b' })).toBe('op-b');
+    expect(getSessionIdentifier({ id: 'op-c' })).toBe('op-c');
+    expect(getSessionIdentifier({})).toBeNull();
+  });
+});
+
 describe('resolveWorkerSessionId', () => {
+  it('resolves workers identified by sessionId only', () => {
+    expect(
+      resolveWorkerSessionId(
+        [
+          {
+            sessionId: 'opk-worker-9',
+            role: 'worker',
+            prNumber: 66,
+            status: 'working',
+          },
+        ],
+        66,
+      ),
+    ).toBe('opk-worker-9');
+  });
+
+  it('starts review when status payload uses sessionId', () => {
+    const actions = planReconcileActions({
+      openPrs: [{ number: 66, headRefOid: 'sha66' }],
+      reviewRuns: [],
+      sessions: [
+        {
+          sessionId: 'opk-worker-9',
+          role: 'worker',
+          prNumber: 66,
+          status: 'working',
+        },
+      ],
+    });
+    expect(startReviewActions(actions)).toEqual([
+      expect.objectContaining({
+        type: 'start_review',
+        sessionId: 'opk-worker-9',
+        prNumber: 66,
+      }),
+    ]);
+  });
+
   it('ignores dead worker sessions linked to the PR', () => {
     expect(
       resolveWorkerSessionId(

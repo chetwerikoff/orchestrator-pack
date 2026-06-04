@@ -7,6 +7,8 @@ export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 
 export declare function isLiveWorkerSession(session: AoSession): boolean;
 
+export declare function getSessionIdentifier(session: AoSession): string | null;
+
 export interface OpenPr {
   number: number;
   headRefOid: string;
@@ -23,6 +25,8 @@ export interface ReviewRun {
 
 export interface AoSession {
   name?: string;
+  sessionId?: string;
+  id?: string;
   role?: string;
   prNumber?: number | null;
   pr?: string | null;
