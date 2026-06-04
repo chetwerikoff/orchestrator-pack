@@ -91,8 +91,9 @@ and without a declaration snapshot.
 
 ### PR body contract
 
-1. **Spec-only signal** — include this HTML comment on its own line near the top
-   of the PR description (machine-detectable; does not render in the GitHub UI):
+1. **Spec-only signal** — include this HTML comment **alone on one line** near the
+   top of the PR description (machine-detectable; does not render in the GitHub UI).
+   Inline mentions, backticks, or fenced examples do not count:
 
    ```html
    <!-- pr-type: spec-only -->
@@ -131,6 +132,50 @@ to fail. No committed declaration snapshot is required for this PR shape.
 The skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
 `scripts/verify.ps1`) still applies on spec-only skill PRs — canonical/pointer
 mismatch or a hand-edited pointer fails CI independently of this allowlist.
+
+## Skill-doc PRs (skill instruction markdown only)
+
+Use this path when the **entire PR diff** is agent skill instruction markdown —
+no GitHub Issue, no `<!-- pr-type: spec-only -->` signal, and no declaration
+snapshot. Scope guard detects the shape from **diff-content only** (automatic;
+the author adds no PR-body marker).
+
+### Diff-content trigger
+
+Every changed path must match **one** of:
+
+- `.claude/skills/**/*.md` — canonical skill source
+- `.cursor/skills/**/*.md` — generated pointer surface
+
+The shape is **conjunctive**: if any changed path is outside these globs (docs
+draft, code, workflows, a non-markdown file under a skill directory, and so on),
+the PR does **not** qualify as skill-doc and falls through to spec-only (when
+signalled) or implementation handling unchanged.
+
+**Markdown-only boundary:** only `.md` files under the skill directories above
+qualify. A non-markdown asset under `.claude/skills/**` or `.cursor/skills/**`
+forces the implementation path.
+
+### What skill-doc PRs omit
+
+Skill-doc PRs pass scope guard **without**:
+
+- a committed declaration snapshot under `docs/declarations/**`;
+- any issue reference in the PR body (`Closes`, `Refs`, `See`, `Related to`, and
+  so on — absence is never a failure reason for this shape);
+- the spec-only HTML comment signal.
+
+Scope guard **fails** when the PR body links any GitHub issue in any common form:
+closing keywords (`Closes` / `Fixes` / `Resolves`), non-closing forms (`Ref` /
+`Refs` / `See` / `Related to`), bare `#N` autolinks, or
+`https://github.com/<owner>/<repo>/issues/<N>` URLs (fenced-code examples are
+ignored). Skill-doc PRs must not reference an issue in the description.
+
+### Safety gates (unchanged)
+
+- Conjunctive diff boundary — skill-doc PRs cannot carry code or other surfaces.
+- Skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
+  `scripts/verify.ps1`) remains a **separate required gate** on skill-doc PRs.
 
 ### Implementation PRs (unchanged)
 

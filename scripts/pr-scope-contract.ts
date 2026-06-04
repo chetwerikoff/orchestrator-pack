@@ -23,13 +23,21 @@ export const NON_CLOSING_ISSUE_REF_PATTERN = new RegExp(
   'gi',
 );
 
+/** GitHub issue page URL (not pull request URLs). */
+export const GITHUB_ISSUE_URL_PATTERN =
+  /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/(\d+)\b/gi;
+
+/** Bare `#123` issue autolink (after start-of-string or non-word/non-#). */
+export const BARE_ISSUE_HASH_PATTERN = /(?:^|[^\w#/])#(\d+)\b/g;
+
 /**
  * Machine-detectable spec-only PR signal. Place on its own line near the top of the PR body.
  * Documented in docs/repository_policy.md.
  */
 export const SPEC_ONLY_SIGNAL_LITERAL = '<!-- pr-type: spec-only -->';
 
-export const SPEC_ONLY_SIGNAL_PATTERN = /<!--\s*pr-type:\s*spec-only\s*-->/i;
+/** Whole-line signal (policy: HTML comment on its own line). */
+export const SPEC_ONLY_SIGNAL_LINE_PATTERN = /^<!--\s*pr-type:\s*spec-only\s*-->\s*$/i;
 
 /**
  * Runtime spec-docs allowlist for spec-only PRs (narrow docs-only; not issue allowed-roots).
@@ -62,8 +70,19 @@ export function normalizePrBody(prBody: string): string {
   return prBody.replace(/^\uFEFF/, '').trim();
 }
 
+/** Remove fenced code blocks so documented signal examples do not trigger detection. */
+export function stripMarkdownFencedCodeBlocks(text: string): string {
+  return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+}
+
 export function hasSpecOnlySignal(prBody: string): boolean {
-  return SPEC_ONLY_SIGNAL_PATTERN.test(normalizePrBody(prBody));
+  const scannable = stripMarkdownFencedCodeBlocks(normalizePrBody(prBody));
+  for (const line of scannable.split(/\r?\n/)) {
+    if (SPEC_ONLY_SIGNAL_LINE_PATTERN.test(line.trim())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function hasClosingIssueReference(prBody: string): boolean {
@@ -104,6 +123,89 @@ export function extractNonClosingIssueNumber(prBody: string): number | null {
   }
 
   return issueNumber;
+}
+
+/** PR body text scanned for issue links (fenced code blocks omitted). */
+export function prBodyScannableForIssueLinks(prBody: string): string {
+  return stripMarkdownFencedCodeBlocks(normalizePrBody(prBody));
+}
+
+const SKILL_DOC_ISSUE_LINK_PATTERNS: readonly RegExp[] = [
+  ISSUE_LINK_PATTERN,
+  NON_CLOSING_ISSUE_REF_PATTERN,
+  GITHUB_ISSUE_URL_PATTERN,
+  BARE_ISSUE_HASH_PATTERN,
+];
+
+/** Issue numbers linked anywhere in a skill-doc PR body (all supported GitHub forms). */
+export function findSkillDocIssueLinks(prBody: string): number[] {
+  const text = prBodyScannableForIssueLinks(prBody);
+  const linked = new Set<number>();
+
+  for (const pattern of SKILL_DOC_ISSUE_LINK_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const issueNumber = Number(match[1]);
+      if (Number.isInteger(issueNumber) && issueNumber > 0) {
+        linked.add(issueNumber);
+      }
+    }
+  }
+
+  return [...linked];
+}
+
+export function hasSkillDocIssueLink(prBody: string): boolean {
+  return findSkillDocIssueLinks(prBody).length > 0;
+}
+
+/**
+ * True when every changed path is markdown under the skill instruction surfaces
+ * (conjunctive; empty diff does not qualify).
+ */
+export function isSkillDocPr(prPaths: string[]): boolean {
+  if (prPaths.length === 0) {
+    return false;
+  }
+  return classifySkillDocPaths(prPaths).ok;
+}
+
+export function classifySkillDocPaths(prPaths: string[]): {
+  ok: true;
+  checkedPaths: string[];
+} | {
+  ok: false;
+  outOfSkillMarkdown: string[];
+  invalidPaths: Array<{ path: string; reason: string }>;
+  checkedPaths: string[];
+} {
+  const outOfSkillMarkdown: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+  const checkedPaths: string[] = [];
+
+  for (const rawPath of prPaths) {
+    const normalized = normalizePath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+      continue;
+    }
+
+    checkedPaths.push(normalized.path);
+
+    if (!pathMatchesAnyPattern(normalized.path, [...SPEC_SKILL_MARKDOWN_GLOBS])) {
+      outOfSkillMarkdown.push(normalized.path);
+    }
+  }
+
+  if (invalidPaths.length > 0) {
+    return { ok: false, outOfSkillMarkdown, invalidPaths, checkedPaths };
+  }
+
+  if (outOfSkillMarkdown.length > 0) {
+    return { ok: false, outOfSkillMarkdown, invalidPaths: [], checkedPaths };
+  }
+
+  return { ok: true, checkedPaths };
 }
 
 export function classifySpecDocsPaths(prPaths: string[]): {
