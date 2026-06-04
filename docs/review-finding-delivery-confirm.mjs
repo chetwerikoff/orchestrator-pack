@@ -341,10 +341,9 @@ export function planDeliveryConfirmActions({
       };
     }
 
+    // Use pre-tick tracking for overlap checks so same-tick escalations still count.
     if (
-      isDeliveryConfirmed(run, sessionList, confirmationAnchorMs, runList, {
-        runs: nextRuns,
-      })
+      isDeliveryConfirmed(run, sessionList, confirmationAnchorMs, runList, tracking)
     ) {
       nextRuns[runId] = {
         ...nextRuns[runId],

@@ -1,0 +1,43 @@
+{
+  "description": "AC1a: overlapping runs; first escalates same tick — peer must not confirm from shared report",
+  "nowMs": 1717502000000,
+  "reviewRuns": [
+    {
+      "id": "run-a",
+      "prNumber": 99,
+      "targetSha": "deadbeef",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "op-live",
+      "sentAt": "2024-06-04T10:00:00.000Z"
+    },
+    {
+      "id": "run-b",
+      "prNumber": 99,
+      "targetSha": "deadbeef",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "op-live",
+      "sentAt": "2024-06-04T10:01:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "op-live",
+      "role": "worker",
+      "prNumber": 99,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-04T10:05:00Z"
+        }
+      ]
+    }
+  ],
+  "tracking": { "runs": {} },
+  "config": {
+    "confirmationWindowMs": 60000,
+    "maxRedeliveries": 0
+  }
+}

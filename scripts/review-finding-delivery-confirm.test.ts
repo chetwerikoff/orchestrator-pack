@@ -125,6 +125,17 @@ describe('ambiguous overlapping runs (AC1a)', () => {
       ).length,
     ).toBeGreaterThan(0);
   });
+
+  it('does not confirm a peer after same-tick escalation of an overlapping run', () => {
+    const { actions, tracking } = planFromFixture(
+      'ambiguous-overlap-same-tick-escalation.json',
+    );
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
+      false,
+    );
+    expect(tracking.runs?.['run-a']?.deliveryState).toBe(DELIVERY_STATE_ESCALATED);
+    expect(tracking.runs?.['run-b']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
+  });
 });
 
 describe('run-level observable source only (AC2)', () => {
