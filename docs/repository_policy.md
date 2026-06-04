@@ -12,6 +12,8 @@ Allowed categories:
 - `scripts/**` — reusable setup, verification, guard, and developer scripts;
 - `.github/workflows/**` — reusable CI checks;
 - `docs/**` — reusable architecture, migration, and usage notes;
+- `.cursor/rules/**` — always-applied Cursor project rules (thin pointers to
+  canonical prompts; see architecture §S);
 - config examples such as `agent-orchestrator.yaml.example`;
 - repository metadata such as `README.md`, `AGENTS.md`, `.gitignore`, and
   package/tooling config for this pack.
