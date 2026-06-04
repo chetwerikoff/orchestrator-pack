@@ -11,21 +11,26 @@ import {
   isRunCoveringHead,
   planReconcileActions,
   resolveWorkerSessionId,
+  type PlanReconcileInput,
+  type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
+
+function startReviewActions(actions: ReconcileAction[]) {
+  return actions.filter((a): a is Extract<ReconcileAction, { type: 'start_review' }> => a.type === 'start_review');
+}
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/review-trigger-reconcile',
 );
 
-function loadFixture(name: string) {
+type FixturePayload = PlanReconcileInput & {
+  expect?: { startReviewCount?: number; sessionId?: string };
+};
+
+function loadFixture(name: string): FixturePayload {
   const raw = readFileSync(path.join(fixturesDir, name), 'utf8');
-  return JSON.parse(raw) as {
-    openPrs: Array<{ number: number; headRefOid: string }>;
-    reviewRuns: Array<Record<string, unknown>>;
-    sessions: Array<Record<string, unknown>>;
-    expect?: { startReviewCount?: number; sessionId?: string };
-  };
+  return JSON.parse(raw) as FixturePayload;
 }
 
 describe('isRunCoveringHead', () => {
@@ -68,7 +73,7 @@ describe('planReconcileActions', () => {
   it('AC1: starts review for uncovered head without worker report path', () => {
     const fixture = loadFixture('uncovered-no-report.json');
     const actions = planReconcileActions(fixture);
-    const starts = actions.filter((a) => a.type === 'start_review');
+    const starts = startReviewActions(actions);
     expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
     expect(starts[0]).toMatchObject({
       prNumber: 99,
@@ -80,7 +85,7 @@ describe('planReconcileActions', () => {
   it('AC2: same plan when orchestrator is stuck (not consulted)', () => {
     const fixture = loadFixture('uncovered-no-report.json');
     const actions = planReconcileActions(fixture);
-    expect(actions.filter((a) => a.type === 'start_review')).toHaveLength(1);
+    expect(startReviewActions(actions)).toHaveLength(1);
   });
 
   it('AC3: does not start when head is covered by each blocking status', () => {
@@ -92,20 +97,20 @@ describe('planReconcileActions', () => {
     ]) {
       const fixture = loadFixture(name);
       const actions = planReconcileActions(fixture);
-      expect(actions.filter((a) => a.type === 'start_review'), name).toHaveLength(0);
+      expect(startReviewActions(actions), name).toHaveLength(0);
     }
   });
 
   it('AC3: starts when only outdated runs cover the PR', () => {
     const fixture = loadFixture('uncovered-only-outdated.json');
     const actions = planReconcileActions(fixture);
-    expect(actions.filter((a) => a.type === 'start_review')).toHaveLength(1);
+    expect(startReviewActions(actions)).toHaveLength(1);
   });
 
   it('AC4: split-brain uses live worker session only (no lifecycle in review argv)', () => {
     const fixture = loadFixture('split-brain-live-worker.json');
     const actions = planReconcileActions(fixture);
-    const starts = actions.filter((a) => a.type === 'start_review');
+    const starts = startReviewActions(actions);
     expect(starts).toHaveLength(1);
     expect(starts[0]?.sessionId).toBe('op-worker-pr97');
 
