@@ -597,6 +597,25 @@ runtime target (decision §P).
 See also [`README.md`](../README.md) (Linux baseline) and decision §P in
 [`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
 
+### Coworker RTK on AO Cursor workers (Issue #145)
+
+Optional RTK compaction for worker shells is **opt-in** and **host-global** (`~/.cursor/hooks.json`
+affects orchestrator and workers on the same machine). No tracked yaml change is required.
+
+**Operator adoption** — after merge (full steps in
+[`docs/coworker-rtk-runbook.md`](coworker-rtk-runbook.md)):
+
+1. Record a pre-enable baseline (recent worker PRs: Codex findings, CI, iteration churn).
+2. Install coworker; `coworker rtk install` only — do not enable yet.
+3. `pwsh -NoProfile -File scripts/apply-coworker-rtk-passthrough.ps1` — verify all pack
+   patterns in `coworker rtk passthrough list` (log upstream-default drift if any).
+4. `coworker rtk enable` → hook smoke from the runbook.
+5. Run the **7-day** qualitative observation window; conclude `continue` | `extend` | `disable`.
+6. Rollback: `coworker rtk disable` — do not hand-edit `hooks.json` for routine disable.
+
+Architecture: decision §R in
+[`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
+
 ## Operator adoption contract
 
 Merged worker PRs often change `agent-orchestrator.yaml.example` and docs while
