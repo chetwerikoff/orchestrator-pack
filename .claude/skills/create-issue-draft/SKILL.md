@@ -197,7 +197,61 @@ Whenever you add a new draft or first sync a draft to GitHub:
 Do not add open/closed/shipped columns to the registry — live state stays in
 GitHub (`gh issue view`).
 
-## Sync to GitHub Issue
+## Publish via Cursor CLI (default)
+
+Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
+questions recorded), **you do not run `gh issue create` or open the publish PR
+yourself.** Delegate publishing to the Cursor CLI worker; it reads the local
+draft from the current working tree and lands it.
+
+**Mechanism — direct `cursor-agent`, not `ao spawn`.** `ao spawn` revives a
+worker against an issue that *already exists*, in a fresh checkout; it can
+neither create the issue nor see your uncommitted local draft. Invoke
+`cursor-agent` directly in the architect working tree (workspace defaults to the
+current directory; do **not** pass `-w`/`--worktree`) so it reads
+`docs/issues_drafts/NN-<slug>.md` exactly as it sits on disk:
+
+```bash
+cursor-agent -p --force "$(cat <<'EOF'
+You are publishing an already-reviewed architect task spec for orchestrator-pack.
+The draft is docs/issues_drafts/NN-<slug>.md (substitute the real NN-<slug>). It
+passed Codex review — do NOT edit its task content. Steps:
+
+1. Create the GitHub Issue:
+   - Title = the draft's H1 (first heading line).
+   - Body  = the draft body MINUS the H1 line (tail -n +3 of the file).
+   - gh issue create --repo chetwerikoff/orchestrator-pack --title "<H1>" --body-file <tmp>
+2. Write the returned number into the draft's `GitHub Issue: #N` line (it is
+   `TBD` now) and add/update the row in docs/issue_queue_index.md (draft path ->
+   #N). Do not add open/closed/shipped columns.
+3. PUBLISH-TO-MAIN — run only when the prompt below sets PUBLISH=yes. Otherwise
+   STOP after step 2 (sync-only: the Issue is the queue, the draft stays local).
+   When PUBLISH=yes, follow .claude/skills/publish-issue-draft/SKILL.md Mode C
+   exactly: branch from main, commit the draft + index (spec-only), open the
+   spec-only PR (use that skill's body template — no issue-closing refs), wait
+   for CI green, gh pr merge --merge --delete-branch, then git checkout main &&
+   git pull origin main.
+
+Report the Issue URL/number and, when PUBLISH=yes, the PR URL and merge commit.
+PUBLISH=<no|yes>
+EOF
+)"
+```
+
+**Default is merge.** Set `PUBLISH=yes` so Cursor runs the full cycle
+(PR → CI → `gh pr merge` → `git pull`) — this is the default for the create-task
+flow. Switch to `PUBLISH=no` (sync-only: Cursor stops after step 2, the draft
+stays local) **only when the user opts out of the merge** («не мержи», «только
+драфт», «без PR», "don't merge", "sync only"). This selects
+[`publish-issue-draft`](../publish-issue-draft/SKILL.md) Mode C; that skill's own
+sync-only default applies only when it is invoked standalone, outside this flow.
+
+**Fallback — architect publishes directly.** If `cursor-agent` is not on `PATH`,
+the run errors, or it leaves the issue/PR half-done, complete the publish
+yourself with the manual commands below (this is today's behavior) and tell the
+user the Cursor path was unavailable.
+
+### Sync to GitHub Issue (fallback / manual)
 
 The draft body **minus the H1 heading** is the issue body. Use:
 
@@ -218,10 +272,10 @@ rm -f "$body"
 
 For new issues: `gh issue create ... --body-file $body --title "<title>"`.
 
-## Publish to main (required by default)
+### Publish to main (fallback / manual)
 
-After sync, the draft must not stay uncommitted on disk. Unless the user opts out
-(«только драфт», «без PR», «не мержи»), immediately invoke
+The draft must not stay uncommitted on disk. Unless the user opts out
+(«только драфт», «без PR», «не мержи»), invoke
 [`publish-issue-draft`](../publish-issue-draft/SKILL.md):
 
 1. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
@@ -272,3 +326,9 @@ in the test-harness code.
 - Pipe `codex review` through `tail`, `head`, or `grep` (hides in-progress output).
 - Kill a running draft review to rush `gh issue create` — wait for `NO_FINDINGS` or cap.
 - Sync to GitHub before Codex review completes (unless 5-iteration cap with open questions recorded).
+- Use `ao spawn` to publish a brand-new draft — it needs an existing issue and a
+  fresh checkout, so it cannot create the issue or see the local draft. Use a
+  direct `cursor-agent -p --force` call in the working tree (default path), or
+  publish manually (fallback).
+- Pass `PUBLISH=yes` to Cursor when the user did not ask to merge — default is
+  sync-only; the full PR→merge cycle runs only on explicit request.
