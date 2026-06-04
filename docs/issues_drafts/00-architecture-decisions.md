@@ -298,6 +298,33 @@ third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
 on a command-approval prompt) is handled operationally in the recovery runbook,
 file `15-orchestrator-recovery-runbook.md`, not here.
 
+3. **Finding delivery is confirmed sender-side, not assumed from `sent_to_agent`.**
+   Decision taken 2026-06-04 after the PR #166 / opk-8 incident: a review run
+   produced a finding, AO marked it `sent_to_agent` at 08:25:36, but the worker
+   never transitioned to `addressing_reviews` — its terminal input channel was
+   flooded (a dashboard terminal-mux re-init storm), so the injected message never
+   started a turn, and the PR stalled "review sent, 0 open findings" with no fix.
+   Root cause: `sent_to_agent` records only that a best-effort message injection
+   was *attempted*, not that the worker received it. Decision: a pack-layer
+   mechanism confirms delivery from observable worker progress (an
+   `addressing_reviews`/equivalent report tied to the run, after the send), keyed
+   at **run / PR-head granularity** (`ao review list <project> --json`; AO 0.9.2
+   has no supported per-finding identity — consistent with the #140 Gate-0
+   finding). On no confirmation within a bounded window it attempts bounded
+   **best-effort** re-delivery to the linked session **only if that session is
+   still live and owns the head** (else straight to escalation — never re-send into
+   an orphan, the #98 class), performing **no** worker-lifecycle action (no
+   `ao spawn`/`--claim-pr`/kill — the PR #97 split-brain invariant). **Escalation,
+   not re-delivery, is the guarantee:** under the named corrupted-channel class,
+   re-delivery through the same channel can deterministically fail, so the contract
+   guarantees only that an unconfirmed delivery is detected and escalated, never
+   silently dropped. This is a **separate** mechanism from Decision 1's
+   review-run-only reconciler (whose zero-worker-contact invariant forbids the
+   re-delivery this performs) and from Decision 2's wake supervision (a delivered
+   turn is not a delivered finding). Restoring the channel itself is an upstream AO
+   concern, tracked separately. (Issue #171, file
+   `61-review-finding-delivery-confirmation.md`.)
+
 ## I. Worker prompt-delivery launch failure on Windows
 
 Decision taken 2026-05-28 after repeated worker sessions (e.g. issue #60) exited
