@@ -284,8 +284,15 @@ try {
                 Write-ReconcileLog "tick error: $_"
             }
             finally {
-                # Advance last tick even on failure so the next attempt waits the full interval.
-                Set-ReconcileState -Path $statePath -LastTickMs $nowMs
+                # Advance last tick on live ticks (success or failure) so retries honor the interval.
+                # Dry-run verification must not write state — operators often run -Once -DryRun
+                # immediately before starting the real reconciler.
+                if (-not $DryRun) {
+                    Set-ReconcileState -Path $statePath -LastTickMs $nowMs
+                }
+                else {
+                    Write-ReconcileLog 'dry-run: interval state not updated'
+                }
             }
         }
 
