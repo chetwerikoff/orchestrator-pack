@@ -133,32 +133,45 @@ The skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
 `scripts/verify.ps1`) still applies on spec-only skill PRs — canonical/pointer
 mismatch or a hand-edited pointer fails CI independently of this allowlist.
 
-## Skill-doc PRs (skill instruction markdown only)
+## No-ceremony markdown PRs (diff-content only)
 
-Use this path when the **entire PR diff** is agent skill instruction markdown —
-no GitHub Issue, no `<!-- pr-type: spec-only -->` signal, and no declaration
-snapshot. Scope guard detects the shape from **diff-content only** (automatic;
-the author adds no PR-body marker).
+Use this path when the **entire PR diff** is markdown within the **union** of
+spec-docs surfaces and agent skill instruction markdown — no GitHub Issue, no
+`<!-- pr-type: spec-only -->` signal, and no declaration snapshot. Scope guard
+detects the shape from **diff-content only** (automatic; the author adds no
+PR-body marker).
 
-### Diff-content trigger
+### Diff-content trigger (union surface)
 
 Every changed path must match **one** of:
+
+**Spec-docs markdown** (markdown-only subset of the spec-only allowlist):
+
+- `docs/issues_drafts/**/*.md`
+- `docs/issue_queue_index.md`
+- `docs/architecture.md`
+- `docs/issues_drafts/00-architecture-decisions.md`
+
+**Skill instruction markdown:**
 
 - `.claude/skills/**/*.md` — canonical skill source
 - `.cursor/skills/**/*.md` — generated pointer surface
 
-The shape is **conjunctive**: if any changed path is outside these globs (docs
-draft, code, workflows, a non-markdown file under a skill directory, and so on),
-the PR does **not** qualify as skill-doc and falls through to spec-only (when
-signalled) or implementation handling unchanged.
+The shape is **conjunctive**: if any changed path is outside this union (code,
+workflows, `README.md`, `agent-orchestrator.yaml.example`,
+`docs/declarations/**`, a non-markdown file under `docs/issues_drafts/**` or a
+skill directory, and so on), the PR does **not** qualify and falls through to
+spec-only (when signalled) or implementation handling unchanged.
 
-**Markdown-only boundary:** only `.md` files under the skill directories above
-qualify. A non-markdown asset under `.claude/skills/**` or `.cursor/skills/**`
-forces the implementation path.
+A PR may mix skill markdown and spec-docs markdown freely when **every** path
+stays within the union.
 
-### What skill-doc PRs omit
+**Markdown-only boundary:** only `.md` paths within the surfaces above qualify.
+Non-markdown assets force the implementation path.
 
-Skill-doc PRs pass scope guard **without**:
+### What no-ceremony PRs omit
+
+No-ceremony PRs pass scope guard **without**:
 
 - a committed declaration snapshot under `docs/declarations/**`;
 - any issue reference in the PR body (`Closes`, `Refs`, `See`, `Related to`, and
@@ -169,13 +182,14 @@ Scope guard **fails** when the PR body links any GitHub issue in any common form
 closing keywords (`Closes` / `Fixes` / `Resolves`), non-closing forms (`Ref` /
 `Refs` / `See` / `Related to`), bare `#N` autolinks, or
 `https://github.com/<owner>/<repo>/issues/<N>` URLs (fenced-code examples are
-ignored). Skill-doc PRs must not reference an issue in the description.
+ignored). No-ceremony PRs must not reference an issue in the description.
 
 ### Safety gates (unchanged)
 
-- Conjunctive diff boundary — skill-doc PRs cannot carry code or other surfaces.
+- Conjunctive diff boundary — no-ceremony PRs cannot carry code or other surfaces.
 - Skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
-  `scripts/verify.ps1`) remains a **separate required gate** on skill-doc PRs.
+  `scripts/verify.ps1`) remains a **separate required gate** when the diff
+  includes skill markdown paths.
 
 ### Implementation PRs (unchanged)
 
