@@ -27,6 +27,21 @@ Do not commit or push:
 - `vendor/agent-orchestrator` or any modified upstream AO source;
 - `packages/core/**` patches from Composio AO.
 
+## Agent skills (single canonical source)
+
+Each skill is authored **once** under `.claude/skills/<name>/SKILL.md` (canonical).
+Every other agent surface — today `.cursor/skills/<name>/SKILL.md` — is a **generated
+pointer**: discovery frontmatter (`name`, `description`) is derived from the canonical
+file; the body only directs the agent to read and execute the canonical `SKILL.md`.
+
+After editing a canonical skill, run `pwsh scripts/generate-skill-pointers.ps1` when you
+add a skill or change frontmatter. Pointer bodies do not need edits when only the
+canonical instruction body changes. CI runs `scripts/check-skill-pointer-drift.ps1` inside
+`scripts/verify.ps1` so hand-edited pointers cannot merge.
+
+Target surfaces are listed in `scripts/skill-pointer-targets.json` (list-driven; no
+per-skill generator code).
+
 ## Local pre-push check
 
 Before pushing, run:

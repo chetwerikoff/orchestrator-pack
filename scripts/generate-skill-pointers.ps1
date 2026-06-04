@@ -5,17 +5,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Host '[FAIL] scripts/generate-skill-pointers.ps1 requires PowerShell 7+ (pwsh).'
-    exit 1
-}
-
 . (Join-Path $PSScriptRoot 'lib/Skill-Pointer.ps1')
+Initialize-SkillPointerScript -ScriptLeafName 'generate-skill-pointers.ps1'
 
-$Root = $RepoRoot
-if (-not $Root) {
-    $Root = Split-Path -Parent $PSScriptRoot
-}
+$Root = Resolve-SkillPointerRepoRoot -RepoRoot $RepoRoot
 
 $config = Get-SkillPointerConfig -Root $Root
 $expected = Get-ExpectedSkillPointerMap -Root $Root -Config $config

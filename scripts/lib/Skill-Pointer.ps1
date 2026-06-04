@@ -1,5 +1,23 @@
 # Shared skill-pointer generation (Issue #156). Dot-source from generate/check scripts.
 
+function Initialize-SkillPointerScript {
+    param([string]$ScriptLeafName)
+
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        Write-Host "[FAIL] scripts/$ScriptLeafName requires PowerShell 7+ (pwsh)."
+        exit 1
+    }
+}
+
+function Resolve-SkillPointerRepoRoot {
+    param([string]$RepoRoot)
+
+    if ($RepoRoot) {
+        return $RepoRoot
+    }
+    return Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+}
+
 function Get-SkillPointerConfig {
     param(
         [string]$Root,
