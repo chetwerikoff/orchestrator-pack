@@ -470,6 +470,71 @@ overrides). PRs without a linked worker session in `ao status --json --reports f
 are skipped until respawn discipline creates one — the reconcile process must not
 call `ao spawn --claim-pr` (PR #97 split-brain guard).
 
+## Review finding delivery unconfirmed (Issue #171)
+
+`sent_to_agent` / `waiting_update` with `sentFindingCount > 0` means AO **attempted**
+to inject findings — not that the worker received them or reported
+`addressing_reviews`. When the worker input channel is flooded or stuck, findings can
+strand silently ("review sent, 0 open findings") while CI stays green.
+
+Run the sender-side delivery-confirmation loop (mechanical; no LLM-orchestrator turn
+required):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1
+```
+
+Dry-run one tick (no `ao review send`, no state write):
+
+```powershell
+pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun
+```
+
+### Defaults and env overrides
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Tick interval | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` |
+| Confirmation window (wait before re-deliver) | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` |
+| Max best-effort re-deliveries per run | **2** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` |
+| Persisted delivery state file | `%TEMP%\orchestrator-review-delivery-confirm-state.json` | `AO_REVIEW_DELIVERY_CONFIRM_STATE` |
+
+Confirmation is credited only when the **linked** worker reports
+`addressing_reviews`, `fixing_ci`, or `ready_for_review` **after** the send timestamp
+— not from `sent_to_agent` alone and not from unrelated `working` activity. When two
+or more unconfirmed runs share the same PR head and session, a single review-round
+report does **not** confirm either run (ambiguous overlap stays unconfirmed).
+
+Re-delivery uses `ao review send <run-id>` to the **existing** linked session when it
+is still live and owns the PR. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
+or `ao send`. If the linked session is dead/orphan, the loop **escalates immediately**
+(zero re-sends).
+
+### Escalation message and operator remedy
+
+When confirmation never arrives and re-deliveries are exhausted (or the linked session
+is orphan), the process logs:
+
+```text
+[review-finding-delivery-confirm] ESCALATION: unconfirmed delivery for review run <run-id> (PR #<n>, session <session-id>). Operator remedy: ...
+```
+
+**Operator remedy:**
+
+1. Open the worker session terminal — look for a flooded mux, stuck approval prompt, or
+   unsubmitted paste (see Issue #173 / upstream terminal-flood work).
+2. Confirm `ao status --json --reports full`: linked session must be **live** and still
+   on the PR. If `terminated` / `killed` / long `detecting`, do **not** `ao review send`
+   into the orphan run — follow **Orphan review run after worker respawn** below.
+3. After a live session owns the PR: `ao review send <run-id>` manually once, or start a
+   fresh review round (`ao review run` on the live session) per orphan recovery steps.
+4. Inspect persisted state (`AO_REVIEW_DELIVERY_CONFIRM_STATE`) — runs are
+   `confirmed` vs `escalated`; escalated runs are not retried forever.
+
+Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
+runs and never contacts workers.
+
 ## Orphan review run after worker respawn
 
 When a worker session is **terminated**, **killed**, or stuck in **detecting** and

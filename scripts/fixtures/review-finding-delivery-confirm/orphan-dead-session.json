@@ -1,0 +1,36 @@
+{
+  "description": "AC4a: dead linked session escalates immediately with zero re-sends",
+  "nowMs": 1717505000000,
+  "reviewRuns": [
+    {
+      "id": "run-orphan-1",
+      "prNumber": 97,
+      "targetSha": "sha97",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-dead",
+      "sentAt": "2024-06-04T12:33:20.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-dead",
+      "role": "worker",
+      "prNumber": 97,
+      "status": "terminated",
+      "reports": []
+    },
+    {
+      "name": "opk-live",
+      "role": "worker",
+      "prNumber": 97,
+      "status": "working",
+      "reports": []
+    }
+  ],
+  "tracking": { "runs": {} },
+  "config": {
+    "confirmationWindowMs": 60000,
+    "maxRedeliveries": 2
+  }
+}

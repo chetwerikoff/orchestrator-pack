@@ -9,6 +9,18 @@ export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;
 
+export declare function sessionMatchesIdentifier(
+  session: AoSession,
+  needle: string,
+): boolean;
+
+export declare function findSessionById(
+  sessions: AoSession[],
+  sessionId: string,
+): AoSession | null;
+
+export declare function sessionMatchesPr(session: AoSession, prNumber: number): boolean;
+
 export interface OpenPr {
   number: number;
   headRefOid: string;
@@ -30,7 +42,16 @@ export interface AoSession {
   role?: string;
   prNumber?: number | null;
   pr?: string | null;
+  ownedHeadSha?: string;
+  headRefOid?: string;
   status?: string;
+  reports?: Array<{
+    reportState?: string;
+    report_state?: string;
+    reportedAt?: string;
+    timestamp?: string;
+    createdAt?: string;
+  }>;
 }
 
 export interface StartReviewAction {

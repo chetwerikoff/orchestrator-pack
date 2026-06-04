@@ -400,6 +400,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== review-finding delivery confirmation (Issue #171) =='
+$deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
+if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {
+    & $deliveryConfirmCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-finding delivery confirmation checks failed (Issue #171)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-finding delivery confirmation check script (Issue #171)'
+}
+
+Write-Host ''
 Write-Host '== reviewer workspace preflight (Issue #98) =='
 $reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
 if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {

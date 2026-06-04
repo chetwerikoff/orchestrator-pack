@@ -38,6 +38,7 @@ $Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -145,22 +146,6 @@ function Invoke-ReviewerWorkspacePreflight {
     }
 }
 
-function Test-ForbiddenLifecycleCommand {
-    param([string]$CommandLine)
-
-    $blocked = @(
-        'ao spawn',
-        '--claim-pr',
-        'ao session kill',
-        'ao send'
-    )
-    foreach ($frag in $blocked) {
-        if ($CommandLine -match [regex]::Escape($frag)) {
-            throw "forbidden lifecycle fragment in command: $frag"
-        }
-    }
-}
-
 function Invoke-PlannedReviewRun {
     param(
         [string]$SessionId,
@@ -172,7 +157,7 @@ function Invoke-PlannedReviewRun {
 
     $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
     $commandLine = "ao $($runArgs -join ' ')"
-    Test-ForbiddenLifecycleCommand -CommandLine $commandLine
+    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
 
     if ($DryRunMode) {
         Write-ReconcileLog "dry-run would run: $commandLine (PR #$PrNumber head=$HeadSha)"
