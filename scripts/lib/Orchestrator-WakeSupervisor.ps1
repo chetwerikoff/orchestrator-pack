@@ -520,6 +520,11 @@ function Get-OrchestratorWakeSupervisorStatusReport {
     }
 }
 
+function Format-UnixShellSingleQuotedArgument {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "'\\''") + "'"
+}
+
 function Start-OrchestratorWakeSupervisorDaemon {
     param(
         [string[]]$LoopArguments,
@@ -531,18 +536,13 @@ function Start-OrchestratorWakeSupervisorDaemon {
         $stateRoot = Split-Path -Parent $LogPath
         $launcher = Join-Path $stateRoot 'launch-supervisor.sh'
         $quotedArgs = ($LoopArguments | ForEach-Object {
-                if ($_ -match "[\s'`"$]") {
-                    "'" + ($_ -replace "'", "'\\''") + "'"
-                }
-                else {
-                    $_
-                }
+                Format-UnixShellSingleQuotedArgument -Value $_
             }) -join ' '
         $launcherContent = @(
             '#!/usr/bin/env bash'
             'set -euo pipefail'
-            "cd '$($WorkingDirectory -replace "'", "'\\''")'"
-            "nohup pwsh $quotedArgs >> '$($LogPath -replace "'", "'\\''")' 2>&1 &"
+            "cd $(Format-UnixShellSingleQuotedArgument -Value $WorkingDirectory)"
+            "nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 &"
             'echo $!'
         ) -join "`n"
         Set-Content -LiteralPath $launcher -Value $launcherContent -Encoding utf8 -NoNewline

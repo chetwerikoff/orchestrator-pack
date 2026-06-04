@@ -451,4 +451,37 @@ describe('orchestrator-wake-supervisor', () => {
 
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'quotes all launcher arguments on Unix when detached',
+    () => {
+      const stateDir = makeStateDir();
+      const projectId = 'proj&evil;|meta';
+      const start = runSupervisor([
+        '-Action',
+        'Start',
+        '-TestMode',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'op-quote-test',
+        '-ProjectId',
+        projectId,
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '1',
+      ]);
+      expect(start.status).toBe(0);
+
+      const launcher = path.join(stateDir, 'launch-supervisor.sh');
+      expect(fs.existsSync(launcher)).toBe(true);
+      const script = fs.readFileSync(launcher, 'utf8');
+      const quotedProjectId = `'${projectId.replace(/'/g, "'\\''")}'`;
+      expect(script).toContain(`'-ProjectId' ${quotedProjectId}`);
+      expect(script).not.toMatch(/-ProjectId proj&/);
+      expect(script).not.toMatch(/nohup pwsh -NoProfile /);
+
+      runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    },
+  );
 });
