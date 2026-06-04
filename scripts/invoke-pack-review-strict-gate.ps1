@@ -98,14 +98,7 @@ function Invoke-LiveGate {
     }
 
     $payload = Get-AoReviewListJson -Project $Project
-    $runs = @($payload.runs)
-    if (-not $runs -and $payload.data) {
-        $runs = @($payload.data)
-    }
-
-    if ($Project) {
-        $runs = @($runs | Where-Object { $_.projectId -eq $Project })
-    }
+    $runs = Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
 
     $expectedReviewer = Get-PackReviewerFromSelector
     $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer

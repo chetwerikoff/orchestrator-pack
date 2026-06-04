@@ -38,6 +38,35 @@ function Invoke-AoCliJson {
     }
 }
 
+function Get-AoReviewRunsFromPayload {
+    param(
+        $Payload,
+        [string]$Project = ''
+    )
+
+    $runs = @($Payload.runs)
+    if (-not $runs -and $Payload.data) {
+        $runs = @($Payload.data)
+    }
+
+    if ($Project) {
+        $runs = @($runs | Where-Object { $_.projectId -eq $Project })
+    }
+
+    return $runs
+}
+
+function Get-AoStatusSessionsFromPayload {
+    param($Payload)
+
+    $sessions = @($Payload.data)
+    if (-not $sessions -and $Payload.sessions) {
+        $sessions = @($Payload.sessions)
+    }
+
+    return $sessions
+}
+
 function Get-AoReviewListJson {
     param([string]$Project = '')
 
@@ -47,6 +76,18 @@ function Get-AoReviewListJson {
     return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao review list'
 }
 
+function Get-AoReviewRuns {
+    param([string]$Project = '')
+
+    $payload = Get-AoReviewListJson -Project $Project
+    return Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
+}
+
 function Get-AoStatusReportsJson {
     return Invoke-AoCliJson -AoArgs @('status', '--json', '--reports', 'full') -FailureLabel 'ao status'
+}
+
+function Get-AoStatusSessions {
+    $payload = Get-AoStatusReportsJson
+    return Get-AoStatusSessionsFromPayload -Payload $payload
 }

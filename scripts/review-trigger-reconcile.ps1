@@ -121,11 +121,6 @@ function Invoke-GhOpenPrList {
     }
 }
 
-function Get-AoStatusWorkerSessions {
-    $payload = Get-AoStatusReportsJson
-    return @($payload.data)
-}
-
 function Get-FixtureReconcilePayload {
     param([string]$Path)
 
@@ -209,9 +204,8 @@ function Invoke-ReconcileTick {
     }
     else {
         $openPrs = Invoke-GhOpenPrList
-        $reviewList = Get-AoReviewListJson -Project $Project
-        $reviewRuns = @($reviewList.runs)
-        $sessions = Get-AoStatusWorkerSessions
+        $reviewRuns = Get-AoReviewRuns -Project $Project
+        $sessions = Get-AoStatusSessions
         $payload = @{
             openPrs    = $openPrs
             reviewRuns = $reviewRuns
