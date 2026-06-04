@@ -105,14 +105,38 @@ async function waitForMarkers(stateDir: string, timeoutMs = 10_000) {
   throw new Error('timed out waiting for supervisor child markers');
 }
 
-function readMarker(stateDir: string, role: 'listener' | 'heartbeat') {
+type WakeMarker = {
+  role: string;
+  pid: number;
+  orchestratorSessionId: string;
+};
+
+async function readMarker(
+  stateDir: string,
+  role: 'listener' | 'heartbeat',
+  timeoutMs = 5000,
+): Promise<WakeMarker> {
   const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
-  expect(fs.existsSync(markerPath)).toBe(true);
-  return JSON.parse(fs.readFileSync(markerPath, 'utf8')) as {
-    role: string;
-    pid: number;
-    orchestratorSessionId: string;
-  };
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    if (!fs.existsSync(markerPath)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
+    try {
+      const raw = fs.readFileSync(markerPath, 'utf8').trim();
+      if (!raw) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        continue;
+      }
+      return JSON.parse(raw) as WakeMarker;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
 }
 
 function isAlive(pid: number): boolean {
@@ -133,8 +157,8 @@ describe('orchestrator-wake-supervisor', () => {
     ]);
     await waitForMarkers(stateDir);
 
-    const listener = readMarker(stateDir, 'listener');
-    const heartbeat = readMarker(stateDir, 'heartbeat');
+    const listener = await readMarker(stateDir, 'listener');
+    const heartbeat = await readMarker(stateDir, 'heartbeat');
     expect(listener.orchestratorSessionId).toBe('op-test-override');
     expect(heartbeat.orchestratorSessionId).toBe('op-test-override');
     expect(listener.pid).not.toBe(heartbeat.pid);
@@ -147,7 +171,7 @@ describe('orchestrator-wake-supervisor', () => {
     const child = startSupervisorBackground(stateDir, ['-FixturePath', statusFixture]);
     await waitForMarkers(stateDir);
 
-    const listener = readMarker(stateDir, 'listener');
+    const listener = await readMarker(stateDir, 'listener');
     expect(listener.orchestratorSessionId).toBe('op-orchestrator-old');
     child.kill('SIGTERM');
   });
@@ -157,14 +181,14 @@ describe('orchestrator-wake-supervisor', () => {
     const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart']);
     await waitForMarkers(stateDir);
 
-    const first = readMarker(stateDir, 'listener');
+    const first = await readMarker(stateDir, 'listener');
     if (isAlive(first.pid)) {
       process.kill(first.pid, 'SIGKILL');
     }
     const deadline = Date.now() + 10_000;
     let restarted = false;
     while (Date.now() < deadline) {
-      const current = readMarker(stateDir, 'listener');
+      const current = await readMarker(stateDir, 'listener');
       if (current.pid !== first.pid && isAlive(current.pid)) {
         restarted = true;
         break;
@@ -183,8 +207,8 @@ describe('orchestrator-wake-supervisor', () => {
     ]);
     await waitForMarkers(stateDir);
 
-    const listener = readMarker(stateDir, 'listener');
-    const heartbeat = readMarker(stateDir, 'heartbeat');
+    const listener = await readMarker(stateDir, 'listener');
+    const heartbeat = await readMarker(stateDir, 'heartbeat');
     if (isAlive(listener.pid)) {
       process.kill(listener.pid, 'SIGKILL');
     }
@@ -242,10 +266,10 @@ describe('orchestrator-wake-supervisor', () => {
     );
 
     const deadline = Date.now() + 10_000;
-    let listener: ReturnType<typeof readMarker> | null = null;
+    let listener: WakeMarker | null = null;
     while (Date.now() < deadline) {
       try {
-        listener = readMarker(stateDir, 'listener');
+        listener = await readMarker(stateDir, 'listener');
         if (listener.orchestratorSessionId === 'op-orchestrator-old') break;
       } catch {
         // not ready yet
@@ -295,7 +319,7 @@ describe('orchestrator-wake-supervisor', () => {
     const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
     await waitForMarkers(stateDir);
 
-    const oldListener = readMarker(stateDir, 'listener');
+    const oldListener = await readMarker(stateDir, 'listener');
     fs.writeFileSync(
       dynamicFixture,
       fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-new.json')),
@@ -304,7 +328,7 @@ describe('orchestrator-wake-supervisor', () => {
     const deadline = Date.now() + 12_000;
     let sawNew = false;
     while (Date.now() < deadline) {
-      const current = readMarker(stateDir, 'listener');
+      const current = await readMarker(stateDir, 'listener');
       if (current.orchestratorSessionId === 'op-orchestrator-new' && current.pid !== oldListener.pid) {
         sawNew = true;
         break;
@@ -312,7 +336,7 @@ describe('orchestrator-wake-supervisor', () => {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
     expect(sawNew).toBe(true);
-    const heartbeat = readMarker(stateDir, 'heartbeat');
+    const heartbeat = await readMarker(stateDir, 'heartbeat');
     expect(heartbeat.orchestratorSessionId).toBe('op-orchestrator-new');
     child.kill('SIGTERM');
   });
@@ -328,8 +352,8 @@ describe('orchestrator-wake-supervisor', () => {
     const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
     await waitForMarkers(stateDir);
 
-    const listenerBefore = readMarker(stateDir, 'listener');
-    const heartbeatBefore = readMarker(stateDir, 'heartbeat');
+    const listenerBefore = await readMarker(stateDir, 'listener');
+    const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
     fs.writeFileSync(
       dynamicFixture,
       fs.readFileSync(path.join(fixtureDir, 'status-no-orchestrator.json')),
