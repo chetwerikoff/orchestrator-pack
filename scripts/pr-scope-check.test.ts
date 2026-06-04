@@ -5,18 +5,20 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  classifySkillDocPaths,
+  classifyNoCeremonyPaths,
   classifySpecDocsPaths,
   CLOSING_KEYWORD_ALTERNATION,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
-  findSkillDocIssueLinks,
+  findNoCeremonyIssueLinks,
   hasClosingIssueReference,
-  hasSkillDocIssueLink,
+  hasNoCeremonyIssueLink,
   hasSpecOnlySignal,
-  isSkillDocPr,
+  isNoCeremonyPr,
   NON_CLOSING_ISSUE_REF_PATTERN,
+  NO_CEREMONY_MARKDOWN_GLOBS,
   SPEC_DOCS_ALLOWLIST,
+  SPEC_DOCS_MARKDOWN_GLOBS,
   SPEC_ONLY_SIGNAL_LITERAL,
   SPEC_SKILL_MARKDOWN_GLOBS,
 } from './pr-scope-contract.js';
@@ -125,12 +127,12 @@ describe('spec-only contract parsing', () => {
     expect(extractNonClosingIssueNumber('Closes #121')).toBeNull();
   });
 
-  it('findSkillDocIssueLinks detects closing, Refs, bare hash, and issue URLs', () => {
-    expect(findSkillDocIssueLinks('Closes #1')).toEqual([1]);
-    expect(findSkillDocIssueLinks('Refs #2')).toEqual([2]);
-    expect(findSkillDocIssueLinks('(see #3)')).toEqual([3]);
+  it('findNoCeremonyIssueLinks detects closing, Refs, bare hash, and issue URLs', () => {
+    expect(findNoCeremonyIssueLinks('Closes #1')).toEqual([1]);
+    expect(findNoCeremonyIssueLinks('Refs #2')).toEqual([2]);
+    expect(findNoCeremonyIssueLinks('(see #3)')).toEqual([3]);
     expect(
-      findSkillDocIssueLinks('https://github.com/org/repo/issues/4#issuecomment-1'),
+      findNoCeremonyIssueLinks('https://github.com/org/repo/issues/4#issuecomment-1'),
     ).toEqual([4]);
   });
 });
@@ -259,7 +261,7 @@ describe('checkPrScope — spec-only', () => {
     });
   });
 
-  it('skill-markdown-only diff routes to spec-only when mixed with docs paths', () => {
+  it('signalled spec-only takes precedence over no-ceremony when mixed with docs paths', () => {
     const prBody = [SPEC_SIGNAL, '', 'Refs #159', '', '## Summary', 'Spec draft + skill.'].join('\n');
     const result = checkPrScope({
       repoRoot,
@@ -311,12 +313,12 @@ describe('checkPrScope — spec-only', () => {
     });
   });
 
-  it('fails without a non-closing issue reference', () => {
+  it('fails without a non-closing issue reference when paths are outside no-ceremony', () => {
     const result = checkPrScope({
       repoRoot,
       prBody: SPEC_SIGNAL,
       issueBody: null,
-      prPaths: ['docs/issue_queue_index.md'],
+      prPaths: ['docs/issues_drafts/foo.json'],
       degradedMode: false,
       forkPr: false,
     });
@@ -327,8 +329,8 @@ describe('checkPrScope — spec-only', () => {
   });
 });
 
-describe('checkPrScope — skill-doc', () => {
-  const repoRoot = join(tmpdir(), `scope-guard-skill-doc-${randomUUID()}`);
+describe('checkPrScope — no-ceremony', () => {
+  const repoRoot = join(tmpdir(), `scope-guard-no-ceremony-${randomUUID()}`);
 
   const skillPaths = [
     '.claude/skills/create-issue-draft/SKILL.md',
@@ -346,9 +348,21 @@ describe('checkPrScope — skill-doc', () => {
     });
     expect(result).toMatchObject({
       ok: true,
-      mode: 'skill-doc',
+      mode: 'no-ceremony',
     });
     expect('issueNumber' in result && result.ok && result.issueNumber).toBeFalsy();
+  });
+
+  it('passes for spec-docs markdown only with no ceremony', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: '## Summary\n\nDraft spec edit only.',
+      issueBody: null,
+      prPaths: ['docs/issues_drafts/59-spec-docs-only-pr-no-ceremony.md'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'no-ceremony' });
   });
 
   it.each([
@@ -373,13 +387,13 @@ describe('checkPrScope — skill-doc', () => {
       ok: false,
       reason: 'skill_doc_with_issue_reference',
     });
-    expect(hasSkillDocIssueLink(prBody)).toBe(true);
-    expect(findSkillDocIssueLinks(prBody)).toContain(issueNumber);
+    expect(hasNoCeremonyIssueLink(prBody)).toBe(true);
+    expect(findNoCeremonyIssueLinks(prBody)).toContain(issueNumber);
   });
 
   it('does not treat issue mentions inside fenced code as links', () => {
     const prBody = ['## Summary', '', '```', 'Refs #123', '```'].join('\n');
-    expect(hasSkillDocIssueLink(prBody)).toBe(false);
+    expect(hasNoCeremonyIssueLink(prBody)).toBe(false);
     const result = checkPrScope({
       repoRoot,
       prBody,
@@ -388,7 +402,7 @@ describe('checkPrScope — skill-doc', () => {
       degradedMode: false,
       forkPr: false,
     });
-    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
+    expect(result).toMatchObject({ ok: true, mode: 'no-ceremony' });
   });
 
   it('passes without spec-only signal when the body has no issue reference', () => {
@@ -400,7 +414,7 @@ describe('checkPrScope — skill-doc', () => {
       degradedMode: false,
       forkPr: false,
     });
-    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
+    expect(result).toMatchObject({ ok: true, mode: 'no-ceremony' });
   });
 
   it('does not qualify when a non-markdown file is under a skill directory', () => {
@@ -418,20 +432,31 @@ describe('checkPrScope — skill-doc', () => {
     });
   });
 
-  it('does not qualify when skill markdown is mixed with docs', () => {
+  it('passes when skill markdown is mixed with spec-docs markdown', () => {
     const result = checkPrScope({
       repoRoot,
-      prBody: [SPEC_SIGNAL, '', 'Refs #121'].join('\n'),
-      issueBody: 'GitHub Issue: #121',
+      prBody: '## Summary\n\nSkill and draft edits.',
+      issueBody: null,
       prPaths: ['.claude/skills/foo/SKILL.md', 'docs/issue_queue_index.md'],
       degradedMode: false,
       forkPr: false,
     });
-    expect(result).toMatchObject({
-      ok: true,
-      mode: 'spec-only',
+    expect(result).toMatchObject({ ok: true, mode: 'no-ceremony' });
+    expect(isNoCeremonyPr(['.claude/skills/foo/SKILL.md', 'docs/issue_queue_index.md'])).toBe(
+      true,
+    );
+  });
+
+  it('does not qualify when a markdown path is outside the union (e.g. README.md)', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: '## Summary',
+      issueBody: null,
+      prPaths: ['docs/issues_drafts/foo.md', 'README.md'],
+      degradedMode: false,
+      forkPr: false,
     });
-    expect(isSkillDocPr(['.claude/skills/foo/SKILL.md', 'docs/issue_queue_index.md'])).toBe(false);
+    expect(result).toMatchObject({ ok: false, reason: 'missing_issue_link' });
   });
 
   it('does not qualify when skill markdown is mixed with code', () => {
@@ -450,26 +475,43 @@ describe('checkPrScope — skill-doc', () => {
   });
 });
 
-describe('classifySkillDocPaths — skill-doc boundary', () => {
-  it('accepts only markdown under skill surfaces', () => {
-    expect(classifySkillDocPaths(['.claude/skills/foo/SKILL.md'])).toMatchObject({ ok: true });
-    expect(isSkillDocPr(['.claude/skills/foo/SKILL.md', '.cursor/skills/foo/SKILL.md'])).toBe(true);
+describe('classifyNoCeremonyPaths — union boundary', () => {
+  it('accepts markdown under skill surfaces', () => {
+    expect(classifyNoCeremonyPaths(['.claude/skills/foo/SKILL.md'])).toMatchObject({ ok: true });
+    expect(isNoCeremonyPr(['.claude/skills/foo/SKILL.md', '.cursor/skills/foo/SKILL.md'])).toBe(
+      true,
+    );
+  });
+
+  it('accepts spec-docs markdown paths', () => {
+    expect(
+      classifyNoCeremonyPaths(['docs/issues_drafts/59-spec-docs-only-pr-no-ceremony.md']),
+    ).toMatchObject({ ok: true });
+    expect(isNoCeremonyPr(['docs/architecture.md', 'docs/issue_queue_index.md'])).toBe(true);
   });
 
   it('rejects non-markdown under skill directories', () => {
-    const result = classifySkillDocPaths(['.claude/skills/foo/helper.sh']);
+    const result = classifyNoCeremonyPaths(['.claude/skills/foo/helper.sh']);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.outOfSkillMarkdown).toContain('.claude/skills/foo/helper.sh');
+      expect(result.outOfNoCeremonyMarkdown).toContain('.claude/skills/foo/helper.sh');
+    }
+  });
+
+  it('rejects non-markdown under docs/issues_drafts', () => {
+    const result = classifyNoCeremonyPaths(['docs/issues_drafts/foo.json']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.outOfNoCeremonyMarkdown).toContain('docs/issues_drafts/foo.json');
     }
   });
 
   it('rejects empty path lists', () => {
-    expect(isSkillDocPr([])).toBe(false);
+    expect(isNoCeremonyPr([])).toBe(false);
   });
 });
 
-describe('skill-doc PR — pointer drift remains an independent gate', () => {
+describe('no-ceremony PR — pointer drift remains an independent gate', () => {
   it('fails drift check when a pointer does not match canonical', () => {
     const repoRoot = join(tmpdir(), `skill-drift-${randomUUID()}`);
     const scriptsDir = join(repoRoot, 'scripts');
@@ -518,7 +560,7 @@ describe('skill-doc PR — pointer drift remains an independent gate', () => {
       degradedMode: false,
       forkPr: false,
     });
-    expect(scopeResult).toMatchObject({ ok: true, mode: 'skill-doc' });
+    expect(scopeResult).toMatchObject({ ok: true, mode: 'no-ceremony' });
   });
 });
 
@@ -586,10 +628,16 @@ describe('repository_policy.md documents the runtime spec-docs allowlist', () =>
     }
   });
 
-  it('documents the skill-doc PR shape and trigger globs', () => {
+  it('documents the no-ceremony PR shape and union trigger globs', () => {
     const policy = readFileSync(join('docs', 'repository_policy.md'), 'utf8');
-    expect(policy).toMatch(/skill-doc/i);
+    expect(policy).toMatch(/no-ceremony/i);
     expect(policy).toContain('diff-content');
+    for (const pattern of NO_CEREMONY_MARKDOWN_GLOBS) {
+      expect(policy).toContain(pattern);
+    }
+    for (const pattern of SPEC_DOCS_MARKDOWN_GLOBS) {
+      expect(policy).toContain(pattern);
+    }
     for (const pattern of SPEC_SKILL_MARKDOWN_GLOBS) {
       expect(policy).toContain(pattern);
     }

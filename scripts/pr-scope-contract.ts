@@ -58,11 +58,34 @@ export const SPEC_SKILL_MARKDOWN_GLOBS: readonly string[] = [
   ...SPEC_SKILL_POINTER_ROOTS.map((root) => `${root}/**/*.md`),
 ] as const;
 
-export const SPEC_DOCS_ALLOWLIST: readonly string[] = [
+/** Docs-only entries on the spec-only allowlist (excludes skill markdown globs). */
+export const SPEC_DOCS_ONLY_GLOBS: readonly string[] = [
   'docs/issues_drafts/**',
   'docs/issue_queue_index.md',
   'docs/architecture.md',
   'docs/issues_drafts/00-architecture-decisions.md',
+] as const;
+
+/**
+ * Markdown-only spec-docs paths for no-ceremony PRs (docs portion of SPEC_DOCS_ALLOWLIST).
+ */
+export const SPEC_DOCS_MARKDOWN_GLOBS: readonly string[] = [
+  'docs/issues_drafts/**/*.md',
+  'docs/issue_queue_index.md',
+  'docs/architecture.md',
+  'docs/issues_drafts/00-architecture-decisions.md',
+] as const;
+
+/**
+ * Union surface for diff-content no-ceremony PRs (skill instruction + spec-docs markdown).
+ */
+export const NO_CEREMONY_MARKDOWN_GLOBS: readonly string[] = [
+  ...SPEC_DOCS_MARKDOWN_GLOBS,
+  ...SPEC_SKILL_MARKDOWN_GLOBS,
+] as const;
+
+export const SPEC_DOCS_ALLOWLIST: readonly string[] = [
+  ...SPEC_DOCS_ONLY_GLOBS,
   ...SPEC_SKILL_MARKDOWN_GLOBS,
 ] as const;
 
@@ -137,8 +160,8 @@ const SKILL_DOC_ISSUE_LINK_PATTERNS: readonly RegExp[] = [
   BARE_ISSUE_HASH_PATTERN,
 ];
 
-/** Issue numbers linked anywhere in a skill-doc PR body (all supported GitHub forms). */
-export function findSkillDocIssueLinks(prBody: string): number[] {
+/** Issue numbers linked anywhere in a no-ceremony PR body (all supported GitHub forms). */
+export function findNoCeremonyIssueLinks(prBody: string): number[] {
   const text = prBodyScannableForIssueLinks(prBody);
   const linked = new Set<number>();
 
@@ -155,31 +178,40 @@ export function findSkillDocIssueLinks(prBody: string): number[] {
   return [...linked];
 }
 
-export function hasSkillDocIssueLink(prBody: string): boolean {
-  return findSkillDocIssueLinks(prBody).length > 0;
+export function hasNoCeremonyIssueLink(prBody: string): boolean {
+  return findNoCeremonyIssueLinks(prBody).length > 0;
 }
 
+/** @deprecated Use findNoCeremonyIssueLinks */
+export const findSkillDocIssueLinks = findNoCeremonyIssueLinks;
+
+/** @deprecated Use hasNoCeremonyIssueLink */
+export const hasSkillDocIssueLink = hasNoCeremonyIssueLink;
+
 /**
- * True when every changed path is markdown under the skill instruction surfaces
+ * True when every changed path is markdown within the no-ceremony union surface
  * (conjunctive; empty diff does not qualify).
  */
-export function isSkillDocPr(prPaths: string[]): boolean {
+export function isNoCeremonyPr(prPaths: string[]): boolean {
   if (prPaths.length === 0) {
     return false;
   }
-  return classifySkillDocPaths(prPaths).ok;
+  return classifyNoCeremonyPaths(prPaths).ok;
 }
 
-export function classifySkillDocPaths(prPaths: string[]): {
+/** @deprecated Use isNoCeremonyPr */
+export const isSkillDocPr = isNoCeremonyPr;
+
+export function classifyNoCeremonyPaths(prPaths: string[]): {
   ok: true;
   checkedPaths: string[];
 } | {
   ok: false;
-  outOfSkillMarkdown: string[];
+  outOfNoCeremonyMarkdown: string[];
   invalidPaths: Array<{ path: string; reason: string }>;
   checkedPaths: string[];
 } {
-  const outOfSkillMarkdown: string[] = [];
+  const outOfNoCeremonyMarkdown: string[] = [];
   const invalidPaths: Array<{ path: string; reason: string }> = [];
   const checkedPaths: string[] = [];
 
@@ -192,20 +224,42 @@ export function classifySkillDocPaths(prPaths: string[]): {
 
     checkedPaths.push(normalized.path);
 
-    if (!pathMatchesAnyPattern(normalized.path, [...SPEC_SKILL_MARKDOWN_GLOBS])) {
-      outOfSkillMarkdown.push(normalized.path);
+    if (!pathMatchesAnyPattern(normalized.path, [...NO_CEREMONY_MARKDOWN_GLOBS])) {
+      outOfNoCeremonyMarkdown.push(normalized.path);
     }
   }
 
   if (invalidPaths.length > 0) {
-    return { ok: false, outOfSkillMarkdown, invalidPaths, checkedPaths };
+    return { ok: false, outOfNoCeremonyMarkdown, invalidPaths, checkedPaths };
   }
 
-  if (outOfSkillMarkdown.length > 0) {
-    return { ok: false, outOfSkillMarkdown, invalidPaths: [], checkedPaths };
+  if (outOfNoCeremonyMarkdown.length > 0) {
+    return { ok: false, outOfNoCeremonyMarkdown, invalidPaths: [], checkedPaths };
   }
 
   return { ok: true, checkedPaths };
+}
+
+/** @deprecated Use classifyNoCeremonyPaths */
+export function classifySkillDocPaths(prPaths: string[]): {
+  ok: true;
+  checkedPaths: string[];
+} | {
+  ok: false;
+  outOfSkillMarkdown: string[];
+  invalidPaths: Array<{ path: string; reason: string }>;
+  checkedPaths: string[];
+} {
+  const result = classifyNoCeremonyPaths(prPaths);
+  if (result.ok) {
+    return result;
+  }
+  return {
+    ok: false,
+    outOfSkillMarkdown: result.outOfNoCeremonyMarkdown,
+    invalidPaths: result.invalidPaths,
+    checkedPaths: result.checkedPaths,
+  };
 }
 
 export function classifySpecDocsPaths(prPaths: string[]): {

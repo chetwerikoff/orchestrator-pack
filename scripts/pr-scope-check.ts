@@ -15,18 +15,18 @@ import {
   validateDeclaredScope,
 } from '../plugins/ao-task-declaration/lib/validate.js';
 import {
-  classifySkillDocPaths,
+  classifyNoCeremonyPaths,
   classifySpecDocsPaths,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
   hasClosingIssueReference,
-  hasSkillDocIssueLink,
+  hasNoCeremonyIssueLink,
   hasSpecOnlySignal,
-  isSkillDocPr,
+  isNoCeremonyPr,
   ISSUE_LINK_PATTERN,
+  NO_CEREMONY_MARKDOWN_GLOBS,
   resolveIssueNumberForFetch,
   SPEC_DOCS_ALLOWLIST,
-  SPEC_SKILL_MARKDOWN_GLOBS,
 } from './pr-scope-contract.js';
 
 export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
@@ -51,7 +51,7 @@ export interface PrScopeCheckInput {
 export type PrScopeCheckResult =
   | {
       ok: true;
-      mode: 'implementation' | 'spec-only' | 'skill-doc';
+      mode: 'implementation' | 'spec-only' | 'no-ceremony';
       snapshot?: DeclarationSnapshot;
       issueNumber?: number;
       checkedPaths: string[];
@@ -298,17 +298,17 @@ function checkPrPathsAgainstSnapshot(
   return { ok: true, checkedPaths, skippedControlArtifacts: control };
 }
 
-function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  if (hasSkillDocIssueLink(input.prBody)) {
+function checkNoCeremonyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  if (hasNoCeremonyIssueLink(input.prBody)) {
     return {
       ok: false,
       reason: 'skill_doc_with_issue_reference',
       message:
-        'skill-doc PRs must not link any GitHub issue in the PR description (closing keywords, Refs/See forms, bare #N, or github.com/.../issues/N URLs)',
+        'no-ceremony PRs must not link any GitHub issue in the PR description (closing keywords, Refs/See forms, bare #N, or github.com/.../issues/N URLs)',
     };
   }
 
-  const pathCheck = classifySkillDocPaths(input.prPaths);
+  const pathCheck = classifyNoCeremonyPaths(input.prPaths);
   if (!pathCheck.ok) {
     if (pathCheck.invalidPaths.length > 0) {
       return {
@@ -328,9 +328,9 @@ function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
       ok: false,
       reason: 'skill_doc_scope_violation',
       message:
-        'skill-doc PR diff includes paths outside skill instruction markdown (.claude/skills/**/*.md and .cursor/skills/**/*.md; see docs/repository_policy.md)',
+        'no-ceremony PR diff includes paths outside the markdown union surface (spec-docs and skill instruction markdown; see docs/repository_policy.md)',
       violations: {
-        outOfScope: pathCheck.outOfSkillMarkdown,
+        outOfScope: pathCheck.outOfNoCeremonyMarkdown,
         denied: [],
         declarationErrors: [],
         invalidPaths: [],
@@ -340,7 +340,7 @@ function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
   return {
     ok: true,
-    mode: 'skill-doc',
+    mode: 'no-ceremony',
     checkedPaths: pathCheck.checkedPaths,
     skippedControlArtifacts: [],
     unverifiedIssueConstraints: false,
@@ -522,13 +522,26 @@ function checkImplementationPrScope(
   };
 }
 
+function shouldUseSpecOnlyPath(input: PrScopeCheckInput): boolean {
+  if (!hasSpecOnlySignal(input.prBody)) {
+    return false;
+  }
+  if (
+    extractNonClosingIssueNumber(input.prBody) !== null ||
+    hasClosingIssueReference(input.prBody)
+  ) {
+    return true;
+  }
+  return !isNoCeremonyPr(input.prPaths);
+}
+
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  if (isSkillDocPr(input.prPaths)) {
-    return checkSkillDocPrScope(input);
+  if (shouldUseSpecOnlyPath(input)) {
+    return checkSpecOnlyPrScope(input);
   }
 
-  if (hasSpecOnlySignal(input.prBody)) {
-    return checkSpecOnlyPrScope(input);
+  if (isNoCeremonyPr(input.prPaths)) {
+    return checkNoCeremonyPrScope(input);
   }
 
   const issueNumber = extractClosingIssueNumber(input.prBody);
@@ -546,12 +559,12 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
 export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   if (result.ok) {
-    if (result.mode === 'skill-doc') {
+    if (result.mode === 'no-ceremony') {
       const lines = [
-        '## Scope guard — passed (skill-doc)',
+        '## Scope guard — passed (no-ceremony)',
         '',
         'No issue link, spec-only signal, or declaration snapshot required.',
-        `Checked paths: ${result.checkedPaths.length} (skill instruction markdown only)`,
+        `Checked paths: ${result.checkedPaths.length} (spec-docs and/or skill instruction markdown only)`,
       ];
       for (const warning of result.warnings) {
         lines.push('', `> ${warning}`);
@@ -641,7 +654,7 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   ) {
     lines.push(
       '',
-      'Remove all issue links from the PR description. Skill-doc PRs must not use `Closes`/`Refs`/`#N`, or `github.com/.../issues/N` URLs.',
+      'Remove all issue links from the PR description. No-ceremony PRs must not use `Closes`/`Refs`/`#N`, or `github.com/.../issues/N` URLs.',
     );
   }
 
@@ -656,8 +669,8 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   if (result.reason === 'skill_doc_scope_violation') {
     lines.push(
       '',
-      'Skill-doc PRs may change only:',
-      ...SPEC_SKILL_MARKDOWN_GLOBS.map((pattern) => `- \`${pattern}\``),
+      'No-ceremony PRs may change only markdown within:',
+      ...NO_CEREMONY_MARKDOWN_GLOBS.map((pattern) => `- \`${pattern}\``),
     );
   }
 
