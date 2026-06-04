@@ -106,6 +106,55 @@ export function extractNonClosingIssueNumber(prBody: string): number | null {
   return issueNumber;
 }
 
+/**
+ * True when every changed path is markdown under the skill instruction surfaces
+ * (conjunctive; empty diff does not qualify).
+ */
+export function isSkillDocPr(prPaths: string[]): boolean {
+  if (prPaths.length === 0) {
+    return false;
+  }
+  return classifySkillDocPaths(prPaths).ok;
+}
+
+export function classifySkillDocPaths(prPaths: string[]): {
+  ok: true;
+  checkedPaths: string[];
+} | {
+  ok: false;
+  outOfSkillMarkdown: string[];
+  invalidPaths: Array<{ path: string; reason: string }>;
+  checkedPaths: string[];
+} {
+  const outOfSkillMarkdown: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+  const checkedPaths: string[] = [];
+
+  for (const rawPath of prPaths) {
+    const normalized = normalizePath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+      continue;
+    }
+
+    checkedPaths.push(normalized.path);
+
+    if (!pathMatchesAnyPattern(normalized.path, [...SPEC_SKILL_MARKDOWN_GLOBS])) {
+      outOfSkillMarkdown.push(normalized.path);
+    }
+  }
+
+  if (invalidPaths.length > 0) {
+    return { ok: false, outOfSkillMarkdown, invalidPaths, checkedPaths };
+  }
+
+  if (outOfSkillMarkdown.length > 0) {
+    return { ok: false, outOfSkillMarkdown, invalidPaths: [], checkedPaths };
+  }
+
+  return { ok: true, checkedPaths };
+}
+
 export function classifySpecDocsPaths(prPaths: string[]): {
   ok: true;
   checkedPaths: string[];

@@ -132,6 +132,48 @@ The skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
 `scripts/verify.ps1`) still applies on spec-only skill PRs — canonical/pointer
 mismatch or a hand-edited pointer fails CI independently of this allowlist.
 
+## Skill-doc PRs (skill instruction markdown only)
+
+Use this path when the **entire PR diff** is agent skill instruction markdown —
+no GitHub Issue, no `<!-- pr-type: spec-only -->` signal, and no declaration
+snapshot. Scope guard detects the shape from **diff-content only** (automatic;
+the author adds no PR-body marker).
+
+### Diff-content trigger
+
+Every changed path must match **one** of:
+
+- `.claude/skills/**/*.md` — canonical skill source
+- `.cursor/skills/**/*.md` — generated pointer surface
+
+The shape is **conjunctive**: if any changed path is outside these globs (docs
+draft, code, workflows, a non-markdown file under a skill directory, and so on),
+the PR does **not** qualify as skill-doc and falls through to spec-only (when
+signalled) or implementation handling unchanged.
+
+**Markdown-only boundary:** only `.md` files under the skill directories above
+qualify. A non-markdown asset under `.claude/skills/**` or `.cursor/skills/**`
+forces the implementation path.
+
+### What skill-doc PRs omit
+
+Skill-doc PRs pass scope guard **without**:
+
+- a committed declaration snapshot under `docs/declarations/**`;
+- any issue reference in the PR body (`Closes`, `Refs`, and so on — absence is
+  never a failure reason for this shape);
+- the spec-only HTML comment signal.
+
+Merging a skill-doc PR does not close a GitHub Issue via scope guard (there is
+no required link). Avoid putting closing keywords in the body if you do not want
+GitHub to auto-close an issue on merge.
+
+### Safety gates (unchanged)
+
+- Conjunctive diff boundary — skill-doc PRs cannot carry code or other surfaces.
+- Skill-pointer drift check (`scripts/check-skill-pointer-drift.ps1`, run from
+  `scripts/verify.ps1`) remains a **separate required gate** on skill-doc PRs.
+
 ### Implementation PRs (unchanged)
 
 Worker and direct-fix PRs still require `Closes #N` / `Fixes #N` /

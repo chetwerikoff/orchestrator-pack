@@ -5,15 +5,18 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  classifySkillDocPaths,
   classifySpecDocsPaths,
   CLOSING_KEYWORD_ALTERNATION,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
   hasClosingIssueReference,
   hasSpecOnlySignal,
+  isSkillDocPr,
   NON_CLOSING_ISSUE_REF_PATTERN,
   SPEC_DOCS_ALLOWLIST,
   SPEC_ONLY_SIGNAL_LITERAL,
+  SPEC_SKILL_MARKDOWN_GLOBS,
 } from './pr-scope-contract.js';
 import {
   checkPrScope,
@@ -233,15 +236,15 @@ describe('checkPrScope — spec-only', () => {
     });
   });
 
-  it('passes for skill-markdown-only diff without a declaration snapshot', () => {
-    const prBody = [SPEC_SIGNAL, '', 'Refs #159', '', '## Summary', 'Skill instruction edit.'].join('\n');
+  it('skill-markdown-only diff routes to spec-only when mixed with docs paths', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #159', '', '## Summary', 'Spec draft + skill.'].join('\n');
     const result = checkPrScope({
       repoRoot,
       prBody,
       issueBody: 'GitHub Issue: #159\n\n```denylist\nvendor/**\n```',
       prPaths: [
+        'docs/issue_queue_index.md',
         '.claude/skills/create-issue-draft/SKILL.md',
-        '.cursor/skills/create-issue-draft/SKILL.md',
       ],
       degradedMode: false,
       forkPr: false,
@@ -298,6 +301,173 @@ describe('checkPrScope — spec-only', () => {
       ok: false,
       reason: 'missing_spec_issue_reference',
     });
+  });
+});
+
+describe('checkPrScope — skill-doc', () => {
+  const repoRoot = join(tmpdir(), `scope-guard-skill-doc-${randomUUID()}`);
+
+  const skillPaths = [
+    '.claude/skills/create-issue-draft/SKILL.md',
+    '.cursor/skills/create-issue-draft/SKILL.md',
+  ];
+
+  it('passes with no snapshot, issue reference, or spec-only signal', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: '## Summary\n\nSkill instruction edit only.',
+      issueBody: null,
+      prPaths: skillPaths,
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'skill-doc',
+    });
+    expect('issueNumber' in result && result.ok && result.issueNumber).toBeFalsy();
+  });
+
+  it('passes even when the body includes a closing keyword (skill-doc is diff-detected)', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #999\n\n## Summary',
+      issueBody: null,
+      prPaths: skillPaths,
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
+  });
+
+  it('passes without spec-only signal even when the body would otherwise need Refs #N', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: SPEC_ONLY_SIGNAL_LITERAL,
+      issueBody: null,
+      prPaths: skillPaths,
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
+  });
+
+  it('does not qualify when a non-markdown file is under a skill directory', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: '## Summary',
+      issueBody: null,
+      prPaths: ['.claude/skills/foo/run.sh'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'missing_issue_link',
+    });
+  });
+
+  it('does not qualify when skill markdown is mixed with docs', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: [SPEC_SIGNAL, '', 'Refs #121'].join('\n'),
+      issueBody: 'GitHub Issue: #121',
+      prPaths: ['.claude/skills/foo/SKILL.md', 'docs/issue_queue_index.md'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'spec-only',
+    });
+    expect(isSkillDocPr(['.claude/skills/foo/SKILL.md', 'docs/issue_queue_index.md'])).toBe(false);
+  });
+
+  it('does not qualify when skill markdown is mixed with code', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #121',
+      issueBody: null,
+      prPaths: ['.claude/skills/foo/SKILL.md', 'scripts/pr-scope-check.ts'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'missing_snapshot',
+    });
+  });
+});
+
+describe('classifySkillDocPaths — skill-doc boundary', () => {
+  it('accepts only markdown under skill surfaces', () => {
+    expect(classifySkillDocPaths(['.claude/skills/foo/SKILL.md'])).toMatchObject({ ok: true });
+    expect(isSkillDocPr(['.claude/skills/foo/SKILL.md', '.cursor/skills/foo/SKILL.md'])).toBe(true);
+  });
+
+  it('rejects non-markdown under skill directories', () => {
+    const result = classifySkillDocPaths(['.claude/skills/foo/helper.sh']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.outOfSkillMarkdown).toContain('.claude/skills/foo/helper.sh');
+    }
+  });
+
+  it('rejects empty path lists', () => {
+    expect(isSkillDocPr([])).toBe(false);
+  });
+});
+
+describe('skill-doc PR — pointer drift remains an independent gate', () => {
+  it('fails drift check when a pointer does not match canonical', () => {
+    const repoRoot = join(tmpdir(), `skill-drift-${randomUUID()}`);
+    const scriptsDir = join(repoRoot, 'scripts');
+    const canonicalDir = join(repoRoot, '.claude/skills/drift-fixture');
+    const pointerDir = join(repoRoot, '.cursor/skills/drift-fixture');
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    mkdirSync(pointerDir, { recursive: true });
+
+    writeFileSync(
+      join(scriptsDir, 'skill-pointer-targets.json'),
+      readFileSync(join('scripts', 'skill-pointer-targets.json'), 'utf8'),
+      'utf8',
+    );
+
+    const canonicalBody = [
+      '---',
+      'name: drift-fixture',
+      'description: fixture for drift test',
+      '---',
+      '',
+      '# Drift fixture',
+    ].join('\n');
+    writeFileSync(join(canonicalDir, 'SKILL.md'), canonicalBody, 'utf8');
+    writeFileSync(join(pointerDir, 'SKILL.md'), `${canonicalBody}\nstale edit`, 'utf8');
+
+    const driftScript = join(process.cwd(), 'scripts', 'check-skill-pointer-drift.ps1');
+    let driftFailed = false;
+    try {
+      execFileSync('pwsh', ['-NoProfile', '-File', driftScript, '-RepoRoot', repoRoot], {
+        encoding: 'utf8',
+      });
+    } catch {
+      driftFailed = true;
+    }
+    expect(driftFailed).toBe(true);
+
+    const scopeResult = checkPrScope({
+      repoRoot,
+      prBody: '## Summary\n\nSkill only.',
+      issueBody: null,
+      prPaths: [
+        '.claude/skills/drift-fixture/SKILL.md',
+        '.cursor/skills/drift-fixture/SKILL.md',
+      ],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(scopeResult).toMatchObject({ ok: true, mode: 'skill-doc' });
   });
 });
 
@@ -362,6 +532,15 @@ describe('repository_policy.md documents the runtime spec-docs allowlist', () =>
         continue;
       }
       expect(policy).toContain(`\`${pattern}\``);
+    }
+  });
+
+  it('documents the skill-doc PR shape and trigger globs', () => {
+    const policy = readFileSync(join('docs', 'repository_policy.md'), 'utf8');
+    expect(policy).toMatch(/skill-doc/i);
+    expect(policy).toContain('diff-content');
+    for (const pattern of SPEC_SKILL_MARKDOWN_GLOBS) {
+      expect(policy).toContain(pattern);
     }
   });
 });

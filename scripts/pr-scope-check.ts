@@ -15,14 +15,17 @@ import {
   validateDeclaredScope,
 } from '../plugins/ao-task-declaration/lib/validate.js';
 import {
+  classifySkillDocPaths,
   classifySpecDocsPaths,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
   hasClosingIssueReference,
   hasSpecOnlySignal,
+  isSkillDocPr,
   ISSUE_LINK_PATTERN,
   resolveIssueNumberForFetch,
   SPEC_DOCS_ALLOWLIST,
+  SPEC_SKILL_MARKDOWN_GLOBS,
 } from './pr-scope-contract.js';
 
 export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
@@ -47,9 +50,9 @@ export interface PrScopeCheckInput {
 export type PrScopeCheckResult =
   | {
       ok: true;
-      mode: 'implementation' | 'spec-only';
+      mode: 'implementation' | 'spec-only' | 'skill-doc';
       snapshot?: DeclarationSnapshot;
-      issueNumber: number;
+      issueNumber?: number;
       checkedPaths: string[];
       skippedControlArtifacts: string[];
       unverifiedIssueConstraints: boolean;
@@ -62,6 +65,7 @@ export type PrScopeCheckResult =
         | 'missing_spec_issue_reference'
         | 'spec_only_with_closing_keyword'
         | 'spec_docs_scope_violation'
+        | 'skill_doc_scope_violation'
         | 'missing_snapshot'
         | 'snapshot_chain_inconsistency'
         | 'issue_unreadable'
@@ -291,6 +295,47 @@ function checkPrPathsAgainstSnapshot(
   return { ok: true, checkedPaths, skippedControlArtifacts: control };
 }
 
+function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  const pathCheck = classifySkillDocPaths(input.prPaths);
+  if (!pathCheck.ok) {
+    if (pathCheck.invalidPaths.length > 0) {
+      return {
+        ok: false,
+        reason: 'invalid_path',
+        message: 'one or more PR diff paths failed normalization',
+        violations: {
+          outOfScope: [],
+          denied: [],
+          declarationErrors: [],
+          invalidPaths: pathCheck.invalidPaths,
+        },
+      };
+    }
+
+    return {
+      ok: false,
+      reason: 'skill_doc_scope_violation',
+      message:
+        'skill-doc PR diff includes paths outside skill instruction markdown (.claude/skills/**/*.md and .cursor/skills/**/*.md; see docs/repository_policy.md)',
+      violations: {
+        outOfScope: pathCheck.outOfSkillMarkdown,
+        denied: [],
+        declarationErrors: [],
+        invalidPaths: [],
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    mode: 'skill-doc',
+    checkedPaths: pathCheck.checkedPaths,
+    skippedControlArtifacts: [],
+    unverifiedIssueConstraints: false,
+    warnings: [],
+  };
+}
+
 function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   if (hasClosingIssueReference(input.prBody)) {
     return {
@@ -466,6 +511,10 @@ function checkImplementationPrScope(
 }
 
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  if (isSkillDocPr(input.prPaths)) {
+    return checkSkillDocPrScope(input);
+  }
+
   if (hasSpecOnlySignal(input.prBody)) {
     return checkSpecOnlyPrScope(input);
   }
@@ -485,6 +534,19 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
 export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   if (result.ok) {
+    if (result.mode === 'skill-doc') {
+      const lines = [
+        '## Scope guard — passed (skill-doc)',
+        '',
+        'No issue link, spec-only signal, or declaration snapshot required.',
+        `Checked paths: ${result.checkedPaths.length} (skill instruction markdown only)`,
+      ];
+      for (const warning of result.warnings) {
+        lines.push('', `> ${warning}`);
+      }
+      return lines.join('\n');
+    }
+
     if (result.mode === 'spec-only') {
       const lines = [
         '## Scope guard — passed (spec-only)',
@@ -566,6 +628,14 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
       '',
       'Allowed paths for spec-only PRs:',
       ...SPEC_DOCS_ALLOWLIST.map((pattern) => `- \`${pattern}\``),
+    );
+  }
+
+  if (result.reason === 'skill_doc_scope_violation') {
+    lines.push(
+      '',
+      'Skill-doc PRs may change only:',
+      ...SPEC_SKILL_MARKDOWN_GLOBS.map((pattern) => `- \`${pattern}\``),
     );
   }
 
