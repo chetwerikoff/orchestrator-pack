@@ -84,6 +84,16 @@ describe('planReconcileActions', () => {
     });
   });
 
+  it('accepts PowerShell single-object openPrs (not a JSON array)', () => {
+    const fixture = loadFixture('uncovered-no-report.json');
+    const actions = planReconcileActions({
+      openPrs: fixture.openPrs[0] as unknown as typeof fixture.openPrs,
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+    });
+    expect(startReviewActions(actions)).toHaveLength(1);
+  });
+
   it('AC2: same plan when orchestrator is stuck (not consulted)', () => {
     const fixture = loadFixture('uncovered-no-report.json');
     const actions = planReconcileActions(fixture);
@@ -256,8 +266,8 @@ describe('resolveWorkerSessionId', () => {
 });
 
 describe('evaluateReconcileInterval', () => {
-  it('AC5: default interval is twenty minutes', () => {
-    expect(DEFAULT_RECONCILE_INTERVAL_MS).toBe(20 * 60 * 1000);
+  it('AC5: default interval is ten minutes', () => {
+    expect(DEFAULT_RECONCILE_INTERVAL_MS).toBe(10 * 60 * 1000);
   });
 
   it('AC5: skips tick inside configured interval', () => {
@@ -265,7 +275,7 @@ describe('evaluateReconcileInterval', () => {
     const result = evaluateReconcileInterval({
       nowMs: now + 5 * 60 * 1000,
       lastTickMs: now,
-      intervalMs: 20 * 60 * 1000,
+      intervalMs: 10 * 60 * 1000,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
