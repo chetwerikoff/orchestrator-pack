@@ -5,8 +5,9 @@ repo (Issues #28 / #39 / #60 — merged as PRs #42, #47, #65). AO does **not** r
 Codex review when a worker spawns; the **orchestrator** drives
 `ao review run` → `ao review send` → worker `addressing_reviews` → re-review.
 
-Follow-up [#58](https://github.com/chetwerikoff/orchestrator-pack/issues/58)
-(reconciliation via `gh` open PRs) adds resilience; heartbeat backstop #59 is
+State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163))
+runs via `scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only).
+Heartbeat backstop [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) is
 documented below alongside the event listener.
 
 After each merged worker PR, run that PR's **`## Operator adoption`** checklist
@@ -23,10 +24,11 @@ and the matching steps in
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Wake supervisor (listener + heartbeat) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs` (Issue #163) |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
 
-## Every session — three terminals (supervisor) or four (manual wake)
+## Every session — five processes
 
 **Terminal A — AO**
 
@@ -67,7 +69,21 @@ before — `scripts/orchestrator-wake-listener.ps1` and
 `scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
 Use when debugging one path in isolation.
 
-**Terminal C — worktree trust watcher** (Windows Cursor; avoids blocking
+**Terminal C — review-trigger reconciliation** (default 20 min; independent of orchestrator turns)
+
+```powershell
+cd <orchestrator-pack-root>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1
+```
+
+Optional: `$env:AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES = '30'` before starting.
+One-shot dry-run (no `ao review run`):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+**Terminal D — worktree trust watcher** (Windows Cursor; avoids blocking
 `Workspace Trust Required` on each new `op-*` worktree)
 
 ```powershell
@@ -176,5 +192,5 @@ worker: pr_created / ready_for_review (+ CI green)
 ## Related issues
 
 - [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68) — this checklist in-repo
-- [#58](https://github.com/chetwerikoff/orchestrator-pack/issues/58) — `gh` reconciliation in rules
+- [#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163) — `review-trigger-reconcile.ps1` (state-derived review trigger)
 - [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) — heartbeat backstop (`orchestrator-wake-heartbeat.ps1`)

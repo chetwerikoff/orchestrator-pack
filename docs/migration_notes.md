@@ -656,7 +656,7 @@ Minimum live YAML fixes not in older copies:
    never hit the webhook listener).
 3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-supervisor.ps1 -Action Start`
    (preferred — Issue #168) or the manual listener + heartbeat pair in separate
-   terminals.
+   terminals, and `scripts/review-trigger-reconcile.ps1` in another terminal.
 
 ## Orchestrator wake supervisor (Issue #168)
 
@@ -677,6 +677,28 @@ State, PID files, and per-child logs live under
 
 Manual two-script startup remains documented as fallback in
 `docs/orchestrator-wake-runbook.md`.
+
+## State-derived review-trigger reconciliation (Issue #163)
+
+Adds `scripts/review-trigger-reconcile.ps1`: observes open PR heads via `gh`,
+coverage via `ao review list --json`, and starts `ao review run` for uncovered heads
+when a worker session is already linked. **Never** `ao spawn`, `--claim-pr`,
+`ao session kill`, or `ao send` from this process.
+
+To adopt after merge:
+
+1. Merge the **STATE-DERIVED REVIEW TRIGGER** block from
+   `agent-orchestrator.yaml.example` into live `orchestratorRules` (documentation
+   for operators; the process is the script, not a YAML scheduler).
+2. Start reconciliation in a dedicated terminal (default **20**-minute interval):
+   `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1`
+3. Optional env: `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`,
+   `AO_REVIEW_TRIGGER_RECONCILE_STATE`.
+4. Verify: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`
+   then confirm `ao review list --json` shows a run for an uncovered PR head.
+
+See `docs/orchestrator-autoloop-go-live.md` and
+`docs/orchestrator-recovery-runbook.md` (State-derived review trigger).
 
 ## Orchestrator wake listener (webhook + local HTTP)
 

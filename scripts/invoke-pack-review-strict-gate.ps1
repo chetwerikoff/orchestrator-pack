@@ -20,34 +20,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
 $DefaultFixtureDir = Join-Path $PackRoot 'tests/fixtures/pack-review-strict-gate'
-
-function Invoke-AoReviewListJson {
-    param([string]$Project)
-
-    $args = @('review', 'list')
-    if ($Project) { $args += $Project }
-    $args += '--json'
-
-    $raw = & ao @args 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $text = ($raw | Out-String).Trim()
-        throw "ao review list failed (exit $LASTEXITCODE): $text"
-    }
-
-    $text = ($raw | ForEach-Object {
-            if ($_ -is [string]) { $_ }
-            elseif ($null -ne $_) { $_.ToString() }
-        }) -join "`n"
-    $start = $text.IndexOf('{')
-    if ($start -lt 0) {
-        throw 'ao review list produced no JSON output'
-    }
-
-    return $text.Substring($start) | ConvertFrom-Json
-}
 
 function Resolve-ConfigYamlPath {
     param([string]$CliYamlPath)
@@ -121,15 +97,8 @@ function Invoke-LiveGate {
         return $false
     }
 
-    $payload = Invoke-AoReviewListJson -Project $Project
-    $runs = @($payload.runs)
-    if (-not $runs -and $payload.data) {
-        $runs = @($payload.data)
-    }
-
-    if ($Project) {
-        $runs = @($runs | Where-Object { $_.projectId -eq $Project })
-    }
+    $payload = Get-AoReviewListJson -Project $Project
+    $runs = Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
 
     $expectedReviewer = Get-PackReviewerFromSelector
     $violations = Get-PackReviewGateViolations -Runs $runs -ReviewCommand $reviewCommand -ExpectedReviewer $expectedReviewer

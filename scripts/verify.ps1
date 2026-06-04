@@ -382,6 +382,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== review-trigger reconciliation (Issue #163) =='
+$reviewReconcileCheck = Join-Path $Root 'scripts/check-review-trigger-reconcile.ps1'
+if (Test-Path -LiteralPath $reviewReconcileCheck -PathType Leaf) {
+    & $reviewReconcileCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-trigger reconciliation wiring checks failed (Issue #163)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-trigger reconciliation check script (Issue #163)'
+}
+
+Write-Host ''
 Write-Host '== reviewer workspace preflight (Issue #98) =='
 $reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
 if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {
