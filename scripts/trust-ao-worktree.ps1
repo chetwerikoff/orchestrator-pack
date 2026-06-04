@@ -37,22 +37,47 @@ function Get-CursorProjectsDir {
     Join-Path (Get-PackUserHome) '.cursor' 'projects'
 }
 
+function Get-CursorPathSegments {
+    param([string[]]$RawSegments)
+    $RawSegments |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ } |
+        ForEach-Object { $_.TrimStart('.') } |
+        Where-Object { $_ }
+}
+
 function Get-CursorProjectSlugFromWorkspace {
     param([string]$FullPath)
     $full = [System.IO.Path]::GetFullPath($FullPath)
     if ($full -match '^([A-Za-z]):[\\/]+(.*)$') {
-        # cursor-agent keeps leading dots in segments (e.g. .agent-orchestrator);
-        # stripping them writes the marker where the interactive worker never looks.
-        $segments = $Matches[2] -split '[\\/]' |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ }
-        return ('{0}-{1}' -f $Matches[1], ($segments -join '-'))
+        $segments = Get-CursorPathSegments -RawSegments ($Matches[2] -split '[\\/]')
+        return ('{0}-{1}' -f $Matches[1].ToLower(), ($segments -join '-'))
     }
     $trimmed = $full.TrimStart([char[]]@('/', '\'))
-    $segments = $trimmed -split '[\\/]' |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ }
+    $segments = Get-CursorPathSegments -RawSegments ($trimmed -split '[\\/]')
     return ($segments -join '-')
+}
+
+function Get-CursorProjectDirFromWorkspace {
+    param([string]$FullPath)
+    # Match cursor-config $(): join(~/.cursor/projects, slugifyPath); hash-truncate when > 92 chars.
+    $projectsDir = Get-CursorProjectsDir
+    $slug = Get-CursorProjectSlugFromWorkspace -FullPath $FullPath
+    $candidate = Join-Path $projectsDir $slug
+    if ($candidate.Length -le 92) {
+        return $candidate
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($candidate))
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $hex = -join ($bytes | ForEach-Object { '{0:x2}' -f $_ })
+    $hash = $hex.Substring(0, 7)
+    $prefixLen = [Math]::Min(84, $candidate.Length)
+    return '{0}-{1}' -f $candidate.Substring(0, $prefixLen), $hash
 }
 
 function Resolve-AoWorkspacePath {
@@ -85,8 +110,7 @@ function Write-CursorWorkspaceTrustedFile {
         [string]$Method = 'orchestrator-pack-script'
     )
 
-    $slug = Get-CursorProjectSlugFromWorkspace -FullPath $Root
-    $projectDir = Join-Path (Get-CursorProjectsDir) $slug
+    $projectDir = Get-CursorProjectDirFromWorkspace -FullPath $Root
     New-Item -ItemType Directory -Force -Path $projectDir | Out-Null
 
     $trustFile = Join-Path $projectDir '.workspace-trusted'
