@@ -201,7 +201,10 @@ describe('checkPrScope — spec-only', () => {
       repoRoot,
       prBody,
       issueBody: 'GitHub Issue: #121\n\n```denylist\nvendor/**\n```',
-      prPaths: ['docs/issues_drafts/43-spec-only-scope-guard-docs-prs.md', 'docs/issue_queue_index.md'],
+      prPaths: [
+        'docs/issues_drafts/43-spec-only-scope-guard-docs-prs.md',
+        'docs/issues_drafts/foo.json',
+      ],
       degradedMode: false,
       forkPr: false,
     });
@@ -218,7 +221,7 @@ describe('checkPrScope — spec-only', () => {
       repoRoot,
       prBody,
       issueBody: null,
-      prPaths: ['docs/issue_queue_index.md'],
+      prPaths: ['docs/issues_drafts/foo.json'],
       degradedMode: false,
       forkPr: false,
     });
@@ -234,7 +237,7 @@ describe('checkPrScope — spec-only', () => {
       repoRoot,
       prBody,
       issueBody: null,
-      prPaths: ['docs/issue_queue_index.md'],
+      prPaths: ['docs/issues_drafts/foo.json'],
       degradedMode: false,
       forkPr: false,
     });
@@ -261,16 +264,13 @@ describe('checkPrScope — spec-only', () => {
     });
   });
 
-  it('signalled spec-only takes precedence over no-ceremony when mixed with docs paths', () => {
-    const prBody = [SPEC_SIGNAL, '', 'Refs #159', '', '## Summary', 'Spec draft + skill.'].join('\n');
+  it('routes non-no-ceremony allowlisted paths to spec-only when signalled with Refs', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #159'].join('\n');
     const result = checkPrScope({
       repoRoot,
       prBody,
       issueBody: 'GitHub Issue: #159\n\n```denylist\nvendor/**\n```',
-      prPaths: [
-        'docs/issue_queue_index.md',
-        '.claude/skills/create-issue-draft/SKILL.md',
-      ],
+      prPaths: ['docs/issues_drafts/foo.json'],
       degradedMode: false,
       forkPr: false,
     });
@@ -429,6 +429,25 @@ describe('checkPrScope — no-ceremony', () => {
     expect(result).toMatchObject({
       ok: false,
       reason: 'missing_issue_link',
+    });
+  });
+
+  it('fails when a no-ceremony diff includes the spec-only signal and Refs #N', () => {
+    const prBody = [SPEC_SIGNAL, '', 'Refs #165', '', '## Summary'].join('\n');
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: null,
+      prPaths: [
+        'docs/issue_queue_index.md',
+        '.claude/skills/create-issue-draft/SKILL.md',
+      ],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'skill_doc_with_issue_reference',
     });
   });
 

@@ -522,26 +522,13 @@ function checkImplementationPrScope(
   };
 }
 
-function shouldUseSpecOnlyPath(input: PrScopeCheckInput): boolean {
-  if (!hasSpecOnlySignal(input.prBody)) {
-    return false;
-  }
-  if (
-    extractNonClosingIssueNumber(input.prBody) !== null ||
-    hasClosingIssueReference(input.prBody)
-  ) {
-    return true;
-  }
-  return !isNoCeremonyPr(input.prPaths);
-}
-
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  if (shouldUseSpecOnlyPath(input)) {
-    return checkSpecOnlyPrScope(input);
-  }
-
   if (isNoCeremonyPr(input.prPaths)) {
     return checkNoCeremonyPrScope(input);
+  }
+
+  if (hasSpecOnlySignal(input.prBody)) {
+    return checkSpecOnlyPrScope(input);
   }
 
   const issueNumber = extractClosingIssueNumber(input.prBody);
