@@ -27,5 +27,6 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 166, "headRefOid": "abc123" }],
   "tracking": { "runs": {} }
 }

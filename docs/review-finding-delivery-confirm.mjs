@@ -39,7 +39,8 @@ export const DELIVERY_STATE_ESCALATED = 'escalated';
 export const DELIVERY_STATE_UNCONFIRMED = 'unconfirmed';
 
 /** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, sentFindingCount?: number, linkedSessionId?: string, sentAt?: string, updatedAt?: string }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} AoSession */
+/** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} AoSession */
 /** @typedef {{ deliveryState?: string, sendObservedAtMs?: number, redeliveryCount?: number, lastRedeliveryAtMs?: number, escalatedAtMs?: number }} RunDeliveryRecord */
 /** @typedef {{ runs?: Record<string, RunDeliveryRecord>, lastTickMs?: number }} DeliveryTrackingState */
 
@@ -127,10 +128,41 @@ export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
 }
 
 /**
+ * @param {AoSession} session
+ * @param {number} prNumber
+ * @param {string} targetHeadSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function sessionOwnsRunHead(session, prNumber, targetHeadSha, openPrs) {
+  if (!sessionMatchesPr(session, prNumber)) {
+    return false;
+  }
+
+  const target = normalizeSha(targetHeadSha);
+  if (!target) {
+    return false;
+  }
+
+  const pr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
+  const currentHead = normalizeSha(pr?.headRefOid);
+  if (currentHead && currentHead !== target) {
+    return false;
+  }
+
+  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (sessionHead) {
+    return sessionHead === target;
+  }
+
+  return Boolean(currentHead && currentHead === target);
+}
+
+/**
  * @param {ReviewRun} run
  * @param {AoSession[]} sessions
+ * @param {OpenPr[]} [openPrs]
  */
-export function isLinkedSessionLiveOwner(run, sessions) {
+export function isLinkedSessionLiveOwner(run, sessions, openPrs) {
   const linkedId = String(run?.linkedSessionId ?? '').trim();
   if (!linkedId) {
     return false;
@@ -149,7 +181,7 @@ export function isLinkedSessionLiveOwner(run, sessions) {
     return false;
   }
 
-  return sessionMatchesPr(session, prNumber);
+  return sessionOwnsRunHead(session, prNumber, String(run?.targetSha ?? ''), openPrs);
 }
 
 /**
@@ -199,8 +231,16 @@ export function countAmbiguousUnconfirmedPeers(runs, tracking, target) {
  * @param {number} sendObservedAtMs
  * @param {ReviewRun[]} allRuns
  * @param {DeliveryTrackingState} tracking
+ * @param {OpenPr[]} [openPrs]
  */
-export function isDeliveryConfirmed(run, sessions, sendObservedAtMs, allRuns, tracking) {
+export function isDeliveryConfirmed(
+  run,
+  sessions,
+  sendObservedAtMs,
+  allRuns,
+  tracking,
+  openPrs,
+) {
   const linkedId = String(run?.linkedSessionId ?? '').trim();
   if (!linkedId) {
     return false;
@@ -210,7 +250,7 @@ export function isDeliveryConfirmed(run, sessions, sendObservedAtMs, allRuns, tr
     return false;
   }
 
-  if (!isLinkedSessionLiveOwner(run, sessions)) {
+  if (!isLinkedSessionLiveOwner(run, sessions, openPrs)) {
     return false;
   }
 
@@ -295,6 +335,7 @@ export const OPERATOR_REMEDY_TEXT =
  * @param {DeliveryTrackingState} input.tracking
  * @param {number} input.nowMs
  * @param {object} [input.config]
+ * @param {OpenPr[]} [input.openPrs]
  */
 export function planDeliveryConfirmActions({
   reviewRuns,
@@ -302,10 +343,12 @@ export function planDeliveryConfirmActions({
   tracking,
   nowMs,
   config,
+  openPrs,
 }) {
   const { confirmationWindowMs, maxRedeliveries } = resolveDeliveryConfig(config);
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
+  const openPrList = toArray(openPrs);
   /** @type {Array<Record<string, unknown>>} */
   const actions = [];
   /** @type {Record<string, RunDeliveryRecord>} */
@@ -353,7 +396,14 @@ export function planDeliveryConfirmActions({
 
     // Use pre-tick tracking for overlap checks so same-tick escalations still count.
     if (
-      isDeliveryConfirmed(run, sessionList, confirmationAnchorMs, runList, tracking)
+      isDeliveryConfirmed(
+        run,
+        sessionList,
+        confirmationAnchorMs,
+        runList,
+        tracking,
+        openPrList,
+      )
     ) {
       nextRuns[runId] = {
         ...nextRuns[runId],
@@ -368,7 +418,17 @@ export function planDeliveryConfirmActions({
     const linkedSessionId = String(run?.linkedSessionId ?? '').trim();
     const prNumber = Number(run?.prNumber);
 
-    if (!isLinkedSessionLiveOwner(run, sessionList)) {
+    if (!isLinkedSessionLiveOwner(run, sessionList, openPrList)) {
+      const headMismatch =
+        Boolean(normalizeSha(run?.targetSha)) &&
+        Boolean(
+          openPrList.find(
+            (pr) =>
+              Number(pr?.number) === prNumber &&
+              normalizeSha(pr?.headRefOid) &&
+              normalizeSha(pr?.headRefOid) !== normalizeSha(run?.targetSha),
+          ),
+        );
       nextRuns[runId] = {
         ...nextRuns[runId],
         deliveryState: DELIVERY_STATE_ESCALATED,
@@ -381,7 +441,9 @@ export function planDeliveryConfirmActions({
         runId,
         sessionId: linkedSessionId,
         prNumber,
-        reason: 'orphan_or_dead_linked_session',
+        reason: headMismatch
+          ? 'stale_run_head_not_owned'
+          : 'orphan_or_dead_linked_session',
         message: buildEscalationMessage({
           runId,
           sessionId: linkedSessionId,

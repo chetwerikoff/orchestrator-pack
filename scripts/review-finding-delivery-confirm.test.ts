@@ -17,8 +17,10 @@ import {
   isPendingSentDeliveryRun,
   planDeliveryConfirmActions,
   getConfirmationAnchorMs,
+  isLinkedSessionLiveOwner,
   resolveDeliveryConfig,
   resolveSendObservedAtMs,
+  sessionOwnsRunHead,
   type DeliveryConfirmAction,
 } from '../docs/review-finding-delivery-confirm.mjs';
 
@@ -31,6 +33,7 @@ type FixturePayload = {
   description?: string;
   reviewRuns: Record<string, unknown>[];
   sessions: Record<string, unknown>[];
+  openPrs?: Record<string, unknown>[];
   tracking?: { runs?: Record<string, Record<string, unknown>> };
   nowMs: number;
   config?: { confirmationWindowMs?: number; maxRedeliveries?: number };
@@ -47,6 +50,7 @@ function planFromFixture(name: string) {
   return planDeliveryConfirmActions({
     reviewRuns: fixture.reviewRuns,
     sessions: fixture.sessions,
+    openPrs: fixture.openPrs ?? [],
     tracking: fixture.tracking ?? { runs: {} },
     nowMs: fixture.nowMs,
     config: fixture.config,
@@ -146,6 +150,32 @@ describe('delivery confirmation signal (AC1)', () => {
       ),
     ).toBe(true);
   });
+
+  it('does not confirm when PR head advanced past run targetSha', () => {
+    const run = {
+      prNumber: 180,
+      targetSha: 'oldhead00',
+      linkedSessionId: 'opk-16',
+    };
+    const sessions = [
+      {
+        name: 'opk-16',
+        role: 'worker',
+        prNumber: 180,
+        ownedHeadSha: 'newhead11',
+        status: 'working',
+        reports: [
+          {
+            reportState: 'addressing_reviews',
+            reportedAt: '2026-06-04T14:00:00.000Z',
+          },
+        ],
+      },
+    ];
+    const openPrs = [{ number: 180, headRefOid: 'newhead11' }];
+    expect(sessionOwnsRunHead(sessions[0]!, 180, 'oldhead00', openPrs)).toBe(false);
+    expect(isLinkedSessionLiveOwner(run, sessions, openPrs)).toBe(false);
+  });
 });
 
 describe('ambiguous overlapping runs (AC1a)', () => {
@@ -200,6 +230,7 @@ describe('ambiguous overlapping runs (AC1a)', () => {
           ],
         },
       ],
+      openPrs: [{ number: 99, headRefOid: 'deadbeef' }],
       tracking: { runs: {} },
       nowMs,
       config: { confirmationWindowMs: 60_000, maxRedeliveries: 0 },
@@ -257,6 +288,7 @@ describe('confirmation anchor after re-delivery', () => {
           sentFindingCount: 1,
           linkedSessionId: 'opk-worker',
           prNumber: 42,
+          targetSha: 'sha42',
         },
       ],
       sessions: [
@@ -268,6 +300,7 @@ describe('confirmation anchor after re-delivery', () => {
           reports: [{ reportState: 'working', reportedAt: '1970-01-01T00:16:00.000Z' }],
         },
       ],
+      openPrs: [{ number: 42, headRefOid: 'sha42' }],
       tracking: {
         runs: {
           'run-anchor': {
@@ -340,6 +373,7 @@ describe('linked session identifier matching', () => {
           reports: [],
         },
       ],
+      openPrs: [{ number: 166, headRefOid: 'sha166' }],
       tracking: { runs: {} },
       nowMs: 1_717_504_000_000,
       config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
@@ -350,6 +384,21 @@ describe('linked session identifier matching', () => {
     expect(actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver')).toHaveLength(
       1,
     );
+  });
+});
+
+describe('stale run head (ownership)', () => {
+  it('escalates when PR head advanced past run targetSha', () => {
+    const { actions } = planFromFixture('stale-head-advanced.json');
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(0);
+    expect(
+      actions.some(
+        (a: DeliveryConfirmAction) =>
+          a.type === 'escalate' && a.reason === 'stale_run_head_not_owned',
+      ),
+    ).toBe(true);
   });
 });
 

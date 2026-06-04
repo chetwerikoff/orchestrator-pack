@@ -128,6 +128,14 @@ function Set-DeliveryState {
     $State | ConvertTo-Json -Depth 30 -Compress | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Get-OpenPrList {
+    $raw = gh pr list --state open --json number,headRefOid --limit 200 2>$null
+    if (-not $raw) {
+        return @()
+    }
+    return @($raw | ConvertFrom-Json)
+}
+
 function Get-FixtureDeliveryPayload {
     param([string]$Path)
 
@@ -135,6 +143,7 @@ function Get-FixtureDeliveryPayload {
     return @{
         reviewRuns = @($fixture.reviewRuns)
         sessions   = @($fixture.sessions)
+        openPrs    = @($fixture.openPrs)
         tracking   = $fixture.tracking
         nowMs      = [long]$fixture.nowMs
         config     = $fixture.config
@@ -180,6 +189,7 @@ function Invoke-DeliveryTick {
         $payload = Get-FixtureDeliveryPayload -Path $Fixture
         $reviewRuns = $payload.reviewRuns
         $sessions = $payload.sessions
+        $openPrs = @($payload.openPrs)
         $tracking = if ($payload.tracking) { $payload.tracking } else { $TrackingState }
         $now = if ($payload.nowMs) { [long]$payload.nowMs } else { $NowMs }
         $tickConfig = if ($payload.config) { $payload.config } else { $Config }
@@ -187,6 +197,7 @@ function Invoke-DeliveryTick {
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
+        $openPrs = Get-OpenPrList
         $tracking = $TrackingState
         $now = $NowMs
         $tickConfig = $Config
@@ -195,6 +206,7 @@ function Invoke-DeliveryTick {
     $plan = Invoke-DeliveryFilterCli -Subcommand 'plan' -Payload @{
         reviewRuns = @($reviewRuns)
         sessions   = @($sessions)
+        openPrs    = @($openPrs)
         tracking   = $tracking
         nowMs      = $now
         config     = $tickConfig

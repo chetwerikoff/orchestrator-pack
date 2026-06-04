@@ -26,5 +26,6 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 120, "headRefOid": "cafe120" }],
   "tracking": { "runs": {} }
 }

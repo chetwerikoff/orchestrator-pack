@@ -26,6 +26,7 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 166, "headRefOid": "sha166" }],
   "tracking": { "runs": {} },
   "config": {
     "confirmationWindowMs": 300000,

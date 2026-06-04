@@ -27,6 +27,7 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 199, "headRefOid": "reassigndead" }],
   "tracking": { "runs": {} },
   "config": {
     "confirmationWindowMs": 300000

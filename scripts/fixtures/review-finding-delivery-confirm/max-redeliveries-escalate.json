@@ -26,6 +26,7 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 166, "headRefOid": "sha166b" }],
   "tracking": {
     "runs": {
       "run-exhausted": {
