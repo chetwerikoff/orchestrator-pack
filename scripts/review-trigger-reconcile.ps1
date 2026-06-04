@@ -34,7 +34,7 @@ if (-not $RepoRoot) {
 }
 
 $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
-$Script:DefaultIntervalMinutes = 20
+$Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
@@ -207,9 +207,9 @@ function Invoke-ReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
         $payload = @{
-            openPrs    = $openPrs
-            reviewRuns = $reviewRuns
-            sessions   = $sessions
+            openPrs    = @($openPrs)
+            reviewRuns = @($reviewRuns)
+            sessions   = @($sessions)
         }
         $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
     }

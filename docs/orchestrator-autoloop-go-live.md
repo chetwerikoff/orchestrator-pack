@@ -53,7 +53,7 @@ $env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-heartbeat.ps1
 ```
 
-**Terminal D — review-trigger reconciliation** (default 20 min; independent of orchestrator turns)
+**Terminal D — review-trigger reconciliation** (default 10 min; independent of orchestrator turns)
 
 ```powershell
 cd <orchestrator-pack-root>

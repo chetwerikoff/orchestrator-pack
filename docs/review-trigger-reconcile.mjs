@@ -7,8 +7,8 @@ import { readFileSync } from 'node:fs';
 /** @typedef {{ prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
 
-/** Default cadence: 20 minutes (low-frequency; tens of minutes). */
-export const DEFAULT_RECONCILE_INTERVAL_MS = 20 * 60 * 1000;
+/** Default cadence: 10 minutes (low-frequency; tens of minutes). */
+export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
   'queued',
@@ -46,6 +46,12 @@ export const FORBIDDEN_LIFECYCLE_PATTERNS = [
   /\bao\s+session\s+kill\b/i,
   /\bao\s+send\b/i,
 ];
+
+/** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
+export function toArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 /**
  * @param {string | undefined | null} sha
@@ -165,19 +171,22 @@ export function resolveWorkerSessionId(sessions, prNumber) {
 export function planReconcileActions({ openPrs, reviewRuns, sessions }) {
   /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string } | { type: 'skip', prNumber: number, headSha: string, reason: string }>} */
   const actions = [];
+  const prList = toArray(openPrs);
+  const runList = toArray(reviewRuns);
+  const sessionList = toArray(sessions);
 
-  for (const pr of openPrs ?? []) {
+  for (const pr of prList) {
     const prNumber = Number(pr?.number);
     const headSha = String(pr?.headRefOid ?? '');
     if (!prNumber || !headSha) {
       continue;
     }
 
-    if (isHeadCovered(reviewRuns ?? [], prNumber, headSha)) {
+    if (isHeadCovered(runList, prNumber, headSha)) {
       continue;
     }
 
-    const sessionId = resolveWorkerSessionId(sessions ?? [], prNumber);
+    const sessionId = resolveWorkerSessionId(sessionList, prNumber);
     if (!sessionId) {
       actions.push({
         type: 'skip',
