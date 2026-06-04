@@ -222,6 +222,59 @@ function Write-OrchestratorWakeSupervisorState {
     $State | ConvertTo-Json -Compress | Set-Content -LiteralPath $StateJsonPath -Encoding utf8
 }
 
+function Test-StartProcessSupportsEnvironmentParameter {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        return $false
+    }
+    if ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -lt 4) {
+        return $false
+    }
+    return (Get-Command Start-Process).Parameters.ContainsKey('Environment')
+}
+
+function Get-OrchestratorWakeSupervisorStoppingFlagPath {
+    param([hashtable]$Paths)
+    return Join-Path $Paths.Root 'stopping'
+}
+
+function Set-OrchestratorWakeSupervisorStoppingFlag {
+    param([hashtable]$Paths)
+    $flag = Get-OrchestratorWakeSupervisorStoppingFlagPath -Paths $Paths
+    $dir = Split-Path -Parent $flag
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    Set-Content -LiteralPath $flag -Value ((Get-Date).ToString('o')) -Encoding ascii
+}
+
+function Test-OrchestratorWakeSupervisorStopping {
+    param([hashtable]$Paths)
+    return Test-Path -LiteralPath (Get-OrchestratorWakeSupervisorStoppingFlagPath -Paths $Paths)
+}
+
+function Clear-OrchestratorWakeSupervisorStoppingFlag {
+    param([hashtable]$Paths)
+    $flag = Get-OrchestratorWakeSupervisorStoppingFlagPath -Paths $Paths
+    if (Test-Path -LiteralPath $flag) {
+        Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-OrchestratorWakeSupervisorProcessExit {
+    param(
+        [int]$ProcessId,
+        [int]$TimeoutSeconds = 5
+    )
+    if ($ProcessId -le 0) { return }
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-ProcessAlive -ProcessId $ProcessId)) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 function Stop-OrchestratorWakeSupervisorProcess {
     param(
         [int]$ProcessId,
@@ -316,13 +369,14 @@ function Start-OrchestratorWakeSupervisorChild {
     if ($IsWindows -or $env:OS -eq 'Windows_NT') {
         $psi['WindowStyle'] = 'Hidden'
     }
-    if ($PSVersionTable.PSVersion.Major -ge 7) {
-        $psi['Environment'] = $childEnv
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
         $psi['RedirectStandardOutput'] = $LogPath
         $psi['RedirectStandardError'] = "${LogPath}.err"
     }
 
-    if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $useStartProcessEnvironment = Test-StartProcessSupportsEnvironmentParameter
+    if ($useStartProcessEnvironment) {
+        $psi['Environment'] = $childEnv
         $proc = Start-Process @psi
     }
     else {
@@ -420,6 +474,11 @@ function Invoke-OrchestratorWakeSupervisorLoop {
     $currentSource = ''
 
     while ($true) {
+        if (Test-OrchestratorWakeSupervisorStopping -Paths $Paths) {
+            Write-OrchestratorWakeSupervisorLog -Message 'stop requested; exiting supervisor loop' -LogPath $Paths.SupervisorLog
+            break
+        }
+
         if ($MaxLoopSeconds -gt 0 -and (((Get-Date) - $loopStart).TotalSeconds -ge $MaxLoopSeconds)) {
             break
         }
@@ -478,6 +537,9 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             }
         }
         else {
+            if (Test-OrchestratorWakeSupervisorStopping -Paths $Paths) {
+                break
+            }
             $children = Get-OrchestratorWakeSupervisorChildStatus -Paths $Paths
             if (-not $children.ListenerAlive) {
                 Write-OrchestratorWakeSupervisorLog -Message 'listener exited; restarting' -LogPath $Paths.SupervisorLog

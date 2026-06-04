@@ -389,6 +389,27 @@ describe('orchestrator-wake-supervisor', () => {
     expect(statusDown.stdout).toContain('stopped');
   });
 
+  it('stops supervisor before children so no orphan wake processes remain', async () => {
+    const stateDir = makeStateDir();
+    startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-stop-order']);
+    await waitForMarkers(stateDir);
+
+    const listenerBefore = await readMarker(stateDir, 'listener');
+    const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
+    expect(isAlive(listenerBefore.pid)).toBe(true);
+    expect(isAlive(heartbeatBefore.pid)).toBe(true);
+
+    const stop = runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    expect(stop.status).toBe(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(isAlive(listenerBefore.pid)).toBe(false);
+    expect(isAlive(heartbeatBefore.pid)).toBe(false);
+
+    const statusDown = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    expect(statusDown.stdout).toContain('stopped');
+  });
+
   it('status exits non-zero when supervisor is stopped but children remain', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
