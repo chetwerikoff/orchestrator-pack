@@ -78,6 +78,55 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 
 ## Common steps (Modes B and C only)
 
+> **Publication runs through Cursor by default (every mode, single or batch).**
+> The architect does **not** run the publish mechanics (branch, commit, push, PR,
+> merge, issue create/re-sync) by hand when `cursor-agent` is on `PATH`. Delegate
+> the whole publish to **one** `cursor-agent -p --force` call in the architect
+> working tree (workspace defaults to the current directory — do **not** pass
+> `-w`/`--worktree`) so it acts on the drafts exactly as they sit on disk. The
+> manual PowerShell/`gh` commands in the steps below are the **fallback** — use
+> them only when `cursor-agent` is missing, errors out, or leaves the PR/issues
+> half-done, and tell the user Cursor was unavailable.
+
+**Delegation prompt** (fill the `<…>` placeholders; covers single draft and batch):
+
+```bash
+cursor-agent -p --force "$(cat <<'EOF'
+You are publishing already-reviewed architect docs for orchestrator-pack from the
+current working tree. Do NOT edit the drafts' content — they passed Codex review.
+
+Files to publish (already on disk): <list every touched path: docs/issues_drafts/NN-*.md,
+  docs/issue_queue_index.md, docs/issues_drafts/00-architecture-decisions.md if changed>.
+Issues to handle after merge: <for each, "#N <- draft path" to re-sync an existing issue
+  body, or "new <- draft path" to create one>.
+
+Steps:
+1. git fetch origin; branch from main: git checkout main && git pull origin main &&
+   git checkout -b architect/draft-<NN>-<slug>.
+2. Stage ONLY the listed files. Run scripts/verify.ps1, scripts/check-reusable.ps1, and
+   scripts/lint-self-architect.ps1 -Strict. Do not change draft content — if a gate fails
+   on the drafts, STOP and report instead of editing.
+3. Commit ("docs: <short title> (spec)") and push -u origin HEAD. If push is refused on
+   credentials, retry: git -c credential.helper='!/usr/bin/gh auth git-credential' push -u origin HEAD
+4. Open a spec-only PR with "<!-- pr-type: spec-only -->" in the body. These docs PRs route
+   the no-ceremony / docs-only path: the scope guard FAILS on any issue reference, so the PR
+   body MUST contain ZERO "Refs #N", bare "#N", or issue URLs — summarise the change instead.
+5. Wait for CI green (gh pr checks <pr> --watch). Then gh pr merge <pr> --merge --delete-branch;
+   git checkout main && git pull origin main.
+6. For each "#N <- draft": re-sync the existing issue body (body = draft minus the H1 line,
+   i.e. tail -n +3) with gh issue edit <N> --body-file <tmp>. For each "new <- draft":
+   gh issue create with title = the draft H1 and body = draft minus H1, then write the
+   returned number into the draft's "GitHub Issue: #N" line and docs/issue_queue_index.md.
+7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
+EOF
+)"
+```
+
+If the published change is an **amendment to an already-closed issue** whose spec
+materially changed, note in your report that the issue may need reopening for
+re-implementation — the architect decides that with the user; Cursor only re-syncs
+the body.
+
 ### Pre-flight
 
 ```powershell
@@ -125,20 +174,21 @@ git push -u origin HEAD
 
 ### Open PR
 
-Body template (replace placeholders). Use the **spec-only signal** and a
-**non-closing** issue reference so GitHub keeps #N open:
+Body template (replace placeholders). Use the **spec-only signal**. These docs
+PRs route the **no-ceremony / docs-only** path, where the scope guard **fails on
+any issue reference** — so the body carries **zero** `Refs #N`, bare `#N`, or
+issue URLs. Name the affected drafts/issues in prose instead; GitHub keeps the
+issues untouched because nothing closes or references them:
 
 ```markdown
 <!-- pr-type: spec-only -->
 
-Refs #N
-
 ## Summary
 
-- Add canonical draft `docs/issues_drafts/NN-<slug>.md` (GitHub #N).
-- Update `docs/issue_queue_index.md`.
+- Add/amend canonical draft `docs/issues_drafts/NN-<slug>.md`.
+- Update `docs/issue_queue_index.md` (and `00-architecture-decisions.md` if changed).
 
-**Spec only** — does not implement #N.
+**Spec only** — does not implement the spec.
 
 ## Test plan
 
@@ -149,8 +199,9 @@ Refs #N
 - [ ] CI: scope guard + self-architect lint
 ```
 
-For a **batch** PR, list every implementation issue: `Refs #N1`, `Refs #N2`, …
-on separate lines (scope guard uses the last non-closing reference).
+For a **batch** PR, summarise each draft in the bullet list — still **no** issue
+references in the body (the no-ceremony scope guard rejects them). If a CI run
+fails because a reference slipped in, strip it and `gh run rerun --failed`.
 
 ```powershell
 gh pr create --repo chetwerikoff/orchestrator-pack `
@@ -177,9 +228,10 @@ git pull origin main
 
 ### Report
 
-Tell the user: PR URL, merge commit, draft path on `main`, and that issue **#N**
-(each `#N` for batch) remains **open** for `ao spawn` (non-closing `Refs #N` —
-no reopen step).
+Tell the user: PR URL, merge commit, draft path(s) on `main`, and the synced/created
+issue number(s). The PR body carried no issue reference, so GitHub never auto-closed
+anything — if a closed issue's spec materially changed, flag that it may need reopening
+for re-implementation (architect + user decide).
 
 ## Operator adoption
 
@@ -189,6 +241,10 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 ## Do not
 
+- Run the publish git/`gh` mechanics by hand when `cursor-agent` is available —
+  delegate to Cursor first; the manual commands are the fallback only.
+- Put any issue reference (`Refs #N`, bare `#N`, issue URL) in a spec-only PR body —
+  the no-ceremony scope guard rejects it.
 - Open a PR in sync-only mode — that is the whole point of the default.
 - Merge with failing scope guard or self-architect `-Strict`.
 - Use `gh pr merge --admin` to skip checks unless the user explicitly requests it.
