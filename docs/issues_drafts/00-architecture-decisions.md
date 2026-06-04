@@ -321,8 +321,15 @@ file `15-orchestrator-recovery-runbook.md`, not here.
    silently dropped. This is a **separate** mechanism from Decision 1's
    review-run-only reconciler (whose zero-worker-contact invariant forbids the
    re-delivery this performs) and from Decision 2's wake supervision (a delivered
-   turn is not a delivered finding). Restoring the channel itself is an upstream AO
-   concern, tracked separately. (Issue #171, file
+   turn is not a delivered finding). Restoring the channel itself (the DA-flood) is
+   an upstream AO/dashboard concern, now filed as
+   **ComposioHQ/agent-orchestrator#2094** and tracked pack-side by **Issue #173**
+   (`62-terminal-flood-resilience.md`, detection + operator recovery,
+   active-blocked-upstream); **Issue #174** (`63-review-ready-worker-stuck-guard.md`)
+   keeps the flood-induced false `stuck` from costing a review-ready worker a
+   respawn/kill. The 2026-06-04 recurrence on opk-10/PR #169 (finding from run
+   `c134e976` injected as an unsubmitted paste, never picked up) confirmed both the
+   flood and the delivery-loss class. (Issue #171, file
    `61-review-finding-delivery-confirmation.md`.)
 
 ## I. Worker prompt-delivery launch failure on Windows
