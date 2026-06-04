@@ -127,9 +127,46 @@ describe('ambiguous overlapping runs (AC1a)', () => {
   });
 
   it('does not confirm a peer after same-tick escalation of an overlapping run', () => {
-    const { actions, tracking } = planFromFixture(
-      'ambiguous-overlap-same-tick-escalation.json',
-    );
+    const nowMs = 1_717_502_000_000;
+    const { actions, tracking } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-a',
+          prNumber: 99,
+          targetSha: 'deadbeef',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'op-live',
+          sentAt: '2024-06-04T10:00:00.000Z',
+        },
+        {
+          id: 'run-b',
+          prNumber: 99,
+          targetSha: 'deadbeef',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'op-live',
+          sentAt: '2024-06-04T10:01:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          name: 'op-live',
+          role: 'worker',
+          prNumber: 99,
+          status: 'working',
+          reports: [
+            {
+              reportState: 'addressing_reviews',
+              reportedAt: '2026-06-04T10:05:00Z',
+            },
+          ],
+        },
+      ],
+      tracking: { runs: {} },
+      nowMs,
+      config: { confirmationWindowMs: 60_000, maxRedeliveries: 0 },
+    });
     expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
       false,
     );
