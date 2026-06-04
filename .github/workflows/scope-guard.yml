@@ -12,6 +12,67 @@ permissions:
   contents: read
 
 jobs:
+  # Conservative markdown-only gate for heavy advisory jobs (issue #155).
+  # Every changed path in the PR diff must be .md/.mdc AND match the allowlist below;
+  # one non-qualifying path forces the full CI suite.
+  classify-pr-changes:
+    name: Classify PR changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      markdown_only: ${{ steps.classify.outputs.markdown_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify markdown-only PR
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Markdown-only allowlist (literal; conservative / fail-safe):
+          #   docs/**
+          #   .claude/skills/**
+          #   .cursor/skills/**
+          #   .cursor/rules/**
+          #   AGENTS.md
+          #   top-level *.md (e.g. README.md, CLAUDE.md)
+          # Each changed path must also end in .md or .mdc.
+
+          mapfile -t changed < <(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "markdown_only=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          markdown_only=true
+          for path in "${changed[@]}"; do
+            [ -z "$path" ] && continue
+            case "$path" in
+              *.md|*.mdc) ;;
+              *) markdown_only=false; break ;;
+            esac
+            case "$path" in
+              docs/*|.claude/skills/*|.cursor/skills/*|.cursor/rules/*) continue ;;
+              AGENTS.md) continue ;;
+            esac
+            if [[ "$path" != */* ]]; then
+              continue
+            fi
+            markdown_only=false
+            break
+          done
+
+          echo "markdown_only=${markdown_only}" >> "$GITHUB_OUTPUT"
+
   verify-pack:
     name: Verify orchestrator-pack structure
     runs-on: ubuntu-latest
@@ -83,6 +144,11 @@ jobs:
 
   tests:
     name: Run pack contract tests
+    needs: classify-pr-changes
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -117,7 +183,11 @@ jobs:
 
   self-architect-lint:
     name: Self-architect lint
-    if: github.event_name == 'pull_request'
+    needs: classify-pr-changes
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.classify-pr-changes.outputs.markdown_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

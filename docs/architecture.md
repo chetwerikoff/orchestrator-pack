@@ -167,6 +167,11 @@ issue body, the latest committed declaration snapshot on the PR head, and
 `gh pr diff --name-only`, then enforces the #3.A validation formula (with fork
 fail-closed policy and opt-in degraded mode).
 
+On pull requests whose diff is **markdown-only** under the workflow allowlist
+(`docs/**`, skill/rule trees, top-level `*.md` / `AGENTS.md`, each path ending
+in `.md`/`.mdc`), the heavy advisory jobs (contract tests, self-architect lint)
+are skipped; the required verifier and PR scope guard still run (#155).
+
 CI is the third line of defense. Runtime scope guard and the pre-commit hook
 remain mandatory because an agent can mutate the working tree and index before a
 PR exists.
