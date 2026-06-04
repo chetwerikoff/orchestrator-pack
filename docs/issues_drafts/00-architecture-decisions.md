@@ -256,6 +256,21 @@ runs and the orchestrator went `stuck` — review never started.
    duplicate workers. `agent-orchestrator.yaml.example` again uses **report-driven**
    review trigger only until a safer reconciliation design ships (see Issue #98
    for post-respawn review hygiene, not auto-spawn).
+   **Re-specified, scoped — 2026-06-04 (Issue #163, file
+   `58-safe-review-trigger-reconciliation.md`)** after the PR #162 incident: a
+   worker reported `ready_for_review` with CI green, but `opk-orchestrator` was
+   `stuck`, so no second review run was triggered for the new head. Root cause:
+   the mechanical, idempotent review trigger was coupled to the fragile actors
+   it should not depend on (a worker report arriving, and the LLM-orchestrator
+   taking a healthy turn). The re-spec restores the state-derived trigger but
+   strips the unsafe behaviour that caused the rollback: it produces **only**
+   `ao review run` for an uncovered head and is **forbidden any
+   worker-lifecycle action** (no `ao spawn`, `--claim-pr`, `ao session kill`,
+   or worker ping). Severing all worker-lifecycle effects is what makes
+   re-introduction safe — the PR #97 split-brain came specifically from
+   claiming/spawning a worker, not from triggering a review. It composes with
+   the Issue #98 idempotency/stale-workspace preflight and stays low-frequency
+   per Decision 2.
 
 2. **The wake mechanism's strict no-polling invariant is relaxed for a
    low-frequency heartbeat.** Issue #39 (file
@@ -273,9 +288,12 @@ These compose: decision 2 guarantees the orchestrator gets turns even in event
 silence. ~~Decision 1 defined what it does on each such turn (reconcile open PRs
 against review-run coverage and trigger review). Neither was sufficient alone —
 without the heartbeat the reconciliation never ran in silence; without
-reconciliation the delivered turn had no state-derived trigger to act on.~~ With
-decision 1 rolled back, heartbeat turns rely on report-driven review triggers and
-other orchestratorRules discipline until reconciliation is re-specified. A
+reconciliation the delivered turn had no state-derived trigger to act on.~~ While
+decision 1 was rolled back, heartbeat turns relied on report-driven review triggers
+and other orchestratorRules discipline. With decision 1 re-specified (Issue #163),
+the review trigger no longer depends on the LLM-orchestrator taking a turn at all:
+the heartbeat remains the backstop for the orchestrator's *judgement* work, but
+review triggering converges from state on its own low-frequency cadence. A
 third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
 on a command-approval prompt) is handled operationally in the recovery runbook,
 file `15-orchestrator-recovery-runbook.md`, not here.
