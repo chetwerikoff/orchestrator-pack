@@ -27,6 +27,7 @@ All custom behavior must live in one of:
 - `prompts/`
 - `scripts/`
 - `.github/workflows/`
+- `.cursor/rules/` (always-applied Cursor project rules; thin pointers only)
 - config examples such as `agent-orchestrator.yaml.example`
 - `docs/`
 
@@ -53,6 +54,7 @@ Do not port Windows PowerShell wrapper internals, `.ai-loop/` layout as a requir
 - `docs/**`
 - `.claude/skills/**`
 - `.cursor/skills/**`
+- `.cursor/rules/**`
 - `CLAUDE.md`
 - `.github/workflows/**`
 - `README.md`
