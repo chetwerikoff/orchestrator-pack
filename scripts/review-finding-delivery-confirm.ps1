@@ -37,6 +37,7 @@ $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 
 function Get-DeliveryIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -140,22 +141,6 @@ function Get-FixtureDeliveryPayload {
     }
 }
 
-function Test-ForbiddenDeliveryLifecycleCommand {
-    param([string]$CommandLine)
-
-    $blocked = @(
-        'ao spawn',
-        '--claim-pr',
-        'ao session kill',
-        'ao send'
-    )
-    foreach ($frag in $blocked) {
-        if ($CommandLine -match [regex]::Escape($frag)) {
-            throw "forbidden lifecycle fragment in command: $frag"
-        }
-    }
-}
-
 function Invoke-PlannedReviewSend {
     param(
         [string]$RunId,
@@ -167,7 +152,7 @@ function Invoke-PlannedReviewSend {
 
     $sendArgs = @('review', 'send', $RunId)
     $commandLine = "ao $($sendArgs -join ' ')"
-    Test-ForbiddenDeliveryLifecycleCommand -CommandLine $commandLine
+    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
 
     if ($DryRunMode) {
         Write-DeliveryLog "dry-run would redeliver: $commandLine (PR #$PrNumber session=$SessionId attempt=$Attempt)"

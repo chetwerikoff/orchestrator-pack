@@ -7,21 +7,30 @@
   "baseline": {
     "commit_sha": "0908cae2de976305490758fac658cd9074bd6a26",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:730defc294d4b20f13ad5edf0e5a62f364c0266a0c0879baff47200c7ebc25e1"
+    "active_scope_hash": "sha256:89ce939beae30d14180e0cc3f0c136c5f40ce826294606908c36038f486d462e"
   },
   "declared_paths": [
     "docs/declarations/171.opk-15.json",
     "docs/migration_notes.md",
     "docs/orchestrator-autoloop-go-live.md",
     "docs/orchestrator-recovery-runbook.md",
+    "docs/review-finding-delivery-confirm.d.mts",
+    "docs/review-finding-delivery-confirm.d.ts",
     "docs/review-finding-delivery-confirm.mjs",
+    "docs/review-mechanical-cli.d.mts",
+    "docs/review-mechanical-cli.d.ts",
+    "docs/review-mechanical-cli.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/review-trigger-reconcile.mjs",
     "scripts/check-review-finding-delivery-confirm.ps1",
+    "scripts/lib/Review-MechanicalForbiddenCommand.ps1",
     "scripts/review-finding-delivery-confirm.ps1",
     "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
     "scripts/verify.ps1"
   ],
   "declared_globs": [
-    "tests/fixtures/review-finding-delivery-confirm/**"
+    "scripts/fixtures/review-finding-delivery-confirm/**"
   ],
   "amendments": []
 }

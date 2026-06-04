@@ -9,6 +9,13 @@ export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;
 
+export declare function findSessionById(
+  sessions: AoSession[],
+  sessionId: string,
+): AoSession | null;
+
+export declare function sessionMatchesPr(session: AoSession, prNumber: number): boolean;
+
 export interface OpenPr {
   number: number;
   headRefOid: string;

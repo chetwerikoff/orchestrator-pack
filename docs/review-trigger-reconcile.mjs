@@ -2,7 +2,11 @@
  * State-derived review-trigger reconciliation (Issue #163).
  * Vitest: scripts/review-trigger-reconcile.test.ts
  */
-import { readFileSync } from 'node:fs';
+import {
+  evaluateMechanicalTickInterval,
+  readStdinJson,
+  runStdinJsonCli,
+} from './review-mechanical-cli.mjs';
 /** @typedef {{ number: number, headRefOid: string }} OpenPr */
 /** @typedef {{ prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
@@ -126,10 +130,27 @@ export function getSessionIdentifier(session) {
 }
 
 /**
+ * @param {AoSession[]} sessions
+ * @param {string} sessionId
+ */
+export function findSessionById(sessions, sessionId) {
+  const needle = String(sessionId ?? '').trim();
+  if (!needle) {
+    return null;
+  }
+  for (const session of toArray(sessions)) {
+    if (getSessionIdentifier(session) === needle) {
+      return session;
+    }
+  }
+  return null;
+}
+
+/**
  * @param {AoSession} session
  * @param {number} prNumber
  */
-function sessionMatchesPr(session, prNumber) {
+export function sessionMatchesPr(session, prNumber) {
   if (Number(session?.prNumber) === prNumber) {
     return true;
   }
@@ -215,14 +236,12 @@ export function planReconcileActions({ openPrs, reviewRuns, sessions }) {
  * @param {number} input.intervalMs
  */
 export function evaluateReconcileInterval({ nowMs, lastTickMs, intervalMs }) {
-  const interval = Math.max(1, Number(intervalMs) || DEFAULT_RECONCILE_INTERVAL_MS);
-  if (!lastTickMs || lastTickMs <= 0) {
-    return { ok: true, intervalMs: interval };
-  }
-  if (nowMs - lastTickMs >= interval) {
-    return { ok: true, intervalMs: interval };
-  }
-  return { ok: false, reason: 'interval_not_elapsed', intervalMs: interval };
+  return evaluateMechanicalTickInterval({
+    nowMs,
+    lastTickMs,
+    intervalMs,
+    defaultIntervalMs: DEFAULT_RECONCILE_INTERVAL_MS,
+  });
 }
 
 /**
@@ -250,40 +269,14 @@ export function buildReviewRunArgv(sessionId, reviewCommand) {
   return ['review', 'run', sessionId, '--execute', '--command', reviewCommand];
 }
 
-function readStdinJson() {
-  const text = readFileSync(0, 'utf8').trim();
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
-}
-
-function printJson(value) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
-}
-
-const isCli =
-  process.argv[1] &&
-  (process.argv[1].endsWith('review-trigger-reconcile.mjs') ||
-    process.argv[1].endsWith('review-trigger-reconcile.js'));
-
-if (isCli) {
-  const sub = process.argv[2];
-  if (sub === 'plan') {
-    printJson(planReconcileActions(readStdinJson()));
-    process.exit(0);
-  }
-  if (sub === 'interval') {
+runStdinJsonCli('review-trigger-reconcile.mjs', {
+  plan: () => planReconcileActions(readStdinJson()),
+  interval: () => {
     const payload = readStdinJson();
-    printJson(
-      evaluateReconcileInterval({
-        nowMs: Number(payload.nowMs) || Date.now(),
-        lastTickMs: payload.lastTickMs,
-        intervalMs: Number(payload.intervalMs) || DEFAULT_RECONCILE_INTERVAL_MS,
-      }),
-    );
-    process.exit(0);
-  }
-  console.error('Usage: node review-trigger-reconcile.mjs <plan|interval>');
-  process.exit(2);
-}
+    return evaluateReconcileInterval({
+      nowMs: Number(payload.nowMs) || Date.now(),
+      lastTickMs: payload.lastTickMs,
+      intervalMs: Number(payload.intervalMs) || DEFAULT_RECONCILE_INTERVAL_MS,
+    });
+  },
+});

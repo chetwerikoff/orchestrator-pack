@@ -18,11 +18,12 @@ import {
   planDeliveryConfirmActions,
   resolveDeliveryConfig,
   resolveSendObservedAtMs,
+  type DeliveryConfirmAction,
 } from '../docs/review-finding-delivery-confirm.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../tests/fixtures/review-finding-delivery-confirm',
+  'fixtures/review-finding-delivery-confirm',
 );
 
 type FixturePayload = {
@@ -65,7 +66,6 @@ describe('isPendingSentDeliveryRun', () => {
     expect(
       isPendingSentDeliveryRun({
         status: 'needs_triage',
-        openFindingCount: 1,
         sentFindingCount: 0,
       }),
     ).toBe(false);
@@ -87,7 +87,9 @@ describe('delivery confirmation signal (AC1)', () => {
     ).toBe(false);
 
     const { actions, tracking } = planFromFixture('sent-no-review-round-report.json');
-    expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(false);
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
+      false,
+    );
     expect(tracking.runs?.['run-opk8-166']?.deliveryState).not.toBe(
       DELIVERY_STATE_CONFIRMED,
     );
@@ -111,11 +113,15 @@ describe('delivery confirmation signal (AC1)', () => {
 describe('ambiguous overlapping runs (AC1a)', () => {
   it('does not credit one addressing_reviews report to either run', () => {
     const { actions, tracking } = planFromFixture('ambiguous-overlap-two-runs.json');
-    expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(false);
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
+      false,
+    );
     expect(tracking.runs?.['run-a']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
     expect(tracking.runs?.['run-b']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
     expect(
-      actions.filter((a) => a.type === 'redeliver' || a.type === 'escalate').length,
+      actions.filter(
+        (a: DeliveryConfirmAction) => a.type === 'redeliver' || a.type === 'escalate',
+      ).length,
     ).toBeGreaterThan(0);
   });
 });
@@ -148,7 +154,10 @@ describe('confirmation window config (AC3)', () => {
 describe('bounded re-delivery (AC4)', () => {
   it('re-delivers to the same linked session within max count', () => {
     const { actions } = planFromFixture('window-elapsed-redeliver.json');
-    const redelivers = actions.filter((a) => a.type === 'redeliver');
+    const redelivers = actions.filter(
+      (a): a is Extract<DeliveryConfirmAction, { type: 'redeliver' }> =>
+        a.type === 'redeliver',
+    );
     expect(redelivers).toHaveLength(1);
     expect(redelivers[0]).toMatchObject({
       runId: 'run-redeliver-1',
@@ -163,8 +172,13 @@ describe('bounded re-delivery (AC4)', () => {
 describe('orphan linked session (AC4a)', () => {
   it('escalates immediately with zero re-sends', () => {
     const { actions } = planFromFixture('orphan-dead-session.json');
-    expect(actions.filter((a) => a.type === 'redeliver')).toHaveLength(0);
-    const escalation = actions.find((a) => a.type === 'escalate');
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(0);
+    const escalation = actions.find(
+      (a): a is Extract<DeliveryConfirmAction, { type: 'escalate' }> =>
+        a.type === 'escalate',
+    );
     expect(escalation).toMatchObject({
       runId: 'run-orphan-1',
       sessionId: 'opk-dead',
@@ -192,8 +206,13 @@ describe('no worker lifecycle on no-confirmation path (AC5)', () => {
 describe('escalation after max redeliveries (AC6)', () => {
   it('stops retrying and emits actionable escalation', () => {
     const { actions, tracking } = planFromFixture('max-redeliveries-escalate.json');
-    expect(actions.filter((a) => a.type === 'redeliver')).toHaveLength(0);
-    const escalation = actions.find((a) => a.type === 'escalate');
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(0);
+    const escalation = actions.find(
+      (a): a is Extract<DeliveryConfirmAction, { type: 'escalate' }> =>
+        a.type === 'escalate',
+    );
     expect(escalation).toMatchObject({
       runId: 'run-exhausted',
       sessionId: 'opk-worker-live',
@@ -225,7 +244,9 @@ describe('delivery state outcomes (AC7)', () => {
 describe('idempotent confirmed runs (AC8)', () => {
   it('does not re-deliver when addressing_reviews exists after send', () => {
     const { actions } = planFromFixture('confirmed-idempotent.json');
-    expect(actions.filter((a) => a.type === 'redeliver')).toHaveLength(0);
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(0);
     expect(actions).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'mark_confirmed' })]),
     );

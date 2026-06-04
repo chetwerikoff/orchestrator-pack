@@ -2,14 +2,21 @@
  * Sender-side review-finding delivery confirmation (Issue #171).
  * Vitest: scripts/review-finding-delivery-confirm.test.ts
  */
-import { readFileSync } from 'node:fs';
 import {
-  FORBIDDEN_LIFECYCLE_PATTERNS,
-  getSessionIdentifier,
+  evaluateMechanicalTickInterval,
+  readStdinJson,
+  runStdinJsonCli,
+} from './review-mechanical-cli.mjs';
+import {
+  findForbiddenLifecycleCommands,
+  findSessionById,
   isLiveWorkerSession,
   normalizeSha,
+  sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+export { findForbiddenLifecycleCommands as findForbiddenDeliveryLifecycleCommands };
 
 /** Default: wait 5 minutes after send before re-delivery / escalation. */
 export const DEFAULT_CONFIRMATION_WINDOW_MS = 5 * 60 * 1000;
@@ -114,37 +121,6 @@ export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
 }
 
 /**
- * @param {AoSession[]} sessions
- * @param {string} sessionId
- */
-export function findSessionById(sessions, sessionId) {
-  const needle = String(sessionId ?? '').trim();
-  if (!needle) {
-    return null;
-  }
-  for (const session of toArray(sessions)) {
-    if (getSessionIdentifier(session) === needle) {
-      return session;
-    }
-  }
-  return null;
-}
-
-/**
- * @param {AoSession} session
- * @param {number} prNumber
- */
-function sessionMatchesPr(session, prNumber) {
-  if (Number(session?.prNumber) === prNumber) {
-    return true;
-  }
-  const prField = String(session?.pr ?? '');
-  return Boolean(
-    prField && (prField === String(prNumber) || prField === `#${prNumber}`),
-  );
-}
-
-/**
  * @param {ReviewRun} run
  * @param {AoSession[]} sessions
  */
@@ -243,14 +219,12 @@ export function isDeliveryConfirmed(run, sessions, sendObservedAtMs, allRuns, tr
  * @param {number} [input.intervalMs]
  */
 export function evaluateDeliveryTickInterval({ nowMs, lastTickMs, intervalMs }) {
-  const interval = Math.max(1, Number(intervalMs) || DEFAULT_TICK_INTERVAL_MS);
-  if (!lastTickMs || lastTickMs <= 0) {
-    return { ok: true, intervalMs: interval };
-  }
-  if (nowMs - lastTickMs >= interval) {
-    return { ok: true, intervalMs: interval };
-  }
-  return { ok: false, reason: 'interval_not_elapsed', intervalMs: interval };
+  return evaluateMechanicalTickInterval({
+    nowMs,
+    lastTickMs,
+    intervalMs,
+    defaultIntervalMs: DEFAULT_TICK_INTERVAL_MS,
+  });
 }
 
 /**
@@ -446,74 +420,29 @@ export function buildEscalationMessage({ runId, sessionId, prNumber }) {
 }
 
 /**
- * @param {string[]} commandLines
- */
-export function findForbiddenDeliveryLifecycleCommands(commandLines) {
-  /** @type {Array<{ command: string, pattern: string }>} */
-  const violations = [];
-  for (const command of commandLines ?? []) {
-    const line = String(command ?? '');
-    for (const pattern of FORBIDDEN_LIFECYCLE_PATTERNS) {
-      if (pattern.test(line)) {
-        violations.push({ command: line, pattern: pattern.source });
-      }
-    }
-  }
-  return violations;
-}
-
-/**
  * @param {string} runId
  */
 export function buildReviewSendArgv(runId) {
   return ['review', 'send', runId];
 }
 
-function readStdinJson() {
-  const text = readFileSync(0, 'utf8').trim();
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
-}
-
-function printJson(value) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
-}
-
-const isCli =
-  process.argv[1] &&
-  (process.argv[1].endsWith('review-finding-delivery-confirm.mjs') ||
-    process.argv[1].endsWith('review-finding-delivery-confirm.js'));
-
-if (isCli) {
-  const sub = process.argv[2];
-  if (sub === 'plan') {
+runStdinJsonCli('review-finding-delivery-confirm.mjs', {
+  plan: () => {
     const payload = readStdinJson();
-    printJson(
-      planDeliveryConfirmActions({
-        reviewRuns: payload.reviewRuns,
-        sessions: payload.sessions,
-        tracking: payload.tracking ?? { runs: {} },
-        nowMs: Number(payload.nowMs) || Date.now(),
-        config: payload.config ?? {},
-      }),
-    );
-    process.exit(0);
-  }
-  if (sub === 'interval') {
+    return planDeliveryConfirmActions({
+      reviewRuns: payload.reviewRuns,
+      sessions: payload.sessions,
+      tracking: payload.tracking ?? { runs: {} },
+      nowMs: Number(payload.nowMs) || Date.now(),
+      config: payload.config ?? {},
+    });
+  },
+  interval: () => {
     const payload = readStdinJson();
-    printJson(
-      evaluateDeliveryTickInterval({
-        nowMs: Number(payload.nowMs) || Date.now(),
-        lastTickMs: payload.lastTickMs,
-        intervalMs: Number(payload.intervalMs) || DEFAULT_TICK_INTERVAL_MS,
-      }),
-    );
-    process.exit(0);
-  }
-  console.error(
-    'Usage: node review-finding-delivery-confirm.mjs <plan|interval>',
-  );
-  process.exit(2);
-}
+    return evaluateDeliveryTickInterval({
+      nowMs: Number(payload.nowMs) || Date.now(),
+      lastTickMs: payload.lastTickMs,
+      intervalMs: Number(payload.intervalMs) || DEFAULT_TICK_INTERVAL_MS,
+    });
+  },
+});
