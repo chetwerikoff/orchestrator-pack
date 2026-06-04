@@ -1,0 +1,14 @@
+{
+  "description": "needs_triage on current head blocks re-review",
+  "openPrs": [{ "number": 12, "headRefOid": "ccc333" }],
+  "reviewRuns": [
+    {
+      "prNumber": 12,
+      "targetSha": "ccc333",
+      "status": "needs_triage",
+      "findingCount": 2,
+      "openFindingCount": 2
+    }
+  ],
+  "sessions": [{ "name": "op-12", "role": "worker", "prNumber": 12 }]
+}

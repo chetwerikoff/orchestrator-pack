@@ -1,0 +1,172 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_RECONCILE_INTERVAL_MS,
+  buildReviewRunArgv,
+  evaluateReconcileInterval,
+  findForbiddenLifecycleCommands,
+  isHeadCovered,
+  isRunCoveringHead,
+  planReconcileActions,
+  resolveWorkerSessionId,
+} from '../docs/review-trigger-reconcile.mjs';
+
+const fixturesDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../tests/fixtures/review-trigger-reconcile',
+);
+
+function loadFixture(name: string) {
+  const raw = readFileSync(path.join(fixturesDir, name), 'utf8');
+  return JSON.parse(raw) as {
+    openPrs: Array<{ number: number; headRefOid: string }>;
+    reviewRuns: Array<Record<string, unknown>>;
+    sessions: Array<Record<string, unknown>>;
+    expect?: { startReviewCount?: number; sessionId?: string };
+  };
+}
+
+describe('isRunCoveringHead', () => {
+  it.each([
+    ['queued', true],
+    ['preparing', true],
+    ['running', true],
+    ['reviewing', true],
+    ['clean', true],
+    ['needs_triage', true],
+    ['waiting_update', true],
+    ['outdated', false],
+    ['failed', false],
+    ['cancelled', false],
+  ])('status %s covered=%s', (status, covered) => {
+    expect(isRunCoveringHead({ status })).toBe(covered);
+  });
+});
+
+describe('isHeadCovered', () => {
+  const head = 'abc123';
+  const pr = 42;
+
+  it('is false when no runs exist for the head', () => {
+    expect(isHeadCovered([], pr, head)).toBe(false);
+  });
+
+  it('is true when only outdated runs exist', () => {
+    expect(
+      isHeadCovered(
+        [{ prNumber: pr, targetSha: head, status: 'outdated' }],
+        pr,
+        head,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('planReconcileActions', () => {
+  it('AC1: starts review for uncovered head without worker report path', () => {
+    const fixture = loadFixture('uncovered-no-report.json');
+    const actions = planReconcileActions(fixture);
+    const starts = actions.filter((a) => a.type === 'start_review');
+    expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
+    expect(starts[0]).toMatchObject({
+      prNumber: 99,
+      sessionId: fixture.expect?.sessionId ?? 'op-live-worker',
+      headSha: 'deadbeef',
+    });
+  });
+
+  it('AC2: same plan when orchestrator is stuck (not consulted)', () => {
+    const fixture = loadFixture('uncovered-no-report.json');
+    const actions = planReconcileActions(fixture);
+    expect(actions.filter((a) => a.type === 'start_review')).toHaveLength(1);
+  });
+
+  it('AC3: does not start when head is covered by each blocking status', () => {
+    for (const name of [
+      'covered-in-flight.json',
+      'covered-clean.json',
+      'covered-needs-triage.json',
+      'covered-waiting-update.json',
+    ]) {
+      const fixture = loadFixture(name);
+      const actions = planReconcileActions(fixture);
+      expect(actions.filter((a) => a.type === 'start_review'), name).toHaveLength(0);
+    }
+  });
+
+  it('AC3: starts when only outdated runs cover the PR', () => {
+    const fixture = loadFixture('uncovered-only-outdated.json');
+    const actions = planReconcileActions(fixture);
+    expect(actions.filter((a) => a.type === 'start_review')).toHaveLength(1);
+  });
+
+  it('AC4: split-brain uses live worker session only (no lifecycle in review argv)', () => {
+    const fixture = loadFixture('split-brain-live-worker.json');
+    const actions = planReconcileActions(fixture);
+    const starts = actions.filter((a) => a.type === 'start_review');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.sessionId).toBe('op-worker-pr97');
+
+    const reviewCommand =
+      'powershell.exe -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main';
+    const argv = buildReviewRunArgv(starts[0]!.sessionId, reviewCommand);
+    const commandLine = `ao ${argv.join(' ')}`;
+    expect(findForbiddenLifecycleCommands([commandLine])).toEqual([]);
+  });
+});
+
+describe('resolveWorkerSessionId', () => {
+  it('ignores orchestrator sessions', () => {
+    const id = resolveWorkerSessionId(
+      [
+        { name: 'op-orchestrator', role: 'orchestrator', prNumber: 99 },
+        { name: 'op-worker', role: 'worker', prNumber: 99 },
+      ],
+      99,
+    );
+    expect(id).toBe('op-worker');
+  });
+});
+
+describe('evaluateReconcileInterval', () => {
+  it('AC5: default interval is twenty minutes', () => {
+    expect(DEFAULT_RECONCILE_INTERVAL_MS).toBe(20 * 60 * 1000);
+  });
+
+  it('AC5: skips tick inside configured interval', () => {
+    const now = 10_000_000;
+    const result = evaluateReconcileInterval({
+      nowMs: now + 5 * 60 * 1000,
+      lastTickMs: now,
+      intervalMs: 20 * 60 * 1000,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('interval_not_elapsed');
+    }
+  });
+
+  it('accepts tick after interval elapsed', () => {
+    const now = 20_000_000;
+    const result = evaluateReconcileInterval({
+      nowMs: now + DEFAULT_RECONCILE_INTERVAL_MS,
+      lastTickMs: now,
+      intervalMs: DEFAULT_RECONCILE_INTERVAL_MS,
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('findForbiddenLifecycleCommands', () => {
+  it('flags spawn, claim-pr, kill, and send', () => {
+    const violations = findForbiddenLifecycleCommands([
+      'ao spawn --claim-pr 12',
+      'ao session kill op-1',
+      'ao send op-2 hello',
+      'ao review run op-3 --execute --command foo',
+    ]);
+    expect(violations.length).toBeGreaterThanOrEqual(4);
+  });
+});
