@@ -228,19 +228,46 @@ export function evaluateDeliveryTickInterval({ nowMs, lastTickMs, intervalMs }) 
 }
 
 /**
+ * @param {unknown} value
+ * @param {number} defaultValue
+ * @param {number} [min]
+ */
+function resolveBoundedInt(value, defaultValue, min = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return defaultValue;
+  }
+  return Math.max(min, parsed);
+}
+
+/**
+ * @param {RunDeliveryRecord} record
+ * @param {number} sendObservedAtMs
+ */
+export function getConfirmationAnchorMs(record, sendObservedAtMs) {
+  const lastRedelivery = record?.lastRedeliveryAtMs;
+  if (lastRedelivery && lastRedelivery > 0) {
+    return lastRedelivery;
+  }
+  return sendObservedAtMs;
+}
+
+/**
  * @param {object} config
  * @param {number} [config.confirmationWindowMs]
  * @param {number} [config.maxRedeliveries]
  */
 export function resolveDeliveryConfig(config = {}) {
   return {
-    confirmationWindowMs: Math.max(
+    confirmationWindowMs: resolveBoundedInt(
+      config.confirmationWindowMs,
+      DEFAULT_CONFIRMATION_WINDOW_MS,
       1,
-      Number(config.confirmationWindowMs) || DEFAULT_CONFIRMATION_WINDOW_MS,
     ),
-    maxRedeliveries: Math.max(
+    maxRedeliveries: resolveBoundedInt(
+      config.maxRedeliveries,
+      DEFAULT_MAX_REDELIVERIES,
       0,
-      Number(config.maxRedeliveries) ?? DEFAULT_MAX_REDELIVERIES,
     ),
   };
 }
@@ -295,6 +322,16 @@ export function planDeliveryConfirmActions({
 
     const sendObservedAtMs =
       existing.sendObservedAtMs ?? resolveSendObservedAtMs(run, nowMs);
+    const recordForAnchor = {
+      ...existing,
+      ...(nextRuns[runId] ?? {}),
+      sendObservedAtMs,
+    };
+    const confirmationAnchorMs = getConfirmationAnchorMs(
+      recordForAnchor,
+      sendObservedAtMs,
+    );
+
     if (!existing.sendObservedAtMs) {
       nextRuns[runId] = {
         ...existing,
@@ -305,7 +342,7 @@ export function planDeliveryConfirmActions({
     }
 
     if (
-      isDeliveryConfirmed(run, sessionList, sendObservedAtMs, runList, {
+      isDeliveryConfirmed(run, sessionList, confirmationAnchorMs, runList, {
         runs: nextRuns,
       })
     ) {
@@ -345,7 +382,7 @@ export function planDeliveryConfirmActions({
       continue;
     }
 
-    const elapsed = nowMs - sendObservedAtMs;
+    const elapsed = nowMs - confirmationAnchorMs;
     if (elapsed < confirmationWindowMs) {
       actions.push({
         type: 'wait',

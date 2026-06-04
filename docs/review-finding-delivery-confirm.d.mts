@@ -89,6 +89,11 @@ export declare function evaluateDeliveryTickInterval(input: {
   lastTickMs?: number;
   intervalMs?: number;
 }): { ok: true; intervalMs: number } | { ok: false; reason: string; intervalMs: number };
+export declare function getConfirmationAnchorMs(
+  record: RunDeliveryRecord,
+  sendObservedAtMs: number,
+): number;
+
 export declare function resolveDeliveryConfig(config?: {
   confirmationWindowMs?: number;
   maxRedeliveries?: number;

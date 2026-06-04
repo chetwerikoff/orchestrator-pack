@@ -16,6 +16,7 @@ import {
   isDeliveryConfirmed,
   isPendingSentDeliveryRun,
   planDeliveryConfirmActions,
+  getConfirmationAnchorMs,
   resolveDeliveryConfig,
   resolveSendObservedAtMs,
   type DeliveryConfirmAction,
@@ -148,6 +149,67 @@ describe('confirmation window config (AC3)', () => {
     expect(resolveDeliveryConfig({ confirmationWindowMs: override }).confirmationWindowMs).toBe(
       override,
     );
+  });
+
+  it('defaults maxRedeliveries to two when omitted or undefined', () => {
+    expect(resolveDeliveryConfig({}).maxRedeliveries).toBe(DEFAULT_MAX_REDELIVERIES);
+    expect(resolveDeliveryConfig({ maxRedeliveries: undefined }).maxRedeliveries).toBe(
+      DEFAULT_MAX_REDELIVERIES,
+    );
+  });
+});
+
+describe('confirmation anchor after re-delivery', () => {
+  it('waits from lastRedeliveryAtMs before another re-deliver', () => {
+    const nowMs = 1_000_000;
+    const sendObservedAtMs = nowMs - 600_000;
+    const lastRedeliveryAtMs = nowMs - 60_000;
+    const { actions } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-anchor',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'opk-worker',
+          prNumber: 42,
+        },
+      ],
+      sessions: [
+        {
+          sessionId: 'opk-worker',
+          role: 'worker',
+          prNumber: 42,
+          status: 'working',
+          reports: [{ reportState: 'working', reportedAt: '1970-01-01T00:16:00.000Z' }],
+        },
+      ],
+      tracking: {
+        runs: {
+          'run-anchor': {
+            sendObservedAtMs,
+            lastRedeliveryAtMs,
+            redeliveryCount: 1,
+          },
+        },
+      },
+      nowMs,
+      config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
+    });
+
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'wait')).toBe(true);
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(0);
+  });
+
+  it('getConfirmationAnchorMs prefers lastRedeliveryAtMs', () => {
+    expect(
+      getConfirmationAnchorMs(
+        { sendObservedAtMs: 100, lastRedeliveryAtMs: 500 },
+        100,
+      ),
+    ).toBe(500);
+    expect(getConfirmationAnchorMs({ sendObservedAtMs: 100 }, 100)).toBe(100);
   });
 });
 
