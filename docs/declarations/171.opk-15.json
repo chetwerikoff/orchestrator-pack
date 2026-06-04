@@ -1,0 +1,27 @@
+{
+  "issue_number": 171,
+  "iteration_id": "opk-15",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T12:00:00.000Z",
+  "baseline": {
+    "commit_sha": "0908cae2de976305490758fac658cd9074bd6a26",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:730defc294d4b20f13ad5edf0e5a62f364c0266a0c0879baff47200c7ebc25e1"
+  },
+  "declared_paths": [
+    "docs/declarations/171.opk-15.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-finding-delivery-confirm.mjs",
+    "scripts/check-review-finding-delivery-confirm.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-finding-delivery-confirm/**"
+  ],
+  "amendments": []
+}
