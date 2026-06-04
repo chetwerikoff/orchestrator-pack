@@ -41,6 +41,11 @@ if ($ps1 -notmatch 'gh pr list failed \(exit') {
     exit 1
 }
 
+if ($ps1 -notmatch '\$tickFailed = \$true' -or $ps1 -notmatch 'if \(\$tickFailed\) \{\s*exit 1') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must exit 1 when a live tick fails'
+    exit 1
+}
+
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(
     'review-finding-delivery-confirm',

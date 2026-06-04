@@ -275,6 +275,8 @@ if ($FixturePath) {
     exit 0
 }
 
+$tickFailed = $false
+
 try {
     do {
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -308,6 +310,7 @@ try {
                 Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) escalated=$($result.escalated))"
             }
             catch {
+                $tickFailed = $true
                 Write-DeliveryLog "tick error: $_"
             }
         }
@@ -315,6 +318,10 @@ try {
         if ($Once) { break }
         Start-Sleep -Milliseconds $pollMs
     } while ($true)
+
+    if ($tickFailed) {
+        exit 1
+    }
 }
 finally {
     Write-DeliveryLog 'stopped'
