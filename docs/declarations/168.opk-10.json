@@ -1,0 +1,26 @@
+{
+  "issue_number": 168,
+  "iteration_id": "opk-10",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T08:45:00.000Z",
+  "baseline": {
+    "commit_sha": "781448f25e887a725ec2f28dacfea0c8d857dbe7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:54be81e9667a0840e31dce3a4fb23f85e936726d13712cd71aba82bf4b4b562b"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/orchestrator-wake-runbook.md",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts"
+  ],
+  "declared_globs": [
+    "tests/fixtures/orchestrator-wake-supervisor/**"
+  ],
+  "amendments": []
+}
