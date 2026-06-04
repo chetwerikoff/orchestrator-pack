@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "orchestrator-pack additive RTK passthrough patterns (applied via apply-coworker-rtk-passthrough.ps1 only; never upstream defaults)",
+  "patterns": [
+    "git diff",
+    "git log",
+    "gh pr checks",
+    "ao ",
+    "ao-declare",
+    "npx ao-declare"
+  ]
+}

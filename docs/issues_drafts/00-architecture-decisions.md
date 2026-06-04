@@ -560,6 +560,37 @@ Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only 
 
 See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149).
 
+## R. Coworker RTK: passthrough-first adoption on worker hosts (Issue #145)
+
+Decision taken 2026-06-04: optional [coworker RTK](https://github.com/Arcanada-one/coworker/blob/main/docs/rtk-plugin.md)
+on AO **Cursor worker** hosts is **opt-in**, **passthrough-first**, and **host-global**.
+
+1. **Worker-host scope.** Initial adoption targets machines running `defaults.worker.agent: cursor`.
+   Orchestrator-only RTK enablement is deferred unless worker observation shows net benefit and the
+   operator opts in separately.
+
+2. **Host-global hook.** `coworker rtk enable` manages `~/.cursor/hooks.json` for **all**
+   cursor-agent sessions on that host (orchestrator, workers, ad-hoc CLI). Per-session RTK
+   toggling is not supported upstream; document the limitation, do not invent per-worker slicing.
+
+3. **Additive passthrough.** Pack ships a tracked helper and manifest that apply **five pattern
+   families** on top of coworker's 13 upstream defaults (`git diff`, `git log`, `gh pr checks`,
+   `ao ` subcommands, `ao-declare` + `npx ao-declare`). The helper MUST NOT add or restore
+   upstream entries; operator coworker version owns upstream defaults.
+
+4. **Passthrough-first enable.** Operator sequence: `coworker rtk install` → apply pack helper →
+   verify `coworker rtk passthrough list` (pack families) → `coworker rtk enable` → hook smoke.
+   CI covers static manifest + merge preview only; effective hook smoke is operator acceptance.
+
+5. **Adoption observation (not harness).** After enable, a **7-day** qualitative comparison on
+   Codex findings, CI failures, and iteration churn (`continue` | `extend` | `disable`). Not
+   shell-output proxy measurement; does not block worker PR merge.
+
+6. **Disable rollback.** Primary rollback: `coworker rtk disable` — no routine manual
+   `hooks.json` surgery.
+
+See [`docs/coworker-rtk-runbook.md`](../coworker-rtk-runbook.md).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

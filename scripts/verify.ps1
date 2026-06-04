@@ -560,6 +560,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Coworker RTK passthrough static guard (Issue #145) =='
+$rtkPassthroughCheck = Join-Path $Root 'scripts/check-rtk-passthrough-static.ps1'
+if (Test-Path -LiteralPath $rtkPassthroughCheck -PathType Leaf) {
+    & $rtkPassthroughCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'RTK passthrough static guard failed (Issue #145)'
+    }
+}
+else {
+    Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing RTK passthrough static guard script (Issue #145)'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

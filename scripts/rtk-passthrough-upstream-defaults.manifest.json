@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "Snapshot of coworker RTK upstream default passthrough patterns (validation-only; not applied by pack helper)",
+  "source": "https://github.com/Arcanada-one/coworker/blob/main/docs/rtk-plugin.md",
+  "patterns": [
+    "git push",
+    "git pull",
+    "git fetch",
+    "git merge",
+    "git status",
+    "git remote",
+    "git rev-parse",
+    "git branch",
+    "gh pr",
+    "gh issue",
+    "gh release",
+    "gh api",
+    "gh run"
+  ]
+}
