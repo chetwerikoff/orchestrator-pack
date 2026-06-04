@@ -86,10 +86,11 @@ Safety (preserve in implementation):
 ## Denylist
 
 ```denylist
-# issue 59 — spec-docs-only PR no-ceremony shape
+# issue 165 — spec-docs markdown no-ceremony (extends #161 machinery)
 vendor/**
 packages/core/**
 .ao/**
+.github/workflows/**
 ```
 
 ```allowed-roots
