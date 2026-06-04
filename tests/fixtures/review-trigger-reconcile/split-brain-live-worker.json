@@ -1,0 +1,20 @@
+{
+  "description": "PR #97 split-brain: live worker on branch, uncovered head — review only, no spawn",
+  "openPrs": [{ "number": 97, "headRefOid": "f00ba4" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-pr97",
+      "role": "worker",
+      "prNumber": 97,
+      "status": "working",
+      "branch": "feat/issue-86"
+    },
+    {
+      "name": "op-orchestrator",
+      "role": "orchestrator",
+      "status": "stuck"
+    }
+  ],
+  "expect": { "startReviewCount": 1, "sessionId": "op-worker-pr97" }
+}

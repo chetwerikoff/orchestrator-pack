@@ -439,6 +439,36 @@ Expected behavior:
 Nothing in this runbook auto-merges PRs or kills workers; that stays in
 `orchestratorRules`.
 
+## State-derived review trigger (Issue #163)
+
+When an open PR head has **no** `ao review list` coverage (no in-flight, clean,
+`needs_triage`, or `waiting_update` run for that SHA) and the worker never reported
+`pr_created` / `ready_for_review` — or the LLM orchestrator is `stuck` and not
+taking turns — start the low-frequency reconcile process (review-run **only**; it
+never spawns, claims, kills, or pings workers):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1
+```
+
+Verify wiring without starting a review:
+
+```powershell
+pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+Confirm a run appears after an uncovered head exists:
+
+```powershell
+ao review list orchestrator-pack --json
+```
+
+Default cadence is **20 minutes** (`AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
+overrides). PRs without a linked worker session in `ao status --json --reports full`
+are skipped until respawn discipline creates one — the reconcile process must not
+call `ao spawn --claim-pr` (PR #97 split-brain guard).
+
 ## Orphan review run after worker respawn
 
 When a worker session is **terminated**, **killed**, or stuck in **detecting** and
