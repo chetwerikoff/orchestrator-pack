@@ -92,10 +92,22 @@ describe('extractClosingIssueNumber / extractLinkedIssueNumber', () => {
 });
 
 describe('spec-only contract parsing', () => {
-  it('detects the canonical spec-only signal', () => {
+  it('detects the canonical spec-only signal on its own line', () => {
     expect(hasSpecOnlySignal(`## Summary\n\n${SPEC_SIGNAL}\n\nRefs #121`)).toBe(true);
     expect(hasSpecOnlySignal('<!-- PR-TYPE: spec-only -->')).toBe(true);
     expect(hasSpecOnlySignal('Spec only PR')).toBe(false);
+  });
+
+  it('does not treat inline or prose mentions of the signal as a declaration', () => {
+    const proseMention = [
+      'Closes #161',
+      '',
+      '## Summary',
+      '',
+      '- Passes without the spec-only PR-body signal or `<!-- pr-type: spec-only -->` in the description.',
+    ].join('\n');
+    expect(hasSpecOnlySignal(proseMention)).toBe(false);
+    expect(hasSpecOnlySignal(['```html', SPEC_SIGNAL, '```'].join('\n'))).toBe(false);
   });
 
   it.each([

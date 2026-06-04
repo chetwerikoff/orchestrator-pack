@@ -29,7 +29,8 @@ export const NON_CLOSING_ISSUE_REF_PATTERN = new RegExp(
  */
 export const SPEC_ONLY_SIGNAL_LITERAL = '<!-- pr-type: spec-only -->';
 
-export const SPEC_ONLY_SIGNAL_PATTERN = /<!--\s*pr-type:\s*spec-only\s*-->/i;
+/** Whole-line signal (policy: HTML comment on its own line). */
+export const SPEC_ONLY_SIGNAL_LINE_PATTERN = /^<!--\s*pr-type:\s*spec-only\s*-->\s*$/i;
 
 /**
  * Runtime spec-docs allowlist for spec-only PRs (narrow docs-only; not issue allowed-roots).
@@ -62,8 +63,19 @@ export function normalizePrBody(prBody: string): string {
   return prBody.replace(/^\uFEFF/, '').trim();
 }
 
+/** Remove fenced code blocks so documented signal examples do not trigger detection. */
+export function stripMarkdownFencedCodeBlocks(text: string): string {
+  return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+}
+
 export function hasSpecOnlySignal(prBody: string): boolean {
-  return SPEC_ONLY_SIGNAL_PATTERN.test(normalizePrBody(prBody));
+  const scannable = stripMarkdownFencedCodeBlocks(normalizePrBody(prBody));
+  for (const line of scannable.split(/\r?\n/)) {
+    if (SPEC_ONLY_SIGNAL_LINE_PATTERN.test(line.trim())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function hasClosingIssueReference(prBody: string): boolean {

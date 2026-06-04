@@ -91,8 +91,9 @@ and without a declaration snapshot.
 
 ### PR body contract
 
-1. **Spec-only signal** — include this HTML comment on its own line near the top
-   of the PR description (machine-detectable; does not render in the GitHub UI):
+1. **Spec-only signal** — include this HTML comment **alone on one line** near the
+   top of the PR description (machine-detectable; does not render in the GitHub UI).
+   Inline mentions, backticks, or fenced examples do not count:
 
    ```html
    <!-- pr-type: spec-only -->
