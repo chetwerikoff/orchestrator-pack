@@ -84,8 +84,10 @@ docs/**
    signal; merging it closes no issue.
 2. A PR that includes a non-markdown file under a skill directory does **not**
    qualify as a skill-doc PR (falls through to existing handling).
-3. A PR mixing skill markdown with any other path (docs draft or code) does
-   **not** get the no-ceremony treatment; its existing behaviour is unchanged.
+3. A PR mixing skill markdown with **spec-docs markdown** (all paths within the
+   union) **does** get no-ceremony. A PR that includes code, workflows, or any
+   path outside the union does **not** qualify; its existing behaviour is unchanged.
+   (Extended by #165 / `59-spec-docs-only-pr-no-ceremony.md`.)
 4. The skill-pointer drift check still runs on a skill-doc PR and **fails** a
    canonical/pointer mismatch or a hand-edited pointer.
 5. The prior spec-only (docs-draft) and implementation-PR test matrices are
