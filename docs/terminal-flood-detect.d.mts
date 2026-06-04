@@ -51,6 +51,10 @@ export declare function isTerminalMuxConnected(event: Record<string, unknown>): 
 export declare function isTerminalMuxDisconnected(event: Record<string, unknown>): boolean;
 export declare function getDisconnectSubscriberCount(event: Record<string, unknown>): number | null;
 
+export declare function countOrderedPairedCycles(
+  rows: Array<{ event: Record<string, unknown>; tsMs: number }>,
+): number;
+
 export declare function detectTerminalMuxFlood(input: {
   events: Array<Record<string, unknown>> | unknown;
   nowMs: number;

@@ -124,6 +124,34 @@ export function getDisconnectSubscriberCount(event) {
 }
 
 /**
+ * Count connect→disconnect pairs in timestamp order (alternating cycles only).
+ * Batched connects followed later by batched disconnects yield a low count even when
+ * min(connected, disconnected) is high.
+ *
+ * @param {Array<{ event: Record<string, unknown>, tsMs: number }>} rows
+ */
+export function countOrderedPairedCycles(rows) {
+  const sorted = [...rows].sort((a, b) => a.tsMs - b.tsMs || 0);
+  let orderedPairs = 0;
+  let awaitingDisconnect = false;
+
+  for (const row of sorted) {
+    if (isTerminalMuxConnected(row.event)) {
+      awaitingDisconnect = true;
+      continue;
+    }
+    if (isTerminalMuxDisconnected(row.event)) {
+      if (awaitingDisconnect) {
+        orderedPairs += 1;
+        awaitingDisconnect = false;
+      }
+    }
+  }
+
+  return orderedPairs;
+}
+
+/**
  * @param {object} input
  * @param {Array<Record<string, unknown>>} input.events
  * @param {number} input.nowMs
@@ -173,7 +201,7 @@ export function detectTerminalMuxFlood({
   const sessions = [];
 
   for (const [sessionKey, group] of groups.entries()) {
-    const pairedCycles = Math.min(group.connected, group.disconnected);
+    const pairedCycles = countOrderedPairedCycles(group.rows);
     const timestamps = group.rows.map((row) => row.tsMs).sort((a, b) => a - b);
     const spanMs =
       timestamps.length >= 2 ? timestamps[timestamps.length - 1] - timestamps[0] : 0;

@@ -7,6 +7,9 @@ import {
   DEFAULT_MIN_SPAN_MS,
   DEFAULT_WINDOW_MS,
   FLOOD_SIGNATURE_NAME,
+  TERMINAL_MUX_CONNECTED,
+  TERMINAL_MUX_DISCONNECTED,
+  countOrderedPairedCycles,
   detectTerminalMuxFlood,
   resolveEventSessionId,
   resolveFloodDetectConfig,
@@ -54,6 +57,30 @@ describe('resolveEventSessionId', () => {
   });
 });
 
+describe('countOrderedPairedCycles', () => {
+  it('counts alternating connect→disconnect cycles in timestamp order', () => {
+    const rows = [
+      { event: { kind: TERMINAL_MUX_CONNECTED }, tsMs: 1000 },
+      { event: { kind: TERMINAL_MUX_DISCONNECTED }, tsMs: 1500 },
+      { event: { kind: TERMINAL_MUX_CONNECTED }, tsMs: 2000 },
+      { event: { kind: TERMINAL_MUX_DISCONNECTED }, tsMs: 2500 },
+    ];
+    expect(countOrderedPairedCycles(rows)).toBe(2);
+  });
+
+  it('does not treat batched connects and later batched disconnects as six pairs', () => {
+    const rows = [
+      { event: { kind: TERMINAL_MUX_CONNECTED }, tsMs: 1000 },
+      { event: { kind: TERMINAL_MUX_CONNECTED }, tsMs: 1100 },
+      { event: { kind: TERMINAL_MUX_CONNECTED }, tsMs: 1200 },
+      { event: { kind: TERMINAL_MUX_DISCONNECTED }, tsMs: 5000 },
+      { event: { kind: TERMINAL_MUX_DISCONNECTED }, tsMs: 5100 },
+      { event: { kind: TERMINAL_MUX_DISCONNECTED }, tsMs: 5200 },
+    ];
+    expect(countOrderedPairedCycles(rows)).toBe(1);
+  });
+});
+
 describe('detectTerminalMuxFlood fixtures', () => {
   it('flags sustained session-local paired flapping', () => {
     const result = detectFromFixture('positive-sustained-paired-flap.json');
@@ -79,6 +106,10 @@ describe('detectTerminalMuxFlood fixtures', () => {
 
   it('does not flag benign multi-viewer disconnect churn', () => {
     expect(detectFromFixture('negative-multiple-viewers.json').flagged).toBe(false);
+  });
+
+  it('does not flag batched connects followed by batched disconnects', () => {
+    expect(detectFromFixture('negative-batched-connect-disconnect.json').flagged).toBe(false);
   });
 
   it('does not attribute global mux instability to a worker session', () => {
