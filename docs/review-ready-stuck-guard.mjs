@@ -341,7 +341,15 @@ export function classifyReviewReadySnapshot({
   const reasons = [];
 
   if (!prNumber || !headSha || !sessionId) {
-    return { reviewReady: false, reasons: ['missing_snapshot_ids'] };
+    return {
+      reviewReady: false,
+      reasons: ['missing_snapshot_ids'],
+      prNumber: prNumber || 0,
+      headSha: headSha || '',
+      sessionId: sessionId || '',
+      readyReport: null,
+      cleanRun: null,
+    };
   }
 
   if (!sessionMatchesPr(session, prNumber)) {

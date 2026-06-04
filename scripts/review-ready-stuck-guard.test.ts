@@ -163,6 +163,26 @@ describe('grace tracking (AC3)', () => {
   });
 });
 
+describe('classifyReviewReadySnapshot shape', () => {
+  it('early exit returns full ReviewReadyClassification fields', () => {
+    const result = classifyReviewReadySnapshot({
+      session: {},
+      openPr: {},
+      reviewRuns: [],
+      ciChecks: [],
+    });
+    expect(result).toMatchObject({
+      reviewReady: false,
+      reasons: ['missing_snapshot_ids'],
+      prNumber: 0,
+      headSha: '',
+      sessionId: '',
+      readyReport: null,
+      cleanRun: null,
+    });
+  });
+});
+
 describe('consistent-snapshot classification (AC1)', () => {
   it('positive fixture is review-ready', () => {
     const result = classifyFromFixture('positive-review-ready-alive.json');
