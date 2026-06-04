@@ -51,13 +51,19 @@ export function getReviewRunId(run) {
   return id || null;
 }
 
+/** Run statuses with findings sent but delivery not yet confirmed. */
+export const PENDING_SENT_DELIVERY_STATUSES = new Set([
+  'waiting_update',
+  'sent_to_agent',
+]);
+
 /**
  * @param {ReviewRun} run
  */
 export function isPendingSentDeliveryRun(run) {
   const status = String(run?.status ?? '').toLowerCase();
   const sent = Number(run?.sentFindingCount ?? 0);
-  return status === 'waiting_update' && sent > 0;
+  return PENDING_SENT_DELIVERY_STATUSES.has(status) && sent > 0;
 }
 
 /**

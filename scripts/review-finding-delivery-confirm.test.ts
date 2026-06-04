@@ -63,6 +63,15 @@ describe('isPendingSentDeliveryRun', () => {
     ).toBe(true);
   });
 
+  it('is true for sent_to_agent with sent findings', () => {
+    expect(
+      isPendingSentDeliveryRun({
+        status: 'sent_to_agent',
+        sentFindingCount: 1,
+      }),
+    ).toBe(true);
+  });
+
   it('is false for needs_triage (not yet sent)', () => {
     expect(
       isPendingSentDeliveryRun({
