@@ -35,6 +35,12 @@ if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
     exit 1
 }
 
+$ps1 = Get-Content -LiteralPath $scriptPath -Raw
+if ($ps1 -notmatch 'gh pr list failed \(exit') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must fail tick when gh pr list fails'
+    exit 1
+}
+
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(
     'review-finding-delivery-confirm',

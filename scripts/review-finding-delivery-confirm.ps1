@@ -129,11 +129,16 @@ function Set-DeliveryState {
 }
 
 function Get-OpenPrList {
-    $raw = gh pr list --state open --json number,headRefOid --limit 200 2>$null
-    if (-not $raw) {
+    $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+        throw "gh pr list failed (exit ${LASTEXITCODE}): $text"
+    }
+    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+    if (-not $text.Trim()) {
         return @()
     }
-    return @($raw | ConvertFrom-Json)
+    return @($text | ConvertFrom-Json)
 }
 
 function Get-FixtureDeliveryPayload {
