@@ -39,18 +39,33 @@ and cleared instead of silently stranding work.
 
 ## Binding surface
 
-- **Detection signature from observable AO state.** Provide a way to flag a session
-  exhibiting the flood from **observable signals** — primarily the mux
-  connect/disconnect flap rate in `ao events` (a high `ui.terminal_*` churn over a
-  short window) — not by scraping the tmux pane for escape bytes (fragile, runtime
-  specific). The signature names the affected session and the evidence.
-- **Operator recovery runbook.** Document the end-to-end recovery: how to recognise
-  the flood (symptoms: CPU-pegged idle worker, mux flap in `ao events`, an injected
-  finding visible as an unsubmitted `[Pasted text]`), how to stop it (the
-  mux-client side — e.g. closing the flooded dashboard terminal view that is driving
-  the reconnect loop), how to re-deliver the stranded finding, and when to recycle
-  the session. The runbook must state plainly that the **root fix is upstream
-  (#2094)** and these are mitigations.
+- **Detection signature from observable AO state — specific, not just "high churn".**
+  Provide a way to flag a session exhibiting the flood from **observable signals**,
+  not by scraping the tmux pane for escape bytes (fragile, runtime specific). The
+  signature MUST be discriminating, not merely "many terminal events":
+  - **session-local** — attributable to a specific affected session, not global
+    dashboard activity;
+  - **paired flapping** — repeated `ui.terminal_connected` *and*
+    `ui.terminal_disconnected` cycling, not one-off connects;
+  - **sustained over a bounded window** — present across a window, not a single
+    spike;
+  - **distinguishable from benign reconnects** — a single dashboard refresh, an AO
+    restart / network blip, multiple legitimate terminal viewers, or general
+    websocket instability MUST NOT trip it.
+  The signature names the affected session and the evidence.
+- **Operator recovery runbook — with a verified-stopped gate before re-delivery.**
+  Document the end-to-end recovery: how to recognise the flood (symptoms: CPU-pegged
+  idle worker, the signature above in `ao events`, an injected finding visible as an
+  unsubmitted `[Pasted text]`); how to stop the reconnect loop (the mux-client side —
+  e.g. closing the flooded dashboard terminal view driving it); a **post-stop
+  verification** that the signature for that session has actually subsided below the
+  threshold (closing the wrong view / a stale tab / an external loop must be caught),
+  with explicit **fallback to recycling the session** when churn does not drop; and
+  only **after** the channel is verified quiet, how to re-deliver the stranded
+  finding — driven, when available, by the #171 unconfirmed/escalated run evidence
+  (run identity) rather than a blind ad-hoc resend that could duplicate or re-lose
+  it. The runbook must state plainly that the **root fix is upstream (#2094)** and
+  these are mitigations.
 - **No core / dashboard patching.** The reset/sanitize-on-attach and reconnect
   throttle are out of scope for the pack (AO core / dashboard). This issue only adds
   pack-owned detection + docs and tracks #2094.
@@ -92,19 +107,23 @@ docs/**
 
 ## Acceptance criteria
 
-1. A documented **detection signature** flags a session exhibiting the flood from
-   observable AO state — primarily an elevated `ui.terminal_connected` /
-   `ui.terminal_disconnected` churn rate in `ao events` over a bounded window — and
-   names the affected session and the evidence. Provable by a fixture with a
-   high-churn event stream asserting the session is flagged, and a normal stream
-   asserting it is not.
+1. A documented **detection signature** flags a session exhibiting the flood only on
+   a **session-local, paired (`connected`+`disconnected`), sustained** flap in
+   `ao events` over a bounded window, and names the affected session and the
+   evidence. Provable by a positive fixture (sustained paired flapping → flagged)
+   **and negative fixtures that must NOT flag**: a single dashboard refresh / one-off
+   connect, an AO restart or network blip, multiple legitimate terminal viewers, and
+   general (non-session-local) websocket instability.
 2. The detection does **not** depend on scraping the tmux pane for escape bytes.
    Provable by the detection running purely from the event/observable inputs in the
    fixture.
-3. The recovery runbook documents: the flood symptoms, how to stop the mux
-   reconnect loop, how to re-deliver a stranded finding, and when to recycle the
-   session — and states the root fix is upstream **#2094**. Provable by inspecting
-   the runbook.
+3. The recovery runbook documents, in order: the flood symptoms; how to stop the
+   reconnect loop; a **post-stop verification** that the signature for that session
+   has subsided below the threshold, with a **fallback to recycling the session**
+   when it has not; and — only **after** the channel is verified quiet — how to
+   re-deliver the stranded finding (driven by the #171 unconfirmed/escalated run
+   evidence when available, not a blind resend). It states the root fix is upstream
+   **#2094**. Provable by inspecting the runbook for each step.
 4. The runbook / queue note links upstream **ComposioHQ/agent-orchestrator#2094**
    and marks this work `active-blocked-upstream` for the reset/throttle fix.
    Provable by grep.
@@ -122,10 +141,14 @@ docs/**
 ## Verification
 
 - Automated tests over fixtures cover the detection signature: flagged on a
-  high-churn `ao events` window (criterion 1), not flagged on a normal window, and
-  driven without pane scraping (criterion 2). Run via the pack test runner.
-- Grep confirms the recovery runbook documents symptoms, stop/re-deliver/recycle
-  steps, the upstream link, and the `active-blocked-upstream` status (criteria
-  3–4), and any new diagnostic flag with its default (criterion 5).
+  session-local, paired, sustained flap window, and **not** flagged on each benign
+  case — single refresh/one-off connect, AO restart/network blip, multiple viewers,
+  global non-session-local instability (criterion 1) — all driven without pane
+  scraping (criterion 2). Run via the pack test runner.
+- Grep confirms the recovery runbook documents, in order, symptoms → stop →
+  post-stop verification with recycle fallback → verified-quiet re-delivery, the
+  upstream link, and the `active-blocked-upstream` status (criteria 3–4), and any
+  new diagnostic flag with its default (criterion 5).
 - Live smoke (operator, optional): on a flooded session, follow the runbook to stop
-  the loop and re-deliver the stranded finding, confirming the worker resumes.
+  the loop, verify the signature subsided for that session, then re-deliver the
+  stranded finding, confirming the worker resumes.
