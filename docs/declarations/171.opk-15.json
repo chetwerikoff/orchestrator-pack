@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "0908cae2de976305490758fac658cd9074bd6a26",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:89ce939beae30d14180e0cc3f0c136c5f40ce826294606908c36038f486d462e"
+    "active_scope_hash": "sha256:aa29baa58ff1aec1a9e99e9ad6c5008e47fcc4d10594b4a0ed03dceb6eac18b1"
   },
   "declared_paths": [
     "docs/declarations/171.opk-15.json",
@@ -27,10 +27,26 @@
     "scripts/review-finding-delivery-confirm.ps1",
     "scripts/review-finding-delivery-confirm.test.ts",
     "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [
     "scripts/fixtures/review-finding-delivery-confirm/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:89ce939beae30d14180e0cc3f0c136c5f40ce826294606908c36038f486d462e",
+      "new_active_scope_hash": "sha256:aa29baa58ff1aec1a9e99e9ad6c5008e47fcc4d10594b4a0ed03dceb6eac18b1",
+      "changed": {
+        "added": [
+          "scripts/review-trigger-reconcile.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add review-trigger-reconcile tests for session identifier matching",
+      "actor": "opk-15",
+      "timestamp": "2026-06-04T12:43:55.895Z",
+      "applied": true
+    }
+  ]
 }
