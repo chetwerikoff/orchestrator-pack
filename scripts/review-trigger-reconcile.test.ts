@@ -9,6 +9,7 @@ import {
   findForbiddenLifecycleCommands,
   isHeadCovered,
   isRunCoveringHead,
+  isLiveWorkerSession,
   planReconcileActions,
   resolveWorkerSessionId,
   type PlanReconcileInput,
@@ -122,7 +123,78 @@ describe('planReconcileActions', () => {
   });
 });
 
+describe('isLiveWorkerSession', () => {
+  it.each([
+    ['working', true],
+    ['stuck', true],
+    ['terminated', false],
+    ['killed', false],
+    ['detecting', false],
+    ['done', false],
+  ])('status %s live=%s', (status, live) => {
+    expect(isLiveWorkerSession({ status })).toBe(live);
+  });
+});
+
 describe('resolveWorkerSessionId', () => {
+  it('ignores dead worker sessions linked to the PR', () => {
+    expect(
+      resolveWorkerSessionId(
+        [
+          {
+            name: 'op-dead',
+            role: 'worker',
+            prNumber: 55,
+            status: 'terminated',
+          },
+        ],
+        55,
+      ),
+    ).toBeNull();
+  });
+
+  it('prefers a live worker when dead and live sessions share the PR', () => {
+    expect(
+      resolveWorkerSessionId(
+        [
+          {
+            name: 'op-dead',
+            role: 'worker',
+            prNumber: 55,
+            status: 'killed',
+          },
+          {
+            name: 'op-live',
+            role: 'worker',
+            prNumber: 55,
+            status: 'working',
+          },
+        ],
+        55,
+      ),
+    ).toBe('op-live');
+  });
+
+  it('skips reconcile when only dead workers hold the PR', () => {
+    const fixture = {
+      openPrs: [{ number: 55, headRefOid: 'cafe55' }],
+      reviewRuns: [],
+      sessions: [
+        {
+          name: 'op-dead',
+          role: 'worker',
+          prNumber: 55,
+          status: 'detecting',
+        },
+      ],
+    };
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'skip' && a.reason === 'no_worker_session')).toBe(
+      true,
+    );
+  });
+
   it('ignores orchestrator sessions', () => {
     const id = resolveWorkerSessionId(
       [

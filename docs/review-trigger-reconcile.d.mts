@@ -2,7 +2,10 @@ export declare const DEFAULT_RECONCILE_INTERVAL_MS: number;
 
 export declare const IN_FLIGHT_REVIEW_STATUSES: ReadonlySet<string>;
 export declare const COVERED_TERMINAL_REVIEW_STATUSES: ReadonlySet<string>;
+export declare const NON_LIVE_WORKER_SESSION_STATUSES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
+
+export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export interface OpenPr {
   number: number;

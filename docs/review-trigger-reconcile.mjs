@@ -23,6 +23,22 @@ export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
   'waiting_update',
 ]);
 
+/**
+ * Worker session statuses that must not receive ao review run (orphan / dead session).
+ * Aligns with orchestrator-diagnose.ps1 terminal workers and recovery runbook orphan signals.
+ */
+export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
+  'done',
+  'merged',
+  'terminated',
+  'killed',
+  'errored',
+  'exited',
+  'cleanup',
+  'closed',
+  'detecting',
+]);
+
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = [
   /\bao\s+spawn\b/i,
@@ -74,13 +90,24 @@ export function isHeadCovered(runs, prNumber, headSha) {
 }
 
 /**
+ * @param {AoSession} session
+ */
+export function isLiveWorkerSession(session) {
+  const status = String(session?.status ?? '').toLowerCase();
+  if (!status) {
+    return true;
+  }
+  return !NON_LIVE_WORKER_SESSION_STATUSES.has(status);
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {number} prNumber
  */
 export function resolveWorkerSessionId(sessions, prNumber) {
   const workers = sessions.filter((s) => {
     const role = String(s?.role ?? '').toLowerCase();
-    return role === 'worker' || role === 'coding';
+    return (role === 'worker' || role === 'coding') && isLiveWorkerSession(s);
   });
 
   for (const session of workers) {
