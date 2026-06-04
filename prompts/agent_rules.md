@@ -99,6 +99,84 @@ scope:
 - If upstream behavior appears missing, write a contract or wrapper first and
   escalate the need for a proper plugin/API only after confirming the gap.
 
+## Coworker CLI delegation
+
+Use the external `coworker` CLI (`coworker ask`, `coworker write`) only when this
+section’s triggers and fences apply. `coworker stats` is optional for cost
+observability. This policy does not replace in-session subagent / Task delegation
+rules when those are present. For the broader “cheapest sufficient executor”
+ladder, see
+[`docs/first_principles_5_operational_framework.md`](../docs/first_principles_5_operational_framework.md).
+
+**Pickup before shell-out.** Run `ao acknowledge` (see **First action**) before the
+first `coworker` invocation in the session — same ordering as other implementation
+work.
+
+**Mandatory profiles.** Every `coworker ask` MUST pass `--profile code` (fixed; no
+per-task override). Every `coworker write` MUST pass `--profile write` unless the
+task issue explicitly names a different profile. Do not rely on operator or upstream
+CLI defaults.
+
+**Upstream file gate.** Default corpus for `coworker ask` and context for
+`coworker write` is text/markdown only. Source-code input requires `--allow-code`
+or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
+requires code at the cheap provider; do not bypass the gate to force delegation on
+undeclared code.
+
+**Provider-input fence (no exfiltration).** File material sent to the external
+provider — `coworker ask` corpus and `coworker write` context — MUST be
+repo-originating and non-secret: this repo’s tracked files, or repo-derived material
+(e.g. `git diff`, `git log`, working-tree output captured to a scratch path). Never
+send out-of-tree paths, external content, gitignored or secret-bearing files, or
+credentials. The `--question` / `--spec` prompt is worker-authored task text: it MUST
+carry no secrets or credentials, but need not be a repo file. `coworker ask` performs
+no edit — its corpus may span repo context outside the editable declared scope under
+this fence. `coworker write --target` is an edit: every `--target` MUST stay inside
+the active declared scope.
+
+**Delegate `coworker ask` (with `--profile code`) only when at least one trigger holds:**
+
+- Combined corpus for one question is **more than 600 lines** across all paths in
+  that invocation.
+- **3 or more files** under one question (same `coworker ask` call).
+- Diff or log material to summarize is **more than 200 lines**.
+- Bootstrap read of **2 or more** config/doc paths that together total **more than
+  600 lines** (or each path is **more than 200 lines**) where bulk read is the work,
+  not synthesis.
+
+When **no** ask trigger holds, use deterministic repo tools (search, read, diff,
+tests) **instead of** `coworker ask` — do not delegate.
+
+**Delegate `coworker write` (with `--profile write`) only for primary drafts:**
+
+- README, install docs, configuration reference (first cut).
+- Standard boilerplate: LICENSE, `.gitignore`, CI workflow yaml skeletons.
+
+Any context/input fed to `coworker write` obeys the provider-input fence above. Do
+not use `coworker write` for iterative refinement of in-scope implementation code.
+Delegate only when the target does **not** exist yet, or the task issue explicitly
+authorizes replacing that file. Upstream `coworker write` truncate-writes by default
+— do not overwrite an existing README, LICENSE, `.gitignore`, or workflow file unless
+replacement is in scope. Prefer `--stdout` and apply the diff yourself when the target
+already exists.
+
+**Do not delegate (keep on the reasoning model):**
+
+- Tasks estimated **under 2000 tokens** of real work (CLI overhead eats savings).
+- Debugging, root-cause analysis, races, safety-critical logic.
+- Architectural decisions and trade-off reasoning.
+- Edits requiring **exact line numbers** or surgical diffs in existing code.
+- Inferring user intent or clarifying ambiguous requirements.
+- **Review reasoning** — producing or shaping PR-review findings (correctness,
+  security, race, logic). The review path — canonical **REVIEW_COMMAND**, **PACK_REVIEWER**,
+  and the pack review wrapper it dispatches — MUST NOT be routed through `coworker`.
+  Nothing backstops reviewer judgment; the cost rule’s “delegate I/O, keep reasoning”
+  does not license cheap review.
+
+**Accountability.** You remain responsible for verifying coworker output, scope,
+commits, and AO transitions. `coworker` must not run `ao-declare`, `ao report`, or
+open PRs.
+
 ## Required CI (CI green)
 
 Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use
