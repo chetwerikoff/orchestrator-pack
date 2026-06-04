@@ -35,6 +35,11 @@ if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
     exit 1
 }
 
+if ($mjs -notmatch 'export function sessionOwnsRunHead' -or $mjs -notmatch 'sessionOwnsRunHead\(session, prNumber') {
+    Write-Host 'docs/review-finding-delivery-confirm.mjs must verify linked session owns run targetSha'
+    exit 1
+}
+
 $ps1 = Get-Content -LiteralPath $scriptPath -Raw
 if ($ps1 -notmatch 'gh pr list failed \(exit') {
     Write-Host 'scripts/review-finding-delivery-confirm.ps1 must fail tick when gh pr list fails'
@@ -43,6 +48,11 @@ if ($ps1 -notmatch 'gh pr list failed \(exit') {
 
 if ($ps1 -notmatch '\$tickFailed = \$true' -or $ps1 -notmatch 'if \(\$tickFailed\) \{\s*exit 1') {
     Write-Host 'scripts/review-finding-delivery-confirm.ps1 must exit 1 when a live tick fails'
+    exit 1
+}
+
+if ($ps1 -notmatch 'Save-PartialDeliveryTracking') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must persist tracking after each applied action'
     exit 1
 }
 

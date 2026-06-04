@@ -128,6 +128,50 @@ function Set-DeliveryState {
     $State | ConvertTo-Json -Depth 30 -Compress | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
+function Copy-DeliveryTrackingRuns {
+    param([object]$Tracking)
+
+    $runs = @{}
+    if ($Tracking -and $Tracking.runs) {
+        foreach ($prop in $Tracking.runs.PSObject.Properties) {
+            $runs[$prop.Name] = $prop.Value
+        }
+    }
+    return $runs
+}
+
+function Get-PlannedDeliveryRunRecord {
+    param(
+        [object]$PlannedTracking,
+        [string]$RunId
+    )
+
+    if (-not $PlannedTracking -or -not $PlannedTracking.runs) {
+        return $null
+    }
+
+    $plannedRuns = $PlannedTracking.runs
+    if ($plannedRuns -is [System.Collections.IDictionary]) {
+        return $plannedRuns[$RunId]
+    }
+
+    return $plannedRuns.$RunId
+}
+
+function Save-PartialDeliveryTracking {
+    param(
+        [string]$Path,
+        [hashtable]$AppliedTracking,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode -or -not $Path) {
+        return
+    }
+
+    Set-DeliveryState -Path $Path -State $AppliedTracking
+}
+
 function Get-OpenPrList {
     $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -187,7 +231,8 @@ function Invoke-DeliveryTick {
         [switch]$DryRunMode,
         [string]$Fixture,
         [object]$TrackingState,
-        [long]$NowMs
+        [long]$NowMs,
+        [string]$PartialStatePath = ''
     )
 
     if ($Fixture) {
@@ -220,21 +265,40 @@ function Invoke-DeliveryTick {
     $redelivered = 0
     $escalated = 0
     $confirmed = 0
+    $appliedTracking = @{
+        runs       = Copy-DeliveryTrackingRuns -Tracking $tracking
+        lastTickMs = $tracking.lastTickMs
+    }
 
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'mark_confirmed' {
                 Write-DeliveryLog "delivery confirmed: run=$($action.runId) PR #$($action.prNumber)"
                 $confirmed++
+                $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
+                if ($record) {
+                    $appliedTracking.runs[$action.runId] = $record
+                    Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
+                }
             }
             'redeliver' {
                 Invoke-PlannedReviewSend -RunId $action.runId -PrNumber $action.prNumber `
                     -SessionId $action.sessionId -Attempt $action.attempt -DryRunMode:$DryRunMode
                 $redelivered++
+                $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
+                if ($record) {
+                    $appliedTracking.runs[$action.runId] = $record
+                    Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
+                }
             }
             'escalate' {
                 Write-DeliveryLog $action.message
                 $escalated++
+                $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
+                if ($record) {
+                    $appliedTracking.runs[$action.runId] = $record
+                    Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
+                }
             }
             'wait' {
                 Write-DeliveryLog "waiting: run=$($action.runId) $($action.reason) (~$([math]::Round($action.remainingMs / 1000))s left)"
@@ -297,8 +361,9 @@ try {
         }
         else {
             try {
+                $partialStatePath = if ($DryRun) { '' } else { $statePath }
                 $result = Invoke-DeliveryTick -Project $ProjectId -Config $config -DryRunMode:$DryRun `
-                    -TrackingState $state -NowMs $nowMs
+                    -TrackingState $state -NowMs $nowMs -PartialStatePath $partialStatePath
                 $nextState = $result.tracking
                 $nextState.lastTickMs = $nowMs
                 if (-not $DryRun) {
