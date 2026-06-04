@@ -92,6 +92,17 @@ export declare function isLinkedSessionLiveOwner(
   sessions: AoSession[],
   openPrs?: OpenPr[],
 ): boolean;
+export declare function linkedRunSessionsMatch(
+  sessions: AoSession[],
+  linkedA: string,
+  linkedB: string,
+): boolean;
+export declare function countAmbiguousUnconfirmedPeers(
+  runs: ReviewRun[],
+  tracking: DeliveryTrackingState,
+  target: ReviewRun,
+  sessions: AoSession[],
+): number;
 export declare function isDeliveryConfirmed(
   run: ReviewRun,
   sessions: AoSession[],

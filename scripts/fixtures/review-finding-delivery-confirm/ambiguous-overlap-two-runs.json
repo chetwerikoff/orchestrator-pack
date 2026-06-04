@@ -35,6 +35,7 @@
       ]
     }
   ],
+  "openPrs": [{ "number": 99, "headRefOid": "deadbeef" }],
   "tracking": { "runs": {} },
   "config": {
     "confirmationWindowMs": 600000,

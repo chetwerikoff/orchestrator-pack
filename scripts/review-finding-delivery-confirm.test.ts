@@ -179,6 +179,56 @@ describe('delivery confirmation signal (AC1)', () => {
 });
 
 describe('ambiguous overlapping runs (AC1a)', () => {
+  it('does not credit one addressing_reviews when linked ids use name vs sessionId aliases', () => {
+    const nowMs = 1_717_502_000_000;
+    const { actions, tracking } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-a',
+          prNumber: 99,
+          targetSha: 'deadbeef',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'op-live',
+          sentAt: '2024-06-04T10:00:00.000Z',
+        },
+        {
+          id: 'run-b',
+          prNumber: 99,
+          targetSha: 'deadbeef',
+          status: 'sent_to_agent',
+          sentFindingCount: 1,
+          linkedSessionId: 'stable-session-id',
+          sentAt: '2024-06-04T10:01:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          name: 'op-live',
+          sessionId: 'stable-session-id',
+          role: 'worker',
+          prNumber: 99,
+          status: 'working',
+          reports: [
+            {
+              reportState: 'addressing_reviews',
+              reportedAt: '2026-06-04T10:05:00Z',
+            },
+          ],
+        },
+      ],
+      openPrs: [{ number: 99, headRefOid: 'deadbeef' }],
+      tracking: { runs: {} },
+      nowMs,
+      config: { confirmationWindowMs: 60_000, maxRedeliveries: 0 },
+    });
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
+      false,
+    );
+    expect(tracking.runs?.['run-a']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
+    expect(tracking.runs?.['run-b']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
+  });
+
   it('does not credit one addressing_reviews report to either run', () => {
     const { actions, tracking } = planFromFixture('ambiguous-overlap-two-runs.json');
     expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(

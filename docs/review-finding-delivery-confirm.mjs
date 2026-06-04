@@ -12,6 +12,7 @@ import {
   findSessionById,
   isLiveWorkerSession,
   normalizeSha,
+  sessionMatchesIdentifier,
   sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
@@ -185,14 +186,37 @@ export function isLinkedSessionLiveOwner(run, sessions, openPrs) {
 }
 
 /**
+ * @param {AoSession[]} sessions
+ * @param {string} linkedA
+ * @param {string} linkedB
+ */
+export function linkedRunSessionsMatch(sessions, linkedA, linkedB) {
+  const a = String(linkedA ?? '').trim();
+  const b = String(linkedB ?? '').trim();
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  const session = findSessionById(sessions, a) ?? findSessionById(sessions, b);
+  if (!session) {
+    return false;
+  }
+  return sessionMatchesIdentifier(session, a) && sessionMatchesIdentifier(session, b);
+}
+
+/**
  * @param {ReviewRun[]} runs
  * @param {DeliveryTrackingState} tracking
  * @param {ReviewRun} target
+ * @param {AoSession[]} sessions
  */
-export function countAmbiguousUnconfirmedPeers(runs, tracking, target) {
+export function countAmbiguousUnconfirmedPeers(runs, tracking, target, sessions) {
   const prNumber = Number(target?.prNumber);
   const head = normalizeSha(target?.targetSha);
   const sessionId = String(target?.linkedSessionId ?? '').trim();
+  const sessionList = toArray(sessions);
   if (!prNumber || !head || !sessionId) {
     return 0;
   }
@@ -208,7 +232,8 @@ export function countAmbiguousUnconfirmedPeers(runs, tracking, target) {
     if (normalizeSha(run?.targetSha) !== head) {
       continue;
     }
-    if (String(run?.linkedSessionId ?? '').trim() !== sessionId) {
+    const peerLinked = String(run?.linkedSessionId ?? '').trim();
+    if (!linkedRunSessionsMatch(sessionList, sessionId, peerLinked)) {
       continue;
     }
     const runId = getReviewRunId(run);
@@ -246,7 +271,7 @@ export function isDeliveryConfirmed(
     return false;
   }
 
-  if (countAmbiguousUnconfirmedPeers(allRuns, tracking, run) > 1) {
+  if (countAmbiguousUnconfirmedPeers(allRuns, tracking, run, sessions) > 1) {
     return false;
   }
 
