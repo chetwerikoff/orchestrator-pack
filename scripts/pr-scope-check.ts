@@ -20,6 +20,7 @@ import {
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
   hasClosingIssueReference,
+  hasSkillDocIssueLink,
   hasSpecOnlySignal,
   isSkillDocPr,
   ISSUE_LINK_PATTERN,
@@ -298,21 +299,12 @@ function checkPrPathsAgainstSnapshot(
 }
 
 function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
-  if (hasClosingIssueReference(input.prBody)) {
-    return {
-      ok: false,
-      reason: 'skill_doc_with_closing_keyword',
-      message:
-        'skill-doc PRs must not use GitHub closing keywords (Closes/Fixes/Resolves #N); omit issue references so merge does not auto-close an issue',
-    };
-  }
-
-  if (extractNonClosingIssueNumber(input.prBody) !== null) {
+  if (hasSkillDocIssueLink(input.prBody)) {
     return {
       ok: false,
       reason: 'skill_doc_with_issue_reference',
       message:
-        'skill-doc PRs must not include issue references (Ref/Refs/See/Related to #N); omit all issue links from the PR description',
+        'skill-doc PRs must not link any GitHub issue in the PR description (closing keywords, Refs/See forms, bare #N, or github.com/.../issues/N URLs)',
     };
   }
 
@@ -643,17 +635,13 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     );
   }
 
-  if (result.reason === 'skill_doc_with_closing_keyword') {
+  if (
+    result.reason === 'skill_doc_with_issue_reference' ||
+    result.reason === 'skill_doc_with_closing_keyword'
+  ) {
     lines.push(
       '',
-      'Remove closing keywords (`Closes` / `Fixes` / `Resolves`) from the PR description. Skill-doc PRs must not link or auto-close issues on merge.',
-    );
-  }
-
-  if (result.reason === 'skill_doc_with_issue_reference') {
-    lines.push(
-      '',
-      'Remove non-closing issue references (`Refs` / `See` / `Related to`) from the PR description. Skill-doc PRs must not link any GitHub issue.',
+      'Remove all issue links from the PR description. Skill-doc PRs must not use `Closes`/`Refs`/`#N`, or `github.com/.../issues/N` URLs.',
     );
   }
 

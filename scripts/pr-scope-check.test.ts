@@ -10,7 +10,9 @@ import {
   CLOSING_KEYWORD_ALTERNATION,
   extractClosingIssueNumber,
   extractNonClosingIssueNumber,
+  findSkillDocIssueLinks,
   hasClosingIssueReference,
+  hasSkillDocIssueLink,
   hasSpecOnlySignal,
   isSkillDocPr,
   NON_CLOSING_ISSUE_REF_PATTERN,
@@ -121,6 +123,15 @@ describe('spec-only contract parsing', () => {
 
   it('does not treat closing keywords as non-closing refs', () => {
     expect(extractNonClosingIssueNumber('Closes #121')).toBeNull();
+  });
+
+  it('findSkillDocIssueLinks detects closing, Refs, bare hash, and issue URLs', () => {
+    expect(findSkillDocIssueLinks('Closes #1')).toEqual([1]);
+    expect(findSkillDocIssueLinks('Refs #2')).toEqual([2]);
+    expect(findSkillDocIssueLinks('(see #3)')).toEqual([3]);
+    expect(
+      findSkillDocIssueLinks('https://github.com/org/repo/issues/4#issuecomment-1'),
+    ).toEqual([4]);
   });
 });
 
@@ -340,25 +351,16 @@ describe('checkPrScope — skill-doc', () => {
     expect('issueNumber' in result && result.ok && result.issueNumber).toBeFalsy();
   });
 
-  it('fails when the body includes a closing keyword', () => {
-    const prBody = 'Closes #999\n\n## Summary';
-    const result = checkPrScope({
-      repoRoot,
-      prBody,
-      issueBody: null,
-      prPaths: skillPaths,
-      degradedMode: false,
-      forkPr: false,
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'skill_doc_with_closing_keyword',
-    });
-    expect(hasClosingIssueReference(prBody)).toBe(true);
-  });
-
-  it('fails when the body includes a non-closing issue reference', () => {
-    const prBody = 'Refs #123\n\n## Summary\n\nSkill tweak.';
+  it.each([
+    ['Closes #999', 999],
+    ['Refs #123', 123],
+    ['Tracks work for #456 in the skill text.', 456],
+    [
+      'See https://github.com/chetwerikoff/orchestrator-pack/issues/789 for context.',
+      789,
+    ],
+  ])('fails when the body links an issue (%s)', (fragment, issueNumber) => {
+    const prBody = `${fragment}\n\n## Summary\n\nSkill tweak.`;
     const result = checkPrScope({
       repoRoot,
       prBody,
@@ -371,7 +373,22 @@ describe('checkPrScope — skill-doc', () => {
       ok: false,
       reason: 'skill_doc_with_issue_reference',
     });
-    expect(extractNonClosingIssueNumber(prBody)).toBe(123);
+    expect(hasSkillDocIssueLink(prBody)).toBe(true);
+    expect(findSkillDocIssueLinks(prBody)).toContain(issueNumber);
+  });
+
+  it('does not treat issue mentions inside fenced code as links', () => {
+    const prBody = ['## Summary', '', '```', 'Refs #123', '```'].join('\n');
+    expect(hasSkillDocIssueLink(prBody)).toBe(false);
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: null,
+      prPaths: skillPaths,
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
   });
 
   it('passes without spec-only signal when the body has no issue reference', () => {

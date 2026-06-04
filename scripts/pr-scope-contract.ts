@@ -23,6 +23,13 @@ export const NON_CLOSING_ISSUE_REF_PATTERN = new RegExp(
   'gi',
 );
 
+/** GitHub issue page URL (not pull request URLs). */
+export const GITHUB_ISSUE_URL_PATTERN =
+  /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/(\d+)\b/gi;
+
+/** Bare `#123` issue autolink (after start-of-string or non-word/non-#). */
+export const BARE_ISSUE_HASH_PATTERN = /(?:^|[^\w#/])#(\d+)\b/g;
+
 /**
  * Machine-detectable spec-only PR signal. Place on its own line near the top of the PR body.
  * Documented in docs/repository_policy.md.
@@ -116,6 +123,40 @@ export function extractNonClosingIssueNumber(prBody: string): number | null {
   }
 
   return issueNumber;
+}
+
+/** PR body text scanned for issue links (fenced code blocks omitted). */
+export function prBodyScannableForIssueLinks(prBody: string): string {
+  return stripMarkdownFencedCodeBlocks(normalizePrBody(prBody));
+}
+
+const SKILL_DOC_ISSUE_LINK_PATTERNS: readonly RegExp[] = [
+  ISSUE_LINK_PATTERN,
+  NON_CLOSING_ISSUE_REF_PATTERN,
+  GITHUB_ISSUE_URL_PATTERN,
+  BARE_ISSUE_HASH_PATTERN,
+];
+
+/** Issue numbers linked anywhere in a skill-doc PR body (all supported GitHub forms). */
+export function findSkillDocIssueLinks(prBody: string): number[] {
+  const text = prBodyScannableForIssueLinks(prBody);
+  const linked = new Set<number>();
+
+  for (const pattern of SKILL_DOC_ISSUE_LINK_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const issueNumber = Number(match[1]);
+      if (Number.isInteger(issueNumber) && issueNumber > 0) {
+        linked.add(issueNumber);
+      }
+    }
+  }
+
+  return [...linked];
+}
+
+export function hasSkillDocIssueLink(prBody: string): boolean {
+  return findSkillDocIssueLinks(prBody).length > 0;
 }
 
 /**

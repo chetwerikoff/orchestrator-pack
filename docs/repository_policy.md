@@ -165,10 +165,11 @@ Skill-doc PRs pass scope guard **without**:
   so on — absence is never a failure reason for this shape);
 - the spec-only HTML comment signal.
 
-Scope guard **fails** when the PR body links any GitHub issue: closing keywords
-(`Closes` / `Fixes` / `Resolves`) or non-closing forms (`Ref` / `Refs` / `See` /
-`Related to`). Skill-doc PRs must not reference an issue number in the
-description.
+Scope guard **fails** when the PR body links any GitHub issue in any common form:
+closing keywords (`Closes` / `Fixes` / `Resolves`), non-closing forms (`Ref` /
+`Refs` / `See` / `Related to`), bare `#N` autolinks, or
+`https://github.com/<owner>/<repo>/issues/<N>` URLs (fenced-code examples are
+ignored). Skill-doc PRs must not reference an issue in the description.
 
 ### Safety gates (unchanged)
 
