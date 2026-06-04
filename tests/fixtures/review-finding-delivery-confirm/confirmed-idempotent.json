@@ -1,0 +1,30 @@
+{
+  "description": "AC8: addressing_reviews after send confirms; no re-deliver",
+  "nowMs": 1717502000000,
+  "reviewRuns": [
+    {
+      "id": "run-confirmed",
+      "prNumber": 120,
+      "targetSha": "cafe120",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-worker-ok",
+      "sentAt": "2026-06-04T11:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "opk-worker-ok",
+      "role": "worker",
+      "prNumber": 120,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-04T11:02:00Z"
+        }
+      ]
+    }
+  ],
+  "tracking": { "runs": {} }
+}

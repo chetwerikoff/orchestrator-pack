@@ -1,0 +1,319 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  Sender-side review-finding delivery confirmation (Issue #171).
+
+.DESCRIPTION
+  Low-frequency mechanical loop: observes run-level state from ao review list --json
+  and worker reports from ao status --reports full. Confirms delivery only when the
+  linked worker reports addressing_reviews (or equivalent) after send; on timeout
+  re-delivers via ao review send to the same live session (bounded); escalates when
+  the channel is dead or retries are exhausted. Never ao spawn, --claim-pr, ao session
+  kill, or ao send.
+
+  Distinct from review-trigger-reconcile.ps1 (Issue #163), which only starts review runs.
+
+  See docs/orchestrator-recovery-runbook.md and docs/issues_drafts/00-architecture-decisions.md §H.
+#>
+[CmdletBinding()]
+param(
+    [string]$ProjectId = 'orchestrator-pack',
+    [int]$IntervalMinutes = 0,
+    [int]$ConfirmationWindowMinutes = 0,
+    [int]$MaxRedeliveries = -1,
+    [int]$PollSeconds = 60,
+    [string]$StateFile = '',
+    [switch]$DryRun,
+    [switch]$Once,
+    [string]$FixturePath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+$PackRoot = Split-Path -Parent $PSScriptRoot
+$DeliveryFilterCli = Join-Path $PackRoot 'docs/review-finding-delivery-confirm.mjs'
+$Script:DefaultIntervalMinutes = 5
+$Script:DefaultConfirmationWindowMinutes = 5
+$Script:DefaultMaxRedeliveries = 2
+
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+
+function Get-DeliveryIntervalMinutes {
+    if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
+    $envMinutes = $env:AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES
+    if ($envMinutes -and [int]::TryParse($envMinutes, [ref]$null)) {
+        return [int]$envMinutes
+    }
+    return $Script:DefaultIntervalMinutes
+}
+
+function Get-DeliveryConfirmationWindowMinutes {
+    if ($ConfirmationWindowMinutes -gt 0) { return $ConfirmationWindowMinutes }
+    $envMinutes = $env:AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES
+    if ($envMinutes -and [int]::TryParse($envMinutes, [ref]$null)) {
+        return [int]$envMinutes
+    }
+    return $Script:DefaultConfirmationWindowMinutes
+}
+
+function Get-DeliveryMaxRedeliveries {
+    if ($MaxRedeliveries -ge 0) { return $MaxRedeliveries }
+    $envMax = $env:AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES
+    if ($envMax -and [int]::TryParse($envMax, [ref]$null)) {
+        return [int]$envMax
+    }
+    return $Script:DefaultMaxRedeliveries
+}
+
+function Get-DeliveryStatePath {
+    param([string]$CliPath)
+    if ($CliPath) { return $CliPath }
+    if ($env:AO_REVIEW_DELIVERY_CONFIRM_STATE) { return $env:AO_REVIEW_DELIVERY_CONFIRM_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-delivery-confirm-state.json'
+}
+
+function Write-DeliveryLog {
+    param([string]$Message)
+    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Host "[$stamp] review-finding-delivery-confirm: $Message"
+}
+
+function Invoke-DeliveryFilterCli {
+    param(
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+
+    $json = $Payload | ConvertTo-Json -Depth 30 -Compress
+    $output = $json | & node $DeliveryFilterCli $Subcommand 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "review-finding-delivery-confirm.mjs $Subcommand exited ${LASTEXITCODE}: $output"
+    }
+
+    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+    return $text | ConvertFrom-Json
+}
+
+function Get-DeliveryState {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @{ runs = @{}; lastTickMs = $null }
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        if (-not $raw.runs) {
+            $raw | Add-Member -NotePropertyName runs -NotePropertyValue @{} -Force
+        }
+        return $raw
+    }
+    catch {
+        return @{ runs = @{}; lastTickMs = $null }
+    }
+}
+
+function Set-DeliveryState {
+    param(
+        [string]$Path,
+        [object]$State
+    )
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    $State | ConvertTo-Json -Depth 30 -Compress | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
+function Get-FixtureDeliveryPayload {
+    param([string]$Path)
+
+    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return @{
+        reviewRuns = @($fixture.reviewRuns)
+        sessions   = @($fixture.sessions)
+        tracking   = $fixture.tracking
+        nowMs      = [long]$fixture.nowMs
+        config     = $fixture.config
+    }
+}
+
+function Test-ForbiddenDeliveryLifecycleCommand {
+    param([string]$CommandLine)
+
+    $blocked = @(
+        'ao spawn',
+        '--claim-pr',
+        'ao session kill',
+        'ao send'
+    )
+    foreach ($frag in $blocked) {
+        if ($CommandLine -match [regex]::Escape($frag)) {
+            throw "forbidden lifecycle fragment in command: $frag"
+        }
+    }
+}
+
+function Invoke-PlannedReviewSend {
+    param(
+        [string]$RunId,
+        [int]$PrNumber,
+        [string]$SessionId,
+        [int]$Attempt,
+        [switch]$DryRunMode
+    )
+
+    $sendArgs = @('review', 'send', $RunId)
+    $commandLine = "ao $($sendArgs -join ' ')"
+    Test-ForbiddenDeliveryLifecycleCommand -CommandLine $commandLine
+
+    if ($DryRunMode) {
+        Write-DeliveryLog "dry-run would redeliver: $commandLine (PR #$PrNumber session=$SessionId attempt=$Attempt)"
+        return
+    }
+
+    Write-DeliveryLog "re-delivering findings: run=$RunId PR #$PrNumber session=$SessionId attempt=$Attempt"
+    & ao @sendArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "ao review send failed (exit $LASTEXITCODE) for run $RunId"
+    }
+}
+
+function Invoke-DeliveryTick {
+    param(
+        [string]$Project,
+        [hashtable]$Config,
+        [switch]$DryRunMode,
+        [string]$Fixture,
+        [object]$TrackingState,
+        [long]$NowMs
+    )
+
+    if ($Fixture) {
+        $payload = Get-FixtureDeliveryPayload -Path $Fixture
+        $reviewRuns = $payload.reviewRuns
+        $sessions = $payload.sessions
+        $tracking = if ($payload.tracking) { $payload.tracking } else { $TrackingState }
+        $now = if ($payload.nowMs) { [long]$payload.nowMs } else { $NowMs }
+        $tickConfig = if ($payload.config) { $payload.config } else { $Config }
+    }
+    else {
+        $reviewRuns = Get-AoReviewRuns -Project $Project
+        $sessions = Get-AoStatusSessions
+        $tracking = $TrackingState
+        $now = $NowMs
+        $tickConfig = $Config
+    }
+
+    $plan = Invoke-DeliveryFilterCli -Subcommand 'plan' -Payload @{
+        reviewRuns = @($reviewRuns)
+        sessions   = @($sessions)
+        tracking   = $tracking
+        nowMs      = $now
+        config     = $tickConfig
+    }
+
+    $redelivered = 0
+    $escalated = 0
+    $confirmed = 0
+
+    foreach ($action in @($plan.actions)) {
+        switch ($action.type) {
+            'mark_confirmed' {
+                Write-DeliveryLog "delivery confirmed: run=$($action.runId) PR #$($action.prNumber)"
+                $confirmed++
+            }
+            'redeliver' {
+                Invoke-PlannedReviewSend -RunId $action.runId -PrNumber $action.prNumber `
+                    -SessionId $action.sessionId -Attempt $action.attempt -DryRunMode:$DryRunMode
+                $redelivered++
+            }
+            'escalate' {
+                Write-DeliveryLog $action.message
+                $escalated++
+            }
+            'wait' {
+                Write-DeliveryLog "waiting: run=$($action.runId) $($action.reason) (~$([math]::Round($action.remainingMs / 1000))s left)"
+            }
+        }
+    }
+
+    return @{
+        tracking    = $plan.tracking
+        redelivered = $redelivered
+        escalated   = $escalated
+        confirmed   = $confirmed
+    }
+}
+
+$intervalMinutes = Get-DeliveryIntervalMinutes
+$intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
+$windowMinutes = Get-DeliveryConfirmationWindowMinutes
+$windowMs = [Math]::Max(1, $windowMinutes) * 60 * 1000
+$maxRedeliveries = Get-DeliveryMaxRedeliveries
+$pollMs = [Math]::Max(5, $PollSeconds) * 1000
+$statePath = Get-DeliveryStatePath -CliPath $StateFile
+$config = @{
+    confirmationWindowMs = $windowMs
+    maxRedeliveries      = $maxRedeliveries
+}
+
+Write-DeliveryLog "starting (project=$ProjectId, interval=${intervalMinutes}m, window=${windowMinutes}m, maxRedeliveries=$maxRedeliveries, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+
+if ($FixturePath) {
+    $state = Get-DeliveryState -Path $statePath
+    $result = Invoke-DeliveryTick -Project $ProjectId -Config $config -DryRunMode:$DryRun `
+        -Fixture $FixturePath -TrackingState $state -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    if (-not $DryRun) {
+        Set-DeliveryState -Path $statePath -State $result.tracking
+    }
+    Write-DeliveryLog "fixture tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) escalated=$($result.escalated))"
+    exit 0
+}
+
+try {
+    do {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $state = Get-DeliveryState -Path $statePath
+        $lastTickMs = $null
+        if ($state.lastTickMs) {
+            $lastTickMs = [long]$state.lastTickMs
+        }
+
+        $gate = Invoke-DeliveryFilterCli -Subcommand 'interval' -Payload @{
+            nowMs      = $nowMs
+            lastTickMs = $lastTickMs
+            intervalMs = $intervalMs
+        }
+
+        if (-not $gate.ok) {
+            Write-DeliveryLog "tick skipped: $($gate.reason)"
+        }
+        else {
+            try {
+                $result = Invoke-DeliveryTick -Project $ProjectId -Config $config -DryRunMode:$DryRun `
+                    -TrackingState $state -NowMs $nowMs
+                $nextState = $result.tracking
+                $nextState.lastTickMs = $nowMs
+                if (-not $DryRun) {
+                    Set-DeliveryState -Path $statePath -State $nextState
+                }
+                else {
+                    Write-DeliveryLog 'dry-run: delivery state not updated'
+                }
+                Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) escalated=$($result.escalated))"
+            }
+            catch {
+                Write-DeliveryLog "tick error: $_"
+            }
+        }
+
+        if ($Once) { break }
+        Start-Sleep -Milliseconds $pollMs
+    } while ($true)
+}
+finally {
+    Write-DeliveryLog 'stopped'
+}

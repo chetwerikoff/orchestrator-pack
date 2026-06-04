@@ -1,0 +1,34 @@
+{
+  "description": "AC4: confirmation window elapsed triggers one bounded re-deliver to same session",
+  "nowMs": 1717504000000,
+  "reviewRuns": [
+    {
+      "id": "run-redeliver-1",
+      "prNumber": 166,
+      "targetSha": "sha166",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-worker-live",
+      "sentAt": "2024-06-04T12:16:40.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-worker-live",
+      "role": "worker",
+      "prNumber": 166,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-04T12:01:00Z"
+        }
+      ]
+    }
+  ],
+  "tracking": { "runs": {} },
+  "config": {
+    "confirmationWindowMs": 300000,
+    "maxRedeliveries": 2
+  }
+}

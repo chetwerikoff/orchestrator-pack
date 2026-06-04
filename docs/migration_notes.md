@@ -700,6 +700,26 @@ To adopt after merge:
 See `docs/orchestrator-autoloop-go-live.md` and
 `docs/orchestrator-recovery-runbook.md` (State-derived review trigger).
 
+## Review-finding delivery confirmation (Issue #171)
+
+Adds `scripts/review-finding-delivery-confirm.ps1`: observes `waiting_update` runs with
+`sentFindingCount > 0` from `ao review list --json`, confirms receipt only when the linked
+worker reports `addressing_reviews` (or `fixing_ci` / `ready_for_review`) after send,
+then bounded `ao review send` re-delivery or escalation. **Never** `ao spawn`,
+`--claim-pr`, `ao session kill`, or `ao send`.
+
+To adopt after merge:
+
+1. Start in a dedicated terminal (default **5**-minute tick and confirmation window):
+   `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1`
+2. Optional env: `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES`,
+   `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES`,
+   `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` (default **2**),
+   `AO_REVIEW_DELIVERY_CONFIRM_STATE`.
+3. Verify: `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun`
+
+See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
