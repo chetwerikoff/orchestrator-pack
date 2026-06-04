@@ -278,6 +278,37 @@ projects:
         ao spawn --claim-pr <PR>
       Reset ping tracking for the new session.
 
+      REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,
+      BEFORE kill/respawn/claim-pr discipline above for a worker flagged stuck or
+      probe_failure, classify one consistent snapshot from ao status --json --reports
+      full, gh pr view (current head), gh pr checks (required CI), and ao review list
+      --json (no pane scraping):
+        Linked session owns the PR current head AND runtime alive AND required
+        merge-contract CI green on that head AND last accepted ready_for_review is
+        for that head AND a review run with status clean and findingCount 0 covers
+        the same head/session pair.
+        waiting_update does NOT grant protection (mid-fix; Issue #171 owns delivery).
+        Red or pending required CI disqualifies protection — use CI FAILURE DISCIPLINE.
+      When classified review-ready on false stuck:
+        Do NOT immediately ao spawn, --claim-pr, ao session kill, or respawn.
+        Hold for bounded grace (default 15 minutes, monotonic per session+head:
+        anchored to first false stuck; repeated stuck reports do NOT extend grace).
+        Optional helper: docs/review-ready-stuck-guard.mjs (plan/classify stdin JSON).
+        Env override: AO_REVIEW_READY_STUCK_GRACE_MINUTES.
+      Within grace, recovery requires affirmative unreachability evidence only:
+        failed bounded reachability attempt; Issue #171 delivery unconfirmed/escalated
+        for the linked run; or Issue #173 terminal_mux_paired_flap still flagged after
+        stop-verify. Mere silence (no outbound report) is NOT evidence — do not recover
+        on silence alone before grace deadline.
+      When evidence exists, prefer careful recycle (ao session kill + operator
+      escalation/notify) over blind ao spawn --claim-pr (PR #97 split-brain).
+      After grace expires without affirmative unreachable evidence, normal stuck
+      handling may resume.
+      Genuine death (runtime not alive) is NOT shielded — orphan/respawn (#98) applies.
+      Operator adoption: merge this block into live orchestratorRules, then ao stop
+      and ao start. See docs/orchestrator-recovery-runbook.md (Review-ready worker
+      false stuck).
+
       ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
       last review run's target SHA, immediately run ao review run <session> --execute
       with --command set to REVIEW_COMMAND for the next round — do not ask the operator.

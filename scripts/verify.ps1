@@ -436,6 +436,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== review-ready worker stuck guard (Issue #174) =='
+$stuckGuardCheck = Join-Path $Root 'scripts/check-review-ready-stuck-guard.ps1'
+if (Test-Path -LiteralPath $stuckGuardCheck -PathType Leaf) {
+    & $stuckGuardCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-ready worker stuck guard checks failed (Issue #174)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-ready worker stuck guard check script (Issue #174)'
+}
+
+Write-Host ''
 Write-Host '== reviewer workspace preflight (Issue #98) =='
 $reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
 if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {

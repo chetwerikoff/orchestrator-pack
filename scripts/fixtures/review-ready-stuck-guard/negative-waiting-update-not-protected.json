@@ -1,0 +1,37 @@
+{
+  "description": "AC2: waiting_update does not grant review-ready protection",
+  "nowMs": 1717503000000,
+  "session": {
+    "sessionId": "opk-worker-wu",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "stuck",
+    "runtime": "alive",
+    "ownedHeadSha": "face174",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "face174",
+        "reportedAt": "2026-06-04T12:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "face174" },
+  "reviewRuns": [
+    {
+      "id": "run-waiting",
+      "prNumber": 174,
+      "targetSha": "face174",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-worker-wu"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "expect": { "reviewReady": false }
+}

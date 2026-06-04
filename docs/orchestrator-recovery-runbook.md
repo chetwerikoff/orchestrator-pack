@@ -535,6 +535,74 @@ is orphan), the process logs:
 Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
 runs and never contacts workers.
 
+## Review-ready worker false stuck (Issue #174)
+
+A **live** worker that finished its task (`ready_for_review`, green required CI, clean
+review run on the current head) can be misclassified `stuck` / `probe_failure` when the
+dashboard terminal is DA-flooded (Issue #173) — the activity probe reads idle input as no
+progress. Pack orchestration must **not** reflexively `ao spawn`, `--claim-pr`, kill, or
+respawn that session without a consistent-snapshot check.
+
+### Consistent snapshot (classification)
+
+From `ao status --json --reports full`, `gh pr view` (current head), `gh pr checks`, and
+`ao review list --json` (no pane scraping), a session is **review-ready** only when **all**
+hold on the **same** head:
+
+| Predicate | Source |
+|-----------|--------|
+| Session owns PR current head | `ownedHeadSha` / PR head match |
+| Runtime alive | `runtime: alive` (not `exited` / `process_missing`) |
+| Required merge-contract CI green | Same definition as `ready_for_review` in `agent_rules.md` |
+| Last `ready_for_review` for that head | Report `headRefOid` matches current head |
+| Covering **clean** run | `status: clean`, `findingCount: 0`, same head + `linkedSessionId` |
+
+**Not protected:** `waiting_update` (mid-fix — Issue #171), red/pending CI, stale
+`ready_for_review` on a prior head, dead runtime, or missing clean run.
+
+Deterministic helper (fixtures + stdin JSON):
+
+```powershell
+node docs/review-ready-stuck-guard.mjs classify < snapshot.json
+node docs/review-ready-stuck-guard.mjs plan < snapshot.json
+```
+
+Fixture examples: `scripts/fixtures/review-ready-stuck-guard/`.
+
+### Bounded grace, then evidence-backed recovery
+
+When classified review-ready on false stuck:
+
+1. **Hold** — do **not** immediately kill, respawn, or `ao spawn --claim-pr`.
+2. **Grace** — default **15** minutes (`AO_REVIEW_READY_STUCK_GRACE_MINUTES`), anchored
+   once per `(session, PR head)` on the **first** false stuck; **monotonic** (repeated
+   `stuck` reports do not extend grace).
+3. **Within grace**, recovery requires **affirmative** unreachability only:
+   - failed bounded reachability attempt to the session;
+   - Issue #171 delivery **unconfirmed** or **escalated** for the linked run;
+   - Issue #173 `terminal_mux_paired_flap` still flagged after stop-verify.
+4. **Not evidence:** mere silence (no outbound report) — a quiet review-ready worker may
+   have nothing to report until grace expires.
+5. **When evidence exists** — prefer careful **recycle** (`ao session kill` + operator
+   escalation/notify), **not** blind `ao spawn --claim-pr` (PR #97 split-brain).
+6. **After grace** without affirmative unreachable evidence — normal stuck handling may
+   resume.
+
+Genuine death (`runtime` not alive) is **not** shielded — orphan/respawn discipline
+(Issue #98) still applies.
+
+### Operator adoption
+
+Merge the **REVIEW-READY WORKER STUCK GUARD** block from `agent-orchestrator.yaml.example`
+into live `orchestratorRules`, then:
+
+```powershell
+ao stop
+ao start
+```
+
+See `docs/migration_notes.md` (Review-ready worker stuck guard).
+
 ## Terminal Device-Attributes flood (Issue #173)
 
 **Queue status:** `active-blocked-upstream` — the durable fix (terminal reset/sanitize on

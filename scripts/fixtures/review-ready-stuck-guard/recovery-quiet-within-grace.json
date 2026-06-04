@@ -1,0 +1,44 @@
+{
+  "description": "AC4b: quiet review-ready stays protected until grace deadline",
+  "nowMs": 1717502500000,
+  "session": {
+    "sessionId": "opk-quiet",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "probe_failure",
+    "runtime": "alive",
+    "ownedHeadSha": "quiet174",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "quiet174",
+        "reportedAt": "2026-06-04T12:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "quiet174" },
+  "reviewRuns": [
+    {
+      "id": "run-quiet",
+      "prNumber": 174,
+      "targetSha": "quiet174",
+      "status": "clean",
+      "findingCount": 0,
+      "linkedSessionId": "opk-quiet"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "tracking": {
+    "snapshots": {
+      "opk-quiet:quiet174": { "firstFalseStuckAtMs": 1717502000000 }
+    }
+  },
+  "graceMs": 900000,
+  "unreachability": {},
+  "expect": { "actionType": "hold_grace" }
+}

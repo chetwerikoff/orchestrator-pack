@@ -1,0 +1,37 @@
+{
+  "description": "AC1 negative: stale ready_for_review on prior head",
+  "nowMs": 1717503000000,
+  "session": {
+    "sessionId": "opk-worker-stale",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "stuck",
+    "runtime": "alive",
+    "ownedHeadSha": "newhead999",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "oldhead111",
+        "reportedAt": "2026-06-04T11:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "newhead999" },
+  "reviewRuns": [
+    {
+      "id": "run-stale",
+      "prNumber": 174,
+      "targetSha": "newhead999",
+      "status": "clean",
+      "findingCount": 0,
+      "linkedSessionId": "opk-worker-stale"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "expect": { "reviewReady": false }
+}
