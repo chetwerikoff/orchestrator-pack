@@ -127,7 +127,7 @@ describe('delivery confirmation signal (AC1)', () => {
     expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
       false,
     );
-    expect(tracking.runs?.['run-opk8-166']?.deliveryState).not.toBe(
+    expect(tracking.runs?.['run-reassign-pr188']?.deliveryState).not.toBe(
       DELIVERY_STATE_CONFIRMED,
     );
     expect(
