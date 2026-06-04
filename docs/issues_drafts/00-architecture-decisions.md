@@ -538,6 +538,28 @@ B (`prior_sent` at routing point) is also missing. Same class as §J / draft 38 
 
 Record Gate 0 + two-track table in [`docs/architecture.md`](../architecture.md#finding-routing-enactment--gate-0-ao-092-2026-06-02).
 
+## S. Delegation policy fan-out (single source, thin pointers)
+
+Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only in
+`prompts/agent_rules.md`. Without fan-out, Codex, standalone Cursor CLI, and Claude Code
+(architect) never see rules that AO injects only via `agentRulesFile`.
+
+1. **Single canonical body.** Triggers, profiles, anti-delegation, reviewer carve-out, and
+   provider-input fence are authored and maintained only in `prompts/agent_rules.md` (#148).
+   No second authoritative copy in pointer surfaces.
+
+2. **One thin pointer per entrypoint** (names the canonical path; does not paste ≥10 consecutive
+   policy lines):
+   - AO workers — `agentRulesFile` → `prompts/agent_rules.md` (injection, not a separate file).
+   - Codex — [`AGENTS.md`](../../AGENTS.md) coworker delegation section.
+   - Standalone Cursor CLI — always-applied [`.cursor/rules/`](../../.cursor/rules/) rule.
+   - Architect (Claude Code) — [`CLAUDE.md`](../../CLAUDE.md) coworker delegation section.
+
+3. **Advisory enforcement.** Delegation remains prompt-level guidance; review and operator
+   judgment are the backstop. No `beforeShellExecution` or Claude Code hook mandates coworker use.
+
+See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

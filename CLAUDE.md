@@ -1,7 +1,17 @@
 # CLAUDE.md
 
-> For Claude Code sessions only. Cursor and Codex read
-> `prompts/agent_rules.md` and the issue body — don't duplicate that here.
+> For Claude Code sessions only. Rules surface by entrypoint — do not assume every tool reads
+> `prompts/agent_rules.md` natively: **Codex** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
+> → [`.cursor/rules/`](.cursor/rules/) (always-applied project rules); **AO-injected workers** →
+> [`prompts/agent_rules.md`](prompts/agent_rules.md) via `agentRulesFile`. Task specs come from the
+> GitHub issue body. Do not duplicate universal worker policy here.
+
+## Coworker CLI delegation (canonical policy)
+
+Before delegating work to the external `coworker` CLI, read and follow the **Coworker CLI
+delegation** section in [`prompts/agent_rules.md`](prompts/agent_rules.md) (single source of
+truth). Do not paste or paraphrase the full policy in this file. Fan-out surfaces: §S in
+[`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
 ## Review wiring
 
