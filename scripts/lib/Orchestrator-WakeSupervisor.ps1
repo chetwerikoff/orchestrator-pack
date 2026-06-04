@@ -308,21 +308,43 @@ function Start-OrchestratorWakeSupervisorChild {
     }
 
     $psi = @{
-        FilePath               = 'pwsh'
-        ArgumentList           = $childArgs
-        WorkingDirectory       = $Script:OrchestratorWakeSupervisorPackRoot
-        PassThru               = $true
-        Environment            = $childEnv
+        FilePath         = 'pwsh'
+        ArgumentList     = $childArgs
+        WorkingDirectory = $Script:OrchestratorWakeSupervisorPackRoot
+        PassThru         = $true
     }
     if ($IsWindows -or $env:OS -eq 'Windows_NT') {
         $psi['WindowStyle'] = 'Hidden'
     }
     if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $psi['Environment'] = $childEnv
         $psi['RedirectStandardOutput'] = $LogPath
         $psi['RedirectStandardError'] = "${LogPath}.err"
     }
 
-    $proc = Start-Process @psi
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $proc = Start-Process @psi
+    }
+    else {
+        $savedEnv = @{}
+        foreach ($key in $childEnv.Keys) {
+            $savedEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            Set-Item -Path "Env:$key" -Value $childEnv[$key]
+        }
+        try {
+            $proc = Start-Process @psi
+        }
+        finally {
+            foreach ($key in $childEnv.Keys) {
+                if ([string]::IsNullOrEmpty($savedEnv[$key])) {
+                    Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+                }
+                else {
+                    Set-Item -Path "Env:$key" -Value $savedEnv[$key]
+                }
+            }
+        }
+    }
     Write-OrchestratorWakeSupervisorPidFile -Path $PidFile -ProcessId $proc.Id
     return $proc.Id
 }

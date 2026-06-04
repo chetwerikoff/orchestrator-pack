@@ -53,7 +53,9 @@ switch ($Action) {
     'Status' {
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
-        if ($report.ListenerAlive -and $report.HeartbeatAlive) { exit 0 }
+        if ($report.SupervisorAlive -and $report.ListenerAlive -and $report.HeartbeatAlive) {
+            exit 0
+        }
         exit 1
     }
 

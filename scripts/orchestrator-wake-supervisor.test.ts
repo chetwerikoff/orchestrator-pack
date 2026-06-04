@@ -374,6 +374,7 @@ describe('orchestrator-wake-supervisor', () => {
 
     const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusUp.status).toBe(0);
+    expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   running');
     expect(statusUp.stdout).toContain('heartbeat:  running');
 
@@ -386,6 +387,36 @@ describe('orchestrator-wake-supervisor', () => {
     const statusDown = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusDown.status).not.toBe(0);
     expect(statusDown.stdout).toContain('stopped');
+  });
+
+  it('status exits non-zero when supervisor is stopped but children remain', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-status-orphan',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const supervisorPid = Number(
+      fs.readFileSync(path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
+    );
+    const listener = await readMarker(stateDir, 'listener');
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    if (isAlive(supervisorPid)) {
+      process.kill(supervisorPid, 'SIGKILL');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    if (isAlive(listener.pid)) {
+      const statusOrphan = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+      expect(statusOrphan.status).not.toBe(0);
+      expect(statusOrphan.stdout).toContain('supervisor: stopped');
+      process.kill(listener.pid, 'SIGKILL');
+    }
+
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   });
 
   it('captures per-child logs and survives launching shell exit when detached', () => {
