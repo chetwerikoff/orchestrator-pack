@@ -578,6 +578,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Skill pointer drift (Issue #156) =='
+$skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'
+if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {
+    & $skillPointerDriftCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-skill-pointer-drift.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-skill-pointer-drift.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Skill pointer drift check failed (Issue #156)'
+    }
+}
+else {
+    Write-Check 'scripts/check-skill-pointer-drift.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing skill pointer drift check script (Issue #156)'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

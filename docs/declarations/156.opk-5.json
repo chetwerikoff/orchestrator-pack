@@ -1,0 +1,27 @@
+{
+  "issue_number": 156,
+  "iteration_id": "opk-5",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-04T03:11:30.000Z",
+  "baseline": {
+    "commit_sha": "eb023541f3cfff948a2e38da9cc21eeb4136c83e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:01b3dae5fc31cfe6d84b481421a6020cea961c612174d6cd30d81dd86062c449"
+  },
+  "declared_paths": [
+    "docs/repository_policy.md",
+    "scripts/check-skill-pointer-drift.ps1",
+    "scripts/generate-skill-pointers.ps1",
+    "scripts/lib/Skill-Pointer.ps1",
+    "scripts/skill-pointer-targets.json",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    ".claude/skills/**",
+    ".cursor/skills/**",
+    "docs/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}
