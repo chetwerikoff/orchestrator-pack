@@ -540,6 +540,7 @@ runStdinJsonCli('review-finding-delivery-confirm.mjs', {
     return planDeliveryConfirmActions({
       reviewRuns: payload.reviewRuns,
       sessions: payload.sessions,
+      openPrs: payload.openPrs,
       tracking: payload.tracking ?? { runs: {} },
       nowMs: Number(payload.nowMs) || Date.now(),
       config: payload.config ?? {},

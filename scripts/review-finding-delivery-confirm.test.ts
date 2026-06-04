@@ -387,6 +387,79 @@ describe('linked session identifier matching', () => {
   });
 });
 
+describe('openPrs passed to planner (live CLI path)', () => {
+  it('redelivers when session lacks ownedHeadSha but openPrs matches run head', () => {
+    const nowMs = 1_717_520_000_000;
+    const sendMs = nowMs - 600_000;
+    const { actions } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-open-prs',
+          prNumber: 180,
+          targetSha: 'livehead1',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'opk-16',
+          sentAt: new Date(sendMs).toISOString(),
+        },
+      ],
+      sessions: [
+        {
+          name: 'opk-16',
+          role: 'worker',
+          prNumber: 180,
+          status: 'working',
+          reports: [{ reportState: 'working', reportedAt: '1970-01-01T00:00:00.000Z' }],
+        },
+      ],
+      openPrs: [{ number: 180, headRefOid: 'livehead1' }],
+      tracking: { runs: {} },
+      nowMs,
+      config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
+    });
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'escalate'),
+    ).toHaveLength(0);
+    expect(
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
+    ).toHaveLength(1);
+  });
+
+  it('escalates when openPrs is omitted and session has no owned head', () => {
+    const nowMs = 1_717_520_000_000;
+    const { actions } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-no-open-prs',
+          prNumber: 180,
+          targetSha: 'livehead1',
+          status: 'sent_to_agent',
+          sentFindingCount: 1,
+          linkedSessionId: 'opk-16',
+          sentAt: '2026-06-04T14:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          name: 'opk-16',
+          role: 'worker',
+          prNumber: 180,
+          status: 'working',
+        },
+      ],
+      tracking: { runs: {} },
+      nowMs,
+      config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
+    });
+    expect(
+      actions.some(
+        (a: DeliveryConfirmAction) =>
+          a.type === 'escalate' && a.reason === 'orphan_or_dead_linked_session',
+      ),
+    ).toBe(true);
+  });
+});
+
 describe('stale run head (ownership)', () => {
   it('escalates when PR head advanced past run targetSha', () => {
     const { actions } = planFromFixture('stale-head-advanced.json');
