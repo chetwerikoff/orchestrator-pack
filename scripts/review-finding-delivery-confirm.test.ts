@@ -33,7 +33,7 @@ type FixturePayload = {
   description?: string;
   reviewRuns: Record<string, unknown>[];
   sessions: Record<string, unknown>[];
-  openPrs?: Record<string, unknown>[];
+  openPrs?: Array<{ number: number; headRefOid: string }>;
   tracking?: { runs?: Record<string, Record<string, unknown>> };
   nowMs: number;
   config?: { confirmationWindowMs?: number; maxRedeliveries?: number };

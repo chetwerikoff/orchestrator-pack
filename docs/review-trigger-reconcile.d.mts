@@ -42,6 +42,8 @@ export interface AoSession {
   role?: string;
   prNumber?: number | null;
   pr?: string | null;
+  ownedHeadSha?: string;
+  headRefOid?: string;
   status?: string;
   reports?: Array<{
     reportState?: string;

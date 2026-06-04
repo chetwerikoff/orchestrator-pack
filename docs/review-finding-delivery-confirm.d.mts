@@ -2,6 +2,7 @@ export declare const DEFAULT_CONFIRMATION_WINDOW_MS: number;
 export declare const DEFAULT_MAX_REDELIVERIES: number;
 export declare const DEFAULT_TICK_INTERVAL_MS: number;
 
+export declare const PENDING_SENT_DELIVERY_STATUSES: ReadonlySet<string>;
 export declare const REVIEW_ROUND_REPORT_STATES: ReadonlySet<string>;
 export declare const DELIVERY_STATE_CONFIRMED: string;
 export declare const DELIVERY_STATE_ESCALATED: string;
@@ -15,12 +16,15 @@ export interface ReviewRun {
   targetSha?: string;
   status?: string;
   sentFindingCount?: number;
+  openFindingCount?: number;
   linkedSessionId?: string;
   sentAt?: string;
   updatedAt?: string;
 }
 
-export type { AoSession } from './review-trigger-reconcile.d.mts';
+import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+
+export type { AoSession, OpenPr };
 
 export interface RunDeliveryRecord {
   deliveryState?: string;
@@ -77,12 +81,24 @@ export declare function getReviewRunId(run: ReviewRun): string | null;
 export declare function isPendingSentDeliveryRun(run: ReviewRun): boolean;
 export declare function parseIsoMs(iso: string | undefined): number | null;
 export declare function resolveSendObservedAtMs(run: ReviewRun, fallbackMs: number): number;
+export declare function sessionOwnsRunHead(
+  session: AoSession,
+  prNumber: number,
+  targetHeadSha: string,
+  openPrs?: OpenPr[],
+): boolean;
+export declare function isLinkedSessionLiveOwner(
+  run: ReviewRun,
+  sessions: AoSession[],
+  openPrs?: OpenPr[],
+): boolean;
 export declare function isDeliveryConfirmed(
   run: ReviewRun,
   sessions: AoSession[],
   sendObservedAtMs: number,
   allRuns: ReviewRun[],
   tracking: DeliveryTrackingState,
+  openPrs?: OpenPr[],
 ): boolean;
 export declare function evaluateDeliveryTickInterval(input: {
   nowMs: number;
@@ -101,6 +117,7 @@ export declare function resolveDeliveryConfig(config?: {
 export declare function planDeliveryConfirmActions(input: {
   reviewRuns: ReviewRun[];
   sessions: AoSession[];
+  openPrs?: OpenPr[];
   tracking: DeliveryTrackingState;
   nowMs: number;
   config?: { confirmationWindowMs?: number; maxRedeliveries?: number };
