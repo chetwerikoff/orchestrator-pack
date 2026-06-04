@@ -10,6 +10,8 @@ import {
   getReportTimestampMs,
   sessionOwnsRunHead,
 } from './review-finding-delivery-confirm.mjs';
+
+export { DELIVERY_STATE_ESCALATED, DELIVERY_STATE_UNCONFIRMED };
 import {
   findSessionById,
   getSessionIdentifier,
@@ -201,14 +203,8 @@ export function findLastReadyForReviewReport(session, headSha) {
       continue;
     }
     const reportHead = getReportHeadSha(report);
-    if (reportHead && reportHead !== target) {
+    if (!reportHead || reportHead !== target) {
       continue;
-    }
-    if (!reportHead) {
-      const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
-      if (sessionHead && sessionHead !== target) {
-        continue;
-      }
     }
     const ts = getReportTimestampMs(report);
     if (ts >= bestMs) {

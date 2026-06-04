@@ -187,6 +187,28 @@ describe('consistent-snapshot classification (AC1)', () => {
     expect(result.reasons).toContain('ci_not_green');
   });
 
+  it('headless ready_for_review does not match current head (stale-head race)', () => {
+    const fixture = loadFixture('positive-review-ready-alive.json');
+    const result = classifyReviewReadySnapshot({
+      session: {
+        ...fixture.session,
+        ownedHeadSha: 'deadbeef174',
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-04T11:00:00Z',
+          },
+        ],
+      },
+      openPr: fixture.openPr,
+      reviewRuns: fixture.reviewRuns,
+      ciChecks: fixture.ciChecks,
+      sessions: [fixture.session],
+    });
+    expect(result.reviewReady).toBe(false);
+    expect(result.reasons).toContain('no_ready_for_review_for_head');
+  });
+
   it('missing runtime is not review-ready (fail closed)', () => {
     const fixture = loadFixture('positive-review-ready-alive.json');
     const result = classifyReviewReadySnapshot({
