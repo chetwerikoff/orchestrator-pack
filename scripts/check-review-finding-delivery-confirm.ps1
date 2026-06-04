@@ -30,6 +30,11 @@ if ($mjs -notmatch 'DEFAULT_MAX_REDELIVERIES = 2') {
     exit 1
 }
 
+if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
+    Write-Host 'docs/review-finding-delivery-confirm.mjs must treat sent_to_agent as pending sent delivery'
+    exit 1
+}
+
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(
     'review-finding-delivery-confirm',
