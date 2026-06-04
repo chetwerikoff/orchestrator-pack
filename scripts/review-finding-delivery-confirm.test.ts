@@ -231,6 +231,43 @@ describe('bounded re-delivery (AC4)', () => {
   });
 });
 
+describe('linked session identifier matching', () => {
+  it('treats linkedSessionId as sessionId when status row also has name', () => {
+    const { actions } = planDeliveryConfirmActions({
+      reviewRuns: [
+        {
+          id: 'run-id-match',
+          prNumber: 166,
+          targetSha: 'sha166',
+          status: 'waiting_update',
+          sentFindingCount: 1,
+          linkedSessionId: 'opk-worker-stable-id',
+          sentAt: '2024-06-04T12:00:00.000Z',
+        },
+      ],
+      sessions: [
+        {
+          name: 'opk-worker-display',
+          sessionId: 'opk-worker-stable-id',
+          role: 'worker',
+          prNumber: 166,
+          status: 'working',
+          reports: [],
+        },
+      ],
+      tracking: { runs: {} },
+      nowMs: 1_717_504_000_000,
+      config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
+    });
+    expect(actions.filter((a: DeliveryConfirmAction) => a.type === 'escalate')).toHaveLength(
+      0,
+    );
+    expect(actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver')).toHaveLength(
+      1,
+    );
+  });
+});
+
 describe('orphan linked session (AC4a)', () => {
   it('escalates immediately with zero re-sends', () => {
     const { actions } = planFromFixture('orphan-dead-session.json');

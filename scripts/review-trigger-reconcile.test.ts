@@ -9,8 +9,10 @@ import {
   findForbiddenLifecycleCommands,
   isHeadCovered,
   isRunCoveringHead,
+  findSessionById,
   getSessionIdentifier,
   isLiveWorkerSession,
+  sessionMatchesIdentifier,
   planReconcileActions,
   resolveWorkerSessionId,
   type PlanReconcileInput,
@@ -153,6 +155,36 @@ describe('getSessionIdentifier', () => {
     expect(getSessionIdentifier({ sessionId: 'op-b' })).toBe('op-b');
     expect(getSessionIdentifier({ id: 'op-c' })).toBe('op-c');
     expect(getSessionIdentifier({})).toBeNull();
+  });
+});
+
+describe('sessionMatchesIdentifier', () => {
+  it('matches name, sessionId, or id independently', () => {
+    const session = {
+      name: 'opk-worker-display',
+      sessionId: 'opk-worker-stable-id',
+      id: 'legacy-id',
+    };
+    expect(sessionMatchesIdentifier(session, 'opk-worker-display')).toBe(true);
+    expect(sessionMatchesIdentifier(session, 'opk-worker-stable-id')).toBe(true);
+    expect(sessionMatchesIdentifier(session, 'legacy-id')).toBe(true);
+    expect(sessionMatchesIdentifier(session, 'unknown')).toBe(false);
+  });
+});
+
+describe('findSessionById', () => {
+  it('finds session when linkedSessionId is sessionId but row also has name', () => {
+    const sessions = [
+      {
+        name: 'opk-15',
+        sessionId: 'opk-15-stable',
+        role: 'worker',
+        prNumber: 180,
+        status: 'working',
+      },
+    ];
+    expect(findSessionById(sessions, 'opk-15-stable')).toBe(sessions[0]);
+    expect(findSessionById(sessions, 'opk-15')).toBe(sessions[0]);
   });
 });
 

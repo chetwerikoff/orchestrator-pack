@@ -130,6 +130,27 @@ export function getSessionIdentifier(session) {
 }
 
 /**
+ * True when needle matches any stable session identifier field (name, sessionId, id).
+ * Review runs may store linkedSessionId as sessionId while status rows also carry name.
+ *
+ * @param {AoSession} session
+ * @param {string} needle
+ */
+export function sessionMatchesIdentifier(session, needle) {
+  const id = String(needle ?? '').trim();
+  if (!id) {
+    return false;
+  }
+  for (const field of [session?.name, session?.sessionId, session?.id]) {
+    const value = String(field ?? '').trim();
+    if (value && value === id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {string} sessionId
  */
@@ -139,7 +160,7 @@ export function findSessionById(sessions, sessionId) {
     return null;
   }
   for (const session of toArray(sessions)) {
-    if (getSessionIdentifier(session) === needle) {
+    if (sessionMatchesIdentifier(session, needle)) {
       return session;
     }
   }
