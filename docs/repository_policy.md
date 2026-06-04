@@ -161,14 +161,14 @@ forces the implementation path.
 Skill-doc PRs pass scope guard **without**:
 
 - a committed declaration snapshot under `docs/declarations/**`;
-- any issue reference in the PR body (`Closes`, `Refs`, and so on — absence is
-  never a failure reason for this shape);
+- any issue reference in the PR body (`Closes`, `Refs`, `See`, `Related to`, and
+  so on — absence is never a failure reason for this shape);
 - the spec-only HTML comment signal.
 
-Merging a skill-doc PR must not auto-close a GitHub Issue. Scope guard **fails**
-if the PR body contains `Closes`, `Fixes`, `Resolves`, or other GitHub closing
-keywords (same class of rejection as spec-only PRs, but skill-doc PRs also omit
-non-closing references such as `Refs #N`).
+Scope guard **fails** when the PR body links any GitHub issue: closing keywords
+(`Closes` / `Fixes` / `Resolves`) or non-closing forms (`Ref` / `Refs` / `See` /
+`Related to`). Skill-doc PRs must not reference an issue number in the
+description.
 
 ### Safety gates (unchanged)
 

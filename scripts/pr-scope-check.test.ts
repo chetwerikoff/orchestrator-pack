@@ -357,7 +357,24 @@ describe('checkPrScope — skill-doc', () => {
     expect(hasClosingIssueReference(prBody)).toBe(true);
   });
 
-  it('passes without spec-only signal even when the body would otherwise need Refs #N', () => {
+  it('fails when the body includes a non-closing issue reference', () => {
+    const prBody = 'Refs #123\n\n## Summary\n\nSkill tweak.';
+    const result = checkPrScope({
+      repoRoot,
+      prBody,
+      issueBody: null,
+      prPaths: skillPaths,
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'skill_doc_with_issue_reference',
+    });
+    expect(extractNonClosingIssueNumber(prBody)).toBe(123);
+  });
+
+  it('passes without spec-only signal when the body has no issue reference', () => {
     const result = checkPrScope({
       repoRoot,
       prBody: SPEC_ONLY_SIGNAL_LITERAL,
