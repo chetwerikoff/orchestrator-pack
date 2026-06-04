@@ -340,16 +340,21 @@ describe('checkPrScope — skill-doc', () => {
     expect('issueNumber' in result && result.ok && result.issueNumber).toBeFalsy();
   });
 
-  it('passes even when the body includes a closing keyword (skill-doc is diff-detected)', () => {
+  it('fails when the body includes a closing keyword', () => {
+    const prBody = 'Closes #999\n\n## Summary';
     const result = checkPrScope({
       repoRoot,
-      prBody: 'Closes #999\n\n## Summary',
+      prBody,
       issueBody: null,
       prPaths: skillPaths,
       degradedMode: false,
       forkPr: false,
     });
-    expect(result).toMatchObject({ ok: true, mode: 'skill-doc' });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'skill_doc_with_closing_keyword',
+    });
+    expect(hasClosingIssueReference(prBody)).toBe(true);
   });
 
   it('passes without spec-only signal even when the body would otherwise need Refs #N', () => {

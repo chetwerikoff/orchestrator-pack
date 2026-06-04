@@ -165,9 +165,10 @@ Skill-doc PRs pass scope guard **without**:
   never a failure reason for this shape);
 - the spec-only HTML comment signal.
 
-Merging a skill-doc PR does not close a GitHub Issue via scope guard (there is
-no required link). Avoid putting closing keywords in the body if you do not want
-GitHub to auto-close an issue on merge.
+Merging a skill-doc PR must not auto-close a GitHub Issue. Scope guard **fails**
+if the PR body contains `Closes`, `Fixes`, `Resolves`, or other GitHub closing
+keywords (same class of rejection as spec-only PRs, but skill-doc PRs also omit
+non-closing references such as `Refs #N`).
 
 ### Safety gates (unchanged)
 

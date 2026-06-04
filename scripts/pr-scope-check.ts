@@ -64,6 +64,7 @@ export type PrScopeCheckResult =
         | 'missing_issue_link'
         | 'missing_spec_issue_reference'
         | 'spec_only_with_closing_keyword'
+        | 'skill_doc_with_closing_keyword'
         | 'spec_docs_scope_violation'
         | 'skill_doc_scope_violation'
         | 'missing_snapshot'
@@ -296,6 +297,15 @@ function checkPrPathsAgainstSnapshot(
 }
 
 function checkSkillDocPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  if (hasClosingIssueReference(input.prBody)) {
+    return {
+      ok: false,
+      reason: 'skill_doc_with_closing_keyword',
+      message:
+        'skill-doc PRs must not use GitHub closing keywords (Closes/Fixes/Resolves #N); omit issue references so merge does not auto-close an issue',
+    };
+  }
+
   const pathCheck = classifySkillDocPaths(input.prPaths);
   if (!pathCheck.ok) {
     if (pathCheck.invalidPaths.length > 0) {
@@ -620,6 +630,13 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     lines.push(
       '',
       'Remove closing keywords (`Closes` / `Fixes` / `Resolves`) and use `Refs #N` instead.',
+    );
+  }
+
+  if (result.reason === 'skill_doc_with_closing_keyword') {
+    lines.push(
+      '',
+      'Remove closing keywords (`Closes` / `Fixes` / `Resolves`) from the PR description. Skill-doc PRs must not link or auto-close issues on merge.',
     );
   }
 
