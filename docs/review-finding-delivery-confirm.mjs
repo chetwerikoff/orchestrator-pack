@@ -204,6 +204,10 @@ export function isDeliveryConfirmed(run, sessions, sendObservedAtMs, allRuns, tr
     return false;
   }
 
+  if (!isLinkedSessionLiveOwner(run, sessions)) {
+    return false;
+  }
+
   const session = findSessionById(sessions, linkedId);
   if (!session) {
     return false;

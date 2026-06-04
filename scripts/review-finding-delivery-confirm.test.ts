@@ -109,6 +109,34 @@ describe('delivery confirmation signal (AC1)', () => {
       ),
     ).toBe(false);
   });
+
+  it('does not confirm when linked session was reassigned to another PR', () => {
+    const fixture = loadFixture('session-reassigned-other-pr.json');
+    const sendMs = resolveSendObservedAtMs(fixture.reviewRuns[0]!, fixture.nowMs);
+    expect(
+      isDeliveryConfirmed(
+        fixture.reviewRuns[0]!,
+        fixture.sessions,
+        sendMs,
+        fixture.reviewRuns,
+        fixture.tracking ?? { runs: {} },
+      ),
+    ).toBe(false);
+
+    const { actions, tracking } = planFromFixture('session-reassigned-other-pr.json');
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'mark_confirmed')).toBe(
+      false,
+    );
+    expect(tracking.runs?.['run-opk8-166']?.deliveryState).not.toBe(
+      DELIVERY_STATE_CONFIRMED,
+    );
+    expect(
+      actions.some(
+        (a: DeliveryConfirmAction) =>
+          a.type === 'escalate' && a.reason === 'orphan_or_dead_linked_session',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('ambiguous overlapping runs (AC1a)', () => {
