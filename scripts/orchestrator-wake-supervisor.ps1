@@ -63,9 +63,9 @@ switch ($Action) {
         $supervisorPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
         Write-OrchestratorWakeSupervisorLog -Message 'stopping wake supervisor and children'
         Set-OrchestratorWakeSupervisorStoppingFlag -Paths $paths
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $supervisorPid -PidFile $paths.SupervisorPid
+        Stop-OrchestratorWakeSupervisorProcess -ProcessId $supervisorPid -PidFile $paths.SupervisorPid -ManagedRole 'supervisor' -LogPath $paths.SupervisorLog
         Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $supervisorPid -TimeoutSeconds 5
-        Stop-OrchestratorWakeSupervisorChildren -Paths $paths
+        Stop-OrchestratorWakeSupervisorChildren -Paths $paths -LogPath $paths.SupervisorLog
         if (Test-Path -LiteralPath $paths.StateJson) {
             Remove-Item -LiteralPath $paths.StateJson -Force -ErrorAction SilentlyContinue
         }

@@ -275,13 +275,111 @@ function Wait-OrchestratorWakeSupervisorProcessExit {
     }
 }
 
+function Get-OrchestratorWakeSupervisorProcessCommandLine {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) { return '' }
+
+    if ($IsLinux) {
+        $procPath = "/proc/$ProcessId/cmdline"
+        if (Test-Path -LiteralPath $procPath) {
+            $raw = [System.IO.File]::ReadAllBytes($procPath)
+            if ($raw.Length -eq 0) { return '' }
+            $parts = New-Object System.Collections.Generic.List[string]
+            $current = New-Object System.Text.StringBuilder
+            foreach ($byte in $raw) {
+                if ($byte -eq 0) {
+                    if ($current.Length -gt 0) {
+                        $parts.Add($current.ToString())
+                        $current.Clear() | Out-Null
+                    }
+                }
+                else {
+                    [void]$current.Append([char]$byte)
+                }
+            }
+            if ($current.Length -gt 0) {
+                $parts.Add($current.ToString())
+            }
+            return ($parts -join ' ')
+        }
+    }
+
+    if ($IsMacOS) {
+        $out = & ps -p $ProcessId -o command= 2>$null
+        return (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+    }
+
+    try {
+        $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        return [string]$cim.CommandLine
+    }
+    catch {
+        return ''
+    }
+}
+
+function Test-OrchestratorWakeSupervisorManagedProcess {
+    param(
+        [int]$ProcessId,
+        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [string]$Role
+    )
+
+    if ($ProcessId -le 0) { return $false }
+    if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return $false }
+
+    $commandLine = Get-OrchestratorWakeSupervisorProcessCommandLine -ProcessId $ProcessId
+    if (-not $commandLine) { return $false }
+
+    $scriptMarkers = switch ($Role) {
+        'supervisor' { @('orchestrator-wake-supervisor.ps1') }
+        'listener' { @('orchestrator-wake-listener.ps1') }
+        'heartbeat' { @('orchestrator-wake-heartbeat.ps1') }
+    }
+
+    $matchedScript = $false
+    foreach ($marker in $scriptMarkers) {
+        if ($commandLine -like "*$marker*") {
+            $matchedScript = $true
+            break
+        }
+    }
+
+    if ($commandLine -like '*orchestrator-wake-supervisor-test-child.ps1*') {
+        if ($Role -eq 'listener' -and $commandLine -match '-Role\s+listener') {
+            return $true
+        }
+        if ($Role -eq 'heartbeat' -and $commandLine -match '-Role\s+heartbeat') {
+            return $true
+        }
+        return $false
+    }
+
+    return $matchedScript
+}
+
 function Stop-OrchestratorWakeSupervisorProcess {
     param(
         [int]$ProcessId,
-        [string]$PidFile = ''
+        [string]$PidFile = '',
+        [ValidateSet('supervisor', 'listener', 'heartbeat', '')]
+        [string]$ManagedRole = '',
+        [string]$LogPath = ''
     )
 
     if ($ProcessId -le 0) { return }
+
+    if ($ManagedRole) {
+        if (-not (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $ProcessId -Role $ManagedRole)) {
+            Write-OrchestratorWakeSupervisorLog -Message "skipping kill for pid=$ProcessId (stale or unrelated $ManagedRole)" -LogPath $LogPath
+            if ($PidFile) {
+                Remove-OrchestratorWakeSupervisorPidFile -Path $PidFile
+            }
+            return
+        }
+    }
+
     try {
         $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
         if ($proc -and -not $proc.HasExited) {
@@ -404,14 +502,17 @@ function Start-OrchestratorWakeSupervisorChild {
 }
 
 function Stop-OrchestratorWakeSupervisorChildren {
-    param($Paths)
+    param(
+        $Paths,
+        [string]$LogPath = ''
+    )
 
     foreach ($pair in @(
             @{ Pid = $Paths.ListenerPid; Label = 'listener' },
             @{ Pid = $Paths.HeartbeatPid; Label = 'heartbeat' }
         )) {
         $pidVal = Read-OrchestratorWakeSupervisorPidFile -Path $pair.Pid
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $pidVal -PidFile $pair.Pid
+        Stop-OrchestratorWakeSupervisorProcess -ProcessId $pidVal -PidFile $pair.Pid -ManagedRole $pair.Label -LogPath $LogPath
     }
 }
 
@@ -423,8 +524,10 @@ function Get-OrchestratorWakeSupervisorChildStatus {
     return @{
         ListenerPid    = $listenerPid
         HeartbeatPid   = $heartbeatPid
-        ListenerAlive  = Test-ProcessAlive -ProcessId $listenerPid
-        HeartbeatAlive = Test-ProcessAlive -ProcessId $heartbeatPid
+        ListenerAlive  = (Test-ProcessAlive -ProcessId $listenerPid) -and
+        (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $listenerPid -Role 'listener')
+        HeartbeatAlive = (Test-ProcessAlive -ProcessId $heartbeatPid) -and
+        (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId $heartbeatPid -Role 'heartbeat')
     }
 }
 
