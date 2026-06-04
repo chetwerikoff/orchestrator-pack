@@ -1,0 +1,24 @@
+{
+  "description": "Session-local mux connect/disconnect cycles ~1 Hz for 49s — must flag",
+  "nowMs": 1000000,
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 950000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 951000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 958000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 959000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 966000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 967000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 974000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 975000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 982000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 983000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 990000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 991000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-flood-worker", "tsEpoch": 998000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-flood-worker", "tsEpoch": 999000, "data": { "subscriberCount": 1 } }
+  ],
+  "expect": {
+    "flagged": true,
+    "sessionId": "opk-flood-worker"
+  }
+}

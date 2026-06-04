@@ -720,6 +720,26 @@ To adopt after merge:
 
 See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
 
+## Terminal Device-Attributes flood detection (Issue #173)
+
+Adds read-only `scripts/terminal-flood-detect.ps1` and `docs/terminal-flood-detect.mjs`:
+flags session-local sustained `ui.terminal_connected` / `ui.terminal_disconnected` pairs
+from `ao events` (signature `terminal_mux_paired_flap`). **Does not** fix the flood —
+upstream reset/throttle is
+[ComposioHQ/agent-orchestrator#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)
+(`active-blocked-upstream`).
+
+To adopt after merge:
+
+1. When a worker shows flood symptoms (CPU pegged, unsubmitted paste, stalled review),
+   run:
+   `pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>`
+2. Optional env: `AO_TERMINAL_FLOOD_WINDOW_SECONDS` (default **60**),
+   `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` (default **6**).
+3. Follow `docs/orchestrator-recovery-runbook.md` (Terminal Device-Attributes flood):
+   stop the dashboard terminal view → verify signature subsided → re-deliver via Issue #171
+   run evidence when quiet.
+
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn

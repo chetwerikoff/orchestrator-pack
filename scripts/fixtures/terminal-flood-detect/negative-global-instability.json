@@ -1,0 +1,25 @@
+{
+  "description": "Global mux flap without session id — must not flag a named worker session",
+  "nowMs": 2000000,
+  "sessionIdFilter": "opk-worker",
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1950000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1951000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1958000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1959000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1966000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1967000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1974000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1975000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1982000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1983000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1990000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1991000, "data": { "subscriberCount": 1 } },
+    { "kind": "ui.terminal_connected", "sessionId": null, "tsEpoch": 1998000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": null, "tsEpoch": 1999000, "data": { "subscriberCount": 1 } }
+  ],
+  "expect": {
+    "flagged": false,
+    "globalMuxChurn": true
+  }
+}

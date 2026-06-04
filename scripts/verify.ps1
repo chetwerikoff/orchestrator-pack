@@ -418,6 +418,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== terminal mux flood detection (Issue #173) =='
+$terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
+if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {
+    & $terminalFloodCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-terminal-flood-detect.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-terminal-flood-detect.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'terminal mux flood detection checks failed (Issue #173)'
+    }
+}
+else {
+    Write-Check 'scripts/check-terminal-flood-detect.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing terminal flood detection check script (Issue #173)'
+}
+
+Write-Host ''
 Write-Host '== reviewer workspace preflight (Issue #98) =='
 $reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
 if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {
