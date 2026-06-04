@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "name": "op-orchestrator-new",
+      "role": "orchestrator",
+      "project": "orchestrator-pack"
+    }
+  ]
+}

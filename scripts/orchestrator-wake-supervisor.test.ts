@@ -1,0 +1,399 @@
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+const repoRoot = path.resolve(import.meta.dirname, '..');
+const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
+const fixtureDir = path.join(repoRoot, 'tests/fixtures/orchestrator-wake-supervisor');
+const aoStub = path.join(fixtureDir, 'ao-stub.sh');
+
+const tmpRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of tmpRoots.splice(0)) {
+    try {
+      execFileSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          supervisorScript,
+          '-Action',
+          'Stop',
+          '-StateDir',
+          root,
+        ],
+        { cwd: repoRoot, stdio: 'pipe' },
+      );
+    } catch {
+      // best effort
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function makeStateDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-supervisor-test-'));
+  tmpRoots.push(dir);
+  return dir;
+}
+
+function runSupervisor(
+  args: string[],
+  env: Record<string, string> = {},
+): { stdout: string; stderr: string; status: number | null } {
+  const result = spawnSync(
+    'pwsh',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+      timeout: 120_000,
+    },
+  );
+  return {
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    status: result.status,
+  };
+}
+
+function startSupervisorBackground(
+  stateDir: string,
+  extraArgs: string[] = [],
+  env: Record<string, string> = {},
+) {
+  const args = [
+    '-Action',
+    'Start',
+    '-Foreground',
+    '-TestMode',
+    '-SkipInitialWait',
+    '-StateDir',
+    stateDir,
+    '-PollSeconds',
+    '1',
+    ...extraArgs,
+  ];
+  const child = spawn(
+    'pwsh',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return child;
+}
+
+async function waitForMarkers(stateDir: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const listenerPath = path.join(stateDir, 'markers', 'listener.marker.json');
+    const heartbeatPath = path.join(stateDir, 'markers', 'heartbeat.marker.json');
+    if (fs.existsSync(listenerPath) && fs.existsSync(heartbeatPath)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('timed out waiting for supervisor child markers');
+}
+
+function readMarker(stateDir: string, role: 'listener' | 'heartbeat') {
+  const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
+  expect(fs.existsSync(markerPath)).toBe(true);
+  return JSON.parse(fs.readFileSync(markerPath, 'utf8')) as {
+    role: string;
+    pid: number;
+    orchestratorSessionId: string;
+  };
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('orchestrator-wake-supervisor', () => {
+  it('starts listener and heartbeat as separate processes with session override', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-test-override',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const listener = readMarker(stateDir, 'listener');
+    const heartbeat = readMarker(stateDir, 'heartbeat');
+    expect(listener.orchestratorSessionId).toBe('op-test-override');
+    expect(heartbeat.orchestratorSessionId).toBe('op-test-override');
+    expect(listener.pid).not.toBe(heartbeat.pid);
+    child.kill('SIGTERM');
+  });
+
+  it('resolves orchestrator session id from ao status when override unset', async () => {
+    const stateDir = makeStateDir();
+    const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
+    const child = startSupervisorBackground(stateDir, ['-FixturePath', statusFixture]);
+    await waitForMarkers(stateDir);
+
+    const listener = readMarker(stateDir, 'listener');
+    expect(listener.orchestratorSessionId).toBe('op-orchestrator-old');
+    child.kill('SIGTERM');
+  });
+
+  it('restarts a child after it exits', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart']);
+    await waitForMarkers(stateDir);
+
+    const first = readMarker(stateDir, 'listener');
+    if (isAlive(first.pid)) {
+      process.kill(first.pid, 'SIGKILL');
+    }
+    const deadline = Date.now() + 10_000;
+    let restarted = false;
+    while (Date.now() < deadline) {
+      const current = readMarker(stateDir, 'listener');
+      if (current.pid !== first.pid && isAlive(current.pid)) {
+        restarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    expect(restarted).toBe(true);
+    child.kill('SIGTERM');
+  });
+
+  it('does not share fate between listener and heartbeat', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-independent',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const listener = readMarker(stateDir, 'listener');
+    const heartbeat = readMarker(stateDir, 'heartbeat');
+    if (isAlive(listener.pid)) {
+      process.kill(listener.pid, 'SIGKILL');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    expect(isAlive(heartbeat.pid)).toBe(true);
+    child.kill('SIGTERM');
+  });
+
+  it('waits when no orchestrator session then starts children when one appears', async () => {
+    const stateDir = makeStateDir();
+    const dynamicFixture = path.join(stateDir, 'ao-status.json');
+    fs.writeFileSync(dynamicFixture, fs.readFileSync(path.join(fixtureDir, 'status-no-orchestrator.json')));
+
+    const child = spawn(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        supervisorScript,
+        '-Action',
+        'Start',
+        '-Foreground',
+        '-TestMode',
+        '-StateDir',
+        stateDir,
+        '-FixturePath',
+        dynamicFixture,
+        '-PollSeconds',
+        '1',
+        '-WaitSeconds',
+        '15',
+        '-MaxLoopSeconds',
+        '12',
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+
+    let stdout = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(stdout).toContain('waiting for orchestrator session');
+
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old.json')),
+    );
+
+    const deadline = Date.now() + 10_000;
+    let listener: ReturnType<typeof readMarker> | null = null;
+    while (Date.now() < deadline) {
+      try {
+        listener = readMarker(stateDir, 'listener');
+        if (listener.orchestratorSessionId === 'op-orchestrator-old') break;
+      } catch {
+        // not ready yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    child.kill('SIGTERM');
+    expect(listener?.orchestratorSessionId).toBe('op-orchestrator-old');
+  });
+
+  it('exits with actionable message when no orchestrator session appears within bound', () => {
+    const stateDir = makeStateDir();
+    const statusFixture = path.join(fixtureDir, 'status-no-orchestrator.json');
+    const run = runSupervisor(
+      [
+        '-Action',
+        'Start',
+        '-TestMode',
+        '-StateDir',
+        stateDir,
+        '-FixturePath',
+        statusFixture,
+        '-AoCommand',
+        aoStub,
+        '-WaitSeconds',
+        '2',
+        '-PollSeconds',
+        '1',
+      ],
+      { AO_WAKE_SUPERVISOR_FIXTURE: statusFixture },
+    );
+    expect(run.status).not.toBe(0);
+    const combined = `${run.stdout}\n${run.stderr}`;
+    expect(combined).toContain('orchestrator-pack');
+    expect(combined).toMatch(/start.*ao/i);
+  });
+
+  it('restarts both children when orchestrator session id changes', async () => {
+    const stateDir = makeStateDir();
+    const dynamicFixture = path.join(stateDir, 'ao-status.json');
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old.json')),
+    );
+
+    const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
+    await waitForMarkers(stateDir);
+
+    const oldListener = readMarker(stateDir, 'listener');
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-new.json')),
+    );
+
+    const deadline = Date.now() + 12_000;
+    let sawNew = false;
+    while (Date.now() < deadline) {
+      const current = readMarker(stateDir, 'listener');
+      if (current.orchestratorSessionId === 'op-orchestrator-new' && current.pid !== oldListener.pid) {
+        sawNew = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    expect(sawNew).toBe(true);
+    const heartbeat = readMarker(stateDir, 'heartbeat');
+    expect(heartbeat.orchestratorSessionId).toBe('op-orchestrator-new');
+    child.kill('SIGTERM');
+  });
+
+  it('stops children when orchestrator session disappears at runtime', async () => {
+    const stateDir = makeStateDir();
+    const dynamicFixture = path.join(stateDir, 'ao-status.json');
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old.json')),
+    );
+
+    const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
+    await waitForMarkers(stateDir);
+
+    const listenerBefore = readMarker(stateDir, 'listener');
+    const heartbeatBefore = readMarker(stateDir, 'heartbeat');
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-no-orchestrator.json')),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    expect(isAlive(listenerBefore.pid)).toBe(false);
+    expect(isAlive(heartbeatBefore.pid)).toBe(false);
+    child.kill('SIGTERM');
+  });
+
+  it('reports status and stops both children cleanly', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-status-stop',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    expect(statusUp.status).toBe(0);
+    expect(statusUp.stdout).toContain('listener:   running');
+    expect(statusUp.stdout).toContain('heartbeat:  running');
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const stop = runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    expect(stop.status).toBe(0);
+
+    const statusDown = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    expect(statusDown.status).not.toBe(0);
+    expect(statusDown.stdout).toContain('stopped');
+  });
+
+  it('captures per-child logs and survives launching shell exit when detached', () => {
+    const stateDir = makeStateDir();
+    const start = runSupervisor([
+      '-Action',
+      'Start',
+      '-TestMode',
+      '-SkipInitialWait',
+      '-OrchestratorSessionId',
+      'op-detached',
+      '-StateDir',
+      stateDir,
+      '-PollSeconds',
+      '1',
+    ]);
+    expect(start.status).toBe(0);
+    expect(start.stdout).toContain('supervisor detached');
+
+    const listenerLog = path.join(stateDir, 'listener.log');
+    const heartbeatLog = path.join(stateDir, 'heartbeat.log');
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(listenerLog) && fs.existsSync(heartbeatLog)) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+    }
+    expect(fs.existsSync(listenerLog)).toBe(true);
+    expect(fs.existsSync(heartbeatLog)).toBe(true);
+
+    const statusMid = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    expect(statusMid.status).toBe(0);
+
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  });
+});

@@ -22,11 +22,11 @@ and the matching steps in
 | Worker review contract | `prompts/agent_rules.md` |
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
-| Wake listener + heartbeat | `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Wake supervisor (listener + heartbeat) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
 
-## Every session — four processes
+## Every session — three terminals (supervisor) or four (manual wake)
 
 **Terminal A — AO**
 
@@ -35,23 +35,39 @@ cd <orchestrator-pack-root>
 ao start orchestrator-pack
 ```
 
-**Terminal B — wake listener** (before or with `ao start`)
+**Terminal B — wake supervisor** (listener + heartbeat; preferred — Issue #168)
+
+Starts both wake processes as **separate children**, resolves the orchestrator
+session id from `ao status` when unset, restarts either child on exit, and
+re-targets both when the orchestrator session id changes. Logs:
+`%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
+`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`).
 
 ```powershell
 cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'   # your id from ao status
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-listener.ps1
+# Optional: pin session id instead of auto-resolve from ao status
+# $env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
 ```
 
-**Terminal C — heartbeat backstop** (separate from the webhook listener; default 15 min)
+Status and stop:
 
 ```powershell
-cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-heartbeat.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
 ```
 
-**Terminal D — worktree trust watcher** (Windows Cursor; avoids blocking
+Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (default
+120 — bounded wait for orchestrator session before exit), `AO_WAKE_SUPERVISOR_POLL_SECONDS`
+(supervisor poll, default 5), `AO_WAKE_SUPERVISOR_STATE_DIR`, `AO_WAKE_SUPERVISOR_PROJECT_ID`
+(default `orchestrator-pack`). See [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
+
+**Manual fallback — two terminals** (listener and heartbeat separately): same as
+before — `scripts/orchestrator-wake-listener.ps1` and
+`scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
+Use when debugging one path in isolation.
+
+**Terminal C — worktree trust watcher** (Windows Cursor; avoids blocking
 `Workspace Trust Required` on each new `op-*` worktree)
 
 ```powershell
