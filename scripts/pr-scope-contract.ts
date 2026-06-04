@@ -35,11 +35,27 @@ export const SPEC_ONLY_SIGNAL_PATTERN = /<!--\s*pr-type:\s*spec-only\s*-->/i;
  * Runtime spec-docs allowlist for spec-only PRs (narrow docs-only; not issue allowed-roots).
  * Enumerated in docs/repository_policy.md.
  */
+/** Canonical skill instruction surface (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
+export const SPEC_SKILL_CANONICAL_ROOT = '.claude/skills';
+
+/** Generated pointer skill surfaces (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
+export const SPEC_SKILL_POINTER_ROOTS: readonly string[] = ['.cursor/skills'] as const;
+
+/**
+ * Markdown-only skill paths admitted on spec-only PRs (conjunctive with docs entries).
+ * Non-markdown files under skill directories stay on the implementation path.
+ */
+export const SPEC_SKILL_MARKDOWN_GLOBS: readonly string[] = [
+  `${SPEC_SKILL_CANONICAL_ROOT}/**/*.md`,
+  ...SPEC_SKILL_POINTER_ROOTS.map((root) => `${root}/**/*.md`),
+] as const;
+
 export const SPEC_DOCS_ALLOWLIST: readonly string[] = [
   'docs/issues_drafts/**',
   'docs/issue_queue_index.md',
   'docs/architecture.md',
   'docs/issues_drafts/00-architecture-decisions.md',
+  ...SPEC_SKILL_MARKDOWN_GLOBS,
 ] as const;
 
 export function normalizePrBody(prBody: string): string {
