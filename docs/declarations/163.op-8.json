@@ -18,6 +18,8 @@
     "docs/review-trigger-reconcile.d.mts",
     "docs/review-trigger-reconcile.d.ts",
     "docs/review-trigger-reconcile.mjs",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/invoke-pack-review-strict-gate.ps1",
     "scripts/check-review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",

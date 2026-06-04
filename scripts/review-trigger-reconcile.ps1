@@ -37,6 +37,7 @@ $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
 $Script:DefaultIntervalMinutes = 20
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -120,46 +121,8 @@ function Invoke-GhOpenPrList {
     }
 }
 
-function Invoke-AoReviewListJson {
-    param([string]$Project)
-
-    $args = @('review', 'list')
-    if ($Project) { $args += $Project }
-    $args += '--json'
-
-    $raw = & ao @args 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao review list failed (exit $LASTEXITCODE): $raw"
-    }
-
-    $text = ($raw | ForEach-Object {
-            if ($_ -is [string]) { $_ }
-            elseif ($null -ne $_) { $_.ToString() }
-        }) -join "`n"
-    $start = $text.IndexOf('{')
-    if ($start -lt 0) {
-        throw 'ao review list produced no JSON output'
-    }
-
-    return ($text.Substring($start) | ConvertFrom-Json)
-}
-
-function Invoke-AoStatusSessions {
-    $raw = & ao status --json --reports full 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao status failed (exit $LASTEXITCODE): $raw"
-    }
-
-    $text = ($raw | ForEach-Object {
-            if ($_ -is [string]) { $_ }
-            elseif ($null -ne $_) { $_.ToString() }
-        }) -join "`n"
-    $start = $text.IndexOf('{')
-    if ($start -lt 0) {
-        throw 'ao status produced no JSON output'
-    }
-
-    $payload = $text.Substring($start) | ConvertFrom-Json
+function Get-AoStatusWorkerSessions {
+    $payload = Get-AoStatusReportsJson
     return @($payload.data)
 }
 
@@ -246,9 +209,9 @@ function Invoke-ReconcileTick {
     }
     else {
         $openPrs = Invoke-GhOpenPrList
-        $reviewList = Invoke-AoReviewListJson -Project $Project
+        $reviewList = Get-AoReviewListJson -Project $Project
         $reviewRuns = @($reviewList.runs)
-        $sessions = Invoke-AoStatusSessions
+        $sessions = Get-AoStatusWorkerSessions
         $payload = @{
             openPrs    = $openPrs
             reviewRuns = $reviewRuns
