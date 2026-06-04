@@ -4,6 +4,13 @@
  */
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
+  DELIVERY_STATE_ESCALATED,
+  DELIVERY_STATE_UNCONFIRMED,
+  getReportState,
+  getReportTimestampMs,
+  sessionOwnsRunHead,
+} from './review-finding-delivery-confirm.mjs';
+import {
   findSessionById,
   getSessionIdentifier,
   isLiveWorkerSession,
@@ -12,10 +19,6 @@ import {
   sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
-
-/** Issue #171 delivery states used only as unreachability evidence (never for protection). */
-export const DELIVERY_STATE_ESCALATED = 'escalated';
-export const DELIVERY_STATE_UNCONFIRMED = 'unconfirmed';
 
 /** Default bounded grace after first false stuck for (session, PR head). */
 export const DEFAULT_GRACE_MS = 15 * 60 * 1000;
@@ -128,66 +131,6 @@ export function isMergeContractCiGreen(checks, options = {}) {
   }
 
   return normalizedRequired.every((name) => matched.has(name));
-}
-
-/**
- * @param {string | undefined} iso
- */
-export function parseIsoMs(iso) {
-  if (!iso) {
-    return null;
-  }
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-/**
- * @param {{ reportState?: string, report_state?: string }} report
- */
-export function getReportState(report) {
-  return String(report?.reportState ?? report?.report_state ?? '').toLowerCase();
-}
-
-/**
- * @param {{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }} report
- */
-export function getReportTimestampMs(report) {
-  return (
-    parseIsoMs(report?.reportedAt) ??
-    parseIsoMs(report?.timestamp) ??
-    parseIsoMs(report?.createdAt) ??
-    0
-  );
-}
-
-/**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
- * @param {number} prNumber
- * @param {string} targetHeadSha
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [openPrs]
- */
-export function sessionOwnsRunHead(session, prNumber, targetHeadSha, openPrs) {
-  if (!sessionMatchesPr(session, prNumber)) {
-    return false;
-  }
-
-  const target = normalizeSha(targetHeadSha);
-  if (!target) {
-    return false;
-  }
-
-  const pr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
-  const currentHead = normalizeSha(pr?.headRefOid);
-  if (currentHead && currentHead !== target) {
-    return false;
-  }
-
-  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
-  if (sessionHead) {
-    return sessionHead === target;
-  }
-
-  return Boolean(currentHead && currentHead === target);
 }
 
 /**
