@@ -122,7 +122,7 @@ describe('isMergeContractCiGreen', () => {
     ).toBe(true);
   });
 
-  it('rejects pending and failure', () => {
+  it('rejects pending and failure on required checks', () => {
     expect(
       isMergeContractCiGreen([
         { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
@@ -131,6 +131,19 @@ describe('isMergeContractCiGreen', () => {
         { name: 'Self-architect lint', state: 'SUCCESS' },
       ]),
     ).toBe(false);
+  });
+
+  it('ignores optional or third-party checks that are red or pending', () => {
+    expect(
+      isMergeContractCiGreen([
+        { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+        { name: 'PR scope guard', state: 'SUCCESS' },
+        { name: 'Run pack contract tests', state: 'SUCCESS' },
+        { name: 'Self-architect lint', state: 'SUCCESS' },
+        { name: 'Codecov', state: 'FAILURE' },
+        { name: 'Some optional workflow', state: 'PENDING' },
+      ]),
+    ).toBe(true);
   });
 });
 

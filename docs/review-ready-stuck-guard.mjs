@@ -155,13 +155,13 @@ export function isMergeContractCiGreen(checks, options = {}) {
 
   for (const check of list) {
     const name = String(check?.name ?? '').toLowerCase();
-    if (!name) {
+    if (!name || !normalizedRequired.includes(name)) {
       continue;
     }
     if (isCiCheckPending(check) || isCiCheckFailure(check)) {
       return false;
     }
-    if (normalizedRequired.includes(name) && isCiCheckSuccess(check)) {
+    if (isCiCheckSuccess(check)) {
       matched.add(name);
     }
   }
