@@ -176,11 +176,10 @@ describe('evaluateWakePreRunRecheck', () => {
 
   it('pre-run abort merge intent uses fresh head and defers merge', () => {
     const fixture = loadFixture('head-advanced-abort.json');
-    const fresh = fixture.fresh!;
     const mergeEval = evaluateMergeIntentAfterReviewTrigger({
       prNumber: fixture.planned!.prNumber,
       headSha: 'new216',
-      reviewRuns: fresh.reviewRuns ?? [],
+      reviewRuns: [],
     });
     expect(mergeEval.mergeable).toBe(false);
     expect(mergeEval.reason).toBe('no_covered_terminal_run');
