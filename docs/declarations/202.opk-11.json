@@ -7,13 +7,61 @@
   "baseline": {
     "commit_sha": "a11d37ff7fe4887615536b2b22d4a858492ba068",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:acc4c8c1aa1b2b6ea85c16e1b5d856a321af4b3edd4b2a3f0372a3e596794c1f"
+    "active_scope_hash": "sha256:1f027f86f1ab23808d4e02e95f25c2eb6eb20bc527936ce538f2d27cf9d5efa3"
   },
   "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-send-reconcile.d.mts",
+    "docs/review-send-reconcile.d.ts",
+    "docs/review-send-reconcile.mjs",
+    "docs/declarations/202.opk-11.json",
+    "prompts/agent_rules.md",
+    "scripts/check-review-send-reconcile.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-send-reconcile.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [
     "tests/fixtures/review-send-reconcile/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:acc4c8c1aa1b2b6ea85c16e1b5d856a321af4b3edd4b2a3f0372a3e596794c1f",
+      "new_active_scope_hash": "sha256:1f027f86f1ab23808d4e02e95f25c2eb6eb20bc527936ce538f2d27cf9d5efa3",
+      "changed": {
+        "added": [
+          "agent-orchestrator.yaml.example",
+          "docs/declarations/202.opk-11.json",
+          "docs/migration_notes.md",
+          "docs/orchestrator-autoloop-go-live.md",
+          "docs/orchestrator-recovery-runbook.md",
+          "docs/review-send-reconcile.d.mts",
+          "docs/review-send-reconcile.d.ts",
+          "docs/review-send-reconcile.mjs",
+          "prompts/agent_rules.md",
+          "scripts/check-review-send-reconcile.ps1",
+          "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+          "scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1",
+          "scripts/orchestrator-wake-supervisor-test-child.ps1",
+          "scripts/orchestrator-wake-supervisor.ps1",
+          "scripts/orchestrator-wake-supervisor.test.ts",
+          "scripts/review-send-reconcile.ps1",
+          "scripts/review-send-reconcile.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "full scope for issue 202 implementation",
+      "actor": "opk-11",
+      "timestamp": "2026-06-05T11:46:55.680Z",
+      "applied": true
+    }
+  ]
 }
