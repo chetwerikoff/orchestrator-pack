@@ -22,7 +22,7 @@ import {
   getSessionIdentifier,
   isLiveWorkerSession,
   normalizeSha,
-  sessionMatchesPr,
+  resolveWorkerSessionId,
   toArray,
 } from './review-trigger-reconcile.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
@@ -165,29 +165,9 @@ export function isPreHandOffWorkerForHead(session, headSha) {
  */
 export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
   const prList = toArray(openPrs);
-
-  for (const session of toArray(sessions)) {
-    const role = String(session?.role ?? '').toLowerCase();
-    if (role !== 'worker' && role !== 'coding') {
-      continue;
-    }
-    if (!isLiveWorkerSession(session)) {
-      continue;
-    }
-    if (!sessionMatchesPr(session, prNumber)) {
-      continue;
-    }
-    if (!sessionOwnsRunHead(session, prNumber, headSha, prList)) {
-      continue;
-    }
-
-    const identifier = getSessionIdentifier(session);
-    if (identifier) {
-      return identifier;
-    }
-  }
-
-  return null;
+  return resolveWorkerSessionId(sessions, prNumber, {
+    ownsHead: (session) => sessionOwnsRunHead(session, prNumber, headSha, prList),
+  });
 }
 
 /**

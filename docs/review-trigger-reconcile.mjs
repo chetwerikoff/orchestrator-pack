@@ -181,8 +181,10 @@ export function sessionMatchesPr(session, prNumber) {
 /**
  * @param {AoSession[]} sessions
  * @param {number} prNumber
+ * @param {{ ownsHead?: (session: AoSession) => boolean }} [options]
  */
-export function resolveWorkerSessionId(sessions, prNumber) {
+export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
+  const ownsHead = options.ownsHead;
   const workers = sessions.filter((s) => {
     const role = String(s?.role ?? '').toLowerCase();
     return (role === 'worker' || role === 'coding') && isLiveWorkerSession(s);
@@ -190,6 +192,9 @@ export function resolveWorkerSessionId(sessions, prNumber) {
 
   for (const session of workers) {
     if (!sessionMatchesPr(session, prNumber)) {
+      continue;
+    }
+    if (ownsHead && !ownsHead(session)) {
       continue;
     }
     const identifier = getSessionIdentifier(session);

@@ -108,6 +108,7 @@ export declare function isHeadCovered(
 export declare function resolveWorkerSessionId(
   sessions: AoSession[],
   prNumber: number,
+  options?: { ownsHead?: (session: AoSession) => boolean },
 ): string | null;
 
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcileAction[];
