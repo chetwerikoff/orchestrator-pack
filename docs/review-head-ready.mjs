@@ -79,6 +79,13 @@ export function classifyRequiredCiForReviewTrigger(checks, options = {}) {
     if (scope.length === 0) {
       return 'degraded';
     }
+    const matchedRequired = new Set(
+      scope.map((check) => String(check?.name ?? '').toLowerCase()),
+    );
+    const hasMissingRequired = normalizedRequired.some((name) => !matchedRequired.has(name));
+    if (hasMissingRequired) {
+      return 'degraded';
+    }
   } else if (list.length === 0) {
     return 'degraded';
   }
@@ -133,11 +140,11 @@ export function findLatestAcceptedReportForHead(session, headSha) {
  * @param {string} headSha
  */
 export function hasReadyForReviewForHead(session, headSha) {
-  return Boolean(
-    findLatestReportForHead(session, headSha, {
-      matchStates: new Set(['ready_for_review']),
-    }),
-  );
+  const latest = findLatestAcceptedReportForHead(session, headSha);
+  if (!latest) {
+    return false;
+  }
+  return getReportState(latest) === 'ready_for_review';
 }
 
 /**

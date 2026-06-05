@@ -56,6 +56,21 @@ describe('classifyRequiredCiForReviewTrigger', () => {
       ),
     ).toBe('red');
   });
+
+  it('classifies partially missing required checks as degraded, not red', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger(
+        [{ name: 'Verify orchestrator-pack structure', state: 'SUCCESS' }],
+        {
+          requiredCheckNames: [
+            'Verify orchestrator-pack structure',
+            'PR scope guard',
+            'Run pack contract tests',
+          ],
+        },
+      ),
+    ).toBe('degraded');
+  });
 });
 
 describe('evaluateHeadReadyForReview', () => {
@@ -102,6 +117,37 @@ describe('evaluateHeadReadyForReview', () => {
       sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
     }>('intermediate-commit.json').sessions[0]!;
     expect(hasReadyForReviewForHead(session, 'newhead55')).toBe(false);
+  });
+
+  it('requires the latest accepted report to be ready_for_review', () => {
+    const head = 'superseded01';
+    const session = {
+      name: 'op-worker-superseded',
+      role: 'worker',
+      prNumber: 60,
+      reports: [
+        {
+          reportState: 'ready_for_review',
+          headRefOid: head,
+          reportedAt: '2026-06-05T11:00:00.000Z',
+        },
+        {
+          reportState: 'addressing_reviews',
+          headRefOid: head,
+          reportedAt: '2026-06-05T12:00:00.000Z',
+        },
+      ],
+    };
+    expect(hasReadyForReviewForHead(session, head)).toBe(false);
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 60,
+      headSha: head,
+      session: session as never,
+      ciChecks: greenChecks,
+    });
+    expect(decision.eligible).toBe(false);
+    expect(decision.reason).toBe('uncovered_not_ready');
   });
 
   it('(d) red CI defers an otherwise-ready head', () => {
