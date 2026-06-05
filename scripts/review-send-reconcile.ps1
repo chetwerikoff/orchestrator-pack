@@ -46,6 +46,8 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Review-Send-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -190,9 +192,17 @@ function Invoke-PlannedFirstReviewSend {
     }
 
     Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$($Action.sessionId)"
-    & ao @sendArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
+    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
+    Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        & ao @sendArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
+        }
+    }
+    if (-not $fenced.ok) {
+        Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
+        return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
     $post = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
@@ -348,6 +358,7 @@ try {
             intervalMs = $intervalMs
         }
 
+        Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'poll'
         if (-not $gate.ok) {
             Write-ReviewSendLog "tick skipped: $($gate.reason)"
         }
@@ -358,6 +369,9 @@ try {
             }
             catch {
                 Write-ReviewSendLog "tick error: $_"
+            }
+            finally {
+                Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'tick_complete'
             }
         }
 

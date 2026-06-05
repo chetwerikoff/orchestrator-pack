@@ -38,6 +38,8 @@ $Script:DefaultMaxRedeliveries = 2
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 
 function Get-DeliveryIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -218,9 +220,17 @@ function Invoke-PlannedReviewSend {
     }
 
     Write-DeliveryLog "re-delivering findings: run=$RunId PR #$PrNumber session=$SessionId attempt=$Attempt"
-    & ao @sendArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao review send failed (exit $LASTEXITCODE) for run $RunId"
+    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'delivery-confirm-side-effect.lock'
+    Write-OrchestratorSideProcessProgress -ChildId 'review-finding-delivery-confirm' -Phase 'side_effect'
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        & ao @sendArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "ao review send failed (exit $LASTEXITCODE) for run $RunId"
+        }
+    }
+    if (-not $fenced.ok) {
+        Write-DeliveryLog "redelivery skipped (side-effect busy) run=$RunId"
+        return
     }
 }
 
@@ -356,6 +366,7 @@ try {
             intervalMs = $intervalMs
         }
 
+        Write-OrchestratorSideProcessProgress -ChildId 'review-finding-delivery-confirm' -Phase 'poll'
         if (-not $gate.ok) {
             Write-DeliveryLog "tick skipped: $($gate.reason)"
         }
@@ -378,13 +389,16 @@ try {
                 $tickFailed = $true
                 Write-DeliveryLog "tick error: $_"
             }
+            finally {
+                Write-OrchestratorSideProcessProgress -ChildId 'review-finding-delivery-confirm' -Phase 'tick_complete'
+            }
         }
 
         if ($Once) { break }
         Start-Sleep -Milliseconds $pollMs
     } while ($true)
 
-    if ($tickFailed) {
+    if ($Once -and $tickFailed) {
         exit 1
     }
 }

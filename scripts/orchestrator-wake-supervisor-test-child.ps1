@@ -1,19 +1,23 @@
 #requires -Version 5.1
 <#
-  Test-only stub child for orchestrator-wake-supervisor (Issue #168 fixtures).
+  Test-only stub child for orchestrator side-process supervisor (Issues #168, #205 fixtures).
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('listener', 'heartbeat', 'review-send-reconcile')]
     [string]$Role,
 
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
-    [string]$MarkerDir = ''
+    [string]$MarkerDir = '',
+    [ValidateSet('normal', 'hang', 'slow-side-effect')]
+    [string]$Mode = 'normal'
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 
 $sessionId = if ($OrchestratorSessionId) {
     $OrchestratorSessionId.Trim()
@@ -55,6 +59,7 @@ $marker = @{
     role                  = $Role
     pid                   = $PID
     orchestratorSessionId = $sessionId
+    mode                  = $Mode
     startedAt             = (Get-Date).ToString('o')
 }
 if ($projectId) {
@@ -63,6 +68,22 @@ if ($projectId) {
 $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encoding utf8 -NoNewline
 Move-Item -LiteralPath $markerTemp -Destination $markerPath -Force
 
+Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'started'
+
 while ($true) {
-  Start-Sleep -Seconds 1
+    if ($Mode -eq 'hang') {
+        Start-Sleep -Seconds 1
+        continue
+    }
+
+    if ($Mode -eq 'slow-side-effect') {
+        $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'test-side-effect.lock'
+        Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'side_effect'
+        Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+            Start-Sleep -Seconds 8
+        } | Out-Null
+    }
+
+    Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'idle'
+    Start-Sleep -Seconds 1
 }

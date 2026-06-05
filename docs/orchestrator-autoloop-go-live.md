@@ -25,7 +25,8 @@ and the matching steps in
 | Worker review contract | `prompts/agent_rules.md` |
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
-| Wake supervisor (listener + heartbeat + review-send) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `scripts/review-send-reconcile.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Side-process supervisor (all autoloop children) | `scripts/orchestrator-wake-supervisor.ps1`, `scripts/orchestrator-side-process-registry.json` (Issues #168, #202, #205) |
+| Wake listener / heartbeat (manual fallback) | `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
 | Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs`, `docs/review-head-ready.mjs` (Issues #163, #195) |
 | CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | First-send review delivery reconcile | `scripts/review-send-reconcile.ps1`, `docs/review-send-reconcile.mjs` (Issue #202) |
@@ -35,7 +36,7 @@ and the matching steps in
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
 
-## Every session — five processes
+## Every session — two operator processes (plus optional watcher)
 
 **Terminal A — AO**
 
@@ -44,11 +45,15 @@ cd <orchestrator-pack-root>
 ao start orchestrator-pack
 ```
 
-**Terminal B — wake supervisor** (listener + heartbeat + review-send-reconcile; preferred — Issue #168 / #202)
+**Terminal B — side-process supervisor** (preferred — Issues #168, #202, #205)
 
-Starts wake and first-send reconcile processes as **separate managed children**, resolves the
-orchestrator session id from `ao status` when unset, restarts any child on exit, and
-re-targets wake children when the orchestrator session id changes. Logs:
+Starts **all** orchestrator side-processes from
+`scripts/orchestrator-side-process-registry.json` as **separate managed children**:
+wake listener, heartbeat, review-trigger reconcile, CI-green wake reconcile,
+review-send reconcile, and review-finding delivery-confirm. Resolves the orchestrator
+session id from `ao status` when unset, restarts children on exit or stall (idle-safe
+threshold per child cadence), debounces session-id flaps, and re-targets session-bound
+children on a confirmed id change. Logs:
 `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
 `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`).
 
@@ -71,48 +76,16 @@ Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (defa
 (supervisor poll, default 5), `AO_WAKE_SUPERVISOR_STATE_DIR`, `AO_WAKE_SUPERVISOR_PROJECT_ID`
 (default `orchestrator-pack`). See [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
 
-**Manual fallback — two terminals** (listener and heartbeat separately): same as
-before — `scripts/orchestrator-wake-listener.ps1` and
-`scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
-Use when debugging one path in isolation.
+**Manual fallback — per-process launches** (when debugging one path in isolation):
 
-**Terminal D — review-trigger reconciliation** (default 10 min; independent of orchestrator turns)
+- Wake listener + heartbeat: `scripts/orchestrator-wake-listener.ps1`,
+  `scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
+- Review-trigger reconcile: `scripts/review-trigger-reconcile.ps1` (default 10 min).
+- CI-green wake: `scripts/ci-green-wake-reconcile.ps1` (default 1 min).
+- First-send delivery: `scripts/review-send-reconcile.ps1` (default 2 min).
+- Delivery confirm: `scripts/review-finding-delivery-confirm.ps1` (default 5 min).
 
-```powershell
-cd <orchestrator-pack-root>
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1
-```
-
-Optional: `$env:AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES = '30'` before starting.
-One-shot dry-run (no `ao review run`):
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
-```
-
-**Terminal F — CI-green worker wake** (default 1 min; Issue #191 — `ao send` only)
-
-```powershell
-cd <orchestrator-pack-root>
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-green-wake-reconcile.ps1
-```
-
-Optional: `$env:AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES = '1'` (default). One-shot dry-run:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun
-```
-
-**First-send review delivery** (default 2 min; Issue #202 — `ao review send` only for never-sent
-`needs_triage` runs) is started automatically by the wake supervisor above. Standalone debug:
-
-```powershell
-cd <orchestrator-pack-root>
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-send-reconcile.ps1 -Once -DryRun
-```
-
-Optional: `$env:AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES = '2'` (default),
-`$env:AO_REVIEW_SEND_RECONCILE_STATE` for the dedupe state file path.
+Each supports `-Once -DryRun` for fixture/contract checks without live `ao`/`gh`.
 
 **Terminal E — worktree trust watcher** (Windows Cursor; avoids blocking
 `Workspace Trust Required` on each new `op-*` worktree)

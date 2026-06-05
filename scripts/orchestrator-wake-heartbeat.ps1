@@ -27,6 +27,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
 $Script:DefaultIntervalMinutes = 15
 
@@ -72,6 +73,7 @@ try {
         if (Test-OrchestratorWakeCancelled) { break }
 
         try {
+            Write-OrchestratorSideProcessProgress -ChildId 'heartbeat' -Phase 'poll'
             $tick = Invoke-HeartbeatTick -DedupFile $dedupFile -IntervalMs $intervalMs -WindowMs $dedupWindowMs
             if ($tick.ok) {
                 Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $tick.wakeMessage -DryRun:$DryRun -LogSuffix 'heartbeat'
@@ -80,6 +82,7 @@ try {
             else {
                 Write-HeartbeatLog "heartbeat skipped: $($tick.reason)"
             }
+            Write-OrchestratorSideProcessProgress -ChildId 'heartbeat' -Phase 'tick_complete'
         }
         catch {
             Write-HeartbeatLog "heartbeat tick error: $_"

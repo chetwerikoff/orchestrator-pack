@@ -42,6 +42,8 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -202,9 +204,17 @@ function Invoke-PlannedCiGreenWakeSend {
     }
 
     Write-CiGreenWakeLog "nudging worker: PR #$($Action.prNumber) head=$($Action.headSha) session=$($Action.sessionId) transition=$($Action.transitionId)"
-    & ao @sendArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao send failed (exit $LASTEXITCODE) for PR #$($Action.prNumber)"
+    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'ci-green-wake-side-effect.lock'
+    Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'side_effect'
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        & ao @sendArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "ao send failed (exit $LASTEXITCODE) for PR #$($Action.prNumber)"
+        }
+    }
+    if (-not $fenced.ok) {
+        Write-CiGreenWakeLog "nudge skipped (side-effect busy) PR #$($Action.prNumber)"
+        return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
     return @{ sent = $true; reason = 'sent' }
@@ -361,6 +371,7 @@ try {
             intervalMs = $intervalMs
         }
 
+        Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'poll'
         if (-not $gate.ok) {
             Write-CiGreenWakeLog "tick skipped: $($gate.reason)"
         }
@@ -371,6 +382,9 @@ try {
             }
             catch {
                 Write-CiGreenWakeLog "tick error: $_"
+            }
+            finally {
+                Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'tick_complete'
             }
         }
 

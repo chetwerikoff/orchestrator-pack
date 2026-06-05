@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,16 +46,28 @@ function runSupervisor(
   args: string[],
   env: Record<string, string> = {},
 ): { stdout: string; stderr: string; status: number | null } {
+  const savedEnv: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    savedEnv[key] = process.env[key];
+    process.env[key] = value;
+  }
   const result = spawnSync(
     'pwsh',
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
     {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: process.env,
       encoding: 'utf8',
       timeout: 120_000,
     },
   );
+  for (const [key, previous] of Object.entries(savedEnv)) {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
   return {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
@@ -80,29 +92,50 @@ function startSupervisorBackground(
     '1',
     ...extraArgs,
   ];
+  const savedEnv: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    savedEnv[key] = process.env[key];
+    process.env[key] = value;
+  }
   const child = spawn(
     'pwsh',
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
     {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+      stdio: 'ignore',
     },
   );
+  child.on('exit', () => {
+    for (const [key, previous] of Object.entries(savedEnv)) {
+      if (previous === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous;
+      }
+    }
+  });
   return child;
 }
 
-async function waitForMarkers(stateDir: string, timeoutMs = 10_000) {
+const managedChildRoles = [
+  'listener',
+  'heartbeat',
+  'review-trigger-reconcile',
+  'ci-green-wake-reconcile',
+  'review-send-reconcile',
+  'review-finding-delivery-confirm',
+] as const;
+
+type ManagedChildRole = (typeof managedChildRoles)[number];
+
+async function waitForMarkers(stateDir: string, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const listenerPath = path.join(stateDir, 'markers', 'listener.marker.json');
-    const heartbeatPath = path.join(stateDir, 'markers', 'heartbeat.marker.json');
-    const reviewSendPath = path.join(stateDir, 'markers', 'review-send-reconcile.marker.json');
-    if (
-      fs.existsSync(listenerPath) &&
-      fs.existsSync(heartbeatPath) &&
-      fs.existsSync(reviewSendPath)
-    ) {
+    const ready = managedChildRoles.every((role) =>
+      fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`)),
+    );
+    if (ready) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -119,7 +152,7 @@ type WakeMarker = {
 
 async function readMarker(
   stateDir: string,
-  role: 'listener' | 'heartbeat' | 'review-send-reconcile',
+  role: ManagedChildRole,
   timeoutMs = 5000,
 ): Promise<WakeMarker> {
   const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
@@ -155,7 +188,7 @@ function isAlive(pid: number): boolean {
 }
 
 describe('orchestrator-wake-supervisor', () => {
-  it('starts listener, heartbeat, and review-send-reconcile as separate processes', async () => {
+  it('starts all registered managed children as separate processes', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
       '-OrchestratorSessionId',
@@ -163,14 +196,14 @@ describe('orchestrator-wake-supervisor', () => {
     ]);
     await waitForMarkers(stateDir);
 
-    const listener = await readMarker(stateDir, 'listener');
-    const heartbeat = await readMarker(stateDir, 'heartbeat');
-    const reviewSend = await readMarker(stateDir, 'review-send-reconcile');
-    expect(listener.orchestratorSessionId).toBe('op-test-override');
-    expect(heartbeat.orchestratorSessionId).toBe('op-test-override');
-    expect(listener.pid).not.toBe(heartbeat.pid);
-    expect(reviewSend.pid).not.toBe(listener.pid);
-    expect(reviewSend.pid).not.toBe(heartbeat.pid);
+    const markers = await Promise.all(managedChildRoles.map((role) => readMarker(stateDir, role)));
+    const pids = new Set(markers.map((m) => m.pid));
+    expect(pids.size).toBe(managedChildRoles.length);
+    for (const marker of markers) {
+      if (marker.role === 'listener' || marker.role === 'heartbeat') {
+        expect(marker.orchestratorSessionId).toBe('op-test-override');
+      }
+    }
     child.kill('SIGTERM');
   });
 
@@ -378,7 +411,9 @@ describe('orchestrator-wake-supervisor', () => {
       fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old.json')),
     );
 
-    const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
+    const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture], {
+      AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS: '1',
+    });
     await waitForMarkers(stateDir);
 
     const oldListener = await readMarker(stateDir, 'listener');
@@ -387,19 +422,22 @@ describe('orchestrator-wake-supervisor', () => {
       fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-new.json')),
     );
 
-    const deadline = Date.now() + 12_000;
+    const deadline = Date.now() + 45_000;
     let sawNew = false;
     while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'listener');
-      if (current.orchestratorSessionId === 'op-orchestrator-new' && current.pid !== oldListener.pid) {
+      const listener = await readMarker(stateDir, 'listener');
+      const heartbeat = await readMarker(stateDir, 'heartbeat');
+      if (
+        listener.orchestratorSessionId === 'op-orchestrator-new' &&
+        heartbeat.orchestratorSessionId === 'op-orchestrator-new' &&
+        listener.pid !== oldListener.pid
+      ) {
         sawNew = true;
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
     expect(sawNew).toBe(true);
-    const heartbeat = await readMarker(stateDir, 'heartbeat');
-    expect(heartbeat.orchestratorSessionId).toBe('op-orchestrator-new');
     child.kill('SIGTERM');
   });
 
@@ -520,22 +558,17 @@ describe('orchestrator-wake-supervisor', () => {
     expect(start.status).toBe(0);
     expect(start.stdout).toContain('supervisor detached');
 
-    const listenerLog = path.join(stateDir, 'listener.log');
-    const heartbeatLog = path.join(stateDir, 'heartbeat.log');
-    const reviewSendLog = path.join(stateDir, 'review-send-reconcile.log');
-    const deadline = Date.now() + 8000;
+    const childLogs = managedChildRoles.map((role) => path.join(stateDir, `${role}.log`));
+    const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
-      if (
-        fs.existsSync(listenerLog) &&
-        fs.existsSync(heartbeatLog) &&
-        fs.existsSync(reviewSendLog)
-      ) {
+      if (childLogs.every((logPath) => fs.existsSync(logPath))) {
         break;
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
     }
-    expect(fs.existsSync(listenerLog)).toBe(true);
-    expect(fs.existsSync(heartbeatLog)).toBe(true);
+    for (const logPath of childLogs) {
+      expect(fs.existsSync(logPath)).toBe(true);
+    }
 
     const statusMid = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusMid.status).toBe(0);
@@ -600,13 +633,96 @@ describe('orchestrator-wake-supervisor', () => {
   );
 });
 
-describe('Issue #207 side-effecting listener registry', () => {
-  it('registry classifies listener as side-effecting with lock path', () => {
-    const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
-    const text = fs.readFileSync(supervisorLib, 'utf8');
-    expect(text).toContain('Get-OrchestratorWakeSupervisorChildRegistry');
-    expect(text).toContain("Id            = 'listener'");
-    expect(text).toContain('SideEffecting = $true');
-    expect(text).toContain('listener-side-effect.lock');
+describe('Issue #205 side-process registry', () => {
+  const issue205TimeoutMs = 60_000;
+  it('registry JSON lists all required managed children', () => {
+    const registryPath = path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json');
+    const doc = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as {
+      requiredChildIds: string[];
+      children: { id: string; sideEffecting?: boolean; sideEffectLockFile?: string }[];
+    };
+    for (const id of managedChildRoles) {
+      expect(doc.requiredChildIds).toContain(id);
+      expect(doc.children.some((c) => c.id === id)).toBe(true);
+    }
+    const listener = doc.children.find((c) => c.id === 'listener');
+    expect(listener?.sideEffecting).toBe(true);
+    expect(listener?.sideEffectLockFile).toBe('listener-side-effect.lock');
   });
+
+  it(
+    'recovers a hung test child without restarting idle siblings',
+    async () => {
+    const stateDir = makeStateDir();
+    const start = runSupervisor(
+      [
+        '-Action',
+        'Start',
+        '-TestMode',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'op-stall-test',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '1',
+      ],
+      {
+        AO_WAKE_SUPERVISOR_TEST_MODE_review_trigger_reconcile: 'hang',
+        AO_WAKE_SUPERVISOR_TEST_STALL_SECONDS: '5',
+      },
+    );
+    expect(start.status).toBe(0);
+    await waitForMarkers(stateDir, 20_000);
+
+    const first = await readMarker(stateDir, 'review-trigger-reconcile');
+    const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
+    const deadline = Date.now() + 25_000;
+    let recovered = false;
+    while (Date.now() < deadline) {
+      const current = await readMarker(stateDir, 'review-trigger-reconcile');
+      if (current.pid !== first.pid && isAlive(current.pid)) {
+        recovered = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    expect(recovered).toBe(true);
+    expect(isAlive(heartbeatBefore.pid)).toBe(true);
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    },
+    issue205TimeoutMs,
+  );
+
+  it(
+    'does not restart a child that is merely slow on a side effect',
+    async () => {
+    const stateDir = makeStateDir();
+    const start = runSupervisor(
+      [
+        '-Action',
+        'Start',
+        '-TestMode',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'op-slow-side-effect',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '1',
+      ],
+      { AO_WAKE_SUPERVISOR_TEST_MODE_ci_green_wake_reconcile: 'slow-side-effect' },
+    );
+    expect(start.status).toBe(0);
+    await waitForMarkers(stateDir, 20_000);
+
+    const first = await readMarker(stateDir, 'ci-green-wake-reconcile');
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    const current = await readMarker(stateDir, 'ci-green-wake-reconcile');
+    expect(current.pid).toBe(first.pid);
+    expect(isAlive(current.pid)).toBe(true);
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    },
+    issue205TimeoutMs,
+  );
 });

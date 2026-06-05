@@ -433,9 +433,10 @@ Expected behavior:
   (terminal; no ping or respawn for review on that PR).
 - Workers in **`addressing_reviews`** / **`fixing_ci`** should be left alone
   unless the loop rules say otherwise.
-- Wake processes (if used): prefer `scripts/orchestrator-wake-supervisor.ps1 -Action Stop`
-  then `-Action Start` after recovery; manual fallback is separate listener/heartbeat
-  scripts — see `docs/orchestrator-wake-runbook.md`.
+- Side-processes (if used): prefer `scripts/orchestrator-wake-supervisor.ps1 -Action Stop`
+  then `-Action Start` after recovery (registry-managed listener, heartbeat, reconcilers,
+  delivery-confirm — Issue #205). Manual fallback is per-script launches — see
+  `docs/orchestrator-autoloop-go-live.md` and `docs/orchestrator-wake-runbook.md`.
 
 Nothing in this runbook auto-merges PRs or kills workers; that stays in
 `orchestratorRules`.

@@ -769,6 +769,24 @@ State, PID files, and per-child logs live under
 Manual two-script startup remains documented as fallback in
 `docs/orchestrator-wake-runbook.md`.
 
+## Side-process supervisor — full autoloop set (Issue #205)
+
+After merge, use **one** supervisor for all registry-managed side-processes (listener,
+heartbeat, review-trigger reconcile, CI-green wake reconcile, review-send reconcile,
+delivery-confirm). Replaces separate Terminal D/F reconcile launches and the
+#168-only listener+heartbeat+review-send scope.
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. Stop any manual reconcile / listener / heartbeat processes still running.
+3. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+4. Confirm: `-Action Status` lists **all** registry children as `running`.
+5. Optional env: `AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` (default 2),
+   `AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS` (default 2),
+   `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` (default 500).
+
+Registry: `scripts/orchestrator-side-process-registry.json` — add new long-running
+side-processes here in the same PR that introduces the process.
+
 ## State-derived review-trigger reconciliation (Issue #163)
 
 Adds `scripts/review-trigger-reconcile.ps1`: observes open PR heads via `gh`,

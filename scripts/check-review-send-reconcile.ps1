@@ -9,7 +9,8 @@ $example = Join-Path $Root 'agent-orchestrator.yaml.example'
 $agentRules = Join-Path $Root 'prompts/agent_rules.md'
 $wakeScript = Join-Path $Root 'scripts/review-send-reconcile.ps1'
 $wakeMjs = Join-Path $Root 'docs/review-send-reconcile.mjs'
-$supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-WakeSupervisor.ps1'
+$registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
+$supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
 $runbook = Join-Path $Root 'docs/orchestrator-recovery-runbook.md'
 
 if (-not (Test-Path -LiteralPath $wakeScript -PathType Leaf)) {
@@ -56,9 +57,19 @@ if ($mjs -notmatch 'DEFAULT_REVIEW_SEND_INTERVAL_MS = 2 \* 60 \* 1000') {
     exit 1
 }
 
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    Write-Host "Missing registry: $registryPath"
+    exit 1
+}
+$registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+$sendChild = $registry.children | Where-Object { $_.id -eq 'review-send-reconcile' } | Select-Object -First 1
+if (-not $sendChild) {
+    Write-Host 'orchestrator-side-process-registry.json must register review-send-reconcile'
+    exit 1
+}
 $supervisor = Get-Content -LiteralPath $supervisorLib -Raw
-if ($supervisor -notmatch 'review-send-reconcile') {
-    Write-Host 'Orchestrator-WakeSupervisor.ps1 must manage review-send-reconcile child'
+if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
+    Write-Host 'Orchestrator-SideProcessSupervisor.ps1 must load registry-managed children'
     exit 1
 }
 

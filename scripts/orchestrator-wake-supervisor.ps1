@@ -52,12 +52,14 @@ if (-not (Test-Path -LiteralPath $paths.Root)) {
 switch ($Action) {
     'Status' {
         Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid) -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
-        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.ListenerPid) -PidFile $paths.ListenerPid -Role 'listener' -LogPath $paths.SupervisorLog
-        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.HeartbeatPid) -PidFile $paths.HeartbeatPid -Role 'heartbeat' -LogPath $paths.SupervisorLog
-        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.ReviewSendReconcilePid) -PidFile $paths.ReviewSendReconcilePid -Role 'review-send-reconcile' -LogPath $paths.SupervisorLog
+        foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+            $pidPath = Get-OrchestratorWakeSupervisorChildPidPath -Paths $paths -ChildId $child.Id
+            Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $pidPath) `
+                -PidFile $pidPath -Role $child.Id -LogPath $paths.SupervisorLog
+        }
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
-        if ($report.SupervisorAlive -and $report.ListenerAlive -and $report.HeartbeatAlive -and $report.ReviewSendReconcileAlive) {
+        if (Test-OrchestratorWakeSupervisorAllChildrenAlive -Report $report) {
             exit 0
         }
         exit 1
@@ -79,6 +81,18 @@ switch ($Action) {
     }
 
     'Start' {
+        $registryErrors = @()
+        if (-not (Test-OrchestratorSideProcessRegistry -OutErrors ([ref]$registryErrors))) {
+            $message = "Supervisor registry validation failed: $($registryErrors -join '; ')"
+            Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
+            Write-Error $message
+            exit 2
+        }
+
+        if (-not (Test-Path -LiteralPath $paths.ProgressDir)) {
+            New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
+        }
+
         $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
         Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId $existingPid -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
         $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid

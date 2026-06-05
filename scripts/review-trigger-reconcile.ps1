@@ -43,6 +43,8 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -221,9 +223,17 @@ function Invoke-PlannedReviewRun {
 
     Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
-    & ao @runArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
+    Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        & ao @runArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+        }
+    }
+    if (-not $fenced.ok) {
+        Write-ReconcileLog "review run skipped (side-effect busy) PR #$PrNumber"
+        return
     }
 }
 
@@ -377,6 +387,7 @@ try {
             intervalMs = $intervalMs
         }
 
+        Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'poll'
         if (-not $gate.ok) {
             Write-ReconcileLog "tick skipped: $($gate.reason)"
         }
@@ -397,6 +408,7 @@ try {
                 $result = $null
             }
             finally {
+                Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'tick_complete'
                 if (-not $DryRun) {
                     $degradedCi = $tickTracking.degradedCi
                     if ($result -and $result.plan) {
