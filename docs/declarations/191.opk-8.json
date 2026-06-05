@@ -19,6 +19,7 @@
     "docs/orchestrator-autoloop-go-live.md",
     "docs/review-mechanical-cli.d.mts",
     "docs/review-mechanical-cli.mjs",
+    "docs/review-ready-stuck-guard.d.mts",
     "docs/review-ready-stuck-guard.mjs",
     "docs/review-trigger-reconcile.d.mts",
     "docs/review-trigger-reconcile.mjs",
