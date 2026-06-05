@@ -154,10 +154,14 @@ function Invoke-PlannedFirstReviewSend {
         [switch]$UseFixtureSnapshot
     )
 
-    if ($UseFixtureSnapshot -and -not $FreshPayload) {
-        throw 'FreshPayload is required when UseFixtureSnapshot is set'
+    if ($UseFixtureSnapshot) {
+        # Fixture ticks never call live ao/gh (contract tests must run without AO).
+        $DryRunMode = $true
+        if (-not $FreshPayload) {
+            throw 'FreshPayload is required when UseFixtureSnapshot is set'
+        }
     }
-    if (-not $UseFixtureSnapshot) {
+    elseif (-not $FreshPayload) {
         $FreshPayload = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
     }
 
@@ -321,7 +325,10 @@ Write-ReviewSendLog "starting (project=$ProjectId, interval=${intervalMinutes}m,
 Write-ReviewSendLog "additive path: LLM-turn first-send and heartbeat backstop remain; #171 owns re-delivery after send"
 
 if ($FixturePath) {
-    $count = Invoke-ReviewSendTick -Project $ProjectId -StatePath $statePath -DryRunMode:$DryRun -Fixture $FixturePath
+    if (-not $DryRun) {
+        Write-ReviewSendLog 'fixture mode: enforcing dry-run (no live ao/gh)'
+    }
+    $count = Invoke-ReviewSendTick -Project $ProjectId -StatePath $statePath -DryRunMode -Fixture $FixturePath
     Write-ReviewSendLog "fixture tick complete (sent=$count)"
     exit 0
 }

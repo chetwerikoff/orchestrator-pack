@@ -62,6 +62,16 @@ if ($supervisor -notmatch 'review-send-reconcile') {
     exit 1
 }
 
+$ps1 = Get-Content -LiteralPath $wakeScript -Raw
+if ($ps1 -notmatch 'UseFixtureSnapshot[\s\S]*\$DryRunMode = \$true') {
+    Write-Host 'review-send-reconcile.ps1 must force dry-run when using fixture snapshots'
+    exit 1
+}
+if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePath') {
+    Write-Host 'review-send-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live ao/gh)'
+    exit 1
+}
+
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(
     'review-send-reconcile',
