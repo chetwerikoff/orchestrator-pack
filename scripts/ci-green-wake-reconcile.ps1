@@ -90,6 +90,27 @@ function Set-CiGreenWakeState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
 }
 
+function Save-PartialCiGreenWakeTracking {
+    param(
+        [string]$Path,
+        [hashtable]$HeadRecords,
+        [hashtable]$Nudged,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode -or -not $Path) {
+        return
+    }
+
+    $existing = Get-CiGreenWakeState -Path $Path
+    $merged = @{
+        heads      = $HeadRecords
+        nudged     = $Nudged
+        lastTickMs = $existing.lastTickMs
+    }
+    Set-CiGreenWakeState -Path $Path -State $merged
+}
+
 function ConvertFrom-GhJsonArrayOutput {
     param([object]$RawOutput)
 
@@ -353,6 +374,15 @@ function Invoke-CiGreenWakeTick {
         }
     }
 
+    $headRecords = @{}
+    if ($plan.headRecords) {
+        foreach ($prop in $plan.headRecords.PSObject.Properties) {
+            $headRecords[$prop.Name] = $prop.Value
+        }
+    }
+
+    $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
+
     foreach ($action in @($plan.actions)) {
         if ($action.type -eq 'skip') {
             Write-CiGreenWakeLog "skip PR #$($action.prNumber): $($action.reason)"
@@ -362,8 +392,15 @@ function Invoke-CiGreenWakeTick {
             continue
         }
 
-        $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $fixtureFreshPayload `
-            -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
+        try {
+            $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $fixtureFreshPayload `
+                -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
+        }
+        catch {
+            Write-CiGreenWakeLog "send error PR #$($action.prNumber): $_"
+            continue
+        }
+
         if ($result.sent) {
             if (-not $DryRunMode) {
                 $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -371,15 +408,10 @@ function Invoke-CiGreenWakeTick {
                     sessionId = [string]$action.sessionId
                     sentAtMs  = $nowMs
                 }
+                Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
+                    -Nudged $nudged -DryRunMode:$DryRunMode
             }
             $sent++
-        }
-    }
-
-    $headRecords = @{}
-    if ($plan.headRecords) {
-        foreach ($prop in $plan.headRecords.PSObject.Properties) {
-            $headRecords[$prop.Name] = $prop.Value
         }
     }
 
