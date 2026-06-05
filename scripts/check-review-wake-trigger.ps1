@@ -46,8 +46,16 @@ if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorksp
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
     exit 1
 }
+if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Test-ReviewWakeTriggerForbiddenCommand') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must block merge commands in the wake trigger guard'
+    exit 1
+}
 
 $mjs = Get-Content -LiteralPath $triggerMjs -Raw
+if ($mjs -notmatch 'MECHANICAL_FORBIDDEN_REVIEW_WAKE') {
+    Write-Host 'docs/review-wake-trigger.mjs must forbid merge commands in the wake trigger guard'
+    exit 1
+}
 if ($mjs -notmatch 'WAKE_TO_RUN_DECISION_MAX_MS = 5_000') {
     Write-Host 'docs/review-wake-trigger.mjs must define 5-second wake-to-run decision bound'
     exit 1

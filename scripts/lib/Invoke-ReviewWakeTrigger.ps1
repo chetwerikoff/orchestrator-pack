@@ -8,6 +8,16 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 
+function Test-ReviewWakeTriggerForbiddenCommand {
+    param([string]$CommandLine)
+
+    Test-ReviewMechanicalForbiddenCommand -CommandLine $CommandLine
+
+    if ($CommandLine -match '\bgh\s+pr\s+merge\b') {
+        throw 'forbidden merge fragment in review wake command: gh pr merge'
+    }
+}
+
 function Get-ReviewWakeTriggerSideEffectLockPath {
     param([string]$StateRoot = '')
     if ($StateRoot) {
@@ -195,7 +205,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     $planned = $evaluation.planned
     $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
     $commandLine = "ao $($runArgs -join ' ')"
-    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
+    Test-ReviewWakeTriggerForbiddenCommand -CommandLine $commandLine
 
     $lockPath = if ($SideEffectLockPath) { $SideEffectLockPath } else { Get-ReviewWakeTriggerSideEffectLockPath }
     if (Test-ReviewWakeTriggerSideEffectInFlight -LockPath $lockPath) {

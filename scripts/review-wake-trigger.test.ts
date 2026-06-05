@@ -258,7 +258,10 @@ describe('findForbiddenReviewWakeCommands', () => {
       'ao session kill opk-11',
       'ao review run x --claim-pr',
     ]);
-    expect(violations.length).toBeGreaterThanOrEqual(4);
+    expect(violations.length).toBeGreaterThanOrEqual(5);
+    expect(
+      violations.some((entry) => entry.command.includes('gh pr merge')),
+    ).toBe(true);
   });
 });
 

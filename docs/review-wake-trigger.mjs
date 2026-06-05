@@ -320,8 +320,14 @@ export function evaluateWakePreRunRecheck(input) {
 /**
  * @param {string[]} commandLines
  */
+/** Wake fast path must never merge — extends review mechanical guard. */
+export const MECHANICAL_FORBIDDEN_REVIEW_WAKE = [
+  ...MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL,
+  /\bgh\s+pr\s+merge\b/i,
+];
+
 export function findForbiddenReviewWakeCommands(commandLines) {
-  return findForbiddenCommandPatterns(commandLines, MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL);
+  return findForbiddenCommandPatterns(commandLines, MECHANICAL_FORBIDDEN_REVIEW_WAKE);
 }
 
 export { buildReviewRunArgv };
