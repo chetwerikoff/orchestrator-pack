@@ -22,7 +22,7 @@ import {
   getSessionIdentifier,
   isLiveWorkerSession,
   normalizeSha,
-  resolveWorkerSessionId,
+  sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
@@ -156,6 +156,41 @@ export function isPreHandOffWorkerForHead(session, headSha) {
 }
 
 /**
+ * Pick the live worker session that owns the current PR head (not merely the first PR match).
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
+  const prList = toArray(openPrs);
+
+  for (const session of toArray(sessions)) {
+    const role = String(session?.role ?? '').toLowerCase();
+    if (role !== 'worker' && role !== 'coding') {
+      continue;
+    }
+    if (!isLiveWorkerSession(session)) {
+      continue;
+    }
+    if (!sessionMatchesPr(session, prNumber)) {
+      continue;
+    }
+    if (!sessionOwnsRunHead(session, prNumber, headSha, prList)) {
+      continue;
+    }
+
+    const identifier = getSessionIdentifier(session);
+    if (identifier) {
+      return identifier;
+    }
+  }
+
+  return null;
+}
+
+/**
  * @param {object} input
  * @param {AoSession} input.session
  * @param {number} input.prNumber
@@ -246,9 +281,14 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    const sessionId = resolveWorkerSessionId(sessionList, prNumber);
+    const sessionId = resolveHeadOwningWorkerSessionId(
+      sessionList,
+      prNumber,
+      headSha,
+      toArray(openPrs),
+    );
     if (!sessionId) {
-      actions.push({ type: 'skip', prNumber, headSha, reason: 'no_worker_session' });
+      actions.push({ type: 'skip', prNumber, headSha, reason: 'no_head_owning_worker_session' });
       continue;
     }
 

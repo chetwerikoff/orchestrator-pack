@@ -11,11 +11,13 @@ import {
   findForbiddenCiGreenWakeCommands,
   mergeBranchRequiredCheckNames,
   planCiGreenWakeActions,
+  resolveHeadOwningWorkerSessionId,
   preSendRecheck,
   recordSuccessfulNudge,
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
+import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -137,6 +139,36 @@ describe('deriveGreenEpoch', () => {
   });
 });
 
+describe('resolveHeadOwningWorkerSessionId', () => {
+  it('skips stale live PR session and returns head owner', () => {
+    const headSha = 'currenthead';
+    const sessions: AoSession[] = [
+      {
+        name: 'op-stale',
+        role: 'worker',
+        prNumber: 42,
+        ownedHeadSha: 'oldhead00',
+        runtime: 'alive',
+        status: 'working',
+      },
+      {
+        name: 'op-owner',
+        role: 'worker',
+        prNumber: 42,
+        ownedHeadSha: headSha,
+        runtime: 'alive',
+        status: 'fixing_ci',
+      },
+    ];
+
+    expect(
+      resolveHeadOwningWorkerSessionId(sessions, 42, headSha, [
+        { number: 42, headRefOid: headSha },
+      ]),
+    ).toBe('op-owner');
+  });
+});
+
 describe('planCiGreenWakeActions', () => {
   it('(a) nudges pre-hand-off worker when required CI is green', () => {
     const session = liveWorker({
@@ -215,6 +247,52 @@ describe('planCiGreenWakeActions', () => {
       tracking: {},
     });
     expect(nudgeActions(result.actions)).toHaveLength(0);
+  });
+
+  it('nudges when first live PR session is stale but a later session owns the head', () => {
+    const headSha = 'currenthead';
+    const result = plan({
+      openPrs: [{ number: 77, headRefOid: headSha }],
+      sessions: [
+        {
+          name: 'op-stale',
+          role: 'worker',
+          prNumber: 77,
+          ownedHeadSha: 'oldhead00',
+          runtime: 'alive',
+          reports: [
+            {
+              reportState: 'fixing_ci',
+              headRefOid: 'oldhead00',
+              reportedAt: '2026-06-01T00:00:00.000Z',
+            },
+          ],
+        } as unknown as AoSession,
+        {
+          name: 'op-owner',
+          role: 'worker',
+          prNumber: 77,
+          ownedHeadSha: headSha,
+          runtime: 'alive',
+          reports: [
+            { reportState: 'fixing_ci', headRefOid: headSha, reportedAt: '2026-06-05T00:00:00.000Z' },
+          ],
+        } as unknown as AoSession,
+      ],
+      ciChecksByPr: {
+        77: [
+          { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+          { name: 'PR scope guard', state: 'SUCCESS' },
+          { name: 'Run pack contract tests', state: 'SUCCESS' },
+          { name: 'Self-architect lint', state: 'SUCCESS' },
+        ],
+      },
+      tracking: {},
+    });
+
+    const nudges = nudgeActions(result.actions);
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0]?.sessionId).toBe('op-owner');
   });
 
   it('(f) does not nudge when runtime is not alive', () => {

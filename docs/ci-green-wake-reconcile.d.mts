@@ -80,6 +80,13 @@ export declare function deriveGreenEpoch(
 
 export declare function isPreHandOffWorkerForHead(session: AoSession, headSha: string): boolean;
 
+export declare function resolveHeadOwningWorkerSessionId(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): string | null;
+
 export declare function evaluateCiGreenWakeCandidate(input: {
   session: AoSession;
   prNumber: number;
