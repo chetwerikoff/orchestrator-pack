@@ -89,12 +89,7 @@ export declare function normalizeRequiredCheckLookupFailedByPr(
   lookupFailedByPr: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'],
 ): Map<number, boolean>;
 
-export declare function resolveHeadOwningWorkerSessionId(
-  sessions: AoSession[],
-  prNumber: number,
-  headSha: string,
-  openPrs?: OpenPr[],
-): string | null;
+export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.d.mts';
 
 export declare function evaluateCiGreenWakeCandidate(input: {
   session: AoSession;

@@ -14,10 +14,18 @@ import {
   isLiveWorkerSession,
   sessionMatchesIdentifier,
   planReconcileActions,
+  resolveHeadOwningWorkerSessionId,
   resolveWorkerSessionId,
   type PlanReconcileInput,
   type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
+
+const greenChecks = [
+  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+  { name: 'PR scope guard', state: 'SUCCESS' },
+  { name: 'Run pack contract tests', state: 'SUCCESS' },
+  { name: 'Self-architect lint', state: 'SUCCESS' },
+];
 
 function startReviewActions(actions: ReconcileAction[]) {
   return actions.filter((a): a is Extract<ReconcileAction, { type: 'start_review' }> => a.type === 'start_review');
@@ -366,6 +374,71 @@ describe('resolveWorkerSessionId', () => {
       99,
     );
     expect(id).toBe('op-worker');
+  });
+
+  it('prefers head-owning worker over stale live worker on the same PR', () => {
+    const headSha = 'currenthead57';
+    expect(
+      resolveHeadOwningWorkerSessionId(
+        [
+          {
+            name: 'op-stale',
+            role: 'worker',
+            prNumber: 57,
+            ownedHeadSha: 'oldhead57',
+            status: 'working',
+          },
+          {
+            name: 'op-ready',
+            role: 'worker',
+            prNumber: 57,
+            ownedHeadSha: headSha,
+            status: 'idle',
+          },
+        ],
+        57,
+        headSha,
+        [{ number: 57, headRefOid: headSha }],
+      ),
+    ).toBe('op-ready');
+  });
+
+  it('prefers worker with ready_for_review report when multiple live workers match PR', () => {
+    const headSha = 'currenthead58';
+    const actions = planReconcileActions({
+      openPrs: [{ number: 58, headRefOid: headSha }],
+      reviewRuns: [],
+      sessions: [
+        {
+          name: 'op-earlier',
+          role: 'worker',
+          prNumber: 58,
+          status: 'working',
+          reports: [],
+        },
+        {
+          name: 'op-ready',
+          role: 'worker',
+          prNumber: 58,
+          status: 'idle',
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              headRefOid: headSha,
+              reportedAt: '2026-06-05T12:00:00.000Z',
+            },
+          ],
+        },
+      ],
+      ciChecksByPr: { '58': greenChecks },
+    });
+    expect(startReviewActions(actions)).toEqual([
+      expect.objectContaining({
+        type: 'start_review',
+        sessionId: 'op-ready',
+        prNumber: 58,
+      }),
+    ]);
   });
 });
 

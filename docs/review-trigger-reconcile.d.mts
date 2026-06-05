@@ -178,6 +178,20 @@ export declare function resolveWorkerSessionId(
   options?: { ownsHead?: (session: AoSession) => boolean },
 ): string | null;
 
+export declare function sessionOwnsPrHead(
+  session: AoSession,
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): boolean;
+
+export declare function resolveHeadOwningWorkerSessionId(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): string | null;
+
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcileAction[];
 
 export declare function buildDegradedCiEscalationMessage(

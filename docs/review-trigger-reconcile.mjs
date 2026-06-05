@@ -17,7 +17,7 @@ import {
 } from './review-head-ready.mjs';
 /** @typedef {{ number: number, headRefOid: string }} OpenPr */
 /** @typedef {{ prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ prNumber?: number, checks?: Array<{ name?: string, state?: string, conclusion?: string, status?: string }> }} CiChecksByPrRow */
 /** @typedef {{ prNumber?: number, requiredCheckNames?: string[] }} RequiredCheckNamesRow */
 /** @typedef {{ prNumber?: number, failed?: boolean }} RequiredCheckLookupFailedRow */
@@ -211,6 +211,144 @@ export function sessionMatchesPr(session, prNumber) {
 }
 
 /**
+ * @param {Record<string, unknown>} report
+ */
+function getReportHeadShaFromReport(report) {
+  const head =
+    report?.headRefOid ??
+    report?.head_ref_oid ??
+    report?.forHeadSha ??
+    report?.for_head_sha ??
+    report?.prHeadSha ??
+    report?.pr_head_sha;
+  return normalizeSha(String(head ?? ''));
+}
+
+/**
+ * @param {Record<string, unknown>} report
+ */
+function getReportTimestampMs(report) {
+  const raw =
+    report?.reportedAt ??
+    report?.timestamp ??
+    report?.createdAt ??
+    report?.reported_at ??
+    report?.created_at;
+  const parsed = Date.parse(String(raw ?? ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * @param {AoSession} session
+ * @param {string} headSha
+ */
+function sessionHasReportForHead(session, headSha) {
+  const target = normalizeSha(headSha);
+  if (!target) {
+    return false;
+  }
+  for (const report of toArray(session?.reports)) {
+    if (getReportHeadShaFromReport(report) === target) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {AoSession} session
+ * @param {string} headSha
+ */
+function sessionExplicitlyOwnsHead(session, headSha) {
+  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  const target = normalizeSha(headSha);
+  return Boolean(sessionHead && target && sessionHead === target);
+}
+
+/**
+ * @param {AoSession} session
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function sessionOwnsPrHead(session, prNumber, headSha, openPrs = []) {
+  if (!sessionMatchesPr(session, prNumber)) {
+    return false;
+  }
+
+  const target = normalizeSha(headSha);
+  if (!target) {
+    return false;
+  }
+
+  const pr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
+  const currentHead = normalizeSha(pr?.headRefOid);
+  if (currentHead && currentHead !== target) {
+    return false;
+  }
+
+  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (sessionHead) {
+    return sessionHead === target;
+  }
+
+  return Boolean(currentHead && currentHead === target);
+}
+
+/**
+ * Pick the live worker session that owns the current PR head (not merely the first PR match).
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
+  const prList = toArray(openPrs);
+  const target = normalizeSha(headSha);
+  const workers = toArray(sessions).filter((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    return (
+      (role === 'worker' || role === 'coding') &&
+      isLiveWorkerSession(session) &&
+      sessionMatchesPr(session, prNumber)
+    );
+  });
+
+  const headBound = workers.filter(
+    (session) =>
+      sessionExplicitlyOwnsHead(session, headSha) || sessionHasReportForHead(session, headSha),
+  );
+
+  if (headBound.length === 1) {
+    return getSessionIdentifier(headBound[0]);
+  }
+
+  if (headBound.length > 1) {
+    let best = headBound[0];
+    let bestMs = -1;
+    for (const session of headBound) {
+      let latestMs = -1;
+      for (const report of toArray(session?.reports)) {
+        if (getReportHeadShaFromReport(report) !== target) {
+          continue;
+        }
+        latestMs = Math.max(latestMs, getReportTimestampMs(report));
+      }
+      if (latestMs > bestMs) {
+        bestMs = latestMs;
+        best = session;
+      }
+    }
+    return getSessionIdentifier(best);
+  }
+
+  return resolveWorkerSessionId(sessions, prNumber, {
+    ownsHead: (session) => sessionOwnsPrHead(session, prNumber, headSha, prList),
+  });
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {number} prNumber
  * @param {{ ownsHead?: (session: AoSession) => boolean }} [options]
@@ -341,7 +479,7 @@ export function planReconcileActions({
       continue;
     }
 
-    const sessionId = resolveWorkerSessionId(sessionList, prNumber);
+    const sessionId = resolveHeadOwningWorkerSessionId(sessionList, prNumber, headSha, prList);
     const session = sessionId ? findSessionById(sessionList, sessionId) : null;
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);
