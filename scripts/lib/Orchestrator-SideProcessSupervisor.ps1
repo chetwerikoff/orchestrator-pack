@@ -4,6 +4,7 @@
   Loaded by Orchestrator-WakeSupervisor.ps1 for backward-compatible entrypoint paths.
 #>
 
+. (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
@@ -296,18 +297,6 @@ function Resolve-OrchestratorWakeSupervisorSessionId {
         return @{ Id = $resolved; Source = 'ao_status' }
     }
     return $null
-}
-
-function Test-ProcessAlive {
-    param([int]$ProcessId)
-    if ($ProcessId -le 0) { return $false }
-    try {
-        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
-        return -not $proc.HasExited
-    }
-    catch {
-        return $false
-    }
 }
 
 function Read-OrchestratorWakeSupervisorPidFile {

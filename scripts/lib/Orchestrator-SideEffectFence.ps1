@@ -3,6 +3,8 @@
   File-based side-effect fencing for supervised orchestrator children (Issue #205).
 #>
 
+. (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
+
 $Script:SideEffectLockMaxAgeMinutesWithoutPid = 180
 
 function Get-OrchestratorSideEffectStateRoot {
@@ -49,19 +51,6 @@ function Get-OrchestratorSideEffectLockRecord {
     }
 }
 
-function Test-OrchestratorSideEffectLockOwnerAlive {
-    param([int]$ProcessId)
-
-    if ($ProcessId -le 0) { return $false }
-    try {
-        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
-        return -not $proc.HasExited
-    }
-    catch {
-        return $false
-    }
-}
-
 function Test-OrchestratorSideEffectLockStale {
     param([string]$LockPath)
 
@@ -77,7 +66,7 @@ function Test-OrchestratorSideEffectLockStale {
     }
 
     if ($hasPid) {
-        return -not (Test-OrchestratorSideEffectLockOwnerAlive -ProcessId $ownerPid)
+        return -not (Test-ProcessAlive -ProcessId $ownerPid)
     }
 
     $startedAt = $null
