@@ -37,7 +37,8 @@
     "scripts/review-head-ready.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
-    "scripts/verify.ps1"
+    "scripts/verify.ps1",
+    "tests/powershell/Gh-PrChecks.Tests.ps1"
   ],
   "declared_globs": [
     "tests/fixtures/review-trigger-reconcile/**"

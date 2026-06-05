@@ -47,6 +47,15 @@ function Invoke-GhOpenPrList {
     }
 }
 
+function Get-GhEncodedBranchRef {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BranchRef
+    )
+
+    return [uri]::EscapeDataString([string]$BranchRef)
+}
+
 function Invoke-GhPrChecks {
     param(
         [Parameter(Mandatory = $true)]
@@ -94,7 +103,8 @@ function Get-GhRequiredCheckNamesForPr {
             return @{ names = $null; lookupFailed = $true }
         }
 
-        $protectionRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" 2>&1
+        $encodedBaseRef = Get-GhEncodedBranchRef -BranchRef $baseRef
+        $protectionRaw = gh api "repos/$repoSlug/branches/$encodedBaseRef/protection" 2>&1
         $protectionExit = $LASTEXITCODE
         if ($protectionExit -ne 0) {
             $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
