@@ -285,10 +285,30 @@ has gone idle — not a substitute for fixing CI yourself.
   after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
   **without waiting** for `ci-failed`, `report-stale`, or operator ping.
 
+## CI-green orchestrator nudge (fast path; Issue #191)
+
+**Self-drive is primary;** the orchestrator CI-green nudge is recovery when you have gone
+idle after required CI turned green — not a substitute for reporting `ready_for_review`
+yourself.
+
+When required CI for the **current PR head** is green and you are still pre-hand-off
+(`fixing_ci`, `working`, or `pr_created` without `ready_for_review` accepted on that
+head), a background reconciler (`scripts/ci-green-wake-reconcile.ps1`, ~1-minute cadence)
+may `ao send` you to continue the hand-off. AO 0.9.x has no CI-green reaction; this path
+is independent of orchestrator LLM turns and is far faster than `report-stale` (~30 min).
+
+- On CI-green nudge: re-check `gh pr checks` for the current head, then
+  `ao report ready_for_review` when criteria are met — do not stay idle.
+- The nudge does **not** apply once `ready_for_review` or `addressing_reviews` is
+  accepted for that head (review loop owns the next transitions).
+- It does **not** recover a dead session (#98) — if you exited, operator respawn /
+  `--claim-pr` still applies.
+
 ## PR created hand-off (initial path)
 
-**Worker self-drive is primary;** orchestrator `report-stale` / CI-failure ping is
-recovery when the worker has gone idle — not a substitute for driving the PR yourself.
+**Worker self-drive is primary;** orchestrator `report-stale` / CI-failure ping /
+CI-green nudge are recovery when the worker has gone idle — not a substitute for driving
+the PR yourself.
 
 **`pr_created` is a transient state, not completion.** Opening a PR for the task does
 not discharge your obligation. You must drive that PR to an explicit **hand-off**

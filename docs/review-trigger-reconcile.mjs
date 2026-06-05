@@ -4,6 +4,8 @@
  */
 import {
   evaluateMechanicalTickInterval,
+  findForbiddenCommandPatterns,
+  MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL,
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
@@ -44,12 +46,7 @@ export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
 ]);
 
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
-export const FORBIDDEN_LIFECYCLE_PATTERNS = [
-  /\bao\s+spawn\b/i,
-  /--claim-pr\b/i,
-  /\bao\s+session\s+kill\b/i,
-  /\bao\s+send\b/i,
-];
+export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
 
 /** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
 export function toArray(value) {
@@ -184,8 +181,10 @@ export function sessionMatchesPr(session, prNumber) {
 /**
  * @param {AoSession[]} sessions
  * @param {number} prNumber
+ * @param {{ ownsHead?: (session: AoSession) => boolean }} [options]
  */
-export function resolveWorkerSessionId(sessions, prNumber) {
+export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
+  const ownsHead = options.ownsHead;
   const workers = sessions.filter((s) => {
     const role = String(s?.role ?? '').toLowerCase();
     return (role === 'worker' || role === 'coding') && isLiveWorkerSession(s);
@@ -193,6 +192,9 @@ export function resolveWorkerSessionId(sessions, prNumber) {
 
   for (const session of workers) {
     if (!sessionMatchesPr(session, prNumber)) {
+      continue;
+    }
+    if (ownsHead && !ownsHead(session)) {
       continue;
     }
     const identifier = getSessionIdentifier(session);
@@ -269,17 +271,7 @@ export function evaluateReconcileInterval({ nowMs, lastTickMs, intervalMs }) {
  * @param {string[]} commandLines
  */
 export function findForbiddenLifecycleCommands(commandLines) {
-  /** @type {Array<{ command: string, pattern: string }>} */
-  const violations = [];
-  for (const command of commandLines ?? []) {
-    const line = String(command ?? '');
-    for (const pattern of FORBIDDEN_LIFECYCLE_PATTERNS) {
-      if (pattern.test(line)) {
-        violations.push({ command: line, pattern: pattern.source });
-      }
-    }
-  }
-  return violations;
+  return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
 }
 
 /**

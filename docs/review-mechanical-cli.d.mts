@@ -11,3 +11,11 @@ export declare function runStdinJsonCli(
   scriptBasename: string,
   handlers: Record<string, () => unknown>,
 ): void;
+
+export declare const MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL: readonly RegExp[];
+export declare const MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL: readonly RegExp[];
+
+export declare function findForbiddenCommandPatterns(
+  commandLines: string[],
+  patterns: readonly RegExp[],
+): Array<{ command: string; pattern: string }>;

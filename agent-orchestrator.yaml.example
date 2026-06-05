@@ -141,6 +141,35 @@ projects:
       so pack rules cannot ping. Expect only report-stale (~30 min), reactions.ci-failed,
       or operator ao send / kill-respawn per docs/orchestrator-recovery-runbook.md.
 
+      STATE-DERIVED CI-GREEN WORKER WAKE (Issue #191 — separate process, ao send only).
+      AO 0.9.x has no CI-green/CI-success reaction key for send-to-agent (reactions only
+      expose ci-failed, changes-requested, report-stale, approved-and-green→notify). The
+      fast path is a dedicated reconciliation loop outside the LLM orchestrator turn:
+        pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1
+      Default cadence: 1 minute (worst-case green-observed → ao send ~60s poll + 1m tick,
+      far below report-stale ~30m). Override with AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES
+      or -IntervalMinutes. State file: AO_CI_GREEN_WAKE_RECONCILE_STATE or
+      %TEMP%\orchestrator-ci-green-wake-state.json.
+      Each tick (level/state-derived, not edge-only):
+        1. gh pr list --state open --json number,headRefOid
+        2. gh pr checks <n> per PR — required CI per REQUIRED CI above
+        3. ao status --json --reports full — linked worker session + report states
+        4. For each open PR whose required CI is currently green, whose linked worker is
+           runtime alive, head-owning, and pre-hand-off (fixing_ci / working / pr_created
+           with no ready_for_review or addressing_reviews accepted on that head), and
+           not yet nudged for this green transition: pre-send recheck on one snapshot,
+           then ao send continue-hand-off message to that session id only
+      Transition identity and dedupe live in the state file (survives sender restart;
+      new red/pending→green on the same head SHA is a new transition). Record dedupe only
+      after a successful send to a confirmed-live owner; failed/stale sends consume no slot.
+      Does not recover dead workers (#98) — reduces how often respawn is needed.
+      Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill from this
+      process. Does not alter approved-and-green or merge rules. reactions.report-stale and
+      reactions.ci-failed remain upstream backstops (additive fast path, not a replacement).
+      Verification:
+        pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun
+      See docs/orchestrator-autoloop-go-live.md and docs/migration_notes.md.
+
       MERGED PR — REVIEW LOOP TERMINAL (Issue #54). On EVERY orchestrator turn,
       BEFORE autonomous review-loop reads below, for each PR that has entries in
       ao review list --json or an open worker session with a PR ref:

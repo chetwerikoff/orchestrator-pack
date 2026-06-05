@@ -45,6 +45,7 @@ export interface AoSession {
   ownedHeadSha?: string;
   headRefOid?: string;
   status?: string;
+  runtime?: string;
   reports?: Array<{
     reportState?: string;
     report_state?: string;
@@ -107,6 +108,7 @@ export declare function isHeadCovered(
 export declare function resolveWorkerSessionId(
   sessions: AoSession[],
   prNumber: number,
+  options?: { ownsHead?: (session: AoSession) => boolean },
 ): string | null;
 
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcileAction[];

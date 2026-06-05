@@ -97,6 +97,11 @@ export declare function isMergeContractCiGreen(
   options?: { requiredCheckNames?: string[] },
 ): boolean;
 export declare function getReportHeadSha(report: Record<string, unknown>): string;
+export declare function findLatestReportForHead(
+  session: AoSession,
+  headSha: string,
+  options?: { matchStates?: ReadonlySet<string> },
+): Record<string, unknown> | null;
 export declare function findLastReadyForReviewReport(
   session: AoSession,
   headSha: string,

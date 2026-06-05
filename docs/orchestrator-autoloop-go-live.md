@@ -25,6 +25,7 @@ and the matching steps in
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Wake supervisor (listener + heartbeat) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
 | Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs` (Issue #163) |
+| CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | Review-finding delivery confirm | `scripts/review-finding-delivery-confirm.ps1`, `docs/review-finding-delivery-confirm.mjs` (Issue #171) |
 | Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |
 | Review-ready false stuck guard | `docs/review-ready-stuck-guard.mjs` (Issue #174; rules in `orchestratorRules`) |
@@ -84,6 +85,19 @@ One-shot dry-run (no `ao review run`):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+**Terminal F — CI-green worker wake** (default 1 min; Issue #191 — `ao send` only)
+
+```powershell
+cd <orchestrator-pack-root>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-green-wake-reconcile.ps1
+```
+
+Optional: `$env:AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES = '1'` (default). One-shot dry-run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun
 ```
 
 **Terminal E — worktree trust watcher** (Windows Cursor; avoids blocking

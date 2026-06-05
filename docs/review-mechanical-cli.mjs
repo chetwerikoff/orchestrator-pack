@@ -42,6 +42,37 @@ export function evaluateMechanicalTickInterval({
   return { ok: false, reason: 'interval_not_elapsed', intervalMs: interval };
 }
 
+/** Spawn / claim-pr / kill forbidden on all mechanical reconcile entrypoints. */
+export const MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL = [
+  /\bao\s+spawn\b/i,
+  /--claim-pr\b/i,
+  /\bao\s+session\s+kill\b/i,
+];
+
+/** Review-trigger / delivery-confirm paths also forbid worker ao send. */
+export const MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL = [
+  ...MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL,
+  /\bao\s+send\b/i,
+];
+
+/**
+ * @param {string[]} commandLines
+ * @param {readonly RegExp[]} patterns
+ */
+export function findForbiddenCommandPatterns(commandLines, patterns) {
+  /** @type {Array<{ command: string, pattern: string }>} */
+  const violations = [];
+  for (const command of commandLines ?? []) {
+    const line = String(command ?? '');
+    for (const pattern of patterns) {
+      if (pattern.test(line)) {
+        violations.push({ command: line, pattern: pattern.source });
+      }
+    }
+  }
+  return violations;
+}
+
 export function runStdinJsonCli(scriptBasename, handlers) {
   const isCli =
     process.argv[1] &&

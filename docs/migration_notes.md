@@ -115,6 +115,28 @@ Behavioural acceptance: on the next real red-CI PR episode, confirm in
 that an orchestrator `ao send` appeared before `report-stale` (~30 min). See
 `docs/orchestrator-recovery-runbook.md` (Red CI with idle worker).
 
+### CI-green worker wake (Issue #191)
+
+Issue #191 adds a **state-derived CI-green fast path**: when required CI is green and the
+linked worker is live, head-owning, and pre-hand-off, `scripts/ci-green-wake-reconcile.ps1`
+`ao send`s a continue-hand-off nudge (~1-minute cadence; far below `report-stale` ~30 min).
+AO 0.9.x has no CI-green `send-to-agent` reaction — this process is the non-turn-gated
+delivery path. `reactions.report-stale`, `reactions.ci-failed`, and turn-driven CI-failure
+discipline in `orchestratorRules` are unchanged. Does not recover dead workers (#98).
+
+To adopt:
+
+1. Merge the updated `orchestratorRules` block (STATE-DERIVED CI-GREEN WORKER WAKE) from
+   `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
+2. Pull `prompts/agent_rules.md` (CI-green orchestrator nudge section) and confirm
+   `agentRulesFile` points at it.
+3. Start the reconciler in a dedicated terminal (see `docs/orchestrator-autoloop-go-live.md`
+   Terminal F): `pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1`
+4. Restart AO: `ao stop` then `ao start` (orchestratorRules reload).
+
+Behavioural acceptance: worker paused on green required CI receives `ao send` within ~1–2
+minutes, not only at `report-stale`. Verify with `ao events list --json` after a real episode.
+
 ### Patch: `sentFindingCount` pending-worker detection (Issue #45)
 
 Issue #45 corrects the review-loop contract after `ao review send`: findings move
