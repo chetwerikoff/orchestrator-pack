@@ -28,6 +28,16 @@ if ($listener -notmatch 'merge\.ready') {
     Write-Host 'orchestrator-wake-listener.ps1 must handle merge.ready completion wakes'
     exit 1
 }
+$triggerIdx = $listener.IndexOf('Invoke-ReviewWakeTriggerOnCompletionWake')
+$dedupIdx = $listener.IndexOf('$dedupDecision = Test-AndRecordWakeDedup')
+if ($triggerIdx -lt 0 -or $dedupIdx -lt 0 -or $triggerIdx -gt $dedupIdx) {
+    Write-Host 'orchestrator-wake-listener.ps1 must invoke review wake trigger before wake dedup'
+    exit 1
+}
+if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
+    exit 1
+}
 
 $mjs = Get-Content -LiteralPath $triggerMjs -Raw
 if ($mjs -notmatch 'WAKE_TO_RUN_DECISION_MAX_MS = 5_000') {

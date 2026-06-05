@@ -50,6 +50,21 @@ function Exit-ReviewWakeTriggerSideEffectFence {
     }
 }
 
+function Invoke-ReviewerWorkspacePreflight {
+    param([string]$RepoRoot)
+
+    $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $preflight = Join-Path $packRoot 'scripts/reviewer-workspace-preflight.ps1'
+    if (-not (Test-Path -LiteralPath $preflight -PathType Leaf)) {
+        return
+    }
+
+    & $preflight -RepoRoot $RepoRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "reviewer-workspace-preflight failed (exit $LASTEXITCODE)"
+    }
+}
+
 function Invoke-ReviewWakeTriggerFilterCli {
     param(
         [string]$Subcommand,
@@ -230,6 +245,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
+            Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
             & ao @runArgs
             if ($LASTEXITCODE -ne 0) {
                 throw "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"

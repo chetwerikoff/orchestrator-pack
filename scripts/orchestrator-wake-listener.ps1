@@ -212,14 +212,8 @@ try {
                     continue
                 }
 
-                $dedupDecision = Test-AndRecordWakeDedup -DedupeKey $filterResult.dedupeKey
-                if (-not $dedupDecision.ok) {
-                    Write-ListenerLog "deduped ($($dedupDecision.reason)): $($filterResult.wakeKind) $($filterResult.sessionId)"
-                    $response.StatusCode = 204
-                    $response.Close()
-                    continue
-                }
-
+                # Event-driven review trigger must run before wake dedup so burst
+                # handoffs within the dedup window still start the first review run.
                 $wakeMessage = $filterResult.wakeMessage
                 if ($filterResult.wakeKind -eq 'merge.ready') {
                     $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
@@ -235,6 +229,14 @@ try {
                     if ($triggerResult.triggered) {
                         Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
                     }
+                }
+
+                $dedupDecision = Test-AndRecordWakeDedup -DedupeKey $filterResult.dedupeKey
+                if (-not $dedupDecision.ok) {
+                    Write-ListenerLog "deduped ($($dedupDecision.reason)): $($filterResult.wakeKind) $($filterResult.sessionId)"
+                    $response.StatusCode = 204
+                    $response.Close()
+                    continue
                 }
 
                 Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $wakeMessage -DryRun:$DryRun
