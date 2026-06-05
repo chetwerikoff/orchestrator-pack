@@ -1,0 +1,35 @@
+{
+  "issue_number": 207,
+  "iteration_id": "opk-12",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T13:40:00.000Z",
+  "baseline": {
+    "commit_sha": "4ac8fe654e39d2ea195ddab97c43736b979d261a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/207.opk-12.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-filter.d.mts",
+    "docs/orchestrator-wake-filter.mjs",
+    "docs/orchestrator-wake-runbook.md",
+    "docs/review-wake-trigger.d.mts",
+    "docs/review-wake-trigger.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-listener.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-wake-trigger/**"
+  ],
+  "amendments": []
+}

@@ -7,6 +7,11 @@ export declare const DEDUP_LOCK_STALE_MS: number;
 export declare const DEDUP_LOCK_WAIT_MS: number;
 
 export declare const WAKE_RELEVANT_KINDS: ReadonlySet<string>;
+export declare const COMPLETION_MERGE_INTENT_WAKE_KINDS: ReadonlySet<string>;
+
+export declare function isCompletionMergeIntentWake(
+  wakeKind: string | null | undefined,
+): boolean;
 
 export interface AoWebhookEvent {
   id?: string;
