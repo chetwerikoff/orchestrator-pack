@@ -237,7 +237,9 @@ five recognizable ways. Recovery is CLI-first; see
 
 | Signature | Symptom | Pack fix / operator action |
 |-----------|---------|----------------------------|
-| **Run-storm** | Multiple `ao review run` on the same PR head sha within minutes | `orchestratorRules` **REVIEW RUN IDEMPOTENCY**: check `ao review list --json` for `running` / `reviewing` on current head sha before spawning |
+| **Run-storm** | Multiple `ao review run` on the same PR head sha within minutes | `orchestratorRules` **REVIEW RUN IDEMPOTENCY** (Issue #189): head is covered when any run matches same `prNumber` + exact `targetSha` and is in-flight or `clean` / `needs_triage` / `waiting_update`; re-read list immediately before `ao review run` |
+| **Redundant review on clean head** | Orchestrator turns keep firing `ao review run` while PR head is unchanged and a `clean` run already exists | Same covered-head rule; `failed` / `cancelled` on current head use EMPTY REVIEW TRAP retry-once, not plain re-run |
+| **prNumber-less merged run** | After merge cleanup, run has no `prNumber` but `needs_triage` / `waiting_update` | **MERGED PR — REVIEW LOOP TERMINAL**: resolve PR via `linkedSessionId` + `ao status`; inaction when linkage ambiguous |
 | **Orphan `needs_triage`** | Open findings on a run whose `linkedSessionId` is `terminated` / `killed` | `ao session claim-pr <pr> <new-session>` then fresh review; do not `ao review send` to dead session |
 | **Detached-HEAD `gh` error** | `gh: could not determine current branch: not on any branch` in reviewer workspace | Pack resolves PR via `headRefOid` / `AO_PR_NUMBER` — not bare `gh pr view`; see `scripts/lib/Get-AutoReviewPrContext.ps1` |
 | **Stale-workspace `worktree add`** | `git worktree add … already exists`, `findingCount: 0`, `status: failed` | `pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .` before retry |
@@ -268,6 +270,32 @@ To adopt Issue #98:
 Regression guards: `scripts/check-orchestrator-review-idempotency.ps1`,
 `scripts/check-auto-review-pr-context.ps1`, `scripts/check-reviewer-workspace-preflight.ps1`
 (via `scripts/verify.ps1`).
+
+### Covered-head review idempotency (Issue #189)
+
+Widens **REVIEW RUN IDEMPOTENCY** so the LLM orchestrator turn loop matches the
+mechanical reconciler (`review-trigger-reconcile.ps1` / `docs/review-trigger-reconcile.mjs`):
+a head is covered by same `prNumber` + exact normalized `targetSha` plus in-flight or
+`clean` / `needs_triage` / `waiting_update`. `failed` / `cancelled` on the current head stay
+on EMPTY REVIEW TRAP (retry once, not plain re-run). **PRE-RUN COVERAGE RE-CHECK** requires
+re-reading `ao review list --json` immediately before `ao review run`.
+
+**MERGED PR — REVIEW LOOP TERMINAL** now covers runs with no `prNumber` when the linked
+worker session's PR is merged (resolve via `linkedSessionId`). Unresolvable linkage →
+orchestrator inaction (surface for operator).
+
+To adopt Issue #189:
+
+1. Merge updated `orchestratorRules` (**REVIEW RUN IDEMPOTENCY**, **MERGED PR — REVIEW
+   LOOP TERMINAL** prNumber-less clause) from `agent-orchestrator.yaml.example` into live
+   `agent-orchestrator.yaml`.
+2. Restart AO: `ao stop` then `ao start`.
+3. Optional smoke: with a PR at one head that already has `clean`, confirm no new runs in
+   `ao review list --json` across orchestrator turns until the head advances.
+
+Regression guards: `scripts/check-orchestrator-review-head-coverage.ps1`,
+`scripts/review-orchestrator-loop.test.ts` (via `npm test`), plus updated
+`scripts/check-orchestrator-review-idempotency.ps1` (via `scripts/verify.ps1`).
 
 ### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 

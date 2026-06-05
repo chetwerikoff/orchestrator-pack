@@ -1,0 +1,12 @@
+{
+  "runsAtTurnStart": [],
+  "runsImmediatelyBeforeRun": [
+    {
+      "id": "run-just-finished",
+      "prNumber": 88,
+      "targetSha": "cafe00",
+      "status": "clean",
+      "findingCount": 0
+    }
+  ]
+}

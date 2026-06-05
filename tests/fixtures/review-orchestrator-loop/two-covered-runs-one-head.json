@@ -1,0 +1,18 @@
+{
+  "runs": [
+    {
+      "id": "run-clean",
+      "prNumber": 77,
+      "targetSha": "deadbeef",
+      "status": "clean",
+      "findingCount": 0
+    },
+    {
+      "id": "run-waiting",
+      "prNumber": 77,
+      "targetSha": "deadbeef",
+      "status": "waiting_update",
+      "sentFindingCount": 2
+    }
+  ]
+}

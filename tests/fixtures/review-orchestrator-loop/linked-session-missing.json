@@ -1,0 +1,10 @@
+{
+  "run": {
+    "id": "run-orphan",
+    "targetSha": "abc",
+    "status": "needs_triage",
+    "linkedSessionId": "opk-gone"
+  },
+  "sessions": [],
+  "mergedPrNumbers": [50]
+}

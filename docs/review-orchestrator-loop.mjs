@@ -1,0 +1,243 @@
+/**
+ * LLM-orchestrator review-loop predicates (Issue #189).
+ * Coverage identity matches docs/review-trigger-reconcile.mjs (Issue #163).
+ * Vitest: scripts/review-orchestrator-loop.test.ts
+ */
+import {
+  findSessionById,
+  isHeadCovered,
+  isRunCoveringHead,
+  normalizeSha,
+} from './review-trigger-reconcile.mjs';
+
+export {
+  COVERED_TERMINAL_REVIEW_STATUSES,
+  IN_FLIGHT_REVIEW_STATUSES,
+  isHeadCovered,
+  isRunCoveringHead,
+  normalizeSha,
+} from './review-trigger-reconcile.mjs';
+
+/** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, terminationReason?: string }} ReviewRun */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
+
+const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
+
+/**
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
+  const head = normalizeSha(headSha);
+  return runs.some((run) => {
+    const status = String(run?.status ?? '').toLowerCase();
+    return (
+      Number(run?.prNumber) === prNumber &&
+      normalizeSha(run?.targetSha) === head &&
+      FAILED_OR_CANCELLED.has(status)
+    );
+  });
+}
+
+/**
+ * Plain uncovered path: no covered/in-flight run; not failed/cancelled discipline.
+ *
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function shouldStartReviewRunOnUncoveredPath(runs, prNumber, headSha) {
+  if (isHeadCovered(runs, prNumber, headSha)) {
+    return { start: false, reason: 'head_covered' };
+  }
+  if (hasFailedOrCancelledOnHead(runs, prNumber, headSha)) {
+    return {
+      start: false,
+      reason: 'failed_or_cancelled_use_retry_discipline',
+    };
+  }
+  return { start: true, reason: 'uncovered_head' };
+}
+
+/**
+ * Pre-run re-check: second read immediately before ao review run.
+ *
+ * @param {object} input
+ * @param {ReviewRun[]} input.runsAtTurnStart
+ * @param {ReviewRun[]} input.runsImmediatelyBeforeRun
+ * @param {number} input.prNumber
+ * @param {string} input.headSha
+ */
+export function evaluateReviewRunWithRecheck({
+  runsAtTurnStart,
+  runsImmediatelyBeforeRun,
+  prNumber,
+  headSha,
+}) {
+  const atStart = shouldStartReviewRunOnUncoveredPath(
+    runsAtTurnStart,
+    prNumber,
+    headSha,
+  );
+  if (!atStart.start) {
+    return { emitReviewRun: false, reason: atStart.reason };
+  }
+  const beforeRun = shouldStartReviewRunOnUncoveredPath(
+    runsImmediatelyBeforeRun,
+    prNumber,
+    headSha,
+  );
+  if (!beforeRun.start) {
+    return {
+      emitReviewRun: false,
+      reason: `pre_run_recheck_${beforeRun.reason}`,
+    };
+  }
+  return { emitReviewRun: true, reason: 'uncovered_after_recheck' };
+}
+
+/**
+ * @param {ReviewRun} run
+ */
+export function getRunLinkedSessionId(run) {
+  return String(run?.linkedSessionId ?? run?.reviewerSessionId ?? '').trim();
+}
+
+/**
+ * @param {AoSession} session
+ */
+export function resolveSessionPrNumber(session) {
+  const direct = Number(session?.prNumber);
+  if (direct > 0) {
+    return { resolved: true, prNumber: direct };
+  }
+  const prField = String(session?.pr ?? '').trim();
+  if (!prField) {
+    return { resolved: false, reason: 'ambiguous_pr_metadata' };
+  }
+  const normalized = prField.startsWith('#') ? prField.slice(1) : prField;
+  const parsed = Number(normalized);
+  if (!parsed || Number.isNaN(parsed)) {
+    return { resolved: false, reason: 'ambiguous_pr_metadata' };
+  }
+  return { resolved: true, prNumber: parsed };
+}
+
+/**
+ * @param {ReviewRun} run
+ * @param {AoSession[]} sessions
+ */
+export function resolveRunPrViaLinkedSession(run, sessions) {
+  const linkedId = getRunLinkedSessionId(run);
+  if (!linkedId) {
+    return { resolved: false, reason: 'linked_session_missing' };
+  }
+  const session = findSessionById(sessions, linkedId);
+  if (!session) {
+    return { resolved: false, reason: 'linked_session_missing' };
+  }
+  const pr = resolveSessionPrNumber(session);
+  if (!pr.resolved) {
+    return { resolved: false, reason: pr.reason ?? 'ambiguous_pr_metadata' };
+  }
+  return {
+    resolved: true,
+    prNumber: pr.prNumber,
+    session,
+    linkedId,
+  };
+}
+
+/**
+ * Linked id absent from ao status while other worker sessions exist (restore race).
+ *
+ * @param {ReviewRun} run
+ * @param {AoSession[]} sessions
+ */
+export function hasRestoredSessionIdMismatch(run, sessions) {
+  const linkedId = getRunLinkedSessionId(run);
+  if (!linkedId || findSessionById(sessions, linkedId)) {
+    return false;
+  }
+  return sessions.some((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    return role === 'worker' || role === 'coding';
+  });
+}
+
+/**
+ * @param {number} prNumber
+ * @param {Set<number> | number[] | Record<string, boolean>} mergedPrNumbers
+ */
+export function isPrMergedOnGitHub(prNumber, mergedPrNumbers) {
+  if (mergedPrNumbers instanceof Set) {
+    return mergedPrNumbers.has(prNumber);
+  }
+  if (Array.isArray(mergedPrNumbers)) {
+    return mergedPrNumbers.includes(prNumber);
+  }
+  return Boolean(mergedPrNumbers?.[String(prNumber)] ?? mergedPrNumbers?.[prNumber]);
+}
+
+/**
+ * MERGED PR terminal for prNumber-less runs (Issue #54 residual, Issue #189).
+ *
+ * @param {ReviewRun} run
+ * @param {AoSession[]} sessions
+ * @param {Set<number> | number[] | Record<string, boolean>} mergedPrNumbers
+ */
+export function evaluatePrNumberLessMergedRun(run, sessions, mergedPrNumbers) {
+  if (Number(run?.prNumber) > 0) {
+    return { action: 'use_run_pr_number', terminal: false };
+  }
+  if (hasRestoredSessionIdMismatch(run, sessions)) {
+    return {
+      action: 'inaction_fail_closed',
+      terminal: false,
+      reason: 'restored_session_id_mismatch',
+    };
+  }
+  const resolution = resolveRunPrViaLinkedSession(run, sessions);
+  if (!resolution.resolved) {
+    return {
+      action: 'inaction_fail_closed',
+      terminal: false,
+      reason: resolution.reason ?? 'linked_session_missing',
+    };
+  }
+  if (isPrMergedOnGitHub(resolution.prNumber, mergedPrNumbers)) {
+    return {
+      action: 'inaction_merged_terminal',
+      terminal: true,
+      prNumber: resolution.prNumber,
+      reason: 'merged_pr_via_linked_session',
+    };
+  }
+  return { action: 'not_merged', terminal: false, prNumber: resolution.prNumber };
+}
+
+/**
+ * Orchestrator inaction on a review run (no send / no new round / no lifecycle).
+ *
+ * @param {ReviewRun} run
+ * @param {AoSession[]} sessions
+ * @param {Set<number> | number[] | Record<string, boolean>} mergedPrNumbers
+ */
+export function shouldOrchestratorActOnRun(run, sessions, mergedPrNumbers) {
+  const merged = evaluatePrNumberLessMergedRun(run, sessions, mergedPrNumbers);
+  if (merged.terminal || merged.action === 'inaction_fail_closed') {
+    return { act: false, ...merged };
+  }
+  const prNumber = Number(run?.prNumber);
+  if (prNumber > 0 && isPrMergedOnGitHub(prNumber, mergedPrNumbers)) {
+    return {
+      act: false,
+      terminal: true,
+      action: 'inaction_merged_terminal',
+      prNumber,
+      reason: 'merged_pr_on_run',
+    };
+  }
+  return { act: true, action: 'may_proceed' };
+}

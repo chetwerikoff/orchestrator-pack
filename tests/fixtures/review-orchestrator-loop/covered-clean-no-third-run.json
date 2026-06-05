@@ -1,0 +1,11 @@
+{
+  "runs": [
+    {
+      "id": "run-1",
+      "prNumber": 77,
+      "targetSha": "deadbeef",
+      "status": "clean",
+      "findingCount": 0
+    }
+  ]
+}

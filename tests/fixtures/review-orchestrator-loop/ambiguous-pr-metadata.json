@@ -1,0 +1,17 @@
+{
+  "run": {
+    "id": "run-ambig",
+    "targetSha": "fff",
+    "status": "needs_triage",
+    "linkedSessionId": "opk-worker-ambig"
+  },
+  "sessions": [
+    {
+      "name": "opk-worker-ambig",
+      "role": "worker",
+      "pr": "not-a-number",
+      "status": "working"
+    }
+  ],
+  "mergedPrNumbers": []
+}
