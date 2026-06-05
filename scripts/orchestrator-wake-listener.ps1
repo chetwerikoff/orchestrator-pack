@@ -216,18 +216,27 @@ try {
                 # handoffs within the dedup window still start the first review run.
                 $wakeMessage = $filterResult.wakeMessage
                 if ($filterResult.wakeKind -eq 'merge.ready') {
-                    $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
-                        -FilterResult $filterResult `
-                        -ProjectId $projectId `
-                        -RepoRoot $Script:OrchestratorWakeRepoRoot `
-                        -ReviewCommand $reviewCommand `
-                        -SideEffectLockPath $sideEffectLockPath `
-                        -FixtureSnapshot $fixtureSnapshot `
-                        -DryRun:($DryRun -or [bool]$FixturePath) `
-                        -LogWriter { param([string]$Message) Write-ListenerLog $Message }
-                    $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval $triggerResult.mergeEval
-                    if ($triggerResult.triggered) {
-                        Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
+                    try {
+                        $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
+                            -FilterResult $filterResult `
+                            -ProjectId $projectId `
+                            -RepoRoot $Script:OrchestratorWakeRepoRoot `
+                            -ReviewCommand $reviewCommand `
+                            -SideEffectLockPath $sideEffectLockPath `
+                            -FixtureSnapshot $fixtureSnapshot `
+                            -DryRun:($DryRun -or [bool]$FixturePath) `
+                            -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+                        $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval $triggerResult.mergeEval
+                        if ($triggerResult.triggered) {
+                            Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
+                        }
+                    }
+                    catch {
+                        Write-ListenerLog "review-wake-trigger: failed ($_); forwarding merge wake as non-mergeable"
+                        $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval @{
+                            mergeable = $false
+                            reason    = 'review_trigger_failed'
+                        }
                     }
                 }
 

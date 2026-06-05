@@ -129,6 +129,15 @@ describe('evaluateWakeReviewTrigger', () => {
     expect(result.terminationReason).toContain('reviewer command exited');
   });
 
+  it('review trigger failure reason annotates merge wake as non-mergeable', () => {
+    const amended = amendMergeWakeMessage('wake merge.ready session=opk-1 pr=#1', {
+      mergeable: false,
+      reason: 'review_trigger_failed',
+    });
+    expect(amended).toContain('mergeable=false');
+    expect(amended).toContain('review_trigger_failed');
+  });
+
   it('empty-review trap annotates merge intent as non-mergeable', () => {
     const fixture = loadFixture('failed-precedence.json');
     const mergeEval = evaluateMergeIntentAfterReviewTrigger({

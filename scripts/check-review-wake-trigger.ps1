@@ -34,6 +34,10 @@ if ($triggerIdx -lt 0 -or $dedupIdx -lt 0 -or $triggerIdx -gt $dedupIdx) {
     Write-Host 'orchestrator-wake-listener.ps1 must invoke review wake trigger before wake dedup'
     exit 1
 }
+if ($listener -notmatch 'review_trigger_failed') {
+    Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
+    exit 1
+}
 if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight\.ps1') {
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must compose Invoke-ReviewerWorkspacePreflight.ps1'
     exit 1
