@@ -14,12 +14,15 @@ import {
 export { DELIVERY_STATE_ESCALATED, DELIVERY_STATE_UNCONFIRMED };
 import {
   findSessionById,
+  getReportHeadSha,
   getSessionIdentifier,
   normalizeSha,
   sessionMatchesIdentifier,
   sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+export { getReportHeadSha };
 
 /** Default bounded grace after first false stuck for (session, PR head). */
 export const DEFAULT_GRACE_MINUTES = 15;
@@ -169,20 +172,6 @@ export function isMergeContractCiGreen(checks, options = {}) {
   }
 
   return normalizedRequired.every((name) => matched.has(name));
-}
-
-/**
- * @param {Record<string, unknown>} report
- */
-export function getReportHeadSha(report) {
-  const head =
-    report?.headRefOid ??
-    report?.head_ref_oid ??
-    report?.forHeadSha ??
-    report?.for_head_sha ??
-    report?.prHeadSha ??
-    report?.pr_head_sha;
-  return normalizeSha(String(head ?? ''));
 }
 
 /**

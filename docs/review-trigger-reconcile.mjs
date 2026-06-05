@@ -213,7 +213,7 @@ export function sessionMatchesPr(session, prNumber) {
 /**
  * @param {Record<string, unknown>} report
  */
-function getReportHeadShaFromReport(report) {
+export function getReportHeadSha(report) {
   const head =
     report?.headRefOid ??
     report?.head_ref_oid ??
@@ -248,7 +248,7 @@ function sessionHasReportForHead(session, headSha) {
     return false;
   }
   for (const report of toArray(session?.reports)) {
-    if (getReportHeadShaFromReport(report) === target) {
+    if (getReportHeadSha(report) === target) {
       return true;
     }
   }
@@ -271,7 +271,7 @@ function sessionExplicitlyOwnsHead(session, headSha) {
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function sessionOwnsPrHead(session, prNumber, headSha, openPrs = []) {
+export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
   if (!sessionMatchesPr(session, prNumber)) {
     return false;
   }
@@ -330,7 +330,7 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
     for (const session of headBound) {
       let latestMs = -1;
       for (const report of toArray(session?.reports)) {
-        if (getReportHeadShaFromReport(report) !== target) {
+        if (getReportHeadSha(report) !== target) {
           continue;
         }
         latestMs = Math.max(latestMs, getReportTimestampMs(report));
@@ -344,7 +344,7 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
   }
 
   return resolveWorkerSessionId(sessions, prNumber, {
-    ownsHead: (session) => sessionOwnsPrHead(session, prNumber, headSha, prList),
+    ownsHead: (session) => sessionOwnsRunHead(session, prNumber, headSha, prList),
   });
 }
 

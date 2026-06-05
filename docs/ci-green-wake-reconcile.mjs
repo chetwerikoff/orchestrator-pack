@@ -23,7 +23,7 @@ import {
   isLiveWorkerSession,
   normalizeSha,
   resolveHeadOwningWorkerSessionId,
-  sessionOwnsPrHead,
+  sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
 
@@ -207,7 +207,7 @@ export function evaluateCiGreenWakeCandidate({
   if (!isRuntimeAlive(session)) {
     reasons.push('runtime_not_alive');
   }
-  if (!sessionOwnsPrHead(session, prNumber, headSha, openPrs)) {
+  if (!sessionOwnsRunHead(session, prNumber, headSha, openPrs)) {
     reasons.push('session_does_not_own_head');
   }
   if (!isPreHandOffWorkerForHead(session, headSha)) {

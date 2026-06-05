@@ -178,7 +178,9 @@ export declare function resolveWorkerSessionId(
   options?: { ownsHead?: (session: AoSession) => boolean },
 ): string | null;
 
-export declare function sessionOwnsPrHead(
+export declare function getReportHeadSha(report: Record<string, unknown>): string;
+
+export declare function sessionOwnsRunHead(
   session: AoSession,
   prNumber: number,
   headSha: string,

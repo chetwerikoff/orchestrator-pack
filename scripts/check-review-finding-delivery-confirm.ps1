@@ -35,7 +35,7 @@ if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
     exit 1
 }
 
-if ($mjs -notmatch 'export function sessionOwnsRunHead' -or $mjs -notmatch 'sessionOwnsRunHead\(session, prNumber') {
+if ($mjs -notmatch 'export \{ sessionOwnsRunHead \}' -or $mjs -notmatch 'sessionOwnsRunHead\(session, prNumber') {
     Write-Host 'docs/review-finding-delivery-confirm.mjs must verify linked session owns run targetSha'
     exit 1
 }
