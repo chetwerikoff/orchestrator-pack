@@ -266,14 +266,66 @@ has gone idle — not a substitute for fixing CI yourself.
 
 - Do **not** run `ao report ready_for_review` (or treat the task as done) while
   required CI for the PR head is not green per the definition above.
-- **Before** every `ao report ready_for_review`, check required CI for the current
+- **Before** every `ao report ready_for_review`, check required CI for the **current**
   head; if any check is red or still running, stay in or move to
-  `ao report fixing_ci` and fix — push, re-run local verification, wait for green CI.
+  `ao report fixing_ci` — then act per the check state below. A `ready_for_review`
+  that validated an earlier head which has since moved is **stale** and does not
+  satisfy the obligation; re-check the current head and re-report.
+- **Red CI:** fix — push, re-run local verification, keep reporting `fixing_ci` as
+  needed; do not go idle on a red-CI PR expecting the orchestrator to drive the fix
+  unless you are blocked.
+- **Pending CI (still running):** stay in or move to `ao report fixing_ci` **and
+  remain actively engaged** — monitor required CI for the current head until it
+  reaches green (`ready_for_review`), red (fix path above), or degraded-CI escalation
+  (see **PR created hand-off**). Filing `fixing_ci` on a merely-pending head is the
+  required non-silent action; it is **not** a stopping point. Do **not** treat "CI is
+  still running", "I filed `fixing_ci`", or "done editing while CI runs" as
+  permission to go idle or treat the task as done.
 - If CI was green when you reported but fails on a later push, or you discover red CI
   after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
   **without waiting** for `ci-failed`, `report-stale`, or operator ping.
-- While actively fixing CI, keep reporting `fixing_ci` as needed; do not go idle on a
-  red-CI PR expecting the orchestrator to drive the fix unless you are blocked.
+
+## PR created hand-off (initial path)
+
+**Worker self-drive is primary;** orchestrator `report-stale` / CI-failure ping is
+recovery when the worker has gone idle — not a substitute for driving the PR yourself.
+
+**`pr_created` is a transient state, not completion.** Opening a PR for the task does
+not discharge your obligation. You must drive that PR to an explicit **hand-off**
+before you may go idle, stop, or treat the task as done.
+
+**Two stop categories — only these permit disengaging.** Distinguish states where
+you may **stop** from those where you must **stay actively engaged**:
+
+1. **Terminal hand-off (category A):** `ao report ready_for_review` once required CI
+   for the **current PR head** is green (see **Required CI** and **Worker CI gate** —
+   check the current head **before every** report; a `ready_for_review` that validated
+   an earlier head which has since moved is **stale** and does not satisfy the
+   obligation), **or** terminal failure with a reason via the existing convention
+   (`ao report completed --note "<reason>"` or `ao send`) when you genuinely cannot
+   reach a ready state.
+2. **Evidence-backed escalation (category B):** when required CI does **not** resolve
+   to green or red — checks missing or never triggered, a run `cancelled`, auth /
+   rate-limit / infrastructure failure, or CI pending past a reasonable bound —
+   escalate with evidence (e.g. `ao send` to the orchestrator describing the blocked
+   condition). This is a permitted non-silent hand-off: after escalating you may stop
+   active polling while remaining reachable for the orchestrator's response. Do **not**
+   poll indefinitely and do **not** report terminal failure for a transient CI delay.
+
+**Continued-engagement (not a stop category).** While required CI is still resolving on
+the current head, you stay in **Worker CI gate** reported handling (`fixing_ci` while
+red or pending) **and remain actively engaged**. Green CI alone is **not** an exit —
+you must still emit `ready_for_review`. Forbidden recurrence of the stranded-green-PR
+failure: filing `fixing_ci` on pending CI, then stopping while CI later goes green
+without ever reporting `ready_for_review`.
+
+**Forbidden silent disengagement.** You MUST NOT stop or treat the task as done while
+a PR you opened has **not** reached one of the two stop categories above for its
+**current head** — including when CI was still running when editing finished. This
+complements (does not replace) the **Worker CI gate** ban on premature
+`ready_for_review` while CI is red and the **AO review response** ban on idling on the
+review-feedback path; it closes the initial `pr_created` → first-review path those
+rules leave open.
 
 ## Review feedback handling
 
