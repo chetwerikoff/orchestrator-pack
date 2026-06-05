@@ -6,6 +6,8 @@
 
 $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-wake-trigger.mjs'
 
+. (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
+
 function Get-ReviewWakeTriggerSideEffectLockPath {
     param([string]$StateRoot = '')
     if ($StateRoot) {
@@ -47,21 +49,6 @@ function Exit-ReviewWakeTriggerSideEffectFence {
     param([string]$LockPath)
     if ($LockPath -and (Test-Path -LiteralPath $LockPath)) {
         Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Invoke-ReviewerWorkspacePreflight {
-    param([string]$RepoRoot)
-
-    $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $preflight = Join-Path $packRoot 'scripts/reviewer-workspace-preflight.ps1'
-    if (-not (Test-Path -LiteralPath $preflight -PathType Leaf)) {
-        return
-    }
-
-    & $preflight -RepoRoot $RepoRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "reviewer-workspace-preflight failed (exit $LASTEXITCODE)"
     }
 }
 

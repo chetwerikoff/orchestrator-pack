@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "28e0adaafdceac0f5b425e8ad5b63784c4e4b5f3",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3b3a727617b98c3bc855cd5445765c966f0b5704238a9afba0a0cba4759269e5"
+    "active_scope_hash": "sha256:bf947d01ff0431254fcb21caac65f688883f6e791a8cf2738213872d6ddd80e7"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -20,8 +20,10 @@
     "docs/review-wake-trigger.mjs",
     "prompts/agent_rules.md",
     "scripts/check-review-wake-trigger.ps1",
+    "scripts/lib/Invoke-ReviewerWorkspacePreflight.ps1",
     "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
     "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/review-trigger-reconcile.ps1",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/orchestrator-wake-listener.test.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
