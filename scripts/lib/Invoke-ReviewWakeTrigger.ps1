@@ -39,7 +39,7 @@ function Enter-ReviewWakeTriggerSideEffectFence {
         [string]$LockPath,
         [hashtable]$Metadata = @{}
     )
-    Enter-OrchestratorSideEffectFence -LockPath $LockPath -Metadata $Metadata
+    return Enter-OrchestratorSideEffectFence -LockPath $LockPath -Metadata $Metadata
 }
 
 function Exit-ReviewWakeTriggerSideEffectFence {
@@ -247,10 +247,22 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter "review-wake-trigger: dry-run would run: $commandLine (PR #$($planned.prNumber) head=$($planned.headSha))"
     }
     else {
-        Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
-            prNumber  = $planned.prNumber
-            headSha   = $planned.headSha
-            sessionId = $planned.sessionId
+        if (-not (Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
+                prNumber  = $planned.prNumber
+                headSha   = $planned.headSha
+                sessionId = $planned.sessionId
+            })) {
+            & $LogWriter "review-wake-trigger: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
+            return @{
+                triggered = $false
+                reason    = 'side_effect_in_flight'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
+                    -HeadSha $planned.headSha -ExtraReviewRuns @(@{
+                        prNumber  = $planned.prNumber
+                        targetSha = $planned.headSha
+                        status    = 'queued'
+                    })
+            }
         }
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"

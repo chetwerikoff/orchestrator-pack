@@ -32,6 +32,8 @@ function Enter-OrchestratorSideEffectFence {
         [hashtable]$Metadata = @{}
     )
 
+    if (-not $LockPath) { return $false }
+
     $dir = Split-Path -Parent $LockPath
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -44,7 +46,31 @@ function Enter-OrchestratorSideEffectFence {
     foreach ($key in $Metadata.Keys) {
         $payload[$key] = $Metadata[$key]
     }
-    $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $LockPath -Encoding utf8
+    $json = $payload | ConvertTo-Json -Compress
+
+    try {
+        $stream = [System.IO.FileStream]::new(
+            $LockPath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        try {
+            $writer = New-Object System.IO.StreamWriter($stream, [System.Text.UTF8Encoding]::new($false))
+            $writer.Write($json)
+            $writer.Flush()
+        }
+        finally {
+            $stream.Dispose()
+        }
+        return $true
+    }
+    catch [System.IO.IOException] {
+        return $false
+    }
+    catch [System.UnauthorizedAccessException] {
+        return $false
+    }
 }
 
 function Exit-OrchestratorSideEffectFence {
@@ -61,11 +87,9 @@ function Invoke-OrchestratorSideEffectFenced {
         [hashtable]$Metadata = @{}
     )
 
-    if (Test-OrchestratorSideEffectInFlight -LockPath $LockPath) {
+    if (-not (Enter-OrchestratorSideEffectFence -LockPath $LockPath -Metadata $Metadata)) {
         return @{ ok = $false; reason = 'side_effect_busy' }
     }
-
-    Enter-OrchestratorSideEffectFence -LockPath $LockPath -Metadata $Metadata
     try {
         & $Action
         return @{ ok = $true }
