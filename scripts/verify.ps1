@@ -382,6 +382,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== orchestrator head-ready review gate (Issue #195) =='
+$reviewHeadReadyCheck = Join-Path $Root 'scripts/check-orchestrator-review-head-ready.ps1'
+if (Test-Path -LiteralPath $reviewHeadReadyCheck -PathType Leaf) {
+    & $reviewHeadReadyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-review-head-ready.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-review-head-ready.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'orchestratorRules must document head-ready-for-review gate (Issue #195)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-review-head-ready.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing head-ready review gate check script (Issue #195)'
+}
+
+Write-Host ''
 Write-Host '== detached-HEAD PR context (Issue #98) =='
 $autoReviewContextCheck = Join-Path $Root 'scripts/check-auto-review-pr-context.ps1'
 if (Test-Path -LiteralPath $autoReviewContextCheck -PathType Leaf) {

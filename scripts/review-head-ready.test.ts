@@ -1,0 +1,182 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import {
+  classifyRequiredCiForReviewTrigger,
+  evaluateHeadReadyForReview,
+  hasReadyForReviewForHead,
+  isWorkerDegradedCiHandoff,
+  preRunHeadReadyRecheck,
+} from '../docs/review-head-ready.mjs';
+
+const fixturesDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../tests/fixtures/review-trigger-reconcile',
+);
+
+const greenChecks = [
+  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+  { name: 'PR scope guard', state: 'SUCCESS' },
+  { name: 'Run pack contract tests', state: 'SUCCESS' },
+  { name: 'Self-architect lint', state: 'SUCCESS' },
+];
+
+function loadFixture<T>(name: string): T {
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as T;
+}
+
+describe('classifyRequiredCiForReviewTrigger', () => {
+  it('classifies lookup failure as degraded', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger(greenChecks, { requiredCheckLookupFailed: true }),
+    ).toBe('degraded');
+  });
+
+  it('classifies absent required jobs as degraded', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger([], {
+        requiredCheckNames: ['Missing required job'],
+      }),
+    ).toBe('degraded');
+  });
+
+  it('classifies pending known required checks as pending', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger(
+        [{ name: 'Verify orchestrator-pack structure', state: 'PENDING' }, ...greenChecks.slice(1)],
+      ),
+    ).toBe('pending');
+  });
+
+  it('classifies failure as red', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger(
+        [{ name: 'Verify orchestrator-pack structure', state: 'FAILURE' }, ...greenChecks.slice(1)],
+      ),
+    ).toBe('red');
+  });
+});
+
+describe('evaluateHeadReadyForReview', () => {
+  it('(a) ready head with green CI is eligible', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: Array<Record<string, unknown>>;
+      ciChecksByPr: Record<string, typeof greenChecks>;
+    }>('ready-head-triggers.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: fixture.ciChecksByPr[String(pr.number)],
+    });
+    expect(decision.eligible).toBe(true);
+    expect(decision.reason).toBe('head_ready_for_review');
+  });
+
+  it('(b) intermediate commit without ready_for_review is not eligible', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      ciChecksByPr: Record<string, typeof greenChecks>;
+    }>('intermediate-commit.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: fixture.ciChecksByPr[String(pr.number)],
+    });
+    expect(decision.eligible).toBe(false);
+    expect(decision.reason).toBe('uncovered_not_ready');
+  });
+
+  it('(c) stale ready_for_review on older head does not authorize current head', () => {
+    const session = loadFixture<{
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+    }>('intermediate-commit.json').sessions[0]!;
+    expect(hasReadyForReviewForHead(session, 'newhead55')).toBe(false);
+  });
+
+  it('(d) red CI defers an otherwise-ready head', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      ciChecksByPr: Record<string, { name: string; state: string }[]>;
+    }>('red-ci-defer.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: fixture.ciChecksByPr[String(pr.number)],
+    });
+    expect(decision.eligible).toBe(false);
+    expect(decision.reason).toBe('ci_red_defer');
+  });
+
+  it('(e) pending CI on ready head is eligible', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      ciChecksByPr: Record<string, { name: string; state: string }[]>;
+    }>('pending-ci-triggers.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: fixture.ciChecksByPr[String(pr.number)],
+    });
+    expect(decision.eligible).toBe(true);
+  });
+
+  it('(e3) worker degraded-CI handoff is not uncovered-not-ready', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      requiredCheckLookupFailedByPr: Record<string, boolean>;
+    }>('degraded-ci-worker-handoff.json');
+    const pr = fixture.openPrs[0]!;
+    const report = fixture.sessions[0]!.reports?.[0];
+    expect(isWorkerDegradedCiHandoff(report)).toBe(true);
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: [],
+      requiredCheckLookupFailed: true,
+    });
+    expect(decision.reason).not.toBe('uncovered_not_ready');
+    expect(decision.route).toBe('degraded_ci_retry');
+  });
+});
+
+describe('preRunHeadReadyRecheck', () => {
+  it('(g) aborts when head becomes covered before run', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        reviewRuns: { prNumber: number; targetSha: string; status: string }[];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reasonPrefix: string };
+    }>('pre-run-abort.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+});

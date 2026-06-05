@@ -1,0 +1,32 @@
+{
+  "description": "Worker degraded-CI handoff routes to orchestrator branch, not uncovered-not-ready",
+  "openPrs": [{ "number": 48, "headRefOid": "handoff48" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-48",
+      "role": "worker",
+      "prNumber": 48,
+      "status": "completed",
+      "reports": [
+        {
+          "reportState": "completed",
+          "headRefOid": "handoff48",
+          "note": "Evidence-backed degraded CI escalation: required checks missing",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "48": []
+  },
+  "requiredCheckLookupFailedByPr": {
+    "48": true
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "trackDegradedCi": true,
+    "notSkipReason": "uncovered_not_ready"
+  }
+}

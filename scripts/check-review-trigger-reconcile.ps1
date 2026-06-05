@@ -22,9 +22,12 @@ if (-not (Test-Path -LiteralPath $reconcileMjs -PathType Leaf)) {
 
 $required = @(
     'STATE-DERIVED REVIEW TRIGGER',
+    'HEAD READY FOR REVIEW',
+    'Issue #195',
     'review-trigger-reconcile.ps1',
     'gh pr list --state open',
     'ao review list --json',
+    'gh pr checks',
     'never ao spawn',
     'AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES'
 )
@@ -38,6 +41,11 @@ if ($missing.Count -gt 0) {
 $mjs = Get-Content -LiteralPath $reconcileMjs -Raw
 if ($mjs -notmatch 'DEFAULT_RECONCILE_INTERVAL_MS = 10 \* 60 \* 1000') {
     Write-Host 'docs/review-trigger-reconcile.mjs must default to 10-minute interval'
+    exit 1
+}
+
+if ($mjs -notmatch "from '\./review-head-ready\.mjs'") {
+    Write-Host 'docs/review-trigger-reconcile.mjs must import review-head-ready.mjs (Issue #195)'
     exit 1
 }
 

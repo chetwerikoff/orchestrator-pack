@@ -750,6 +750,30 @@ To adopt after merge:
 See `docs/orchestrator-autoloop-go-live.md` and
 `docs/orchestrator-recovery-runbook.md` (State-derived review trigger).
 
+## Head-ready review gate (Issue #195)
+
+Adds `docs/review-head-ready.mjs`: one shared **head ready for review** predicate for
+report-driven triggers, `ROUND PROGRESSION`, and `review-trigger-reconcile.ps1`. Review runs
+start only after `ready_for_review` for the exact head (or orchestrator degraded-CI branch
+after #186 worker hand-off), with required CI green/pending (red defers; missing visibility
+→ bounded re-attempt + operator escalation). Uncovered-but-not-ready heads take no review
+run and no reconciler lifecycle action.
+
+To adopt after merge:
+
+1. Merge the **HEAD READY FOR REVIEW** block from `agent-orchestrator.yaml.example` into
+   live `orchestratorRules` (including updated TRIGGER REVIEW, STATE-DERIVED REVIEW TRIGGER,
+   and ROUND PROGRESSION sections).
+2. Pull `prompts/agent_rules.md` (**Head ready for review** section).
+3. Restart AO: `ao stop` then `ao start`.
+4. Restart `scripts/review-trigger-reconcile.ps1` if it runs as a standalone loop (the script
+   now fetches `gh pr checks` and branch-protection required-check names per tick).
+5. Optional env: `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` (default **3**).
+6. Verify fixtures: `npx vitest run scripts/review-head-ready.test.ts scripts/review-trigger-reconcile.test.ts`
+   and `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`.
+
+See `docs/orchestrator-autoloop-go-live.md` and `docs/review-head-ready.mjs`.
+
 ## Review-finding delivery confirmation (Issue #171)
 
 Adds `scripts/review-finding-delivery-confirm.ps1`: observes `waiting_update` runs with

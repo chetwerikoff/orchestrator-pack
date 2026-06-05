@@ -418,6 +418,39 @@ escalate (EMPTY REVIEW TRAP). **PRE-RUN COVERAGE RE-CHECK:** immediately before 
 The mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; see
 `docs/review-orchestrator-loop.mjs`.
 
+## Head ready for review (Issue #195)
+
+Orchestrator sessions (not workers) must apply **one** shared predicate before any
+`ao review run` — report-driven triggers, `ROUND PROGRESSION`, and the #163 reconciler
+all consume `docs/review-head-ready.mjs` (no independent trigger conditions).
+
+Evaluate **failed/cancelled on the current head first** (EMPTY REVIEW TRAP — never the
+plain uncovered-ready path). Then a PR head SHA is **ready for review** only when ALL hold
+on one consistent snapshot:
+
+- the latest accepted worker report for that **exact current head SHA** is
+  `ready_for_review` (reuse #186 current-head-at-report-time semantics — stale reports for
+  an earlier head do not authorize a later head);
+- required CI on that head (see **Required CI** above) is **green** or **genuinely
+  pending/queued** against a known required-check set — explicitly **not** red/failing and
+  **not** missing/unknown/unresolvable (red **defers**; missing routes to the orchestrator/
+  reconciler degraded-CI branch below);
+- the head is **not** already covered per **Orchestrator review-run coverage** (#189); and
+- the current head has **no** `failed`/`cancelled` run awaiting EMPTY REVIEW TRAP handling.
+
+**Uncovered-but-not-ready** heads are left alone: no review run and no worker-lifecycle
+action from the reconciler. The gate defers only — `report-stale`, ping/respawn, and #191
+CI-green wake still converge idle or dead workers; the gate removes none of those backstops.
+
+**Worker degraded-CI hand-off** (#186 evidence-backed escalation, not `ready_for_review`)
+routes to the orchestrator/reconciler degraded-CI branch: bounded re-attempts to resolve
+required-check visibility for the head, then observable operator escalation — not generic
+uncovered-not-ready worker-liveness handling.
+
+**PRE-RUN HEAD-READY RE-CHECK** (widens #189): immediately before `ao review run`, re-read
+current head SHA, latest accepted report, required-CI state, and coverage; abort if the
+predicate no longer holds.
+
 **Merged PR — prNumber-less runs.** A run with no `prNumber` is terminal when its
 linked worker session's PR is merged on GitHub (resolve via `linkedSessionId` in
 `ao status`, not the run record alone). When merge state cannot be resolved (linked

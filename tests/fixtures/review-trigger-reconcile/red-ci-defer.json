@@ -1,0 +1,32 @@
+{
+  "description": "Red required CI on otherwise-ready head defers review",
+  "openPrs": [{ "number": 44, "headRefOid": "redci44" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-44",
+      "role": "worker",
+      "prNumber": 44,
+      "status": "fixing_ci",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "redci44",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "44": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "ci_red_defer"
+  }
+}

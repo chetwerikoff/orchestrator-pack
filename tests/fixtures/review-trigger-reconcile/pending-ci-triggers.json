@@ -1,0 +1,31 @@
+{
+  "description": "Genuinely pending required CI on ready head still triggers review",
+  "openPrs": [{ "number": 45, "headRefOid": "pending45" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-45",
+      "role": "worker",
+      "prNumber": 45,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "pending45",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "45": [
+      { "name": "Verify orchestrator-pack structure", "state": "PENDING" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1
+  }
+}

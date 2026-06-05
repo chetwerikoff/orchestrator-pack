@@ -1,0 +1,35 @@
+{
+  "description": "After bounded degraded-ci attempts, operator escalation is emitted",
+  "openPrs": [{ "number": 47, "headRefOid": "degraded47" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-47",
+      "role": "worker",
+      "prNumber": 47,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "degraded47",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "47": []
+  },
+  "requiredCheckLookupFailedByPr": {
+    "47": true
+  },
+  "tracking": {
+    "degradedCi": {
+      "47:degraded47": { "attempts": 3, "lastAttemptMs": 1 }
+    }
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "escalateDegradedCi": true
+  }
+}

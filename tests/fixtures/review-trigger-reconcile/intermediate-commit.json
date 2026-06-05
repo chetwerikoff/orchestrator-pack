@@ -1,0 +1,39 @@
+{
+  "description": "Intermediate commit without ready_for_review does not trigger review",
+  "openPrs": [{ "number": 55, "headRefOid": "newhead55" }],
+  "reviewRuns": [
+    { "prNumber": 55, "targetSha": "oldhead55", "status": "waiting_update" }
+  ],
+  "sessions": [
+    {
+      "name": "op-worker-55",
+      "role": "worker",
+      "prNumber": 55,
+      "status": "addressing_reviews",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "oldhead55",
+          "reportedAt": "2026-06-05T11:00:00.000Z"
+        },
+        {
+          "reportState": "addressing_reviews",
+          "headRefOid": "newhead55",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "55": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready"
+  }
+}

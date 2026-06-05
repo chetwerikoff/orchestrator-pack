@@ -9,6 +9,16 @@ import {
   isRunCoveringHead,
   normalizeSha,
 } from './review-trigger-reconcile.mjs';
+import { evaluateHeadReadyForReview } from './review-head-ready.mjs';
+
+export {
+  evaluateHeadReadyForReview,
+  hasReadyForReviewForHead,
+  preRunHeadReadyRecheck,
+} from './review-head-ready.mjs';
+
+/** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, terminationReason?: string }} ReviewRun */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -17,9 +27,6 @@ export {
   isRunCoveringHead,
   normalizeSha,
 } from './review-trigger-reconcile.mjs';
-
-/** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, terminationReason?: string }} ReviewRun */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
 
 const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
 
@@ -61,6 +68,28 @@ export function shouldStartReviewRunOnUncoveredPath(runs, prNumber, headSha) {
 }
 
 /**
+ * Issue #195 — full head-ready predicate for all review-trigger paths.
+ *
+ * @param {object} input
+ * @param {ReviewRun[]} input.reviewRuns
+ * @param {number} input.prNumber
+ * @param {string} input.headSha
+ * @param {AoSession | null} [input.session]
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
+ * @param {string[]} [input.requiredCheckNames]
+ * @param {boolean} [input.requiredCheckLookupFailed]
+ * @param {number} [input.degradedCiAttempts]
+ */
+export function shouldStartReviewRun(input) {
+  const decision = evaluateHeadReadyForReview(input);
+  return {
+    start: decision.eligible,
+    reason: decision.reason,
+    route: decision.route,
+  };
+}
+
+/**
  * Pre-run re-check: second read immediately before ao review run.
  *
  * @param {object} input
@@ -68,13 +97,58 @@ export function shouldStartReviewRunOnUncoveredPath(runs, prNumber, headSha) {
  * @param {ReviewRun[]} input.runsImmediatelyBeforeRun
  * @param {number} input.prNumber
  * @param {string} input.headSha
+ * @param {AoSession | null} [input.session]
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecksAtStart]
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecksBeforeRun]
+ * @param {string[]} [input.requiredCheckNamesAtStart]
+ * @param {string[]} [input.requiredCheckNamesBeforeRun]
+ * @param {boolean} [input.requiredCheckLookupFailedAtStart]
+ * @param {boolean} [input.requiredCheckLookupFailedBeforeRun]
  */
 export function evaluateReviewRunWithRecheck({
   runsAtTurnStart,
   runsImmediatelyBeforeRun,
   prNumber,
   headSha,
+  session = null,
+  ciChecksAtStart = [],
+  ciChecksBeforeRun = [],
+  requiredCheckNamesAtStart = [],
+  requiredCheckNamesBeforeRun = [],
+  requiredCheckLookupFailedAtStart = false,
+  requiredCheckLookupFailedBeforeRun = false,
 }) {
+  if (session) {
+    const atStart = shouldStartReviewRun({
+      reviewRuns: runsAtTurnStart,
+      prNumber,
+      headSha,
+      session,
+      ciChecks: ciChecksAtStart,
+      requiredCheckNames: requiredCheckNamesAtStart,
+      requiredCheckLookupFailed: requiredCheckLookupFailedAtStart,
+    });
+    if (!atStart.start) {
+      return { emitReviewRun: false, reason: atStart.reason };
+    }
+    const beforeRun = shouldStartReviewRun({
+      reviewRuns: runsImmediatelyBeforeRun,
+      prNumber,
+      headSha,
+      session,
+      ciChecks: ciChecksBeforeRun,
+      requiredCheckNames: requiredCheckNamesBeforeRun,
+      requiredCheckLookupFailed: requiredCheckLookupFailedBeforeRun,
+    });
+    if (!beforeRun.start) {
+      return {
+        emitReviewRun: false,
+        reason: `pre_run_recheck_${beforeRun.reason}`,
+      };
+    }
+    return { emitReviewRun: true, reason: 'head_ready_after_recheck' };
+  }
+
   const atStart = shouldStartReviewRunOnUncoveredPath(
     runsAtTurnStart,
     prNumber,
