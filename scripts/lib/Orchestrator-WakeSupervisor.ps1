@@ -9,6 +9,59 @@ $Script:OrchestratorWakeHeartbeatScript = Join-Path $Script:OrchestratorWakeSupe
 $Script:OrchestratorReviewSendReconcileScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/review-send-reconcile.ps1'
 $Script:OrchestratorWakeSupervisorTestChildScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/orchestrator-wake-supervisor-test-child.ps1'
 
+function Get-OrchestratorWakeSupervisorChildRegistry {
+    return @(
+        @{
+            Id            = 'listener'
+            SideEffecting = $true
+            SideEffectLock = { param($Paths) Join-Path $Paths.Root 'listener-side-effect.lock' }
+        },
+        @{
+            Id            = 'heartbeat'
+            SideEffecting = $false
+        },
+        @{
+            Id            = 'review-send-reconcile'
+            SideEffecting = $false
+        }
+    )
+}
+
+function Test-OrchestratorWakeSupervisorSideEffectInFlight {
+    param(
+        [hashtable]$Paths,
+        [ValidateSet('listener', 'review-send-reconcile')]
+        [string]$Role
+    )
+
+    $entry = Get-OrchestratorWakeSupervisorChildRegistry | Where-Object { $_.Id -eq $Role } | Select-Object -First 1
+    if (-not $entry -or -not $entry.SideEffecting -or -not $entry.SideEffectLock) {
+        return $false
+    }
+    $lockPath = & $entry.SideEffectLock $Paths
+    return Test-Path -LiteralPath $lockPath -PathType Leaf
+}
+
+function Wait-OrchestratorWakeSupervisorSideEffectDrain {
+    param(
+        [hashtable]$Paths,
+        [ValidateSet('listener', 'review-send-reconcile')]
+        [string]$Role,
+        [int]$TimeoutSeconds = 30,
+        [string]$LogPath = ''
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -Role $Role)) {
+            return $true
+        }
+        Write-OrchestratorWakeSupervisorLog -Message "draining $Role side-effect (waiting for lock release)" -LogPath $LogPath
+        Start-Sleep -Milliseconds 200
+    }
+    return -not (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -Role $Role)
+}
+
 function Get-OrchestratorWakeSupervisorDefaultProjectId {
     if ($env:AO_WAKE_SUPERVISOR_PROJECT_ID) {
         return $env:AO_WAKE_SUPERVISOR_PROJECT_ID.Trim()
@@ -492,16 +545,19 @@ function Start-OrchestratorWakeSupervisorChild {
     elseif ($Role -ne 'review-send-reconcile') {
         $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
     }
-    if ($Role -eq 'review-send-reconcile' -and $ProjectId) {
+    if (($Role -eq 'review-send-reconcile' -or $Role -eq 'listener') -and $ProjectId) {
         $childArgs += @('-ProjectId', $ProjectId)
     }
-    if ($ExtraChildArgs) {
+    if ($ExtraChildArgs -and -not $TestMode) {
         $childArgs += $ExtraChildArgs
     }
 
     $childEnv = @{}
     if ($Role -ne 'review-send-reconcile') {
         $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
+    }
+    if ($Role -eq 'listener' -and $ProjectId) {
+        $childEnv['AO_WAKE_LISTENER_PROJECT_ID'] = $ProjectId
     }
     if ($TestMode) {
         $markerRoot = Join-Path (Split-Path -Parent $PidFile) 'markers'
@@ -565,6 +621,12 @@ function Stop-OrchestratorWakeSupervisorChildren {
             @{ Pid = $Paths.HeartbeatPid; Label = 'heartbeat' },
             @{ Pid = $Paths.ReviewSendReconcilePid; Label = 'review-send-reconcile' }
         )) {
+        if ($pair.Label -eq 'listener') {
+            $drained = Wait-OrchestratorWakeSupervisorSideEffectDrain -Paths $Paths -Role $pair.Label -LogPath $LogPath
+            if (-not $drained) {
+                Write-OrchestratorWakeSupervisorLog -Message "stop: $(${pair.Label}) side-effect still in flight after drain window" -LogPath $LogPath
+            }
+        }
         $pidVal = Read-OrchestratorWakeSupervisorPidFile -Path $pair.Pid
         Stop-OrchestratorWakeSupervisorProcess -ProcessId $pidVal -PidFile $pair.Pid -ManagedRole $pair.Label -LogPath $LogPath
     }
@@ -671,7 +733,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $phase = 'running'
             $currentSessionId = $sessionId
             $currentSource = $resolved.Source
-            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
@@ -686,7 +748,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             Stop-OrchestratorWakeSupervisorChildren -Paths $Paths
             $currentSessionId = $sessionId
             $currentSource = $resolved.Source
-            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
@@ -702,8 +764,12 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             }
             $children = Get-OrchestratorWakeSupervisorChildStatus -Paths $Paths
             if (-not $children.ListenerAlive) {
+                if (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -Role 'listener') {
+                    Write-OrchestratorWakeSupervisorLog -Message 'listener exited during side-effect; waiting for drain before restart' -LogPath $Paths.SupervisorLog
+                    Wait-OrchestratorWakeSupervisorSideEffectDrain -Paths $Paths -Role 'listener' -LogPath $Paths.SupervisorLog | Out-Null
+                }
                 Write-OrchestratorWakeSupervisorLog -Message 'listener exited; restarting' -LogPath $Paths.SupervisorLog
-                Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
+                Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             }
             if (-not $children.HeartbeatAlive) {
                 Write-OrchestratorWakeSupervisorLog -Message 'heartbeat exited; restarting' -LogPath $Paths.SupervisorLog

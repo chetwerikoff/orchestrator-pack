@@ -1,0 +1,35 @@
+{
+  "description": "Webhook sessionId fallback must not select terminal workers",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-done",
+  "prNumber": 217,
+  "openPrs": [{ "number": 217, "headRefOid": "dead217" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-done",
+      "role": "worker",
+      "prNumber": 217,
+      "status": "done",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "dead217",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "217": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "reason": "no_worker_session"
+  }
+}

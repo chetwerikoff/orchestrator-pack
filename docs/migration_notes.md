@@ -115,6 +115,24 @@ Behavioural acceptance: on the next real red-CI PR episode, confirm in
 that an orchestrator `ao send` appeared before `report-stale` (~30 min). See
 `docs/orchestrator-recovery-runbook.md` (Red CI with idle worker).
 
+### Event-driven review wake trigger (Issue #207)
+
+Issue #207 teaches `orchestrator-wake-listener.ps1` to issue the first `ao review run`
+on `merge.ready` (approved-and-green) completion wakes when HEAD READY FOR REVIEW (#195)
+holds. Additive to `review-trigger-reconcile.ps1` (#163) and the heartbeat backstop.
+
+**No new operator process** — restart the existing wake supervisor so the listener picks
+up the behaviour and side-effect fencing:
+
+1. Merge updated `orchestratorRules` (EVENT-DRIVEN REVIEW TRIGGER) from
+   `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
+2. Pull `prompts/agent_rules.md` (event-driven review trigger section).
+3. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
+   `-Action Start`.
+4. Verify: on worker `ready_for_review` + green CI, listener log shows
+   `review-wake-trigger: starting review` within seconds of the completion wake (not only
+   on the next heartbeat/reconcile tick).
+
 ### First-send review delivery reconcile (Issue #202)
 
 Issue #202 adds a **state-derived first `ao review send` path**: when a review run is in

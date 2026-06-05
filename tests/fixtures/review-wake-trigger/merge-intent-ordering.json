@@ -1,0 +1,35 @@
+{
+  "description": "After fast trigger starts review, merge intent is not mergeable until coverage exists",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-merge",
+  "prNumber": 215,
+  "openPrs": [{ "number": 215, "headRefOid": "merge215" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-merge",
+      "role": "worker",
+      "prNumber": 215,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "merge215",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "215": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": true,
+    "mergeableAfterTrigger": false,
+    "mergeReason": "review_in_flight_revalidate"
+  }
+}

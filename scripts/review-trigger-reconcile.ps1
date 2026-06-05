@@ -42,6 +42,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -153,18 +154,6 @@ function Get-PreRunRecheckSnapshot {
     }
 }
 
-function Invoke-ReviewerWorkspacePreflight {
-    $preflight = Join-Path $PackRoot 'scripts/reviewer-workspace-preflight.ps1'
-    if (-not (Test-Path -LiteralPath $preflight -PathType Leaf)) {
-        return
-    }
-
-    & $preflight -RepoRoot $RepoRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "reviewer-workspace-preflight failed (exit $LASTEXITCODE)"
-    }
-}
-
 function Test-PreRunHeadReadyRecheck {
     param(
         [hashtable]$PlannedAction,
@@ -230,7 +219,7 @@ function Invoke-PlannedReviewRun {
         return
     }
 
-    Invoke-ReviewerWorkspacePreflight
+    Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     & ao @runArgs
     if ($LASTEXITCODE -ne 0) {

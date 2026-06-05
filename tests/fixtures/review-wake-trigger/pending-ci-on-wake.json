@@ -1,0 +1,33 @@
+{
+  "description": "Pending CI head triggers when completion wake arrives",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-pending",
+  "prNumber": 210,
+  "openPrs": [{ "number": 210, "headRefOid": "pending210" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-pending",
+      "role": "worker",
+      "prNumber": 210,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "pending210",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "210": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "PENDING" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": true
+  }
+}

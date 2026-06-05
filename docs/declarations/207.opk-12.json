@@ -1,0 +1,37 @@
+{
+  "issue_number": 207,
+  "iteration_id": "opk-12",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T13:40:00.000Z",
+  "baseline": {
+    "commit_sha": "28e0adaafdceac0f5b425e8ad5b63784c4e4b5f3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:bf947d01ff0431254fcb21caac65f688883f6e791a8cf2738213872d6ddd80e7"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/207.opk-12.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-wake-filter.d.mts",
+    "docs/orchestrator-wake-filter.mjs",
+    "docs/orchestrator-wake-runbook.md",
+    "docs/review-wake-trigger.d.mts",
+    "docs/review-wake-trigger.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/lib/Invoke-ReviewerWorkspacePreflight.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-listener.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-wake-trigger/**"
+  ],
+  "amendments": []
+}

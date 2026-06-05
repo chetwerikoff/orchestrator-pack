@@ -1,0 +1,35 @@
+{
+  "description": "PR #204 / opk-11 incident: completion wake would have triggered review before heartbeat",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-11",
+  "prNumber": 204,
+  "openPrs": [{ "number": 204, "headRefOid": "incident204" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-11",
+      "role": "worker",
+      "prNumber": 204,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "incident204",
+          "reportedAt": "2026-06-05T11:51:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "204": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": true,
+    "beatsHeartbeatBackstop": true
+  }
+}

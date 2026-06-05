@@ -3,6 +3,13 @@
 **Event path:** AO `webhook` notifier → loopback HTTP POST →
 `ao send <orchestrator-session-id> <wake message>`.
 
+**Fast review trigger (Issue #207):** on `merge.ready` (approved-and-green completion wake),
+the listener first evaluates `docs/review-wake-trigger.mjs` (HEAD READY FOR REVIEW #195,
+covered-head dedupe #189) and may `ao review run` before forwarding the merge-intent wake.
+Processing bound: **5 seconds** from wake receipt to run decision (excluding AO/GitHub
+command latency). The listener is reclassified as **side-effecting** under the wake
+supervisor (`listener-side-effect.lock` drain/fence). See `scripts/lib/Invoke-ReviewWakeTrigger.ps1`.
+
 **Heartbeat path (issue #59):** separate process
 `scripts/orchestrator-wake-heartbeat.ps1` → periodic labelled `ao send` on a
 low-frequency interval, independent of webhook traffic.

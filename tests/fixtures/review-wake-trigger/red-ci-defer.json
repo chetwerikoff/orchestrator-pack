@@ -1,0 +1,34 @@
+{
+  "description": "Red required CI defers fast-path review trigger",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-red",
+  "prNumber": 211,
+  "openPrs": [{ "number": 211, "headRefOid": "red211" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-red",
+      "role": "worker",
+      "prNumber": 211,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "red211",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "211": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "reason": "ci_red_defer"
+  }
+}

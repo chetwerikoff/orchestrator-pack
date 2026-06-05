@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWakeMessage,
   evaluateWakePayload,
+  isCompletionMergeIntentWake,
   type AoWebhookBody,
 } from '../docs/orchestrator-wake-filter.mjs';
 
@@ -148,6 +149,13 @@ describe('evaluateWakePayload', () => {
       }),
     );
     expect(result).toEqual({ ok: false, reason: 'info_priority', detail: 'info' });
+  });
+});
+
+describe('isCompletionMergeIntentWake', () => {
+  it('identifies merge.ready as completion merge-intent wake', () => {
+    expect(isCompletionMergeIntentWake('merge.ready')).toBe(true);
+    expect(isCompletionMergeIntentWake('ci.failing')).toBe(false);
   });
 });
 

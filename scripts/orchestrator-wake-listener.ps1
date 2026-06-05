@@ -15,16 +15,26 @@
 param(
     [int]$Port = 0,
     [string]$OrchestratorSessionId = '',
+    [string]$ProjectId = '',
     [string]$Path = '/ao-wake',
     [int]$DedupWindowSeconds = 30,
+    [string]$SideEffectStateDir = '',
+    [string]$FixturePath = '',
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ReviewWakeTrigger.ps1')
 
 $Script:DefaultPort = 17487
+$Script:GhPrChecksLogWriter = { param([string]$Message) Write-ListenerLog $Message }
 
 function Get-ListenerPort {
     if ($Port -gt 0) { return $Port }
@@ -82,13 +92,55 @@ function Test-AndRecordWakeDedup {
 
 $listenerPort = Get-ListenerPort
 $orchestratorId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
+$projectId = if ($ProjectId) {
+    $ProjectId.Trim()
+}
+elseif ($env:AO_WAKE_LISTENER_PROJECT_ID) {
+    $env:AO_WAKE_LISTENER_PROJECT_ID.Trim()
+}
+else {
+    'orchestrator-pack'
+}
 $normalizedPath = if ($Path.StartsWith('/')) { $Path } else { "/$Path" }
 $prefix = "http://127.0.0.1:${listenerPort}/"
 $script:dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $lastAcceptedAt = $null
 $quietCheckSeconds = 300
+$sideEffectLockPath = Get-ReviewWakeTriggerSideEffectLockPath -StateRoot $SideEffectStateDir
+$fixtureSnapshot = $null
+if ($FixturePath) {
+    $fixture = Get-Content -LiteralPath $FixturePath -Raw | ConvertFrom-Json
+    $fixtureSnapshot = @{
+        openPrs                       = @($fixture.openPrs)
+        reviewRuns                    = @($fixture.reviewRuns)
+        sessions                      = @($fixture.sessions)
+        ciChecksByPr                  = @{}
+        requiredCheckNamesByPr        = @{}
+        requiredCheckLookupFailedByPr = @{}
+    }
+    if ($fixture.ciChecksByPr) {
+        foreach ($prop in $fixture.ciChecksByPr.PSObject.Properties) {
+            $fixtureSnapshot.ciChecksByPr[$prop.Name] = $prop.Value
+        }
+    }
+    if ($fixture.requiredCheckNamesByPr) {
+        foreach ($prop in $fixture.requiredCheckNamesByPr.PSObject.Properties) {
+            $fixtureSnapshot.requiredCheckNamesByPr[$prop.Name] = $prop.Value
+        }
+    }
+    if ($fixture.requiredCheckLookupFailedByPr) {
+        foreach ($prop in $fixture.requiredCheckLookupFailedByPr.PSObject.Properties) {
+            $fixtureSnapshot.requiredCheckLookupFailedByPr[$prop.Name] = $prop.Value
+        }
+    }
+}
+$configYaml = Join-Path $Script:OrchestratorWakeRepoRoot 'agent-orchestrator.yaml'
+if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
+    $configYaml = Join-Path $Script:OrchestratorWakeRepoRoot 'agent-orchestrator.yaml.example'
+}
+$reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 
-Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, dedup=${DedupWindowSeconds}s, dryRun=$DryRun)"
+Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, project=$projectId, dedup=${DedupWindowSeconds}s, dryRun=$DryRun, reviewWakeTrigger=on)"
 
 $httpListener = New-Object System.Net.HttpListener
 $httpListener.Prefixes.Add($prefix)
@@ -160,6 +212,34 @@ try {
                     continue
                 }
 
+                # Event-driven review trigger must run before wake dedup so burst
+                # handoffs within the dedup window still start the first review run.
+                $wakeMessage = $filterResult.wakeMessage
+                if ($filterResult.wakeKind -eq 'merge.ready') {
+                    try {
+                        $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
+                            -FilterResult $filterResult `
+                            -ProjectId $projectId `
+                            -RepoRoot $Script:OrchestratorWakeRepoRoot `
+                            -ReviewCommand $reviewCommand `
+                            -SideEffectLockPath $sideEffectLockPath `
+                            -FixtureSnapshot $fixtureSnapshot `
+                            -DryRun:($DryRun -or [bool]$FixturePath) `
+                            -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+                        $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval $triggerResult.mergeEval
+                        if ($triggerResult.triggered) {
+                            Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
+                        }
+                    }
+                    catch {
+                        Write-ListenerLog "review-wake-trigger: failed ($_); forwarding merge wake as non-mergeable"
+                        $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval @{
+                            mergeable = $false
+                            reason    = 'review_trigger_failed'
+                        }
+                    }
+                }
+
                 $dedupDecision = Test-AndRecordWakeDedup -DedupeKey $filterResult.dedupeKey
                 if (-not $dedupDecision.ok) {
                     Write-ListenerLog "deduped ($($dedupDecision.reason)): $($filterResult.wakeKind) $($filterResult.sessionId)"
@@ -168,7 +248,7 @@ try {
                     continue
                 }
 
-                Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $filterResult.wakeMessage -DryRun:$DryRun
+                Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $wakeMessage -DryRun:$DryRun
                 $lastAcceptedAt = Get-Date
                 Write-ListenerLog "accepted: $($filterResult.wakeKind) worker=$($filterResult.sessionId)"
                 $response.StatusCode = 204

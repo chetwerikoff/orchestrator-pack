@@ -1,0 +1,44 @@
+{
+  "description": "Failed run on head routes to EMPTY REVIEW TRAP before head-ready predicate",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-fail",
+  "prNumber": 214,
+  "openPrs": [{ "number": 214, "headRefOid": "fail214" }],
+  "reviewRuns": [
+    {
+      "id": "run-failed",
+      "prNumber": 214,
+      "targetSha": "fail214",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer command exited 1"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-fail",
+      "role": "worker",
+      "prNumber": 214,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "fail214",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "214": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "route": "empty_review_trap",
+    "terminationReason": "reviewer command exited 1"
+  }
+}
