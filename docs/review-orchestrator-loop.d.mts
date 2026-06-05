@@ -1,4 +1,17 @@
-import type { AoSession, ReviewRun } from './review-trigger-reconcile.d.mts';
+import type {
+  AoSession as ReconcileAoSession,
+  ReviewRun as ReconcileReviewRun,
+} from './review-trigger-reconcile.d.mts';
+
+export interface ReviewRun extends ReconcileReviewRun {
+  id?: string;
+  prNumber?: number | null;
+  linkedSessionId?: string;
+  reviewerSessionId?: string;
+  terminationReason?: string;
+}
+
+export type { ReconcileAoSession as AoSession };
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
