@@ -5,6 +5,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
@@ -524,7 +525,7 @@ function Test-OrchestratorWakeSupervisorSideEffectInFlight {
     if (-not $lockPath) {
         $lockPath = Join-Path $Paths.Root $entry.SideEffectLockFile
     }
-    return Test-Path -LiteralPath $lockPath -PathType Leaf
+    return Test-OrchestratorSideEffectInFlight -LockPath $lockPath
 }
 
 function Wait-OrchestratorWakeSupervisorSideEffectDrain {
