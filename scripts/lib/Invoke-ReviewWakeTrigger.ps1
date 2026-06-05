@@ -75,24 +75,28 @@ function Invoke-ReviewWakeTriggerFilterCli {
 function Get-ReviewWakeTriggerMergeEval {
     param(
         [int]$PrNumber,
-        [hashtable]$Snapshot
+        [hashtable]$Snapshot,
+        [string]$HeadSha = '',
+        [array]$ExtraReviewRuns = @()
     )
 
-    $headSha = ''
-    foreach ($pr in @($Snapshot.openPrs)) {
-        if ([int]$pr.number -eq $PrNumber) {
-            $headSha = [string]$pr.headRefOid
-            break
+    $resolvedHeadSha = $HeadSha
+    if (-not $resolvedHeadSha) {
+        foreach ($pr in @($Snapshot.openPrs)) {
+            if ([int]$pr.number -eq $PrNumber) {
+                $resolvedHeadSha = [string]$pr.headRefOid
+                break
+            }
         }
     }
-    if (-not $headSha) {
+    if (-not $resolvedHeadSha) {
         return $null
     }
 
     return Invoke-ReviewWakeTriggerFilterCli -Subcommand 'mergeIntent' -Payload @{
         prNumber   = $PrNumber
-        headSha    = $headSha
-        reviewRuns = @($Snapshot.reviewRuns)
+        headSha    = $resolvedHeadSha
+        reviewRuns = @($Snapshot.reviewRuns) + @($ExtraReviewRuns)
     }
 }
 
@@ -210,7 +214,16 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     $lockPath = if ($SideEffectLockPath) { $SideEffectLockPath } else { Get-ReviewWakeTriggerSideEffectLockPath }
     if (Test-ReviewWakeTriggerSideEffectInFlight -LockPath $lockPath) {
         & $LogWriter "review-wake-trigger: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
-        return @{ triggered = $false; reason = 'side_effect_in_flight' }
+        return @{
+            triggered = $false
+            reason    = 'side_effect_in_flight'
+            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
+                -HeadSha $planned.headSha -ExtraReviewRuns @(@{
+                    prNumber  = $planned.prNumber
+                    targetSha = $planned.headSha
+                    status    = 'queued'
+                })
+        }
     }
 
     $fresh = if ($FixtureSnapshot) {
@@ -238,7 +251,11 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-wake-trigger: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
-        return @{ triggered = $false; reason = $recheck.reason }
+        return @{
+            triggered = $false
+            reason    = $recheck.reason
+            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+        }
     }
 
     if ($DryRun) {

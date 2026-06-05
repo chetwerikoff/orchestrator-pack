@@ -173,6 +173,18 @@ describe('evaluateWakePreRunRecheck', () => {
     expect(result.emitReviewRun).toBe(false);
     expect(result.reason).toBe('pre_run_recheck_head_advanced');
   });
+
+  it('pre-run abort merge intent uses fresh head and defers merge', () => {
+    const fixture = loadFixture('head-advanced-abort.json');
+    const fresh = fixture.fresh!;
+    const mergeEval = evaluateMergeIntentAfterReviewTrigger({
+      prNumber: fixture.planned!.prNumber,
+      headSha: 'new216',
+      reviewRuns: fresh.reviewRuns ?? [],
+    });
+    expect(mergeEval.mergeable).toBe(false);
+    expect(mergeEval.reason).toBe('no_covered_terminal_run');
+  });
 });
 
 describe('evaluateMergeIntentAfterReviewTrigger', () => {
@@ -215,6 +227,25 @@ describe('evaluateMergeIntentAfterReviewTrigger', () => {
     const result = evaluateFixture(fixture);
     expect(result.triggerReviewRun).toBe(false);
     expect(result.reason).toBe('no_worker_session');
+  });
+
+  it('side-effect fence busy treats in-flight review as non-mergeable', () => {
+    const fixture = loadFixture('merge-intent-ordering.json');
+    const headSha = evaluateFixture(fixture).planned!.headSha;
+    const mergeEval = evaluateMergeIntentAfterReviewTrigger({
+      prNumber: fixture.prNumber!,
+      headSha,
+      reviewRuns: [
+        ...(fixture.reviewRuns ?? []),
+        {
+          prNumber: fixture.prNumber,
+          targetSha: headSha,
+          status: 'queued',
+        },
+      ],
+    });
+    expect(mergeEval.mergeable).toBe(false);
+    expect(mergeEval.reason).toBe('review_in_flight_revalidate');
   });
 
   it('Issue #207 (6): merge intent defers while review is in flight', () => {
