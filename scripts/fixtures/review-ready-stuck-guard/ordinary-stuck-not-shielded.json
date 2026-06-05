@@ -1,0 +1,22 @@
+{
+  "description": "AC6: ordinary stuck without review-ready snapshot — normal handling",
+  "nowMs": 1717503000000,
+  "session": {
+    "sessionId": "opk-ordinary",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "stuck",
+    "runtime": "alive",
+    "ownedHeadSha": "ord174",
+    "reports": [{ "reportState": "working", "reportedAt": "2026-06-04T11:00:00Z" }]
+  },
+  "openPr": { "number": 174, "headRefOid": "ord174" },
+  "reviewRuns": [],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "expect": { "reviewReady": false, "actionType": "allow_normal" }
+}

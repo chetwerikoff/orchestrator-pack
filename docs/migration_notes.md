@@ -720,6 +720,25 @@ To adopt after merge:
 
 See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
 
+## Review-ready worker stuck guard (Issue #174)
+
+Adds `docs/review-ready-stuck-guard.mjs`: classifies a **consistent snapshot** when a
+live worker flagged `stuck` / `probe_failure` is actually review-ready (owns current PR
+head, CI green, `ready_for_review` for that head, **clean** review run — not
+`waiting_update`). Plans **hold_grace** (default **15** minutes, monotonic per
+session+head) or **recycle_escalate** when affirmative unreachability evidence exists;
+forbids blind `ao spawn` / `--claim-pr` on the guard path.
+
+To adopt after merge:
+
+1. Merge the **REVIEW-READY WORKER STUCK GUARD** block from
+   `agent-orchestrator.yaml.example` into live `orchestratorRules`.
+2. Restart AO so rules reload: `ao stop` then `ao start`.
+3. Optional env: `AO_REVIEW_READY_STUCK_GRACE_MINUTES` (default **15**).
+4. Verify fixtures: `npx vitest run scripts/review-ready-stuck-guard.test.ts`.
+
+See `docs/orchestrator-recovery-runbook.md` (Review-ready worker false stuck).
+
 ## Terminal Device-Attributes flood detection (Issue #173)
 
 Adds read-only `scripts/terminal-flood-detect.ps1` and `docs/terminal-flood-detect.mjs`:

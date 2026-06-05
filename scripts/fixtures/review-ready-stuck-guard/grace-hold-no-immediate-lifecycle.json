@@ -1,0 +1,38 @@
+{
+  "description": "AC3: hold grace — no immediate spawn/kill/claim-pr",
+  "nowMs": 1717503000000,
+  "session": {
+    "sessionId": "opk-grace",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "probe_failure",
+    "runtime": "alive",
+    "ownedHeadSha": "grace174",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "grace174",
+        "reportedAt": "2026-06-04T12:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "grace174" },
+  "reviewRuns": [
+    {
+      "id": "run-grace",
+      "prNumber": 174,
+      "targetSha": "grace174",
+      "status": "clean",
+      "findingCount": 0,
+      "linkedSessionId": "opk-grace"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "tracking": { "snapshots": {} },
+  "expect": { "actionType": "hold_grace", "forbidImmediateLifecycle": true }
+}

@@ -1,0 +1,43 @@
+{
+  "description": "AC3: repeated stuck does not extend grace past deadline",
+  "nowMs": 1717504000000,
+  "session": {
+    "sessionId": "opk-grace-mono",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "stuck",
+    "runtime": "alive",
+    "ownedHeadSha": "mono174",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "mono174",
+        "reportedAt": "2026-06-04T12:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "mono174" },
+  "reviewRuns": [
+    {
+      "id": "run-mono",
+      "prNumber": 174,
+      "targetSha": "mono174",
+      "status": "clean",
+      "findingCount": 0,
+      "linkedSessionId": "opk-grace-mono"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "conclusion": "SUCCESS" },
+    { "name": "PR scope guard", "conclusion": "SUCCESS" },
+    { "name": "Run pack contract tests", "conclusion": "SUCCESS" },
+    { "name": "Self-architect lint", "conclusion": "SUCCESS" }
+  ],
+  "tracking": {
+    "snapshots": {
+      "opk-grace-mono:mono174": { "firstFalseStuckAtMs": 1717502000000 }
+    }
+  },
+  "graceMs": 900000,
+  "expect": { "actionType": "allow_normal", "graceExpired": true }
+}
