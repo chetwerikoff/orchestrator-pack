@@ -5,6 +5,10 @@ export declare const POST_HANDOFF_REPORT_STATES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 export declare const CI_GREEN_WAKE_MESSAGE: string;
 
+import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
+
+export type { AoSession, OpenPr };
+
 export type CiLevel = 'green' | 'red' | 'pending';
 
 export interface CiCheck {
@@ -12,25 +16,6 @@ export interface CiCheck {
   state?: string;
   conclusion?: string;
   status?: string;
-}
-
-export interface OpenPr {
-  number?: number;
-  headRefOid?: string;
-}
-
-export interface AoSession {
-  name?: string;
-  sessionId?: string;
-  id?: string;
-  role?: string;
-  prNumber?: number | null;
-  pr?: string | null;
-  ownedHeadSha?: string;
-  headRefOid?: string;
-  status?: string;
-  runtime?: string;
-  reports?: Array<Record<string, unknown>>;
 }
 
 export interface HeadCiRecord {
@@ -65,10 +50,20 @@ export interface PlanCiGreenWakeInput {
   openPrs: OpenPr[];
   sessions: AoSession[];
   ciChecksByPr: Record<string, CiCheck[]> | Array<{ prNumber: number; checks: CiCheck[] }>;
+  requiredCheckNamesByPr?:
+    | Record<string, string[]>
+    | Array<{ prNumber: number; requiredCheckNames: string[] }>;
   tracking?: CiGreenWakeState;
 }
 
-export declare function classifyRequiredCiLevel(checks: CiCheck[]): CiLevel;
+export declare function classifyRequiredCiLevel(
+  checks: CiCheck[],
+  options?: { requiredCheckNames?: string[] },
+): CiLevel;
+
+export declare function normalizeRequiredCheckNamesByPr(
+  requiredByPr: PlanCiGreenWakeInput['requiredCheckNamesByPr'],
+): Map<number, string[]>;
 
 export declare function headTrackingKey(prNumber: number, headSha: string): string;
 
@@ -91,6 +86,7 @@ export declare function evaluateCiGreenWakeCandidate(input: {
   headSha: string;
   openPrs?: OpenPr[];
   ciChecks?: CiCheck[];
+  requiredCheckNames?: string[];
 }): {
   eligible: boolean;
   reasons: string[];
@@ -112,6 +108,7 @@ export declare function preSendRecheck(
     openPrs: OpenPr[];
     sessions: AoSession[];
     ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'];
+    requiredCheckNamesByPr?: PlanCiGreenWakeInput['requiredCheckNamesByPr'];
   },
 ): { ok: boolean; reason: string };
 

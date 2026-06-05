@@ -90,6 +90,21 @@ function Set-CiGreenWakeState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
 }
 
+function ConvertFrom-GhJsonArrayOutput {
+    param([object]$RawOutput)
+
+    $text = ($RawOutput | ForEach-Object {
+            if ($_ -is [string]) { $_ }
+            elseif ($null -ne $_) { $_.ToString() }
+        }) -join "`n"
+    $start = $text.IndexOf('[')
+    if ($start -lt 0) {
+        return @()
+    }
+
+    return @($text.Substring($start) | ConvertFrom-Json)
+}
+
 function Invoke-GhOpenPrList {
     Push-Location -LiteralPath $RepoRoot
     try {
@@ -110,13 +125,99 @@ function Invoke-GhPrChecks {
     Push-Location -LiteralPath $RepoRoot
     try {
         $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "gh pr checks failed for PR #$PrNumber (exit $LASTEXITCODE): $raw"
+        $exitCode = $LASTEXITCODE
+        $checks = ConvertFrom-GhJsonArrayOutput -RawOutput $raw
+        if ($exitCode -ne 0 -and $checks.Count -eq 0) {
+            Write-CiGreenWakeLog "warn: gh pr checks PR #$PrNumber exit $exitCode with no parseable JSON; treating as pending"
         }
-        return @($raw | ConvertFrom-Json)
+        return @($checks)
     }
     finally {
         Pop-Location
+    }
+}
+
+function Get-GhRequiredCheckNamesForPr {
+    param([int]$PrNumber)
+
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $baseRef = gh pr view $PrNumber --json baseRefName -q .baseRefName 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not $baseRef) {
+            return $null
+        }
+
+        $repoSlug = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not $repoSlug) {
+            return $null
+        }
+
+        $contextsRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" `
+            --jq '.required_status_checks.contexts[]?' 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+
+        $names = @($contextsRaw | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ })
+        if ($names.Count -eq 0) {
+            return $null
+        }
+
+        return $names
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Get-CiGreenWakeChecksByPr {
+    param([array]$OpenPrs)
+
+    $ciChecksByPr = @{}
+    $requiredCheckNamesByPr = @{}
+    foreach ($pr in @($OpenPrs)) {
+        $n = [int]$pr.number
+        if (-not $n) {
+            continue
+        }
+
+        try {
+            $ciChecksByPr[[string]$n] = @(Invoke-GhPrChecks -PrNumber $n)
+        }
+        catch {
+            Write-CiGreenWakeLog "warn: checks fetch failed PR #$n : $_"
+            $ciChecksByPr[[string]$n] = @()
+        }
+
+        $requiredNames = Get-GhRequiredCheckNamesForPr -PrNumber $n
+        if ($requiredNames) {
+            $requiredCheckNamesByPr[[string]$n] = @($requiredNames)
+        }
+    }
+
+    return @{
+        ciChecksByPr           = $ciChecksByPr
+        requiredCheckNamesByPr = $requiredCheckNamesByPr
+    }
+}
+
+function Get-CiGreenWakePreSendSnapshot {
+    param(
+        [int]$PrNumber,
+        [string]$Project
+    )
+
+    $openPrs = Invoke-GhOpenPrList
+    $sessions = Get-AoStatusSessions
+    $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @(
+        @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
+    )
+
+    return @{
+        openPrs                = @($openPrs)
+        sessions               = @($sessions)
+        ciChecksByPr           = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr = $checksBundle.requiredCheckNamesByPr
     }
 }
 
@@ -125,10 +226,11 @@ function Get-FixtureCiGreenWakePayload {
 
     $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     return @{
-        openPrs       = @($fixture.openPrs)
-        sessions      = @($fixture.sessions)
-        ciChecksByPr  = $fixture.ciChecksByPr
-        tracking      = $fixture.tracking
+        openPrs                = @($fixture.openPrs)
+        sessions               = @($fixture.sessions)
+        ciChecksByPr           = $fixture.ciChecksByPr
+        requiredCheckNamesByPr = $fixture.requiredCheckNamesByPr
+        tracking               = $fixture.tracking
     }
 }
 
@@ -136,8 +238,19 @@ function Invoke-PlannedCiGreenWakeSend {
     param(
         [object]$Action,
         [object]$FreshPayload,
-        [switch]$DryRunMode
+        [string]$Project,
+        [switch]$DryRunMode,
+        [switch]$UseFixtureSnapshot
     )
+
+    if ($UseFixtureSnapshot) {
+        if (-not $FreshPayload) {
+            throw 'FreshPayload is required when UseFixtureSnapshot is set'
+        }
+    }
+    else {
+        $FreshPayload = Get-CiGreenWakePreSendSnapshot -PrNumber ([int]$Action.prNumber) -Project $Project
+    }
 
     $recheck = Invoke-CiGreenWakeFilterCli -Subcommand 'recheck' -Payload @{
         planned = @{
@@ -181,11 +294,17 @@ function Invoke-CiGreenWakeTick {
 
     $tracking = Get-CiGreenWakeState -Path $StatePath
 
+    $ciChecksByPr = @{}
+    $requiredCheckNamesByPr = @{}
+
     if ($Fixture) {
         $payload = Get-FixtureCiGreenWakePayload -Path $Fixture
         $openPrs = $payload.openPrs
         $sessions = $payload.sessions
         $ciChecksByPr = $payload.ciChecksByPr
+        if ($payload.requiredCheckNamesByPr) {
+            $requiredCheckNamesByPr = $payload.requiredCheckNamesByPr
+        }
         if ($payload.tracking) {
             $tracking = $payload.tracking
         }
@@ -193,27 +312,29 @@ function Invoke-CiGreenWakeTick {
     else {
         $openPrs = Invoke-GhOpenPrList
         $sessions = Get-AoStatusSessions
-        $ciChecksByPr = @{}
-        foreach ($pr in @($openPrs)) {
-            $n = [int]$pr.number
-            if ($n) {
-                $ciChecksByPr[[string]$n] = @(Invoke-GhPrChecks -PrNumber $n)
-            }
-        }
+        $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @($openPrs)
+        $ciChecksByPr = $checksBundle.ciChecksByPr
+        $requiredCheckNamesByPr = $checksBundle.requiredCheckNamesByPr
     }
 
     $planPayload = @{
-        openPrs      = @($openPrs)
-        sessions     = @($sessions)
-        ciChecksByPr = $ciChecksByPr
-        tracking     = $tracking
+        openPrs                = @($openPrs)
+        sessions               = @($sessions)
+        ciChecksByPr           = $ciChecksByPr
+        requiredCheckNamesByPr = $requiredCheckNamesByPr
+        tracking               = $tracking
     }
 
     $plan = Invoke-CiGreenWakeFilterCli -Subcommand 'plan' -Payload $planPayload
-    $freshPayload = @{
-        openPrs      = @($openPrs)
-        sessions     = @($sessions)
-        ciChecksByPr = $ciChecksByPr
+    $useFixtureSnapshot = [bool]$Fixture
+    $fixtureFreshPayload = $null
+    if ($useFixtureSnapshot) {
+        $fixtureFreshPayload = @{
+            openPrs                = @($openPrs)
+            sessions               = @($sessions)
+            ciChecksByPr           = $ciChecksByPr
+            requiredCheckNamesByPr = $requiredCheckNamesByPr
+        }
     }
 
     $sent = 0
@@ -233,7 +354,8 @@ function Invoke-CiGreenWakeTick {
             continue
         }
 
-        $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $freshPayload -DryRunMode:$DryRunMode
+        $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $fixtureFreshPayload `
+            -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
         if ($result.sent) {
             if (-not $DryRunMode) {
                 $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

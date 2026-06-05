@@ -70,6 +70,28 @@ describe('classifyRequiredCiLevel', () => {
   it('classifies red when a required check failed', () => {
     expect(classifyRequiredCiLevel(redChecks)).toBe('red');
   });
+
+  it('honors branch-required checks beyond pack fallback', () => {
+    const packGreenOnly = [
+      ...greenChecks,
+      { name: 'External gate', state: 'FAILURE' },
+    ];
+    expect(classifyRequiredCiLevel(packGreenOnly)).toBe('green');
+
+    expect(
+      classifyRequiredCiLevel(packGreenOnly, {
+        requiredCheckNames: ['External gate', ...greenChecks.map((c) => c.name)],
+      }),
+    ).toBe('red');
+  });
+
+  it('returns pending when branch-required checks are missing from output', () => {
+    expect(
+      classifyRequiredCiLevel(greenChecks, {
+        requiredCheckNames: ['Missing required job'],
+      }),
+    ).toBe('pending');
+  });
 });
 
 describe('deriveGreenEpoch', () => {
@@ -218,6 +240,20 @@ describe('planCiGreenWakeActions', () => {
 describe('preSendRecheck', () => {
   const baseSession = liveWorker({
     reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+  });
+
+  it('fails when fresh snapshot shows CI no longer green', () => {
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [{ number: 42, headRefOid: 'abc123' }],
+        sessions: [baseSession],
+        ciChecksByPr: { 42: redChecks },
+        requiredCheckNamesByPr: {},
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('ci_red');
   });
 
   it('(g) fails closed when head moved before send', () => {
