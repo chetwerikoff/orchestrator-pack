@@ -15,6 +15,8 @@
     "docs/issues_drafts/00-architecture-decisions.md",
     "docs/migration_notes.md",
     "docs/orchestrator-autoloop-go-live.md",
+    "docs/ci-green-wake-reconcile.mjs",
+    "docs/ci-green-wake-reconcile.d.mts",
     "docs/review-head-ready.mjs",
     "docs/review-head-ready.d.mts",
     "docs/review-head-ready.d.ts",
