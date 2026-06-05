@@ -174,6 +174,44 @@ function Save-PartialDeliveryTracking {
     Set-DeliveryState -Path $Path -State $AppliedTracking
 }
 
+function Merge-DeliveryTickTracking {
+    param(
+        [object]$PlannedTracking,
+        [hashtable]$AppliedRuns
+    )
+
+    $finalRuns = @{}
+    if ($PlannedTracking -and $PlannedTracking.runs) {
+        $plannedRuns = $PlannedTracking.runs
+        if ($plannedRuns -is [System.Collections.IDictionary]) {
+            foreach ($runId in $plannedRuns.Keys) {
+                if ($AppliedRuns.ContainsKey($runId)) {
+                    $finalRuns[$runId] = $AppliedRuns[$runId]
+                }
+                else {
+                    $finalRuns[$runId] = $plannedRuns[$runId]
+                }
+            }
+        }
+        else {
+            foreach ($prop in $plannedRuns.PSObject.Properties) {
+                $runId = $prop.Name
+                if ($AppliedRuns.ContainsKey($runId)) {
+                    $finalRuns[$runId] = $AppliedRuns[$runId]
+                }
+                else {
+                    $finalRuns[$runId] = $prop.Value
+                }
+            }
+        }
+    }
+
+    return @{
+        runs       = $finalRuns
+        lastTickMs = $PlannedTracking.lastTickMs
+    }
+}
+
 function Get-OpenPrList {
     $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -216,7 +254,7 @@ function Invoke-PlannedReviewSend {
 
     if ($DryRunMode) {
         Write-DeliveryLog "dry-run would redeliver: $commandLine (PR #$PrNumber session=$SessionId attempt=$Attempt)"
-        return
+        return @{ sent = $true; reason = 'dry_run' }
     }
 
     Write-DeliveryLog "re-delivering findings: run=$RunId PR #$PrNumber session=$SessionId attempt=$Attempt"
@@ -230,8 +268,10 @@ function Invoke-PlannedReviewSend {
     }
     if (-not $fenced.ok) {
         Write-DeliveryLog "redelivery skipped (side-effect busy) run=$RunId"
-        return
+        return @{ sent = $false; reason = 'side_effect_busy' }
     }
+
+    return @{ sent = $true; reason = 'sent' }
 }
 
 function Invoke-DeliveryTick {
@@ -292,12 +332,31 @@ function Invoke-DeliveryTick {
                 }
             }
             'redeliver' {
-                Invoke-PlannedReviewSend -RunId $action.runId -PrNumber $action.prNumber `
+                $sendResult = Invoke-PlannedReviewSend -RunId $action.runId -PrNumber $action.prNumber `
                     -SessionId $action.sessionId -Attempt $action.attempt -DryRunMode:$DryRunMode
-                $redelivered++
-                $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
-                if ($record) {
-                    $appliedTracking.runs[$action.runId] = $record
+                if ($sendResult.sent) {
+                    $redelivered++
+                    $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
+                    if ($record) {
+                        $appliedTracking.runs[$action.runId] = $record
+                        Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
+                    }
+                }
+                else {
+                    $priorRecord = Get-PlannedDeliveryRunRecord -PlannedTracking $tracking -RunId $action.runId
+                    if ($priorRecord) {
+                        $appliedTracking.runs[$action.runId] = $priorRecord
+                    }
+                    else {
+                        $planRecord = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
+                        if ($planRecord) {
+                            $appliedTracking.runs[$action.runId] = @{
+                                deliveryState    = 'unconfirmed'
+                                sendObservedAtMs = $planRecord.sendObservedAtMs
+                                redeliveryCount  = [Math]::Max(0, [int]$action.attempt - 1)
+                            }
+                        }
+                    }
                     Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
                 }
             }
@@ -317,7 +376,7 @@ function Invoke-DeliveryTick {
     }
 
     return @{
-        tracking    = $plan.tracking
+        tracking    = Merge-DeliveryTickTracking -PlannedTracking $plan.tracking -AppliedRuns $appliedTracking.runs
         redelivered = $redelivered
         escalated   = $escalated
         confirmed   = $confirmed
