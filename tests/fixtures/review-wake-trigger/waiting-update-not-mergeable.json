@@ -1,0 +1,44 @@
+{
+  "description": "waiting_update covered head must defer merge intent",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-wait",
+  "prNumber": 216,
+  "openPrs": [{ "number": 216, "headRefOid": "wait216" }],
+  "reviewRuns": [
+    {
+      "id": "run-wait",
+      "prNumber": 216,
+      "targetSha": "wait216",
+      "status": "waiting_update",
+      "sentFindingCount": 2
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-wait",
+      "role": "worker",
+      "prNumber": 216,
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "headRefOid": "wait216",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "216": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "reason": "head_covered",
+    "mergeable": false,
+    "mergeReason": "waiting_update_revalidate"
+  }
+}

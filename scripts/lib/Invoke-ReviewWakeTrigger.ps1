@@ -121,9 +121,11 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         return @{ triggered = $false; reason = 'missing_pr_number' }
     }
 
-    $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $snapshot = Get-ReviewWakeTriggerSnapshot -PrNumber $prNumber -Project $ProjectId `
         -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
+
+    # Bound listener-local processing only — exclude gh/ao snapshot latency.
+    $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
     $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
     $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload @{

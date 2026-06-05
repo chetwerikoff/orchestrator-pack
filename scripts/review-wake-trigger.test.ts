@@ -164,6 +164,33 @@ describe('evaluateMergeIntentAfterReviewTrigger', () => {
     );
   });
 
+  it('waiting_update covered head is not mergeable', () => {
+    const fixture = loadFixture('waiting-update-not-mergeable.json');
+    const evalResult = evaluateFixture(fixture);
+    expect(evalResult.triggerReviewRun).toBe(false);
+    expect(evalResult.reason).toBe('head_covered');
+    const mergeEval = evaluateMergeIntentAfterReviewTrigger({
+      prNumber: fixture.prNumber!,
+      headSha: 'wait216',
+      reviewRuns: fixture.reviewRuns!,
+    });
+    expect(mergeEval.mergeable).toBe(false);
+    expect(mergeEval.reason).toBe('waiting_update_revalidate');
+    const amended = amendMergeWakeMessage(
+      'wake merge.ready session=opk-wait pr=#216',
+      mergeEval,
+    );
+    expect(amended).toContain('mergeable=false');
+    expect(amended).toContain('waiting_update_revalidate');
+  });
+
+  it('webhook sessionId fallback rejects non-live workers', () => {
+    const fixture = loadFixture('non-live-fallback-session.json');
+    const result = evaluateFixture(fixture);
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('no_worker_session');
+  });
+
   it('Issue #207 (6): merge intent defers while review is in flight', () => {
     const fixture = loadFixture('merge-intent-ordering.json');
     const evalResult = evaluateFixture(fixture);

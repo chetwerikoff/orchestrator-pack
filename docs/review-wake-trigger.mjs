@@ -19,6 +19,7 @@ import {
   hasFailedOrCancelledOnHead,
   IN_FLIGHT_REVIEW_STATUSES,
   isHeadCovered,
+  isLiveWorkerSession,
   isRunCoveringHead,
   normalizeSha,
   resolveHeadOwningWorkerSessionId,
@@ -128,10 +129,41 @@ export function evaluateWakeReviewTrigger(input) {
     };
   }
 
-  const sessionId =
-    resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs) ??
-    String(input.sessionId ?? '').trim();
+  const resolvedSessionId = resolveHeadOwningWorkerSessionId(
+    sessions,
+    prNumber,
+    headSha,
+    openPrs,
+  );
+  let sessionId = resolvedSessionId;
+  if (!sessionId) {
+    const fallbackId = String(input.sessionId ?? '').trim();
+    const fallbackSession = fallbackId ? findSessionById(sessions, fallbackId) : null;
+    if (fallbackSession && isLiveWorkerSession(fallbackSession)) {
+      sessionId = fallbackId;
+    }
+  }
   const session = sessionId ? findSessionById(sessions, sessionId) : null;
+
+  if (!sessionId || !session) {
+    return {
+      triggerReviewRun: false,
+      reason: 'no_worker_session',
+      route: 'none',
+      processingMs,
+      withinLatencyBound,
+    };
+  }
+
+  if (!isLiveWorkerSession(session)) {
+    return {
+      triggerReviewRun: false,
+      reason: 'non_live_worker_session',
+      route: 'none',
+      processingMs,
+      withinLatencyBound,
+    };
+  }
 
   const decision = evaluateHeadReadyForReview({
     reviewRuns,
@@ -148,16 +180,6 @@ export function evaluateWakeReviewTrigger(input) {
       triggerReviewRun: false,
       reason: decision.reason,
       route: decision.route ?? 'none',
-      processingMs,
-      withinLatencyBound,
-    };
-  }
-
-  if (!sessionId) {
-    return {
-      triggerReviewRun: false,
-      reason: 'no_worker_session',
-      route: 'none',
       processingMs,
       withinLatencyBound,
     };
@@ -223,6 +245,24 @@ export function evaluateMergeIntentAfterReviewTrigger(input) {
     return {
       mergeable: false,
       reason: 'needs_triage_revalidate',
+      forwardWake: true,
+      covered,
+    };
+  }
+
+  const waitingUpdate = reviewRuns.some((run) => {
+    const status = String(run?.status ?? '').toLowerCase();
+    return (
+      Number(run?.prNumber) === prNumber &&
+      normalizeSha(run?.targetSha) === headSha &&
+      status === 'waiting_update'
+    );
+  });
+
+  if (waitingUpdate) {
+    return {
+      mergeable: false,
+      reason: 'waiting_update_revalidate',
       forwardWake: true,
       covered,
     };
