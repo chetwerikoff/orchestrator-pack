@@ -5,13 +5,12 @@ import type {
 
 export interface ReviewRun extends ReconcileReviewRun {
   id?: string;
-  prNumber?: number | null;
   linkedSessionId?: string;
   reviewerSessionId?: string;
   terminationReason?: string;
 }
 
-export type { ReconcileAoSession as AoSession };
+export type AoSession = ReconcileAoSession;
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
