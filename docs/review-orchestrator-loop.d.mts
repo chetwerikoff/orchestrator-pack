@@ -28,6 +28,12 @@ export {
   normalizeSha,
 } from './review-trigger-reconcile.d.mts';
 
+export interface StartReviewDecision {
+  start: boolean;
+  reason: string;
+  route?: string;
+}
+
 export declare function shouldStartReviewRunOnUncoveredPath(
   runs: ReviewRun[],
   prNumber: number,

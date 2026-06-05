@@ -71,6 +71,14 @@ describe('classifyRequiredCiForReviewTrigger', () => {
       ),
     ).toBe('degraded');
   });
+
+  it('classifies missing fallback merge-contract checks as degraded when unrelated checks exist', () => {
+    expect(
+      classifyRequiredCiForReviewTrigger(
+        [{ name: 'Unrelated external gate', state: 'PENDING' }],
+      ),
+    ).toBe('degraded');
+  });
 });
 
 describe('evaluateHeadReadyForReview', () => {

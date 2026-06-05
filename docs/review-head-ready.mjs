@@ -8,6 +8,7 @@ import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   findLatestReportForHead,
   getReportHeadSha,
+  PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
 import {
   findSessionById,
@@ -70,27 +71,28 @@ export function classifyRequiredCiForReviewTrigger(checks, options = {}) {
   const branchRequired = toArray(options.requiredCheckNames)
     .map((name) => String(name ?? '').trim())
     .filter(Boolean);
-  const normalizedRequired = branchRequired.map((name) => name.toLowerCase());
+  const effectiveRequired =
+    branchRequired.length > 0 ? branchRequired : PACK_MERGE_CONTRACT_CHECK_NAMES;
+  const normalizedEffective = effectiveRequired.map((name) => name.toLowerCase());
 
-  if (normalizedRequired.length > 0) {
-    const scope = list.filter((check) =>
-      normalizedRequired.includes(String(check?.name ?? '').toLowerCase()),
-    );
-    if (scope.length === 0) {
-      return 'degraded';
-    }
-    const matchedRequired = new Set(
-      scope.map((check) => String(check?.name ?? '').toLowerCase()),
-    );
-    const hasMissingRequired = normalizedRequired.some((name) => !matchedRequired.has(name));
-    if (hasMissingRequired) {
-      return 'degraded';
-    }
-  } else if (list.length === 0) {
+  const scope = list.filter((check) =>
+    normalizedEffective.includes(String(check?.name ?? '').toLowerCase()),
+  );
+  if (scope.length === 0) {
+    return 'degraded';
+  }
+  const matchedRequired = new Set(
+    scope.map((check) => String(check?.name ?? '').toLowerCase()),
+  );
+  const hasMissingRequired = normalizedEffective.some((name) => !matchedRequired.has(name));
+  if (hasMissingRequired) {
     return 'degraded';
   }
 
-  const level = classifyRequiredCiLevel(checks, options);
+  const level = classifyRequiredCiLevel(scope, {
+    requiredCheckNames: effectiveRequired,
+    requiredCheckLookupFailed: options.requiredCheckLookupFailed,
+  });
   if (level === 'green' || level === 'pending') {
     return level;
   }
