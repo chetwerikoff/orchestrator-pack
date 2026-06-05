@@ -418,6 +418,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== CI-green worker wake (Issue #191) =='
+$ciGreenWakeCheck = Join-Path $Root 'scripts/check-ci-green-wake-reconcile.ps1'
+if (Test-Path -LiteralPath $ciGreenWakeCheck -PathType Leaf) {
+    & $ciGreenWakeCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-ci-green-wake-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-ci-green-wake-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'CI-green worker wake wiring checks failed (Issue #191)'
+    }
+}
+else {
+    Write-Check 'scripts/check-ci-green-wake-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing CI-green worker wake check script (Issue #191)'
+}
+
+Write-Host ''
 Write-Host '== review-finding delivery confirmation (Issue #171) =='
 $deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
 if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {
