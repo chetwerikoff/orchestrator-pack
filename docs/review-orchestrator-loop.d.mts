@@ -1,3 +1,4 @@
+import type { CiCheck } from './ci-green-wake-reconcile.d.mts';
 import type {
   AoSession as ReconcileAoSession,
   ReviewRun as ReconcileReviewRun,
@@ -11,6 +12,12 @@ export interface ReviewRun extends ReconcileReviewRun {
 }
 
 export type AoSession = ReconcileAoSession;
+
+export {
+  evaluateHeadReadyForReview,
+  hasReadyForReviewForHead,
+  preRunHeadReadyRecheck,
+} from './review-head-ready.d.mts';
 
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
@@ -29,6 +36,7 @@ export declare function hasFailedOrCancelledOnHead(
 export interface StartReviewDecision {
   start: boolean;
   reason: string;
+  route?: string;
 }
 
 export declare function shouldStartReviewRunOnUncoveredPath(
@@ -36,6 +44,17 @@ export declare function shouldStartReviewRunOnUncoveredPath(
   prNumber: number,
   headSha: string,
 ): StartReviewDecision;
+
+export declare function shouldStartReviewRun(input: {
+  reviewRuns: ReviewRun[];
+  prNumber: number;
+  headSha: string;
+  session?: AoSession | null;
+  ciChecks?: CiCheck[];
+  requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
+  degradedCiAttempts?: number;
+}): StartReviewDecision;
 
 export interface ReviewRunRecheckDecision {
   emitReviewRun: boolean;
@@ -47,6 +66,13 @@ export declare function evaluateReviewRunWithRecheck(input: {
   runsImmediatelyBeforeRun: ReviewRun[];
   prNumber: number;
   headSha: string;
+  session?: AoSession | null;
+  ciChecksAtStart?: CiCheck[];
+  ciChecksBeforeRun?: CiCheck[];
+  requiredCheckNamesAtStart?: string[];
+  requiredCheckNamesBeforeRun?: string[];
+  requiredCheckLookupFailedAtStart?: boolean;
+  requiredCheckLookupFailedBeforeRun?: boolean;
 }): ReviewRunRecheckDecision;
 
 export declare function getRunLinkedSessionId(run: ReviewRun): string;

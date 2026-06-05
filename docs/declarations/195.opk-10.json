@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-06-05T12:00:00.000Z",
   "baseline": {
-    "commit_sha": "7ceaa257c8f2e8f0e8b0e8f0e8b0e8f0e8b0e8f0",
+    "commit_sha": "7ceaa25d04a714dc70b3d218946ff32c81c7a87e",
     "worktree_dirty": true,
     "active_scope_hash": "sha256:pending"
   },
@@ -16,8 +16,12 @@
     "docs/migration_notes.md",
     "docs/orchestrator-autoloop-go-live.md",
     "docs/review-head-ready.mjs",
+    "docs/review-head-ready.d.mts",
+    "docs/review-head-ready.d.ts",
     "docs/review-orchestrator-loop.mjs",
+    "docs/review-orchestrator-loop.d.mts",
     "docs/review-trigger-reconcile.mjs",
+    "docs/review-trigger-reconcile.d.mts",
     "prompts/agent_rules.md",
     "scripts/check-orchestrator-review-head-ready.ps1",
     "scripts/check-review-trigger-reconcile.ps1",
