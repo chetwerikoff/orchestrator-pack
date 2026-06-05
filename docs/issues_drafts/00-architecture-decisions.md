@@ -272,6 +272,18 @@ runs and the orchestrator went `stuck` — review never started.
    the Issue #98 idempotency/stale-workspace preflight and stays low-frequency
    per Decision 2.
 
+4. **Review triggering requires worker hand-off per head (Issue #195).** Decision
+   taken 2026-06-05 after outdated review runs piled up when SHA-advance and #163
+   reconciliation keyed only on coverage, not on `ready_for_review` for the exact
+   head. **One canonical predicate — head ready for review** — gates all three
+   trigger paths (report-driven, `ROUND PROGRESSION`, #163 reconciler): latest
+   accepted `ready_for_review` for the current head, required CI green or genuinely
+   pending (red defers; missing visibility → orchestrator degraded-CI branch), #189
+   coverage, and failed/cancelled evaluated first. Uncovered-but-not-ready heads
+   defer without reconciler lifecycle action; existing `report-stale` / ping /
+   respawn backstops and #191 CI-green wake remain. Mechanical source:
+   `docs/review-head-ready.mjs` (file `67-orchestrator-review-gate-on-handoff.md`).
+
 2. **The wake mechanism's strict no-polling invariant is relaxed for a
    low-frequency heartbeat.** Issue #39 (file
    `14-orchestrator-wake-mechanism.md`) originally committed the wake listener

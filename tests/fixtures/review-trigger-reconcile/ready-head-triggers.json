@@ -1,5 +1,5 @@
 {
-  "description": "Uncovered head without ready_for_review is left alone (uncovered-but-not-ready)",
+  "description": "Ready head with green required CI triggers exactly one review run",
   "openPrs": [{ "number": 99, "headRefOid": "deadbeef" }],
   "reviewRuns": [],
   "sessions": [
@@ -7,7 +7,14 @@
       "name": "op-live-worker",
       "role": "worker",
       "prNumber": 99,
-      "status": "working"
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "deadbeef",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
     }
   ],
   "ciChecksByPr": {
@@ -19,7 +26,7 @@
     ]
   },
   "expect": {
-    "startReviewCount": 0,
-    "skipReason": "uncovered_not_ready"
+    "startReviewCount": 1,
+    "sessionId": "op-live-worker"
   }
 }

@@ -14,13 +14,25 @@ import {
   isLiveWorkerSession,
   sessionMatchesIdentifier,
   planReconcileActions,
+  resolveHeadOwningWorkerSessionId,
   resolveWorkerSessionId,
   type PlanReconcileInput,
   type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
 
+const greenChecks = [
+  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+  { name: 'PR scope guard', state: 'SUCCESS' },
+  { name: 'Run pack contract tests', state: 'SUCCESS' },
+  { name: 'Self-architect lint', state: 'SUCCESS' },
+];
+
 function startReviewActions(actions: ReconcileAction[]) {
   return actions.filter((a): a is Extract<ReconcileAction, { type: 'start_review' }> => a.type === 'start_review');
+}
+
+function skipActions(actions: ReconcileAction[]) {
+  return actions.filter((a): a is Extract<ReconcileAction, { type: 'skip' }> => a.type === 'skip');
 }
 
 const fixturesDir = path.join(
@@ -29,7 +41,14 @@ const fixturesDir = path.join(
 );
 
 type FixturePayload = PlanReconcileInput & {
-  expect?: { startReviewCount?: number; sessionId?: string };
+  expect?: {
+    startReviewCount?: number;
+    sessionId?: string;
+    skipReason?: string;
+    trackDegradedCi?: boolean;
+    escalateDegradedCi?: boolean;
+    notSkipReason?: string;
+  };
 };
 
 function loadFixture(name: string): FixturePayload {
@@ -74,8 +93,8 @@ describe('isHeadCovered', () => {
 });
 
 describe('planReconcileActions', () => {
-  it('AC1: starts review for uncovered head without worker report path', () => {
-    const fixture = loadFixture('uncovered-no-report.json');
+  it('Issue #195 (a): starts review for ready head with green CI', () => {
+    const fixture = loadFixture('ready-head-triggers.json');
     const actions = planReconcileActions(fixture);
     const starts = startReviewActions(actions);
     expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
@@ -86,20 +105,31 @@ describe('planReconcileActions', () => {
     });
   });
 
-  it('accepts PowerShell single-object openPrs (not a JSON array)', () => {
+  it('Issue #195 (b): does not start without ready_for_review (uncovered-but-not-ready)', () => {
     const fixture = loadFixture('uncovered-no-report.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(skipActions(actions).some((a) => a.reason === fixture.expect?.skipReason)).toBe(
+      true,
+    );
+  });
+
+  it('accepts PowerShell single-object openPrs (not a JSON array)', () => {
+    const fixture = loadFixture('ready-head-triggers.json');
     const actions = planReconcileActions({
       openPrs: fixture.openPrs[0] as unknown as typeof fixture.openPrs,
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
+      ciChecksByPr: fixture.ciChecksByPr,
     });
     expect(startReviewActions(actions)).toHaveLength(1);
   });
 
-  it('AC2: same plan when orchestrator is stuck (not consulted)', () => {
-    const fixture = loadFixture('uncovered-no-report.json');
+  it('Issue #195 (c): intermediate commit without ready_for_review does not trigger', () => {
+    const fixture = loadFixture('intermediate-commit.json');
     const actions = planReconcileActions(fixture);
-    expect(startReviewActions(actions)).toHaveLength(1);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(skipActions(actions).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
   });
 
   it('AC3: does not start when head is covered by each blocking status', () => {
@@ -115,10 +145,45 @@ describe('planReconcileActions', () => {
     }
   });
 
-  it('AC3: starts when only outdated runs cover the PR', () => {
+  it('AC3: starts when only outdated runs cover the PR and head is ready', () => {
     const fixture = loadFixture('uncovered-only-outdated.json');
     const actions = planReconcileActions(fixture);
     expect(startReviewActions(actions)).toHaveLength(1);
+  });
+
+  it('Issue #195 (d): red CI defers review on ready head', () => {
+    const fixture = loadFixture('red-ci-defer.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(skipActions(actions).some((a) => a.reason === 'ci_red_defer')).toBe(true);
+  });
+
+  it('Issue #195 (e): pending CI on ready head still triggers', () => {
+    const fixture = loadFixture('pending-ci-triggers.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(1);
+  });
+
+  it('Issue #195 (e2): missing required checks track degraded-ci retry', () => {
+    const fixture = loadFixture('degraded-ci-visibility.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'track_degraded_ci')).toBe(true);
+  });
+
+  it('Issue #195 (e2): bounded attempts escalate operator', () => {
+    const fixture = loadFixture('degraded-ci-escalate.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'escalate_degraded_ci')).toBe(true);
+  });
+
+  it('Issue #195 (e3): degraded-CI worker handoff avoids uncovered-not-ready', () => {
+    const fixture = loadFixture('degraded-ci-worker-handoff.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    expect(skipActions(actions).some((a) => a.reason === 'uncovered_not_ready')).toBe(false);
+    expect(actions.some((a) => a.type === 'track_degraded_ci')).toBe(true);
   });
 
   it('AC4: split-brain uses live worker session only (no lifecycle in review argv)', () => {
@@ -205,7 +270,7 @@ describe('resolveWorkerSessionId', () => {
     ).toBe('opk-worker-9');
   });
 
-  it('starts review when status payload uses sessionId', () => {
+  it('starts review when status payload uses sessionId and head is ready', () => {
     const actions = planReconcileActions({
       openPrs: [{ number: 66, headRefOid: 'sha66' }],
       reviewRuns: [],
@@ -215,8 +280,23 @@ describe('resolveWorkerSessionId', () => {
           role: 'worker',
           prNumber: 66,
           status: 'working',
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              headRefOid: 'sha66',
+              reportedAt: '2026-06-05T12:00:00.000Z',
+            },
+          ],
         },
       ],
+      ciChecksByPr: {
+        '66': [
+          { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+          { name: 'PR scope guard', state: 'SUCCESS' },
+          { name: 'Run pack contract tests', state: 'SUCCESS' },
+          { name: 'Self-architect lint', state: 'SUCCESS' },
+        ],
+      },
     });
     expect(startReviewActions(actions)).toEqual([
       expect.objectContaining({
@@ -294,6 +374,71 @@ describe('resolveWorkerSessionId', () => {
       99,
     );
     expect(id).toBe('op-worker');
+  });
+
+  it('prefers head-owning worker over stale live worker on the same PR', () => {
+    const headSha = 'currenthead57';
+    expect(
+      resolveHeadOwningWorkerSessionId(
+        [
+          {
+            name: 'op-stale',
+            role: 'worker',
+            prNumber: 57,
+            ownedHeadSha: 'oldhead57',
+            status: 'working',
+          },
+          {
+            name: 'op-ready',
+            role: 'worker',
+            prNumber: 57,
+            ownedHeadSha: headSha,
+            status: 'idle',
+          },
+        ],
+        57,
+        headSha,
+        [{ number: 57, headRefOid: headSha }],
+      ),
+    ).toBe('op-ready');
+  });
+
+  it('prefers worker with ready_for_review report when multiple live workers match PR', () => {
+    const headSha = 'currenthead58';
+    const actions = planReconcileActions({
+      openPrs: [{ number: 58, headRefOid: headSha }],
+      reviewRuns: [],
+      sessions: [
+        {
+          name: 'op-earlier',
+          role: 'worker',
+          prNumber: 58,
+          status: 'working',
+          reports: [],
+        },
+        {
+          name: 'op-ready',
+          role: 'worker',
+          prNumber: 58,
+          status: 'idle',
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              headRefOid: headSha,
+              reportedAt: '2026-06-05T12:00:00.000Z',
+            },
+          ],
+        },
+      ],
+      ciChecksByPr: { '58': greenChecks },
+    });
+    expect(startReviewActions(actions)).toEqual([
+      expect.objectContaining({
+        type: 'start_review',
+        sessionId: 'op-ready',
+        prNumber: 58,
+      }),
+    ]);
   });
 });
 

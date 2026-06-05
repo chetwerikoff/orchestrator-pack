@@ -264,6 +264,32 @@ projects:
       same covered-head definition; rare double-runs from simultaneous observation are
       acceptable residual risk (one run goes outdated; no worker-lifecycle effect).
 
+      HEAD READY FOR REVIEW (Issue #195 — one predicate for all review-trigger paths).
+      Before any ao review run (report-driven trigger, ROUND PROGRESSION, or the #163
+      reconciler), evaluate failed/cancelled on the current head FIRST (EMPTY REVIEW TRAP —
+      never the plain uncovered-ready path). Then a PR head SHA is ready for review only when
+      ALL hold on one consistent snapshot:
+        - latest accepted worker report for that exact current head SHA is ready_for_review
+          (a ready_for_review for an earlier head does not authorize a later head — reuse #186
+          current-head-at-report-time semantics);
+        - required CI on that head (same Required CI definition as prompts/agent_rules.md) is
+          green or genuinely pending/queued against a known required-check set — explicitly NOT
+          red/failing and NOT missing/unknown/unresolvable (red defers; missing routes to the
+          degraded-CI orchestrator branch below);
+        - the head is not already covered per REVIEW RUN IDEMPOTENCY (#189); and
+        - no failed/cancelled run on the current head awaits EMPTY REVIEW TRAP handling.
+      Uncovered-but-not-ready heads are left alone: no review run and no worker-lifecycle
+      action from the reconciler. Defer, never drop — report-stale and ping/respawn backstops
+      still reach idle/dead workers; #191 CI-green wake speeds pre-hand-off re-engagement.
+      Worker degraded-CI hand-off (#186 evidence-backed escalation, not ready_for_review)
+      routes to the orchestrator/reconciler degraded-CI branch — bounded re-attempts to resolve
+      required-check visibility, then observable operator escalation — not generic
+      uncovered-not-ready worker-liveness handling. PRE-RUN HEAD-READY RE-CHECK widens #189:
+      immediately before ao review run, re-read current head SHA, latest accepted report,
+      required-CI state, and coverage; abort if the predicate no longer holds. Mechanical
+      implementation: docs/review-head-ready.mjs (shared with review-trigger-reconcile.ps1
+      and docs/review-orchestrator-loop.mjs).
+
       STALE REVIEWER WORKSPACE (Issue #98). Before ao review run when the prior attempt for
       the same PR head failed with terminationReason containing worktree add and already
       exists, or when retrying after a failed reviewer infra run, run from the pack repo root:
@@ -273,12 +299,13 @@ projects:
 
       TRIGGER REVIEW WITHOUT HUMAN PROMPT (report-driven on orchestrator turns). Whenever
       a worker reports pr_created or ready_for_review on an open PR (visible in
-      ao status --reports full), apply REVIEW RUN IDEMPOTENCY and STALE REVIEWER WORKSPACE
-      above, then run:
+      ao status --reports full), apply HEAD READY FOR REVIEW (#195), REVIEW RUN IDEMPOTENCY,
+      PRE-RUN HEAD-READY RE-CHECK, and STALE REVIEWER WORKSPACE above, then run:
         ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
-      Do not wait for operator words review or loop. Report-driven triggering is not the
-      only path — the low-frequency reconcile process below converges from GitHub + review
-      list state even when reports are missing or the orchestrator is stuck.
+      only when the head is ready for review. Do not wait for operator words review or loop.
+      Report-driven triggering is not the only path — the low-frequency reconcile process
+      below converges from GitHub + review list state even when reports are missing or the
+      orchestrator is stuck.
 
       STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
       low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
@@ -291,13 +318,18 @@ projects:
         2. ao review list --json — coverage per PR head SHA (compose with REVIEW RUN
            IDEMPOTENCY above: in-flight, clean, needs_triage, waiting_update count as covered;
            only outdated or absent runs are uncovered)
-        3. ao status --json --reports full — resolve an existing worker session id for the PR
-        4. For each uncovered head with a linked worker session: STALE REVIEWER WORKSPACE
-           preflight, then ao review run <worker-session-id> --execute with --command set to
-           REVIEW_COMMAND
+        3. ao status --json --reports full — resolve worker session and latest accepted
+           report for each PR head
+        4. gh pr checks + branch-protection required-check names — classify required CI per
+           HEAD READY FOR REVIEW (#195; red defers, green/pending eligible, missing routes to
+           degraded-CI orchestrator branch)
+        5. For each head that is ready for review with a linked worker session: STALE
+           REVIEWER WORKSPACE preflight, PRE-RUN HEAD-READY RE-CHECK, then ao review run
+           <worker-session-id> --execute with --command set to REVIEW_COMMAND
       Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send
-      from this process — only ao review run for an uncovered head. Skip PRs with no linked
-      worker session (orchestrator respawn discipline owns session creation). Verification:
+      from this process — only ao review run for a head ready for review. Skip uncovered-but-
+      not-ready heads with no worker-lifecycle action. Skip PRs with no linked worker session
+      (orchestrator respawn discipline owns session creation). Verification:
         pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
       See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
 
@@ -367,8 +399,11 @@ projects:
       false stuck).
 
       ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
-      last review run's target SHA, immediately run ao review run <session> --execute
-      with --command set to REVIEW_COMMAND for the next round — do not ask the operator.
+      last review run's target SHA, apply HEAD READY FOR REVIEW (#195) and PRE-RUN
+      HEAD-READY RE-CHECK, then run ao review run <session> --execute with --command set to
+      REVIEW_COMMAND for the next round only when the new head is ready for review — do not
+      ask the operator. Intermediate commits while the worker is still fixing must not trigger
+      a review run.
 
       ROUND LIMIT (prompt-level stop). Count completed review runs for the current PR
       from ao review list --json where findingCount > 0 OR openFindingCount > 0.

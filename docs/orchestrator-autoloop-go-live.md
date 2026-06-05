@@ -5,8 +5,10 @@ repo (Issues #28 / #39 / #60 — merged as PRs #42, #47, #65). AO does **not** r
 Codex review when a worker spawns; the **orchestrator** drives
 `ao review run` → `ao review send` → worker `addressing_reviews` → re-review.
 
-State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163))
-runs via `scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only).
+State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163),
+[#195](https://github.com/chetwerikoff/orchestrator-pack/issues/195)) runs via
+`scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only when the head is
+**ready for review**).
 Heartbeat backstop [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) is
 documented below alongside the event listener.
 
@@ -24,7 +26,7 @@ and the matching steps in
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Wake supervisor (listener + heartbeat) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
-| Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs` (Issue #163) |
+| Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs`, `docs/review-head-ready.mjs` (Issues #163, #195) |
 | CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | Review-finding delivery confirm | `scripts/review-finding-delivery-confirm.ps1`, `docs/review-finding-delivery-confirm.mjs` (Issue #171) |
 | Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |

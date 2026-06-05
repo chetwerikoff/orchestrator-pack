@@ -14,8 +14,11 @@ import {
   normalizeSha,
   sessionMatchesIdentifier,
   sessionMatchesPr,
+  sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+export { sessionOwnsRunHead };
 
 export { findForbiddenLifecycleCommands as findForbiddenDeliveryLifecycleCommands };
 
@@ -126,36 +129,6 @@ export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
     }
   }
   return null;
-}
-
-/**
- * @param {AoSession} session
- * @param {number} prNumber
- * @param {string} targetHeadSha
- * @param {OpenPr[]} [openPrs]
- */
-export function sessionOwnsRunHead(session, prNumber, targetHeadSha, openPrs) {
-  if (!sessionMatchesPr(session, prNumber)) {
-    return false;
-  }
-
-  const target = normalizeSha(targetHeadSha);
-  if (!target) {
-    return false;
-  }
-
-  const pr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
-  const currentHead = normalizeSha(pr?.headRefOid);
-  if (currentHead && currentHead !== target) {
-    return false;
-  }
-
-  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
-  if (sessionHead) {
-    return sessionHead === target;
-  }
-
-  return Boolean(currentHead && currentHead === target);
 }
 
 /**

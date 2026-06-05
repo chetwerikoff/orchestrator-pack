@@ -1,0 +1,38 @@
+{
+  "description": "Head becomes not-ready between observation and pre-run re-check",
+  "planned": {
+    "prNumber": 50,
+    "headSha": "head50",
+    "sessionId": "op-worker-50"
+  },
+  "fresh": {
+    "openPrs": [{ "number": 50, "headRefOid": "head50" }],
+    "reviewRuns": [
+      { "prNumber": 50, "targetSha": "head50", "status": "queued" }
+    ],
+    "sessions": [
+      {
+        "name": "op-worker-50",
+        "role": "worker",
+        "prNumber": 50,
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "headRefOid": "head50",
+            "reportedAt": "2026-06-05T12:00:00.000Z"
+          }
+        ]
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": false,
+    "reasonPrefix": "pre_run_recheck_"
+  }
+}

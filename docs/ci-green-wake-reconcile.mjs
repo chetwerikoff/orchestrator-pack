@@ -9,7 +9,7 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { getReportState, sessionOwnsRunHead } from './review-finding-delivery-confirm.mjs';
+import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   findLatestReportForHead,
   isCiCheckFailure,
@@ -22,9 +22,12 @@ import {
   getSessionIdentifier,
   isLiveWorkerSession,
   normalizeSha,
-  resolveWorkerSessionId,
+  resolveHeadOwningWorkerSessionId,
+  sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
 export const DEFAULT_CI_GREEN_WAKE_INTERVAL_MS = 60 * 1000;
 
@@ -171,21 +174,6 @@ export function isPreHandOffWorkerForHead(session, headSha) {
   }
 
   return PRE_HANDOFF_REPORT_STATES.has(getReportState(last));
-}
-
-/**
- * Pick the live worker session that owns the current PR head (not merely the first PR match).
- *
- * @param {AoSession[]} sessions
- * @param {number} prNumber
- * @param {string} headSha
- * @param {OpenPr[]} [openPrs]
- */
-export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
-  const prList = toArray(openPrs);
-  return resolveWorkerSessionId(sessions, prNumber, {
-    ownsHead: (session) => sessionOwnsRunHead(session, prNumber, headSha, prList),
-  });
 }
 
 /**

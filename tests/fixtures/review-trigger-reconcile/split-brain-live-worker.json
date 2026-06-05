@@ -8,7 +8,14 @@
       "role": "worker",
       "prNumber": 97,
       "status": "working",
-      "branch": "feat/issue-86"
+      "branch": "feat/issue-86",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "f00ba4",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
     },
     {
       "name": "op-orchestrator",
@@ -16,5 +23,13 @@
       "status": "stuck"
     }
   ],
+  "ciChecksByPr": {
+    "97": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
   "expect": { "startReviewCount": 1, "sessionId": "op-worker-pr97" }
 }
