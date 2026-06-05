@@ -20,6 +20,7 @@
     "docs/review-mechanical-cli.d.mts",
     "docs/review-mechanical-cli.mjs",
     "docs/review-ready-stuck-guard.mjs",
+    "docs/review-trigger-reconcile.d.mts",
     "docs/review-trigger-reconcile.mjs",
     "prompts/agent_rules.md",
     "scripts/check-ci-green-wake-reconcile.ps1",
