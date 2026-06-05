@@ -56,6 +56,10 @@ export const CI_GREEN_WAKE_MESSAGE =
  * @param {{ requiredCheckNames?: string[] }} [options]
  */
 export function classifyRequiredCiLevel(checks, options = {}) {
+  if (options.requiredCheckLookupFailed) {
+    return /** @type {CiLevel} */ ('pending');
+  }
+
   const list = toArray(checks);
   if (list.length === 0) {
     return /** @type {CiLevel} */ ('pending');
@@ -137,6 +141,13 @@ export function deriveGreenEpoch(record, currentLevel) {
 
 /**
  * @param {AoSession} session
+ */
+export function normalizeSessionReportState(session) {
+  return String(session?.status ?? session?.reportState ?? '').toLowerCase();
+}
+
+/**
+ * @param {AoSession} session
  * @param {string} headSha
  */
 export function isPreHandOffWorkerForHead(session, headSha) {
@@ -149,7 +160,14 @@ export function isPreHandOffWorkerForHead(session, headSha) {
 
   const last = findLatestReportForHead(session, headSha);
   if (!last) {
-    return true;
+    const sessionState = normalizeSessionReportState(session);
+    if (POST_HANDOFF_REPORT_STATES.has(sessionState)) {
+      return false;
+    }
+    if (PRE_HANDOFF_REPORT_STATES.has(sessionState)) {
+      return true;
+    }
+    return false;
   }
 
   return PRE_HANDOFF_REPORT_STATES.has(getReportState(last));
@@ -178,6 +196,7 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
  * @param {OpenPr[]} [input.openPrs]
  * @param {CiCheck[]} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
+ * @param {boolean} [input.requiredCheckLookupFailed]
  */
 export function evaluateCiGreenWakeCandidate({
   session,
@@ -186,6 +205,7 @@ export function evaluateCiGreenWakeCandidate({
   openPrs = [],
   ciChecks = [],
   requiredCheckNames = [],
+  requiredCheckLookupFailed = false,
 }) {
   const sessionId = getSessionIdentifier(session);
   const reasons = [];
@@ -206,7 +226,10 @@ export function evaluateCiGreenWakeCandidate({
     reasons.push('post_handoff_or_ineligible_report');
   }
 
-  const ciLevel = classifyRequiredCiLevel(ciChecks, { requiredCheckNames });
+  const ciLevel = classifyRequiredCiLevel(ciChecks, {
+    requiredCheckNames,
+    requiredCheckLookupFailed,
+  });
   if (ciLevel !== 'green') {
     reasons.push(`ci_${ciLevel}`);
   }
@@ -220,11 +243,40 @@ export function evaluateCiGreenWakeCandidate({
 }
 
 /**
+ * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }> | undefined} lookupFailedByPr
+ * @returns {Map<number, boolean>}
+ */
+export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
+  /** @type {Map<number, boolean>} */
+  const map = new Map();
+  if (lookupFailedByPr == null) {
+    return map;
+  }
+  if (Array.isArray(lookupFailedByPr)) {
+    for (const row of lookupFailedByPr) {
+      const prNumber = Number(row?.prNumber);
+      if (prNumber && row?.failed) {
+        map.set(prNumber, true);
+      }
+    }
+    return map;
+  }
+  for (const [key, failed] of Object.entries(lookupFailedByPr)) {
+    const prNumber = Number(key);
+    if (prNumber && failed) {
+      map.set(prNumber, true);
+    }
+  }
+  return map;
+}
+
+/**
  * @param {object} input
  * @param {OpenPr[]} input.openPrs
  * @param {AoSession[]} input.sessions
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} input.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [input.requiredCheckNamesByPr]
+ * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [input.requiredCheckLookupFailedByPr]
  * @param {CiGreenWakeState} [input.tracking]
  */
 export function planCiGreenWakeActions({
@@ -232,6 +284,7 @@ export function planCiGreenWakeActions({
   sessions,
   ciChecksByPr,
   requiredCheckNamesByPr,
+  requiredCheckLookupFailedByPr,
   tracking = {},
 }) {
   /** @type {CiGreenWakeAction[]} */
@@ -242,6 +295,9 @@ export function planCiGreenWakeActions({
 
   const checksMap = normalizeCiChecksByPr(ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(requiredCheckNamesByPr);
+  const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(
+    requiredCheckLookupFailedByPr,
+  );
 
   for (const pr of toArray(openPrs)) {
     const prNumber = Number(pr?.number);
@@ -252,7 +308,11 @@ export function planCiGreenWakeActions({
 
     const checks = checksMap.get(prNumber) ?? [];
     const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
-    const ciLevel = classifyRequiredCiLevel(checks, { requiredCheckNames });
+    const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
+    const ciLevel = classifyRequiredCiLevel(checks, {
+      requiredCheckNames,
+      requiredCheckLookupFailed,
+    });
     const trackKey = headTrackingKey(prNumber, headSha);
     const derived = deriveGreenEpoch(headRecords[trackKey], ciLevel);
     headRecords[trackKey] = derived;
@@ -285,6 +345,7 @@ export function planCiGreenWakeActions({
       openPrs: toArray(openPrs),
       ciChecks: checks,
       requiredCheckNames,
+      requiredCheckLookupFailed,
     });
 
     if (!candidate.eligible) {
@@ -396,6 +457,7 @@ export function normalizeRequiredCheckNamesByPr(requiredByPr) {
  * @param {AoSession[]} fresh.sessions
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} fresh.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [fresh.requiredCheckNamesByPr]
+ * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [fresh.requiredCheckLookupFailedByPr]
  */
 export function preSendRecheck(planned, fresh) {
   const { sessionId, prNumber, headSha } = planned;
@@ -409,8 +471,12 @@ export function preSendRecheck(planned, fresh) {
 
   const checksMap = normalizeCiChecksByPr(fresh.ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(fresh.requiredCheckNamesByPr);
+  const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(
+    fresh.requiredCheckLookupFailedByPr,
+  );
   const checks = checksMap.get(prNumber) ?? [];
   const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
+  const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
   const candidate = evaluateCiGreenWakeCandidate({
     session,
     prNumber,
@@ -418,6 +484,7 @@ export function preSendRecheck(planned, fresh) {
     openPrs: toArray(fresh.openPrs),
     ciChecks: checks,
     requiredCheckNames,
+    requiredCheckLookupFailed,
   });
 
   if (!candidate.eligible) {

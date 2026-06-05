@@ -8,6 +8,7 @@ import {
   classifyRequiredCiLevel,
   deriveGreenEpoch,
   evaluateCiGreenWakeCandidate,
+  isPreHandOffWorkerForHead,
   findForbiddenCiGreenWakeCommands,
   mergeBranchRequiredCheckNames,
   planCiGreenWakeActions,
@@ -93,6 +94,12 @@ describe('classifyRequiredCiLevel', () => {
       classifyRequiredCiLevel(greenChecks, {
         requiredCheckNames: ['Missing required job'],
       }),
+    ).toBe('pending');
+  });
+
+  it('returns pending when required-check lookup failed', () => {
+    expect(
+      classifyRequiredCiLevel(greenChecks, { requiredCheckLookupFailed: true }),
     ).toBe('pending');
   });
 });
@@ -413,7 +420,39 @@ describe('findForbiddenCiGreenWakeCommands', () => {
   });
 });
 
+describe('isPreHandOffWorkerForHead', () => {
+  it('fails closed when reports are missing and session status is post-hand-off', () => {
+    expect(
+      isPreHandOffWorkerForHead(
+        liveWorker({ status: 'addressing_reviews', reports: [] }),
+        'abc123',
+      ),
+    ).toBe(false);
+  });
+
+  it('allows pre-hand-off when reports are missing but session status is eligible', () => {
+    expect(
+      isPreHandOffWorkerForHead(liveWorker({ status: 'fixing_ci', reports: [] }), 'abc123'),
+    ).toBe(true);
+  });
+});
+
 describe('evaluateCiGreenWakeCandidate', () => {
+  it('rejects nudge when required-check lookup failed even if pack checks are green', () => {
+    const candidate = evaluateCiGreenWakeCandidate({
+      session: liveWorker({
+        reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+      }),
+      prNumber: 42,
+      headSha: 'abc123',
+      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      ciChecks: greenChecks,
+      requiredCheckLookupFailed: true,
+    });
+    expect(candidate.eligible).toBe(false);
+    expect(candidate.reasons).toContain('ci_pending');
+  });
+
   it('accepts pr_created and working states', () => {
     for (const state of ['pr_created', 'working'] as const) {
       const candidate = evaluateCiGreenWakeCandidate({

@@ -53,12 +53,15 @@ export interface PlanCiGreenWakeInput {
   requiredCheckNamesByPr?:
     | Record<string, string[]>
     | Array<{ prNumber: number; requiredCheckNames: string[] }>;
+  requiredCheckLookupFailedByPr?:
+    | Record<string, boolean>
+    | Array<{ prNumber: number; failed: boolean }>;
   tracking?: CiGreenWakeState;
 }
 
 export declare function classifyRequiredCiLevel(
   checks: CiCheck[],
-  options?: { requiredCheckNames?: string[] },
+  options?: { requiredCheckNames?: string[]; requiredCheckLookupFailed?: boolean },
 ): CiLevel;
 
 export declare function normalizeRequiredCheckNamesByPr(
@@ -78,7 +81,13 @@ export declare function deriveGreenEpoch(
   currentLevel: CiLevel,
 ): { greenEpoch: number; lastCiLevel: CiLevel };
 
+export declare function normalizeSessionReportState(session: AoSession): string;
+
 export declare function isPreHandOffWorkerForHead(session: AoSession, headSha: string): boolean;
+
+export declare function normalizeRequiredCheckLookupFailedByPr(
+  lookupFailedByPr: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'],
+): Map<number, boolean>;
 
 export declare function resolveHeadOwningWorkerSessionId(
   sessions: AoSession[],
@@ -94,6 +103,7 @@ export declare function evaluateCiGreenWakeCandidate(input: {
   openPrs?: OpenPr[];
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
 }): {
   eligible: boolean;
   reasons: string[];
@@ -116,6 +126,7 @@ export declare function preSendRecheck(
     sessions: AoSession[];
     ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'];
     requiredCheckNamesByPr?: PlanCiGreenWakeInput['requiredCheckNamesByPr'];
+    requiredCheckLookupFailedByPr?: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'];
   },
 ): { ok: boolean; reason: string };
 

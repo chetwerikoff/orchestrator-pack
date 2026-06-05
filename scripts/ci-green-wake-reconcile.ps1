@@ -161,38 +161,49 @@ function Invoke-GhPrChecks {
 function Get-GhRequiredCheckNamesForPr {
     param([int]$PrNumber)
 
+    $lookupFailed = $false
+    $names = $null
+
     Push-Location -LiteralPath $RepoRoot
     try {
         $baseRef = gh pr view $PrNumber --json baseRefName -q .baseRefName 2>&1
         if ($LASTEXITCODE -ne 0 -or -not $baseRef) {
-            return $null
+            $lookupFailed = $true
+            return @{ names = $null; lookupFailed = $lookupFailed }
         }
 
         $repoSlug = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
         if ($LASTEXITCODE -ne 0 -or -not $repoSlug) {
-            return $null
+            $lookupFailed = $true
+            return @{ names = $null; lookupFailed = $lookupFailed }
         }
 
         $protectionRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            return $null
+        $protectionExit = $LASTEXITCODE
+        if ($protectionExit -ne 0) {
+            $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
+            if ($protectionText -match 'Branch not protected|404') {
+                return @{ names = $null; lookupFailed = $false }
+            }
+            Write-CiGreenWakeLog "warn: branch protection lookup failed PR #$PrNumber (exit $protectionExit); treating required CI as pending"
+            return @{ names = $null; lookupFailed = $true }
         }
 
         $protection = $protectionRaw | ConvertFrom-Json
         $rsc = $protection.required_status_checks
         if (-not $rsc) {
-            return $null
+            return @{ names = $null; lookupFailed = $false }
         }
 
-        $names = Invoke-CiGreenWakeFilterCli -Subcommand 'merge-required-names' -Payload @{
+        $merged = Invoke-CiGreenWakeFilterCli -Subcommand 'merge-required-names' -Payload @{
             contexts = @($rsc.contexts)
             checks   = @($rsc.checks)
         }
-        if (-not $names -or @($names).Count -eq 0) {
-            return $null
+        if (-not $merged -or @($merged).Count -eq 0) {
+            return @{ names = $null; lookupFailed = $false }
         }
 
-        return @($names)
+        return @{ names = @($merged); lookupFailed = $false }
     }
     finally {
         Pop-Location
@@ -204,6 +215,7 @@ function Get-CiGreenWakeChecksByPr {
 
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}
+    $requiredCheckLookupFailedByPr = @{}
     foreach ($pr in @($OpenPrs)) {
         $n = [int]$pr.number
         if (-not $n) {
@@ -218,15 +230,19 @@ function Get-CiGreenWakeChecksByPr {
             $ciChecksByPr[[string]$n] = @()
         }
 
-        $requiredNames = Get-GhRequiredCheckNamesForPr -PrNumber $n
-        if ($requiredNames) {
-            $requiredCheckNamesByPr[[string]$n] = @($requiredNames)
+        $requiredLookup = Get-GhRequiredCheckNamesForPr -PrNumber $n
+        if ($requiredLookup.lookupFailed) {
+            $requiredCheckLookupFailedByPr[[string]$n] = $true
+        }
+        elseif ($requiredLookup.names) {
+            $requiredCheckNamesByPr[[string]$n] = @($requiredLookup.names)
         }
     }
 
     return @{
-        ciChecksByPr           = $ciChecksByPr
-        requiredCheckNamesByPr = $requiredCheckNamesByPr
+        ciChecksByPr                    = $ciChecksByPr
+        requiredCheckNamesByPr          = $requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
     }
 }
 
@@ -243,10 +259,11 @@ function Get-CiGreenWakePreSendSnapshot {
     )
 
     return @{
-        openPrs                = @($openPrs)
-        sessions               = @($sessions)
-        ciChecksByPr           = $checksBundle.ciChecksByPr
-        requiredCheckNamesByPr = $checksBundle.requiredCheckNamesByPr
+        openPrs                         = @($openPrs)
+        sessions                        = @($sessions)
+        ciChecksByPr                    = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
     }
 }
 
@@ -255,11 +272,12 @@ function Get-FixtureCiGreenWakePayload {
 
     $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     return @{
-        openPrs                = @($fixture.openPrs)
-        sessions               = @($fixture.sessions)
-        ciChecksByPr           = $fixture.ciChecksByPr
-        requiredCheckNamesByPr = $fixture.requiredCheckNamesByPr
-        tracking               = $fixture.tracking
+        openPrs                         = @($fixture.openPrs)
+        sessions                        = @($fixture.sessions)
+        ciChecksByPr                    = $fixture.ciChecksByPr
+        requiredCheckNamesByPr          = $fixture.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr   = $fixture.requiredCheckLookupFailedByPr
+        tracking                        = $fixture.tracking
     }
 }
 
@@ -325,6 +343,7 @@ function Invoke-CiGreenWakeTick {
 
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}
+    $requiredCheckLookupFailedByPr = @{}
 
     if ($Fixture) {
         $payload = Get-FixtureCiGreenWakePayload -Path $Fixture
@@ -333,6 +352,9 @@ function Invoke-CiGreenWakeTick {
         $ciChecksByPr = $payload.ciChecksByPr
         if ($payload.requiredCheckNamesByPr) {
             $requiredCheckNamesByPr = $payload.requiredCheckNamesByPr
+        }
+        if ($payload.requiredCheckLookupFailedByPr) {
+            $requiredCheckLookupFailedByPr = $payload.requiredCheckLookupFailedByPr
         }
         if ($payload.tracking) {
             $tracking = $payload.tracking
@@ -344,14 +366,16 @@ function Invoke-CiGreenWakeTick {
         $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @($openPrs)
         $ciChecksByPr = $checksBundle.ciChecksByPr
         $requiredCheckNamesByPr = $checksBundle.requiredCheckNamesByPr
+        $requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
     }
 
     $planPayload = @{
-        openPrs                = @($openPrs)
-        sessions               = @($sessions)
-        ciChecksByPr           = $ciChecksByPr
-        requiredCheckNamesByPr = $requiredCheckNamesByPr
-        tracking               = $tracking
+        openPrs                         = @($openPrs)
+        sessions                        = @($sessions)
+        ciChecksByPr                    = $ciChecksByPr
+        requiredCheckNamesByPr          = $requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
+        tracking                        = $tracking
     }
 
     $plan = Invoke-CiGreenWakeFilterCli -Subcommand 'plan' -Payload $planPayload
@@ -359,10 +383,11 @@ function Invoke-CiGreenWakeTick {
     $fixtureFreshPayload = $null
     if ($useFixtureSnapshot) {
         $fixtureFreshPayload = @{
-            openPrs                = @($openPrs)
-            sessions               = @($sessions)
-            ciChecksByPr           = $ciChecksByPr
-            requiredCheckNamesByPr = $requiredCheckNamesByPr
+            openPrs                         = @($openPrs)
+            sessions                        = @($sessions)
+            ciChecksByPr                    = $ciChecksByPr
+            requiredCheckNamesByPr          = $requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
         }
     }
 
