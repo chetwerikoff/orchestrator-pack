@@ -62,6 +62,30 @@ function Invoke-ReviewWakeTriggerFilterCli {
         -Subcommand $Subcommand -Payload $Payload -Label 'review-wake-trigger' -JsonDepth 30
 }
 
+function Get-ReviewWakeTriggerMergeEval {
+    param(
+        [int]$PrNumber,
+        [hashtable]$Snapshot
+    )
+
+    $headSha = ''
+    foreach ($pr in @($Snapshot.openPrs)) {
+        if ([int]$pr.number -eq $PrNumber) {
+            $headSha = [string]$pr.headRefOid
+            break
+        }
+    }
+    if (-not $headSha) {
+        return $null
+    }
+
+    return Invoke-ReviewWakeTriggerFilterCli -Subcommand 'mergeIntent' -Payload @{
+        prNumber   = $PrNumber
+        headSha    = $headSha
+        reviewRuns = @($Snapshot.reviewRuns)
+    }
+}
+
 function Get-ReviewWakeTriggerSnapshot {
     param(
         [int]$PrNumber,
@@ -155,30 +179,16 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             triggered = $false
             reason    = $evaluation.reason
             route     = $evaluation.route
-            mergeEval = $null
+            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $prNumber -Snapshot $snapshot
         }
     }
 
     if (-not $evaluation.triggerReviewRun) {
         & $LogWriter "review-wake-trigger: defer PR #$prNumber ($($evaluation.reason))"
-        $headSha = ''
-        foreach ($pr in @($snapshot.openPrs)) {
-            if ([int]$pr.number -eq $prNumber) {
-                $headSha = [string]$pr.headRefOid
-                break
-            }
-        }
-        $mergeEval = if ($headSha) {
-            Invoke-ReviewWakeTriggerFilterCli -Subcommand 'mergeIntent' -Payload @{
-                prNumber    = $prNumber
-                headSha     = $headSha
-                reviewRuns  = @($snapshot.reviewRuns)
-            }
-        } else { $null }
         return @{
             triggered = $false
             reason    = $evaluation.reason
-            mergeEval = $mergeEval
+            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $prNumber -Snapshot $snapshot
         }
     }
 

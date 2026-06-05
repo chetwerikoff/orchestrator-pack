@@ -129,6 +129,23 @@ describe('evaluateWakeReviewTrigger', () => {
     expect(result.terminationReason).toContain('reviewer command exited');
   });
 
+  it('empty-review trap annotates merge intent as non-mergeable', () => {
+    const fixture = loadFixture('failed-precedence.json');
+    const mergeEval = evaluateMergeIntentAfterReviewTrigger({
+      prNumber: fixture.prNumber!,
+      headSha: 'fail214',
+      reviewRuns: fixture.reviewRuns!,
+    });
+    expect(mergeEval.mergeable).toBe(false);
+    expect(mergeEval.reason).toBe('no_covered_terminal_run');
+    const amended = amendMergeWakeMessage(
+      'wake merge.ready session=opk-fail pr=#214',
+      mergeEval,
+    );
+    expect(amended).toContain('mergeable=false');
+    expect(amended).toContain('no_covered_terminal_run');
+  });
+
   it('Issue #207 (8): incident 2026-06-05 would fast-trigger instead of heartbeat', () => {
     const fixture = loadFixture('incident-2026-06-05.json');
     const result = evaluateFixture(fixture);
