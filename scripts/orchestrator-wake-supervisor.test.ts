@@ -114,6 +114,7 @@ type WakeMarker = {
   role: string;
   pid: number;
   orchestratorSessionId: string;
+  projectId?: string;
 };
 
 async function readMarker(
@@ -181,6 +182,21 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listener = await readMarker(stateDir, 'listener');
     expect(listener.orchestratorSessionId).toBe('op-orchestrator-old');
+    child.kill('SIGTERM');
+  });
+
+  it('passes supervisor ProjectId to review-send-reconcile child', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-project-pass',
+      '-ProjectId',
+      'custom-ao-project',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const reviewSend = await readMarker(stateDir, 'review-send-reconcile');
+    expect(reviewSend.projectId).toBe('custom-ao-project');
     child.kill('SIGTERM');
   });
 

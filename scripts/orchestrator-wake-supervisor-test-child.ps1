@@ -9,6 +9,7 @@ param(
     [string]$Role,
 
     [string]$OrchestratorSessionId = '',
+    [string]$ProjectId = '',
     [string]$MarkerDir = ''
 )
 
@@ -38,14 +39,28 @@ if (-not (Test-Path -LiteralPath $dir)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
+$projectId = if ($ProjectId) {
+    $ProjectId.Trim()
+}
+elseif ($env:AO_WAKE_SUPERVISOR_PROJECT_ID) {
+    $env:AO_WAKE_SUPERVISOR_PROJECT_ID.Trim()
+}
+else {
+    ''
+}
+
 $markerPath = Join-Path $dir "$Role.marker.json"
 $markerTemp = "${markerPath}.tmp"
-@{
+$marker = @{
     role                  = $Role
     pid                   = $PID
     orchestratorSessionId = $sessionId
     startedAt             = (Get-Date).ToString('o')
-} | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encoding utf8 -NoNewline
+}
+if ($projectId) {
+    $marker.projectId = $projectId
+}
+$marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encoding utf8 -NoNewline
 Move-Item -LiteralPath $markerTemp -Destination $markerPath -Force
 
 while ($true) {

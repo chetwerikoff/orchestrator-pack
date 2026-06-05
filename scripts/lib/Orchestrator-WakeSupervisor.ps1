@@ -454,6 +454,7 @@ function Start-OrchestratorWakeSupervisorChild {
         [string]$OrchestratorSessionId,
         [string]$LogPath,
         [string]$PidFile,
+        [string]$ProjectId = '',
         [switch]$TestMode,
         [string]$TestChildScript = '',
         [string[]]$ExtraChildArgs = @()
@@ -490,6 +491,9 @@ function Start-OrchestratorWakeSupervisorChild {
     }
     elseif ($Role -ne 'review-send-reconcile') {
         $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
+    }
+    if ($Role -eq 'review-send-reconcile' -and $ProjectId) {
+        $childArgs += @('-ProjectId', $ProjectId)
     }
     if ($ExtraChildArgs) {
         $childArgs += $ExtraChildArgs
@@ -669,7 +673,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $currentSource = $resolved.Source
             Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
-            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
                 phase                  = 'running'
                 orchestratorSessionId = $sessionId
@@ -684,7 +688,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $currentSource = $resolved.Source
             Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
-            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
                 phase                  = 'running'
                 orchestratorSessionId = $sessionId
@@ -707,7 +711,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             }
             if (-not $children.ReviewSendReconcileAlive) {
                 Write-OrchestratorWakeSupervisorLog -Message 'review-send-reconcile exited; restarting' -LogPath $Paths.SupervisorLog
-                Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
+                Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             }
         }
 
