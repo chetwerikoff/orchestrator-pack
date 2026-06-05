@@ -72,8 +72,4 @@ export declare function hasStaleReadyForReviewOnOlderHead(
   currentHeadSha: string,
 ): boolean;
 
-export declare function hasFailedOrCancelledOnHead(
-  runs: ReviewRun[],
-  prNumber: number,
-  headSha: string,
-): boolean;
+export { hasFailedOrCancelledOnHead } from './review-trigger-reconcile.d.mts';

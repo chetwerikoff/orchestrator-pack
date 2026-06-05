@@ -11,32 +11,13 @@ import {
 } from './review-ready-stuck-guard.mjs';
 import {
   findSessionById,
+  hasFailedOrCancelledOnHead,
   isHeadCovered,
   normalizeSha,
   toArray,
 } from './review-trigger-reconcile.mjs';
 
-/** @typedef {import('./review-trigger-reconcile.mjs').ReviewRun} ReviewRun */
-/** @typedef {import('./review-trigger-reconcile.mjs').AoSession} AoSession */
-
-const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
-
-/**
- * @param {ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} headSha
- */
-export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
-  const head = normalizeSha(headSha);
-  return toArray(runs).some((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    return (
-      Number(run?.prNumber) === prNumber &&
-      normalizeSha(run?.targetSha) === head &&
-      FAILED_OR_CANCELLED.has(status)
-    );
-  });
-}
+export { hasFailedOrCancelledOnHead } from './review-trigger-reconcile.mjs';
 
 /** Bounded orchestrator/reconciler re-attempts when required-check visibility is degraded. */
 export const DEFAULT_DEGRADED_CI_MAX_ATTEMPTS = 3;

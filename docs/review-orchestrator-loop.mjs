@@ -5,6 +5,7 @@
  */
 import {
   findSessionById,
+  hasFailedOrCancelledOnHead,
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
@@ -23,29 +24,11 @@ export {
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
   IN_FLIGHT_REVIEW_STATUSES,
+  hasFailedOrCancelledOnHead,
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
 } from './review-trigger-reconcile.mjs';
-
-const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
-
-/**
- * @param {ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} headSha
- */
-export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
-  const head = normalizeSha(headSha);
-  return runs.some((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    return (
-      Number(run?.prNumber) === prNumber &&
-      normalizeSha(run?.targetSha) === head &&
-      FAILED_OR_CANCELLED.has(status)
-    );
-  });
-}
 
 /**
  * Plain uncovered path: no covered/in-flight run; not failed/cancelled discipline.

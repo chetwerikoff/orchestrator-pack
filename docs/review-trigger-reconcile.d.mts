@@ -166,6 +166,12 @@ export declare function isHeadCovered(
   headSha: string,
 ): boolean;
 
+export declare function hasFailedOrCancelledOnHead(
+  runs: ReviewRun[],
+  prNumber: number,
+  headSha: string,
+): boolean;
+
 export declare function resolveWorkerSessionId(
   sessions: AoSession[],
   prNumber: number,

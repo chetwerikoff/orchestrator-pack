@@ -61,6 +61,8 @@ export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
 
+const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
+
 /** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
 export function toArray(value) {
   if (value == null) return [];
@@ -107,6 +109,23 @@ export function isHeadCovered(runs, prNumber, headSha) {
     return false;
   }
   return forHead.some((run) => isRunCoveringHead(run));
+}
+
+/**
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
+  const head = normalizeSha(headSha);
+  return toArray(runs).some((run) => {
+    const status = String(run?.status ?? '').toLowerCase();
+    return (
+      Number(run?.prNumber) === prNumber &&
+      normalizeSha(run?.targetSha) === head &&
+      FAILED_OR_CANCELLED.has(status)
+    );
+  });
 }
 
 /**

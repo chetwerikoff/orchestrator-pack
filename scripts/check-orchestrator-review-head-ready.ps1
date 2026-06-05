@@ -5,18 +5,14 @@
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
 $agentRules = Join-Path $Root 'prompts/agent_rules.md'
 $headReadyMjs = Join-Path $Root 'docs/review-head-ready.mjs'
 $loopMjs = Join-Path $Root 'docs/review-orchestrator-loop.mjs'
 $reconcileMjs = Join-Path $Root 'docs/review-trigger-reconcile.mjs'
 
-foreach ($path in @($example, $agentRules, $headReadyMjs, $loopMjs, $reconcileMjs)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Host "Missing required file: $path"
-        exit 1
-    }
-}
+Assert-RequiredPathsExist -Paths @($example, $agentRules, $headReadyMjs, $loopMjs, $reconcileMjs)
 
 $exampleText = Get-Content -LiteralPath $example -Raw
 $rulesText = Get-Content -LiteralPath $agentRules -Raw

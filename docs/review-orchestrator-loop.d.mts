@@ -22,22 +22,11 @@ export {
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
   IN_FLIGHT_REVIEW_STATUSES,
+  hasFailedOrCancelledOnHead,
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
 } from './review-trigger-reconcile.d.mts';
-
-export declare function hasFailedOrCancelledOnHead(
-  runs: ReviewRun[],
-  prNumber: number,
-  headSha: string,
-): boolean;
-
-export interface StartReviewDecision {
-  start: boolean;
-  reason: string;
-  route?: string;
-}
 
 export declare function shouldStartReviewRunOnUncoveredPath(
   runs: ReviewRun[],

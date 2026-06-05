@@ -41,6 +41,7 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -63,6 +64,8 @@ function Write-CiGreenWakeLog {
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
+
+$Script:GhPrChecksLogWriter = { param([string]$Message) Write-CiGreenWakeLog $Message }
 
 function Invoke-CiGreenWakeFilterCli {
     param(
@@ -111,139 +114,15 @@ function Save-PartialCiGreenWakeTracking {
     Set-CiGreenWakeState -Path $Path -State $merged
 }
 
-function ConvertFrom-GhJsonArrayOutput {
-    param([object]$RawOutput)
-
-    $text = ($RawOutput | ForEach-Object {
-            if ($_ -is [string]) { $_ }
-            elseif ($null -ne $_) { $_.ToString() }
-        }) -join "`n"
-    $start = $text.IndexOf('[')
-    if ($start -lt 0) {
-        return @()
-    }
-
-    return @($text.Substring($start) | ConvertFrom-Json)
-}
-
-function Invoke-GhOpenPrList {
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $raw = gh pr list --state open --json number,headRefOid --limit 200 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "gh pr list failed (exit $LASTEXITCODE): $raw"
-        }
-        return @($raw | ConvertFrom-Json)
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-function Invoke-GhPrChecks {
-    param([int]$PrNumber)
-
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
-        $exitCode = $LASTEXITCODE
-        $checks = ConvertFrom-GhJsonArrayOutput -RawOutput $raw
-        if ($exitCode -ne 0 -and $checks.Count -eq 0) {
-            Write-CiGreenWakeLog "warn: gh pr checks PR #$PrNumber exit $exitCode with no parseable JSON; treating as pending"
-        }
-        return @($checks)
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-function Get-GhRequiredCheckNamesForPr {
-    param([int]$PrNumber)
-
-    $lookupFailed = $false
-    $names = $null
-
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $baseRef = gh pr view $PrNumber --json baseRefName -q .baseRefName 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not $baseRef) {
-            $lookupFailed = $true
-            return @{ names = $null; lookupFailed = $lookupFailed }
-        }
-
-        $repoSlug = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not $repoSlug) {
-            $lookupFailed = $true
-            return @{ names = $null; lookupFailed = $lookupFailed }
-        }
-
-        $protectionRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" 2>&1
-        $protectionExit = $LASTEXITCODE
-        if ($protectionExit -ne 0) {
-            $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
-            if ($protectionText -match 'Branch not protected|404') {
-                return @{ names = $null; lookupFailed = $false }
-            }
-            Write-CiGreenWakeLog "warn: branch protection lookup failed PR #$PrNumber (exit $protectionExit); treating required CI as pending"
-            return @{ names = $null; lookupFailed = $true }
-        }
-
-        $protection = $protectionRaw | ConvertFrom-Json
-        $rsc = $protection.required_status_checks
-        if (-not $rsc) {
-            return @{ names = $null; lookupFailed = $false }
-        }
-
-        $merged = Invoke-CiGreenWakeFilterCli -Subcommand 'merge-required-names' -Payload @{
-            contexts = @($rsc.contexts)
-            checks   = @($rsc.checks)
-        }
-        if (-not $merged -or @($merged).Count -eq 0) {
-            return @{ names = $null; lookupFailed = $false }
-        }
-
-        return @{ names = @($merged); lookupFailed = $false }
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 function Get-CiGreenWakeChecksByPr {
     param([array]$OpenPrs)
 
-    $ciChecksByPr = @{}
-    $requiredCheckNamesByPr = @{}
-    $requiredCheckLookupFailedByPr = @{}
-    foreach ($pr in @($OpenPrs)) {
-        $n = [int]$pr.number
-        if (-not $n) {
-            continue
-        }
-
-        try {
-            $ciChecksByPr[[string]$n] = @(Invoke-GhPrChecks -PrNumber $n)
-        }
-        catch {
-            Write-CiGreenWakeLog "warn: checks fetch failed PR #$n : $_"
-            $ciChecksByPr[[string]$n] = @()
-        }
-
-        $requiredLookup = Get-GhRequiredCheckNamesForPr -PrNumber $n
-        if ($requiredLookup.lookupFailed) {
-            $requiredCheckLookupFailedByPr[[string]$n] = $true
-        }
-        elseif ($requiredLookup.names) {
-            $requiredCheckNamesByPr[[string]$n] = @($requiredLookup.names)
-        }
-    }
-
-    return @{
-        ciChecksByPr                    = $ciChecksByPr
-        requiredCheckNamesByPr          = $requiredCheckNamesByPr
-        requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
-    }
+    return Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @($OpenPrs) `
+        -MergeRequiredNames {
+            param($payload)
+            Invoke-CiGreenWakeFilterCli -Subcommand 'merge-required-names' -Payload $payload
+        } `
+        -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as pending'
 }
 
 function Get-CiGreenWakePreSendSnapshot {
@@ -252,7 +131,7 @@ function Get-CiGreenWakePreSendSnapshot {
         [string]$Project
     )
 
-    $openPrs = Invoke-GhOpenPrList
+    $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
     $sessions = Get-AoStatusSessions
     $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @(
         @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
@@ -361,7 +240,7 @@ function Invoke-CiGreenWakeTick {
         }
     }
     else {
-        $openPrs = Invoke-GhOpenPrList
+        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
         $sessions = Get-AoStatusSessions
         $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @($openPrs)
         $ciChecksByPr = $checksBundle.ciChecksByPr
