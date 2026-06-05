@@ -19,6 +19,7 @@
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/gh-pr-checks-empty-openprs.test.ts",
     "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Orchestrator-ProcessAlive.ps1",
     "scripts/lib/Orchestrator-SideEffectFence.ps1",
     "scripts/lib/Orchestrator-SideProcessProgress.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
