@@ -1,25 +1,23 @@
 {
-  "description": "Head becomes not-ready between observation and pre-run re-check",
+  "description": "PR head advanced after plan but before pre-run re-check",
   "planned": {
-    "prNumber": 50,
-    "headSha": "head50",
-    "sessionId": "op-worker-50"
+    "prNumber": 51,
+    "headSha": "oldhead51",
+    "sessionId": "op-worker-51"
   },
   "fresh": {
-    "openPrs": [{ "number": 50, "headRefOid": "head50" }],
-    "reviewRuns": [
-      { "prNumber": 50, "targetSha": "head50", "status": "queued" }
-    ],
+    "openPrs": [{ "number": 51, "headRefOid": "newhead51" }],
+    "reviewRuns": [],
     "sessions": [
       {
-        "name": "op-worker-50",
+        "name": "op-worker-51",
         "role": "worker",
-        "prNumber": 50,
+        "prNumber": 51,
         "reports": [
           {
             "reportState": "ready_for_review",
-            "headRefOid": "head50",
-            "reportedAt": "2026-06-05T12:00:00.000Z"
+            "headRefOid": "oldhead51",
+            "reportedAt": "2026-06-05T11:00:00.000Z"
           }
         ]
       }
@@ -33,6 +31,6 @@
   },
   "expect": {
     "emitReviewRun": false,
-    "reasonPrefix": "pre_run_recheck_"
+    "reason": "pre_run_recheck_head_advanced"
   }
 }

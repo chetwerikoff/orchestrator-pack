@@ -255,12 +255,26 @@ export function evaluateHeadReadyForReview({
 }
 
 /**
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[] | import('./review-trigger-reconcile.mjs').OpenPr} [openPrs]
+ * @param {number} prNumber
+ */
+export function resolveCurrentPrHeadSha(openPrs, prNumber) {
+  for (const pr of toArray(openPrs)) {
+    if (Number(pr?.number) === prNumber) {
+      return String(pr?.headRefOid ?? '');
+    }
+  }
+  return '';
+}
+
+/**
  * Pre-run revalidation immediately before ao review run (widens #189 PRE-RUN COVERAGE RE-CHECK).
  *
  * @param {object} planned
  * @param {number} planned.prNumber
  * @param {string} planned.headSha
  * @param {object} fresh
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [fresh.openPrs]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} fresh.reviewRuns
  * @param {import('./review-trigger-reconcile.mjs').AoSession[]} fresh.sessions
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [fresh.ciChecks]
@@ -269,13 +283,38 @@ export function evaluateHeadReadyForReview({
  */
 export function preRunHeadReadyRecheck(planned, fresh) {
   const prNumber = Number(planned?.prNumber);
-  const headSha = String(planned?.headSha ?? '');
+  const plannedHead = normalizeSha(String(planned?.headSha ?? ''));
+  const currentHead = normalizeSha(resolveCurrentPrHeadSha(fresh?.openPrs, prNumber));
   const session = findSessionById(toArray(fresh.sessions), String(planned?.sessionId ?? ''));
+
+  if (!plannedHead || !currentHead) {
+    return {
+      emitReviewRun: false,
+      reason: 'pre_run_recheck_head_unresolved',
+      decision: {
+        eligible: false,
+        reason: 'head_unresolved',
+        route: 'none',
+      },
+    };
+  }
+
+  if (plannedHead !== currentHead) {
+    return {
+      emitReviewRun: false,
+      reason: 'pre_run_recheck_head_advanced',
+      decision: {
+        eligible: false,
+        reason: 'head_advanced_since_plan',
+        route: 'none',
+      },
+    };
+  }
 
   const decision = evaluateHeadReadyForReview({
     reviewRuns: toArray(fresh.reviewRuns),
     prNumber,
-    headSha,
+    headSha: currentHead,
     session: session ?? null,
     ciChecks: toArray(fresh.ciChecks),
     requiredCheckNames: toArray(fresh.requiredCheckNames),

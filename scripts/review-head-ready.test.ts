@@ -215,6 +215,7 @@ describe('preRunHeadReadyRecheck', () => {
     const fixture = loadFixture<{
       planned: { prNumber: number; headSha: string; sessionId: string };
       fresh: {
+        openPrs: { number: number; headRefOid: string }[];
         reviewRuns: { prNumber: number; targetSha: string; status: string }[];
         sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
         ciChecks: typeof greenChecks;
@@ -224,5 +225,21 @@ describe('preRunHeadReadyRecheck', () => {
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
+  it('aborts when PR head advanced since plan', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        openPrs: { number: number; headRefOid: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reason: string };
+    }>('pre-run-head-advanced.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toBe(fixture.expect.reason);
   });
 });

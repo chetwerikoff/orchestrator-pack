@@ -54,9 +54,15 @@ export interface PreRunHeadReadyRecheckResult {
   decision: HeadReadyDecision;
 }
 
+export declare function resolveCurrentPrHeadSha(
+  openPrs: import('./review-trigger-reconcile.d.mts').OpenPr[] | import('./review-trigger-reconcile.d.mts').OpenPr | undefined,
+  prNumber: number,
+): string;
+
 export declare function preRunHeadReadyRecheck(
   planned: { prNumber?: number; headSha?: string; sessionId?: string },
   fresh: {
+    openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
     reviewRuns?: ReviewRun[];
     sessions?: AoSession[];
     ciChecks?: CiCheck[];

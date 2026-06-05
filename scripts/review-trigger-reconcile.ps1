@@ -187,6 +187,7 @@ function Test-PreRunHeadReadyRecheck {
             sessionId = $PlannedAction.sessionId
         }
         fresh   = @{
+            openPrs                       = @($fresh.openPrs)
             reviewRuns                    = @($fresh.reviewRuns)
             sessions                      = @($fresh.sessions)
             ciChecks                      = @($fresh.ciChecksByPr[$prKey])
