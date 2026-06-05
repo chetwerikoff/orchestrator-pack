@@ -281,6 +281,7 @@ function Invoke-ReconcileTick {
             $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
         }
         $fixtureSnapshot = @{
+            openPrs                       = @($payload.openPrs)
             reviewRuns                    = $payload.reviewRuns
             sessions                      = $payload.sessions
             ciChecksByPr                  = $payload.ciChecksByPr
