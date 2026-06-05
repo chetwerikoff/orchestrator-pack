@@ -1,0 +1,25 @@
+{
+  "reviewRuns": [
+    {
+      "id": "run-happy",
+      "prNumber": 42,
+      "targetSha": "deadbeef",
+      "status": "needs_triage",
+      "openFindingCount": 1,
+      "sentFindingCount": 0,
+      "linkedSessionId": "op-worker"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "op-worker",
+      "role": "worker",
+      "prNumber": 42,
+      "ownedHeadSha": "deadbeef",
+      "runtime": "alive",
+      "status": "working"
+    }
+  ],
+  "openPrs": [{ "number": 42, "headRefOid": "deadbeef" }],
+  "tracking": { "sent": {} }
+}

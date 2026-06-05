@@ -97,7 +97,12 @@ async function waitForMarkers(stateDir: string, timeoutMs = 10_000) {
   while (Date.now() < deadline) {
     const listenerPath = path.join(stateDir, 'markers', 'listener.marker.json');
     const heartbeatPath = path.join(stateDir, 'markers', 'heartbeat.marker.json');
-    if (fs.existsSync(listenerPath) && fs.existsSync(heartbeatPath)) {
+    const reviewSendPath = path.join(stateDir, 'markers', 'review-send-reconcile.marker.json');
+    if (
+      fs.existsSync(listenerPath) &&
+      fs.existsSync(heartbeatPath) &&
+      fs.existsSync(reviewSendPath)
+    ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -109,11 +114,12 @@ type WakeMarker = {
   role: string;
   pid: number;
   orchestratorSessionId: string;
+  projectId?: string;
 };
 
 async function readMarker(
   stateDir: string,
-  role: 'listener' | 'heartbeat',
+  role: 'listener' | 'heartbeat' | 'review-send-reconcile',
   timeoutMs = 5000,
 ): Promise<WakeMarker> {
   const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
@@ -149,7 +155,7 @@ function isAlive(pid: number): boolean {
 }
 
 describe('orchestrator-wake-supervisor', () => {
-  it('starts listener and heartbeat as separate processes with session override', async () => {
+  it('starts listener, heartbeat, and review-send-reconcile as separate processes', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
       '-OrchestratorSessionId',
@@ -159,9 +165,12 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listener = await readMarker(stateDir, 'listener');
     const heartbeat = await readMarker(stateDir, 'heartbeat');
+    const reviewSend = await readMarker(stateDir, 'review-send-reconcile');
     expect(listener.orchestratorSessionId).toBe('op-test-override');
     expect(heartbeat.orchestratorSessionId).toBe('op-test-override');
     expect(listener.pid).not.toBe(heartbeat.pid);
+    expect(reviewSend.pid).not.toBe(listener.pid);
+    expect(reviewSend.pid).not.toBe(heartbeat.pid);
     child.kill('SIGTERM');
   });
 
@@ -173,6 +182,44 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listener = await readMarker(stateDir, 'listener');
     expect(listener.orchestratorSessionId).toBe('op-orchestrator-old');
+    child.kill('SIGTERM');
+  });
+
+  it('passes supervisor ProjectId to review-send-reconcile child', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-project-pass',
+      '-ProjectId',
+      'custom-ao-project',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const reviewSend = await readMarker(stateDir, 'review-send-reconcile');
+    expect(reviewSend.projectId).toBe('custom-ao-project');
+    child.kill('SIGTERM');
+  });
+
+  it('restarts review-send-reconcile after it exits', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart-send']);
+    await waitForMarkers(stateDir);
+
+    const first = await readMarker(stateDir, 'review-send-reconcile');
+    if (isAlive(first.pid)) {
+      process.kill(first.pid, 'SIGKILL');
+    }
+    const deadline = Date.now() + 10_000;
+    let restarted = false;
+    while (Date.now() < deadline) {
+      const current = await readMarker(stateDir, 'review-send-reconcile');
+      if (current.pid !== first.pid && isAlive(current.pid)) {
+        restarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    expect(restarted).toBe(true);
     child.kill('SIGTERM');
   });
 
@@ -377,6 +424,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   running');
     expect(statusUp.stdout).toContain('heartbeat:  running');
+    expect(statusUp.stdout).toContain('review-send-reconcile: running');
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -459,9 +507,16 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listenerLog = path.join(stateDir, 'listener.log');
     const heartbeatLog = path.join(stateDir, 'heartbeat.log');
+    const reviewSendLog = path.join(stateDir, 'review-send-reconcile.log');
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
-      if (fs.existsSync(listenerLog) && fs.existsSync(heartbeatLog)) break;
+      if (
+        fs.existsSync(listenerLog) &&
+        fs.existsSync(heartbeatLog) &&
+        fs.existsSync(reviewSendLog)
+      ) {
+        break;
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
     }
     expect(fs.existsSync(listenerLog)).toBe(true);

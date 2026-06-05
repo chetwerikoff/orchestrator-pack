@@ -454,6 +454,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== first-send review delivery reconcile (Issue #202) =='
+$reviewSendCheck = Join-Path $Root 'scripts/check-review-send-reconcile.ps1'
+if (Test-Path -LiteralPath $reviewSendCheck -PathType Leaf) {
+    & $reviewSendCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-send-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-send-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'first-send review delivery reconcile checks failed (Issue #202)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-send-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing first-send review delivery reconcile check script (Issue #202)'
+}
+
+Write-Host ''
 Write-Host '== review-finding delivery confirmation (Issue #171) =='
 $deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
 if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {
