@@ -32,7 +32,9 @@ Codex pass runs per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md).
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).
 - Codex draft review done (`NO_FINDINGS` or 5-iteration cap with open questions recorded).
 - `gh issue create` / `gh issue edit` synced the body.
-- `docs/issue_queue_index.md` row updated **locally**.
+- Registry row for this draft defined (draft path → issue **N**); Cursor lands it in
+  `docs/issue_queue_index.md` at publish — the architect does not hand-edit the tracked
+  file (see Common steps).
 
 ---
 
@@ -44,7 +46,8 @@ working artifact; the issue carries everything the worker needs.
 1. Confirm the issue body matches the local draft (re-`gh issue edit` if the
    draft changed after the last sync).
 2. Confirm the draft header records `GitHub Issue: #N`.
-3. Ensure the local `docs/issue_queue_index.md` row exists (local edit only — not committed).
+3. Confirm the registry row for this draft is defined (draft path → **N**); it will be
+   written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
 4. **Stop.** Do not open a PR, do not run `ao-declare`, do not run scope checks.
 5. Report to the user:
    - Issue URL and number **N** (open for `ao spawn`).
@@ -62,8 +65,10 @@ architecture wave) or the registry needs to land. One PR, one CI run, one merge
 for the whole set.
 
 1. Pre-flight + branch from `main` (see Common steps).
-2. Stage all drafts + one `docs/issue_queue_index.md` update (plus
-   `docs/issues_drafts/00-architecture-decisions.md` when changed).
+2. Stage all drafts plus **only each published draft's registry row** in
+   `docs/issue_queue_index.md` (selective staging — see Common steps; other drafts'
+   pending index rows stay in the working tree uncommitted), and
+   `docs/issues_drafts/00-architecture-decisions.md` when changed.
 3. One commit, one PR covering the set (spec-only body template below), one CI run, one merge.
 
 Prefer batch over N single-draft PRs whenever drafts are related.
@@ -96,14 +101,27 @@ You are publishing already-reviewed architect docs for orchestrator-pack from th
 current working tree. Do NOT edit the drafts' content — they passed Codex review.
 
 Files to publish (already on disk): <list every touched path: docs/issues_drafts/NN-*.md,
-  docs/issue_queue_index.md, docs/issues_drafts/00-architecture-decisions.md if changed>.
+  docs/issues_drafts/00-architecture-decisions.md if changed>.
+Registry rows to land (one per published draft): <for each draft, the exact index line,
+  e.g. "| docs/issues_drafts/NN-<slug>.md | #N |" — derive from the draft or from this list>.
 Issues to handle after merge: <for each, "#N <- draft path" to re-sync an existing issue
   body, or "new <- draft path" to create one>.
+
+Index ownership: Cursor owns docs/issue_queue_index.md during publish. Add each new registry
+row (from the draft or from the row text above) and stage ONLY that row's hunk — never
+wholesale-stage or reset the file. The architect does NOT pre-edit, post-edit, or restore
+the index by hand.
 
 Steps:
 1. git fetch origin; branch from main: git checkout main && git pull origin main &&
    git checkout -b architect/draft-<NN>-<slug>.
-2. Stage ONLY the listed files. Run scripts/verify.ps1, scripts/check-reusable.ps1, and
+2. Stage ONLY the listed draft files (and 00-architecture-decisions.md if applicable).
+   For docs/issue_queue_index.md: add or update ONLY each published draft's registry row,
+   then stage selectively — e.g. git add -p docs/issue_queue_index.md (accept only the
+   new-row hunk), or git apply --cached with a one-line patch. Other unpublished drafts'
+   pending index rows MUST stay in the working tree and MUST NOT be committed. FORBIDDEN:
+   git checkout HEAD -- docs/issue_queue_index.md (or any wholesale reset) — that destroys
+   other drafts' pending rows. Run scripts/verify.ps1, scripts/check-reusable.ps1, and
    scripts/lint-self-architect.ps1 -Strict. Do not change draft content — if a gate fails
    on the drafts, STOP and report instead of editing.
 3. Commit ("docs: <short title> (spec)") and push -u origin HEAD. If push is refused on
@@ -116,7 +134,8 @@ Steps:
 6. For each "#N <- draft": re-sync the existing issue body (body = draft minus the H1 line,
    i.e. tail -n +3) with gh issue edit <N> --body-file <tmp>. For each "new <- draft":
    gh issue create with title = the draft H1 and body = draft minus H1, then write the
-   returned number into the draft's "GitHub Issue: #N" line and docs/issue_queue_index.md.
+   returned number into the draft's "GitHub Issue: #N" line and add that draft's registry
+   row to docs/issue_queue_index.md (selective staging only — see Index ownership above).
 7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
 EOF
 )"
@@ -143,11 +162,21 @@ cut for this draft). Record implementation issue number **N** from the draft hea
 Include **only** what the draft session touched:
 
 - `docs/issues_drafts/NN-<slug>.md`
-- `docs/issue_queue_index.md`
+- **Only this draft's registry row** in `docs/issue_queue_index.md` (Cursor adds/updates the
+  row and stages it selectively — see Index ownership below; other drafts' pending rows stay
+  uncommitted in the working tree)
 - `docs/issues_drafts/00-architecture-decisions.md` (if decision log updated)
 - `.claude/skills/**` or `.cursor/skills/**` only when the draft itself required skill changes
 
 Do **not** bundle unrelated local edits (other skills, `agent-orchestrator.yaml`, WIP code).
+
+**Index ownership (Cursor during publish):** `docs/issue_queue_index.md` is Cursor-owned for
+the publish commit. Cursor derives each new row from the draft (or from row text in the
+delegation prompt), writes it into the working tree, and stages **only** that row's hunk.
+The architect does **not** pre-edit, post-edit, or restore `docs/issue_queue_index.md` by
+hand. **Forbidden scoping shortcuts:** `git add docs/issue_queue_index.md` (wholesale) and
+`git checkout HEAD -- docs/issue_queue_index.md` (or any reset-to-HEAD) — both drop other
+drafts' pending registry rows.
 
 Spec-only docs PRs use the **spec-only scope-guard path** (no declaration
 snapshot, no `Closes #N`, no reopen step). See
@@ -166,8 +195,12 @@ Fix `[STRICT]` findings before push.
 ### Commit and push
 
 ```powershell
-git add docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md
+git add docs/issues_drafts/NN-<slug>.md
 # plus 00-architecture-decisions.md if applicable
+# Index row — selective staging ONLY (never wholesale git add on the index):
+#   git add -p docs/issue_queue_index.md   # accept only this draft's new-row hunk
+# or: echo '<one-line row patch>' | git apply --cached
+# FORBIDDEN: git checkout HEAD -- docs/issue_queue_index.md
 git commit -m "docs: draft NN — <short title> (#N spec)"
 git push -u origin HEAD
 ```
@@ -243,6 +276,8 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 - Run the publish git/`gh` mechanics by hand when `cursor-agent` is available —
   delegate to Cursor first; the manual commands are the fallback only.
+- Hand-edit, wholesale-stage, or reset `docs/issue_queue_index.md` — Cursor owns the index
+  during publish; selective single-row staging only (see Index ownership).
 - Put any issue reference (`Refs #N`, bare `#N`, issue URL) in a spec-only PR body —
   the no-ceremony scope guard rejects it.
 - Open a PR in sync-only mode — that is the whole point of the default.
