@@ -73,7 +73,8 @@ if ($loop -notmatch 'export function shouldStartReviewRunOnUncoveredPath' -or
     exit 1
 }
 
-if ($reconcileMjs -notmatch "COVERED_TERMINAL_REVIEW_STATUSES") {
+$reconcile = Get-Content -LiteralPath $reconcileMjs -Raw
+if ($reconcile -notmatch 'COVERED_TERMINAL_REVIEW_STATUSES') {
     Write-Host 'docs/review-trigger-reconcile.mjs must export COVERED_TERMINAL_REVIEW_STATUSES'
     exit 1
 }
