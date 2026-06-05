@@ -139,3 +139,8 @@ export declare function buildCiGreenWakeSendArgv(
   sessionId: string,
   message: string,
 ): string[];
+
+export declare function mergeBranchRequiredCheckNames(
+  contexts: string[] | undefined,
+  checks: Array<string | { context?: string }> | undefined,
+): string[];

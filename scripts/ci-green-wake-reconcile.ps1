@@ -152,18 +152,26 @@ function Get-GhRequiredCheckNamesForPr {
             return $null
         }
 
-        $contextsRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" `
-            --jq '.required_status_checks.contexts[]?' 2>&1
+        $protectionRaw = gh api "repos/$repoSlug/branches/$baseRef/protection" 2>&1
         if ($LASTEXITCODE -ne 0) {
             return $null
         }
 
-        $names = @($contextsRaw | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ })
-        if ($names.Count -eq 0) {
+        $protection = $protectionRaw | ConvertFrom-Json
+        $rsc = $protection.required_status_checks
+        if (-not $rsc) {
             return $null
         }
 
-        return $names
+        $names = Invoke-CiGreenWakeFilterCli -Subcommand 'merge-required-names' -Payload @{
+            contexts = @($rsc.contexts)
+            checks   = @($rsc.checks)
+        }
+        if (-not $names -or @($names).Count -eq 0) {
+            return $null
+        }
+
+        return @($names)
     }
     finally {
         Pop-Location

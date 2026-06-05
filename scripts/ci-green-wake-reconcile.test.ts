@@ -9,6 +9,7 @@ import {
   deriveGreenEpoch,
   evaluateCiGreenWakeCandidate,
   findForbiddenCiGreenWakeCommands,
+  mergeBranchRequiredCheckNames,
   planCiGreenWakeActions,
   preSendRecheck,
   recordSuccessfulNudge,
@@ -91,6 +92,29 @@ describe('classifyRequiredCiLevel', () => {
         requiredCheckNames: ['Missing required job'],
       }),
     ).toBe('pending');
+  });
+});
+
+describe('mergeBranchRequiredCheckNames', () => {
+  it('merges legacy contexts and app-style checks[].context', () => {
+    expect(
+      mergeBranchRequiredCheckNames(
+        ['PR scope guard', 'Verify orchestrator-pack structure'],
+        [{ context: 'External gate' }, { context: 'PR scope guard' }],
+      ),
+    ).toEqual([
+      'PR scope guard',
+      'Verify orchestrator-pack structure',
+      'External gate',
+    ]);
+  });
+
+  it('returns checks-only names when contexts is empty', () => {
+    expect(mergeBranchRequiredCheckNames([], [{ context: 'ci/build' }])).toEqual(['ci/build']);
+  });
+
+  it('returns empty when both sources are unset', () => {
+    expect(mergeBranchRequiredCheckNames(undefined, undefined)).toEqual([]);
   });
 });
 

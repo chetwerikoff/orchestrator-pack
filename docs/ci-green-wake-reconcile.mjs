@@ -462,6 +462,45 @@ export function buildCiGreenWakeSendArgv(sessionId, message) {
   return ['send', sessionId, message];
 }
 
+/**
+ * Merge legacy `contexts[]` and app-style `checks[].context` from branch protection.
+ *
+ * @param {string[] | undefined} contexts
+ * @param {Array<string | { context?: string }> | undefined} checks
+ * @returns {string[]}
+ */
+export function mergeBranchRequiredCheckNames(contexts, checks) {
+  const seen = new Set();
+  /** @type {string[]} */
+  const names = [];
+
+  const add = (raw) => {
+    const name = String(raw ?? '').trim();
+    if (!name) {
+      return;
+    }
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    names.push(name);
+  };
+
+  for (const context of toArray(contexts)) {
+    add(context);
+  }
+  for (const row of toArray(checks)) {
+    if (row && typeof row === 'object') {
+      add(row.context);
+    } else {
+      add(row);
+    }
+  }
+
+  return names;
+}
+
 runStdinJsonCli('ci-green-wake-reconcile.mjs', {
   plan: () => {
     const payload = readStdinJson();
@@ -478,5 +517,9 @@ runStdinJsonCli('ci-green-wake-reconcile.mjs', {
   recheck: () => {
     const payload = readStdinJson();
     return preSendRecheck(payload.planned, payload.fresh);
+  },
+  'merge-required-names': () => {
+    const payload = readStdinJson();
+    return mergeBranchRequiredCheckNames(payload.contexts, payload.checks);
   },
 });
