@@ -200,6 +200,21 @@ describe('orchestrator-wake-supervisor', () => {
     child.kill('SIGTERM');
   });
 
+  it('passes supervisor ProjectId to listener child', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(stateDir, [
+      '-OrchestratorSessionId',
+      'op-listener-project-pass',
+      '-ProjectId',
+      'custom-ao-project',
+    ]);
+    await waitForMarkers(stateDir);
+
+    const listener = await readMarker(stateDir, 'listener');
+    expect(listener.projectId).toBe('custom-ao-project');
+    child.kill('SIGTERM');
+  });
+
   it('restarts review-send-reconcile after it exits', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart-send']);

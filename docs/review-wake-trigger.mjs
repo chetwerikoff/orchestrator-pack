@@ -245,8 +245,10 @@ export function evaluateMergeIntentAfterReviewTrigger(input) {
       !IN_FLIGHT_REVIEW_STATUSES.has(String(run?.status ?? '').toLowerCase()),
   );
 
+  // Covered-terminal clean (etc.) is mergeable even when reviewDecision is still
+  // none — only the empty-review trap (no covered run + reviewDecision none) defers.
   return {
-    mergeable: terminalCovered && reviewDecision !== 'none',
+    mergeable: terminalCovered,
     reason: terminalCovered ? 'covered_terminal_run' : 'awaiting_review_coverage',
     forwardWake: true,
     covered,

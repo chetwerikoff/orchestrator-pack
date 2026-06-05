@@ -150,6 +150,20 @@ describe('evaluateWakePreRunRecheck', () => {
 });
 
 describe('evaluateMergeIntentAfterReviewTrigger', () => {
+  it('covered-terminal clean is mergeable when reviewDecision is none', () => {
+    const fixture = loadFixture('covered-head-skip.json');
+    const mergeEval = evaluateMergeIntentAfterReviewTrigger({
+      prNumber: fixture.prNumber!,
+      headSha: 'cov213',
+      reviewRuns: fixture.reviewRuns!,
+    });
+    expect(mergeEval.mergeable).toBe(true);
+    expect(mergeEval.reason).toBe('covered_terminal_run');
+    expect(amendMergeWakeMessage('wake merge.ready session=opk-covered pr=#213', mergeEval)).toBe(
+      'wake merge.ready session=opk-covered pr=#213',
+    );
+  });
+
   it('Issue #207 (6): merge intent defers while review is in flight', () => {
     const fixture = loadFixture('merge-intent-ordering.json');
     const evalResult = evaluateFixture(fixture);

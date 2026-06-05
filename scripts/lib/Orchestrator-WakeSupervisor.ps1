@@ -545,7 +545,7 @@ function Start-OrchestratorWakeSupervisorChild {
     elseif ($Role -ne 'review-send-reconcile') {
         $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
     }
-    if ($Role -eq 'review-send-reconcile' -and $ProjectId) {
+    if (($Role -eq 'review-send-reconcile' -or $Role -eq 'listener') -and $ProjectId) {
         $childArgs += @('-ProjectId', $ProjectId)
     }
     if ($ExtraChildArgs -and -not $TestMode) {
@@ -555,6 +555,9 @@ function Start-OrchestratorWakeSupervisorChild {
     $childEnv = @{}
     if ($Role -ne 'review-send-reconcile') {
         $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
+    }
+    if ($Role -eq 'listener' -and $ProjectId) {
+        $childEnv['AO_WAKE_LISTENER_PROJECT_ID'] = $ProjectId
     }
     if ($TestMode) {
         $markerRoot = Join-Path (Split-Path -Parent $PidFile) 'markers'
@@ -730,7 +733,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $phase = 'running'
             $currentSessionId = $sessionId
             $currentSource = $resolved.Source
-            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
+            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
@@ -745,7 +748,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             Stop-OrchestratorWakeSupervisorChildren -Paths $Paths
             $currentSessionId = $sessionId
             $currentSource = $resolved.Source
-            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
+            Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
@@ -766,7 +769,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     Wait-OrchestratorWakeSupervisorSideEffectDrain -Paths $Paths -Role 'listener' -LogPath $Paths.SupervisorLog | Out-Null
                 }
                 Write-OrchestratorWakeSupervisorLog -Message 'listener exited; restarting' -LogPath $Paths.SupervisorLog
-                Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
+                Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -ProjectId $ProjectId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript -ExtraChildArgs @('-SideEffectStateDir', $Paths.Root)
             }
             if (-not $children.HeartbeatAlive) {
                 Write-OrchestratorWakeSupervisorLog -Message 'heartbeat exited; restarting' -LogPath $Paths.SupervisorLog
