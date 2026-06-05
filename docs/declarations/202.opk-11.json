@@ -1,0 +1,19 @@
+{
+  "issue_number": 202,
+  "iteration_id": "opk-11",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T11:46:19.308Z",
+  "baseline": {
+    "commit_sha": "a11d37ff7fe4887615536b2b22d4a858492ba068",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:acc4c8c1aa1b2b6ea85c16e1b5d856a321af4b3edd4b2a3f0372a3e596794c1f"
+  },
+  "declared_paths": [
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-send-reconcile/**"
+  ],
+  "amendments": []
+}
