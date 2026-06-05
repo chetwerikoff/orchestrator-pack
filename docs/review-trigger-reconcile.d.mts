@@ -45,6 +45,7 @@ export interface AoSession {
   ownedHeadSha?: string;
   headRefOid?: string;
   status?: string;
+  runtime?: string;
   reports?: Array<{
     reportState?: string;
     report_state?: string;
