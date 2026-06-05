@@ -4,20 +4,18 @@
  */
 import {
   evaluateMechanicalTickInterval,
+  findForbiddenCommandPatterns,
+  MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL,
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
+import { getReportState, sessionOwnsRunHead } from './review-finding-delivery-confirm.mjs';
 import {
-  getReportState,
-  getReportTimestampMs,
-  sessionOwnsRunHead,
-} from './review-finding-delivery-confirm.mjs';
-import {
-  getReportHeadSha,
-  isMergeContractCiGreen,
-  isRuntimeAlive,
+  findLatestReportForHead,
   isCiCheckFailure,
   isCiCheckPending,
+  isMergeContractCiGreen,
+  isRuntimeAlive,
 } from './review-ready-stuck-guard.mjs';
 import {
   findSessionById,
@@ -37,11 +35,7 @@ export const PRE_HANDOFF_REPORT_STATES = new Set(['fixing_ci', 'working', 'pr_cr
 export const POST_HANDOFF_REPORT_STATES = new Set(['ready_for_review', 'addressing_reviews']);
 
 /** Shell fragments forbidden on this path (PR #97 split-brain). ao send is required. */
-export const FORBIDDEN_LIFECYCLE_PATTERNS = [
-  /\bao\s+spawn\b/i,
-  /--claim-pr\b/i,
-  /\bao\s+session\s+kill\b/i,
-];
+export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL;
 
 export const CI_GREEN_WAKE_MESSAGE =
   'Required CI is green for the current PR head. Continue your hand-off: verify gh pr checks for this head, then ao report ready_for_review when criteria are met. Do not stay idle waiting for report-stale.';
@@ -121,56 +115,19 @@ export function deriveGreenEpoch(record, currentLevel) {
  * @param {AoSession} session
  * @param {string} headSha
  */
-export function hasPostHandOffReportForHead(session, headSha) {
-  const target = normalizeSha(headSha);
-  for (const report of toArray(session?.reports)) {
-    const state = getReportState(report);
-    if (!POST_HANDOFF_REPORT_STATES.has(state)) {
-      continue;
-    }
-    const reportHead = getReportHeadSha(report);
-    if (!reportHead || reportHead !== target) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-/**
- * @param {AoSession} session
- * @param {string} headSha
- */
-export function getLastAcceptedReportForHead(session, headSha) {
-  const target = normalizeSha(headSha);
-  let best = null;
-  let bestMs = -1;
-
-  for (const report of toArray(session?.reports)) {
-    const reportHead = getReportHeadSha(report);
-    if (reportHead && reportHead !== target) {
-      continue;
-    }
-    const ts = getReportTimestampMs(report);
-    if (ts >= bestMs) {
-      bestMs = ts;
-      best = report;
-    }
-  }
-
-  return best;
-}
-
 /**
  * @param {AoSession} session
  * @param {string} headSha
  */
 export function isPreHandOffWorkerForHead(session, headSha) {
-  if (hasPostHandOffReportForHead(session, headSha)) {
+  const postHandOff = findLatestReportForHead(session, headSha, {
+    matchStates: POST_HANDOFF_REPORT_STATES,
+  });
+  if (postHandOff) {
     return false;
   }
 
-  const last = getLastAcceptedReportForHead(session, headSha);
+  const last = findLatestReportForHead(session, headSha);
   if (!last) {
     return true;
   }
@@ -424,17 +381,7 @@ export function evaluateCiGreenWakeInterval({ nowMs, lastTickMs, intervalMs }) {
  * @param {string[]} commandLines
  */
 export function findForbiddenCiGreenWakeCommands(commandLines) {
-  /** @type {Array<{ command: string, pattern: string }>} */
-  const violations = [];
-  for (const command of commandLines ?? []) {
-    const line = String(command ?? '');
-    for (const pattern of FORBIDDEN_LIFECYCLE_PATTERNS) {
-      if (pattern.test(line)) {
-        violations.push({ command: line, pattern: pattern.source });
-      }
-    }
-  }
-  return violations;
+  return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
 }
 
 /**

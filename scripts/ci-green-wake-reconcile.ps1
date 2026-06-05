@@ -28,6 +28,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Script:ReconcileLogPrefix = 'ci-green-wake-reconcile'
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) {
@@ -39,6 +40,7 @@ $Script:DefaultIntervalMinutes = 1
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -59,7 +61,7 @@ function Get-CiGreenWakeStatePath {
 function Write-CiGreenWakeLog {
     param([string]$Message)
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    Write-Host "[$stamp] ci-green-wake-reconcile: $Message"
+    Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
 
 function Invoke-CiGreenWakeFilterCli {
@@ -68,32 +70,15 @@ function Invoke-CiGreenWakeFilterCli {
         [hashtable]$Payload
     )
 
-    $json = $Payload | ConvertTo-Json -Depth 30 -Compress
-    $output = $json | & node $WakeFilterCli $Subcommand 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "ci-green-wake-reconcile.mjs $Subcommand exited ${LASTEXITCODE}: $output"
-    }
-
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    return $text | ConvertFrom-Json
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $WakeFilterCli -Subcommand $Subcommand `
+        -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
 function Get-CiGreenWakeState {
     param([string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return @{ heads = @{}; nudged = @{}; lastTickMs = $null }
-    }
-
-    try {
-        $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-        if (-not $raw.heads) { $raw | Add-Member -NotePropertyName heads -NotePropertyValue @{} -Force }
-        if (-not $raw.nudged) { $raw | Add-Member -NotePropertyName nudged -NotePropertyValue @{} -Force }
-        return $raw
-    }
-    catch {
-        return @{ heads = @{}; nudged = @{}; lastTickMs = $null }
-    }
+    $default = @{ heads = @{}; nudged = @{}; lastTickMs = $null }
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
 }
 
 function Set-CiGreenWakeState {
@@ -102,12 +87,7 @@ function Set-CiGreenWakeState {
         [object]$State
     )
 
-    $dir = Split-Path -Parent $Path
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-
-    $State | ConvertTo-Json -Depth 30 -Compress | Set-Content -LiteralPath $Path -Encoding utf8
+    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
 }
 
 function Invoke-GhOpenPrList {

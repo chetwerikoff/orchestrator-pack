@@ -12,6 +12,8 @@ import {
   planCiGreenWakeActions,
   preSendRecheck,
   recordSuccessfulNudge,
+  type CiGreenWakeAction,
+  type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
 
 const fixturesDir = path.join(
@@ -46,23 +48,18 @@ function liveWorker(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function plan(input: Parameters<typeof planCiGreenWakeActions>[0]) {
+function plan(input: PlanCiGreenWakeInput) {
   return planCiGreenWakeActions(input);
 }
 
-function nudgeActions(actions: ReturnType<typeof planCiGreenWakeActions>['actions']) {
-  return actions.filter((a) => a.type === 'nudge');
+function nudgeActions(actions: CiGreenWakeAction[]) {
+  return actions.filter(
+    (a): a is Extract<CiGreenWakeAction, { type: 'nudge' }> => a.type === 'nudge',
+  );
 }
 
-type FixturePayload = {
-  openPrs: Array<{ number: number; headRefOid: string }>;
-  sessions: Array<Record<string, unknown>>;
-  ciChecksByPr: Record<string, typeof greenChecks>;
-  tracking?: { heads?: Record<string, unknown>; nudged?: Record<string, unknown> };
-};
-
-function loadFixture(name: string): FixturePayload {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
+function loadFixture(name: string): PlanCiGreenWakeInput {
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as PlanCiGreenWakeInput;
 }
 
 describe('classifyRequiredCiLevel', () => {

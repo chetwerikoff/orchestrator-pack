@@ -186,20 +186,25 @@ export function getReportHeadSha(report) {
 }
 
 /**
+ * Latest worker report for a PR head, optionally filtered by reportState.
+ *
  * @param {AoSession} session
  * @param {string} headSha
+ * @param {{ matchStates?: Set<string> }} [options]
  */
-export function findLastReadyForReviewReport(session, headSha) {
+export function findLatestReportForHead(session, headSha, options = {}) {
   const target = normalizeSha(headSha);
   if (!target) {
     return null;
   }
 
+  const matchStates = options.matchStates;
   let best = null;
   let bestMs = -1;
 
   for (const report of toArray(session?.reports)) {
-    if (getReportState(report) !== 'ready_for_review') {
+    const state = getReportState(report);
+    if (matchStates && !matchStates.has(state)) {
       continue;
     }
     const reportHead = getReportHeadSha(report);
@@ -214,6 +219,16 @@ export function findLastReadyForReviewReport(session, headSha) {
   }
 
   return best;
+}
+
+/**
+ * @param {AoSession} session
+ * @param {string} headSha
+ */
+export function findLastReadyForReviewReport(session, headSha) {
+  return findLatestReportForHead(session, headSha, {
+    matchStates: new Set(['ready_for_review']),
+  });
 }
 
 /**

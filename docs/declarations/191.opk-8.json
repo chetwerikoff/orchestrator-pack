@@ -1,0 +1,36 @@
+{
+  "issue_number": 191,
+  "iteration_id": "opk-8",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T04:50:00.000Z",
+  "baseline": {
+    "commit_sha": "e95b922a1c558f6ee108f11bee2fdf8a255c009b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/ci-green-wake-reconcile.d.mts",
+    "docs/ci-green-wake-reconcile.d.ts",
+    "docs/ci-green-wake-reconcile.mjs",
+    "docs/declarations/191.opk-8.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/review-mechanical-cli.d.mts",
+    "docs/review-mechanical-cli.mjs",
+    "docs/review-ready-stuck-guard.mjs",
+    "docs/review-trigger-reconcile.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-ci-green-wake-reconcile.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1",
+    "scripts/lib/MechanicalReconcileNode.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/ci-green-wake-reconcile/**"
+  ],
+  "amendments": []
+}
