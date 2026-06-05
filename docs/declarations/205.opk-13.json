@@ -27,6 +27,7 @@
     "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/orchestrator-wake-heartbeat.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
     "scripts/orchestrator-wake-supervisor-test-child.ps1",
     "scripts/orchestrator-wake-supervisor.ps1",
     "scripts/orchestrator-wake-supervisor.test.ts",
