@@ -913,8 +913,14 @@ function Start-OrchestratorWakeSupervisorManagedSet {
     )
 
     $started = @()
-  $failures = @()
+    $failures = @()
     foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+        $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id
+        if ($status.Alive) {
+            Write-OrchestratorWakeSupervisorLog -Message "reusing adopted $($child.Id) pid=$($status.Pid)" -LogPath $LogPath
+            continue
+        }
+
         try {
             Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $SessionId `
                 -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
@@ -928,7 +934,7 @@ function Start-OrchestratorWakeSupervisorManagedSet {
     }
 
     if ($failures.Count -gt 0) {
-        Write-OrchestratorWakeSupervisorLog -Message 'partial start; rolling back started children' -LogPath $LogPath
+        Write-OrchestratorWakeSupervisorLog -Message 'partial start; rolling back newly started children' -LogPath $LogPath
         Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $LogPath -ChildIds $started
         throw "Supervisor partial start failed: $($failures -join '; ')"
     }
