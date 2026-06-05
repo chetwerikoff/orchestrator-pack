@@ -721,8 +721,9 @@ delivery fails silently or errors; the worker will never see those findings.
    pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .
    ```
 
-3. **Fresh review** on the live session (after `orchestratorRules` idempotency check —
-   no `running` / `reviewing` run on the current head sha):
+3. **Fresh review** on the live session (after `orchestratorRules` covered-head check —
+   no in-flight or covered-terminal run on the current head sha for that PR; see Issue
+   #189 — `clean` / `needs_triage` / `waiting_update` count as covered):
 
    ```powershell
    ao review run <new-worker-session-id> --execute --command "<REVIEW_COMMAND from agent-orchestrator.yaml>"
@@ -759,9 +760,19 @@ does not require hand-editing review-run JSON under `.agent-orchestrator/`.
 **Stale kanban cards are not stuck orchestration.** If `ao review list` still
 shows active-looking runs for a **merged** PR, the orchestrator must **not**
 treat them as backlog: `orchestratorRules` **MERGED PR — REVIEW LOOP TERMINAL**
-(Issue #54) forbids `ao review send`, new `ao review run`, review-loop
-`ao send` pings, and review-loop `ao session kill` / `ao spawn --claim-pr` on
-that PR. Focus recovery and planning on **open** PRs only.
+(Issue #54, prNumber-less runs Issue #189) forbids `ao review send`, new
+`ao review run`, review-loop `ao send` pings, and review-loop
+`ao session kill` / `ao spawn --claim-pr` on that PR — including runs with no
+`prNumber` when the linked worker session's PR is merged (resolve via
+`linkedSessionId` in `ao status`). When linkage is missing or ambiguous, fail
+closed to inaction and surface the run for the operator. Focus recovery and
+planning on **open** PRs only.
+
+**Redundant covered-head runs (Issue #189).** If multiple `clean` or
+`waiting_update` runs exist for the same PR head SHA, the orchestrator should not
+start another — widen live yaml per `agent-orchestrator.yaml.example` **REVIEW RUN
+IDEMPOTENCY** and restart AO. Clearing historical cards is optional; policy is
+inaction, not hand-editing `code-reviews/` JSON.
 
 **Do not** `ao review send` to a worker session that is already `merged` or
 `terminated` for that PR — findings cannot reach a live worker. Do not use

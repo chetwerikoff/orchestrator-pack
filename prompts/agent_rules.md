@@ -381,6 +381,30 @@ briefly allowing the orchestrator to `ao review send` if status is
 **Inspect before reporting.** Use `ao review list --json` to confirm run status
 and counts; do not infer cleanliness from finding prose.
 
+## Orchestrator review-run coverage (Issue #189)
+
+Orchestrator sessions (not workers) follow `orchestratorRules` in
+`agent-orchestrator.yaml` / `agent-orchestrator.yaml.example`. Before any
+`ao review run`, a head SHA is **covered** — start nothing — when `ao review list --json`
+shows any run with the **same PR linkage** (`prNumber`) **and** the **exact normalized
+head SHA** (`targetSha`) that is in-flight (`queued` / `preparing` / `running` /
+`reviewing`) or covered terminal (`clean` / `needs_triage` / `waiting_update`). Same SHA
+on a different PR, or same PR on a different SHA, does **not** count as coverage.
+
+`failed` / `cancelled` on the current head are **not** covered and are **not** plain
+uncovered either: read `terminationReason`, retry at most once after diagnosis, then
+escalate (EMPTY REVIEW TRAP). **PRE-RUN COVERAGE RE-CHECK:** immediately before emitting
+`ao review run`, re-read `ao review list --json` and re-apply the covered-head predicate.
+The mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; see
+`docs/review-orchestrator-loop.mjs`.
+
+**Merged PR — prNumber-less runs.** A run with no `prNumber` is terminal when its
+linked worker session's PR is merged on GitHub (resolve via `linkedSessionId` in
+`ao status`, not the run record alone). When merge state cannot be resolved (linked
+session missing, restored under an unmatched id, ambiguous PR metadata), fail closed to
+inaction — no `ao review send`, no new review round, no worker-lifecycle action; surface
+the run for the operator.
+
 ## AO review command and failed runs (workers)
 
 - Workers MUST NOT invent alternate `ao review run --command` strings. Only the

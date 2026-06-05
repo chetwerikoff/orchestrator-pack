@@ -150,9 +150,20 @@ projects:
         runs persist, so session-only checks miss this case. A visible merged or
         terminated worker session is sufficient but not necessary.
 
+      Runs with no prNumber on the run record: resolve merge state via the run's
+      linkedSessionId in ao status --json (match name, sessionId, or id on the
+      linked worker session), then gh pr view on that session's PR — not solely a
+      prNumber field on the run. When that linked worker PR is merged on GitHub,
+      treat the run as terminal the same as runs that carry prNumber. When merge
+      state cannot be resolved to a specific merged PR (linked session missing from
+      ao status, restored under an unmatched session id, or PR metadata missing or
+      ambiguous), fail closed to inaction — no ao review send, no new review round,
+      no worker-lifecycle action; surface the run for the operator rather than guess.
+
       When the linked worker PR is merged on GitHub (human merge per repo policy):
         Treat all AO-local review runs for that PR as historical, not queue work.
-        MUST NOT ao review send for any run linked to that PR.
+        MUST NOT ao review send for any run linked to that PR (including prNumber-less
+        runs resolved via linked session above).
         MUST NOT ao review run for a new round on that PR.
         MUST NOT ao send ping, ao session kill, or ao spawn --claim-pr for review-loop
         purposes on that PR.
@@ -200,12 +211,29 @@ projects:
       findingCount 0 on failed or cancelled runs is NOT clean. Never read or
       pattern-match finding body prose (NO_FINDINGS contract).
 
-      REVIEW RUN IDEMPOTENCY (Issue #98 — additive to EMPTY REVIEW TRAP). Before calling
-      ao review run for a worker session, read ao review list --json and check the current
-      current PR head sha (from gh pr view or the worker PR ref). If any run for that head sha is
-      in status running or reviewing, do not spawn a new run — poll on the next turn until
-      that run completes or the head sha advances. Only start a new ao review run after the
-      active run finishes or the PR head moves forward.
+      REVIEW RUN IDEMPOTENCY (Issue #98, widened Issue #189 — additive to EMPTY REVIEW TRAP).
+      Before calling ao review run for a worker session, read ao review list --json and the
+      current PR head sha (from gh pr view or the worker PR ref). A head SHA is covered —
+      do not spawn a new run — when any run matches the SAME prNumber linkage AND the EXACT
+      normalized head SHA (targetSha, case-insensitive) and is in-flight (queued, preparing,
+      running, reviewing) OR covered terminal (clean, needs_triage, waiting_update). A run on
+      the same SHA for a different PR does NOT count as coverage. A run on the same PR with a
+      different targetSha does NOT count as coverage for the current head. Only a head with no
+      run at all, or whose only runs on that PR+head are outdated, may use the plain uncovered
+      start path.
+
+      FAILED / CANCELLED ON CURRENT HEAD (not covered — not plain uncovered). A failed or
+      cancelled run on the current head is NOT a covered terminal status (never treat
+      findingCount: 0 on failed as clean). Do not start a new run through the plain uncovered
+      path; follow EMPTY REVIEW TRAP: read terminationReason, retry at most once after
+      diagnosis, escalate otherwise.
+
+      PRE-RUN COVERAGE RE-CHECK (Issue #189). Immediately before emitting ao review run,
+      re-read ao review list --json and re-apply the covered-head predicate above with the
+      smallest gap between read and run. If the head became covered between the turn's first
+      observation and this re-check, do not run. The low-frequency reconcile process uses the
+      same covered-head definition; rare double-runs from simultaneous observation are
+      acceptable residual risk (one run goes outdated; no worker-lifecycle effect).
 
       STALE REVIEWER WORKSPACE (Issue #98). Before ao review run when the prior attempt for
       the same PR head failed with terminationReason containing worktree add and already

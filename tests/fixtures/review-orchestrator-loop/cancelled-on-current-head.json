@@ -1,0 +1,12 @@
+{
+  "runs": [
+    {
+      "id": "run-cancelled",
+      "prNumber": 77,
+      "targetSha": "deadbeef",
+      "status": "cancelled",
+      "findingCount": 0,
+      "terminationReason": "operator cancelled"
+    }
+  ]
+}

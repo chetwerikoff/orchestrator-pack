@@ -1,0 +1,17 @@
+{
+  "run": {
+    "id": "run-old-link",
+    "targetSha": "def",
+    "status": "waiting_update",
+    "linkedSessionId": "opk-worker-old"
+  },
+  "sessions": [
+    {
+      "name": "opk-worker-new",
+      "role": "worker",
+      "prNumber": 55,
+      "status": "working"
+    }
+  ],
+  "mergedPrNumbers": [55]
+}

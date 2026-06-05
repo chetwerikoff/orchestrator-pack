@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: orchestratorRules require review-run idempotency (Issue #98).
+  Regression guard: orchestratorRules require review-run idempotency (Issue #98, #189).
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -11,9 +11,12 @@ $text = Get-Content -LiteralPath $example -Raw
 $required = @(
     'REVIEW RUN IDEMPOTENCY',
     'ao review list --json',
-    'running or reviewing',
     'current PR head sha',
-    'do not spawn a new run'
+    'do not spawn a new run',
+    'covered terminal',
+    'needs_triage',
+    'waiting_update',
+    'PRE-RUN COVERAGE RE-CHECK'
 )
 
 $missing = @($required | Where-Object { $text -notlike "*$_*" })

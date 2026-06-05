@@ -1,0 +1,12 @@
+{
+  "runs": [
+    {
+      "id": "run-failed",
+      "prNumber": 77,
+      "targetSha": "deadbeef",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer command exited 1"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "run": {
+    "id": "run-no-pr",
+    "targetSha": "mergedsha1",
+    "status": "needs_triage",
+    "openFindingCount": 1,
+    "linkedSessionId": "opk-worker-restored"
+  },
+  "sessions": [
+    {
+      "name": "opk-worker-restored",
+      "sessionId": "opk-worker-restored",
+      "role": "worker",
+      "prNumber": 120,
+      "status": "merged"
+    }
+  ],
+  "mergedPrNumbers": [120]
+}

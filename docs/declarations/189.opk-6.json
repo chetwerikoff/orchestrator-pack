@@ -1,0 +1,33 @@
+{
+  "issue_number": 189,
+  "iteration_id": "opk-6",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-05T03:20:00.000Z",
+  "baseline": {
+    "commit_sha": "4b3276c28cdbed73cde2f38697a605bca00089c2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/189.opk-6.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-orchestrator-loop.d.mts",
+    "docs/review-orchestrator-loop.d.ts",
+    "docs/review-orchestrator-loop.mjs",
+    "prompts/agent_rules.md",
+    "scripts/check-orchestrator-review-head-coverage.ps1",
+    "scripts/check-orchestrator-review-idempotency.ps1",
+    "scripts/review-orchestrator-loop.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "prompts/**",
+    "tests/fixtures/review-orchestrator-loop/**"
+  ],
+  "amendments": []
+}

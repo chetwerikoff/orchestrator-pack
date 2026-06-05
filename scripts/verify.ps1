@@ -364,6 +364,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== orchestrator covered-head review idempotency (Issue #189) =='
+$reviewHeadCoverageCheck = Join-Path $Root 'scripts/check-orchestrator-review-head-coverage.ps1'
+if (Test-Path -LiteralPath $reviewHeadCoverageCheck -PathType Leaf) {
+    & $reviewHeadCoverageCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-review-head-coverage.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-review-head-coverage.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'orchestratorRules must document covered-head idempotency (Issue #189)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-review-head-coverage.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing covered-head idempotency check script (Issue #189)'
+}
+
+Write-Host ''
 Write-Host '== detached-HEAD PR context (Issue #98) =='
 $autoReviewContextCheck = Join-Path $Root 'scripts/check-auto-review-pr-context.ps1'
 if (Test-Path -LiteralPath $autoReviewContextCheck -PathType Leaf) {
