@@ -189,10 +189,14 @@ Contract reference: `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
 
 Whenever you add a new draft or first sync a draft to GitHub:
 
-1. Add or update the draft's row in
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) (draft path →
-   GitHub Issue number, or explicit none yet).
-2. Set the draft's `GitHub Issue: #NN` line (or `GitHub Issue: TBD` before sync).
+1. Set the draft's `GitHub Issue: #NN` line (or `GitHub Issue: TBD` before sync).
+2. Ensure a registry row **exists for this draft** mapping draft path → GitHub Issue
+   number (or explicit none yet). **Do not edit the tracked
+   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) by hand** — the
+   publish/sync step (delegated to Cursor per
+   [`publish-issue-draft`](../publish-issue-draft/SKILL.md)) adds or updates **only this
+   draft's row** in the working tree and stages it selectively at publish. Supply the row
+   text in the Cursor delegation prompt when needed.
 
 Do not add open/closed/shipped columns to the registry — live state stays in
 GitHub (`gh issue view`).
@@ -222,15 +226,16 @@ passed Codex review — do NOT edit its task content. Steps:
    - Body  = the draft body MINUS the H1 line (tail -n +3 of the file).
    - gh issue create --repo chetwerikoff/orchestrator-pack --title "<H1>" --body-file <tmp>
 2. Write the returned number into the draft's `GitHub Issue: #N` line (it is
-   `TBD` now) and add/update the row in docs/issue_queue_index.md (draft path ->
-   #N). Do not add open/closed/shipped columns.
+   `TBD` now). Add this draft's registry row to docs/issue_queue_index.md (draft
+   path -> #N; no open/closed/shipped columns) — Cursor owns the tracked index;
+   stage only this row's hunk at publish (see publish-issue-draft Index ownership).
 3. PUBLISH-TO-MAIN — run only when the prompt below sets PUBLISH=yes. Otherwise
    STOP after step 2 (sync-only: the Issue is the queue, the draft stays local).
    When PUBLISH=yes, follow .claude/skills/publish-issue-draft/SKILL.md Mode C
-   exactly: branch from main, commit the draft + index (spec-only), open the
-   spec-only PR (use that skill's body template — no issue-closing refs), wait
-   for CI green, gh pr merge --merge --delete-branch, then git checkout main &&
-   git pull origin main.
+   exactly: branch from main, commit the draft + this draft's index row only
+   (selective staging — spec-only), open the spec-only PR (use that skill's body
+   template — no issue-closing refs), wait for CI green, gh pr merge --merge
+   --delete-branch, then git checkout main && git pull origin main.
 
 Report the Issue URL/number and, when PUBLISH=yes, the PR URL and merge commit.
 PUBLISH=<no|yes>
