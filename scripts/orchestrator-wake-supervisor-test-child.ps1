@@ -5,7 +5,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('listener', 'heartbeat')]
+    [ValidateSet('listener', 'heartbeat', 'review-send-reconcile')]
     [string]$Role,
 
     [string]$OrchestratorSessionId = '',

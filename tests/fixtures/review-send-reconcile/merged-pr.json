@@ -1,0 +1,26 @@
+{
+  "reviewRuns": [
+    {
+      "id": "run-merged",
+      "prNumber": 99,
+      "targetSha": "merged01",
+      "status": "needs_triage",
+      "openFindingCount": 1,
+      "sentFindingCount": 0,
+      "linkedSessionId": "op-merged"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "op-merged",
+      "role": "worker",
+      "prNumber": 99,
+      "ownedHeadSha": "merged01",
+      "runtime": "alive",
+      "status": "working"
+    }
+  ],
+  "openPrs": [],
+  "mergedPrNumbers": [99],
+  "tracking": { "sent": {} }
+}

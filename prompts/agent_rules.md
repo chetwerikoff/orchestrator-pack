@@ -285,6 +285,22 @@ has gone idle — not a substitute for fixing CI yourself.
   after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
   **without waiting** for `ci-failed`, `report-stale`, or operator ping.
 
+## First-send review delivery reconcile (Issue #202)
+
+**Orchestrator LLM turns remain a valid first-send path;** the
+`scripts/review-send-reconcile.ps1` loop is recovery when review completes into
+`needs_triage` but no orchestrator turn issues `ao review send` promptly (AO 0.9.x emits
+no wake on `review.needs_triage`; heartbeat backstop is slower).
+
+When a review run for your PR head is in `needs_triage` with findings not yet sent
+(`sentFindingCount: 0`, `openFindingCount > 0`), a background reconciler (~2-minute
+cadence) may `ao review send` to your live session without waiting for the orchestrator
+turn. After delivery, report `ao report addressing_reviews` — do not stay idle.
+
+- This path performs **first send only**; bounded re-delivery is owned by
+  `review-finding-delivery-confirm.ps1` (#171).
+- It does **not** recover dead sessions (#98) — use `--claim-pr` / respawn discipline.
+
 ## CI-green orchestrator nudge (fast path; Issue #191)
 
 **Self-drive is primary;** the orchestrator CI-green nudge is recovery when you have gone

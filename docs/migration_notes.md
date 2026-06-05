@@ -115,6 +115,29 @@ Behavioural acceptance: on the next real red-CI PR episode, confirm in
 that an orchestrator `ao send` appeared before `report-stale` (~30 min). See
 `docs/orchestrator-recovery-runbook.md` (Red CI with idle worker).
 
+### First-send review delivery reconcile (Issue #202)
+
+Issue #202 adds a **state-derived first `ao review send` path**: when a review run is in
+`needs_triage` with `sentFindingCount: 0` and the linked worker is live and head-owning,
+`scripts/review-send-reconcile.ps1` delivers findings outside the LLM-orchestrator turn
+(~2-minute cadence). Additive to the orchestrator-turn first-send rule and heartbeat
+backstop; re-delivery remains `review-finding-delivery-confirm.ps1` (#171).
+
+To adopt:
+
+1. Merge the updated `orchestratorRules` block (STATE-DERIVED FIRST REVIEW SEND) from
+   `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
+2. Pull `prompts/agent_rules.md` (first-send review delivery section) and confirm
+   `agentRulesFile` points at it.
+3. Restart the wake supervisor so it manages the third child:
+   `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
+   `-Action Start` (or start standalone `scripts/review-send-reconcile.ps1` for debugging).
+4. Restart AO: `ao stop` then `ao start` (orchestratorRules reload).
+
+Behavioural acceptance: after review completes to `needs_triage`, worker receives
+`ao review send` within ~2–3 minutes without an orchestrator turn. Verify with
+`ao review list --json` (run leaves `needs_triage`; `sentFindingCount` increases).
+
 ### CI-green worker wake (Issue #191)
 
 Issue #191 adds a **state-derived CI-green fast path**: when required CI is green and the

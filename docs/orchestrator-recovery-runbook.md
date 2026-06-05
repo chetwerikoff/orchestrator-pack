@@ -477,6 +477,39 @@ to inject findings — not that the worker received them or reported
 `addressing_reviews`. When the worker input channel is flooded or stuck, findings can
 strand silently ("review sent, 0 open findings") while CI stays green.
 
+## First-send review findings undelivered (Issue #202)
+
+When review completes to `needs_triage` (`openFindingCount > 0`, `sentFindingCount: 0`)
+but the worker stays idle with no `ao review send`, the LLM orchestrator may not have
+taken a turn (AO 0.9.x emits no wake on `review.needs_triage`; heartbeat backstop is slow).
+
+Run the first-send reconcile loop (mechanical; no LLM-orchestrator turn required):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/review-send-reconcile.ps1
+```
+
+Dry-run one tick (no `ao review send`, no state write):
+
+```powershell
+pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -Once -DryRun
+```
+
+### Defaults and env overrides
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Tick interval | **2** minutes | `AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES` |
+| Persisted dedupe state file | `%TEMP%\orchestrator-review-send-reconcile-state.json` | `AO_REVIEW_SEND_RECONCILE_STATE` |
+
+The loop sends only when `needs_triage`, `sentFindingCount: 0`, `openFindingCount > 0`,
+`targetSha` equals the PR current head, linked session is runtime-alive and head-owning,
+and the PR is not merged. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
+`ao send`, `ao report`, or `ao review run`. After send, `#171` owns confirmation /
+re-delivery. Prefer the wake supervisor (`orchestrator-wake-supervisor.ps1 -Action Status`)
+so the process is supervised — not a hand-started orphan daemon.
+
 Run the sender-side delivery-confirmation loop (mechanical; no LLM-orchestrator turn
 required):
 

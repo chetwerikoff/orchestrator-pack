@@ -6,6 +6,7 @@
 $Script:OrchestratorWakeSupervisorPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $Script:OrchestratorWakeListenerScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/orchestrator-wake-listener.ps1'
 $Script:OrchestratorWakeHeartbeatScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/orchestrator-wake-heartbeat.ps1'
+$Script:OrchestratorReviewSendReconcileScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/review-send-reconcile.ps1'
 $Script:OrchestratorWakeSupervisorTestChildScript = Join-Path $Script:OrchestratorWakeSupervisorPackRoot 'scripts/orchestrator-wake-supervisor-test-child.ps1'
 
 function Get-OrchestratorWakeSupervisorDefaultProjectId {
@@ -61,11 +62,13 @@ function Get-OrchestratorWakeSupervisorPaths {
         Root           = $StateRoot
         SupervisorPid  = Join-Path $StateRoot 'supervisor.pid'
         StateJson      = Join-Path $StateRoot 'state.json'
-        ListenerPid    = Join-Path $StateRoot 'listener.pid'
-        HeartbeatPid   = Join-Path $StateRoot 'heartbeat.pid'
-        ListenerLog    = Join-Path $StateRoot 'listener.log'
-        HeartbeatLog   = Join-Path $StateRoot 'heartbeat.log'
-        SupervisorLog  = Join-Path $StateRoot 'supervisor.log'
+        ListenerPid              = Join-Path $StateRoot 'listener.pid'
+        HeartbeatPid             = Join-Path $StateRoot 'heartbeat.pid'
+        ReviewSendReconcilePid   = Join-Path $StateRoot 'review-send-reconcile.pid'
+        ListenerLog              = Join-Path $StateRoot 'listener.log'
+        HeartbeatLog             = Join-Path $StateRoot 'heartbeat.log'
+        ReviewSendReconcileLog     = Join-Path $StateRoot 'review-send-reconcile.log'
+        SupervisorLog            = Join-Path $StateRoot 'supervisor.log'
     }
 }
 
@@ -322,7 +325,7 @@ function Get-OrchestratorWakeSupervisorProcessCommandLine {
 function Test-OrchestratorWakeSupervisorManagedProcess {
     param(
         [int]$ProcessId,
-        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [ValidateSet('supervisor', 'listener', 'heartbeat', 'review-send-reconcile')]
         [string]$Role
     )
 
@@ -336,6 +339,7 @@ function Test-OrchestratorWakeSupervisorManagedProcess {
         'supervisor' { @('orchestrator-wake-supervisor.ps1') }
         'listener' { @('orchestrator-wake-listener.ps1') }
         'heartbeat' { @('orchestrator-wake-heartbeat.ps1') }
+        'review-send-reconcile' { @('review-send-reconcile.ps1') }
     }
 
     $matchedScript = $false
@@ -353,6 +357,9 @@ function Test-OrchestratorWakeSupervisorManagedProcess {
         if ($Role -eq 'heartbeat' -and $commandLine -match '-Role\s+heartbeat') {
             return $true
         }
+        if ($Role -eq 'review-send-reconcile' -and $commandLine -match '-Role\s+review-send-reconcile') {
+            return $true
+        }
         return $false
     }
 
@@ -362,7 +369,7 @@ function Test-OrchestratorWakeSupervisorManagedProcess {
 function Test-OrchestratorWakeSupervisorDaemonRunning {
     param(
         [int]$ProcessId,
-        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [ValidateSet('supervisor', 'listener', 'heartbeat', 'review-send-reconcile')]
         [string]$Role
     )
 
@@ -374,7 +381,7 @@ function Clear-OrchestratorWakeSupervisorStalePidIfNeeded {
     param(
         [int]$ProcessId,
         [string]$PidFile,
-        [ValidateSet('supervisor', 'listener', 'heartbeat')]
+        [ValidateSet('supervisor', 'listener', 'heartbeat', 'review-send-reconcile')]
         [string]$Role,
         [string]$LogPath = ''
     )
@@ -400,7 +407,7 @@ function Stop-OrchestratorWakeSupervisorProcess {
     param(
         [int]$ProcessId,
         [string]$PidFile = '',
-        [ValidateSet('supervisor', 'listener', 'heartbeat', '')]
+        [ValidateSet('supervisor', 'listener', 'heartbeat', 'review-send-reconcile', '')]
         [string]$ManagedRole = '',
         [string]$LogPath = ''
     )
@@ -442,7 +449,7 @@ function Stop-OrchestratorWakeSupervisorProcess {
 
 function Start-OrchestratorWakeSupervisorChild {
     param(
-        [ValidateSet('listener', 'heartbeat')]
+        [ValidateSet('listener', 'heartbeat', 'review-send-reconcile')]
         [string]$Role,
         [string]$OrchestratorSessionId,
         [string]$LogPath,
@@ -455,6 +462,7 @@ function Start-OrchestratorWakeSupervisorChild {
     $scriptPath = switch ($Role) {
         'listener' { $Script:OrchestratorWakeListenerScript }
         'heartbeat' { $Script:OrchestratorWakeHeartbeatScript }
+        'review-send-reconcile' { $Script:OrchestratorReviewSendReconcileScript }
     }
     if ($TestMode) {
         $scriptPath = if ($TestChildScript) { $TestChildScript } else { $Script:OrchestratorWakeSupervisorTestChildScript }
@@ -475,17 +483,21 @@ function Start-OrchestratorWakeSupervisorChild {
         '-File', $scriptPath
     )
     if ($TestMode) {
-        $childArgs += @('-Role', $Role, '-OrchestratorSessionId', $OrchestratorSessionId)
+        $childArgs += @('-Role', $Role)
+        if ($Role -ne 'review-send-reconcile') {
+            $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
+        }
     }
-    else {
+    elseif ($Role -ne 'review-send-reconcile') {
         $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
     }
     if ($ExtraChildArgs) {
         $childArgs += $ExtraChildArgs
     }
 
-    $childEnv = @{
-        AO_ORCHESTRATOR_SESSION_ID = $OrchestratorSessionId
+    $childEnv = @{}
+    if ($Role -ne 'review-send-reconcile') {
+        $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
     }
     if ($TestMode) {
         $markerRoot = Join-Path (Split-Path -Parent $PidFile) 'markers'
@@ -546,7 +558,8 @@ function Stop-OrchestratorWakeSupervisorChildren {
 
     foreach ($pair in @(
             @{ Pid = $Paths.ListenerPid; Label = 'listener' },
-            @{ Pid = $Paths.HeartbeatPid; Label = 'heartbeat' }
+            @{ Pid = $Paths.HeartbeatPid; Label = 'heartbeat' },
+            @{ Pid = $Paths.ReviewSendReconcilePid; Label = 'review-send-reconcile' }
         )) {
         $pidVal = Read-OrchestratorWakeSupervisorPidFile -Path $pair.Pid
         Stop-OrchestratorWakeSupervisorProcess -ProcessId $pidVal -PidFile $pair.Pid -ManagedRole $pair.Label -LogPath $LogPath
@@ -558,11 +571,14 @@ function Get-OrchestratorWakeSupervisorChildStatus {
 
     $listenerPid = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.ListenerPid
     $heartbeatPid = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.HeartbeatPid
+    $reviewSendPid = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.ReviewSendReconcilePid
     return @{
-        ListenerPid    = $listenerPid
-        HeartbeatPid   = $heartbeatPid
-        ListenerAlive  = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $listenerPid -Role 'listener'
-        HeartbeatAlive = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $heartbeatPid -Role 'heartbeat'
+        ListenerPid              = $listenerPid
+        HeartbeatPid             = $heartbeatPid
+        ReviewSendReconcilePid   = $reviewSendPid
+        ListenerAlive            = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $listenerPid -Role 'listener'
+        HeartbeatAlive           = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $heartbeatPid -Role 'heartbeat'
+        ReviewSendReconcileAlive = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $reviewSendPid -Role 'review-send-reconcile'
     }
 }
 
@@ -653,6 +669,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $currentSource = $resolved.Source
             Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
                 phase                  = 'running'
                 orchestratorSessionId = $sessionId
@@ -661,12 +678,13 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             }
         }
         elseif ($sessionId -ne $currentSessionId) {
-            Write-OrchestratorWakeSupervisorLog -Message "orchestrator session id changed ($currentSessionId -> $sessionId); restarting both children" -LogPath $Paths.SupervisorLog
+            Write-OrchestratorWakeSupervisorLog -Message "orchestrator session id changed ($currentSessionId -> $sessionId); restarting managed children" -LogPath $Paths.SupervisorLog
             Stop-OrchestratorWakeSupervisorChildren -Paths $Paths
             $currentSessionId = $sessionId
             $currentSource = $resolved.Source
             Start-OrchestratorWakeSupervisorChild -Role 'listener' -OrchestratorSessionId $sessionId -LogPath $Paths.ListenerLog -PidFile $Paths.ListenerPid -TestMode:$TestMode -TestChildScript $TestChildScript
             Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
+            Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
                 phase                  = 'running'
                 orchestratorSessionId = $sessionId
@@ -687,6 +705,10 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                 Write-OrchestratorWakeSupervisorLog -Message 'heartbeat exited; restarting' -LogPath $Paths.SupervisorLog
                 Start-OrchestratorWakeSupervisorChild -Role 'heartbeat' -OrchestratorSessionId $sessionId -LogPath $Paths.HeartbeatLog -PidFile $Paths.HeartbeatPid -TestMode:$TestMode -TestChildScript $TestChildScript
             }
+            if (-not $children.ReviewSendReconcileAlive) {
+                Write-OrchestratorWakeSupervisorLog -Message 'review-send-reconcile exited; restarting' -LogPath $Paths.SupervisorLog
+                Start-OrchestratorWakeSupervisorChild -Role 'review-send-reconcile' -OrchestratorSessionId $sessionId -LogPath $Paths.ReviewSendReconcileLog -PidFile $Paths.ReviewSendReconcilePid -TestMode:$TestMode -TestChildScript $TestChildScript
+            }
         }
 
         Start-Sleep -Seconds $PollSeconds
@@ -706,17 +728,20 @@ function Get-OrchestratorWakeSupervisorStatusReport {
     $sessionId = if ($state) { [string]$state.orchestratorSessionId } else { '' }
 
     return @{
-        ProjectId         = $ProjectId
-        SupervisorPid     = $supervisorPid
-        SupervisorAlive   = $supervisorAlive
-        ListenerPid       = $children.ListenerPid
-        HeartbeatPid      = $children.HeartbeatPid
-        ListenerAlive     = $children.ListenerAlive
-        HeartbeatAlive    = $children.HeartbeatAlive
-        OrchestratorSessionId = $sessionId
-        StateRoot         = $Paths.Root
-        ListenerLog       = $Paths.ListenerLog
-        HeartbeatLog      = $Paths.HeartbeatLog
+        ProjectId                = $ProjectId
+        SupervisorPid            = $supervisorPid
+        SupervisorAlive          = $supervisorAlive
+        ListenerPid              = $children.ListenerPid
+        HeartbeatPid             = $children.HeartbeatPid
+        ReviewSendReconcilePid   = $children.ReviewSendReconcilePid
+        ListenerAlive            = $children.ListenerAlive
+        HeartbeatAlive           = $children.HeartbeatAlive
+        ReviewSendReconcileAlive = $children.ReviewSendReconcileAlive
+        OrchestratorSessionId    = $sessionId
+        StateRoot                = $Paths.Root
+        ListenerLog              = $Paths.ListenerLog
+        HeartbeatLog             = $Paths.HeartbeatLog
+        ReviewSendReconcileLog   = $Paths.ReviewSendReconcileLog
     }
 }
 
@@ -774,6 +799,7 @@ function Write-OrchestratorWakeSupervisorStatusOutput {
     Write-Host ("supervisor: {0} (pid={1})" -f $(if ($Report.SupervisorAlive) { 'running' } else { 'stopped' }), $Report.SupervisorPid)
     Write-Host ("listener:   {0} (pid={1})" -f $(if ($Report.ListenerAlive) { 'running' } else { 'stopped' }), $Report.ListenerPid)
     Write-Host ("heartbeat:  {0} (pid={1})" -f $(if ($Report.HeartbeatAlive) { 'running' } else { 'stopped' }), $Report.HeartbeatPid)
+    Write-Host ("review-send-reconcile: {0} (pid={1})" -f $(if ($Report.ReviewSendReconcileAlive) { 'running' } else { 'stopped' }), $Report.ReviewSendReconcilePid)
     if ($Report.OrchestratorSessionId) {
         Write-Host ("session:    {0}" -f $Report.OrchestratorSessionId)
     }

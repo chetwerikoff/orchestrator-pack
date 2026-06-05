@@ -1,0 +1,370 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  State-derived first review-finding delivery reconciliation (Issue #202).
+
+.DESCRIPTION
+  Independent process from the LLM orchestrator turn loop. Observes ao review list --json
+  for needs_triage runs with sentFindingCount: 0 and issues ao review send to the live
+  head-owning worker — never ao spawn, --claim-pr, ao session kill, ao send, or ao report.
+
+  Re-delivery and confirmation remain owned by review-finding-delivery-confirm.ps1 (#171).
+
+  See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
+#>
+[CmdletBinding()]
+param(
+    [string]$ProjectId = 'orchestrator-pack',
+    [string]$RepoRoot = '',
+    [int]$IntervalMinutes = 0,
+    [int]$PollSeconds = 60,
+    [string]$StateFile = '',
+    [switch]$DryRun,
+    [switch]$Once,
+    [string]$FixturePath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+$Script:ReconcileLogPrefix = 'review-send-reconcile'
+
+$PackRoot = Split-Path -Parent $PSScriptRoot
+if (-not $RepoRoot) {
+    $RepoRoot = $PackRoot
+}
+
+$SendFilterCli = Join-Path $PackRoot 'docs/review-send-reconcile.mjs'
+$Script:DefaultIntervalMinutes = 2
+
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-Send-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+
+function Get-ReviewSendIntervalMinutes {
+    if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
+    $envMinutes = $env:AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES
+    if ($envMinutes -and [int]::TryParse($envMinutes, [ref]$null)) {
+        return [int]$envMinutes
+    }
+    return $Script:DefaultIntervalMinutes
+}
+
+function Get-ReviewSendStatePath {
+    param([string]$CliPath)
+    if ($CliPath) { return $CliPath }
+    if ($env:AO_REVIEW_SEND_RECONCILE_STATE) { return $env:AO_REVIEW_SEND_RECONCILE_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-send-reconcile-state.json'
+}
+
+function Write-ReviewSendLog {
+    param([string]$Message)
+    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
+}
+
+function Invoke-ReviewSendFilterCli {
+    param(
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $SendFilterCli -Subcommand $Subcommand `
+        -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
+}
+
+function Get-ReviewSendState {
+    param([string]$Path)
+
+    $default = @{ sent = @{}; lastTickMs = $null }
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+}
+
+function Set-ReviewSendState {
+    param(
+        [string]$Path,
+        [object]$State
+    )
+
+    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+}
+
+function Save-PartialReviewSendTracking {
+    param(
+        [string]$Path,
+        [hashtable]$Sent,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode -or -not $Path) {
+        return
+    }
+
+    $existing = Get-ReviewSendState -Path $Path
+    $merged = @{
+        sent       = $Sent
+        lastTickMs = $existing.lastTickMs
+    }
+    Set-ReviewSendState -Path $Path -State $merged
+}
+
+function Get-OpenPrList {
+    $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+        throw "gh pr list failed (exit ${LASTEXITCODE}): $text"
+    }
+    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+    if (-not $text.Trim()) {
+        return @()
+    }
+    return @($text | ConvertFrom-Json)
+}
+
+function Get-FixtureReviewSendPayload {
+    param([string]$Path)
+
+    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $payload = @{
+        reviewRuns = @($fixture.reviewRuns)
+        sessions   = @($fixture.sessions)
+        openPrs    = @($fixture.openPrs)
+    }
+    if ($fixture.mergedPrNumbers) {
+        $payload.mergedPrNumbers = @($fixture.mergedPrNumbers)
+    }
+    if ($fixture.tracking) {
+        $payload.tracking = $fixture.tracking
+    }
+    return $payload
+}
+
+function Get-ReviewSendPreSendSnapshot {
+    param(
+        [string]$RunId,
+        [string]$Project
+    )
+
+    return @{
+        reviewRuns = @(Get-AoReviewRuns -Project $Project)
+        sessions   = @(Get-AoStatusSessions)
+        openPrs    = @(Get-OpenPrList)
+    }
+}
+
+function Invoke-PlannedReviewSend {
+    param(
+        [object]$Action,
+        [object]$FreshPayload,
+        [string]$Project,
+        [switch]$DryRunMode,
+        [switch]$UseFixtureSnapshot
+    )
+
+    if ($UseFixtureSnapshot) {
+        if (-not $FreshPayload) {
+            throw 'FreshPayload is required when UseFixtureSnapshot is set'
+        }
+    }
+    else {
+        $FreshPayload = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
+    }
+
+    $recheck = Invoke-ReviewSendFilterCli -Subcommand 'recheck' -Payload @{
+        planned = @{
+            runId     = [string]$Action.runId
+            prNumber  = [int]$Action.prNumber
+            targetSha = [string]$Action.targetSha
+            sessionId = [string]$Action.sessionId
+        }
+        fresh   = $FreshPayload
+    }
+
+    if (-not $recheck.ok) {
+        Write-ReviewSendLog "pre-send recheck failed run=$($Action.runId): $($recheck.reason)"
+        return @{ sent = $false; reason = $recheck.reason }
+    }
+
+    $sendArgs = @('review', 'send', [string]$Action.runId)
+    $commandLine = "ao $($sendArgs -join ' ')"
+    Test-ReviewSendMechanicalForbiddenCommand -CommandLine $commandLine
+
+    if ($DryRunMode) {
+        Write-ReviewSendLog "dry-run would send: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$($Action.sessionId)"
+        return @{ sent = $true; reason = 'dry_run' }
+    }
+
+    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$($Action.sessionId)"
+    & ao @sendArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
+    }
+
+    $post = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
+    $verify = Invoke-ReviewSendFilterCli -Subcommand 'verify-sent' -Payload @{
+        reviewRuns = @($post.reviewRuns)
+        runId      = [string]$Action.runId
+        targetSha  = [string]$Action.targetSha
+    }
+    if (-not $verify.ok) {
+        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason)"
+        return @{ sent = $false; reason = $verify.reason }
+    }
+
+    return @{ sent = $true; reason = 'sent' }
+}
+
+function Invoke-ReviewSendTick {
+    param(
+        [string]$Project,
+        [string]$StatePath,
+        [switch]$DryRunMode,
+        [string]$Fixture
+    )
+
+    $tracking = Get-ReviewSendState -Path $StatePath
+
+    if ($Fixture) {
+        $payload = Get-FixtureReviewSendPayload -Path $Fixture
+        $reviewRuns = $payload.reviewRuns
+        $sessions = $payload.sessions
+        $openPrs = @($payload.openPrs)
+        if ($payload.tracking) {
+            $tracking = $payload.tracking
+        }
+        $mergedPrNumbers = @()
+        if ($payload.mergedPrNumbers) {
+            $mergedPrNumbers = @($payload.mergedPrNumbers)
+        }
+    }
+    else {
+        $reviewRuns = Get-AoReviewRuns -Project $Project
+        $sessions = Get-AoStatusSessions
+        $openPrs = Get-OpenPrList
+        $mergedPrNumbers = @()
+    }
+
+    $planPayload = @{
+        reviewRuns      = @($reviewRuns)
+        sessions        = @($sessions)
+        openPrs         = @($openPrs)
+        mergedPrNumbers = $mergedPrNumbers
+        tracking        = $tracking
+    }
+
+    $plan = Invoke-ReviewSendFilterCli -Subcommand 'plan' -Payload $planPayload
+    $useFixtureSnapshot = [bool]$Fixture
+    $fixtureFreshPayload = $null
+    if ($useFixtureSnapshot) {
+        $fixtureFreshPayload = @{
+            reviewRuns      = @($reviewRuns)
+            sessions        = @($sessions)
+            openPrs         = @($openPrs)
+            mergedPrNumbers = $mergedPrNumbers
+        }
+    }
+
+    $sent = 0
+    $sentRecords = @{}
+    if ($tracking.sent) {
+        foreach ($prop in $tracking.sent.PSObject.Properties) {
+            $sentRecords[$prop.Name] = $prop.Value
+        }
+    }
+
+    $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
+
+    foreach ($action in @($plan.actions)) {
+        if ($action.type -eq 'skip') {
+            if ($action.runId) {
+                Write-ReviewSendLog "skip run=$($action.runId): $($action.reason)"
+            }
+            continue
+        }
+        if ($action.type -ne 'send') {
+            continue
+        }
+
+        try {
+            $result = Invoke-PlannedReviewSend -Action $action -FreshPayload $fixtureFreshPayload `
+                -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
+        }
+        catch {
+            Write-ReviewSendLog "send error run=$($action.runId): $_"
+            continue
+        }
+
+        if ($result.sent) {
+            if (-not $DryRunMode -and $result.reason -eq 'sent') {
+                $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                $sentRecords[[string]$action.dedupeKey] = @{
+                    runId     = [string]$action.runId
+                    targetSha = [string]$action.targetSha
+                    sessionId = [string]$action.sessionId
+                    sentAtMs  = $nowMs
+                }
+                Save-PartialReviewSendTracking -Path $partialStatePath -Sent $sentRecords -DryRunMode:$DryRunMode
+            }
+            $sent++
+        }
+    }
+
+    $merged = @{
+        sent       = $sentRecords
+        lastTickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
+
+    if (-not $DryRunMode) {
+        Set-ReviewSendState -Path $StatePath -State $merged
+    }
+
+    return $sent
+}
+
+$intervalMinutes = Get-ReviewSendIntervalMinutes
+$intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
+$pollMs = [Math]::Max(5, $PollSeconds) * 1000
+$statePath = Get-ReviewSendStatePath -CliPath $StateFile
+
+Write-ReviewSendLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+Write-ReviewSendLog "additive path: LLM-turn first-send and heartbeat backstop remain; #171 owns re-delivery after send"
+
+if ($FixturePath) {
+    $count = Invoke-ReviewSendTick -Project $ProjectId -StatePath $statePath -DryRunMode:$DryRun -Fixture $FixturePath
+    Write-ReviewSendLog "fixture tick complete (sent=$count)"
+    exit 0
+}
+
+try {
+    do {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $state = Get-ReviewSendState -Path $statePath
+        $lastTickMs = $null
+        if ($state.lastTickMs) {
+            $lastTickMs = [long]$state.lastTickMs
+        }
+
+        $gate = Invoke-ReviewSendFilterCli -Subcommand 'interval' -Payload @{
+            nowMs      = $nowMs
+            lastTickMs = $lastTickMs
+            intervalMs = $intervalMs
+        }
+
+        if (-not $gate.ok) {
+            Write-ReviewSendLog "tick skipped: $($gate.reason)"
+        }
+        else {
+            try {
+                $count = Invoke-ReviewSendTick -Project $ProjectId -StatePath $statePath -DryRunMode:$DryRun
+                Write-ReviewSendLog "tick complete (sent=$count)"
+            }
+            catch {
+                Write-ReviewSendLog "tick error: $_"
+            }
+        }
+
+        if ($Once) { break }
+        Start-Sleep -Milliseconds $pollMs
+    } while ($true)
+}
+finally {
+    Write-ReviewSendLog 'stopped'
+}

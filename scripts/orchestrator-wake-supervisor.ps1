@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Supervise orchestrator wake listener and heartbeat as two independent processes.
+  Supervise orchestrator wake listener, heartbeat, and review-send-reconcile as managed children.
 
 .DESCRIPTION
   Single operator entry point to start, monitor, and stop
@@ -54,9 +54,10 @@ switch ($Action) {
         Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid) -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
         Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.ListenerPid) -PidFile $paths.ListenerPid -Role 'listener' -LogPath $paths.SupervisorLog
         Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.HeartbeatPid) -PidFile $paths.HeartbeatPid -Role 'heartbeat' -LogPath $paths.SupervisorLog
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.ReviewSendReconcilePid) -PidFile $paths.ReviewSendReconcilePid -Role 'review-send-reconcile' -LogPath $paths.SupervisorLog
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
-        if ($report.SupervisorAlive -and $report.ListenerAlive -and $report.HeartbeatAlive) {
+        if ($report.SupervisorAlive -and $report.ListenerAlive -and $report.HeartbeatAlive -and $report.ReviewSendReconcileAlive) {
             exit 0
         }
         exit 1
