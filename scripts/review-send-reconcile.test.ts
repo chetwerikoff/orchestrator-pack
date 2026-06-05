@@ -208,9 +208,12 @@ describe('fail-closed matrix (AC2)', () => {
       ],
     });
     expect(sendActions(actions)).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'skip' && a.reason === 'ambiguous_overlapping_runs')).toBe(
-      true,
-    );
+    expect(
+      actions.some(
+        (a: ReviewSendAction) =>
+          a.type === 'skip' && a.reason === 'ambiguous_overlapping_runs',
+      ),
+    ).toBe(true);
   });
 });
 

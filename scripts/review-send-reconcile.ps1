@@ -4,23 +4,30 @@
   State-derived first review-finding delivery reconciliation (Issue #202).
 
 .DESCRIPTION
-  Independent process from the LLM orchestrator turn loop. Observes ao review list --json
-  for needs_triage runs with sentFindingCount: 0 and issues ao review send to the live
-  head-owning worker — never ao spawn, --claim-pr, ao session kill, ao send, or ao report.
+  Issue #202 first-send path only: when review completes into needs_triage with
+  sentFindingCount: 0, this loop ao review send's findings to the live head-owning worker
+  without an LLM orchestrator turn. Split-brain envelope forbids ao spawn, claim-pr,
+  session kill, ao send, ao report, and ao review run.
 
-  Re-delivery and confirmation remain owned by review-finding-delivery-confirm.ps1 (#171).
-
-  See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
+  Bounded re-delivery after send stays in review-finding-delivery-confirm.ps1 (#171).
+  Operator surfaces: docs/orchestrator-autoloop-go-live.md,
+  docs/orchestrator-recovery-runbook.md (First-send review findings undelivered).
 #>
 [CmdletBinding()]
 param(
+    # AO project id for ao review list / ao status snapshots
     [string]$ProjectId = 'orchestrator-pack',
+  # Pack repo root passed to gh pr list helpers
     [string]$RepoRoot = '',
+  # Tick cadence override; env AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES wins when zero
     [int]$IntervalMinutes = 0,
+  # Poll sleep between interval gate checks (seconds)
     [int]$PollSeconds = 60,
+  # Dedupe state path; env AO_REVIEW_SEND_RECONCILE_STATE when empty
     [string]$StateFile = '',
     [switch]$DryRun,
     [switch]$Once,
+  # JSON fixture for contract tests (no live ao/gh)
     [string]$FixturePath = ''
 )
 
@@ -38,6 +45,7 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-Send-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -106,19 +114,6 @@ function Save-PartialReviewSendTracking {
     Set-ReviewSendState -Path $Path -State $merged
 }
 
-function Get-OpenPrList {
-    $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-        throw "gh pr list failed (exit ${LASTEXITCODE}): $text"
-    }
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    if (-not $text.Trim()) {
-        return @()
-    }
-    return @($text | ConvertFrom-Json)
-}
-
 function Get-FixtureReviewSendPayload {
     param([string]$Path)
 
@@ -146,11 +141,11 @@ function Get-ReviewSendPreSendSnapshot {
     return @{
         reviewRuns = @(Get-AoReviewRuns -Project $Project)
         sessions   = @(Get-AoStatusSessions)
-        openPrs    = @(Get-OpenPrList)
+        openPrs    = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     }
 }
 
-function Invoke-PlannedReviewSend {
+function Invoke-PlannedFirstReviewSend {
     param(
         [object]$Action,
         [object]$FreshPayload,
@@ -159,12 +154,10 @@ function Invoke-PlannedReviewSend {
         [switch]$UseFixtureSnapshot
     )
 
-    if ($UseFixtureSnapshot) {
-        if (-not $FreshPayload) {
-            throw 'FreshPayload is required when UseFixtureSnapshot is set'
-        }
+    if ($UseFixtureSnapshot -and -not $FreshPayload) {
+        throw 'FreshPayload is required when UseFixtureSnapshot is set'
     }
-    else {
+    if (-not $UseFixtureSnapshot) {
         $FreshPayload = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
     }
 
@@ -238,7 +231,7 @@ function Invoke-ReviewSendTick {
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
-        $openPrs = Get-OpenPrList
+        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
         $mergedPrNumbers = @()
     }
 
@@ -284,7 +277,7 @@ function Invoke-ReviewSendTick {
         }
 
         try {
-            $result = Invoke-PlannedReviewSend -Action $action -FreshPayload $fixtureFreshPayload `
+            $result = Invoke-PlannedFirstReviewSend -Action $action -FreshPayload $fixtureFreshPayload `
                 -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
         }
         catch {
