@@ -1,0 +1,29 @@
+{
+  "description": "Missing required checks route to degraded CI, not fast-path run",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-miss",
+  "prNumber": 212,
+  "openPrs": [{ "number": 212, "headRefOid": "miss212" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-miss",
+      "role": "worker",
+      "prNumber": 212,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "miss212",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "212": [{ "name": "Optional check", "state": "SUCCESS" }]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "route": "degraded_ci_retry"
+  }
+}

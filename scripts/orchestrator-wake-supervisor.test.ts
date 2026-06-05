@@ -584,3 +584,14 @@ describe('orchestrator-wake-supervisor', () => {
     },
   );
 });
+
+describe('Issue #207 side-effecting listener registry', () => {
+  it('registry classifies listener as side-effecting with lock path', () => {
+    const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
+    const text = fs.readFileSync(supervisorLib, 'utf8');
+    expect(text).toContain('Get-OrchestratorWakeSupervisorChildRegistry');
+    expect(text).toContain("Id            = 'listener'");
+    expect(text).toContain('SideEffecting = $true');
+    expect(text).toContain('listener-side-effect.lock');
+  });
+});

@@ -472,6 +472,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== event-driven review wake trigger (Issue #207) =='
+$reviewWakeTriggerCheck = Join-Path $Root 'scripts/check-review-wake-trigger.ps1'
+if (Test-Path -LiteralPath $reviewWakeTriggerCheck -PathType Leaf) {
+    & $reviewWakeTriggerCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-wake-trigger.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-wake-trigger.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'event-driven review wake trigger checks failed (Issue #207)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-wake-trigger.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing event-driven review wake trigger check script (Issue #207)'
+}
+
+Write-Host ''
 Write-Host '== review-finding delivery confirmation (Issue #171) =='
 $deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
 if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {

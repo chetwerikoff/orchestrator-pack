@@ -27,6 +27,16 @@ export const WAKE_RELEVANT_KINDS = new Set([
   'merge.ready',
 ]);
 
+/** Completion-time wake that may carry merge intent (Issue #207 fast review trigger). */
+export const COMPLETION_MERGE_INTENT_WAKE_KINDS = new Set(['merge.ready']);
+
+/**
+ * @param {string | null | undefined} wakeKind
+ */
+export function isCompletionMergeIntentWake(wakeKind) {
+  return COMPLETION_MERGE_INTENT_WAKE_KINDS.has(String(wakeKind ?? '').trim());
+}
+
 const EVENT_TYPE_TO_WAKE_KIND = {
   'ci.failing': 'ci.failing',
   'merge.ready': 'merge.ready',

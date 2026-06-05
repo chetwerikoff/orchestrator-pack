@@ -1,0 +1,36 @@
+{
+  "description": "Pre-run re-check aborts when head advances after readiness snapshot",
+  "planned": {
+    "prNumber": 216,
+    "headSha": "old216",
+    "sessionId": "opk-adv"
+  },
+  "fresh": {
+    "openPrs": [{ "number": 216, "headRefOid": "new216" }],
+    "reviewRuns": [],
+    "sessions": [
+      {
+        "name": "opk-adv",
+        "role": "worker",
+        "prNumber": 216,
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "headRefOid": "old216",
+            "reportedAt": "2026-06-05T11:00:00.000Z"
+          }
+        ]
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": false,
+    "reason": "pre_run_recheck_head_advanced"
+  }
+}

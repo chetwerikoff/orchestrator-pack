@@ -285,6 +285,26 @@ has gone idle — not a substitute for fixing CI yourself.
   after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
   **without waiting** for `ci-failed`, `report-stale`, or operator ping.
 
+## Event-driven review trigger (Issue #207)
+
+**Orchestrator LLM turns remain a valid first-review path;** the wake listener's
+`merge.ready` completion-wake handler is the low-latency trigger when a worker hands off
+a review-ready head (AO 0.9.x emits no dedicated `ready_for_review` webhook).
+
+On `merge.ready` (approved-and-green), `scripts/orchestrator-wake-listener.ps1` evaluates
+HEAD READY FOR REVIEW (#195) and covered-head dedupe (#189), then may `ao review run`
+**before** forwarding the merge-intent wake. The periodic `review-trigger-reconcile.ps1`
+(#163) and heartbeat remain backstops. Merge handling on that wake must **re-read** review
+run state afterward — a wake annotated `mergeable=false` is not permission to merge on a
+stale approved-and-green snapshot while review is in-flight / `needs_triage`.
+
+- This path issues **review run only** — never `ao spawn`, `--claim-pr`, `ao session kill`,
+  `ao send`, or merge.
+- Seconds-level convergence applies only when a completion wake actually reaches the
+  listener; pending CI with no wake still converges via CI-settle wake or the backstop.
+- The listener is a **side-effecting** supervised child (draft #71 registry); restart
+  waits for in-flight `ao review run` to finish or fail closed.
+
 ## First-send review delivery reconcile (Issue #202)
 
 **Orchestrator LLM turns remain a valid first-send path;** the
