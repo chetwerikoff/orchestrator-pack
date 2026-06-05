@@ -382,6 +382,78 @@ else {
 }
 
 Write-Host ''
+Write-Host '== review-trigger reconciliation (Issue #163) =='
+$reviewReconcileCheck = Join-Path $Root 'scripts/check-review-trigger-reconcile.ps1'
+if (Test-Path -LiteralPath $reviewReconcileCheck -PathType Leaf) {
+    & $reviewReconcileCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-trigger reconciliation wiring checks failed (Issue #163)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-trigger-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-trigger reconciliation check script (Issue #163)'
+}
+
+Write-Host ''
+Write-Host '== review-finding delivery confirmation (Issue #171) =='
+$deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
+if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {
+    & $deliveryConfirmCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-finding delivery confirmation checks failed (Issue #171)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-finding delivery confirmation check script (Issue #171)'
+}
+
+Write-Host ''
+Write-Host '== terminal mux flood detection (Issue #173) =='
+$terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
+if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {
+    & $terminalFloodCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-terminal-flood-detect.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-terminal-flood-detect.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'terminal mux flood detection checks failed (Issue #173)'
+    }
+}
+else {
+    Write-Check 'scripts/check-terminal-flood-detect.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing terminal flood detection check script (Issue #173)'
+}
+
+Write-Host ''
+Write-Host '== review-ready worker stuck guard (Issue #174) =='
+$stuckGuardCheck = Join-Path $Root 'scripts/check-review-ready-stuck-guard.ps1'
+if (Test-Path -LiteralPath $stuckGuardCheck -PathType Leaf) {
+    & $stuckGuardCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-ready worker stuck guard checks failed (Issue #174)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-ready-stuck-guard.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-ready worker stuck guard check script (Issue #174)'
+}
+
+Write-Host ''
 Write-Host '== reviewer workspace preflight (Issue #98) =='
 $reviewerWorkspaceCheck = Join-Path $Root 'scripts/check-reviewer-workspace-preflight.ps1'
 if (Test-Path -LiteralPath $reviewerWorkspaceCheck -PathType Leaf) {
@@ -557,6 +629,42 @@ if ((Test-Path -LiteralPath $orchLaunchCheck -PathType Leaf) -and
 else {
     Write-Check 'scripts/check-orchestrator-launch-failure.ps1' 'FAIL' 'missing script or fixtures'
     Add-Failure 'Missing orchestrator launch-failure check or fixtures'
+}
+
+Write-Host ''
+Write-Host '== Coworker RTK passthrough static guard (Issue #145) =='
+$rtkPassthroughCheck = Join-Path $Root 'scripts/check-rtk-passthrough-static.ps1'
+if (Test-Path -LiteralPath $rtkPassthroughCheck -PathType Leaf) {
+    & $rtkPassthroughCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'RTK passthrough static guard failed (Issue #145)'
+    }
+}
+else {
+    Write-Check 'scripts/check-rtk-passthrough-static.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing RTK passthrough static guard script (Issue #145)'
+}
+
+Write-Host ''
+Write-Host '== Skill pointer drift (Issue #156) =='
+$skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'
+if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {
+    & $skillPointerDriftCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-skill-pointer-drift.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-skill-pointer-drift.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Skill pointer drift check failed (Issue #156)'
+    }
+}
+else {
+    Write-Check 'scripts/check-skill-pointer-drift.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing skill pointer drift check script (Issue #156)'
 }
 
 Write-Host ''

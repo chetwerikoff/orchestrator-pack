@@ -1,0 +1,15 @@
+{
+  "description": "waiting_update (findings sent) blocks re-review",
+  "openPrs": [{ "number": 13, "headRefOid": "ddd444" }],
+  "reviewRuns": [
+    {
+      "prNumber": 13,
+      "targetSha": "ddd444",
+      "status": "waiting_update",
+      "findingCount": 1,
+      "sentFindingCount": 1,
+      "openFindingCount": 0
+    }
+  ],
+  "sessions": [{ "name": "op-13", "role": "worker", "prNumber": 13 }]
+}

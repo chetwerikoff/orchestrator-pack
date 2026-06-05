@@ -18,8 +18,9 @@ defaults:
 # Orchestrator wake (issues #39 / #59): webhook listener + heartbeat backstop.
 # AO webhook POSTs urgent/action notifications to the local listener; a separate
 # heartbeat process delivers periodic `ao send` nudges during event silence.
-# Start scripts/orchestrator-wake-listener.ps1 and orchestrator-wake-heartbeat.ps1
-# alongside `ao start` — see docs/orchestrator-wake-runbook.md.
+# Start scripts/orchestrator-wake-listener.ps1, orchestrator-wake-heartbeat.ps1, and
+# scripts/review-trigger-reconcile.ps1 alongside `ao start` — see
+# docs/orchestrator-wake-runbook.md and docs/orchestrator-autoloop-go-live.md.
 notifiers:
   webhook:
     plugin: webhook
@@ -213,11 +214,35 @@ projects:
       That removes an orphan code-reviews/workspaces path so AO git worktree add can succeed.
       See docs/orchestrator-recovery-runbook.md (Orphan review run after worker respawn).
 
-      TRIGGER REVIEW WITHOUT HUMAN PROMPT. Whenever a worker reports pr_created or
-      ready_for_review on an open PR (visible in ao status --reports full), apply REVIEW RUN
-      IDEMPOTENCY and STALE REVIEWER WORKSPACE above, then run:
+      TRIGGER REVIEW WITHOUT HUMAN PROMPT (report-driven on orchestrator turns). Whenever
+      a worker reports pr_created or ready_for_review on an open PR (visible in
+      ao status --reports full), apply REVIEW RUN IDEMPOTENCY and STALE REVIEWER WORKSPACE
+      above, then run:
         ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
-      Do not wait for operator words review or loop.
+      Do not wait for operator words review or loop. Report-driven triggering is not the
+      only path — the low-frequency reconcile process below converges from GitHub + review
+      list state even when reports are missing or the orchestrator is stuck.
+
+      STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
+      low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
+        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1
+      Default cadence: 10 minutes (tens of minutes). Override with
+      AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES or -IntervalMinutes. State file:
+      AO_REVIEW_TRIGGER_RECONCILE_STATE or %TEMP%\orchestrator-review-reconcile-state.json.
+      Each tick:
+        1. gh pr list --state open --json number,headRefOid
+        2. ao review list --json — coverage per PR head SHA (compose with REVIEW RUN
+           IDEMPOTENCY above: in-flight, clean, needs_triage, waiting_update count as covered;
+           only outdated or absent runs are uncovered)
+        3. ao status --json --reports full — resolve an existing worker session id for the PR
+        4. For each uncovered head with a linked worker session: STALE REVIEWER WORKSPACE
+           preflight, then ao review run <worker-session-id> --execute with --command set to
+           REVIEW_COMMAND
+      Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send
+      from this process — only ao review run for an uncovered head. Skip PRs with no linked
+      worker session (orchestrator respawn discipline owns session creation). Verification:
+        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+      See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
 
       NAMED PENDING STATE: waiting_worker_review_response.
       A PR enters this state after ao review send succeeds for a run in needs_triage,
@@ -252,6 +277,37 @@ projects:
         ao session kill <session>
         ao spawn --claim-pr <PR>
       Reset ping tracking for the new session.
+
+      REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,
+      BEFORE kill/respawn/claim-pr discipline above for a worker flagged stuck or
+      probe_failure, classify one consistent snapshot from ao status --json --reports
+      full, gh pr view (current head), gh pr checks (required CI), and ao review list
+      --json (no pane scraping):
+        Linked session owns the PR current head AND runtime alive AND required
+        merge-contract CI green on that head AND last accepted ready_for_review is
+        for that head AND a review run with status clean and findingCount 0 covers
+        the same head/session pair.
+        waiting_update does NOT grant protection (mid-fix; Issue #171 owns delivery).
+        Red or pending required CI disqualifies protection — use CI FAILURE DISCIPLINE.
+      When classified review-ready on false stuck:
+        Do NOT immediately ao spawn, --claim-pr, ao session kill, or respawn.
+        Hold for bounded grace (default 15 minutes, monotonic per session+head:
+        anchored to first false stuck; repeated stuck reports do NOT extend grace).
+        Optional helper: docs/review-ready-stuck-guard.mjs (plan/classify stdin JSON).
+        Env override: AO_REVIEW_READY_STUCK_GRACE_MINUTES.
+      Within grace, recovery requires affirmative unreachability evidence only:
+        failed bounded reachability attempt; Issue #171 delivery unconfirmed/escalated
+        for the linked run; or Issue #173 terminal_mux_paired_flap still flagged after
+        stop-verify. Mere silence (no outbound report) is NOT evidence — do not recover
+        on silence alone before grace deadline.
+      When evidence exists, prefer careful recycle (ao session kill + operator
+      escalation/notify) over blind ao spawn --claim-pr (PR #97 split-brain).
+      After grace expires without affirmative unreachable evidence, normal stuck
+      handling may resume.
+      Genuine death (runtime not alive) is NOT shielded — orphan/respawn (#98) applies.
+      Operator adoption: merge this block into live orchestratorRules, then ao stop
+      and ao start. See docs/orchestrator-recovery-runbook.md (Review-ready worker
+      false stuck).
 
       ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
       last review run's target SHA, immediately run ao review run <session> --execute

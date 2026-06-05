@@ -44,8 +44,9 @@ pointers** from each tool's native rules surface — no content duplication, so 
   scope) — not in the denied `prompts/agent_rules.md`. Planner picks replacement wording.
 - **Architecture decision §S** records: delegation policy is single-sourced in `agent_rules.md` and
   surfaced via one pointer per entrypoint — AO `agentRulesFile` (workers), `AGENTS.md` (Codex),
-  `.cursor/rules` (standalone Cursor), `CLAUDE.md` (architect); enforcement remains advisory (review
-  is the backstop, no hook mandates delegation).
+  `.cursor/rules` (standalone Cursor), `CLAUDE.md` (architect); **enforcement** remains advisory
+  (review/operator are the backstop, no hook mandates delegation) even though the read-delegation
+  **obligation** is mandatory per §S.3 / #148 — obligation and enforcement are separate axes.
 - No AO core, vendor, or `agent-orchestrator.yaml` changes; no change to the policy content itself.
 
 ## Files in scope

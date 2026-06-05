@@ -1,0 +1,18 @@
+{
+  "description": "Open PR head has no review run; worker exists but never reported pr_created/ready_for_review",
+  "openPrs": [{ "number": 99, "headRefOid": "deadbeef" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-live-worker",
+      "role": "worker",
+      "prNumber": 99,
+      "status": "working"
+    }
+  ],
+  "reviewCommand": "powershell.exe -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "op-live-worker"
+  }
+}

@@ -5,8 +5,9 @@ repo (Issues #28 / #39 / #60 — merged as PRs #42, #47, #65). AO does **not** r
 Codex review when a worker spawns; the **orchestrator** drives
 `ao review run` → `ao review send` → worker `addressing_reviews` → re-review.
 
-Follow-up [#58](https://github.com/chetwerikoff/orchestrator-pack/issues/58)
-(reconciliation via `gh` open PRs) adds resilience; heartbeat backstop #59 is
+State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163))
+runs via `scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only).
+Heartbeat backstop [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) is
 documented below alongside the event listener.
 
 After each merged worker PR, run that PR's **`## Operator adoption`** checklist
@@ -22,11 +23,15 @@ and the matching steps in
 | Worker review contract | `prompts/agent_rules.md` |
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
-| Wake listener + heartbeat | `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Wake supervisor (listener + heartbeat) | `scripts/orchestrator-wake-supervisor.ps1` (preferred), `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs` (Issue #163) |
+| Review-finding delivery confirm | `scripts/review-finding-delivery-confirm.ps1`, `docs/review-finding-delivery-confirm.mjs` (Issue #171) |
+| Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |
+| Review-ready false stuck guard | `docs/review-ready-stuck-guard.mjs` (Issue #174; rules in `orchestratorRules`) |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
 | Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
 
-## Every session — four processes
+## Every session — five processes
 
 **Terminal A — AO**
 
@@ -35,23 +40,53 @@ cd <orchestrator-pack-root>
 ao start orchestrator-pack
 ```
 
-**Terminal B — wake listener** (before or with `ao start`)
+**Terminal B — wake supervisor** (listener + heartbeat; preferred — Issue #168)
+
+Starts both wake processes as **separate children**, resolves the orchestrator
+session id from `ao status` when unset, restarts either child on exit, and
+re-targets both when the orchestrator session id changes. Logs:
+`%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
+`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`).
 
 ```powershell
 cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'   # your id from ao status
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-listener.ps1
+# Optional: pin session id instead of auto-resolve from ao status
+# $env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
 ```
 
-**Terminal C — heartbeat backstop** (separate from the webhook listener; default 15 min)
+Status and stop:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+```
+
+Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (default
+120 — bounded wait for orchestrator session before exit), `AO_WAKE_SUPERVISOR_POLL_SECONDS`
+(supervisor poll, default 5), `AO_WAKE_SUPERVISOR_STATE_DIR`, `AO_WAKE_SUPERVISOR_PROJECT_ID`
+(default `orchestrator-pack`). See [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
+
+**Manual fallback — two terminals** (listener and heartbeat separately): same as
+before — `scripts/orchestrator-wake-listener.ps1` and
+`scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
+Use when debugging one path in isolation.
+
+**Terminal D — review-trigger reconciliation** (default 10 min; independent of orchestrator turns)
 
 ```powershell
 cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-heartbeat.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1
 ```
 
-**Terminal D — worktree trust watcher** (Windows Cursor; avoids blocking
+Optional: `$env:AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES = '30'` before starting.
+One-shot dry-run (no `ao review run`):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+**Terminal E — worktree trust watcher** (Windows Cursor; avoids blocking
 `Workspace Trust Required` on each new `op-*` worktree)
 
 ```powershell
@@ -160,5 +195,5 @@ worker: pr_created / ready_for_review (+ CI green)
 ## Related issues
 
 - [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68) — this checklist in-repo
-- [#58](https://github.com/chetwerikoff/orchestrator-pack/issues/58) — `gh` reconciliation in rules
+- [#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163) — `review-trigger-reconcile.ps1` (state-derived review trigger)
 - [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) — heartbeat backstop (`orchestrator-wake-heartbeat.ps1`)

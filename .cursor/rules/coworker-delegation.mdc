@@ -1,0 +1,11 @@
+---
+description: Resolve Coworker CLI delegation policy from the canonical agent rules file
+alwaysApply: true
+---
+
+# Coworker CLI delegation (canonical policy)
+
+Before shelling out to the external `coworker` CLI, read and follow the **Coworker CLI
+delegation** section in [`prompts/agent_rules.md`](../../prompts/agent_rules.md) (single source
+of truth). Do not duplicate that policy in this rule. Architecture fan-out: §S in
+[`docs/issues_drafts/00-architecture-decisions.md`](../../docs/issues_drafts/00-architecture-decisions.md).

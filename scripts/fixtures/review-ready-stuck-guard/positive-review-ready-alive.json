@@ -1,0 +1,37 @@
+{
+  "description": "AC1 positive: consistent snapshot review-ready on false stuck",
+  "nowMs": 1717503000000,
+  "session": {
+    "sessionId": "opk-worker-174",
+    "role": "worker",
+    "prNumber": 174,
+    "status": "stuck",
+    "runtime": "alive",
+    "ownedHeadSha": "deadbeef174",
+    "reports": [
+      {
+        "reportState": "ready_for_review",
+        "headRefOid": "deadbeef174",
+        "reportedAt": "2026-06-04T12:00:00Z"
+      }
+    ]
+  },
+  "openPr": { "number": 174, "headRefOid": "deadbeef174" },
+  "reviewRuns": [
+    {
+      "id": "run-clean-174",
+      "prNumber": 174,
+      "targetSha": "deadbeef174",
+      "status": "clean",
+      "findingCount": 0,
+      "linkedSessionId": "opk-worker-174"
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "expect": { "reviewReady": true, "actionType": "hold_grace" }
+}

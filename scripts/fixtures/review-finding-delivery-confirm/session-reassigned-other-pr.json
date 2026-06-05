@@ -1,0 +1,35 @@
+{
+  "description": "Linked session exists but owns a different PR — post-send report must not confirm",
+  "nowMs": 1717515000000,
+  "reviewRuns": [
+    {
+      "id": "run-reassign-pr188",
+      "prNumber": 188,
+      "targetSha": "reassigndead",
+      "status": "waiting_update",
+      "sentFindingCount": 2,
+      "openFindingCount": 0,
+      "linkedSessionId": "opk-reuse",
+      "sentAt": "2026-06-04T10:15:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-reuse",
+      "role": "worker",
+      "prNumber": 199,
+      "status": "addressing_reviews",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-04T11:45:00.000Z"
+        }
+      ]
+    }
+  ],
+  "openPrs": [{ "number": 199, "headRefOid": "reassigndead" }],
+  "tracking": { "runs": {} },
+  "config": {
+    "confirmationWindowMs": 300000
+  }
+}

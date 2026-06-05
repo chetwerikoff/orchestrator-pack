@@ -1,0 +1,13 @@
+{
+  "description": "Only outdated runs on current head — reconciliation starts one review",
+  "openPrs": [{ "number": 14, "headRefOid": "eee555" }],
+  "reviewRuns": [
+    {
+      "prNumber": 14,
+      "targetSha": "oldsha00",
+      "status": "outdated"
+    }
+  ],
+  "sessions": [{ "name": "op-14", "role": "worker", "prNumber": 14 }],
+  "expect": { "startReviewCount": 1, "sessionId": "op-14" }
+}

@@ -91,6 +91,7 @@ $allowedRootPatterns = @(
 $allowedPathPatterns = @(
     '.github/*',
     '.cursor/skills/*',
+    '.cursor/rules/*',
     '.claude/skills/*',
     'docs/*',
     'prompts/*',

@@ -1,0 +1,25 @@
+{
+  "description": "High churn with subscriberCount>1 — legitimate multi-viewer, must not flag",
+  "nowMs": 4000000,
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3952000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3952500, "data": { "subscriberCount": 3 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3953000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3953500, "data": { "subscriberCount": 2 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3954000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3954500, "data": { "subscriberCount": 4 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3955000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3955500, "data": { "subscriberCount": 2 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3956000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3956500, "data": { "subscriberCount": 3 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3957000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3957500, "data": { "subscriberCount": 2 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3958000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3958500, "data": { "subscriberCount": 3 } },
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 3959000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 3959500, "data": { "subscriberCount": 2 } }
+  ],
+  "expect": {
+    "flagged": false
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "name": "opk-worker",
+      "role": "worker",
+      "project": "orchestrator-pack"
+    }
+  ]
+}

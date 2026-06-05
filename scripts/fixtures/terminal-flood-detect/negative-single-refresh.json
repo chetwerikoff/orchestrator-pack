@@ -1,0 +1,11 @@
+{
+  "description": "One dashboard refresh — single connect/disconnect pair must not flag",
+  "nowMs": 2000000,
+  "events": [
+    { "kind": "ui.terminal_connected", "sessionId": "opk-worker", "tsEpoch": 1998000 },
+    { "kind": "ui.terminal_disconnected", "sessionId": "opk-worker", "tsEpoch": 1999000, "data": { "subscriberCount": 1 } }
+  ],
+  "expect": {
+    "flagged": false
+  }
+}

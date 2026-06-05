@@ -256,6 +256,21 @@ runs and the orchestrator went `stuck` — review never started.
    duplicate workers. `agent-orchestrator.yaml.example` again uses **report-driven**
    review trigger only until a safer reconciliation design ships (see Issue #98
    for post-respawn review hygiene, not auto-spawn).
+   **Re-specified, scoped — 2026-06-04 (Issue #163, file
+   `58-safe-review-trigger-reconciliation.md`)** after the PR #162 incident: a
+   worker reported `ready_for_review` with CI green, but `opk-orchestrator` was
+   `stuck`, so no second review run was triggered for the new head. Root cause:
+   the mechanical, idempotent review trigger was coupled to the fragile actors
+   it should not depend on (a worker report arriving, and the LLM-orchestrator
+   taking a healthy turn). The re-spec restores the state-derived trigger but
+   strips the unsafe behaviour that caused the rollback: it produces **only**
+   `ao review run` for an uncovered head and is **forbidden any
+   worker-lifecycle action** (no `ao spawn`, `--claim-pr`, `ao session kill`,
+   or worker ping). Severing all worker-lifecycle effects is what makes
+   re-introduction safe — the PR #97 split-brain came specifically from
+   claiming/spawning a worker, not from triggering a review. It composes with
+   the Issue #98 idempotency/stale-workspace preflight and stays low-frequency
+   per Decision 2.
 
 2. **The wake mechanism's strict no-polling invariant is relaxed for a
    low-frequency heartbeat.** Issue #39 (file
@@ -273,12 +288,49 @@ These compose: decision 2 guarantees the orchestrator gets turns even in event
 silence. ~~Decision 1 defined what it does on each such turn (reconcile open PRs
 against review-run coverage and trigger review). Neither was sufficient alone —
 without the heartbeat the reconciliation never ran in silence; without
-reconciliation the delivered turn had no state-derived trigger to act on.~~ With
-decision 1 rolled back, heartbeat turns rely on report-driven review triggers and
-other orchestratorRules discipline until reconciliation is re-specified. A
+reconciliation the delivered turn had no state-derived trigger to act on.~~ While
+decision 1 was rolled back, heartbeat turns relied on report-driven review triggers
+and other orchestratorRules discipline. With decision 1 re-specified (Issue #163),
+the review trigger no longer depends on the LLM-orchestrator taking a turn at all:
+the heartbeat remains the backstop for the orchestrator's *judgement* work, but
+review triggering converges from state on its own low-frequency cadence. A
 third, separate failure mode (the orchestrator alive but its Cursor PTY blocked
 on a command-approval prompt) is handled operationally in the recovery runbook,
 file `15-orchestrator-recovery-runbook.md`, not here.
+
+3. **Finding delivery is confirmed sender-side, not assumed from `sent_to_agent`.**
+   Decision taken 2026-06-04 after the PR #166 / opk-8 incident: a review run
+   produced a finding, AO marked it `sent_to_agent` at 08:25:36, but the worker
+   never transitioned to `addressing_reviews` — its terminal input channel was
+   flooded (a dashboard terminal-mux re-init storm), so the injected message never
+   started a turn, and the PR stalled "review sent, 0 open findings" with no fix.
+   Root cause: `sent_to_agent` records only that a best-effort message injection
+   was *attempted*, not that the worker received it. Decision: a pack-layer
+   mechanism confirms delivery from observable worker progress (an
+   `addressing_reviews`/equivalent report tied to the run, after the send), keyed
+   at **run / PR-head granularity** (`ao review list <project> --json`; AO 0.9.2
+   has no supported per-finding identity — consistent with the #140 Gate-0
+   finding). On no confirmation within a bounded window it attempts bounded
+   **best-effort** re-delivery to the linked session **only if that session is
+   still live and owns the head** (else straight to escalation — never re-send into
+   an orphan, the #98 class), performing **no** worker-lifecycle action (no
+   `ao spawn`/`--claim-pr`/kill — the PR #97 split-brain invariant). **Escalation,
+   not re-delivery, is the guarantee:** under the named corrupted-channel class,
+   re-delivery through the same channel can deterministically fail, so the contract
+   guarantees only that an unconfirmed delivery is detected and escalated, never
+   silently dropped. This is a **separate** mechanism from Decision 1's
+   review-run-only reconciler (whose zero-worker-contact invariant forbids the
+   re-delivery this performs) and from Decision 2's wake supervision (a delivered
+   turn is not a delivered finding). Restoring the channel itself (the DA-flood) is
+   an upstream AO/dashboard concern, now filed as
+   **ComposioHQ/agent-orchestrator#2094** and tracked pack-side by **Issue #173**
+   (`62-terminal-flood-resilience.md`, detection + operator recovery,
+   active-blocked-upstream); **Issue #174** (`63-review-ready-worker-stuck-guard.md`)
+   keeps the flood-induced false `stuck` from costing a review-ready worker a
+   respawn/kill. The 2026-06-04 recurrence on opk-10/PR #169 (finding from run
+   `c134e976` injected as an unsubmitted paste, never picked up) confirmed both the
+   flood and the delivery-loss class. (Issue #171, file
+   `61-review-finding-delivery-confirmation.md`.)
 
 ## I. Worker prompt-delivery launch failure on Windows
 
@@ -537,6 +589,79 @@ B (`prior_sent` at routing point) is also missing. Same class as §J / draft 38 
 - **Backlog sink candidate:** [#1494](https://github.com/ComposioHQ/agent-orchestrator/issues/1494).
 
 Record Gate 0 + two-track table in [`docs/architecture.md`](../architecture.md#finding-routing-enactment--gate-0-ao-092-2026-06-02).
+
+## S. Delegation policy fan-out (single source, thin pointers)
+
+Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only in
+`prompts/agent_rules.md`. Without fan-out, Codex, standalone Cursor CLI, and Claude Code
+(architect) never see rules that AO injects only via `agentRulesFile`.
+
+1. **Single canonical body.** Triggers, profiles, anti-delegation, reviewer carve-out, and
+   provider-input fence are authored and maintained only in `prompts/agent_rules.md` (#148).
+   No second authoritative copy in pointer surfaces.
+
+2. **One thin pointer per entrypoint** (names the canonical path; does not paste ≥10 consecutive
+   policy lines):
+   - AO workers — `agentRulesFile` → `prompts/agent_rules.md` (injection, not a separate file).
+   - Codex — [`AGENTS.md`](../../AGENTS.md) coworker delegation section.
+   - Standalone Cursor CLI — always-applied [`.cursor/rules/`](../../.cursor/rules/) rule.
+   - Architect (Claude Code) — [`CLAUDE.md`](../../CLAUDE.md) coworker delegation section.
+
+3. **Advisory enforcement of a mandatory obligation.** Amended 2026-06-04 (#148 rewrite): read
+   delegation is a **mandatory floor** — when an ask trigger fires, the corpus is fence-clean, and the
+   work is not an excepted reasoning step, the worker **MUST** delegate the read rather than inline it
+   on the reasoning model ("delegate I/O, keep reasoning" is the law, not an option). The MUST is a
+   **prompt-level obligation**: enforcement stays advisory — the backstops are the worker's
+   visible-delegation-outcome status, reviewer judgment, and operator observation. No
+   `beforeShellExecution` or Claude Code hook mandates coworker use. "Mandatory" raises the default
+   from *may* to *must*; it does not claim machine enforcement.
+
+4. **Fence gates on sensitivity, not file origin.** Amended 2026-06-04 (#148 rewrite): the
+   provider-input fence no longer restricts to *repo-originating* material. The two hard prohibitions,
+   **regardless of origin**, are (a) secrets/credentials and (b) personal or third-party private data
+   (unless the issue authorizes). Subject to those, this system's own out-of-tree operational evidence
+   (runtime logs, process/tmux output, AO activity-DB query results) **is** sendable after the worker
+   scrubs both classes and sends the minimal excerpt. **Rationale:** the prior origin fence blocked the
+   highest-value cheap reads (bulk runtime logs during investigation), pushing heavy corpora onto the
+   reasoning model — the exact waste the policy exists to prevent. **Residual risk:** widening the
+   sendable surface to local operational data increases what can reach the third-party provider; it is
+   mitigated by the two-class prohibition, the minimal-excerpt rule, "when in doubt treat as
+   prohibited", and the visible-outcome backstop — not by a hard gate. Accepted as the cheaper-sufficient
+   trade-off; revisit if a leak of non-secret-but-sensitive data is observed.
+
+See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149) and
+`docs/issues_drafts/52-coworker-cli-delegation-policy.md` (GitHub #148).
+
+## R. Coworker RTK: passthrough-first adoption on worker hosts (Issue #145)
+
+Decision taken 2026-06-04: optional [coworker RTK](https://github.com/Arcanada-one/coworker/blob/main/docs/rtk-plugin.md)
+on AO **Cursor worker** hosts is **opt-in**, **passthrough-first**, and **host-global**.
+
+1. **Worker-host scope.** Initial adoption targets machines running `defaults.worker.agent: cursor`.
+   Orchestrator-only RTK enablement is deferred unless worker observation shows net benefit and the
+   operator opts in separately.
+
+2. **Host-global hook.** `coworker rtk enable` manages `~/.cursor/hooks.json` for **all**
+   cursor-agent sessions on that host (orchestrator, workers, ad-hoc CLI). Per-session RTK
+   toggling is not supported upstream; document the limitation, do not invent per-worker slicing.
+
+3. **Additive passthrough.** Pack ships a tracked helper and manifest that apply **five pattern
+   families** on top of coworker's 13 upstream defaults (`git diff`, `git log`, `gh pr checks`,
+   `ao ` subcommands, `ao-declare` + `npx ao-declare`). The helper MUST NOT add or restore
+   upstream entries; operator coworker version owns upstream defaults.
+
+4. **Passthrough-first enable.** Operator sequence: `coworker rtk install` → apply pack helper →
+   verify `coworker rtk passthrough list` (pack families) → `coworker rtk enable` → hook smoke.
+   CI covers static manifest + merge preview only; effective hook smoke is operator acceptance.
+
+5. **Adoption observation (not harness).** After enable, a **7-day** qualitative comparison on
+   Codex findings, CI failures, and iteration churn (`continue` | `extend` | `disable`). Not
+   shell-output proxy measurement; does not block worker PR merge.
+
+6. **Disable rollback.** Primary rollback: `coworker rtk disable` — no routine manual
+   `hooks.json` surgery.
+
+See [`docs/coworker-rtk-runbook.md`](../coworker-rtk-runbook.md).
 
 ## Acceptance for this issue
 

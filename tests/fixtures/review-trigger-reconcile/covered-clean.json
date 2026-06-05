@@ -1,0 +1,13 @@
+{
+  "description": "Clean run on current head blocks a new run",
+  "openPrs": [{ "number": 11, "headRefOid": "bbb222" }],
+  "reviewRuns": [
+    {
+      "prNumber": 11,
+      "targetSha": "bbb222",
+      "status": "clean",
+      "findingCount": 0
+    }
+  ],
+  "sessions": [{ "name": "op-11", "role": "worker", "prNumber": 11 }]
+}

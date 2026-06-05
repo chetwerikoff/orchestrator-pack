@@ -597,6 +597,25 @@ runtime target (decision §P).
 See also [`README.md`](../README.md) (Linux baseline) and decision §P in
 [`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
 
+### Coworker RTK on AO Cursor workers (Issue #145)
+
+Optional RTK compaction for worker shells is **opt-in** and **host-global** (`~/.cursor/hooks.json`
+affects orchestrator and workers on the same machine). No tracked yaml change is required.
+
+**Operator adoption** — after merge (full steps in
+[`docs/coworker-rtk-runbook.md`](coworker-rtk-runbook.md)):
+
+1. Record a pre-enable baseline (recent worker PRs: Codex findings, CI, iteration churn).
+2. Install coworker; `coworker rtk install` only — do not enable yet.
+3. `pwsh -NoProfile -File scripts/apply-coworker-rtk-passthrough.ps1` — verify all pack
+   patterns in `coworker rtk passthrough list` (log upstream-default drift if any).
+4. `coworker rtk enable` → hook smoke from the runbook.
+5. Run the **7-day** qualitative observation window; conclude `continue` | `extend` | `disable`.
+6. Rollback: `coworker rtk disable` — do not hand-edit `hooks.json` for routine disable.
+
+Architecture: decision §R in
+[`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
+
 ## Operator adoption contract
 
 Merged worker PRs often change `agent-orchestrator.yaml.example` and docs while
@@ -635,8 +654,110 @@ Minimum live YAML fixes not in older copies:
    `agent-orchestrator.yaml.example`.
 2. Set `reactions.approved-and-green.priority: action` (otherwise mergeable events
    never hit the webhook listener).
-3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-listener.ps1` and
-   `scripts/orchestrator-wake-heartbeat.ps1` alongside (separate terminals).
+3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+   (preferred — Issue #168) or the manual listener + heartbeat pair in separate
+   terminals, and `scripts/review-trigger-reconcile.ps1` in another terminal.
+
+## Orchestrator wake supervisor (Issue #168)
+
+After merge, replace the two-terminal wake startup with the supervisor:
+
+1. Stop any manual `orchestrator-wake-listener.ps1` / `orchestrator-wake-heartbeat.ps1`
+   processes (Ctrl+C or close those terminals).
+2. From the pack root, with `ao start orchestrator-pack` running:
+   `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Confirm: `... orchestrator-wake-supervisor.ps1 -Action Status` shows listener and
+   heartbeat running.
+4. Optional: set `AO_ORCHESTRATOR_SESSION_ID` before Start to pin the session id;
+   otherwise the supervisor resolves from `ao status` and re-targets on change.
+
+State, PID files, and per-child logs live under
+`%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
+`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`). Stop with `-Action Stop`.
+
+Manual two-script startup remains documented as fallback in
+`docs/orchestrator-wake-runbook.md`.
+
+## State-derived review-trigger reconciliation (Issue #163)
+
+Adds `scripts/review-trigger-reconcile.ps1`: observes open PR heads via `gh`,
+coverage via `ao review list --json`, and starts `ao review run` for uncovered heads
+when a worker session is already linked. **Never** `ao spawn`, `--claim-pr`,
+`ao session kill`, or `ao send` from this process.
+
+To adopt after merge:
+
+1. Merge the **STATE-DERIVED REVIEW TRIGGER** block from
+   `agent-orchestrator.yaml.example` into live `orchestratorRules` (documentation
+   for operators; the process is the script, not a YAML scheduler).
+2. Start reconciliation in a dedicated terminal (default **20**-minute interval):
+   `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1`
+3. Optional env: `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`,
+   `AO_REVIEW_TRIGGER_RECONCILE_STATE`.
+4. Verify: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`
+   then confirm `ao review list --json` shows a run for an uncovered PR head.
+
+See `docs/orchestrator-autoloop-go-live.md` and
+`docs/orchestrator-recovery-runbook.md` (State-derived review trigger).
+
+## Review-finding delivery confirmation (Issue #171)
+
+Adds `scripts/review-finding-delivery-confirm.ps1`: observes `waiting_update` runs with
+`sentFindingCount > 0` from `ao review list --json`, confirms receipt only when the linked
+worker reports `addressing_reviews` (or `fixing_ci` / `ready_for_review`) after send,
+then bounded `ao review send` re-delivery or escalation. **Never** `ao spawn`,
+`--claim-pr`, `ao session kill`, or `ao send`.
+
+To adopt after merge:
+
+1. Start in a dedicated terminal (default **5**-minute tick and confirmation window):
+   `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1`
+2. Optional env: `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES`,
+   `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES`,
+   `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` (default **2**),
+   `AO_REVIEW_DELIVERY_CONFIRM_STATE`.
+3. Verify: `pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun`
+
+See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
+
+## Review-ready worker stuck guard (Issue #174)
+
+Adds `docs/review-ready-stuck-guard.mjs`: classifies a **consistent snapshot** when a
+live worker flagged `stuck` / `probe_failure` is actually review-ready (owns current PR
+head, CI green, `ready_for_review` for that head, **clean** review run — not
+`waiting_update`). Plans **hold_grace** (default **15** minutes, monotonic per
+session+head) or **recycle_escalate** when affirmative unreachability evidence exists;
+forbids blind `ao spawn` / `--claim-pr` on the guard path.
+
+To adopt after merge:
+
+1. Merge the **REVIEW-READY WORKER STUCK GUARD** block from
+   `agent-orchestrator.yaml.example` into live `orchestratorRules`.
+2. Restart AO so rules reload: `ao stop` then `ao start`.
+3. Optional env: `AO_REVIEW_READY_STUCK_GRACE_MINUTES` (default **15**).
+4. Verify fixtures: `npx vitest run scripts/review-ready-stuck-guard.test.ts`.
+
+See `docs/orchestrator-recovery-runbook.md` (Review-ready worker false stuck).
+
+## Terminal Device-Attributes flood detection (Issue #173)
+
+Adds read-only `scripts/terminal-flood-detect.ps1` and `docs/terminal-flood-detect.mjs`:
+flags session-local sustained `ui.terminal_connected` / `ui.terminal_disconnected` pairs
+from `ao events` (signature `terminal_mux_paired_flap`). **Does not** fix the flood —
+upstream reset/throttle is
+[ComposioHQ/agent-orchestrator#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)
+(`active-blocked-upstream`).
+
+To adopt after merge:
+
+1. When a worker shows flood symptoms (CPU pegged, unsubmitted paste, stalled review),
+   run:
+   `pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>`
+2. Optional env: `AO_TERMINAL_FLOOD_WINDOW_SECONDS` (default **60**),
+   `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` (default **6**).
+3. Follow `docs/orchestrator-recovery-runbook.md` (Terminal Device-Attributes flood):
+   stop the dashboard terminal view → verify signature subsided → re-deliver via Issue #171
+   run evidence when quiet.
 
 ## Orchestrator wake listener (webhook + local HTTP)
 
@@ -652,11 +773,10 @@ To adopt on an existing live `agent-orchestrator.yaml`:
    your other notifier channels).
 3. Set `AO_ORCHESTRATOR_SESSION_ID` to your orchestrator session id (from
    `ao status`) or pass `-OrchestratorSessionId` when starting the listener.
-4. In a separate terminal from the AO daemon, start the listener before or with
-   `ao start`:
-   `pwsh -File scripts/orchestrator-wake-listener.ps1`
-5. In another terminal, start the heartbeat backstop (issue #59; default 15-minute
-   interval, independent of webhook POSTs):
+4. Prefer the supervisor (Issue #168):
+   `pwsh -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+   **Manual fallback:** start the listener and heartbeat in separate terminals:
+   `pwsh -File scripts/orchestrator-wake-listener.ps1` and
    `pwsh -File scripts/orchestrator-wake-heartbeat.ps1`
 6. Verify reachability:
    `Test-NetConnection -ComputerName 127.0.0.1 -Port 17487`

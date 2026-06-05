@@ -433,11 +433,251 @@ Expected behavior:
   (terminal; no ping or respawn for review on that PR).
 - Workers in **`addressing_reviews`** / **`fixing_ci`** should be left alone
   unless the loop rules say otherwise.
-- Wake listener (if used) is separate — restart it if you run
-  `scripts/orchestrator-wake-listener.ps1`; see `docs/orchestrator-wake-runbook.md`.
+- Wake processes (if used): prefer `scripts/orchestrator-wake-supervisor.ps1 -Action Stop`
+  then `-Action Start` after recovery; manual fallback is separate listener/heartbeat
+  scripts — see `docs/orchestrator-wake-runbook.md`.
 
 Nothing in this runbook auto-merges PRs or kills workers; that stays in
 `orchestratorRules`.
+
+## State-derived review trigger (Issue #163)
+
+When an open PR head has **no** `ao review list` coverage (no in-flight, clean,
+`needs_triage`, or `waiting_update` run for that SHA) and the worker never reported
+`pr_created` / `ready_for_review` — or the LLM orchestrator is `stuck` and not
+taking turns — start the low-frequency reconcile process (review-run **only**; it
+never spawns, claims, kills, or pings workers):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1
+```
+
+Verify wiring without starting a review:
+
+```powershell
+pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+Confirm a run appears after an uncovered head exists:
+
+```powershell
+ao review list orchestrator-pack --json
+```
+
+Default cadence is **10 minutes** (`AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES`
+overrides). PRs without a linked worker session in `ao status --json --reports full`
+are skipped until respawn discipline creates one — the reconcile process must not
+call `ao spawn --claim-pr` (PR #97 split-brain guard).
+
+## Review finding delivery unconfirmed (Issue #171)
+
+`sent_to_agent` / `waiting_update` with `sentFindingCount > 0` means AO **attempted**
+to inject findings — not that the worker received them or reported
+`addressing_reviews`. When the worker input channel is flooded or stuck, findings can
+strand silently ("review sent, 0 open findings") while CI stays green.
+
+Run the sender-side delivery-confirmation loop (mechanical; no LLM-orchestrator turn
+required):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1
+```
+
+Dry-run one tick (no `ao review send`, no state write):
+
+```powershell
+pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun
+```
+
+### Defaults and env overrides
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Tick interval | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` |
+| Confirmation window (wait before re-deliver) | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` |
+| Max best-effort re-deliveries per run | **2** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` |
+| Persisted delivery state file | `%TEMP%\orchestrator-review-delivery-confirm-state.json` | `AO_REVIEW_DELIVERY_CONFIRM_STATE` |
+
+Confirmation is credited only when the **linked** worker reports
+`addressing_reviews`, `fixing_ci`, or `ready_for_review` **after** the send timestamp
+— not from `sent_to_agent` alone and not from unrelated `working` activity. When two
+or more unconfirmed runs share the same PR head and session, a single review-round
+report does **not** confirm either run (ambiguous overlap stays unconfirmed).
+
+Re-delivery uses `ao review send <run-id>` to the **existing** linked session when it
+is still live and owns the PR. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
+or `ao send`. If the linked session is dead/orphan, the loop **escalates immediately**
+(zero re-sends).
+
+### Escalation message and operator remedy
+
+When confirmation never arrives and re-deliveries are exhausted (or the linked session
+is orphan), the process logs:
+
+```text
+[review-finding-delivery-confirm] ESCALATION: unconfirmed delivery for review run <run-id> (PR #<n>, session <session-id>). Operator remedy: ...
+```
+
+**Operator remedy:**
+
+1. Open the worker session terminal — look for a flooded mux, stuck approval prompt, or
+   unsubmitted paste (see **Terminal Device-Attributes flood** below).
+2. Confirm `ao status --json --reports full`: linked session must be **live** and still
+   on the PR. If `terminated` / `killed` / long `detecting`, do **not** `ao review send`
+   into the orphan run — follow **Orphan review run after worker respawn** below.
+3. After a live session owns the PR: `ao review send <run-id>` manually once, or start a
+   fresh review round (`ao review run` on the live session) per orphan recovery steps.
+4. Inspect persisted state (`AO_REVIEW_DELIVERY_CONFIRM_STATE`) — runs are
+   `confirmed` vs `escalated`; escalated runs are not retried forever.
+
+Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
+runs and never contacts workers.
+
+## Review-ready worker false stuck (Issue #174)
+
+A **live** worker that finished its task (`ready_for_review`, green required CI, clean
+review run on the current head) can be misclassified `stuck` / `probe_failure` when the
+dashboard terminal is DA-flooded (Issue #173) — the activity probe reads idle input as no
+progress. Pack orchestration must **not** reflexively `ao spawn`, `--claim-pr`, kill, or
+respawn that session without a consistent-snapshot check.
+
+### Consistent snapshot (classification)
+
+From `ao status --json --reports full`, `gh pr view` (current head), `gh pr checks`, and
+`ao review list --json` (no pane scraping), a session is **review-ready** only when **all**
+hold on the **same** head:
+
+| Predicate | Source |
+|-----------|--------|
+| Session owns PR current head | `ownedHeadSha` / PR head match |
+| Runtime alive | `runtime: alive` (not `exited` / `process_missing`) |
+| Required merge-contract CI green | Same definition as `ready_for_review` in `agent_rules.md` |
+| Last `ready_for_review` for that head | Report `headRefOid` matches current head |
+| Covering **clean** run | `status: clean`, `findingCount: 0`, same head + `linkedSessionId` |
+
+**Not protected:** `waiting_update` (mid-fix — Issue #171), red/pending CI, stale
+`ready_for_review` on a prior head, dead runtime, or missing clean run.
+
+Deterministic helper (fixtures + stdin JSON):
+
+```powershell
+node docs/review-ready-stuck-guard.mjs classify < snapshot.json
+node docs/review-ready-stuck-guard.mjs plan < snapshot.json
+```
+
+Fixture examples: `scripts/fixtures/review-ready-stuck-guard/`.
+
+### Bounded grace, then evidence-backed recovery
+
+When classified review-ready on false stuck:
+
+1. **Hold** — do **not** immediately kill, respawn, or `ao spawn --claim-pr`.
+2. **Grace** — default **15** minutes (`AO_REVIEW_READY_STUCK_GRACE_MINUTES`), anchored
+   once per `(session, PR head)` on the **first** false stuck; **monotonic** (repeated
+   `stuck` reports do not extend grace).
+3. **Within grace**, recovery requires **affirmative** unreachability only:
+   - failed bounded reachability attempt to the session;
+   - Issue #171 delivery **unconfirmed** or **escalated** for the linked run;
+   - Issue #173 `terminal_mux_paired_flap` still flagged after stop-verify.
+4. **Not evidence:** mere silence (no outbound report) — a quiet review-ready worker may
+   have nothing to report until grace expires.
+5. **When evidence exists** — prefer careful **recycle** (`ao session kill` + operator
+   escalation/notify), **not** blind `ao spawn --claim-pr` (PR #97 split-brain).
+6. **After grace** without affirmative unreachable evidence — normal stuck handling may
+   resume.
+
+Genuine death (`runtime` not alive) is **not** shielded — orphan/respawn discipline
+(Issue #98) still applies.
+
+### Operator adoption
+
+Merge the **REVIEW-READY WORKER STUCK GUARD** block from `agent-orchestrator.yaml.example`
+into live `orchestratorRules`, then:
+
+```powershell
+ao stop
+ao start
+```
+
+See `docs/migration_notes.md` (Review-ready worker stuck guard).
+
+## Terminal Device-Attributes flood (Issue #173)
+
+**Queue status:** `active-blocked-upstream` — the durable fix (terminal reset/sanitize on
+mux-attach + reconnect-loop throttle) is tracked at
+[ComposioHQ/agent-orchestrator#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094).
+The pack does **not** patch AO core; this section is operator mitigation only.
+
+### Symptoms
+
+Recognise the flood before re-sending findings:
+
+- Worker session is otherwise idle but **CPU stays high** (dashboard terminal re-rendering).
+- `ao events list` shows sustained **`ui.terminal_connected` / `ui.terminal_disconnected`**
+  cycling for the affected session (pack signature `terminal_mux_paired_flap`).
+- Injected `ao send` / `ao review send` text appears in the worker pane as an **unsubmitted**
+  `[Pasted text]` block — the agent never starts a turn.
+- Review loop stalls with green CI and **0 open findings** while delivery confirmation
+  (Issue #171) may show **unconfirmed** / **escalated** runs.
+
+Read-only diagnostic (safe defaults: **60**-second window, **6** paired connect/disconnect
+cycles minimum, **30**-second minimum span):
+
+```powershell
+cd <orchestrator-pack-root>
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>
+```
+
+Fixture mode (no live `ao`):
+
+```powershell
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -FixturePath scripts/fixtures/terminal-flood-detect/positive-sustained-paired-flap.json
+```
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Detection window | **60** seconds | `AO_TERMINAL_FLOOD_WINDOW_SECONDS` |
+| Minimum paired mux cycles | **6** | `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` |
+| Events fetch lookback | **5** minutes (`-SinceMinutes`) | — |
+
+Exit code **2** means the signature fired for the requested session. The detector uses
+**only** `ao events` JSON — it does **not** scrape tmux panes for `ESC[` sequences.
+
+### Stop the reconnect loop
+
+On the **dashboard client** (mux side), close the terminal view that is driving the
+reconnect loop — typically the flooded worker session tab/panel. Do **not** kill the
+worker session yet; stopping the flapping client is the first step.
+
+### Post-stop verification
+
+Re-run the diagnostic for that session and confirm the signature has **subsided** below
+threshold (no `terminal_mux_paired_flap` flag):
+
+```powershell
+pwsh -NoProfile -File scripts/terminal-flood-detect.ps1 -SessionId <worker-session-id>
+```
+
+If churn **does not drop** within a few minutes (wrong tab closed, stale browser tab, or
+external reconnect source), **recycle the session** (`ao session kill <id>` and respawn
+per your normal worker discipline, or operator recycle policy) before attempting delivery
+again.
+
+### Re-deliver after verified quiet
+
+Only **after** the channel is verified quiet:
+
+1. Prefer Issue **#171** evidence — use the **unconfirmed** or **escalated** review run id
+   from `scripts/review-finding-delivery-confirm.ps1` logs or
+   `AO_REVIEW_DELIVERY_CONFIRM_STATE`, not a blind resend.
+2. Confirm the linked worker is **live** and owns the PR head (`ao status --json --reports full`).
+3. `ao review send <run-id>` once to the live session, or start a fresh review round if the
+   run is orphan (see **Orphan review run after worker respawn** above).
+
+Do not re-deliver while the mux signature is still flagged — duplicates and silent loss
+are both possible.
 
 ## Orphan review run after worker respawn
 
