@@ -30,6 +30,17 @@ if ($mjs -notmatch 'DEFAULT_MAX_REDELIVERIES = 2') {
     exit 1
 }
 
+$dmtPath = Join-Path $Root 'docs/review-finding-delivery-confirm.d.mts'
+if (-not (Test-Path -LiteralPath $dmtPath -PathType Leaf)) {
+    Write-Host 'Missing docs/review-finding-delivery-confirm.d.mts'
+    exit 1
+}
+$dmt = Get-Content -LiteralPath $dmtPath -Raw
+if ($dmt -match "type: 'submit'|maxSubmits") {
+    Write-Host 'docs/review-finding-delivery-confirm.d.mts must not advertise submit rung (Issue #232 owns submit)'
+    exit 1
+}
+
 $submitMjs = Join-Path $Root 'docs/worker-input-draft-submit.mjs'
 if (-not (Test-Path -LiteralPath $submitMjs -PathType Leaf)) {
     Write-Host 'Missing docs/worker-input-draft-submit.mjs (Issue #216)'

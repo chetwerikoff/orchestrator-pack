@@ -74,17 +74,6 @@ export interface WaitAction {
   remainingMs: number;
 }
 
-export interface SubmitAction {
-  type: 'submit';
-  runId: string;
-  sessionId: string;
-  prNumber: number;
-  headSha: string;
-  attempt: number;
-  maxSubmits: number;
-  decisionKey: string;
-}
-
 export interface DeferAction {
   type: 'defer';
   runId: string;
@@ -98,7 +87,6 @@ export type DeliveryConfirmAction =
   | RedeliverAction
   | EscalateAction
   | WaitAction
-  | SubmitAction
   | DeferAction;
 
 export declare function getReviewRunId(run: ReviewRun): string | null;
@@ -148,15 +136,14 @@ export declare function getConfirmationAnchorMs(
 export declare function resolveDeliveryConfig(config?: {
   confirmationWindowMs?: number;
   maxRedeliveries?: number;
-  maxSubmits?: number;
-}): { confirmationWindowMs: number; maxRedeliveries: number; maxSubmits: number };
+}): { confirmationWindowMs: number; maxRedeliveries: number };
 export declare function planDeliveryConfirmActions(input: {
   reviewRuns: ReviewRun[];
   sessions: AoSession[];
   openPrs?: OpenPr[];
   tracking: DeliveryTrackingState;
   nowMs: number;
-  config?: { confirmationWindowMs?: number; maxRedeliveries?: number; maxSubmits?: number };
+  config?: { confirmationWindowMs?: number; maxRedeliveries?: number };
   aoEvents?: Array<Record<string, unknown>>;
   floodActiveSessions?: Record<string, boolean>;
 }): { actions: DeliveryConfirmAction[]; tracking: DeliveryTrackingState };

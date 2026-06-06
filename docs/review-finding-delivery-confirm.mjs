@@ -292,7 +292,6 @@ export function getConfirmationAnchorMs(record, sendObservedAtMs) {
  * @param {object} config
  * @param {number} [config.confirmationWindowMs]
  * @param {number} [config.maxRedeliveries]
- * @param {number} [config.maxSubmits]
  */
 export function resolveDeliveryConfig(config = {}) {
   return {
