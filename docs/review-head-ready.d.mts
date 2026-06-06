@@ -78,4 +78,69 @@ export declare function hasStaleReadyForReviewOnOlderHead(
   currentHeadSha: string,
 ): boolean;
 
+export declare const NOT_READY_COMPONENT_PRECEDENCE: readonly string[];
+
+export declare function choosePrimaryNotReadyComponent(components: string[]): string;
+
+export declare function resolveReportRoute(
+  report: WorkerReport | Record<string, unknown> | null | undefined,
+): string;
+
+export declare function findLatestStaleReadyForReviewReport(
+  session: AoSession,
+  currentHeadSha: string,
+): Record<string, unknown> | null;
+
+export declare function collectFailedNotReadyComponents(input: {
+  session: AoSession | null;
+  headSha: string;
+  ciChecks?: CiCheck[];
+  requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
+  reviewRuns?: ReviewRun[];
+  prNumber: number;
+}): string[];
+
+export declare function buildReportCiObserved(input: {
+  prNumber: number;
+  headSha: string;
+  session?: AoSession | null;
+  ciChecks?: CiCheck[];
+  requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
+}): Record<string, unknown>;
+
+export declare function buildCoveredSkipObserved(
+  run: ReviewRun | null,
+  prNumber: number,
+  headSha: string,
+): Record<string, unknown>;
+
+export declare function buildFailedCancelledObserved(
+  run: ReviewRun | null,
+  prNumber: number,
+  headSha: string,
+): Record<string, unknown>;
+
+export interface NoStartDecisionRecord {
+  branch: string;
+  reason: string;
+  primary: string;
+  failedComponents: string[];
+  observed: Record<string, unknown>;
+}
+
+export declare function buildNoStartDecisionRecord(input: {
+  reason: string;
+  prNumber: number;
+  headSha: string;
+  reviewRuns: ReviewRun[];
+  session?: AoSession | null;
+  ciChecks?: CiCheck[];
+  requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
+}): NoStartDecisionRecord;
+
+export declare function formatDecisionRecordForLog(record: NoStartDecisionRecord): string;
+
 export { hasFailedOrCancelledOnHead } from './review-trigger-reconcile.d.mts';

@@ -1,0 +1,40 @@
+{
+  "issue_number": 212,
+  "iteration_id": "opk-16",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T02:49:10.803Z",
+  "baseline": {
+    "commit_sha": "3fbd9328c8e8c0e8f0e8e8e8e8e8e8e8e8e8e8e8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1b01d6699050dd50ceba1f81f0c8fc057af6fc31cd0e25ec763c6fff9ea91605"
+  },
+  "declared_paths": [
+    "docs/declarations/212.opk-16.json",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
+    "docs/review-head-ready.mjs",
+    "docs/review-head-ready.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/migration_notes.md"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-trigger-reconcile/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:caf0e05310b9a8c31f06b84816674b01c47948cda7fd2f21d8a60d07dcddf336",
+      "new_active_scope_hash": "sha256:1b01d6699050dd50ceba1f81f0c8fc057af6fc31cd0e25ec763c6fff9ea91605",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Remove deleted test file from declared paths",
+      "actor": "opk-16",
+      "timestamp": "2026-06-06T02:53:09.708Z",
+      "applied": true
+    }
+  ]
+}

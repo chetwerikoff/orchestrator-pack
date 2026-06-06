@@ -833,6 +833,24 @@ To adopt after merge:
 
 See `docs/orchestrator-autoloop-go-live.md` and `docs/review-head-ready.mjs`.
 
+## Reconcile defer subreason and liveness (Issue #212)
+
+Issue #212 makes `review-trigger-reconcile.ps1` defer decisions self-explaining: each
+`skip` log line carries a structured `record=` with `primary`, `failedComponents`, and
+`observed` snapshot values. Ready heads converge on the reconciler's own tick — no
+cached same-head defer.
+
+**No config change required.** No new YAML block; restart the reconcile loop only if
+it is already running as a standalone process so it loads the updated script.
+
+To adopt after merge:
+
+1. Pull updated `scripts/review-trigger-reconcile.ps1` and `docs/review-head-ready.mjs`.
+2. If `review-trigger-reconcile.ps1` runs standalone, restart that process (supervisor
+   restart also suffices when Issue #168/#205 wiring is active).
+3. When a PR is stuck without review, read `primary` and `observed` from the reconcile
+   log per `docs/orchestrator-recovery-runbook.md` (Diagnosing a deferred PR).
+
 ## Review-finding delivery confirmation (Issue #171)
 
 Adds `scripts/review-finding-delivery-confirm.ps1`: observes `waiting_update` runs with

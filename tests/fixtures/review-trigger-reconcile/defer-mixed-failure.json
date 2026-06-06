@@ -1,0 +1,24 @@
+{
+  "description": "No ready_for_review and missing required CI — all failed components recorded",
+  "openPrs": [{ "number": 70, "headRefOid": "mixed70" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-70",
+      "role": "worker",
+      "prNumber": 70,
+      "status": "working"
+    }
+  ],
+  "ciChecksByPr": {
+    "70": []
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready",
+    "record": {
+      "primary": "no_ready_for_review",
+      "failedComponents": ["no_ready_for_review", "ci_not_yet_observed"]
+    }
+  }
+}

@@ -34,12 +34,17 @@ export interface OpenPr {
 }
 
 export interface ReviewRun {
+  id?: string;
+  runId?: string;
   prNumber?: number;
   targetSha?: string;
   status?: string;
   findingCount?: number;
   openFindingCount?: number;
   sentFindingCount?: number;
+  terminationReason?: string;
+  retryEligible?: boolean;
+  retryCount?: number;
 }
 
 export interface WorkerReport {
@@ -83,11 +88,20 @@ export interface StartReviewAction {
   sessionId: string;
 }
 
+export interface NoStartDecisionRecord {
+  branch: string;
+  reason: string;
+  primary: string;
+  failedComponents: string[];
+  observed: Record<string, unknown>;
+}
+
 export interface SkipReconcileAction {
   type: 'skip';
   prNumber: number;
   headSha: string;
   reason: string;
+  record?: NoStartDecisionRecord;
 }
 
 export interface TrackDegradedCiAction {
@@ -171,6 +185,22 @@ export declare function hasFailedOrCancelledOnHead(
   prNumber: number,
   headSha: string,
 ): boolean;
+
+export declare function findFailedOrCancelledRunForHead(
+  runs: ReviewRun[],
+  prNumber: number,
+  headSha: string,
+): ReviewRun | null;
+
+export declare function findCoveringRunForHead(
+  runs: ReviewRun[],
+  prNumber: number,
+  headSha: string,
+): ReviewRun | null;
+
+export declare function formatDecisionRecordForLog(
+  record: NoStartDecisionRecord,
+): string;
 
 export declare function resolveWorkerSessionId(
   sessions: AoSession[],
