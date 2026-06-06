@@ -144,6 +144,25 @@ describe('runExternalOutputShapeGuard', () => {
   });
 });
 
+describe('reference captures', () => {
+  it('accepts scrubbed worker-report captures including source', () => {
+    const capture = JSON.parse(
+      readFileSync(
+        path.join(referencesRoot, 'captures/ao-worker-report/ready_for_review.raw.json'),
+        'utf8',
+      ),
+    );
+    const variant = getVariant('ao-worker-report/ready_for_review');
+    const errors = validateObjectShape(
+      capture,
+      variant,
+      'ready_for_review.raw.json',
+      '$',
+    );
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('validateExternalObject', () => {
   it('resolves gh-pr-open variant and allows headRefOid on PR rows', () => {
     const errors = validateExternalObject(

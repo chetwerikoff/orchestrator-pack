@@ -8,8 +8,8 @@
     "pr_head_sha",
     "before",
     "after",
-    "actor",
-    "source"
+    "actor"
   ],
+  "sharedAllowedFields": ["source"],
   "fixtureConventionFields": ["reportedAt", "accepted", "prNumber"]
 }

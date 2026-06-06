@@ -13,7 +13,8 @@
     "prUrl",
     "note",
     "reportedAt",
-    "timestamp"
+    "timestamp",
+    "source"
   ],
   "forbiddenTogether": []
 }

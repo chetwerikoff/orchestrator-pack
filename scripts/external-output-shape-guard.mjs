@@ -21,8 +21,9 @@ const WORKER_REPORT_SHARED_FORBIDDEN = [
   'before',
   'after',
   'actor',
-  'source',
 ];
+
+const WORKER_REPORT_SHARED_ALLOWED = ['source'];
 
 const DYNAMIC_MAP_KEY_SUFFIXES = ['ByPr', 'BySession', 'ByRun'];
 
@@ -73,6 +74,9 @@ function resolveVariant(raw, dir) {
   if (merged.id?.startsWith('ao-worker-report/')) {
     merged.forbiddenFields = [
       ...new Set([...WORKER_REPORT_SHARED_FORBIDDEN, ...toArray(merged.forbiddenFields)]),
+    ];
+    merged.allowedFields = [
+      ...new Set([...WORKER_REPORT_SHARED_ALLOWED, ...toArray(merged.allowedFields)]),
     ];
   }
 
