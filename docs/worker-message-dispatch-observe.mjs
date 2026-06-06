@@ -232,19 +232,24 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
 /**
  * @param {Array<Record<string, unknown>>} journalDeliveries
  */
-function journalReviewSendSourceKeys(journalDeliveries) {
-  /** @type {Set<string>} */
-  const keys = new Set();
+function journalReviewSendDeliveredAtBySourceKey(journalDeliveries) {
+  /** @type {Map<string, number>} */
+  const byKey = new Map();
   for (const row of journalDeliveries) {
     if (String(row.source ?? '') !== DISPATCH_SOURCE_REVIEW_SEND) {
       continue;
     }
     const key = String(row.sourceKey ?? '').trim();
-    if (key) {
-      keys.add(key);
+    const deliveredAtMs = Number(row.deliveredAtMs ?? 0);
+    if (!key || !deliveredAtMs) {
+      continue;
+    }
+    const prior = byKey.get(key) ?? 0;
+    if (deliveredAtMs > prior) {
+      byKey.set(key, deliveredAtMs);
     }
   }
-  return keys;
+  return byKey;
 }
 
 /**
@@ -259,13 +264,21 @@ export function mergeDeliveryRecords(input) {
     nowMs,
   } = input;
   const journalDeliveries = extractJournalDeliveries(dispatchJournal ?? {});
-  const journalReviewSends = journalReviewSendSourceKeys(journalDeliveries);
+  const journalReviewSendAt = journalReviewSendDeliveredAtBySourceKey(journalDeliveries);
   const reviewRunDeliveries = extractReviewFindingDeliveries(
     toArray(reviewRuns),
     nowMs,
   ).filter((row) => {
     const key = String(row.sourceKey ?? '').trim();
-    return !key || !journalReviewSends.has(key);
+    if (!key) {
+      return true;
+    }
+    const journalAt = journalReviewSendAt.get(key);
+    if (!journalAt) {
+      return true;
+    }
+    const runAt = Number(row.deliveredAtMs ?? 0);
+    return runAt > journalAt;
   });
   const byId = new Map();
   for (const row of [

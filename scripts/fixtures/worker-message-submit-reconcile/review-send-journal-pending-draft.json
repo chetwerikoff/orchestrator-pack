@@ -32,7 +32,8 @@
       "status": "waiting_update",
       "sentFindingCount": 2,
       "linkedSessionId": "opk-review-journal",
-      "updatedAt": "2026-06-04T12:00:00.000Z"
+      "sentAt": "2024-06-05T15:10:00.000Z",
+      "updatedAt": "2024-06-05T15:10:00.000Z"
     }
   ],
   "tracking": { "deliveries": {}, "audit": [] }

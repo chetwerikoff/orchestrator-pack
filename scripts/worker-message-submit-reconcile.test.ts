@@ -546,7 +546,8 @@ describe('mergeDeliveryRecords from AO events', () => {
       linkedSessionId: 'opk-dedupe',
       sentFindingCount: 2,
       status: 'waiting_update',
-      updatedAt: '2026-06-04T12:00:00.000Z',
+      sentAt: new Date(1717600300000).toISOString(),
+      updatedAt: new Date(1717600300000).toISOString(),
       prNumber: 234,
       targetSha: 'abc123',
     };
@@ -572,6 +573,49 @@ describe('mergeDeliveryRecords from AO events', () => {
       'opk-dedupe:1717600300000:review-send:run-journal-dedupe',
     );
     expect(findOverwrittenDeliveries(deliveries, 'opk-dedupe')).toHaveLength(0);
+  });
+
+  it('preserves later review-send delivery when journal only records first send', () => {
+    const journalAtMs = 1717600300000;
+    const redeliveryAtMs = 1717600400000;
+    const run = {
+      id: 'run-redeliver-232',
+      linkedSessionId: 'opk-redeliver',
+      sentFindingCount: 2,
+      status: 'waiting_update',
+      sentAt: new Date(redeliveryAtMs).toISOString(),
+      updatedAt: new Date(redeliveryAtMs).toISOString(),
+      prNumber: 234,
+      targetSha: 'abc123',
+    };
+    const deliveries = mergeDeliveryRecords({
+      aoEvents: [],
+      dispatchJournal: {
+        'opk-redeliver:1717600300000:review-send:run-redeliver-232': {
+          deliveryId: 'opk-redeliver:1717600300000:review-send:run-redeliver-232',
+          sessionId: 'opk-redeliver',
+          deliveredAtMs: journalAtMs,
+          source: 'review-send',
+          sourceKey: 'run-redeliver-232',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          messageShape: { charLength: 420, lineCount: 6 },
+        },
+      },
+      reviewRuns: [run],
+      reactionMessages: {},
+      nowMs: redeliveryAtMs + 1000,
+    });
+    expect(deliveries).toHaveLength(2);
+    expect(
+      deliveries.some(
+        (d) =>
+          String(d.sourceKey) === 'run-redeliver-232' &&
+          Number(d.deliveredAtMs) === redeliveryAtMs,
+      ),
+    ).toBe(true);
+    expect(selectSurvivingDelivery(deliveries, 'opk-redeliver')?.deliveredAtMs).toBe(
+      redeliveryAtMs,
+    );
   });
 
   it('skips unknown reaction keys without a configured message shape', () => {
