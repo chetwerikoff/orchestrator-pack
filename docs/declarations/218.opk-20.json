@@ -1,0 +1,32 @@
+{
+  "issue_number": 218,
+  "iteration_id": "opk-20",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T07:14:04.586Z",
+  "baseline": {
+    "commit_sha": "6a4b870a2ae32d841aa7f69093d9d9855d184d20",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:dd098b35df323aa3453d3f731b1c46ecffe41e1c997bf2aa7b299b68c6deadfa"
+  },
+  "declared_paths": [
+    "docs/ci-green-wake-reconcile.d.mts",
+    "docs/ci-green-wake-reconcile.mjs",
+    "docs/review-head-ready.d.mts",
+    "docs/review-head-ready.mjs",
+    "docs/review-ready-stuck-guard.d.mts",
+    "docs/review-ready-stuck-guard.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "docs/review-wake-trigger.mjs",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/verify.ps1",
+    "scripts/check-review-head-ready-report-binding.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-trigger-reconcile/**"
+  ],
+  "amendments": []
+}
