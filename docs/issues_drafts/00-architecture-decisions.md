@@ -344,6 +344,23 @@ file `15-orchestrator-recovery-runbook.md`, not here.
    flood and the delivery-loss class. (Issue #171, file
    `61-review-finding-delivery-confirmation.md`.)
 
+4. **Narrowed no-pane-mutation exception: submit-only of AO-pasted draft (Issue #216).**
+   Decision taken 2026-06-06 after opk-17/PR #214: AO-core `tmux.sendKeys` clears +
+   pastes multi-line findings but a single trailing `Enter` does not reliably submit an
+   idle worker's bracketed `[Pasted text]` draft; `sendWithConfirmation` mis-counts the
+   visible draft as delivered. The flood/delivery family (#173/#174) otherwise holds
+   **never mutate the worker pane.** This issue narrows that to one **submit-only**
+   action: tmux `Enter` to the linked live head-owning session when #171's causal
+   predicate is unmet, re-deliveries are exhausted, input freshness is established from
+   state/events (no pane scraping), flood is quiet, and submit budget remains — then
+   fail-closed to #171 escalation. **Permits:** one bounded Enter per `(runId, head SHA)`.
+   **Forbids:** composing/editing finding text, `ao send`, spawn/`--claim-pr`/kill, pane
+   scraping for content verification, or submit while #173 flood is active. **Upstream
+   retirement:** **ComposioHQ/agent-orchestrator#2105** (sibling of #2094) — core should
+   retry/verify submit for multi-line pastes (as `send.js → sendViaTmux` already does)
+   and `sendWithConfirmation` must not treat a visible draft as delivery. Pack bridge
+   retires when that ships. (Issue #216.)
+
 ## I. Worker prompt-delivery launch failure on Windows
 
 Decision taken 2026-05-28 after repeated worker sessions (e.g. issue #60) exited

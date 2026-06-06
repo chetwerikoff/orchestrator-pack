@@ -1,0 +1,45 @@
+{
+  "description": "AC5: flood signature active → defer submit, never early escalate",
+  "fixtureTag": "ac5-flood-active-defer",
+  "nowMs": 1717506400000,
+  "reviewRuns": [
+    {
+      "id": "run-flood",
+      "prNumber": 220,
+      "targetSha": "sha220ac5",
+      "status": "sent_to_agent",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-flood-worker",
+      "sentAt": "2026-06-04T19:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-flood-worker",
+      "role": "worker",
+      "prNumber": 220,
+      "status": "working",
+      "reports": []
+    }
+  ],
+  "openPrs": [{ "number": 220, "headRefOid": "sha220ac5" }],
+  "tracking": {
+    "runs": {
+      "run-flood": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717502900000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505500000
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 80000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "floodActiveSessions": {
+    "opk-flood-worker": true
+  },
+  "aoEvents": []
+}

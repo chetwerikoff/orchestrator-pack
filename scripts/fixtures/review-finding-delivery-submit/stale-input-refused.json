@@ -1,0 +1,49 @@
+{
+  "description": "AC8: intervening input-affecting event → no submit, escalate",
+  "fixtureTag": "ac8-stale-input-refused",
+  "nowMs": 1717506500000,
+  "reviewRuns": [
+    {
+      "id": "run-stale",
+      "prNumber": 221,
+      "targetSha": "sha221ac8",
+      "status": "sent_to_agent",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-stale-ac8",
+      "sentAt": "2026-06-04T20:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "opk-stale-ac8",
+      "role": "worker",
+      "prNumber": 221,
+      "status": "working",
+      "reports": []
+    }
+  ],
+  "openPrs": [{ "number": 221, "headRefOid": "sha221ac8" }],
+  "tracking": {
+    "runs": {
+      "run-stale": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717503000000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505600000
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 95000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "aoEvents": [
+    {
+      "kind": "activity.transition",
+      "sessionId": "opk-stale-ac8",
+      "tsEpoch": 1717505700000,
+      "data": { "from": "ready", "to": "active" }
+    }
+  ]
+}

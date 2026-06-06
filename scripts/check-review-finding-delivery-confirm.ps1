@@ -30,6 +30,18 @@ if ($mjs -notmatch 'DEFAULT_MAX_REDELIVERIES = 2') {
     exit 1
 }
 
+$submitMjs = Join-Path $Root 'docs/worker-input-draft-submit.mjs'
+if (-not (Test-Path -LiteralPath $submitMjs -PathType Leaf)) {
+    Write-Host 'Missing docs/worker-input-draft-submit.mjs (Issue #216)'
+    exit 1
+}
+
+$submitMjsText = Get-Content -LiteralPath $submitMjs -Raw
+if ($submitMjsText -notmatch 'DEFAULT_MAX_SUBMITS = 1') {
+    Write-Host 'docs/worker-input-draft-submit.mjs must default to 1 max submit per run/head'
+    exit 1
+}
+
 if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
     Write-Host 'docs/review-finding-delivery-confirm.mjs must treat sent_to_agent as pending sent delivery'
     exit 1
@@ -41,6 +53,11 @@ if ($mjs -notmatch 'export \{ sessionOwnsRunHead \}' -or $mjs -notmatch 'session
 }
 
 $ps1 = Get-Content -LiteralPath $scriptPath -Raw
+if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must invoke submit adapter (Issue #216)'
+    exit 1
+}
+
 if ($ps1 -notmatch 'gh pr list failed \(exit') {
     Write-Host 'scripts/review-finding-delivery-confirm.ps1 must fail tick when gh pr list fails'
     exit 1
@@ -61,7 +78,10 @@ $runbookRequired = @(
     'review-finding-delivery-confirm',
     'AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES',
     'AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES',
+    'AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS',
     'AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES',
+    'Submit stuck paste draft',
+    'submitDecisionKey',
     'ESCALATION: unconfirmed delivery',
     'Operator remedy'
 )
@@ -72,5 +92,5 @@ if ($missingRunbook.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] review-finding delivery confirmation entrypoint and runbook (Issue #171)'
+Write-Host '[PASS] review-finding delivery confirmation + submit bridge entrypoint and runbook (Issues #171, #216)'
 exit 0

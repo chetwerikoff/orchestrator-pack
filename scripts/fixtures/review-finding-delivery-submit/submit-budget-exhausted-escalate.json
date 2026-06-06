@@ -1,0 +1,45 @@
+{
+  "description": "AC4: submit budget exhausted → escalate, no further submit",
+  "fixtureTag": "ac4-submit-budget-exhausted",
+  "nowMs": 1717507000000,
+  "reviewRuns": [
+    {
+      "id": "run-submit-exhausted",
+      "prNumber": 219,
+      "targetSha": "sha219ac4",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-exhausted-ac4",
+      "sentAt": "2026-06-04T18:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "opk-exhausted-ac4",
+      "role": "worker",
+      "prNumber": 219,
+      "status": "working",
+      "reports": []
+    }
+  ],
+  "openPrs": [{ "number": 219, "headRefOid": "sha219ac4" }],
+  "tracking": {
+    "runs": {
+      "run-submit-exhausted": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717502800000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505400000,
+        "submitCount": 1,
+        "lastSubmitAtMs": 1717506500000,
+        "submitDecisionKey": "run-submit-exhausted:sha219ac4"
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 75000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "aoEvents": []
+}

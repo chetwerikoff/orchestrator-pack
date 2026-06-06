@@ -1,0 +1,47 @@
+{
+  "description": "AC2: unrelated working report does not confirm; submit path remains",
+  "fixtureTag": "ac2-unrelated-working-still-submits",
+  "nowMs": 1717506100000,
+  "reviewRuns": [
+    {
+      "id": "run-unrelated",
+      "prNumber": 217,
+      "targetSha": "sha217ac2",
+      "status": "sent_to_agent",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-unrelated-ac2",
+      "sentAt": "2026-06-04T15:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "opk-unrelated-ac2",
+      "role": "worker",
+      "prNumber": 217,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-04T15:35:00Z"
+        }
+      ]
+    }
+  ],
+  "openPrs": [{ "number": 217, "headRefOid": "sha217ac2" }],
+  "tracking": {
+    "runs": {
+      "run-unrelated": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717502500000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505100000
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 90000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "aoEvents": []
+}

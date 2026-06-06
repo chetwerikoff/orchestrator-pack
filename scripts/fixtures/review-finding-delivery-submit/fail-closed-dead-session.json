@@ -1,0 +1,34 @@
+{
+  "description": "AC3: dead linked session → escalate, no submit",
+  "fixtureTag": "ac3-dead-session-escalate",
+  "nowMs": 1717506300000,
+  "reviewRuns": [
+    {
+      "id": "run-dead",
+      "prNumber": 97,
+      "targetSha": "deadbeefac3",
+      "status": "sent_to_agent",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-dead-ac3",
+      "sentAt": "2026-06-04T17:00:00Z"
+    }
+  ],
+  "sessions": [],
+  "openPrs": [{ "number": 97, "headRefOid": "deadbeefac3" }],
+  "tracking": {
+    "runs": {
+      "run-dead": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717502700000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505300000
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 45000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "aoEvents": []
+}

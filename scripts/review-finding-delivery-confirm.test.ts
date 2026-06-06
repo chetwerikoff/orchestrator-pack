@@ -559,27 +559,25 @@ describe('no worker lifecycle on no-confirmation path (AC5)', () => {
   });
 });
 
-describe('escalation after max redeliveries (AC6)', () => {
-  it('stops retrying and emits actionable escalation', () => {
+describe('submit rung after max redeliveries (#216)', () => {
+  it('plans submit before escalation when redeliveries exhausted', () => {
     const { actions, tracking } = planFromFixture('max-redeliveries-escalate.json');
     expect(
       actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
     ).toHaveLength(0);
-    const escalation = actions.find(
-      (a): a is Extract<DeliveryConfirmAction, { type: 'escalate' }> =>
-        a.type === 'escalate',
+    const submit = actions.find(
+      (a): a is Extract<DeliveryConfirmAction, { type: 'submit' }> => a.type === 'submit',
     );
-    expect(escalation).toMatchObject({
+    expect(submit).toMatchObject({
       runId: 'run-exhausted',
       sessionId: 'opk-worker-live',
       prNumber: 166,
-      reason: 'max_redeliveries_exhausted',
+      attempt: 1,
     });
-    expect(String(escalation?.message)).toContain('run-exhausted');
-    expect(String(escalation?.message)).toContain('PR #166');
-    expect(String(escalation?.message)).toContain('opk-worker-live');
-    expect(String(escalation?.message)).toContain('Operator remedy');
-    expect(tracking.runs?.['run-exhausted']?.deliveryState).toBe(DELIVERY_STATE_ESCALATED);
+    expect(tracking.runs?.['run-exhausted']?.submitCount).toBe(1);
+    expect(tracking.runs?.['run-exhausted']?.deliveryState).not.toBe(
+      DELIVERY_STATE_ESCALATED,
+    );
   });
 });
 
@@ -590,10 +588,8 @@ describe('delivery state outcomes (AC7)', () => {
       DELIVERY_STATE_CONFIRMED,
     );
 
-    const escalated = planFromFixture('max-redeliveries-escalate.json');
-    expect(escalated.tracking.runs?.['run-exhausted']?.deliveryState).toBe(
-      DELIVERY_STATE_ESCALATED,
-    );
+    const submitPlanned = planFromFixture('max-redeliveries-escalate.json');
+    expect(submitPlanned.tracking.runs?.['run-exhausted']?.submitCount).toBe(1);
   });
 });
 
