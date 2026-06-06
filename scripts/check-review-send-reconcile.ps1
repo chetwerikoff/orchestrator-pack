@@ -82,6 +82,10 @@ if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePat
     Write-Host 'review-send-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live ao/gh)'
     exit 1
 }
+if ($ps1 -notmatch "Register-WorkerMessageDispatch[\s\S]*-DeliveryPath 'pending-draft'") {
+    Write-Host 'review-send-reconcile.ps1 must record review-send dispatch as pending-draft'
+    exit 1
+}
 
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(

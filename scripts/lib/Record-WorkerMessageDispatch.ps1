@@ -110,6 +110,7 @@ function Register-WorkerMessageDispatch {
         [string]$Source,
         [string]$SourceKey = '',
         [string]$JournalPath = '',
+        [string]$DeliveryPath = '',
         [switch]$RestoreRetry,
         [long]$DeliveredAtMs = 0
     )
@@ -119,6 +120,12 @@ function Register-WorkerMessageDispatch {
     if (-not $senderSessionId) { $senderSessionId = '' }
 
     $shape = Invoke-DispatchShapeCli -Message $Message -SenderSessionId $senderSessionId
+    $resolvedDeliveryPath = if ($DeliveryPath.Trim()) {
+        $DeliveryPath.Trim()
+    }
+    else {
+        [string]$shape.deliveryPath
+    }
     $deliveryId = New-WorkerMessageDeliveryId -SessionId $SessionId -DeliveredAtMs $deliveredMs -Source $Source -SourceKey $SourceKey
     if (-not $deliveryId) {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
@@ -136,7 +143,7 @@ function Register-WorkerMessageDispatch {
             deliveredAtMs = $deliveredMs
             source        = $Source
             sourceKey     = $SourceKey
-            deliveryPath  = [string]$shape.deliveryPath
+            deliveryPath  = $resolvedDeliveryPath
             messageShape  = @{
                 charLength = [int]$shape.charLength
                 lineCount  = [int]$shape.lineCount
@@ -157,7 +164,7 @@ function Register-WorkerMessageDispatch {
     return @{
         recorded     = $true
         deliveryId   = $deliveryId
-        deliveryPath = [string]$shape.deliveryPath
+        deliveryPath = $resolvedDeliveryPath
     }
 }
 

@@ -219,7 +219,8 @@ function Invoke-PlannedFirstReviewSend {
 
     $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
-        -Source 'review-send' -SourceKey ([string]$Action.runId)
+        -Source 'review-send' -SourceKey ([string]$Action.runId) `
+        -DeliveryPath 'pending-draft'
     $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
     if (-not $outcome.journalRecorded) {
         Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (review send already delivered)"

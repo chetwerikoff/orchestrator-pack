@@ -406,7 +406,10 @@ export function planWorkerMessageSubmitActions(input) {
     for (const lost of overwritten) {
       const lostId = String(lost.deliveryId);
       const existing = nextDeliveries[lostId] ?? {};
-      if (existing.terminalState === SUBMIT_STATE_ESCALATED) {
+      if (
+        existing.terminalState === SUBMIT_STATE_ESCALATED ||
+        existing.terminalState === SUBMIT_STATE_SUBMITTED
+      ) {
         continue;
       }
       nextDeliveries[lostId] = {

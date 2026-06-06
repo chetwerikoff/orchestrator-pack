@@ -376,6 +376,22 @@ describe('surviving delivery selection (review)', () => {
 });
 
 describe('multiple pending deliveries (AC10)', () => {
+  it('does not escalate overwritten delivery already marked submitted', () => {
+    const { actions } = planFixture('submitted-overwritten-no-escalate.json');
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'escalate' &&
+          a.reason === 'lost_delivery_overwritten' &&
+          a.deliveryId === 'opk-submitted-overwrite:1717600900000:pack-send:first',
+      ),
+    ).toBe(false);
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(
+      'opk-submitted-overwrite:1717600950000:pack-send:second',
+    );
+  });
+
   it('submits surviving record once and escalates overwritten', () => {
     const { actions } = planFixture('two-pending-overwrite.json');
     expect(submitActions(actions)).toHaveLength(1);
@@ -435,6 +451,16 @@ describe('auditable decisions (AC7)', () => {
     const { tracking } = planFixture('long-script-nudge.json');
     expect(Array.isArray(tracking.audit)).toBe(true);
     expect(tracking.audit?.length).toBeGreaterThan(0);
+  });
+});
+
+describe('review-send journal path (review)', () => {
+  it('submits when review-send journal records pending-draft despite short placeholder', () => {
+    const { actions } = planFixture('review-send-journal-pending-draft.json');
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(
+      'opk-review-journal:1717600200000:review-send:run-journal-pending',
+    );
   });
 });
 
