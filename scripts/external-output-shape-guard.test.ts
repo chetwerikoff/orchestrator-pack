@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   extractAtJsonPath,
+  findInlineWorkerReports,
   formatShapeErrors,
+  INLINE_IDENTIFIER_VALUE,
   loadVariantCatalog,
   runExternalOutputShapeGuard,
   validateExternalObject,
@@ -91,6 +93,29 @@ describe('dynamic-key maps', () => {
     expect(dynamicErrors).toEqual([]);
     const extracted = extractAtJsonPath(payload, '$.ciChecksByPr');
     expect(extracted).toHaveLength(1);
+  });
+});
+
+describe('findInlineWorkerReports', () => {
+  it('records identifier-valued properties so forbidden fields are validated', () => {
+    const source = [
+      'function example(headSha: string) {',
+      "  const report = { reportState: 'ready_for_review', headRefOid: headSha, reportedAt: '2026-06-01T00:00:00.000Z' };",
+      '  return report;',
+      '}',
+    ].join('\n');
+    const reports = findInlineWorkerReports('inline-example.test.ts', source);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].object.headRefOid).toBe(INLINE_IDENTIFIER_VALUE);
+
+    const variant = getVariant('ao-worker-report/ready_for_review');
+    const errors = validateObjectShape(
+      reports[0].object,
+      variant,
+      'inline-example.test.ts:2',
+      '$',
+    );
+    expect(formatShapeErrors(errors)).toMatch(/headRefOid/);
   });
 });
 

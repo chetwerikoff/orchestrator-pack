@@ -463,12 +463,15 @@ function extractBalancedObject(source, openBraceIdx) {
 /**
  * @param {string} snippet
  */
+/** Marker for object-literal properties whose value is a variable reference, not a literal. */
+export const INLINE_IDENTIFIER_VALUE = Symbol('inline-identifier-value');
+
 function parseObjectLiteralSnippet(snippet) {
   /** @type {Record<string, unknown>} */
   const obj = {};
   const body = snippet.slice(1, -1);
   const propPattern =
-    /([A-Za-z_][\w]*)\s*:\s*(?:'([^']*)'|"([^"]*)"|(true|false)|(-?\d+(?:\.\d+)?)|(\{[\s\S]*?\}))/g;
+    /([A-Za-z_][\w]*)\s*:\s*(?:'([^']*)'|"([^"]*)"|(true|false)|(-?\d+(?:\.\d+)?)|(\{[\s\S]*?\})|([A-Za-z_$][\w$]*))/g;
   let match;
   while ((match = propPattern.exec(body)) !== null) {
     const key = match[1];
@@ -477,6 +480,7 @@ function parseObjectLiteralSnippet(snippet) {
     else if (match[4] !== undefined) obj[key] = match[4] === 'true';
     else if (match[5] !== undefined) obj[key] = Number(match[5]);
     else if (match[6] !== undefined) obj[key] = parseObjectLiteralSnippet(match[6]);
+    else if (match[7] !== undefined) obj[key] = INLINE_IDENTIFIER_VALUE;
   }
   return obj;
 }

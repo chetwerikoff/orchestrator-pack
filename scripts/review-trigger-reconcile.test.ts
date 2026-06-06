@@ -443,7 +443,7 @@ describe('resolveWorkerSessionId', () => {
   it('prefers worker with ready_for_review report when multiple live workers match PR', () => {
     const headSha = 'currenthead58';
     const actions = planReconcileActions({
-      openPrs: [{ number: 58, headRefOid: headSha }],
+      openPrs: [{ number: 58, headRefOid: headSha, headCommittedAt: '2026-06-05T11:00:00.000Z' }],
       reviewRuns: [],
       sessions: [
         {
@@ -461,7 +461,6 @@ describe('resolveWorkerSessionId', () => {
           reports: [
             {
               reportState: 'ready_for_review',
-              headRefOid: headSha,
               reportedAt: '2026-06-05T12:00:00.000Z',
             },
           ],
@@ -649,7 +648,7 @@ describe('Issue #212 defer subreason records', () => {
     const prNumber = 211;
     const headSha = '1607071';
     const base = {
-      openPrs: [{ number: prNumber, headRefOid: headSha }],
+      openPrs: [{ number: prNumber, headRefOid: headSha, headCommittedAt: '2026-06-06T01:00:00.000Z' }],
       reviewRuns: [] as [],
       ciChecksByPr: { [String(prNumber)]: greenChecks },
     };
@@ -674,7 +673,6 @@ describe('Issue #212 defer subreason records', () => {
           reports: [
             {
               reportState: 'ready_for_review',
-              headRefOid: headSha,
               reportedAt: '2026-06-06T01:45:00.000Z',
             },
           ],

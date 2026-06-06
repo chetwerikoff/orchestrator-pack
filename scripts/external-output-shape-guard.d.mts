@@ -47,3 +47,11 @@ export function extractAtJsonPath(
   root: unknown,
   jsonPath: string,
 ): Array<{ value: unknown; path: string }>;
+
+export const INLINE_IDENTIFIER_VALUE: unique symbol;
+
+export function findInlineWorkerReports(
+  filePath: string,
+  sourceText: string,
+  optOuts?: Array<{ file: string; line: number; reason: string }>,
+): Array<{ line: number; object: Record<string, unknown> }>;
