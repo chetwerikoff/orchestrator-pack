@@ -561,6 +561,7 @@ pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun
 | Tick interval | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` |
 | Confirmation window (wait before re-deliver) | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` |
 | Max best-effort re-deliveries per run | **2** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` |
+| Max submit attempts per `(runId, head SHA)` | **1** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS` |
 | Persisted delivery state file | `%TEMP%\orchestrator-review-delivery-confirm-state.json` | `AO_REVIEW_DELIVERY_CONFIRM_STATE` |
 
 Confirmation is credited only when the **linked** worker reports
@@ -573,6 +574,27 @@ Re-delivery uses `ao review send <run-id>` to the **existing** linked session wh
 is still live and owns the PR. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
 or `ao send`. If the linked session is dead/orphan, the loop **escalates immediately**
 (zero re-sends).
+
+### Submit stuck paste draft (Issue #216)
+
+When re-deliveries are exhausted but the worker still has not reported
+`addressing_reviews` for this run/head, the listener may **submit** the draft AO already
+pasted — a tmux **Enter only** to the linked live session (never composes finding text).
+Submit runs **after** bounded re-delivery and **before** escalation; it is skipped while
+the #173 flood signature is active (defer only — never escalate earlier than #171).
+
+Read delivery-confirm state (`AO_REVIEW_DELIVERY_CONFIRM_STATE`) for per-run fields:
+
+| Field | Meaning |
+|-------|---------|
+| `submitCount` / `lastSubmitAtMs` | Bounded submit attempts for current `(runId, head SHA)` |
+| `submitDecisionKey` | Dedupe key `runId:headSha` — new head resets submit budget |
+| `deliveryState: escalated` with reason `stale_input_refused` | Input changed since controlled delivery — operator must resend manually |
+| `deliveryState: escalated` with reason `max_submits_exhausted` | Submit tried; still unconfirmed — operator remedy below |
+
+Submit eligibility requires: live head-owning session, no ambiguous overlap, no intervening
+input-affecting `ao events` since the last controlled delivery, flood channel quiet, and
+submit budget remaining. Adapter failure fail-closes to escalation without crashing the tick.
 
 ### Escalation message and operator remedy
 

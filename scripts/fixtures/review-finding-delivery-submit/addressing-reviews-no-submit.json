@@ -1,0 +1,46 @@
+{
+  "description": "AC2: run-attributed addressing_reviews before window ends submit path",
+  "nowMs": 1717506000000,
+  "reviewRuns": [
+    {
+      "id": "run-confirmed",
+      "prNumber": 166,
+      "targetSha": "sha166c",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-worker-live",
+      "sentAt": "2026-06-04T14:00:00Z"
+    }
+  ],
+  "sessions": [
+    {
+      "sessionId": "opk-worker-live",
+      "role": "worker",
+      "prNumber": 166,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-04T14:35:00Z"
+        }
+      ]
+    }
+  ],
+  "openPrs": [{ "number": 166, "headRefOid": "sha166c" }],
+  "tracking": {
+    "runs": {
+      "run-confirmed": {
+        "deliveryState": "unconfirmed",
+        "sendObservedAtMs": 1717502400000,
+        "redeliveryCount": 2,
+        "lastRedeliveryAtMs": 1717505000000
+      }
+    }
+  },
+  "config": {
+    "confirmationWindowMs": 60000,
+    "maxRedeliveries": 2,
+    "maxSubmits": 1
+  },
+  "aoEvents": []
+}

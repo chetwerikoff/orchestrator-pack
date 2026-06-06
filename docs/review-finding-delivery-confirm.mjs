@@ -8,6 +8,10 @@ import {
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
+  evaluateSubmitEligibility,
+  resolveSubmitConfig,
+} from './worker-input-draft-submit.mjs';
+import {
   findForbiddenLifecycleCommands,
   findSessionById,
   isLiveWorkerSession,
@@ -45,7 +49,7 @@ export const DELIVERY_STATE_UNCONFIRMED = 'unconfirmed';
 /** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, sentFindingCount?: number, linkedSessionId?: string, sentAt?: string, updatedAt?: string }} ReviewRun */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} AoSession */
-/** @typedef {{ deliveryState?: string, sendObservedAtMs?: number, redeliveryCount?: number, lastRedeliveryAtMs?: number, escalatedAtMs?: number }} RunDeliveryRecord */
+/** @typedef {{ deliveryState?: string, sendObservedAtMs?: number, redeliveryCount?: number, lastRedeliveryAtMs?: number, escalatedAtMs?: number, submitCount?: number, lastSubmitAtMs?: number, submitDecisionKey?: string }} RunDeliveryRecord */
 /** @typedef {{ runs?: Record<string, RunDeliveryRecord>, lastTickMs?: number }} DeliveryTrackingState */
 
 /**
@@ -304,8 +308,10 @@ export function getConfirmationAnchorMs(record, sendObservedAtMs) {
  * @param {object} config
  * @param {number} [config.confirmationWindowMs]
  * @param {number} [config.maxRedeliveries]
+ * @param {number} [config.maxSubmits]
  */
 export function resolveDeliveryConfig(config = {}) {
+  const submit = resolveSubmitConfig(config);
   return {
     confirmationWindowMs: resolveBoundedInt(
       config.confirmationWindowMs,
@@ -317,6 +323,7 @@ export function resolveDeliveryConfig(config = {}) {
       DEFAULT_MAX_REDELIVERIES,
       0,
     ),
+    maxSubmits: submit.maxSubmits,
   };
 }
 
@@ -334,6 +341,8 @@ export const OPERATOR_REMEDY_TEXT =
  * @param {number} input.nowMs
  * @param {object} [input.config]
  * @param {OpenPr[]} [input.openPrs]
+ * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Record<string, boolean>} [input.floodActiveSessions]
  */
 export function planDeliveryConfirmActions({
   reviewRuns,
@@ -342,6 +351,8 @@ export function planDeliveryConfirmActions({
   nowMs,
   config,
   openPrs,
+  aoEvents,
+  floodActiveSessions,
 }) {
   const { confirmationWindowMs, maxRedeliveries } = resolveDeliveryConfig(config);
   const runList = toArray(reviewRuns);
@@ -482,6 +493,64 @@ export function planDeliveryConfirmActions({
       continue;
     }
 
+    const submitEligibility = evaluateSubmitEligibility({
+      run,
+      sessions: sessionList,
+      tracking,
+      allRuns: runList,
+      openPrs: openPrList,
+      aoEvents: toArray(aoEvents),
+      floodActiveSessions: floodActiveSessions ?? {},
+      nowMs,
+      config,
+    });
+
+    if (submitEligibility.defer) {
+      actions.push({
+        type: 'defer',
+        runId,
+        sessionId: linkedSessionId,
+        prNumber,
+        reason: submitEligibility.reason,
+      });
+      continue;
+    }
+
+    if (submitEligibility.ok) {
+      const priorKey = String(nextRuns[runId]?.submitDecisionKey ?? '').trim();
+      const submitCount =
+        priorKey && priorKey === submitEligibility.decisionKey
+          ? Number(nextRuns[runId]?.submitCount ?? 0)
+          : 0;
+      nextRuns[runId] = {
+        ...nextRuns[runId],
+        deliveryState: DELIVERY_STATE_UNCONFIRMED,
+        sendObservedAtMs,
+        redeliveryCount,
+        submitCount: submitCount + 1,
+        lastSubmitAtMs: nowMs,
+        submitDecisionKey: submitEligibility.decisionKey,
+      };
+      actions.push({
+        type: 'submit',
+        runId,
+        sessionId: linkedSessionId,
+        prNumber,
+        headSha: submitEligibility.headSha,
+        attempt: submitEligibility.attempt,
+        maxSubmits: submitEligibility.maxSubmits,
+        decisionKey: submitEligibility.decisionKey,
+      });
+      continue;
+    }
+
+    const escalateReason =
+      submitEligibility.reason === 'submit_budget_exhausted'
+        ? 'max_submits_exhausted'
+        : submitEligibility.reason === 'stale_input'
+          ? 'stale_input_refused'
+          : 'max_redeliveries_exhausted';
+
     nextRuns[runId] = {
       ...nextRuns[runId],
       deliveryState: DELIVERY_STATE_ESCALATED,
@@ -494,7 +563,7 @@ export function planDeliveryConfirmActions({
       runId,
       sessionId: linkedSessionId,
       prNumber,
-      reason: 'max_redeliveries_exhausted',
+      reason: escalateReason,
       message: buildEscalationMessage({
         runId,
         sessionId: linkedSessionId,
@@ -542,6 +611,8 @@ runStdinJsonCli('review-finding-delivery-confirm.mjs', {
       tracking: payload.tracking ?? { runs: {} },
       nowMs: Number(payload.nowMs) || Date.now(),
       config: payload.config ?? {},
+      aoEvents: payload.aoEvents ?? [],
+      floodActiveSessions: payload.floodActiveSessions ?? {},
     });
   },
   interval: () => {
