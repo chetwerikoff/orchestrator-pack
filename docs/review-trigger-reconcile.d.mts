@@ -31,6 +31,9 @@ export declare function sessionMatchesPr(session: AoSession, prNumber: number): 
 export interface OpenPr {
   number: number;
   headRefOid: string;
+  headCommittedAt?: string | number;
+  headCommitCommittedAt?: string | number;
+  head_commit_committed_at?: string | number;
 }
 
 export interface ReviewRun {
@@ -208,7 +211,18 @@ export declare function resolveWorkerSessionId(
   options?: { ownsHead?: (session: AoSession) => boolean },
 ): string | null;
 
+export declare function getStoredReportHeadSha(report: Record<string, unknown>): string;
 export declare function getReportHeadSha(report: Record<string, unknown>): string;
+export declare function getReportTimestampMs(report: Record<string, unknown>): number;
+export declare function reportCoversHead(
+  report: Record<string, unknown>,
+  headSha: string,
+  options?: { headCommittedAtMs?: number },
+): boolean;
+export declare function resolveHeadCommittedAtMs(
+  openPrs: OpenPr[] | OpenPr | undefined,
+  prNumber: number,
+): number | undefined;
 
 export declare function sessionOwnsRunHead(
   session: AoSession,

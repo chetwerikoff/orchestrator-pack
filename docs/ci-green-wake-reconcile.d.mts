@@ -83,7 +83,12 @@ export declare function deriveGreenEpoch(
 
 export declare function normalizeSessionReportState(session: AoSession): string;
 
-export declare function isPreHandOffWorkerForHead(session: AoSession, headSha: string): boolean;
+export declare function isPreHandOffWorkerForHead(
+  session: AoSession,
+  headSha: string,
+  openPrs?: OpenPr[],
+  prNumber?: number,
+): boolean;
 
 export declare function normalizeRequiredCheckLookupFailedByPr(
   lookupFailedByPr: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'],

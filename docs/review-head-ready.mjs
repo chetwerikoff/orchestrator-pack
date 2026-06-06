@@ -7,16 +7,18 @@ import { classifyRequiredCiLevel } from './ci-green-wake-reconcile.mjs';
 import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   findLatestReportForHead,
-  getReportHeadSha,
+  getStoredReportHeadSha,
   PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
 import {
   findCoveringRunForHead,
   findFailedOrCancelledRunForHead,
   findSessionById,
+  getReportTimestampMs,
   hasFailedOrCancelledOnHead,
   isHeadCovered,
   normalizeSha,
+  resolveHeadCommittedAtMs,
   toArray,
 } from './review-trigger-reconcile.mjs';
 
@@ -134,17 +136,19 @@ export function isWorkerDegradedCiHandoff(report) {
 /**
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function findLatestAcceptedReportForHead(session, headSha) {
-  return findLatestReportForHead(session, headSha);
+export function findLatestAcceptedReportForHead(session, headSha, options = {}) {
+  return findLatestReportForHead(session, headSha, options);
 }
 
 /**
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function hasReadyForReviewForHead(session, headSha) {
-  const latest = findLatestAcceptedReportForHead(session, headSha);
+export function hasReadyForReviewForHead(session, headSha, options = {}) {
+  const latest = findLatestAcceptedReportForHead(session, headSha, options);
   if (!latest) {
     return false;
   }
@@ -170,6 +174,7 @@ export function degradedCiTrackingKey(prNumber, headSha) {
  * @param {boolean} [input.requiredCheckLookupFailed]
  * @param {number} [input.degradedCiAttempts]
  * @param {number} [input.maxDegradedCiAttempts]
+ * @param {number} [input.headCommittedAtMs]
  */
 export function evaluateHeadReadyForReview({
   reviewRuns,
@@ -181,7 +186,9 @@ export function evaluateHeadReadyForReview({
   requiredCheckLookupFailed = false,
   degradedCiAttempts = 0,
   maxDegradedCiAttempts = resolveMaxDegradedCiAttempts(),
+  headCommittedAtMs,
 }) {
+  const reportBindingOptions = { headCommittedAtMs };
   if (hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
     return {
       eligible: false,
@@ -198,9 +205,9 @@ export function evaluateHeadReadyForReview({
     return { eligible: false, reason: 'no_worker_session', route: 'none' };
   }
 
-  const latestReport = findLatestAcceptedReportForHead(session, headSha);
+  const latestReport = findLatestAcceptedReportForHead(session, headSha, reportBindingOptions);
   const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
-  const readyForReview = hasReadyForReviewForHead(session, headSha);
+  const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
 
   if (!readyForReview && !degradedHandoff) {
     return {
@@ -325,6 +332,7 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     requiredCheckLookupFailed: Boolean(fresh.requiredCheckLookupFailed),
     degradedCiAttempts: Number(fresh.degradedCiAttempts ?? 0),
     maxDegradedCiAttempts: resolveMaxDegradedCiAttempts(fresh),
+    headCommittedAtMs: resolveHeadCommittedAtMs(fresh?.openPrs, prNumber),
   });
 
   return {
@@ -339,8 +347,9 @@ export function preRunHeadReadyRecheck(planned, fresh) {
  *
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} currentHeadSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha) {
+export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha, options = {}) {
   const current = normalizeSha(currentHeadSha);
   if (!current) {
     return false;
@@ -351,9 +360,22 @@ export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha) {
     if (getReportState(report) !== 'ready_for_review') {
       continue;
     }
-    const reportHead = getReportHeadSha(report);
-    if (reportHead && reportHead !== current) {
+    const stored = getStoredReportHeadSha(report);
+    if (stored && stored !== current) {
       foundStale = true;
+      continue;
+    }
+    if (!stored) {
+      const reportMs = getReportTimestampMs(report);
+      const headCommittedAtMs = Number(options.headCommittedAtMs);
+      if (
+        Number.isFinite(headCommittedAtMs) &&
+        headCommittedAtMs > 0 &&
+        reportMs > 0 &&
+        headCommittedAtMs > reportMs
+      ) {
+        foundStale = true;
+      }
     }
   }
   return foundStale;
@@ -410,8 +432,9 @@ export function resolveReportRoute(report) {
  *
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} currentHeadSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function findLatestStaleReadyForReviewReport(session, currentHeadSha) {
+export function findLatestStaleReadyForReviewReport(session, currentHeadSha, options = {}) {
   const current = normalizeSha(currentHeadSha);
   if (!current) {
     return null;
@@ -423,21 +446,18 @@ export function findLatestStaleReadyForReviewReport(session, currentHeadSha) {
     if (getReportState(report) !== 'ready_for_review') {
       continue;
     }
-    const reportHead = getReportHeadSha(report);
-    if (!reportHead || reportHead === current) {
+    const stored = getStoredReportHeadSha(report);
+    const isStale =
+      (stored && stored !== current) ||
+      (!stored &&
+        Number.isFinite(Number(options.headCommittedAtMs)) &&
+        Number(options.headCommittedAtMs) > 0 &&
+        getReportTimestampMs(report) > 0 &&
+        Number(options.headCommittedAtMs) > getReportTimestampMs(report));
+    if (!isStale) {
       continue;
     }
-    const ts = Date.parse(
-      String(
-        report?.reportedAt ??
-          report?.timestamp ??
-          report?.createdAt ??
-          report?.reported_at ??
-          report?.created_at ??
-          '',
-      ),
-    );
-    const ms = Number.isFinite(ts) ? ts : 0;
+    const ms = getReportTimestampMs(report);
     if (ms >= bestMs) {
       bestMs = ms;
       best = report;
@@ -449,36 +469,10 @@ export function findLatestStaleReadyForReviewReport(session, currentHeadSha) {
 /**
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-function findLatestReportBoundToHead(session, headSha) {
-  const target = normalizeSha(headSha);
-  if (!target) {
-    return null;
-  }
-  let best = null;
-  let bestMs = -1;
-  for (const report of toArray(session?.reports)) {
-    const reportHead = getReportHeadSha(report);
-    if (!reportHead || reportHead !== target) {
-      continue;
-    }
-    const ts = Date.parse(
-      String(
-        report?.reportedAt ??
-          report?.timestamp ??
-          report?.createdAt ??
-          report?.reported_at ??
-          report?.created_at ??
-          '',
-      ),
-    );
-    const ms = Number.isFinite(ts) ? ts : 0;
-    if (ms >= bestMs) {
-      bestMs = ms;
-      best = report;
-    }
-  }
-  return best;
+function findLatestReportBoundToHead(session, headSha, options = {}) {
+  return findLatestReportForHead(session, headSha, options);
 }
 
 /**
@@ -492,6 +486,7 @@ function findLatestReportBoundToHead(session, headSha) {
  * @param {boolean} input.requiredCheckLookupFailed
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
+ * @param {number} [input.headCommittedAtMs]
  */
 export function collectFailedNotReadyComponents({
   session,
@@ -501,7 +496,9 @@ export function collectFailedNotReadyComponents({
   requiredCheckLookupFailed = false,
   reviewRuns = [],
   prNumber,
+  headCommittedAtMs,
 }) {
+  const reportBindingOptions = { headCommittedAtMs };
   /** @type {string[]} */
   const failed = [];
 
@@ -514,14 +511,14 @@ export function collectFailedNotReadyComponents({
     return failed;
   }
 
-  const latestReport = findLatestReportBoundToHead(session, headSha);
-  const readyForReview = hasReadyForReviewForHead(session, headSha);
+  const latestReport = findLatestReportBoundToHead(session, headSha, reportBindingOptions);
+  const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
   const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
 
   if (!readyForReview) {
     failed.push('no_ready_for_review');
   }
-  if (hasStaleReadyForReviewOnOlderHead(session, headSha)) {
+  if (hasStaleReadyForReviewOnOlderHead(session, headSha, reportBindingOptions)) {
     failed.push('stale_report_binding');
   }
   if (degradedHandoff) {
@@ -554,6 +551,7 @@ export function collectFailedNotReadyComponents({
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
+ * @param {number} [input.headCommittedAtMs]
  */
 export function buildReportCiObserved({
   prNumber,
@@ -562,22 +560,26 @@ export function buildReportCiObserved({
   ciChecks = [],
   requiredCheckNames = [],
   requiredCheckLookupFailed = false,
+  headCommittedAtMs,
 }) {
   const currentHeadSha = normalizeSha(headSha);
+  const reportBindingOptions = { headCommittedAtMs };
   const latestReportOnCurrentHead = session
-    ? findLatestReportBoundToHead(session, currentHeadSha)
+    ? findLatestReportBoundToHead(session, currentHeadSha, reportBindingOptions)
     : null;
   const staleReadyReport = session
-    ? findLatestStaleReadyForReviewReport(session, currentHeadSha)
+    ? findLatestStaleReadyForReviewReport(session, currentHeadSha, reportBindingOptions)
     : null;
 
   let reportBoundHeadSha = '';
   let reportRoute = 'none';
   if (latestReportOnCurrentHead) {
-    reportBoundHeadSha = getReportHeadSha(latestReportOnCurrentHead) || '';
+    const stored = getStoredReportHeadSha(latestReportOnCurrentHead);
+    reportBoundHeadSha = stored || currentHeadSha;
     reportRoute = resolveReportRoute(latestReportOnCurrentHead);
   } else if (staleReadyReport) {
-    reportBoundHeadSha = getReportHeadSha(staleReadyReport) || '';
+    const stored = getStoredReportHeadSha(staleReadyReport);
+    reportBoundHeadSha = stored || 'stale_sha_less_handoff';
     reportRoute = 'ready_for_review';
   }
 
@@ -605,7 +607,8 @@ export function buildReportCiObserved({
   };
 
   if (staleReadyReport) {
-    observed.staleReadyForReviewHeadSha = getReportHeadSha(staleReadyReport) || 'none';
+    const stored = getStoredReportHeadSha(staleReadyReport);
+    observed.staleReadyForReviewHeadSha = stored || 'stale_sha_less_handoff';
     observed.staleReadyForReviewRoute = 'ready_for_review';
   }
 
@@ -657,6 +660,7 @@ export function buildFailedCancelledObserved(run, prNumber, headSha) {
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
+ * @param {number} [input.headCommittedAtMs]
  */
 export function buildNoStartDecisionRecord({
   reason,
@@ -667,6 +671,7 @@ export function buildNoStartDecisionRecord({
   ciChecks = [],
   requiredCheckNames = [],
   requiredCheckLookupFailed = false,
+  headCommittedAtMs,
 }) {
   const normalizedHead = normalizeSha(headSha);
 
@@ -706,6 +711,7 @@ export function buildNoStartDecisionRecord({
         ciChecks,
         requiredCheckNames,
         requiredCheckLookupFailed,
+        headCommittedAtMs,
       }),
     };
   }
@@ -718,6 +724,7 @@ export function buildNoStartDecisionRecord({
     requiredCheckLookupFailed,
     reviewRuns,
     prNumber,
+    headCommittedAtMs,
   });
   const primary = choosePrimaryNotReadyComponent(failedComponents);
   const observed = buildReportCiObserved({
@@ -727,6 +734,7 @@ export function buildNoStartDecisionRecord({
     ciChecks,
     requiredCheckNames,
     requiredCheckLookupFailed,
+    headCommittedAtMs,
   });
 
   return {

@@ -400,6 +400,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== report→head binding without report-stored SHA (Issue #218) =='
+$reportBindingCheck = Join-Path $Root 'scripts/check-review-head-ready-report-binding.ps1'
+if (Test-Path -LiteralPath $reportBindingCheck -PathType Leaf) {
+    & $reportBindingCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-head-ready-report-binding.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-head-ready-report-binding.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Head-ready predicate must bind reports via observable state (Issue #218)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-head-ready-report-binding.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing report→head binding check script (Issue #218)'
+}
+
+Write-Host ''
 Write-Host '== detached-HEAD PR context (Issue #98) =='
 $autoReviewContextCheck = Join-Path $Root 'scripts/check-auto-review-pr-context.ps1'
 if (Test-Path -LiteralPath $autoReviewContextCheck -PathType Leaf) {

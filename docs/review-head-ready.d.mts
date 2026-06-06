@@ -22,9 +22,14 @@ export declare function isWorkerDegradedCiHandoff(
 export declare function findLatestAcceptedReportForHead(
   session: AoSession,
   headSha: string,
+  options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 
-export declare function hasReadyForReviewForHead(session: AoSession, headSha: string): boolean;
+export declare function hasReadyForReviewForHead(
+  session: AoSession,
+  headSha: string,
+  options?: { headCommittedAtMs?: number },
+): boolean;
 
 export declare function degradedCiTrackingKey(prNumber: number, headSha: string): string;
 
@@ -46,6 +51,7 @@ export declare function evaluateHeadReadyForReview(input: {
   requiredCheckLookupFailed?: boolean;
   degradedCiAttempts?: number;
   maxDegradedCiAttempts?: number;
+  headCommittedAtMs?: number;
 }): HeadReadyDecision;
 
 export interface PreRunHeadReadyRecheckResult {
@@ -76,6 +82,7 @@ export declare function preRunHeadReadyRecheck(
 export declare function hasStaleReadyForReviewOnOlderHead(
   session: AoSession,
   currentHeadSha: string,
+  options?: { headCommittedAtMs?: number },
 ): boolean;
 
 export declare const NOT_READY_COMPONENT_PRECEDENCE: readonly string[];
@@ -89,6 +96,7 @@ export declare function resolveReportRoute(
 export declare function findLatestStaleReadyForReviewReport(
   session: AoSession,
   currentHeadSha: string,
+  options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 
 export declare function collectFailedNotReadyComponents(input: {
@@ -99,6 +107,7 @@ export declare function collectFailedNotReadyComponents(input: {
   requiredCheckLookupFailed?: boolean;
   reviewRuns?: ReviewRun[];
   prNumber: number;
+  headCommittedAtMs?: number;
 }): string[];
 
 export declare function buildReportCiObserved(input: {
@@ -108,6 +117,7 @@ export declare function buildReportCiObserved(input: {
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
+  headCommittedAtMs?: number;
 }): Record<string, unknown>;
 
 export declare function buildCoveredSkipObserved(
@@ -139,6 +149,7 @@ export declare function buildNoStartDecisionRecord(input: {
   ciChecks?: CiCheck[];
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
+  headCommittedAtMs?: number;
 }): NoStartDecisionRecord;
 
 export declare function formatDecisionRecordForLog(record: NoStartDecisionRecord): string;

@@ -22,6 +22,7 @@ import {
   getSessionIdentifier,
   isLiveWorkerSession,
   normalizeSha,
+  resolveHeadCommittedAtMs,
   resolveHeadOwningWorkerSessionId,
   sessionOwnsRunHead,
   toArray,
@@ -153,15 +154,18 @@ export function normalizeSessionReportState(session) {
  * @param {AoSession} session
  * @param {string} headSha
  */
-export function isPreHandOffWorkerForHead(session, headSha) {
+export function isPreHandOffWorkerForHead(session, headSha, openPrs = [], prNumber = 0) {
+  const headCommittedAtMs = prNumber ? resolveHeadCommittedAtMs(openPrs, prNumber) : undefined;
+  const bindingOptions = { headCommittedAtMs };
   const postHandOff = findLatestReportForHead(session, headSha, {
     matchStates: POST_HANDOFF_REPORT_STATES,
+    ...bindingOptions,
   });
   if (postHandOff) {
     return false;
   }
 
-  const last = findLatestReportForHead(session, headSha);
+  const last = findLatestReportForHead(session, headSha, bindingOptions);
   if (!last) {
     const sessionState = normalizeSessionReportState(session);
     if (POST_HANDOFF_REPORT_STATES.has(sessionState)) {
@@ -210,7 +214,7 @@ export function evaluateCiGreenWakeCandidate({
   if (!sessionOwnsRunHead(session, prNumber, headSha, openPrs)) {
     reasons.push('session_does_not_own_head');
   }
-  if (!isPreHandOffWorkerForHead(session, headSha)) {
+  if (!isPreHandOffWorkerForHead(session, headSha, openPrs, prNumber)) {
     reasons.push('post_handoff_or_ineligible_report');
   }
 

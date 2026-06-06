@@ -97,10 +97,16 @@ export declare function isMergeContractCiGreen(
   options?: { requiredCheckNames?: string[] },
 ): boolean;
 export declare function getReportHeadSha(report: Record<string, unknown>): string;
+export declare function getStoredReportHeadSha(report: Record<string, unknown>): string;
+export declare function reportCoversHead(
+  report: Record<string, unknown>,
+  headSha: string,
+  options?: { headCommittedAtMs?: number },
+): boolean;
 export declare function findLatestReportForHead(
   session: AoSession,
   headSha: string,
-  options?: { matchStates?: ReadonlySet<string> },
+  options?: { matchStates?: ReadonlySet<string>; headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 export declare function findLastReadyForReviewReport(
   session: AoSession,

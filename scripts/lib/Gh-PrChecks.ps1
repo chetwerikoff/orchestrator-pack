@@ -35,12 +35,25 @@ function Invoke-GhOpenPrList {
 
     Push-Location -LiteralPath $RepoRoot
     try {
-        $raw = gh pr list --state open --json number,headRefOid --limit 200 2>&1
+        $raw = gh pr list --state open --json number,headRefOid,commits --limit 200 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "gh pr list failed (exit $LASTEXITCODE): $raw"
         }
 
-        return @($raw | ConvertFrom-Json)
+        $prs = @($raw | ConvertFrom-Json)
+        foreach ($pr in $prs) {
+            $commits = @($pr.commits)
+            if ($commits.Count -gt 0) {
+                $tip = $commits[$commits.Count - 1]
+                if ($tip -and $tip.committedDate) {
+                    $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$tip.committedDate) -Force
+                }
+            }
+            if ($pr.PSObject.Properties['commits']) {
+                $pr.PSObject.Properties.Remove('commits')
+            }
+        }
+        return $prs
     }
     finally {
         Pop-Location
