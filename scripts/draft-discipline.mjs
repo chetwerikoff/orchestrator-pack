@@ -222,19 +222,36 @@ export function checkPositiveOutcome(markdown) {
   return { ok: errors.length === 0, errors, warnings, behaviorKind, skipped: false };
 }
 
+export function normalizeLiveIssue(parsed) {
+  const state = parsed.state === 'OPEN' ? 'OPEN' : 'CLOSED';
+  const closedByPr = Array.isArray(parsed.closedByPullRequestsReferences)
+    && parsed.closedByPullRequestsReferences.length > 0;
+  const intentionallyResolved = state === 'CLOSED'
+    && (parsed.stateReason === 'COMPLETED' || closedByPr);
+  return {
+    state,
+    title: parsed.title ?? '',
+    body: parsed.body ?? '',
+    intentionallyResolved,
+  };
+}
+
 export function fetchLiveIssue(issueNumber, repo = process.env.GITHUB_REPOSITORY || DEFAULT_ISSUE_REPO) {
   try {
     const output = execFileSync(
       'gh',
-      ['issue', 'view', String(issueNumber), '--repo', repo, '--json', 'state,title,body'],
+      [
+        'issue',
+        'view',
+        String(issueNumber),
+        '--repo',
+        repo,
+        '--json',
+        'state,stateReason,title,body,closedByPullRequestsReferences',
+      ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
-    const parsed = JSON.parse(output);
-    return {
-      state: parsed.state === 'OPEN' ? 'OPEN' : 'CLOSED',
-      title: parsed.title ?? '',
-      body: parsed.body ?? '',
-    };
+    return normalizeLiveIssue(JSON.parse(output));
   } catch {
     return null;
   }

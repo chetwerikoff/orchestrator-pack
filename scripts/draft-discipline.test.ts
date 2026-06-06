@@ -6,6 +6,7 @@ import {
   checkParkedRoot,
   checkPositiveOutcome,
   checkRcaSpecDisciplineSurfaces,
+  normalizeLiveIssue,
   type MockIssue,
 } from './draft-discipline.mjs';
 
@@ -107,6 +108,48 @@ describe('checkParkedRoot', () => {
     );
     expect(result.ok).toBe(false);
     expect(result.deferralWithoutBlock).toBe(true);
+  });
+
+  it('passes a closed follow-up issue when intentionally resolved', () => {
+    const result = checkParkedRoot(
+      loadFixture('parked-valid.md'),
+      loadMockIssues('parked-intentionally-resolved-closed.json'),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe('normalizeLiveIssue', () => {
+  it('marks COMPLETED closed issues as intentionally resolved', () => {
+    const issue = normalizeLiveIssue({
+      state: 'CLOSED',
+      stateReason: 'COMPLETED',
+      title: 'Binding fix',
+      body: 'done',
+    });
+    expect(issue.intentionallyResolved).toBe(true);
+  });
+
+  it('marks PR-closed issues as intentionally resolved', () => {
+    const issue = normalizeLiveIssue({
+      state: 'CLOSED',
+      stateReason: 'NOT_PLANNED',
+      title: 'Binding fix',
+      body: 'done',
+      closedByPullRequestsReferences: [{ url: 'https://github.com/org/repo/pull/1' }],
+    });
+    expect(issue.intentionallyResolved).toBe(true);
+  });
+
+  it('does not mark abandoned closed issues as intentionally resolved', () => {
+    const issue = normalizeLiveIssue({
+      state: 'CLOSED',
+      stateReason: 'NOT_PLANNED',
+      title: 'Binding fix',
+      body: 'done',
+    });
+    expect(issue.intentionallyResolved).toBe(false);
   });
 });
 

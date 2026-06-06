@@ -13,6 +13,14 @@ export function checkPositiveOutcome(markdown: string): {
   skipped: boolean;
 };
 
+export function normalizeLiveIssue(parsed: {
+  state?: string;
+  stateReason?: string;
+  title?: string;
+  body?: string;
+  closedByPullRequestsReferences?: unknown[];
+}): MockIssue;
+
 export function fetchLiveIssue(
   issueNumber: number,
   repo?: string,
