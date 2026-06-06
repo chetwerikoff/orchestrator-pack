@@ -136,7 +136,7 @@ function Register-WorkerMessageDispatch {
     $lastFailureReason = 'journal_write_failed'
     $maxJournalAttempts = 3
     for ($attempt = 1; $attempt -le $maxJournalAttempts; $attempt++) {
-        $recorded = $false
+        $recordHolder = @{ recorded = $false }
         $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
             kind = 'worker-message-dispatch-journal'
         } -Action {
@@ -155,9 +155,10 @@ function Register-WorkerMessageDispatch {
                 restoreRetry  = [bool]$RestoreRetry
             }
             Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
-            $recorded = $true
+            $recordHolder.recorded = $true
         }
 
+        $recorded = [bool]$recordHolder.recorded
         if ($fenced.ok -and $recorded) {
             break
         }
