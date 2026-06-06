@@ -144,7 +144,7 @@ function Register-WorkerMessageDispatch {
             restoreRetry  = [bool]$RestoreRetry
         }
         Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
-        $script:recorded = $true
+        $recorded = $true
     }
 
     if (-not $fenced.ok) {

@@ -8,7 +8,10 @@ import {
   deriveMessageShape,
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
+  extractReviewFindingDeliveries,
+  isDeliveryConsumed,
   mergeDeliveryRecords,
+  DISPATCH_SOURCE_REVIEW_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
 import {
   applySubmitOutcomes,
@@ -89,6 +92,41 @@ describe('classifyDeliveryPath', () => {
   });
 });
 
+describe('dispatch observation helpers (review)', () => {
+  it('uses stable review-run send anchor from updatedAt', () => {
+    const run = {
+      id: 'run-stable-ts',
+      linkedSessionId: 'opk-stable',
+      sentFindingCount: 1,
+      status: 'waiting_update',
+      updatedAt: '2026-06-04T12:00:00.000Z',
+    };
+    const first = extractReviewFindingDeliveries([run], 1_000);
+    const second = extractReviewFindingDeliveries([run], 9_999_999);
+    expect(first).toHaveLength(1);
+    expect(second[0]?.deliveryId).toBe(first[0]?.deliveryId);
+    expect(second[0]?.deliveredAtMs).toBe(first[0]?.deliveredAtMs);
+  });
+
+  it('honors report timestamp and state aliases for consumption', () => {
+    const consumed = isDeliveryConsumed(
+      {
+        sessionId: 'opk-alias',
+        reports: [
+          {
+            report_state: 'addressing_reviews',
+            reportedAt: '2026-06-04T12:05:00.000Z',
+            accepted: true,
+          },
+        ],
+      },
+      { source: DISPATCH_SOURCE_REVIEW_SEND },
+      Date.parse('2026-06-04T12:00:00.000Z'),
+    );
+    expect(consumed).toBe(true);
+  });
+});
+
 describe('stale input guard (review)', () => {
   it('refuses submit after intervening input-affecting activity', () => {
     const { actions } = planFixture('stale-input-after-activity.json');
@@ -139,6 +177,14 @@ describe('human input never submits (AC3)', () => {
 describe('negative AO states (AC4/AC8)', () => {
   it('consumed delivery is not submitted', () => {
     const { actions } = planFixture('already-consumed.json');
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(
+      true,
+    );
+  });
+
+  it('consumed delivery with report aliases is not submitted', () => {
+    const { actions } = planFixture('consumed-report-aliases.json');
     expect(submitActions(actions)).toHaveLength(0);
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(
       true,

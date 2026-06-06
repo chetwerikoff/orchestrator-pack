@@ -1,0 +1,34 @@
+{
+  "description": "Review: report_state/reportedAt aliases mark delivery consumed",
+  "nowMs": 1717600700000,
+  "sessions": [
+    {
+      "sessionId": "opk-alias-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": [
+        {
+          "report_state": "addressing_reviews",
+          "reportedAt": "2026-06-04T12:05:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "dispatchJournal": {},
+  "aoEvents": [],
+  "reviewRuns": [
+    {
+      "id": "run-alias-232",
+      "prNumber": 232,
+      "targetSha": "sha232alias",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-alias-232",
+      "updatedAt": "2026-06-04T12:00:00.000Z"
+    }
+  ],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

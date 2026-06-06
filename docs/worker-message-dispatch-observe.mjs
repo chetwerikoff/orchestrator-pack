@@ -11,7 +11,12 @@ import {
   getEventTimestampMs,
   resolveEventSessionId,
 } from './terminal-flood-detect.mjs';
-import { getReviewRunId } from './review-finding-delivery-confirm.mjs';
+import {
+  getReportState,
+  getReportTimestampMs,
+  getReviewRunId,
+  resolveSendObservedAtMs,
+} from './review-finding-delivery-confirm.mjs';
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
 export const AO_PASTE_CHAR_THRESHOLD = 200;
@@ -192,9 +197,8 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
     if (!runId || !sessionId) {
       continue;
     }
-    const sentAt = String(run?.sentAt ?? run?.sentToAgentAt ?? '').trim();
-    const deliveredAtMs = sentAt ? Date.parse(sentAt) : nowMs;
-    if (!Number.isFinite(deliveredAtMs)) {
+    const deliveredAtMs = resolveSendObservedAtMs(run, nowMs);
+    if (!Number.isFinite(deliveredAtMs) || deliveredAtMs <= 0) {
       continue;
     }
     const deliveryId = buildDeliveryId(
@@ -266,11 +270,11 @@ export function getSessionActivity(session) {
 export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
   const reports = toArray(session?.reports);
   for (const report of reports) {
-    const ts = Date.parse(String(report?.timestamp ?? ''));
-    if (!Number.isFinite(ts) || ts <= deliveredAtMs) {
+    const ts = getReportTimestampMs(report);
+    if (!ts || ts <= deliveredAtMs) {
       continue;
     }
-    const state = String(report?.reportState ?? '').trim();
+    const state = getReportState(report);
     if (state === 'addressing_reviews' && delivery.source === DISPATCH_SOURCE_REVIEW_SEND) {
       return true;
     }
