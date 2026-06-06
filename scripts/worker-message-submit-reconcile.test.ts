@@ -413,6 +413,29 @@ describe('multiple pending deliveries (AC10)', () => {
     );
   });
 
+  it('does not escalate overwritten delivery already consumed via worker report', () => {
+    const { actions } = planFixture('consumed-overwritten-no-escalate.json');
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'escalate' &&
+          a.reason === 'lost_delivery_overwritten' &&
+          a.deliveryId === 'opk-consumed-overwrite:1717600900000:pack-send:first',
+      ),
+    ).toBe(false);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'mark_consumed' &&
+          a.deliveryId === 'opk-consumed-overwrite:1717600900000:pack-send:first',
+      ),
+    ).toBe(true);
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(
+      'opk-consumed-overwrite:1717600950000:pack-send:second',
+    );
+  });
+
   it('submits surviving record once and escalates overwritten', () => {
     const { actions } = planFixture('two-pending-overwrite.json');
     expect(submitActions(actions)).toHaveLength(1);

@@ -407,6 +407,7 @@ export function planWorkerMessageSubmitActions(input) {
   const sessionIds = new Set(deliveries.map((d) => String(d.sessionId)));
 
   for (const sessionId of sessionIds) {
+    const session = findSessionById(sessionList, sessionId);
     const overwritten = findOverwrittenDeliveries(deliveries, sessionId);
     for (const lost of overwritten) {
       const lostId = String(lost.deliveryId);
@@ -415,6 +416,22 @@ export function planWorkerMessageSubmitActions(input) {
         existing.terminalState === SUBMIT_STATE_ESCALATED ||
         existing.terminalState === SUBMIT_STATE_SUBMITTED
       ) {
+        continue;
+      }
+      if (isDeliveryConsumed(session, lost, Number(lost.deliveredAtMs ?? 0))) {
+        nextDeliveries[lostId] = {
+          ...existing,
+          deliveryId: lostId,
+          terminalState: SUBMIT_STATE_SUBMITTED,
+          consumedAtMs: nowMs,
+        };
+        actions.push({
+          type: 'mark_consumed',
+          deliveryId: lostId,
+          sessionId,
+          reason: 'consumed',
+        });
+        audit.push({ deliveryId: lostId, action: 'mark_consumed', reason: 'consumed' });
         continue;
       }
       nextDeliveries[lostId] = {
@@ -440,7 +457,6 @@ export function planWorkerMessageSubmitActions(input) {
       continue;
     }
 
-    const session = findSessionById(sessionList, sessionId);
     const deliveryId = String(surviving.deliveryId);
     const prior = nextDeliveries[deliveryId] ?? {};
     if (!prior.firstObservedAtMs) {
