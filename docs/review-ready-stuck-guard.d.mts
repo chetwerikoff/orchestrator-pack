@@ -111,6 +111,7 @@ export declare function findLatestReportForHead(
 export declare function findLastReadyForReviewReport(
   session: AoSession,
   headSha: string,
+  options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 export declare function isCoveringCleanRun(
   run: ReviewRun,

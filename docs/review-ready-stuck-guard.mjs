@@ -19,6 +19,7 @@ import {
   getStoredReportHeadSha,
   normalizeSha,
   reportCoversHead,
+  resolveHeadCommittedAtMs,
   sessionMatchesIdentifier,
   sessionMatchesPr,
   toArray,
@@ -215,10 +216,12 @@ export function findLatestReportForHead(session, headSha, options = {}) {
 /**
  * @param {AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function findLastReadyForReviewReport(session, headSha) {
+export function findLastReadyForReviewReport(session, headSha, options = {}) {
   return findLatestReportForHead(session, headSha, {
     matchStates: new Set(['ready_for_review']),
+    headCommittedAtMs: options.headCommittedAtMs,
   });
 }
 
@@ -374,7 +377,8 @@ export function classifyReviewReadySnapshot({
     reasons.push('ci_not_green');
   }
 
-  const readyReport = findLastReadyForReviewReport(session, headSha);
+  const headCommittedAtMs = resolveHeadCommittedAtMs([openPr], prNumber);
+  const readyReport = findLastReadyForReviewReport(session, headSha, { headCommittedAtMs });
   if (!readyReport) {
     reasons.push('no_ready_for_review_for_head');
   }

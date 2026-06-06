@@ -189,6 +189,12 @@ describe('consistent-snapshot classification (AC1)', () => {
     expect(result.reviewReady).toBe(true);
   });
 
+  it('Issue #218: SHA-less ready_for_review is review-ready when head commit predates report', () => {
+    const result = classifyFromFixture('positive-sha-less-ready.json');
+    expect(result.reviewReady).toBe(true);
+    expect(result.reasons).not.toContain('no_ready_for_review_for_head');
+  });
+
   it('stale head-moved is not review-ready', () => {
     const result = classifyFromFixture('negative-stale-head-moved.json');
     expect(result.reviewReady).toBe(false);
