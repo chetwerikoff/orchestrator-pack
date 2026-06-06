@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Root = if ($RepoRoot) { (Resolve-Path $RepoRoot).Path } else { Split-Path -Parent $PSScriptRoot }
-$CheckScript = Join-Path $PSScriptRoot 'draft-discipline.ts'
+$CheckScript = Join-Path $PSScriptRoot 'draft-discipline.mjs'
 
 $args = @($Command)
 if ($DraftPath) {
@@ -31,7 +31,7 @@ if ($RepoRoot) {
 
 Push-Location $Root
 try {
-    & node --import tsx $CheckScript @args
+    & node $CheckScript @args
     exit $LASTEXITCODE
 }
 finally {

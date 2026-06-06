@@ -1,48 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import taxonomy from './draft-discipline-action-taxonomy.json' with { type: 'json' };
 
-export type BehaviorKind = 'action-producing' | 'record-only';
-
-export interface PositiveOutcomeBlock {
-  asserts?: string;
-  input?: string;
-  provenance?: string;
-  raw: string;
-}
-
-export interface ParkedRootBlock {
-  cause: string;
-  evidence: string;
-  reasonDeferred: string;
-  followUpIssue: string;
-  resolutionPolicy: string;
-  raw: string;
-}
-
-export interface MockIssue {
-  state: 'OPEN' | 'CLOSED';
-  title: string;
-  body: string;
-  intentionallyResolved?: boolean;
-}
-
-export interface PositiveOutcomeCheckResult {
-  ok: boolean;
-  errors: string[];
-  warnings: string[];
-  behaviorKind: BehaviorKind | null;
-  skipped: boolean;
-}
-
-export interface ParkedRootCheckResult {
-  ok: boolean;
-  errors: string[];
-  warnings: string[];
-  blocks: ParkedRootBlock[];
-  deferralWithoutBlock: boolean;
-}
+const require = createRequire(import.meta.url);
+const taxonomy = require('./draft-discipline-action-taxonomy.json');
 
 const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
 
@@ -79,12 +41,12 @@ const REALISTIC_INPUT_VALUES = new Set(['realistic', 'production-representative'
 const EXTERNAL_TOOL_INPUT = 'external-tool-output';
 const VALID_PROVENANCE = new Set(['capture-backed', 'sample-backed']);
 
-function normalizeLine(value: string): string {
+function normalizeLine(value) {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function parseKeyValueBlock(body: string): Record<string, string> {
-  const result: Record<string, string> = {};
+function parseKeyValueBlock(body) {
+  const result = {};
   for (const line of body.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) {
@@ -99,9 +61,9 @@ function parseKeyValueBlock(body: string): Record<string, string> {
   return result;
 }
 
-export function extractFencedBlocks(markdown: string): Map<string, string[]> {
-  const blocks = new Map<string, string[]>();
-  let match: RegExpExecArray | null;
+export function extractFencedBlocks(markdown) {
+  const blocks = new Map();
+  let match;
   const pattern = new RegExp(FENCE_PATTERN.source, FENCE_PATTERN.flags);
   while ((match = pattern.exec(markdown)) !== null) {
     const kind = match[1].toLowerCase();
@@ -113,7 +75,7 @@ export function extractFencedBlocks(markdown: string): Map<string, string[]> {
   return blocks;
 }
 
-export function parseBehaviorKind(markdown: string): BehaviorKind | null {
+export function parseBehaviorKind(markdown) {
   const blocks = extractFencedBlocks(markdown);
   const raw = blocks.get('behavior-kind')?.[0]?.trim().toLowerCase();
   if (!raw) {
@@ -128,7 +90,7 @@ export function parseBehaviorKind(markdown: string): BehaviorKind | null {
   return null;
 }
 
-export function parsePositiveOutcomeBlocks(markdown: string): PositiveOutcomeBlock[] {
+export function parsePositiveOutcomeBlocks(markdown) {
   const blocks = extractFencedBlocks(markdown);
   return (blocks.get('positive-outcome') ?? []).map((raw) => {
     const fields = parseKeyValueBlock(raw);
@@ -141,7 +103,7 @@ export function parsePositiveOutcomeBlocks(markdown: string): PositiveOutcomeBlo
   });
 }
 
-export function parseParkedRootBlocks(markdown: string): ParkedRootBlock[] {
+export function parseParkedRootBlocks(markdown) {
   const blocks = extractFencedBlocks(markdown);
   return (blocks.get('parked-root-cause') ?? []).map((raw) => {
     const fields = parseKeyValueBlock(raw);
@@ -156,7 +118,7 @@ export function parseParkedRootBlocks(markdown: string): ParkedRootBlock[] {
   });
 }
 
-export function countActionTaxonomyHits(markdown: string, terms: string[] = taxonomy.terms): string[] {
+export function countActionTaxonomyHits(markdown, terms = taxonomy.terms) {
   const lower = markdown.toLowerCase();
   return terms.filter((term) => {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -164,7 +126,7 @@ export function countActionTaxonomyHits(markdown: string, terms: string[] = taxo
   });
 }
 
-function isVagueCause(cause: string): boolean {
+function isVagueCause(cause) {
   const normalized = normalizeLine(cause);
   if (normalized.length < 20) {
     return true;
@@ -172,12 +134,12 @@ function isVagueCause(cause: string): boolean {
   return VAGUE_CAUSE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function parseIssueNumber(reference: string): number | null {
+function parseIssueNumber(reference) {
   const match = reference.match(/#(\d+)/);
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-function issueBodyContainsCause(issueBody: string, cause: string): boolean {
+function issueBodyContainsCause(issueBody, cause) {
   const normalizedCause = normalizeLine(cause).toLowerCase();
   if (!normalizedCause) {
     return false;
@@ -194,21 +156,21 @@ function issueBodyContainsCause(issueBody: string, cause: string): boolean {
   return hits.length >= Math.min(3, significant.length);
 }
 
-export function detectDeferralWithoutBlock(markdown: string): boolean {
+export function detectDeferralWithoutBlock(markdown) {
   if (parseParkedRootBlocks(markdown).length > 0) {
     return false;
   }
   return DEFERRAL_WITHOUT_BLOCK_PATTERNS.some((pattern) => pattern.test(markdown));
 }
 
-export function checkPositiveOutcome(markdown: string): PositiveOutcomeCheckResult {
+export function checkPositiveOutcome(markdown) {
   const behaviorKind = parseBehaviorKind(markdown);
   if (!behaviorKind) {
     return { ok: true, errors: [], warnings: [], behaviorKind: null, skipped: true };
   }
 
-  const errors: string[] = [];
-  const warnings: string[] = [];
+  const errors = [];
+  const warnings = [];
   const positiveBlocks = parsePositiveOutcomeBlocks(markdown);
   const taxonomyHits = countActionTaxonomyHits(markdown);
 
@@ -262,12 +224,9 @@ export function checkPositiveOutcome(markdown: string): PositiveOutcomeCheckResu
   return { ok: errors.length === 0, errors, warnings, behaviorKind, skipped: false };
 }
 
-export function checkParkedRoot(
-  markdown: string,
-  mockIssues: Record<string, MockIssue> = {},
-): ParkedRootCheckResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
+export function checkParkedRoot(markdown, mockIssues = {}) {
+  const errors = [];
+  const warnings = [];
   const blocks = parseParkedRootBlocks(markdown);
   const deferralWithoutBlock = detectDeferralWithoutBlock(markdown);
 
@@ -276,7 +235,7 @@ export function checkParkedRoot(
   }
 
   for (const block of blocks) {
-    const requiredFields: Array<[string, string]> = [
+    const requiredFields = [
       ['cause', block.cause],
       ['evidence', block.evidence],
       ['reason-deferred', block.reasonDeferred],
@@ -327,27 +286,16 @@ export function checkParkedRoot(
   };
 }
 
-export interface SurfaceCheckResult {
-  ok: boolean;
-  errors: string[];
-}
-
-export function checkRcaSpecDisciplineSurfaces(
-  repoRoot: string,
-  configPath?: string,
-): SurfaceCheckResult {
+export function checkRcaSpecDisciplineSurfaces(repoRoot, configPath) {
   const configFile =
     configPath ?? path.join(path.dirname(fileURLToPath(import.meta.url)), 'rca-spec-discipline-surfaces.json');
-  const config = JSON.parse(readFileSync(configFile, 'utf8')) as {
-    rules: Array<{ id: string; markers: string[]; surfaces: string[] }>;
-    agentRulesMirrors?: string[];
-  };
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
 
-  const errors: string[] = [];
+  const errors = [];
   for (const rule of config.rules) {
     for (const surface of rule.surfaces) {
       const absolute = path.join(repoRoot, surface);
-      let content: string;
+      let content;
       try {
         content = readFileSync(absolute, 'utf8');
       } catch {
@@ -374,7 +322,7 @@ export function checkRcaSpecDisciplineSurfaces(
   if (agentRules && config.agentRulesMirrors) {
     for (const mirror of config.agentRulesMirrors) {
       const absolute = path.join(repoRoot, mirror);
-      let content: string;
+      let content;
       try {
         content = readFileSync(absolute, 'utf8');
       } catch {
@@ -409,12 +357,12 @@ export function checkRcaSpecDisciplineSurfaces(
   return { ok: errors.length === 0, errors };
 }
 
-function isCliMain(): boolean {
+function isCliMain() {
   const entry = process.argv[1]?.replace(/\\/g, '/');
-  return Boolean(entry?.endsWith('draft-discipline.ts') || entry?.endsWith('check-draft-discipline.ts'));
+  return Boolean(entry?.endsWith('draft-discipline.mjs'));
 }
 
-export function runCli(argv: string[]): number {
+export function runCli(argv) {
   const command = argv[2];
   const draftFlag = argv.indexOf('--draft');
   const mockFlag = argv.indexOf('--mock-issues');
@@ -440,9 +388,9 @@ export function runCli(argv: string[]): number {
 
   const draftPath = argv[draftFlag + 1];
   const markdown = readFileSync(draftPath, 'utf8');
-  let mockIssues: Record<string, MockIssue> = {};
+  let mockIssues = {};
   if (mockFlag >= 0) {
-    mockIssues = JSON.parse(readFileSync(argv[mockFlag + 1], 'utf8')) as Record<string, MockIssue>;
+    mockIssues = JSON.parse(readFileSync(argv[mockFlag + 1], 'utf8'));
   }
 
   if (command === 'positive-outcome') {
