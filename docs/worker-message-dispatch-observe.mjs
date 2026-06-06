@@ -226,6 +226,24 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
 }
 
 /**
+ * @param {Array<Record<string, unknown>>} journalDeliveries
+ */
+function journalReviewSendSourceKeys(journalDeliveries) {
+  /** @type {Set<string>} */
+  const keys = new Set();
+  for (const row of journalDeliveries) {
+    if (String(row.source ?? '') !== DISPATCH_SOURCE_REVIEW_SEND) {
+      continue;
+    }
+    const key = String(row.sourceKey ?? '').trim();
+    if (key) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
  * @param {object} input
  */
 export function mergeDeliveryRecords(input) {
@@ -236,11 +254,20 @@ export function mergeDeliveryRecords(input) {
     reactionMessages,
     nowMs,
   } = input;
+  const journalDeliveries = extractJournalDeliveries(dispatchJournal ?? {});
+  const journalReviewSends = journalReviewSendSourceKeys(journalDeliveries);
+  const reviewRunDeliveries = extractReviewFindingDeliveries(
+    toArray(reviewRuns),
+    nowMs,
+  ).filter((row) => {
+    const key = String(row.sourceKey ?? '').trim();
+    return !key || !journalReviewSends.has(key);
+  });
   const byId = new Map();
   for (const row of [
-    ...extractJournalDeliveries(dispatchJournal ?? {}),
+    ...journalDeliveries,
     ...extractReactionDeliveries(toArray(aoEvents), reactionMessages ?? {}),
-    ...extractReviewFindingDeliveries(toArray(reviewRuns), nowMs),
+    ...reviewRunDeliveries,
   ]) {
     const id = String(row.deliveryId ?? '');
     if (!id) {

@@ -168,10 +168,32 @@ function Invoke-SubmitReconcileTick {
                 if (-not $DryRunMode -and -not $Fixture) {
                     Set-SubmitReconcileState -Path $StatePath -State $tracking
                 }
-                $submitResult = Invoke-WorkerInputDraftSubmit `
-                    -SessionId $action.sessionId `
-                    -ExpectedSessionId $action.sessionId `
-                    -DryRun:$DryRunMode
+                if ($DryRunMode) {
+                    $submitResult = Invoke-WorkerInputDraftSubmit `
+                        -SessionId $action.sessionId `
+                        -ExpectedSessionId $action.sessionId `
+                        -DryRun
+                }
+                else {
+                    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'worker-message-submit-side-effect.lock'
+                    Write-OrchestratorSideProcessProgress -ChildId 'worker-message-submit-reconcile' -Phase 'side_effect'
+                    $submitHolder = @{ result = $null }
+                    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+                        $submitHolder.result = Invoke-WorkerInputDraftSubmit `
+                            -SessionId $action.sessionId `
+                            -ExpectedSessionId $action.sessionId
+                    }
+                    if (-not $fenced.ok) {
+                        Write-SubmitReconcileLog "submit skipped (side-effect busy): delivery=$($action.deliveryId) session=$($action.sessionId)"
+                        $submitResult = @{ submitted = $false; reason = 'side_effect_busy' }
+                    }
+                    elseif (-not $submitHolder.result) {
+                        $submitResult = @{ submitted = $false; reason = 'submit_result_missing' }
+                    }
+                    else {
+                        $submitResult = $submitHolder.result
+                    }
+                }
                 if ($submitResult.submitted) {
                     Write-SubmitReconcileLog "submitted: delivery=$($action.deliveryId) session=$($action.sessionId) attempt=$($action.attempt) claim=$($action.claimKey)"
                     $submitted++

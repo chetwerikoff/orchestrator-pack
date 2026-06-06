@@ -439,6 +439,40 @@ describe('auditable decisions (AC7)', () => {
 });
 
 describe('mergeDeliveryRecords from AO events', () => {
+  it('dedupes review-send when journal already records the run', () => {
+    const run = {
+      id: 'run-journal-dedupe',
+      linkedSessionId: 'opk-dedupe',
+      sentFindingCount: 2,
+      status: 'waiting_update',
+      updatedAt: '2026-06-04T12:00:00.000Z',
+      prNumber: 234,
+      targetSha: 'abc123',
+    };
+    const deliveries = mergeDeliveryRecords({
+      aoEvents: [],
+      dispatchJournal: {
+        'opk-dedupe:1717600300000:review-send:run-journal-dedupe': {
+          deliveryId: 'opk-dedupe:1717600300000:review-send:run-journal-dedupe',
+          sessionId: 'opk-dedupe',
+          deliveredAtMs: 1717600300000,
+          source: 'review-send',
+          sourceKey: 'run-journal-dedupe',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          messageShape: { charLength: 420, lineCount: 6 },
+        },
+      },
+      reviewRuns: [run],
+      reactionMessages: {},
+      nowMs: 1717600400000,
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.deliveryId).toBe(
+      'opk-dedupe:1717600300000:review-send:run-journal-dedupe',
+    );
+    expect(findOverwrittenDeliveries(deliveries, 'opk-dedupe')).toHaveLength(0);
+  });
+
   it('ingests reaction.action_succeeded send-to-agent', () => {
     const deliveries = mergeDeliveryRecords({
       aoEvents: [

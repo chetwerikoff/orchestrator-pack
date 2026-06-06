@@ -48,6 +48,11 @@ if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
     exit 1
 }
 
+if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must fence Enter with worker-message-submit-side-effect.lock'
+    exit 1
+}
+
 if ($ps1 -notmatch 'worker-message-submit-reconcile') {
     Write-Host 'worker-message-submit-reconcile.ps1 must register child progress id'
     exit 1
