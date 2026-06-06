@@ -1,44 +1,45 @@
 {
   "description": "AC2: run-attributed addressing_reviews before window ends submit path",
-  "nowMs": 1717506000000,
+  "fixtureTag": "ac2-addressing-reviews-confirmed",
+  "nowMs": 1717506200000,
   "reviewRuns": [
     {
       "id": "run-confirmed",
-      "prNumber": 166,
-      "targetSha": "sha166c",
+      "prNumber": 218,
+      "targetSha": "sha218ac2b",
       "status": "waiting_update",
       "sentFindingCount": 1,
-      "linkedSessionId": "opk-worker-live",
-      "sentAt": "2026-06-04T14:00:00Z"
+      "linkedSessionId": "opk-confirmed-ac2",
+      "sentAt": "2026-06-04T16:00:00Z"
     }
   ],
   "sessions": [
     {
-      "sessionId": "opk-worker-live",
+      "name": "opk-confirmed-ac2",
       "role": "worker",
-      "prNumber": 166,
+      "prNumber": 218,
       "status": "working",
       "reports": [
         {
           "reportState": "addressing_reviews",
-          "reportedAt": "2026-06-04T14:35:00Z"
+          "reportedAt": "2026-06-04T16:35:00Z"
         }
       ]
     }
   ],
-  "openPrs": [{ "number": 166, "headRefOid": "sha166c" }],
+  "openPrs": [{ "number": 218, "headRefOid": "sha218ac2b" }],
   "tracking": {
     "runs": {
       "run-confirmed": {
         "deliveryState": "unconfirmed",
-        "sendObservedAtMs": 1717502400000,
+        "sendObservedAtMs": 1717502600000,
         "redeliveryCount": 2,
-        "lastRedeliveryAtMs": 1717505000000
+        "lastRedeliveryAtMs": 1717505200000
       }
     }
   },
   "config": {
-    "confirmationWindowMs": 60000,
+    "confirmationWindowMs": 120000,
     "maxRedeliveries": 2,
     "maxSubmits": 1
   },

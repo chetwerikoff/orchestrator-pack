@@ -2,7 +2,11 @@
  * Pack bridge: submit AO-delivered multi-line paste drafts (Issue #216).
  * Vitest: scripts/review-finding-delivery-submit.test.ts, scripts/submit-worker-input-draft.test.ts
  */
-import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import {
+  readStdinJson,
+  resolveBoundedInt,
+  runStdinJsonCli,
+} from './review-mechanical-cli.mjs';
 import { normalizeSha, toArray } from './review-trigger-reconcile.mjs';
 import {
   countAmbiguousUnconfirmedPeers,
@@ -28,19 +32,6 @@ export const INPUT_AFFECTING_EVENT_KINDS = new Set([
   'reaction.send_to_agent_failed',
   'session.send_failed',
 ]);
-
-/**
- * @param {unknown} value
- * @param {number} defaultValue
- * @param {number} [min]
- */
-function resolveBoundedInt(value, defaultValue, min = 0) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return defaultValue;
-  }
-  return Math.max(min, parsed);
-}
 
 /**
  * @param {object} [config]

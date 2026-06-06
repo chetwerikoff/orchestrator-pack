@@ -42,6 +42,19 @@ export function evaluateMechanicalTickInterval({
   return { ok: false, reason: 'interval_not_elapsed', intervalMs: interval };
 }
 
+/**
+ * @param {unknown} value
+ * @param {number} defaultValue
+ * @param {number} [min]
+ */
+export function resolveBoundedInt(value, defaultValue, min = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return defaultValue;
+  }
+  return Math.max(min, parsed);
+}
+
 /** Spawn / claim-pr / kill forbidden on all mechanical reconcile entrypoints. */
 export const MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL = [
   /\bao\s+spawn\b/i,

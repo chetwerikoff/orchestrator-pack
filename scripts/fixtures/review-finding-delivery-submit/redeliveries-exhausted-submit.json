@@ -1,22 +1,24 @@
 {
   "description": "AC1: after max redeliveries without confirmation, emit exactly one submit",
+  "fixtureTag": "ac1-redeliveries-exhausted-submit",
   "nowMs": 1717506000000,
   "reviewRuns": [
     {
       "id": "run-submit-1",
-      "prNumber": 166,
-      "targetSha": "sha166b",
+      "prNumber": 216,
+      "targetSha": "sha216ac1",
       "status": "sent_to_agent",
       "sentFindingCount": 1,
-      "linkedSessionId": "opk-worker-live",
+      "linkedSessionId": "opk-submit-ac1",
       "sentAt": "2026-06-04T14:00:00Z"
     }
   ],
   "sessions": [
     {
-      "sessionId": "opk-worker-live",
+      "name": "opk-submit-ac1",
+      "sessionId": "opk-submit-ac1",
       "role": "worker",
-      "prNumber": 166,
+      "prNumber": 216,
       "status": "working",
       "reports": [
         {
@@ -26,7 +28,7 @@
       ]
     }
   ],
-  "openPrs": [{ "number": 166, "headRefOid": "sha166b" }],
+  "openPrs": [{ "number": 216, "headRefOid": "sha216ac1" }],
   "tracking": {
     "runs": {
       "run-submit-1": {

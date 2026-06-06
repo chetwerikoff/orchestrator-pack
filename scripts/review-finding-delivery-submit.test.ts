@@ -35,12 +35,13 @@ type FixturePayload = {
   floodActiveSessions?: Record<string, boolean>;
 };
 
-function loadFixture(name: string): FixturePayload {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
+function loadSubmitFixture(name: string): FixturePayload {
+  const fixturePath = path.join(fixturesDir, name);
+  return JSON.parse(readFileSync(fixturePath, 'utf8')) as FixturePayload;
 }
 
-function planFromFixture(name: string) {
-  const fixture = loadFixture(name);
+function planSubmitScenario(name: string) {
+  const fixture = loadSubmitFixture(name);
   return planDeliveryConfirmActions({
     reviewRuns: fixture.reviewRuns,
     sessions: fixture.sessions,
@@ -55,33 +56,33 @@ function planFromFixture(name: string) {
 
 describe('submit when delivered-but-unconsumed (AC1)', () => {
   it('emits exactly one submit after redeliveries exhausted', () => {
-    const { actions, tracking } = planFromFixture('redeliveries-exhausted-submit.json');
+    const { actions, tracking } = planSubmitScenario('redeliveries-exhausted-submit.json');
     const submits = actions.filter(
       (a): a is Extract<DeliveryConfirmAction, { type: 'submit' }> => a.type === 'submit',
     );
     expect(submits).toHaveLength(1);
     expect(submits[0]).toMatchObject({
       runId: 'run-submit-1',
-      sessionId: 'opk-worker-live',
-      prNumber: 166,
+      sessionId: 'opk-submit-ac1',
+      prNumber: 216,
       attempt: 1,
       maxSubmits: 1,
-      decisionKey: 'run-submit-1:sha166b',
+      decisionKey: 'run-submit-1:sha216ac1',
     });
     expect(tracking.runs?.['run-submit-1']?.submitCount).toBe(1);
-    expect(tracking.runs?.['run-submit-1']?.submitDecisionKey).toBe('run-submit-1:sha166b');
+    expect(tracking.runs?.['run-submit-1']?.submitDecisionKey).toBe('run-submit-1:sha216ac1');
   });
 });
 
 describe('causal consumption only (AC2)', () => {
   it('marks confirmed on addressing_reviews — no submit', () => {
-    const { actions } = planFromFixture('addressing-reviews-no-submit.json');
+    const { actions } = planSubmitScenario('addressing-reviews-no-submit.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(true);
   });
 
   it('unrelated working report does not confirm — submit remains', () => {
-    const { actions } = planFromFixture('unrelated-activity-still-submits.json');
+    const { actions } = planSubmitScenario('unrelated-activity-still-submits.json');
     expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(false);
     expect(actions.filter((a) => a.type === 'submit')).toHaveLength(1);
   });
@@ -89,7 +90,7 @@ describe('causal consumption only (AC2)', () => {
 
 describe('fail-closed on ambiguity (AC3)', () => {
   it('escalates dead session without submit', () => {
-    const { actions } = planFromFixture('fail-closed-dead-session.json');
+    const { actions } = planSubmitScenario('fail-closed-dead-session.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(
       actions.some(
@@ -106,7 +107,7 @@ describe('bounded submit + escalate (AC4)', () => {
   });
 
   it('escalates when submit budget exhausted', () => {
-    const { actions, tracking } = planFromFixture('submit-budget-exhausted-escalate.json');
+    const { actions, tracking } = planSubmitScenario('submit-budget-exhausted-escalate.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(
       actions.some(
@@ -119,15 +120,17 @@ describe('bounded submit + escalate (AC4)', () => {
   });
 
   it('new head SHA resets submit budget', () => {
-    const { actions } = planFromFixture('new-head-resets-submit-budget.json');
+    const { actions } = planSubmitScenario('new-head-resets-submit-budget.json');
     expect(actions.filter((a) => a.type === 'submit')).toHaveLength(1);
-    expect(buildSubmitDecisionKey('run-new-head', 'newhead99')).toBe('run-new-head:newhead99');
+    expect(buildSubmitDecisionKey('run-new-head', 'newhead99ac4')).toBe(
+      'run-new-head:newhead99ac4',
+    );
   });
 });
 
 describe('flood defer (AC5)', () => {
   it('defers submit without escalating when flood active', () => {
-    const { actions } = planFromFixture('flood-active-defer.json');
+    const { actions } = planSubmitScenario('flood-active-defer.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(actions.some((a) => a.type === 'escalate')).toBe(false);
     expect(actions.some((a) => a.type === 'defer' && a.reason === 'flood_active')).toBe(
@@ -138,7 +141,7 @@ describe('flood defer (AC5)', () => {
 
 describe('dedupe restart-safe (AC6)', () => {
   it('does not plan second submit when decision key already recorded', () => {
-    const fixture = loadFixture('redeliveries-exhausted-submit.json');
+    const fixture = loadSubmitFixture('redeliveries-exhausted-submit.json');
     const first = planDeliveryConfirmActions({
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
@@ -166,7 +169,7 @@ describe('dedupe restart-safe (AC6)', () => {
 
 describe('never authors content (AC7)', () => {
   it('submit action carries no composed finding text', () => {
-    const { actions } = planFromFixture('redeliveries-exhausted-submit.json');
+    const { actions } = planSubmitScenario('redeliveries-exhausted-submit.json');
     const submit = actions.find((a) => a.type === 'submit');
     expect(submit).toBeDefined();
     const serialized = JSON.stringify(submit);
@@ -185,7 +188,7 @@ describe('never authors content (AC7)', () => {
 
 describe('stale input refused (AC8)', () => {
   it('escalates when intervening input-affecting activity detected', () => {
-    const { actions } = planFromFixture('stale-input-refused.json');
+    const { actions } = planSubmitScenario('stale-input-refused.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(
       actions.some(
@@ -210,7 +213,7 @@ describe('stale input refused (AC8)', () => {
 
 describe('confirmed runs skip submit path', () => {
   it('records confirmed without submit', () => {
-    const { actions, tracking } = planFromFixture('addressing-reviews-no-submit.json');
+    const { actions, tracking } = planSubmitScenario('addressing-reviews-no-submit.json');
     expect(actions.some((a) => a.type === 'submit')).toBe(false);
     expect(tracking.runs?.['run-confirmed']?.deliveryState).toBe(DELIVERY_STATE_CONFIRMED);
   });

@@ -5,6 +5,7 @@
 import {
   evaluateMechanicalTickInterval,
   readStdinJson,
+  resolveBoundedInt,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
@@ -277,19 +278,6 @@ export function evaluateDeliveryTickInterval({ nowMs, lastTickMs, intervalMs }) 
     intervalMs,
     defaultIntervalMs: DEFAULT_TICK_INTERVAL_MS,
   });
-}
-
-/**
- * @param {unknown} value
- * @param {number} defaultValue
- * @param {number} [min]
- */
-function resolveBoundedInt(value, defaultValue, min = 0) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return defaultValue;
-  }
-  return Math.max(min, parsed);
 }
 
 /**

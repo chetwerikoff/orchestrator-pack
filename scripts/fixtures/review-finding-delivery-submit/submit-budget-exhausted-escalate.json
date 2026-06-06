@@ -1,42 +1,43 @@
 {
   "description": "AC4: submit budget exhausted → escalate, no further submit",
+  "fixtureTag": "ac4-submit-budget-exhausted",
   "nowMs": 1717507000000,
   "reviewRuns": [
     {
       "id": "run-submit-exhausted",
-      "prNumber": 166,
-      "targetSha": "sha166e",
+      "prNumber": 219,
+      "targetSha": "sha219ac4",
       "status": "waiting_update",
       "sentFindingCount": 1,
-      "linkedSessionId": "opk-worker-live",
-      "sentAt": "2026-06-04T14:00:00Z"
+      "linkedSessionId": "opk-exhausted-ac4",
+      "sentAt": "2026-06-04T18:00:00Z"
     }
   ],
   "sessions": [
     {
-      "sessionId": "opk-worker-live",
+      "sessionId": "opk-exhausted-ac4",
       "role": "worker",
-      "prNumber": 166,
+      "prNumber": 219,
       "status": "working",
       "reports": []
     }
   ],
-  "openPrs": [{ "number": 166, "headRefOid": "sha166e" }],
+  "openPrs": [{ "number": 219, "headRefOid": "sha219ac4" }],
   "tracking": {
     "runs": {
       "run-submit-exhausted": {
         "deliveryState": "unconfirmed",
-        "sendObservedAtMs": 1717502400000,
+        "sendObservedAtMs": 1717502800000,
         "redeliveryCount": 2,
-        "lastRedeliveryAtMs": 1717505000000,
+        "lastRedeliveryAtMs": 1717505400000,
         "submitCount": 1,
         "lastSubmitAtMs": 1717506500000,
-        "submitDecisionKey": "run-submit-exhausted:sha166e"
+        "submitDecisionKey": "run-submit-exhausted:sha219ac4"
       }
     }
   },
   "config": {
-    "confirmationWindowMs": 60000,
+    "confirmationWindowMs": 75000,
     "maxRedeliveries": 2,
     "maxSubmits": 1
   },
