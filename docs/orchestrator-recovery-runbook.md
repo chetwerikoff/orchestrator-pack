@@ -481,6 +481,7 @@ the recovery path without re-deriving the timeline by hand.
 
 | Primary / branch | Meaning | Operator path |
 |------------------|---------|---------------|
+| `no_worker_session` | No live worker session linked to the PR head | Respawn / `--claim-pr` discipline — reconciler does not spawn or claim |
 | `no_ready_for_review` | Worker has not handed off for the exact head | Worker liveness: `report-stale`, ping, respawn — not degraded-CI orchestrator branch |
 | `stale_report_binding` | `ready_for_review` exists but bound to an older head SHA | Wait for worker `ready_for_review` on current head |
 | `degraded_ci_handoff` (`reportRoute: degraded_ci`) | Worker escalated missing/unresolvable required checks | Orchestrator degraded-CI branch (#195): bounded reconcile retries, then escalation |

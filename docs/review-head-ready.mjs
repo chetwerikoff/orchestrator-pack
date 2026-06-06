@@ -365,9 +365,9 @@ export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha) {
  */
 export const NOT_READY_COMPONENT_PRECEDENCE = [
   'failed_or_cancelled_on_head',
+  'degraded_ci_handoff',
   'no_ready_for_review',
   'stale_report_binding',
-  'degraded_ci_handoff',
   'ci_red',
   'ci_degraded',
   'ci_not_yet_observed',
@@ -626,6 +626,23 @@ export function buildNoStartDecisionRecord({
       primary: 'failed_or_cancelled_on_head',
       failedComponents: ['failed_or_cancelled_on_head'],
       observed: buildFailedCancelledObserved(failedRun, prNumber, normalizedHead),
+    };
+  }
+
+  if (reason === 'no_worker_session') {
+    return {
+      branch: 'no_worker_session',
+      reason: 'no_worker_session',
+      primary: 'no_worker_session',
+      failedComponents: ['no_worker_session'],
+      observed: buildReportCiObserved({
+        prNumber,
+        headSha: normalizedHead,
+        session: null,
+        ciChecks,
+        requiredCheckNames,
+        requiredCheckLookupFailed,
+      }),
     };
   }
 

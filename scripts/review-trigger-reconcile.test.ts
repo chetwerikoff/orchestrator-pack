@@ -369,9 +369,14 @@ describe('resolveWorkerSessionId', () => {
     };
     const actions = planReconcileActions(fixture);
     expect(startReviewActions(actions)).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'skip' && a.reason === 'no_worker_session')).toBe(
-      true,
+    const skip = actions.find(
+      (a): a is Extract<ReconcileAction, { type: 'skip' }> =>
+        a.type === 'skip' && a.reason === 'no_worker_session',
     );
+    expect(skip).toBeDefined();
+    expect(skip?.record?.branch).toBe('no_worker_session');
+    expect(skip?.record?.primary).toBe('no_worker_session');
+    expect(skip?.record?.failedComponents).toEqual(['no_worker_session']);
   });
 
   it('ignores orchestrator sessions', () => {
@@ -494,9 +499,15 @@ describe('findForbiddenLifecycleCommands', () => {
 
 describe('Issue #212 defer subreason records', () => {
   it('AC1: documents stable primary precedence order', () => {
+    expect(NOT_READY_COMPONENT_PRECEDENCE.indexOf('degraded_ci_handoff')).toBeLessThan(
+      NOT_READY_COMPONENT_PRECEDENCE.indexOf('no_ready_for_review'),
+    );
     expect(NOT_READY_COMPONENT_PRECEDENCE.indexOf('no_ready_for_review')).toBeLessThan(
       NOT_READY_COMPONENT_PRECEDENCE.indexOf('ci_red'),
     );
+    expect(
+      choosePrimaryNotReadyComponent(['degraded_ci_handoff', 'no_ready_for_review']),
+    ).toBe('degraded_ci_handoff');
     expect(choosePrimaryNotReadyComponent(['ci_red', 'no_ready_for_review'])).toBe(
       'no_ready_for_review',
     );
@@ -573,6 +584,7 @@ describe('Issue #212 defer subreason records', () => {
       planReconcileActions(loadFixture('degraded-ci-worker-handoff.json')),
     ).find((a) => a.record);
     expect(degradedSkip?.reason).not.toBe('uncovered_not_ready');
+    expect(degradedSkip?.record?.primary).toBe('degraded_ci_handoff');
     expect(degradedSkip?.record?.failedComponents).toContain('degraded_ci_handoff');
     expect(degradedSkip?.record?.observed?.reportRoute).toBe('degraded_ci');
 
