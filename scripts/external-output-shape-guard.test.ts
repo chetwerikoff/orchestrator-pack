@@ -14,7 +14,18 @@ import {
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const referencesRoot = path.join(repoRoot, 'tests/external-output-references');
 const guardFixturesDir = path.join(repoRoot, 'tests/fixtures/external-output-shape-guard');
+type VariantShape = {
+  id: string;
+  allowedFields: string[];
+  forbiddenFields: string[];
+  forbiddenTogether: string[][];
+};
+
 const { catalog } = loadVariantCatalog(referencesRoot);
+
+function getVariant(id: string): VariantShape {
+  return catalog.get(id) as VariantShape;
+}
 
 function loadGuardFixture(name: string) {
   return JSON.parse(readFileSync(path.join(guardFixturesDir, name), 'utf8'));
@@ -22,7 +33,7 @@ function loadGuardFixture(name: string) {
 
 describe('validateObjectShape', () => {
   it('rejects phantom headRefOid on a worker report with fixture+path', () => {
-    const variant = catalog.get('ao-worker-report/ready_for_review')!;
+    const variant = getVariant('ao-worker-report/ready_for_review');
     const errors = validateObjectShape(
       loadGuardFixture('phantom-headRefOid-on-report.json').report,
       variant,
@@ -35,7 +46,7 @@ describe('validateObjectShape', () => {
   });
 
   it('accepts variant-valid ready_for_review fields', () => {
-    const variant = catalog.get('ao-worker-report/ready_for_review')!;
+    const variant = getVariant('ao-worker-report/ready_for_review');
     const errors = validateObjectShape(
       loadGuardFixture('valid-ready-for-review.json').report,
       variant,
@@ -46,7 +57,7 @@ describe('validateObjectShape', () => {
   });
 
   it('rejects impossible cross-state field combination on completed variant', () => {
-    const variant = catalog.get('ao-worker-report/completed')!;
+    const variant = getVariant('ao-worker-report/completed');
     const errors = validateObjectShape(
       loadGuardFixture('cross-state-impossible-combo.json').report,
       variant,
@@ -58,7 +69,7 @@ describe('validateObjectShape', () => {
   });
 
   it('detects nested phantom fields', () => {
-    const variant = catalog.get('ao-worker-report/ready_for_review')!;
+    const variant = getVariant('ao-worker-report/ready_for_review');
     const errors = validateObjectShape(
       loadGuardFixture('nested-phantom-field.json').report,
       variant,
@@ -74,7 +85,7 @@ describe('dynamic-key maps', () => {
   it('does not treat ciChecksByPr keys as schema fields', () => {
     const payload = loadGuardFixture('dynamic-key-map.json');
     const result = runExternalOutputShapeGuard(repoRoot);
-    const dynamicErrors = result.errors.filter((error) =>
+    const dynamicErrors = result.errors.filter((error: { path: string }) =>
       String(error.path).includes('ciChecksByPr."'),
     );
     expect(dynamicErrors).toEqual([]);

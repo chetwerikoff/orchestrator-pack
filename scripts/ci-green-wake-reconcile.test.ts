@@ -170,7 +170,7 @@ describe('resolveHeadOwningWorkerSessionId', () => {
 
     expect(
       resolveHeadOwningWorkerSessionId(sessions, 42, headSha, [
-        { number: 42 },
+        { number: 42, headRefOid: headSha },
       ]),
     ).toBe('op-owner');
   });

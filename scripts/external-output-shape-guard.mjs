@@ -5,7 +5,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -443,30 +442,41 @@ export function validateFixtureFileShapes(filePath, shape, catalog) {
 }
 
 /**
- * @param {ts.ObjectLiteralExpression} node
+ * @param {string} source
+ * @param {number} openBraceIdx
  */
-function extractStaticObject(node) {
+function extractBalancedObject(source, openBraceIdx) {
+  let depth = 0;
+  for (let i = openBraceIdx; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(openBraceIdx, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {string} snippet
+ */
+function parseObjectLiteralSnippet(snippet) {
   /** @type {Record<string, unknown>} */
   const obj = {};
-  for (const prop of node.properties) {
-    if (!ts.isPropertyAssignment(prop)) continue;
-    const key = ts.isIdentifier(prop.name)
-      ? prop.name.text
-      : ts.isStringLiteral(prop.name)
-        ? prop.name.text
-        : null;
-    if (!key) continue;
-    const init = prop.initializer;
-    if (ts.isStringLiteral(init)) obj[key] = init.text;
-    else if (ts.isNumericLiteral(init)) obj[key] = Number(init.text);
-    else if (init.kind === ts.SyntaxKind.TrueKeyword) obj[key] = true;
-    else if (init.kind === ts.SyntaxKind.FalseKeyword) obj[key] = false;
-    else if (ts.isObjectLiteralExpression(init)) obj[key] = extractStaticObject(init);
-    else if (ts.isArrayLiteralExpression(init)) {
-      obj[key] = init.elements
-        .filter(ts.isObjectLiteralExpression)
-        .map((element) => extractStaticObject(element));
-    }
+  const body = snippet.slice(1, -1);
+  const propPattern =
+    /([A-Za-z_][\w]*)\s*:\s*(?:'([^']*)'|"([^"]*)"|(true|false)|(-?\d+(?:\.\d+)?)|(\{[\s\S]*?\}))/g;
+  let match;
+  while ((match = propPattern.exec(body)) !== null) {
+    const key = match[1];
+    if (match[2] !== undefined) obj[key] = match[2];
+    else if (match[3] !== undefined) obj[key] = match[3];
+    else if (match[4] !== undefined) obj[key] = match[4] === 'true';
+    else if (match[5] !== undefined) obj[key] = Number(match[5]);
+    else if (match[6] !== undefined) obj[key] = parseObjectLiteralSnippet(match[6]);
   }
   return obj;
 }
@@ -481,36 +491,25 @@ export function findInlineWorkerReports(filePath, sourceText, optOuts = []) {
   const optOutLines = new Set(
     optOuts.filter((o) => rel.endsWith(o.file.replace(/\\/g, '/'))).map((o) => o.line),
   );
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
   /** @type {Array<{ line: number, object: Record<string, unknown> }>} */
   const results = [];
-
-  /** @param {ts.Node} node */
-  function visit(node) {
-    if (ts.isObjectLiteralExpression(node)) {
-      const hasReportState = node.properties.some(
-        (prop) =>
-          ts.isPropertyAssignment(prop) &&
-          ((ts.isIdentifier(prop.name) && prop.name.text === 'reportState') ||
-            (ts.isStringLiteral(prop.name) && prop.name.text === 'reportState')),
-      );
-      if (hasReportState) {
-        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-        if (!optOutLines.has(line)) {
-          results.push({ line, object: extractStaticObject(node) });
-        }
-      }
+  const reportStatePattern = /reportState\s*:\s*['"][^'"]+['"]/g;
+  let match;
+  while ((match = reportStatePattern.exec(sourceText)) !== null) {
+    const line = sourceText.slice(0, match.index).split('\n').length;
+    if (optOutLines.has(line)) {
+      continue;
     }
-    ts.forEachChild(node, visit);
+    let openBrace = sourceText.lastIndexOf('{', match.index);
+    while (openBrace >= 0) {
+      const snippet = extractBalancedObject(sourceText, openBrace);
+      if (snippet && snippet.includes('reportState')) {
+        results.push({ line, object: parseObjectLiteralSnippet(snippet) });
+        break;
+      }
+      openBrace = sourceText.lastIndexOf('{', openBrace - 1);
+    }
   }
-
-  visit(sourceFile);
   return results;
 }
 

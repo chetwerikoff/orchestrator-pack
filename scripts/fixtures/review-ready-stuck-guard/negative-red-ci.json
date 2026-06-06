@@ -30,24 +30,7 @@
       "linkedSessionId": "opk-worker-red-ci"
     }
   ],
-  "ciChecks": [
-    {
-      "name": "Verify orchestrator-pack structure",
-      "state": "SUCCESS"
-    },
-    {
-      "name": "PR scope guard",
-      "state": "FAILURE"
-    },
-    {
-      "name": "Run pack contract tests",
-      "state": "SUCCESS"
-    },
-    {
-      "name": "Self-architect lint",
-      "state": "SUCCESS"
-    }
-  ],
+  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"FAILURE"},{"name":"Run pack contract tests","state":"SUCCESS"},{"name":"Self-architect lint","state":"SUCCESS"}],
   "expect": {
     "reviewReady": false
   }

@@ -27,9 +27,9 @@ function loadFixture<T>(name: string): T {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as T;
 }
 
-function headCommittedAtMsFromPr(pr: { headCommittedAt?: string }) {
-  const raw = pr.headCommittedAt;
-  return raw ? Date.parse(raw) : undefined;
+function headCommittedAtMsFromPr(pr: Record<string, unknown>) {
+  const raw = pr.headCommittedAt ?? pr.headCommitCommittedAt;
+  return typeof raw === 'string' && raw ? Date.parse(raw) : undefined;
 }
 
 describe('classifyRequiredCiForReviewTrigger', () => {

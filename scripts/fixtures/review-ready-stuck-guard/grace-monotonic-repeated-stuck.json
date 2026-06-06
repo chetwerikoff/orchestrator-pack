@@ -30,24 +30,7 @@
       "linkedSessionId": "opk-grace-mono"
     }
   ],
-  "ciChecks": [
-    {
-      "name": "Verify orchestrator-pack structure",
-      "conclusion": "SUCCESS"
-    },
-    {
-      "name": "PR scope guard",
-      "conclusion": "SUCCESS"
-    },
-    {
-      "name": "Run pack contract tests",
-      "conclusion": "SUCCESS"
-    },
-    {
-      "name": "Self-architect lint",
-      "conclusion": "SUCCESS"
-    }
-  ],
+  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"SUCCESS"},{"name":"Run pack contract tests","state":"SUCCESS"},{"name":"Self-architect lint","state":"SUCCESS"}],
   "tracking": {
     "snapshots": {
       "opk-grace-mono:mono174": {
