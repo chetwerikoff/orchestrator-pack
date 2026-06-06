@@ -483,7 +483,7 @@ the recovery path without re-deriving the timeline by hand.
 |------------------|---------|---------------|
 | `no_worker_session` | No live worker session linked to the PR head | Respawn / `--claim-pr` discipline — reconciler does not spawn or claim |
 | `no_ready_for_review` | Worker has not handed off for the exact head | Worker liveness: `report-stale`, ping, respawn — not degraded-CI orchestrator branch |
-| `stale_report_binding` | `ready_for_review` exists but bound to an older head SHA | Wait for worker `ready_for_review` on current head |
+| `stale_report_binding` | `ready_for_review` exists but bound to an older head SHA | Wait for worker `ready_for_review` on current head; read `staleReadyForReviewHeadSha` (and `reportBoundHeadSha` when no current-head report exists) in `observed` |
 | `degraded_ci_handoff` (`reportRoute: degraded_ci`) | Worker escalated missing/unresolvable required checks | Orchestrator degraded-CI branch (#195): bounded reconcile retries, then escalation |
 | `ci_red` | Required CI failing on the head | Fix CI on the PR head |
 | `ci_degraded` / `ci_not_yet_observed` | Required-check set missing or not yet visible | Inspect `gh pr checks` / branch protection; see `requiredCheckSource` and `requiredCheckNames` in `observed` |

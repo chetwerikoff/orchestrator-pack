@@ -86,6 +86,11 @@ export declare function resolveReportRoute(
   report: WorkerReport | Record<string, unknown> | null | undefined,
 ): string;
 
+export declare function findLatestStaleReadyForReviewReport(
+  session: AoSession,
+  currentHeadSha: string,
+): Record<string, unknown> | null;
+
 export declare function collectFailedNotReadyComponents(input: {
   session: AoSession | null;
   headSha: string;

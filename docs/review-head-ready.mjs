@@ -406,6 +406,47 @@ export function resolveReportRoute(report) {
 }
 
 /**
+ * Latest `ready_for_review` report bound to a head other than the current one.
+ *
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} currentHeadSha
+ */
+export function findLatestStaleReadyForReviewReport(session, currentHeadSha) {
+  const current = normalizeSha(currentHeadSha);
+  if (!current) {
+    return null;
+  }
+
+  let best = null;
+  let bestMs = -1;
+  for (const report of toArray(session?.reports)) {
+    if (getReportState(report) !== 'ready_for_review') {
+      continue;
+    }
+    const reportHead = getReportHeadSha(report);
+    if (!reportHead || reportHead === current) {
+      continue;
+    }
+    const ts = Date.parse(
+      String(
+        report?.reportedAt ??
+          report?.timestamp ??
+          report?.createdAt ??
+          report?.reported_at ??
+          report?.created_at ??
+          '',
+      ),
+    );
+    const ms = Number.isFinite(ts) ? ts : 0;
+    if (ms >= bestMs) {
+      bestMs = ms;
+      best = report;
+    }
+  }
+  return best;
+}
+
+/**
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} headSha
  */
@@ -523,9 +564,23 @@ export function buildReportCiObserved({
   requiredCheckLookupFailed = false,
 }) {
   const currentHeadSha = normalizeSha(headSha);
-  const latestReport = session ? findLatestReportBoundToHead(session, currentHeadSha) : null;
-  const reportBoundHeadSha = latestReport ? getReportHeadSha(latestReport) : '';
-  const reportRoute = resolveReportRoute(latestReport);
+  const latestReportOnCurrentHead = session
+    ? findLatestReportBoundToHead(session, currentHeadSha)
+    : null;
+  const staleReadyReport = session
+    ? findLatestStaleReadyForReviewReport(session, currentHeadSha)
+    : null;
+
+  let reportBoundHeadSha = '';
+  let reportRoute = 'none';
+  if (latestReportOnCurrentHead) {
+    reportBoundHeadSha = getReportHeadSha(latestReportOnCurrentHead) || '';
+    reportRoute = resolveReportRoute(latestReportOnCurrentHead);
+  } else if (staleReadyReport) {
+    reportBoundHeadSha = getReportHeadSha(staleReadyReport) || '';
+    reportRoute = 'ready_for_review';
+  }
+
   const ciLevel = classifyRequiredCiForReviewTrigger(ciChecks, {
     requiredCheckNames,
     requiredCheckLookupFailed,
@@ -537,7 +592,8 @@ export function buildReportCiObserved({
   const requiredCheckSource =
     toArray(requiredCheckNames).length > 0 ? 'branch_protection' : 'pack_merge_contract_fallback';
 
-  return {
+  /** @type {Record<string, unknown>} */
+  const observed = {
     prNumber,
     currentHeadSha,
     reportBoundHeadSha: reportBoundHeadSha || 'none',
@@ -547,6 +603,13 @@ export function buildReportCiObserved({
     requiredCheckNames: effectiveRequired,
     requiredCheckLookupFailed: Boolean(requiredCheckLookupFailed),
   };
+
+  if (staleReadyReport) {
+    observed.staleReadyForReviewHeadSha = getReportHeadSha(staleReadyReport) || 'none';
+    observed.staleReadyForReviewRoute = 'ready_for_review';
+  }
+
+  return observed;
 }
 
 /**

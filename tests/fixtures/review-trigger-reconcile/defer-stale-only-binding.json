@@ -1,0 +1,41 @@
+{
+  "description": "Only stale ready_for_review on older head — observed must preserve stale binding",
+  "openPrs": [{ "number": 56, "headRefOid": "newhead56" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-56",
+      "role": "worker",
+      "prNumber": 56,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "oldhead56",
+          "reportedAt": "2026-06-05T11:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "56": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready",
+    "record": {
+      "primary": "no_ready_for_review",
+      "failedComponents": ["no_ready_for_review", "stale_report_binding"],
+      "observed": {
+        "reportBoundHeadSha": "oldhead56",
+        "reportRoute": "ready_for_review",
+        "staleReadyForReviewHeadSha": "oldhead56"
+      }
+    }
+  }
+}

@@ -528,6 +528,15 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.failedComponents).toContain('stale_report_binding');
     expect(skip?.record?.observed?.reportBoundHeadSha).toBe('newhead55');
     expect(skip?.record?.observed?.reportRoute).toBe('addressing_reviews');
+    expect(skip?.record?.observed?.staleReadyForReviewHeadSha).toBe('oldhead55');
+    expect(skip?.record?.observed?.staleReadyForReviewRoute).toBe('ready_for_review');
+  });
+
+  it('AC3: only stale ready_for_review preserves binding in observed', () => {
+    const fixture = loadFixture('defer-stale-only-binding.json');
+    const skip = skipActions(planReconcileActions(fixture))[0];
+    expect(skip?.record?.failedComponents).toContain('stale_report_binding');
+    expect(skip?.record?.observed).toMatchObject(fixture.expect?.record?.observed ?? {});
   });
 
   it('AC1: ci_red_defer records ci_red subreason', () => {
