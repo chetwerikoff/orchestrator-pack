@@ -30,10 +30,10 @@ $Script:ReconcileLogPrefix = 'worker-message-submit-reconcile'
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
 $SubmitFilterCli = Join-Path $PackRoot 'docs/worker-message-submit-reconcile.mjs'
-$FloodDetectCli = Join-Path $PackRoot 'docs/terminal-flood-detect.mjs'
 $Script:DefaultIntervalSeconds = 30
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
@@ -76,43 +76,6 @@ function Set-SubmitReconcileState {
     )
 
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
-}
-
-function Invoke-FloodDetectCli {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $json = @{
-        events = @($Events)
-        nowMs  = $NowMs
-    } | ConvertTo-Json -Depth 30 -Compress
-    $output = $json | & node $FloodDetectCli detect 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "terminal-flood-detect.mjs detect exited ${LASTEXITCODE}: $output"
-    }
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    return $text | ConvertFrom-Json
-}
-
-function Get-FloodActiveSessionMap {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $map = @{}
-    if (-not $Events -or $Events.Count -eq 0) {
-        return $map
-    }
-    $result = Invoke-FloodDetectCli -Events $Events -NowMs $NowMs
-    foreach ($row in @($result.flaggedSessions)) {
-        if ($row.sessionId) {
-            $map[[string]$row.sessionId] = $true
-        }
-    }
-    return $map
 }
 
 function Get-AoReviewRuns {

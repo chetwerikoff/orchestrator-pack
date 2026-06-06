@@ -25,6 +25,7 @@
     "scripts/check-review-finding-delivery-confirm.ps1",
     "scripts/check-worker-message-submit-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/lib/Get-FloodActiveSessionMap.ps1",
     "scripts/lib/Invoke-AoCliJson.ps1",
     "scripts/lib/Record-WorkerMessageDispatch.ps1",
     "scripts/orchestrator-side-process-registry.json",

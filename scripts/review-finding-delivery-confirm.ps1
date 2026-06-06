@@ -40,8 +40,7 @@ $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
-
-$FloodDetectCli = Join-Path $PackRoot 'docs/terminal-flood-detect.mjs'
+. (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 
 function Get-DeliveryIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -241,43 +240,6 @@ function Get-FixtureDeliveryPayload {
         aoEvents            = @($fixture.aoEvents)
         floodActiveSessions = $fixture.floodActiveSessions
     }
-}
-
-function Invoke-FloodDetectCli {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $json = @{
-        events = @($Events)
-        nowMs  = $NowMs
-    } | ConvertTo-Json -Depth 30 -Compress
-    $output = $json | & node $FloodDetectCli detect 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "terminal-flood-detect.mjs detect exited ${LASTEXITCODE}: $output"
-    }
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    return $text | ConvertFrom-Json
-}
-
-function Get-FloodActiveSessionMap {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $map = @{}
-    if (-not $Events -or $Events.Count -eq 0) {
-        return $map
-    }
-    $result = Invoke-FloodDetectCli -Events $Events -NowMs $NowMs
-    foreach ($row in @($result.flaggedSessions)) {
-        if ($row.sessionId) {
-            $map[[string]$row.sessionId] = $true
-        }
-    }
-    return $map
 }
 
 function Invoke-PlannedReviewSend {
