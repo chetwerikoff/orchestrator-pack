@@ -45,26 +45,14 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:6d247416e8f2e5d1245a256ea67a8410fbdc117cde683db5a671683718b029d8",
-      "changed": {
-        "added": [],
-        "removed": []
-      },
-      "reason": "align declaration with PR diff after scope-guard vitest.config revert",
-      "actor": "opk-27",
-      "timestamp": "2026-06-06T17:17:12.081Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:6d247416e8f2e5d1245a256ea67a8410fbdc117cde683db5a671683718b029d8",
       "new_active_scope_hash": "sha256:88ce39558c4b2e038cfc9ff06ef6279ccfd70b69889b1f2cbaac39b910cd21a3",
       "changed": {
         "added": ["docs/review-finding-delivery-confirm.d.mts"],
         "removed": []
       },
-      "reason": "declare delivery-confirm type contract after submit rung removal",
+      "reason": "align declaration with PR diff after vitest.config revert and delivery-confirm d.mts contract",
       "actor": "opk-27",
-      "timestamp": "2026-06-06T23:25:00.000Z",
+      "timestamp": "2026-06-06T23:28:00.000Z",
       "applied": true
     }
   ]
