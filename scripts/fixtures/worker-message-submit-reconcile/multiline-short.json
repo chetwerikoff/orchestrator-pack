@@ -1,0 +1,28 @@
+{
+  "description": "AC2: multi-line short (<200 chars) pending-draft via newline alone",
+  "nowMs": 1717600100000,
+  "sessions": [
+    {
+      "sessionId": "opk-ml-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-ml-232:1717600000000:ao-send:orch-1": {
+      "deliveryId": "opk-ml-232:1717600000000:ao-send:orch-1",
+      "sessionId": "opk-ml-232",
+      "deliveredAtMs": 1717600000000,
+      "source": "ao-send",
+      "sourceKey": "orch-1",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 42, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

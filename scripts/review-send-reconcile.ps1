@@ -48,6 +48,7 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -216,6 +217,9 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $false; reason = $verify.reason }
     }
 
+    $null = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
+        -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
+        -Source 'review-send' -SourceKey ([string]$Action.runId)
     return @{ sent = $true; reason = 'sent' }
 }
 

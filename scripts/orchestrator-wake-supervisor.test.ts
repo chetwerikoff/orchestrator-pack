@@ -125,6 +125,7 @@ const managedChildRoles = [
   'ci-green-wake-reconcile',
   'review-send-reconcile',
   'review-finding-delivery-confirm',
+  'worker-message-submit-reconcile',
 ] as const;
 
 type ManagedChildRole = (typeof managedChildRoles)[number];

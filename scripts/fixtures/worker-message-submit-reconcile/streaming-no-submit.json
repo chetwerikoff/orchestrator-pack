@@ -1,0 +1,27 @@
+{
+  "description": "AC8: streaming session — no submit",
+  "nowMs": 1717600900000,
+  "sessions": [
+    {
+      "sessionId": "opk-stream-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "active",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-stream-232:1717600800000:pack-send:stream": {
+      "deliveryId": "opk-stream-232:1717600800000:pack-send:stream",
+      "sessionId": "opk-stream-232",
+      "deliveredAtMs": 1717600800000,
+      "source": "pack-send",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 260, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

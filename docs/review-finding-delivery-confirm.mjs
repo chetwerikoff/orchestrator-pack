@@ -9,10 +9,6 @@ import {
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
-  evaluateSubmitEligibility,
-  resolveSubmitConfig,
-} from './worker-input-draft-submit.mjs';
-import {
   findForbiddenLifecycleCommands,
   findSessionById,
   isLiveWorkerSession,
@@ -299,7 +295,6 @@ export function getConfirmationAnchorMs(record, sendObservedAtMs) {
  * @param {number} [config.maxSubmits]
  */
 export function resolveDeliveryConfig(config = {}) {
-  const submit = resolveSubmitConfig(config);
   return {
     confirmationWindowMs: resolveBoundedInt(
       config.confirmationWindowMs,
@@ -311,7 +306,6 @@ export function resolveDeliveryConfig(config = {}) {
       DEFAULT_MAX_REDELIVERIES,
       0,
     ),
-    maxSubmits: submit.maxSubmits,
   };
 }
 
@@ -481,64 +475,7 @@ export function planDeliveryConfirmActions({
       continue;
     }
 
-    const submitEligibility = evaluateSubmitEligibility({
-      run,
-      sessions: sessionList,
-      tracking,
-      allRuns: runList,
-      openPrs: openPrList,
-      aoEvents: toArray(aoEvents),
-      floodActiveSessions: floodActiveSessions ?? {},
-      nowMs,
-      config,
-    });
-
-    if (submitEligibility.defer) {
-      actions.push({
-        type: 'defer',
-        runId,
-        sessionId: linkedSessionId,
-        prNumber,
-        reason: submitEligibility.reason,
-      });
-      continue;
-    }
-
-    if (submitEligibility.ok) {
-      const priorKey = String(nextRuns[runId]?.submitDecisionKey ?? '').trim();
-      const submitCount =
-        priorKey && priorKey === submitEligibility.decisionKey
-          ? Number(nextRuns[runId]?.submitCount ?? 0)
-          : 0;
-      nextRuns[runId] = {
-        ...nextRuns[runId],
-        deliveryState: DELIVERY_STATE_UNCONFIRMED,
-        sendObservedAtMs,
-        redeliveryCount,
-        submitCount: submitCount + 1,
-        lastSubmitAtMs: nowMs,
-        submitDecisionKey: submitEligibility.decisionKey,
-      };
-      actions.push({
-        type: 'submit',
-        runId,
-        sessionId: linkedSessionId,
-        prNumber,
-        headSha: submitEligibility.headSha,
-        attempt: submitEligibility.attempt,
-        maxSubmits: submitEligibility.maxSubmits,
-        decisionKey: submitEligibility.decisionKey,
-      });
-      continue;
-    }
-
-    const escalateReason =
-      submitEligibility.reason === 'submit_budget_exhausted'
-        ? 'max_submits_exhausted'
-        : submitEligibility.reason === 'stale_input'
-          ? 'stale_input_refused'
-          : 'max_redeliveries_exhausted';
-
+    // Submit is owned by worker-message-submit-reconcile.ps1 (Issue #232).
     nextRuns[runId] = {
       ...nextRuns[runId],
       deliveryState: DELIVERY_STATE_ESCALATED,
@@ -551,7 +488,7 @@ export function planDeliveryConfirmActions({
       runId,
       sessionId: linkedSessionId,
       prNumber,
-      reason: escalateReason,
+      reason: 'max_redeliveries_exhausted',
       message: buildEscalationMessage({
         runId,
         sessionId: linkedSessionId,

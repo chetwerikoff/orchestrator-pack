@@ -1,0 +1,28 @@
+{
+  "description": "AC8: short single-line already-submitted path — no-op",
+  "nowMs": 1717600800000,
+  "sessions": [
+    {
+      "sessionId": "opk-short-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-short-232:1717600700000:pack-send:short": {
+      "deliveryId": "opk-short-232:1717600700000:pack-send:short",
+      "sessionId": "opk-short-232",
+      "deliveredAtMs": 1717600700000,
+      "source": "pack-send",
+      "sourceKey": "short",
+      "deliveryPath": "self-submitted",
+      "messageShape": { "charLength": 42, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

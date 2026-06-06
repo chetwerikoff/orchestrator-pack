@@ -1,0 +1,29 @@
+{
+  "description": "AC2: restore/retry re-send of a long message",
+  "nowMs": 1717600400000,
+  "sessions": [
+    {
+      "sessionId": "opk-retry-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-retry-232:1717600300000:pack-send:retry-1": {
+      "deliveryId": "opk-retry-232:1717600300000:pack-send:retry-1",
+      "sessionId": "opk-retry-232",
+      "deliveredAtMs": 1717600300000,
+      "source": "pack-send",
+      "sourceKey": "retry-1",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 320, "lineCount": 1 },
+      "restoreRetry": true
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

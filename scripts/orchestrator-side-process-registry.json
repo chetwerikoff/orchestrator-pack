@@ -6,7 +6,8 @@
     "review-trigger-reconcile",
     "ci-green-wake-reconcile",
     "review-send-reconcile",
-    "review-finding-delivery-confirm"
+    "review-finding-delivery-confirm",
+    "worker-message-submit-reconcile"
   ],
   "children": [
     {
@@ -67,6 +68,16 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 300,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "worker-message-submit-reconcile",
+      "script": "worker-message-submit-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "worker-message-submit-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 30,
       "stallGraceMultiplier": 4
     }
   ]

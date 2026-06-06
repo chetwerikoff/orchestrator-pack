@@ -1,0 +1,29 @@
+{
+  "description": "AC2: long (>200 char) ci-green-wake nudge pending-draft delivery",
+  "nowMs": 1717600000000,
+  "sessions": [
+    {
+      "sessionId": "opk-wake-232",
+      "role": "worker",
+      "prNumber": 232,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-wake-232:1717599900000:pack-send:ci-green:tr-1": {
+      "deliveryId": "opk-wake-232:1717599900000:pack-send:ci-green:tr-1",
+      "sessionId": "opk-wake-232",
+      "deliveredAtMs": 1717599900000,
+      "source": "pack-send",
+      "sourceKey": "ci-green:tr-1",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 245, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

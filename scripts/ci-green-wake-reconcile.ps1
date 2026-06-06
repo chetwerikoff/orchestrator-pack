@@ -44,6 +44,7 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -217,6 +218,8 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
+    $null = Register-WorkerMessageDispatch -SessionId $Action.sessionId -Message $Action.message `
+        -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)"
     return @{ sent = $true; reason = 'sent' }
 }
 

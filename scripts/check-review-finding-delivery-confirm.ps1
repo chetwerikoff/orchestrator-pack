@@ -52,9 +52,15 @@ if ($mjs -notmatch 'export \{ sessionOwnsRunHead \}' -or $mjs -notmatch 'session
     exit 1
 }
 
+$submitReconcile = Join-Path $Root 'scripts/worker-message-submit-reconcile.ps1'
+if (-not (Test-Path -LiteralPath $submitReconcile -PathType Leaf)) {
+    Write-Host 'Missing scripts/worker-message-submit-reconcile.ps1 (Issue #232 unified submit owner)'
+    exit 1
+}
+
 $ps1 = Get-Content -LiteralPath $scriptPath -Raw
-if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
-    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must invoke submit adapter (Issue #216)'
+if ($ps1 -match 'Invoke-WorkerInputDraftSubmit') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must not invoke submit adapter — Issue #232 owns submit'
     exit 1
 }
 
@@ -78,10 +84,8 @@ $runbookRequired = @(
     'review-finding-delivery-confirm',
     'AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES',
     'AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES',
-    'AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS',
     'AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES',
-    'Submit stuck paste draft',
-    'submitDecisionKey',
+    'worker-message-submit-reconcile',
     'ESCALATION: unconfirmed delivery',
     'Operator remedy'
 )
@@ -92,5 +96,5 @@ if ($missingRunbook.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] review-finding delivery confirmation + submit bridge entrypoint and runbook (Issues #171, #216)'
+Write-Host '[PASS] review-finding delivery confirmation entrypoint and runbook (Issues #171; submit owned by #232)'
 exit 0

@@ -559,25 +559,19 @@ describe('no worker lifecycle on no-confirmation path (AC5)', () => {
   });
 });
 
-describe('submit rung after max redeliveries (#216)', () => {
-  it('plans submit before escalation when redeliveries exhausted', () => {
+describe('escalate after max redeliveries (submit owned by #232)', () => {
+  it('escalates when redeliveries exhausted — no submit action', () => {
     const { actions, tracking } = planFromFixture('max-redeliveries-escalate.json');
     expect(
       actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
     ).toHaveLength(0);
-    const submit = actions.find(
-      (a): a is Extract<DeliveryConfirmAction, { type: 'submit' }> => a.type === 'submit',
-    );
-    expect(submit).toMatchObject({
-      runId: 'run-exhausted',
-      sessionId: 'opk-worker-live',
-      prNumber: 166,
-      attempt: 1,
-    });
-    expect(tracking.runs?.['run-exhausted']?.submitCount).toBe(1);
-    expect(tracking.runs?.['run-exhausted']?.deliveryState).not.toBe(
-      DELIVERY_STATE_ESCALATED,
-    );
+    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(
+      actions.some(
+        (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
+      ),
+    ).toBe(true);
+    expect(tracking.runs?.['run-exhausted']?.deliveryState).toBe(DELIVERY_STATE_ESCALATED);
   });
 });
 
@@ -588,8 +582,10 @@ describe('delivery state outcomes (AC7)', () => {
       DELIVERY_STATE_CONFIRMED,
     );
 
-    const submitPlanned = planFromFixture('max-redeliveries-escalate.json');
-    expect(submitPlanned.tracking.runs?.['run-exhausted']?.submitCount).toBe(1);
+    const escalated = planFromFixture('max-redeliveries-escalate.json');
+    expect(escalated.tracking.runs?.['run-exhausted']?.deliveryState).toBe(
+      DELIVERY_STATE_ESCALATED,
+    );
   });
 });
 
