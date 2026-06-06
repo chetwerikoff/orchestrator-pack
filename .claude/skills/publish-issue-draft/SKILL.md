@@ -83,6 +83,14 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 
 ## Common steps (Modes B and C only)
 
+> **Self-delegation guard — am I Cursor?** The `cursor-agent` delegation below is
+> **only** for a non-Cursor architect (Claude Code) handing the GitHub work to
+> Cursor. **If you are yourself the Cursor CLI, do NOT call `cursor-agent`** —
+> that spawns a redundant nested Cursor. Instead run the publish mechanics
+> (branch, commit, push, PR, merge, issue create/re-sync) yourself, directly,
+> using the manual `gh`/git commands in the steps below as your **primary** path.
+> A Cursor session never delegates publish/issue/merge work to another Cursor.
+
 > **Publication runs through Cursor by default (every mode, single or batch).**
 > The architect does **not** run the publish mechanics (branch, commit, push, PR,
 > merge, issue create/re-sync) by hand when `cursor-agent` is on `PATH`. Delegate

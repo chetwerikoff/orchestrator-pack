@@ -294,6 +294,14 @@ GitHub (`gh issue view`).
 
 ## Publish via Cursor CLI (default)
 
+> **Self-delegation guard — am I Cursor?** The `cursor-agent` delegation in this
+> section is **only** for a non-Cursor architect (Claude Code) handing the GitHub
+> work to Cursor. **If you are yourself the Cursor CLI, do NOT call
+> `cursor-agent`** — that spawns a redundant nested Cursor. Instead run the issue
+> create / PR / merge mechanics yourself, directly, using the manual `gh`/git
+> commands in the fallback below as your **primary** path. A Cursor session never
+> delegates issue-creation or merge work to another Cursor.
+
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
 questions recorded), **you do not run `gh issue create` or open the publish PR
 yourself.** Delegate publishing to the Cursor CLI worker; it reads the local
