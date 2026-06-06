@@ -16,6 +16,10 @@ import {
   OPERATOR_ESCALATION_PREFIX,
   planWorkerMessageSubmitActions,
 } from '../docs/worker-message-submit-reconcile.mjs';
+import type {
+  SubmitTrackingState,
+  WorkerMessageSubmitAction,
+} from '../docs/worker-message-submit-reconcile.d.mts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -29,7 +33,7 @@ type FixturePayload = {
   dispatchJournal?: Record<string, Record<string, unknown>>;
   aoEvents?: Record<string, unknown>[];
   reviewRuns?: Record<string, unknown>[];
-  tracking?: { deliveries?: Record<string, Record<string, unknown>>; audit?: unknown[] };
+  tracking?: SubmitTrackingState;
   config?: Record<string, unknown>;
   reactionMessages?: Record<string, string>;
   floodActiveSessions?: Record<string, boolean>;
@@ -54,7 +58,7 @@ function planFixture(name: string) {
   });
 }
 
-function submitActions(actions: Record<string, unknown>[]) {
+function submitActions(actions: WorkerMessageSubmitAction[]) {
   return actions.filter((a) => a.type === 'submit');
 }
 
@@ -110,13 +114,19 @@ describe('negative AO states (AC4/AC8)', () => {
   it('consumed delivery is not submitted', () => {
     const { actions } = planFixture('already-consumed.json');
     expect(submitActions(actions)).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'mark_consumed')).toBe(true);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(
+      true,
+    );
   });
 
   it('streaming session is not submitted', () => {
     const { actions } = planFixture('streaming-no-submit.json');
     expect(submitActions(actions)).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'noop' && a.reason === 'streaming')).toBe(true);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'streaming',
+      ),
+    ).toBe(true);
   });
 
   it('short self-submitted path is no-op', () => {
@@ -165,7 +175,11 @@ describe('exactly one submit owner (AC5)', () => {
   it('concurrent observer sees claim held', () => {
     const { actions } = planFixture('claim-prevents-double.json');
     expect(submitActions(actions)).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'noop' && a.reason === 'claim_held')).toBe(true);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'claim_held',
+      ),
+    ).toBe(true);
   });
 
   it('evaluateConcurrentSubmitClaim rejects duplicate', () => {
@@ -187,7 +201,7 @@ describe('multiple pending deliveries (AC10)', () => {
     ).toBe('opk-dual-232:1717600950000:ao-send:second');
     expect(
       actions.some(
-        (a) =>
+        (a: WorkerMessageSubmitAction) =>
           a.type === 'escalate' &&
           a.reason === 'lost_delivery_overwritten' &&
           a.deliveryId === 'opk-dual-232:1717600900000:ao-send:first',
@@ -200,7 +214,9 @@ describe('escalation on stuck branches (AC9)', () => {
   it('escalates when submit attempts exhausted', () => {
     const { actions } = planFixture('submit-budget-escalate.json');
     expect(submitActions(actions)).toHaveLength(0);
-    const escalation = actions.find((a) => a.type === 'escalate');
+    const escalation = actions.find(
+      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
+    );
     expect(escalation?.reason).toBe('submit_attempts_exhausted');
     expect(String(escalation?.diagnosis)).toContain(OPERATOR_ESCALATION_PREFIX);
   });
@@ -208,7 +224,9 @@ describe('escalation on stuck branches (AC9)', () => {
   it('escalates when observation stayed ambiguous', () => {
     const { actions } = planFixture('ambiguous-budget-escalate.json');
     expect(submitActions(actions)).toHaveLength(0);
-    const escalation = actions.find((a) => a.type === 'escalate');
+    const escalation = actions.find(
+      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
+    );
     expect(escalation?.reason).toBe('ambiguous_budget_exhausted');
     expect(String(escalation?.diagnosis)).toContain(OPERATOR_ESCALATION_PREFIX);
   });

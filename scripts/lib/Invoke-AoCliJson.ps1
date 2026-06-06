@@ -91,3 +91,12 @@ function Get-AoStatusSessions {
     $payload = Get-AoStatusReportsJson
     return Get-AoStatusSessionsFromPayload -Payload $payload
 }
+
+function Get-AoEventsSince {
+    param([int]$SinceMinutes = 30)
+
+    $payload = Invoke-AoCliJson -AoArgs @(
+        'events', 'list', '--since', "${SinceMinutes}m", '--limit', '500', '--json'
+    ) -FailureLabel 'ao events list'
+    return @($payload.events)
+}

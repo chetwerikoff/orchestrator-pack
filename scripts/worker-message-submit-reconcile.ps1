@@ -78,15 +78,6 @@ function Set-SubmitReconcileState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
 }
 
-function Get-AoEventsSince {
-    param([int]$SinceMinutes = 30)
-
-    $payload = Invoke-AoCliJson -AoArgs @(
-        'events', 'list', '--since', "${SinceMinutes}m", '--limit', '500', '--json'
-    ) -FailureLabel 'ao events list'
-    return @($payload.events)
-}
-
 function Invoke-FloodDetectCli {
     param(
         [array]$Events,

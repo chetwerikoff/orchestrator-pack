@@ -1,0 +1,44 @@
+{
+  "issue_number": 232,
+  "iteration_id": "opk-27",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-06T12:00:00.000Z",
+  "baseline": {
+    "commit_sha": "87230f16941dbb12372f56c67094fbf0811daab3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/declarations/232.opk-27.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/review-finding-delivery-confirm.mjs",
+    "docs/worker-message-dispatch-observe.d.mts",
+    "docs/worker-message-dispatch-observe.d.ts",
+    "docs/worker-message-dispatch-observe.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.d.ts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "package-lock.json",
+    "scripts/check-review-finding-delivery-confirm.ps1",
+    "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/review-finding-delivery-submit.test.ts",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/verify.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/worker-message-submit-reconcile/**"
+  ],
+  "amendments": []
+}
