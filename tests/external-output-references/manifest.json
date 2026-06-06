@@ -8,7 +8,7 @@
       "variantFromField": "reportState"
     },
     "gh-pr-open": {
-      "source": "gh pr list --state open --json number,headRefOid",
+      "source": "gh pr list --state open --json number,headRefOid,commits (headCommittedAt derived)",
       "variantDir": "variants/gh-pr-open",
       "defaultVariant": "open"
     },

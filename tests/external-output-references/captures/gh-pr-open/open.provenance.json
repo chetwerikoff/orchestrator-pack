@@ -1,7 +1,10 @@
 {
-  "sourceCommand": "gh pr list --state open --json number,headRefOid --limit 200",
+  "sourceCommand": "gh pr list --state open --json number,headRefOid,commits --limit 200",
   "toolVersion": "gh 2.x",
   "capturedAt": "2026-06-06T06:00:00.000Z",
-  "context": "Pack Get-AutoReviewPrContext / Gh-PrChecks.ps1 usage (scrubbed SHA retained as non-secret)",
+  "context": "Pack Invoke-GhOpenPrList (scripts/lib/Gh-PrChecks.ps1): headCommittedAt is derived from the tip commit committedDate; commits is stripped before reconcile consumers see the row.",
+  "derivation": {
+    "headCommittedAt": "commits[-1].committedDate"
+  },
   "scrubLog": ["PR number and SHA are synthetic test identifiers in fixtures; live capture uses real PR metadata"]
 }
