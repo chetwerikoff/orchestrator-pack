@@ -1,0 +1,43 @@
+{
+  "description": "Per-rule loader surface map for RCA spec discipline (Issue #221). Consumed by check-rca-spec-discipline-surfaces.ts.",
+  "rules": [
+    {
+      "id": "positive-outcome",
+      "markers": ["behavior-kind", "positive-outcome"],
+      "surfaces": [
+        ".claude/skills/create-issue-draft/SKILL.md",
+        ".claude/skills/publish-issue-draft/SKILL.md",
+        "prompts/agent_rules.md"
+      ]
+    },
+    {
+      "id": "recurrence-diagnostic",
+      "markers": ["recurrence-diagnostic", "pass + reproduce"],
+      "surfaces": [
+        "prompts/investigate_root_cause.md",
+        ".claude/skills/investigate-root-cause/SKILL.md"
+      ]
+    },
+    {
+      "id": "5-whys-stop",
+      "markers": ["5-Whys stop condition", "terminal root cause"],
+      "surfaces": [
+        "prompts/investigate_root_cause.md",
+        ".claude/skills/investigate-root-cause/SKILL.md"
+      ]
+    },
+    {
+      "id": "parked-roots",
+      "markers": ["parked-root-cause", "parked root"],
+      "surfaces": [
+        ".claude/skills/create-issue-draft/SKILL.md",
+        ".claude/skills/publish-issue-draft/SKILL.md",
+        "prompts/agent_rules.md"
+      ]
+    }
+  ],
+  "agentRulesMirrors": [
+    "AGENTS.md",
+    ".cursor/rules/rca-spec-discipline.mdc"
+  ]
+}

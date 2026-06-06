@@ -1,0 +1,14 @@
+---
+description: RCA spec discipline — positive-outcome acceptance, recurrence diagnostic, parked roots
+alwaysApply: true
+---
+
+# RCA spec discipline (Issue #221)
+
+Authoring and investigation rules live in the canonical worker rules and skills — do not duplicate them here.
+
+- **Worker rules:** [`prompts/agent_rules.md`](../../prompts/agent_rules.md) — **RCA spec discipline** section (`behavior-kind`, `positive-outcome`, `parked-root-cause`, operator `ao stop` / `ao start` adoption).
+- **Root-cause procedure:** [`prompts/investigate_root_cause.md`](../../prompts/investigate_root_cause.md) — **recurrence-diagnostic**, **5-Whys stop condition**, **terminal root cause** rejection.
+- **Draft authoring:** [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) and **publish-issue-draft** (mechanical `check-draft-discipline` guards).
+
+Architecture decision: §T in [`docs/issues_drafts/00-architecture-decisions.md`](../../docs/issues_drafts/00-architecture-decisions.md).
