@@ -13,22 +13,23 @@
     }
   ],
   "dispatchJournal": {
-    "opk-wait-budget-232:1717601000000:pack-send:budget": {
-      "deliveryId": "opk-wait-budget-232:1717601000000:pack-send:budget",
+    "opk-wait-budget-232:1717601050000:pack-send:wait-budget": {
+      "deliveryId": "opk-wait-budget-232:1717601050000:pack-send:wait-budget",
       "sessionId": "opk-wait-budget-232",
-      "deliveredAtMs": 1717601000000,
+      "deliveredAtMs": 1717601050000,
       "source": "pack-send",
+      "sourceKey": "wait-budget",
       "deliveryPath": "pending-draft",
-      "messageShape": { "charLength": 260, "lineCount": 1 }
+      "messageShape": { "charLength": 275, "lineCount": 2 }
     }
   },
   "aoEvents": [],
   "reviewRuns": [],
   "tracking": {
     "deliveries": {
-      "opk-wait-budget-232:1717601000000:pack-send:budget": {
-        "deliveryId": "opk-wait-budget-232:1717601000000:pack-send:budget",
-        "firstObservedAtMs": 1717601000000,
+      "opk-wait-budget-232:1717601050000:pack-send:wait-budget": {
+        "deliveryId": "opk-wait-budget-232:1717601050000:pack-send:wait-budget",
+        "firstObservedAtMs": 1717601050000,
         "submitAttempts": 2,
         "claimed": true,
         "lastSubmitAtMs": 1717601200000
