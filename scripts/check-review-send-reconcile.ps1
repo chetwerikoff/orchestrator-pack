@@ -82,6 +82,7 @@ if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePat
     Write-Host 'review-send-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live ao/gh)'
     exit 1
 }
+
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $runbookRequired = @(
     'review-send-reconcile',
