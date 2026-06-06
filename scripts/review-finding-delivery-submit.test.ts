@@ -55,7 +55,7 @@ function planSubmitScenario(name: string) {
 describe('delivery confirm no longer owns submit (Issue #232)', () => {
   it('escalates after redeliveries exhausted — submit is unified arbiter', () => {
     const { actions } = planSubmitScenario('redeliveries-exhausted-submit.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
@@ -65,13 +65,13 @@ describe('delivery confirm no longer owns submit (Issue #232)', () => {
 
   it('unrelated working report escalates after redeliveries — not submit', () => {
     const { actions } = planSubmitScenario('unrelated-activity-still-submits.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(actions.some((a) => a.type === 'escalate')).toBe(true);
   });
 
   it('escalates dead session without submit', () => {
     const { actions } = planSubmitScenario('fail-closed-dead-session.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'orphan_or_dead_linked_session',
@@ -83,7 +83,7 @@ describe('delivery confirm no longer owns submit (Issue #232)', () => {
 describe('causal consumption only', () => {
   it('marks confirmed on addressing_reviews — no submit', () => {
     const { actions } = planSubmitScenario('addressing-reviews-no-submit.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(true);
   });
 });
@@ -155,7 +155,7 @@ describe('evaluateSubmitEligibility unit (legacy helper)', () => {
 describe('confirmed runs skip submit path', () => {
   it('records confirmed without submit', () => {
     const { actions, tracking } = planSubmitScenario('addressing-reviews-no-submit.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(tracking.runs?.['run-confirmed']?.deliveryState).not.toBe(DELIVERY_STATE_ESCALATED);
   });
 });

@@ -565,7 +565,7 @@ describe('escalate after max redeliveries (submit owned by #232)', () => {
     expect(
       actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
     ).toHaveLength(0);
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
