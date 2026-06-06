@@ -138,7 +138,6 @@ function Invoke-SubmitReconcileTick {
         $reactionMessages = @{
             'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
-            '*'            = 'x'.PadRight(250, 'x')
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
     }

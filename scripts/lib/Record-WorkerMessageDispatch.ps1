@@ -203,3 +203,32 @@ function Resolve-DispatchJournalSendOutcome {
         journalFailureReason = $dispatchReason
     }
 }
+
+function Resolve-DispatchJournalSendOutcomeAfterDelivered {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$DispatchResult
+    )
+
+    $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $DispatchResult
+    if ($outcome.journalRecorded) {
+        return $outcome
+    }
+
+    $dispatchReason = if ($outcome.journalFailureReason) {
+        [string]$outcome.journalFailureReason
+    }
+    elseif ($outcome.reason) {
+        [string]$outcome.reason
+    }
+    else {
+        'journal_record_failed'
+    }
+
+    return @{
+        sent                 = $true
+        reason               = 'sent'
+        journalRecorded      = $false
+        journalFailureReason = $dispatchReason
+    }
+}

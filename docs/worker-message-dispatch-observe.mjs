@@ -120,7 +120,10 @@ export function extractReactionDeliveries(events, reactionMessages = {}) {
       typeof data === 'object' && data !== null && !Array.isArray(data)
         ? String(data.reactionKey ?? '').trim()
         : '';
-    const message = reactionMessages[reactionKey] ?? reactionMessages['*'] ?? '';
+    if (!Object.prototype.hasOwnProperty.call(reactionMessages, reactionKey)) {
+      continue;
+    }
+    const message = reactionMessages[reactionKey];
     const shape = deriveMessageShape(message);
     const deliveryId = buildDeliveryId(
       sessionId,

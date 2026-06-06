@@ -531,6 +531,24 @@ describe('mergeDeliveryRecords from AO events', () => {
     expect(findOverwrittenDeliveries(deliveries, 'opk-dedupe')).toHaveLength(0);
   });
 
+  it('skips unknown reaction keys without a configured message shape', () => {
+    const deliveries = mergeDeliveryRecords({
+      aoEvents: [
+        {
+          kind: 'reaction.action_succeeded',
+          sessionId: 'opk-unknown-react',
+          tsEpoch: 1717600000000,
+          data: { action: 'send-to-agent', reactionKey: 'future-custom-reaction' },
+        },
+      ],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: { 'ci-failed': 'x'.repeat(250) },
+      nowMs: 1717600001000,
+    });
+    expect(deliveries).toHaveLength(0);
+  });
+
   it('ingests reaction.action_succeeded send-to-agent', () => {
     const deliveries = mergeDeliveryRecords({
       aoEvents: [
