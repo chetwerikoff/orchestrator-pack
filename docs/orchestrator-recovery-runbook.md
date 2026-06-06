@@ -471,6 +471,34 @@ overrides). PRs without a linked worker session in `ao status --json --reports f
 are skipped until respawn discipline creates one — the reconcile process must not
 call `ao spawn --claim-pr` (PR #97 split-brain guard).
 
+### Diagnosing a deferred PR (Issue #212)
+
+When review does not start and the reconcile log shows `skip PR #N: …`, read the
+structured `record=` JSON on the same line (or the skip action from a fixture /
+`-DryRun` plan). Each defer names a **primary** subreason, the full
+**failedComponents** set, and **observed** snapshot values — sufficient to choose
+the recovery path without re-deriving the timeline by hand.
+
+| Primary / branch | Meaning | Operator path |
+|------------------|---------|---------------|
+| `no_ready_for_review` | Worker has not handed off for the exact head | Worker liveness: `report-stale`, ping, respawn — not degraded-CI orchestrator branch |
+| `stale_report_binding` | `ready_for_review` exists but bound to an older head SHA | Wait for worker `ready_for_review` on current head |
+| `degraded_ci_handoff` (`reportRoute: degraded_ci`) | Worker escalated missing/unresolvable required checks | Orchestrator degraded-CI branch (#195): bounded reconcile retries, then escalation |
+| `ci_red` | Required CI failing on the head | Fix CI on the PR head |
+| `ci_degraded` / `ci_not_yet_observed` | Required-check set missing or not yet visible | Inspect `gh pr checks` / branch protection; see `requiredCheckSource` and `requiredCheckNames` in `observed` |
+| `failed_or_cancelled_on_head` | EMPTY REVIEW TRAP on current head | Read `terminationReason` in `observed`; retry-once discipline |
+| `head_covered` | #189 coverage — in-flight or covered-terminal run on same PR + head | No new run until head advances |
+
+**Liveness:** the reconciler re-reads report binding, CI, and coverage every tick.
+A head that becomes ready after an earlier defer is started on the **next reconcile
+tick** — no orchestrator heartbeat required. Prior defer verdicts are not cached.
+
+Example log line:
+
+```text
+[2026-06-06 01:48:20] review-trigger-reconcile: skip PR #211: uncovered_not_ready record={"branch":"uncovered_not_ready","primary":"no_ready_for_review","failedComponents":["no_ready_for_review"],"observed":{"prNumber":211,"currentHeadSha":"1607071","reportBoundHeadSha":"none","reportRoute":"none","ciLevel":"green",...}}
+```
+
 ## Review finding delivery unconfirmed (Issue #171)
 
 `sent_to_agent` / `waiting_update` with `sentFindingCount > 0` means AO **attempted**

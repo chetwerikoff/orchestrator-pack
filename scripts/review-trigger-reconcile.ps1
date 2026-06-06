@@ -316,7 +316,11 @@ function Invoke-ReconcileTick {
     $started = 0
     foreach ($action in @($plan)) {
         if ($action.type -eq 'skip') {
-            Write-ReconcileLog "skip PR #$($action.prNumber): $($action.reason)"
+            $detail = ''
+            if ($action.record) {
+                $detail = " record=$($action.record | ConvertTo-Json -Compress -Depth 8)"
+            }
+            Write-ReconcileLog "skip PR #$($action.prNumber): $($action.reason)$detail"
             continue
         }
         if ($action.type -eq 'escalate_degraded_ci') {

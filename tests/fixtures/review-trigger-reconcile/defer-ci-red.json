@@ -1,0 +1,36 @@
+{
+  "description": "Ready head with red CI — ci_red subreason distinct from uncovered_not_ready",
+  "openPrs": [{ "number": 72, "headRefOid": "red72" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-72",
+      "role": "worker",
+      "prNumber": 72,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "red72",
+          "reportedAt": "2026-06-06T01:45:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "72": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "ci_red_defer",
+    "record": {
+      "primary": "ci_red",
+      "failedComponents": ["ci_red"]
+    }
+  }
+}

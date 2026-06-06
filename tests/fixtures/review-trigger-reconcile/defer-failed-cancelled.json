@@ -1,0 +1,45 @@
+{
+  "description": "Failed run on current head — failed/cancelled branch with reproducing fields",
+  "openPrs": [{ "number": 71, "headRefOid": "fail71" }],
+  "reviewRuns": [
+    {
+      "id": "run-fail-71",
+      "prNumber": 71,
+      "targetSha": "fail71",
+      "status": "failed",
+      "terminationReason": "codex exec review exited 1",
+      "findingCount": 0
+    }
+  ],
+  "sessions": [
+    {
+      "name": "op-worker-71",
+      "role": "worker",
+      "prNumber": 71,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "fail71",
+          "reportedAt": "2026-06-06T01:45:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "71": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "failed_or_cancelled_on_head",
+    "record": {
+      "branch": "failed_or_cancelled",
+      "primary": "failed_or_cancelled_on_head"
+    }
+  }
+}

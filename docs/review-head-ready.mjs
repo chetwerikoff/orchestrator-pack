@@ -11,6 +11,8 @@ import {
   PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
 import {
+  findCoveringRunForHead,
+  findFailedOrCancelledRunForHead,
   findSessionById,
   hasFailedOrCancelledOnHead,
   isHeadCovered,
@@ -355,4 +357,314 @@ export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha) {
     }
   }
   return foundStale;
+}
+
+/**
+ * Enumerable not-ready components for defer records (Issue #212).
+ * Documented precedence for `primary` — stable, not evaluation-order incidental.
+ */
+export const NOT_READY_COMPONENT_PRECEDENCE = [
+  'failed_or_cancelled_on_head',
+  'no_ready_for_review',
+  'stale_report_binding',
+  'degraded_ci_handoff',
+  'ci_red',
+  'ci_degraded',
+  'ci_not_yet_observed',
+];
+
+/**
+ * @param {string[]} components
+ */
+export function choosePrimaryNotReadyComponent(components) {
+  for (const candidate of NOT_READY_COMPONENT_PRECEDENCE) {
+    if (components.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return components[0] ?? 'unknown';
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} report
+ */
+export function resolveReportRoute(report) {
+  if (!report) {
+    return 'none';
+  }
+  if (isWorkerDegradedCiHandoff(report)) {
+    return 'degraded_ci';
+  }
+  const state = getReportState(report);
+  if (state === 'ready_for_review') {
+    return 'ready_for_review';
+  }
+  if (state) {
+    return state;
+  }
+  return 'other';
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} headSha
+ */
+function findLatestReportBoundToHead(session, headSha) {
+  const target = normalizeSha(headSha);
+  if (!target) {
+    return null;
+  }
+  let best = null;
+  let bestMs = -1;
+  for (const report of toArray(session?.reports)) {
+    const reportHead = getReportHeadSha(report);
+    if (!reportHead || reportHead !== target) {
+      continue;
+    }
+    const ts = Date.parse(
+      String(
+        report?.reportedAt ??
+          report?.timestamp ??
+          report?.createdAt ??
+          report?.reported_at ??
+          report?.created_at ??
+          '',
+      ),
+    );
+    const ms = Number.isFinite(ts) ? ts : 0;
+    if (ms >= bestMs) {
+      bestMs = ms;
+      best = report;
+    }
+  }
+  return best;
+}
+
+/**
+ * Evaluate every head-ready component that is not satisfied (metadata only).
+ *
+ * @param {object} input
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {string} input.headSha
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} input.ciChecks
+ * @param {string[]} input.requiredCheckNames
+ * @param {boolean} input.requiredCheckLookupFailed
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
+ * @param {number} input.prNumber
+ */
+export function collectFailedNotReadyComponents({
+  session,
+  headSha,
+  ciChecks = [],
+  requiredCheckNames = [],
+  requiredCheckLookupFailed = false,
+  reviewRuns = [],
+  prNumber,
+}) {
+  /** @type {string[]} */
+  const failed = [];
+
+  if (hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
+    failed.push('failed_or_cancelled_on_head');
+    return failed;
+  }
+
+  if (!session) {
+    return failed;
+  }
+
+  const latestReport = findLatestReportBoundToHead(session, headSha);
+  const readyForReview = hasReadyForReviewForHead(session, headSha);
+  const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
+
+  if (!readyForReview) {
+    failed.push('no_ready_for_review');
+  }
+  if (hasStaleReadyForReviewOnOlderHead(session, headSha)) {
+    failed.push('stale_report_binding');
+  }
+  if (degradedHandoff) {
+    failed.push('degraded_ci_handoff');
+  }
+
+  const ciLevel = classifyRequiredCiForReviewTrigger(ciChecks, {
+    requiredCheckNames,
+    requiredCheckLookupFailed,
+  });
+  if (ciLevel === 'red') {
+    failed.push('ci_red');
+  } else if (ciLevel === 'degraded') {
+    const checksEmpty = toArray(ciChecks).length === 0;
+    if (checksEmpty && !requiredCheckLookupFailed) {
+      failed.push('ci_not_yet_observed');
+    } else {
+      failed.push('ci_degraded');
+    }
+  }
+
+  return failed;
+}
+
+/**
+ * @param {object} input
+ * @param {number} input.prNumber
+ * @param {string} input.headSha
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
+ * @param {string[]} [input.requiredCheckNames]
+ * @param {boolean} [input.requiredCheckLookupFailed]
+ */
+export function buildReportCiObserved({
+  prNumber,
+  headSha,
+  session = null,
+  ciChecks = [],
+  requiredCheckNames = [],
+  requiredCheckLookupFailed = false,
+}) {
+  const currentHeadSha = normalizeSha(headSha);
+  const latestReport = session ? findLatestReportBoundToHead(session, currentHeadSha) : null;
+  const reportBoundHeadSha = latestReport ? getReportHeadSha(latestReport) : '';
+  const reportRoute = resolveReportRoute(latestReport);
+  const ciLevel = classifyRequiredCiForReviewTrigger(ciChecks, {
+    requiredCheckNames,
+    requiredCheckLookupFailed,
+  });
+  const effectiveRequired =
+    toArray(requiredCheckNames).length > 0
+      ? toArray(requiredCheckNames)
+      : PACK_MERGE_CONTRACT_CHECK_NAMES;
+  const requiredCheckSource =
+    toArray(requiredCheckNames).length > 0 ? 'branch_protection' : 'pack_merge_contract_fallback';
+
+  return {
+    prNumber,
+    currentHeadSha,
+    reportBoundHeadSha: reportBoundHeadSha || 'none',
+    reportRoute,
+    ciLevel,
+    requiredCheckSource,
+    requiredCheckNames: effectiveRequired,
+    requiredCheckLookupFailed: Boolean(requiredCheckLookupFailed),
+  };
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null} run
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function buildCoveredSkipObserved(run, prNumber, headSha) {
+  const normalizedHead = normalizeSha(headSha);
+  return {
+    prNumber,
+    currentHeadSha: normalizedHead,
+    coveringRunId: String(run?.id ?? run?.runId ?? ''),
+    coveringRunStatus: String(run?.status ?? ''),
+    headMatch: normalizeSha(run?.targetSha) === normalizedHead,
+    prMatch: Number(run?.prNumber) === prNumber,
+  };
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null} run
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function buildFailedCancelledObserved(run, prNumber, headSha) {
+  return {
+    prNumber,
+    currentHeadSha: normalizeSha(headSha),
+    runId: String(run?.id ?? run?.runId ?? ''),
+    status: String(run?.status ?? ''),
+    terminationReason: String(run?.terminationReason ?? ''),
+    retryEligible: run?.retryEligible ?? run?.retryCount == null,
+  };
+}
+
+/**
+ * Branch-complete no-start decision record (metadata only; Issue #212).
+ *
+ * @param {object} input
+ * @param {string} input.reason
+ * @param {number} input.prNumber
+ * @param {string} input.headSha
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
+ * @param {string[]} [input.requiredCheckNames]
+ * @param {boolean} [input.requiredCheckLookupFailed]
+ */
+export function buildNoStartDecisionRecord({
+  reason,
+  prNumber,
+  headSha,
+  reviewRuns,
+  session = null,
+  ciChecks = [],
+  requiredCheckNames = [],
+  requiredCheckLookupFailed = false,
+}) {
+  const normalizedHead = normalizeSha(headSha);
+
+  if (reason === 'head_covered' || isHeadCovered(reviewRuns, prNumber, headSha)) {
+    const coveringRun = findCoveringRunForHead(reviewRuns, prNumber, headSha);
+    return {
+      branch: 'head_covered',
+      reason: 'head_covered',
+      primary: 'head_covered',
+      failedComponents: [],
+      observed: buildCoveredSkipObserved(coveringRun, prNumber, normalizedHead),
+    };
+  }
+
+  if (reason === 'failed_or_cancelled_on_head' || hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
+    const failedRun = findFailedOrCancelledRunForHead(reviewRuns, prNumber, headSha);
+    return {
+      branch: 'failed_or_cancelled',
+      reason: 'failed_or_cancelled_on_head',
+      primary: 'failed_or_cancelled_on_head',
+      failedComponents: ['failed_or_cancelled_on_head'],
+      observed: buildFailedCancelledObserved(failedRun, prNumber, normalizedHead),
+    };
+  }
+
+  const failedComponents = collectFailedNotReadyComponents({
+    session,
+    headSha: normalizedHead,
+    ciChecks,
+    requiredCheckNames,
+    requiredCheckLookupFailed,
+    reviewRuns,
+    prNumber,
+  });
+  const primary = choosePrimaryNotReadyComponent(failedComponents);
+  const observed = buildReportCiObserved({
+    prNumber,
+    headSha: normalizedHead,
+    session,
+    ciChecks,
+    requiredCheckNames,
+    requiredCheckLookupFailed,
+  });
+
+  return {
+    branch: 'uncovered_not_ready',
+    reason,
+    primary,
+    failedComponents,
+    observed,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildNoStartDecisionRecord>} record
+ */
+export function formatDecisionRecordForLog(record) {
+  return JSON.stringify({
+    branch: record.branch,
+    primary: record.primary,
+    failedComponents: record.failedComponents,
+    observed: record.observed,
+  });
 }

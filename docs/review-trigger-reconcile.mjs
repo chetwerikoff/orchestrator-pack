@@ -10,13 +10,15 @@ import {
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
+  buildNoStartDecisionRecord,
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
+  formatDecisionRecordForLog,
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
 /** @typedef {{ number: number, headRefOid: string }} OpenPr */
-/** @typedef {{ prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number }} ReviewRun */
+/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number, terminationReason?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ prNumber?: number, checks?: Array<{ name?: string, state?: string, conclusion?: string, status?: string }> }} CiChecksByPrRow */
 /** @typedef {{ prNumber?: number, requiredCheckNames?: string[] }} RequiredCheckNamesRow */
@@ -117,15 +119,43 @@ export function isHeadCovered(runs, prNumber, headSha) {
  * @param {string} headSha
  */
 export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
+  return Boolean(findFailedOrCancelledRunForHead(runs, prNumber, headSha));
+}
+
+/**
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function findFailedOrCancelledRunForHead(runs, prNumber, headSha) {
   const head = normalizeSha(headSha);
-  return toArray(runs).some((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    return (
-      Number(run?.prNumber) === prNumber &&
-      normalizeSha(run?.targetSha) === head &&
-      FAILED_OR_CANCELLED.has(status)
-    );
-  });
+  return (
+    toArray(runs).find((run) => {
+      const status = String(run?.status ?? '').toLowerCase();
+      return (
+        Number(run?.prNumber) === prNumber &&
+        normalizeSha(run?.targetSha) === head &&
+        FAILED_OR_CANCELLED.has(status)
+      );
+    }) ?? null
+  );
+}
+
+/**
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function findCoveringRunForHead(runs, prNumber, headSha) {
+  const head = normalizeSha(headSha);
+  return (
+    toArray(runs).find(
+      (run) =>
+        Number(run?.prNumber) === prNumber &&
+        normalizeSha(run?.targetSha) === head &&
+        isRunCoveringHead(run),
+    ) ?? null
+  );
 }
 
 /**
@@ -501,6 +531,16 @@ export function planReconcileActions({
       maxDegradedCiAttempts: maxDegradedAttempts,
     });
 
+    const decisionRecordBase = {
+      prNumber,
+      headSha,
+      reviewRuns: runList,
+      session,
+      ciChecks,
+      requiredCheckNames,
+      requiredCheckLookupFailed,
+    };
+
     if (decision.eligible) {
       if (!sessionId) {
         actions.push({
@@ -508,6 +548,10 @@ export function planReconcileActions({
           prNumber,
           headSha,
           reason: 'no_worker_session',
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: 'no_worker_session',
+          }),
         });
         continue;
       }
@@ -547,6 +591,10 @@ export function planReconcileActions({
         prNumber,
         headSha,
         reason: 'no_worker_session',
+        record: buildNoStartDecisionRecord({
+          ...decisionRecordBase,
+          reason: 'no_worker_session',
+        }),
       });
       continue;
     }
@@ -556,6 +604,10 @@ export function planReconcileActions({
       prNumber,
       headSha,
       reason: decision.reason,
+      record: buildNoStartDecisionRecord({
+        ...decisionRecordBase,
+        reason: decision.reason,
+      }),
     });
   }
 
@@ -566,6 +618,8 @@ export function planReconcileActions({
  * @param {number} prNumber
  * @param {string} headSha
  */
+export { formatDecisionRecordForLog } from './review-head-ready.mjs';
+
 export function buildDegradedCiEscalationMessage(prNumber, headSha) {
   return (
     `[review-trigger-reconcile] ESCALATION: required-check visibility unresolved for PR #${prNumber} ` +
