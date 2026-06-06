@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "87230f16941dbb12372f56c67094fbf0811daab3",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:pending"
+    "active_scope_hash": "sha256:6d247416e8f2e5d1245a256ea67a8410fbdc117cde683db5a671683718b029d8"
   },
   "declared_paths": [
     "docs/declarations/232.opk-27.json",
@@ -41,5 +41,18 @@
   "declared_globs": [
     "scripts/fixtures/worker-message-submit-reconcile/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:pending",
+      "new_active_scope_hash": "sha256:6d247416e8f2e5d1245a256ea67a8410fbdc117cde683db5a671683718b029d8",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "align declaration with PR diff after scope-guard vitest.config revert",
+      "actor": "opk-27",
+      "timestamp": "2026-06-06T17:17:12.081Z",
+      "applied": true
+    }
+  ]
 }
