@@ -147,22 +147,18 @@ function issueBodyContainsCause(issueBody, cause) {
     return false;
   }
   const normalizedBody = normalizeLine(issueBody).toLowerCase();
-  if (normalizedBody.includes(normalizedCause)) {
-    return true;
-  }
-  const significant = normalizedCause.split(' ').filter((word) => word.length > 4);
-  if (significant.length === 0) {
-    return false;
-  }
-  const hits = significant.filter((word) => normalizedBody.includes(word));
-  return hits.length >= Math.min(3, significant.length);
+  return normalizedBody.includes(normalizedCause);
+}
+
+function stripFencedBlocks(markdown, kind) {
+  const escaped = kind.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp('```' + escaped + '\\s*\\r?\\n[\\s\\S]*?```', 'gi');
+  return markdown.replace(pattern, '');
 }
 
 export function detectDeferralWithoutBlock(markdown) {
-  if (parseParkedRootBlocks(markdown).length > 0) {
-    return false;
-  }
-  return DEFERRAL_WITHOUT_BLOCK_PATTERNS.some((pattern) => pattern.test(markdown));
+  const withoutParkedBlocks = stripFencedBlocks(markdown, 'parked-root-cause');
+  return DEFERRAL_WITHOUT_BLOCK_PATTERNS.some((pattern) => pattern.test(withoutParkedBlocks));
 }
 
 export function checkPositiveOutcome(markdown) {

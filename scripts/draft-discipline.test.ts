@@ -90,6 +90,24 @@ describe('checkParkedRoot', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/could not be validated/);
   });
+
+  it('fails when issue body shares words but not the declared cause statement', () => {
+    const result = checkParkedRoot(
+      loadFixture('parked-word-overlap.md'),
+      loadMockIssues('parked-word-overlap.json'),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/cause statement/);
+  });
+
+  it('fails when a valid parked block coexists with unstructured deferral prose', () => {
+    const result = checkParkedRoot(
+      loadFixture('parked-dual-deferral.md'),
+      loadMockIssues('parked-valid-issues.json'),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.deferralWithoutBlock).toBe(true);
+  });
 });
 
 describe('checkRcaSpecDisciplineSurfaces', () => {

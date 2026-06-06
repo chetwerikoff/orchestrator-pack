@@ -1,0 +1,7 @@
+{
+  "777": {
+    "state": "OPEN",
+    "title": "README report binding cleanup",
+    "body": "This issue cleans up report wording and binding docs in README. No SHA records changes."
+  }
+}

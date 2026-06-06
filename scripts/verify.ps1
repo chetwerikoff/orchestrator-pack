@@ -803,7 +803,9 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
     $parkedCases = @(
         @{ Name = 'defer-without-block'; Draft = 'defer-without-block.md'; Mock = $null; ExpectPass = $false },
         @{ Name = 'parked-valid'; Draft = 'parked-valid.md'; Mock = 'parked-valid-issues.json'; ExpectPass = $true },
-        @{ Name = 'parked-vague-cause'; Draft = 'parked-vague-cause.md'; Mock = 'parked-placeholder-issue.json'; ExpectPass = $false }
+        @{ Name = 'parked-vague-cause'; Draft = 'parked-vague-cause.md'; Mock = 'parked-placeholder-issue.json'; ExpectPass = $false },
+        @{ Name = 'parked-word-overlap'; Draft = 'parked-word-overlap.md'; Mock = 'parked-word-overlap.json'; ExpectPass = $false },
+        @{ Name = 'parked-dual-deferral'; Draft = 'parked-dual-deferral.md'; Mock = 'parked-valid-issues.json'; ExpectPass = $false }
     )
     foreach ($case in $parkedCases) {
         $draftPath = Join-Path $draftDisciplineFixtureDir $case.Draft
