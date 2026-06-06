@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "6a4b870a2ae32d841aa7f69093d9d9855d184d20",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:dd098b35df323aa3453d3f731b1c46ecffe41e1c997bf2aa7b299b68c6deadfa"
+    "active_scope_hash": "sha256:b2db773e6232e916e9a1572defd953b4d9df22b8a77d1e9ce34d68b4bbc47c63"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -22,11 +22,29 @@
     "scripts/lib/Gh-PrChecks.ps1",
     "scripts/review-head-ready.test.ts",
     "scripts/review-trigger-reconcile.test.ts",
+    "scripts/review-ready-stuck-guard.test.ts",
     "scripts/verify.ps1",
     "scripts/check-review-head-ready-report-binding.ps1"
   ],
   "declared_globs": [
-    "tests/fixtures/review-trigger-reconcile/**"
+    "tests/fixtures/review-trigger-reconcile/**",
+    "scripts/fixtures/review-ready-stuck-guard/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:dd098b35df323aa3453d3f731b1c46ecffe41e1c997bf2aa7b299b68c6deadfa",
+      "new_active_scope_hash": "sha256:b2db773e6232e916e9a1572defd953b4d9df22b8a77d1e9ce34d68b4bbc47c63",
+      "changed": {
+        "added": [
+          "scripts/fixtures/review-ready-stuck-guard/**",
+          "scripts/review-ready-stuck-guard.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add stuck-guard test and fixture for SHA-less ready lookup",
+      "actor": "opk-20",
+      "timestamp": "2026-06-06T07:28:40.411Z",
+      "applied": true
+    }
+  ]
 }
