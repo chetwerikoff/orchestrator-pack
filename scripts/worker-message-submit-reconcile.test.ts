@@ -89,6 +89,18 @@ describe('classifyDeliveryPath', () => {
   });
 });
 
+describe('session identifier matching (review)', () => {
+  it('submits when delivery sessionId matches row sessionId but not name', () => {
+    const { actions } = planFixture('linked-session-id-with-name.json');
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'session_id_mismatch',
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('coverage floor hang classes (AC2)', () => {
   const submitCases = [
     'long-script-nudge.json',

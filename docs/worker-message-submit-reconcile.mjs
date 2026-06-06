@@ -8,7 +8,11 @@ import {
   resolveBoundedInt,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { findSessionById, getSessionIdentifier, toArray } from './review-trigger-reconcile.mjs';
+import {
+  findSessionById,
+  sessionMatchesIdentifier,
+  toArray,
+} from './review-trigger-reconcile.mjs';
 import { isSessionFloodActive } from './worker-input-draft-submit.mjs';
 import {
   DELIVERY_PATH_PENDING_DRAFT,
@@ -225,8 +229,7 @@ export function evaluateSubmitDecision({
     return { action: 'noop', reason: 'session_not_alive', deliveryId, sessionId };
   }
 
-  const resolvedSessionId = getSessionIdentifier(session);
-  if (resolvedSessionId !== sessionId) {
+  if (!sessionMatchesIdentifier(session, sessionId)) {
     return { action: 'noop', reason: 'session_id_mismatch', deliveryId, sessionId };
   }
 
