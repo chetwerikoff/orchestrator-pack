@@ -217,9 +217,14 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $false; reason = $verify.reason }
     }
 
-    $null = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
+    $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
         -Source 'review-send' -SourceKey ([string]$Action.runId)
+    if (-not $dispatchResult.recorded) {
+        $dispatchReason = if ($dispatchResult.reason) { [string]$dispatchResult.reason } else { 'journal_record_failed' }
+        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $dispatchReason"
+        return @{ sent = $false; reason = $dispatchReason }
+    }
     return @{ sent = $true; reason = 'sent' }
 }
 

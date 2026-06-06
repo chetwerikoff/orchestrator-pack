@@ -78,13 +78,6 @@ function Set-SubmitReconcileState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
 }
 
-function Get-AoReviewRuns {
-    param([string]$Project)
-
-    $payload = Invoke-AoCliJson -AoArgs @('review', 'list', $Project, '--json') -FailureLabel 'ao review list'
-    return @($payload.runs)
-}
-
 function Get-FixtureSubmitPayload {
     param([string]$Path)
 
