@@ -548,6 +548,20 @@ describe('Issue #212 defer subreason records', () => {
     });
   });
 
+  it('failed/cancelled record wins over head_covered when both runs exist on head', () => {
+    const fixture = loadFixture('failed-and-covered-same-head.json');
+    const skip = skipActions(planReconcileActions(fixture))[0];
+    expect(skip?.reason).toBe(fixture.expect?.skipReason);
+    expect(skip?.record?.branch).toBe(fixture.expect?.record?.branch);
+    expect(skip?.record?.primary).toBe(fixture.expect?.record?.primary);
+    expect(skip?.record?.observed).toMatchObject({
+      runId: 'run-fail-73',
+      status: 'failed',
+      terminationReason: 'codex exec review exited 1',
+    });
+    expect(skip?.record?.branch).not.toBe('head_covered');
+  });
+
   it('AC1: head_covered is distinct from uncovered-not-ready subreasons', () => {
     const skip = skipActions(planReconcileActions(loadFixture('covered-clean.json')))[0];
     expect(skip?.reason).toBe('head_covered');

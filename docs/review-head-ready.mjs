@@ -607,17 +607,7 @@ export function buildNoStartDecisionRecord({
 }) {
   const normalizedHead = normalizeSha(headSha);
 
-  if (reason === 'head_covered' || isHeadCovered(reviewRuns, prNumber, headSha)) {
-    const coveringRun = findCoveringRunForHead(reviewRuns, prNumber, headSha);
-    return {
-      branch: 'head_covered',
-      reason: 'head_covered',
-      primary: 'head_covered',
-      failedComponents: [],
-      observed: buildCoveredSkipObserved(coveringRun, prNumber, normalizedHead),
-    };
-  }
-
+  // Match evaluateHeadReadyForReview: failed/cancelled before coverage (#212 / EMPTY REVIEW TRAP).
   if (reason === 'failed_or_cancelled_on_head' || hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
     const failedRun = findFailedOrCancelledRunForHead(reviewRuns, prNumber, headSha);
     return {
@@ -626,6 +616,17 @@ export function buildNoStartDecisionRecord({
       primary: 'failed_or_cancelled_on_head',
       failedComponents: ['failed_or_cancelled_on_head'],
       observed: buildFailedCancelledObserved(failedRun, prNumber, normalizedHead),
+    };
+  }
+
+  if (reason === 'head_covered' || isHeadCovered(reviewRuns, prNumber, headSha)) {
+    const coveringRun = findCoveringRunForHead(reviewRuns, prNumber, headSha);
+    return {
+      branch: 'head_covered',
+      reason: 'head_covered',
+      primary: 'head_covered',
+      failedComponents: [],
+      observed: buildCoveredSkipObserved(coveringRun, prNumber, normalizedHead),
     };
   }
 

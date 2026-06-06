@@ -1,0 +1,52 @@
+{
+  "description": "Failed run plus covering run on same head — record must prefer failed/cancelled over head_covered",
+  "openPrs": [{ "number": 73, "headRefOid": "both73" }],
+  "reviewRuns": [
+    {
+      "id": "run-fail-73",
+      "prNumber": 73,
+      "targetSha": "both73",
+      "status": "failed",
+      "terminationReason": "codex exec review exited 1",
+      "findingCount": 0
+    },
+    {
+      "id": "run-clean-73",
+      "prNumber": 73,
+      "targetSha": "both73",
+      "status": "clean",
+      "findingCount": 0
+    }
+  ],
+  "sessions": [
+    {
+      "name": "op-worker-73",
+      "role": "worker",
+      "prNumber": 73,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "headRefOid": "both73",
+          "reportedAt": "2026-06-06T03:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "73": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "failed_or_cancelled_on_head",
+    "record": {
+      "branch": "failed_or_cancelled",
+      "primary": "failed_or_cancelled_on_head"
+    }
+  }
+}
