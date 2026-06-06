@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/running",
+  "command": "ao review list",
+  "variant": "running",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/running.raw.json",
+  "provenanceRef": "captures/ao-review-run/running.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

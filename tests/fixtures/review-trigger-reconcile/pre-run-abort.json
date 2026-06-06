@@ -6,9 +6,19 @@
     "sessionId": "op-worker-50"
   },
   "fresh": {
-    "openPrs": [{ "number": 50, "headRefOid": "head50" }],
+    "openPrs": [
+      {
+        "number": 50,
+        "headRefOid": "head50",
+        "headCommittedAt": "2026-06-05T12:00:00.000Z"
+      }
+    ],
     "reviewRuns": [
-      { "prNumber": 50, "targetSha": "head50", "status": "queued" }
+      {
+        "prNumber": 50,
+        "targetSha": "head50",
+        "status": "queued"
+      }
     ],
     "sessions": [
       {
@@ -18,17 +28,28 @@
         "reports": [
           {
             "reportState": "ready_for_review",
-            "headRefOid": "head50",
             "reportedAt": "2026-06-05T12:00:00.000Z"
           }
         ]
       }
     ],
     "ciChecks": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

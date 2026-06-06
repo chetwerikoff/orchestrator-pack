@@ -1,0 +1,10 @@
+{
+  "id": "ao-worker-report/fixing_ci",
+  "command": "ao report",
+  "variant": "fixing_ci",
+  "version": 1,
+  "captureRef": "captures/ao-worker-report/fixing_ci.raw.json",
+  "provenanceRef": "captures/ao-worker-report/fixing_ci.provenance.json",
+  "allowedFields": ["reportState", "accepted", "note", "reportedAt", "timestamp"],
+  "forbiddenTogether": [["prNumber", "prUrl"]]
+}

@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao review list orchestrator-pack --json",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-06T08:00:00.000Z",
+  "context": "Representative needs_triage run (scrubbed)",
+  "scrubLog": ["Subset of fields retained for fixture contract tests"]
+}

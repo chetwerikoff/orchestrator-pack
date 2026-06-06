@@ -27,6 +27,11 @@ function loadFixture<T>(name: string): T {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as T;
 }
 
+function headCommittedAtMsFromPr(pr: { headCommittedAt?: string }) {
+  const raw = pr.headCommittedAt;
+  return raw ? Date.parse(raw) : undefined;
+}
+
 describe('classifyRequiredCiForReviewTrigger', () => {
   it('classifies lookup failure as degraded', () => {
     expect(
@@ -128,7 +133,7 @@ describe('evaluateHeadReadyForReview', () => {
 
   it('(a) ready head with green CI is eligible', () => {
     const fixture = loadFixture<{
-      openPrs: { number: number; headRefOid: string }[];
+      openPrs: { number: number; headRefOid: string; headCommittedAt?: string }[];
       reviewRuns: [];
       sessions: Array<Record<string, unknown>>;
       ciChecksByPr: Record<string, typeof greenChecks>;
@@ -140,6 +145,7 @@ describe('evaluateHeadReadyForReview', () => {
       headSha: pr.headRefOid,
       session: fixture.sessions[0] as never,
       ciChecks: fixture.ciChecksByPr[String(pr.number)],
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(decision.eligible).toBe(true);
     expect(decision.reason).toBe('head_ready_for_review');
@@ -159,20 +165,29 @@ describe('evaluateHeadReadyForReview', () => {
       headSha: pr.headRefOid,
       session: fixture.sessions[0] as never,
       ciChecks: fixture.ciChecksByPr[String(pr.number)],
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(decision.eligible).toBe(false);
     expect(decision.reason).toBe('uncovered_not_ready');
   });
 
   it('(c) stale ready_for_review on older head does not authorize current head', () => {
-    const session = loadFixture<{
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string; headCommittedAt?: string }[];
       sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
-    }>('intermediate-commit.json').sessions[0]!;
-    expect(hasReadyForReviewForHead(session, 'newhead55')).toBe(false);
+    }>('intermediate-commit.json');
+    const session = fixture.sessions[0]!;
+    const pr = fixture.openPrs[0]!;
+    expect(
+      hasReadyForReviewForHead(session, pr.headRefOid, {
+        headCommittedAtMs: headCommittedAtMsFromPr(pr),
+      }),
+    ).toBe(false);
   });
 
   it('requires the latest accepted report to be ready_for_review', () => {
     const head = 'superseded01';
+    const headCommittedAtMs = Date.parse('2026-06-05T12:00:00.000Z');
     const session = {
       name: 'op-worker-superseded',
       role: 'worker',
@@ -180,23 +195,22 @@ describe('evaluateHeadReadyForReview', () => {
       reports: [
         {
           reportState: 'ready_for_review',
-          headRefOid: head,
           reportedAt: '2026-06-05T11:00:00.000Z',
         },
         {
           reportState: 'addressing_reviews',
-          headRefOid: head,
           reportedAt: '2026-06-05T12:00:00.000Z',
         },
       ],
     };
-    expect(hasReadyForReviewForHead(session, head)).toBe(false);
+    expect(hasReadyForReviewForHead(session, head, { headCommittedAtMs })).toBe(false);
     const decision = evaluateHeadReadyForReview({
       reviewRuns: [],
       prNumber: 60,
       headSha: head,
       session: session as never,
       ciChecks: greenChecks,
+      headCommittedAtMs,
     });
     expect(decision.eligible).toBe(false);
     expect(decision.reason).toBe('uncovered_not_ready');
@@ -204,7 +218,7 @@ describe('evaluateHeadReadyForReview', () => {
 
   it('(d) red CI defers an otherwise-ready head', () => {
     const fixture = loadFixture<{
-      openPrs: { number: number; headRefOid: string }[];
+      openPrs: { number: number; headRefOid: string; headCommittedAt?: string }[];
       reviewRuns: [];
       sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
       ciChecksByPr: Record<string, { name: string; state: string }[]>;
@@ -216,6 +230,7 @@ describe('evaluateHeadReadyForReview', () => {
       headSha: pr.headRefOid,
       session: fixture.sessions[0] as never,
       ciChecks: fixture.ciChecksByPr[String(pr.number)],
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(decision.eligible).toBe(false);
     expect(decision.reason).toBe('ci_red_defer');
@@ -235,6 +250,7 @@ describe('evaluateHeadReadyForReview', () => {
       headSha: pr.headRefOid,
       session: fixture.sessions[0] as never,
       ciChecks: fixture.ciChecksByPr[String(pr.number)],
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(decision.eligible).toBe(true);
   });
@@ -256,6 +272,7 @@ describe('evaluateHeadReadyForReview', () => {
       session: fixture.sessions[0] as never,
       ciChecks: [],
       requiredCheckLookupFailed: true,
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(decision.reason).not.toBe('uncovered_not_ready');
     expect(decision.route).toBe('degraded_ci_retry');

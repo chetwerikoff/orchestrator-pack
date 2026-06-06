@@ -1,0 +1,8 @@
+{
+  "id": "review-run-scrubbed-failed",
+  "status": "failed",
+  "prNumber": 73,
+  "targetSha": "both73",
+  "findingCount": 0,
+  "terminationReason": "reviewer_command_failed"
+}

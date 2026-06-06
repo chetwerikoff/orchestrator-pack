@@ -1,0 +1,12 @@
+{
+  "id": "review-run-scrubbed-clean",
+  "projectId": "orchestrator-pack",
+  "linkedSessionId": "opk-19",
+  "reviewerSessionId": "opk-rev-scrubbed",
+  "status": "clean",
+  "targetSha": "8e35c0052127b8e156b7c1c80b2774286da16e6f",
+  "prNumber": 217,
+  "findingCount": 0,
+  "openFindingCount": 0,
+  "sentFindingCount": 0
+}

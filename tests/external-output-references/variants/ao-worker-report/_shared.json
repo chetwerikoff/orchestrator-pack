@@ -1,0 +1,15 @@
+{
+  "forbiddenFields": [
+    "headRefOid",
+    "head_ref_oid",
+    "forHeadSha",
+    "for_head_sha",
+    "prHeadSha",
+    "pr_head_sha",
+    "before",
+    "after",
+    "actor",
+    "source"
+  ],
+  "fixtureConventionFields": ["reportedAt", "accepted", "prNumber"]
+}

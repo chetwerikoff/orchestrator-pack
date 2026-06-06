@@ -841,6 +841,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== External-output fixture shape guard (Issue #223) =='
+$externalOutputShapeGuard = Join-Path $Root 'scripts/check-external-output-shape-guard.ps1'
+if (Test-Path -LiteralPath $externalOutputShapeGuard -PathType Leaf) {
+    & $externalOutputShapeGuard
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-external-output-shape-guard.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-external-output-shape-guard.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'External-output fixture shape guard failed (Issue #223)'
+    }
+}
+else {
+    Write-Check 'scripts/check-external-output-shape-guard.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing external-output fixture shape guard script (Issue #223)'
+}
+
+Write-Host ''
 Write-Host '== Skill pointer drift (Issue #156) =='
 $skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'
 if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {

@@ -11,12 +11,15 @@
     "reports": [
       {
         "reportState": "ready_for_review",
-        "headRefOid": "quiet174",
         "reportedAt": "2026-06-04T12:00:00Z"
       }
     ]
   },
-  "openPr": { "number": 174, "headRefOid": "quiet174" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "quiet174",
+    "headCommittedAt": "2026-06-04T12:00:00Z"
+  },
   "reviewRuns": [
     {
       "id": "run-quiet",
@@ -28,17 +31,33 @@
     }
   ],
   "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "success" },
-    { "name": "PR scope guard", "state": "success" },
-    { "name": "Run pack contract tests", "state": "success" },
-    { "name": "Self-architect lint", "state": "success" }
+    {
+      "name": "Verify orchestrator-pack structure",
+      "state": "success"
+    },
+    {
+      "name": "PR scope guard",
+      "state": "success"
+    },
+    {
+      "name": "Run pack contract tests",
+      "state": "success"
+    },
+    {
+      "name": "Self-architect lint",
+      "state": "success"
+    }
   ],
   "tracking": {
     "snapshots": {
-      "opk-quiet:quiet174": { "firstFalseStuckAtMs": 1717502000000 }
+      "opk-quiet:quiet174": {
+        "firstFalseStuckAtMs": 1717502000000
+      }
     }
   },
   "graceMs": 900000,
   "unreachability": {},
-  "expect": { "actionType": "hold_grace" }
+  "expect": {
+    "actionType": "hold_grace"
+  }
 }

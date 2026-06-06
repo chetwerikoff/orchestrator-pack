@@ -1,6 +1,12 @@
 {
   "description": "Ready head with green required CI triggers exactly one review run",
-  "openPrs": [{ "number": 99, "headRefOid": "deadbeef" }],
+  "openPrs": [
+    {
+      "number": 99,
+      "headRefOid": "deadbeef",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -11,7 +17,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "deadbeef",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -19,10 +24,22 @@
   ],
   "ciChecksByPr": {
     "99": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

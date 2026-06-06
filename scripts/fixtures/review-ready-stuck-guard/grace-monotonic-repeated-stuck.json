@@ -11,12 +11,15 @@
     "reports": [
       {
         "reportState": "ready_for_review",
-        "headRefOid": "mono174",
         "reportedAt": "2026-06-04T12:00:00Z"
       }
     ]
   },
-  "openPr": { "number": 174, "headRefOid": "mono174" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "mono174",
+    "headCommittedAt": "2026-06-04T12:00:00Z"
+  },
   "reviewRuns": [
     {
       "id": "run-mono",
@@ -28,16 +31,33 @@
     }
   ],
   "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "conclusion": "SUCCESS" },
-    { "name": "PR scope guard", "conclusion": "SUCCESS" },
-    { "name": "Run pack contract tests", "conclusion": "SUCCESS" },
-    { "name": "Self-architect lint", "conclusion": "SUCCESS" }
+    {
+      "name": "Verify orchestrator-pack structure",
+      "conclusion": "SUCCESS"
+    },
+    {
+      "name": "PR scope guard",
+      "conclusion": "SUCCESS"
+    },
+    {
+      "name": "Run pack contract tests",
+      "conclusion": "SUCCESS"
+    },
+    {
+      "name": "Self-architect lint",
+      "conclusion": "SUCCESS"
+    }
   ],
   "tracking": {
     "snapshots": {
-      "opk-grace-mono:mono174": { "firstFalseStuckAtMs": 1717502000000 }
+      "opk-grace-mono:mono174": {
+        "firstFalseStuckAtMs": 1717502000000
+      }
     }
   },
   "graceMs": 900000,
-  "expect": { "actionType": "allow_normal", "graceExpired": true }
+  "expect": {
+    "actionType": "allow_normal",
+    "graceExpired": true
+  }
 }

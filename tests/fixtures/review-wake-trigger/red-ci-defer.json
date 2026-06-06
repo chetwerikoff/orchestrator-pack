@@ -3,7 +3,13 @@
   "wakeKind": "merge.ready",
   "sessionId": "opk-red",
   "prNumber": 211,
-  "openPrs": [{ "number": 211, "headRefOid": "red211" }],
+  "openPrs": [
+    {
+      "number": 211,
+      "headRefOid": "red211",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -13,7 +19,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "red211",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -21,10 +26,22 @@
   ],
   "ciChecksByPr": {
     "211": [
-      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "FAILURE"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

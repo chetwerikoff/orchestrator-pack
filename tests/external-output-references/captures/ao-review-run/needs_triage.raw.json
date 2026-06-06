@@ -1,0 +1,9 @@
+{
+  "id": "review-run-scrubbed-triage",
+  "status": "needs_triage",
+  "prNumber": 42,
+  "targetSha": "deadbeef",
+  "findingCount": 2,
+  "openFindingCount": 2,
+  "sentFindingCount": 0
+}

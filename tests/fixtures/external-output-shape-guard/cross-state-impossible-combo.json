@@ -1,0 +1,9 @@
+{
+  "report": {
+    "reportState": "completed",
+    "note": "degraded CI handoff",
+    "prNumber": 48,
+    "prUrl": "https://github.com/example/orchestrator-pack/pull/48",
+    "reportedAt": "2026-06-05T12:00:00.000Z"
+  }
+}

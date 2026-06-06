@@ -11,12 +11,15 @@
     "reports": [
       {
         "reportState": "ready_for_review",
-        "headRefOid": "deadbeef174",
         "reportedAt": "2026-06-04T12:00:00Z"
       }
     ]
   },
-  "openPr": { "number": 174, "headRefOid": "deadbeef174" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "deadbeef174",
+    "headCommittedAt": "2026-06-04T12:00:00Z"
+  },
   "reviewRuns": [
     {
       "id": "run-clean-174",
@@ -28,10 +31,25 @@
     }
   ],
   "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-    { "name": "PR scope guard", "state": "SUCCESS" },
-    { "name": "Run pack contract tests", "state": "SUCCESS" },
-    { "name": "Self-architect lint", "state": "SUCCESS" }
+    {
+      "name": "Verify orchestrator-pack structure",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "PR scope guard",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Run pack contract tests",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Self-architect lint",
+      "state": "SUCCESS"
+    }
   ],
-  "expect": { "reviewReady": true, "actionType": "hold_grace" }
+  "expect": {
+    "reviewReady": true,
+    "actionType": "hold_grace"
+  }
 }

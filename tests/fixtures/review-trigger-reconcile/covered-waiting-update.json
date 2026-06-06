@@ -1,6 +1,12 @@
 {
   "description": "waiting_update (findings sent) blocks re-review",
-  "openPrs": [{ "number": 13, "headRefOid": "ddd444" }],
+  "openPrs": [
+    {
+      "number": 13,
+      "headRefOid": "ddd444",
+      "headCommittedAt": "2026-06-04T11:30:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "prNumber": 13,
@@ -11,5 +17,11 @@
       "openFindingCount": 0
     }
   ],
-  "sessions": [{ "name": "op-13", "role": "worker", "prNumber": 13 }]
+  "sessions": [
+    {
+      "name": "op-13",
+      "role": "worker",
+      "prNumber": 13
+    }
+  ]
 }

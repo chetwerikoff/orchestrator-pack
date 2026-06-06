@@ -1,6 +1,12 @@
 {
   "description": "In-flight run on current head blocks a new run",
-  "openPrs": [{ "number": 10, "headRefOid": "aaa111" }],
+  "openPrs": [
+    {
+      "number": 10,
+      "headRefOid": "aaa111",
+      "headCommittedAt": "2026-06-04T11:30:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "prNumber": 10,
@@ -8,5 +14,11 @@
       "status": "running"
     }
   ],
-  "sessions": [{ "name": "op-10", "role": "worker", "prNumber": 10 }]
+  "sessions": [
+    {
+      "name": "op-10",
+      "role": "worker",
+      "prNumber": 10
+    }
+  ]
 }

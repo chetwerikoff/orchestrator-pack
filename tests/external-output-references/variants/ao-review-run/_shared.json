@@ -1,0 +1,29 @@
+{
+  "forbiddenFields": ["headRefOid", "head_ref_oid", "reportState", "reports", "accepted"],
+  "allowedFields": [
+    "id",
+    "runId",
+    "projectId",
+    "linkedSessionId",
+    "reviewerSessionId",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "startedAt",
+    "completedAt",
+    "targetSha",
+    "prNumber",
+    "prUrl",
+    "reviewerWorkspacePath",
+    "summary",
+    "findingCount",
+    "openFindingCount",
+    "dismissedFindingCount",
+    "sentFindingCount",
+    "resolvedFindingCount",
+    "terminationReason",
+    "retryEligible",
+    "retryCount",
+    "sentAt"
+  ]
+}

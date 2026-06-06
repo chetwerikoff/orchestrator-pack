@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "gh pr list --state open --json number,headRefOid --limit 200",
+  "toolVersion": "gh 2.x",
+  "capturedAt": "2026-06-06T06:00:00.000Z",
+  "context": "Pack Get-AutoReviewPrContext / Gh-PrChecks.ps1 usage (scrubbed SHA retained as non-secret)",
+  "scrubLog": ["PR number and SHA are synthetic test identifiers in fixtures; live capture uses real PR metadata"]
+}

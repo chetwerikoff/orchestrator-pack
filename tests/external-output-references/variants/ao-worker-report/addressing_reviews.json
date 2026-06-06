@@ -1,0 +1,10 @@
+{
+  "id": "ao-worker-report/addressing_reviews",
+  "command": "ao report",
+  "variant": "addressing_reviews",
+  "version": 1,
+  "captureRef": "captures/ao-worker-report/addressing_reviews.raw.json",
+  "provenanceRef": "captures/ao-worker-report/addressing_reviews.provenance.json",
+  "allowedFields": ["reportState", "accepted", "note", "reportedAt", "timestamp"],
+  "forbiddenTogether": [["prNumber", "prUrl"], ["prNumber", "prIsDraft"]]
+}

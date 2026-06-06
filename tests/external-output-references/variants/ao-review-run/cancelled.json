@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/cancelled",
+  "command": "ao review list",
+  "variant": "cancelled",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/cancelled.raw.json",
+  "provenanceRef": "captures/ao-review-run/cancelled.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

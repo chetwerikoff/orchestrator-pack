@@ -8,15 +8,39 @@
     "status": "stuck",
     "runtime": "alive",
     "ownedHeadSha": "ord174",
-    "reports": [{ "reportState": "working", "reportedAt": "2026-06-04T11:00:00Z" }]
+    "reports": [
+      {
+        "reportState": "working",
+        "reportedAt": "2026-06-04T11:00:00Z"
+      }
+    ]
   },
-  "openPr": { "number": 174, "headRefOid": "ord174" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "ord174",
+    "headCommittedAt": "2026-06-04T11:00:00Z"
+  },
   "reviewRuns": [],
   "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-    { "name": "PR scope guard", "state": "SUCCESS" },
-    { "name": "Run pack contract tests", "state": "SUCCESS" },
-    { "name": "Self-architect lint", "state": "SUCCESS" }
+    {
+      "name": "Verify orchestrator-pack structure",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "PR scope guard",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Run pack contract tests",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Self-architect lint",
+      "state": "SUCCESS"
+    }
   ],
-  "expect": { "reviewReady": false, "actionType": "allow_normal" }
+  "expect": {
+    "reviewReady": false,
+    "actionType": "allow_normal"
+  }
 }
