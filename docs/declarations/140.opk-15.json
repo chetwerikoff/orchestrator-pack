@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "f96c7e8114fc50f92132a95336b843a3d53e1b72",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ebfb4a6c307dcc97c67acb0713f7aa4f8bd2b03f167740495c8f12881626737d"
+    "active_scope_hash": "sha256:78000780ac94444bd5e3782b2cc5c75ca7f93d1e385e800914ff445035b49ffa"
   },
   "declared_paths": [
     "docs/architecture.md",
@@ -18,10 +18,26 @@
     "scripts/review-bulk-send-diagnose.ps1",
     "scripts/review-bulk-send-diagnose.test.ts",
     "scripts/check-review-bulk-send-diagnose.ps1",
-    "scripts/verify.ps1"
+    "scripts/verify.ps1",
+    "docs/declarations/140.opk-15.json"
   ],
   "declared_globs": [
     "scripts/fixtures/review-bulk-send-diagnose/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ebfb4a6c307dcc97c67acb0713f7aa4f8bd2b03f167740495c8f12881626737d",
+      "new_active_scope_hash": "sha256:78000780ac94444bd5e3782b2cc5c75ca7f93d1e385e800914ff445035b49ffa",
+      "changed": {
+        "added": [
+          "docs/declarations/140.opk-15.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in declared paths",
+      "actor": "opk-15",
+      "timestamp": "2026-06-06T01:29:39.348Z",
+      "applied": true
+    }
+  ]
 }
