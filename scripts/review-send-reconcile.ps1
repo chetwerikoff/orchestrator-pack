@@ -221,9 +221,9 @@ function Invoke-PlannedFirstReviewSend {
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
         -Source 'review-send' -SourceKey ([string]$Action.runId) `
         -DeliveryPath 'pending-draft'
-    $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
+    $outcome = Resolve-DispatchJournalSendOutcomeAfterDelivered -DispatchResult $dispatchResult
     if (-not $outcome.journalRecorded) {
-        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (send not marked complete; will retry journal on next tick)"
+        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (review send delivered; deduped, journal will retry)"
     }
     return $outcome
 }
