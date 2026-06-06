@@ -84,6 +84,12 @@ describe('checkParkedRoot', () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
   });
+
+  it('fails when follow-up issue data is absent', () => {
+    const result = checkParkedRoot(loadFixture('parked-valid.md'));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/could not be validated/);
+  });
 });
 
 describe('checkRcaSpecDisciplineSurfaces', () => {

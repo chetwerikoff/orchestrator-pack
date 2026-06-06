@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -40,6 +41,7 @@ const PLACEHOLDER_ISSUE_TITLE_PATTERNS = [
 const REALISTIC_INPUT_VALUES = new Set(['realistic', 'production-representative']);
 const EXTERNAL_TOOL_INPUT = 'external-tool-output';
 const VALID_PROVENANCE = new Set(['capture-backed', 'sample-backed']);
+const DEFAULT_ISSUE_REPO = 'chetwerikoff/orchestrator-pack';
 
 function normalizeLine(value) {
   return value.trim().replace(/\s+/g, ' ');
@@ -224,6 +226,48 @@ export function checkPositiveOutcome(markdown) {
   return { ok: errors.length === 0, errors, warnings, behaviorKind, skipped: false };
 }
 
+export function fetchLiveIssue(issueNumber, repo = process.env.GITHUB_REPOSITORY || DEFAULT_ISSUE_REPO) {
+  try {
+    const output = execFileSync(
+      'gh',
+      ['issue', 'view', String(issueNumber), '--repo', repo, '--json', 'state,title,body'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const parsed = JSON.parse(output);
+    return {
+      state: parsed.state === 'OPEN' ? 'OPEN' : 'CLOSED',
+      title: parsed.title ?? '',
+      body: parsed.body ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveParkedRootIssueMap(blocks, mockIssues = {}, options = {}) {
+  const fetchLive = options.fetchLive ?? false;
+  const repo = options.repo ?? process.env.GITHUB_REPOSITORY ?? DEFAULT_ISSUE_REPO;
+  const map = { ...mockIssues };
+  if (!fetchLive) {
+    return map;
+  }
+  for (const block of blocks) {
+    const issueNumber = parseIssueNumber(block.followUpIssue);
+    if (!issueNumber) {
+      continue;
+    }
+    const key = String(issueNumber);
+    if (map[key]) {
+      continue;
+    }
+    const live = fetchLiveIssue(issueNumber, repo);
+    if (live) {
+      map[key] = live;
+    }
+  }
+  return map;
+}
+
 export function checkParkedRoot(markdown, mockIssues = {}) {
   const errors = [];
   const warnings = [];
@@ -260,7 +304,9 @@ export function checkParkedRoot(markdown, mockIssues = {}) {
 
     const issue = mockIssues[String(issueNumber)];
     if (!issue) {
-      warnings.push(`follow-up issue #${issueNumber} not validated (no mock/live issue data)`);
+      errors.push(
+        `follow-up issue #${issueNumber} could not be validated (not found, inaccessible, or gh issue view failed)`,
+      );
       continue;
     }
 
@@ -409,7 +455,11 @@ export function runCli(argv) {
   }
 
   if (command === 'parked-root') {
-    const result = checkParkedRoot(markdown, mockIssues);
+    const blocks = parseParkedRootBlocks(markdown);
+    const issueMap = resolveParkedRootIssueMap(blocks, mockIssues, {
+      fetchLive: mockFlag < 0,
+    });
+    const result = checkParkedRoot(markdown, issueMap);
     for (const warning of result.warnings) {
       process.stderr.write(`draft-discipline warning: ${warning}\n`);
     }

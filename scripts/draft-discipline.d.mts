@@ -13,6 +13,17 @@ export function checkPositiveOutcome(markdown: string): {
   skipped: boolean;
 };
 
+export function fetchLiveIssue(
+  issueNumber: number,
+  repo?: string,
+): MockIssue | null;
+
+export function resolveParkedRootIssueMap(
+  blocks: Array<{ followUpIssue: string }>,
+  mockIssues?: Record<string, MockIssue>,
+  options?: { fetchLive?: boolean; repo?: string },
+): Record<string, MockIssue>;
+
 export function checkParkedRoot(
   markdown: string,
   mockIssues?: Record<string, MockIssue>,
