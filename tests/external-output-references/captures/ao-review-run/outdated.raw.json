@@ -1,0 +1,8 @@
+{
+  "id": "review-run-scrubbed-outdated",
+  "status": "outdated",
+  "prNumber": 99,
+  "targetSha": "deadbeef",
+  "findingCount": 1,
+  "sentFindingCount": 1
+}

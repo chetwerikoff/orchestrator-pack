@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "triggerTestSuites": [
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/review-orchestrator-loop.test.ts",
+    "scripts/review-ready-stuck-guard.test.ts",
+    "scripts/review-send-reconcile.test.ts",
+    "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/review-finding-delivery-submit.test.ts"
+  ],
+  "fixtureRoots": [
+    {
+      "glob": "tests/fixtures/review-trigger-reconcile/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "tests/fixtures/review-wake-trigger/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "tests/fixtures/ci-green-wake-reconcile/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" }
+      ]
+    },
+    {
+      "glob": "tests/fixtures/review-send-reconcile/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "tests/fixtures/review-orchestrator-loop/*.json",
+      "shapes": [
+        { "jsonPath": "$.runs[*]", "command": "ao-review-run", "variantFrom": "status" },
+        {
+          "jsonPath": "$.runsAtTurnStart[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        },
+        {
+          "jsonPath": "$.runsImmediatelyBeforeRun[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        },
+        { "jsonPath": "$.run", "command": "ao-review-run", "variantFrom": "status" }
+      ]
+    },
+    {
+      "glob": "scripts/fixtures/review-ready-stuck-guard/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.session.reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPr", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "scripts/fixtures/review-finding-delivery-confirm/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "scripts/fixtures/review-finding-delivery-submit/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    }
+  ],
+  "inlineOptOuts": [
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 107,
+      "reason": "Defensive regression for legacy stored-SHA binding; synthetic input, not modeled ao report output (Issue #218)"
+    }
+  ]
+}

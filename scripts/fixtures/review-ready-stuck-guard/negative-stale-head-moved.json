@@ -11,12 +11,15 @@
     "reports": [
       {
         "reportState": "ready_for_review",
-        "headRefOid": "oldhead111",
         "reportedAt": "2026-06-04T11:00:00Z"
       }
     ]
   },
-  "openPr": { "number": 174, "headRefOid": "newhead999" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "newhead999",
+    "headCommittedAt": "2026-06-04T12:30:00.000Z"
+  },
   "reviewRuns": [
     {
       "id": "run-stale",
@@ -27,11 +30,8 @@
       "linkedSessionId": "opk-worker-stale"
     }
   ],
-  "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-    { "name": "PR scope guard", "state": "SUCCESS" },
-    { "name": "Run pack contract tests", "state": "SUCCESS" },
-    { "name": "Self-architect lint", "state": "SUCCESS" }
-  ],
-  "expect": { "reviewReady": false }
+  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"SUCCESS"},{"name":"Run pack contract tests","state":"SUCCESS"},{"name":"Self-architect lint","state":"SUCCESS"}],
+  "expect": {
+    "reviewReady": false
+  }
 }

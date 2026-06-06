@@ -1,6 +1,12 @@
 {
   "description": "Uncovered head without ready_for_review is left alone (uncovered-but-not-ready)",
-  "openPrs": [{ "number": 99, "headRefOid": "deadbeef" }],
+  "openPrs": [
+    {
+      "number": 99,
+      "headRefOid": "deadbeef",
+      "headCommittedAt": "2026-06-04T11:30:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -12,10 +18,22 @@
   ],
   "ciChecksByPr": {
     "99": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

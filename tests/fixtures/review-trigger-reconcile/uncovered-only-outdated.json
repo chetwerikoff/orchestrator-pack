@@ -1,6 +1,12 @@
 {
   "description": "Only outdated runs on current head — reconciliation starts one review",
-  "openPrs": [{ "number": 14, "headRefOid": "eee555" }],
+  "openPrs": [
+    {
+      "number": 14,
+      "headRefOid": "eee555",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "prNumber": 14,
@@ -16,7 +22,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "eee555",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -24,11 +29,26 @@
   ],
   "ciChecksByPr": {
     "14": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
-  "expect": { "startReviewCount": 1, "sessionId": "op-14" }
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "op-14"
+  }
 }

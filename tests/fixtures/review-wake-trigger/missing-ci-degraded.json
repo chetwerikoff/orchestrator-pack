@@ -3,7 +3,13 @@
   "wakeKind": "merge.ready",
   "sessionId": "opk-miss",
   "prNumber": 212,
-  "openPrs": [{ "number": 212, "headRefOid": "miss212" }],
+  "openPrs": [
+    {
+      "number": 212,
+      "headRefOid": "miss212",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -13,14 +19,18 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "miss212",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
     }
   ],
   "ciChecksByPr": {
-    "212": [{ "name": "Optional check", "state": "SUCCESS" }]
+    "212": [
+      {
+        "name": "Optional check",
+        "state": "SUCCESS"
+      }
+    ]
   },
   "expect": {
     "triggerReviewRun": false,

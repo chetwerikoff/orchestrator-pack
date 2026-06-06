@@ -1,0 +1,11 @@
+{
+  "id": "gh-pr-open/open",
+  "command": "gh pr list --state open",
+  "variant": "open",
+  "version": 1,
+  "captureRef": "captures/gh-pr-open/open.raw.json",
+  "provenanceRef": "captures/gh-pr-open/open.provenance.json",
+  "allowedFields": ["number", "headRefOid", "headCommittedAt"],
+  "forbiddenFields": ["reportState", "reports", "accepted"],
+  "forbiddenTogether": []
+}

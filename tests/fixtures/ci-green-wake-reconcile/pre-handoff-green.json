@@ -1,6 +1,12 @@
 {
   "description": "Pre-hand-off worker on green required CI receives nudge",
-  "openPrs": [{ "number": 77, "headRefOid": "cafebabe" }],
+  "openPrs": [
+    {
+      "number": 77,
+      "headRefOid": "cafebabe",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "sessions": [
     {
       "name": "op-fix-ci",
@@ -12,7 +18,6 @@
       "reports": [
         {
           "reportState": "fixing_ci",
-          "headRefOid": "cafebabe",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -20,10 +25,22 @@
   ],
   "ciChecksByPr": {
     "77": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "tracking": {}

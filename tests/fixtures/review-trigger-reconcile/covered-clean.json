@@ -1,6 +1,12 @@
 {
   "description": "Clean run on current head blocks a new run",
-  "openPrs": [{ "number": 11, "headRefOid": "bbb222" }],
+  "openPrs": [
+    {
+      "number": 11,
+      "headRefOid": "bbb222",
+      "headCommittedAt": "2026-06-04T11:30:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "prNumber": 11,
@@ -9,5 +15,11 @@
       "findingCount": 0
     }
   ],
-  "sessions": [{ "name": "op-11", "role": "worker", "prNumber": 11 }]
+  "sessions": [
+    {
+      "name": "op-11",
+      "role": "worker",
+      "prNumber": 11
+    }
+  ]
 }

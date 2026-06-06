@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/outdated",
+  "command": "ao review list",
+  "variant": "outdated",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/outdated.raw.json",
+  "provenanceRef": "captures/ao-review-run/outdated.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

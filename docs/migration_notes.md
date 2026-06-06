@@ -971,3 +971,26 @@ After merge of the worker PR that adds RCA/spec discipline rules and
 2. Restart AO so workers load the new rules: `ao stop` then `ao start`.
 3. Optional: run `pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command surfaces -RepoRoot .`
    to confirm loader surfaces are wired.
+
+## External-output fixture shape guard (Issue #223)
+
+After merge, CI runs `scripts/check-external-output-shape-guard.ps1` (also
+`npm test` via `scripts/external-output-shape-guard.test.ts`). No operator
+adoption beyond normal CI.
+
+**Refresh path (AO / gh version bump):**
+
+1. Capture scrubbed raw output under `tests/external-output-references/captures/`
+   for the affected command variant (see per-variant `*.provenance.json` for the
+   prior capture command and scrub log).
+2. Update the matching `tests/external-output-references/variants/**` reference
+   (`allowedFields`, `forbiddenFields`, `forbiddenTogether`) so fixtures remain
+   anchored to real per-state shapes — do not weaken the guard to silence drift.
+3. Extend `tests/external-output-references/trigger-fixture-classification.json`
+   when new trigger-test fixture roots or inline opt-outs are added; move
+   anchored families out of `inventory.json` when covered.
+4. Run `node scripts/external-output-shape-guard.mjs` and
+   `npm test -- scripts/external-output-shape-guard.test.ts` locally; push so
+   reviewers see the reference diff.
+
+**Owner:** orchestrator-pack maintainers / PR author touching trigger fixtures.

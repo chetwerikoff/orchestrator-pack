@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/needs_triage",
+  "command": "ao review list",
+  "variant": "needs_triage",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/needs_triage.raw.json",
+  "provenanceRef": "captures/ao-review-run/needs_triage.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

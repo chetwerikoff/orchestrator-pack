@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "External-output fixture families outside trigger suites that are not yet shape-anchored.",
+  "entries": [
+    {
+      "glob": "tests/fixtures/terminal-flood-detect/*.json",
+      "owner": "orchestrator-pack",
+      "followUp": "Anchor when terminal-flood fixtures model ao events output (#223 follow-up)"
+    },
+    {
+      "glob": "tests/fixtures/review-bulk-send-diagnose/*.json",
+      "owner": "orchestrator-pack",
+      "followUp": "Anchor when bulk-send diagnose fixtures model ao review list output (#223 follow-up)"
+    },
+    {
+      "glob": "scripts/fixtures/review-bulk-send-diagnose/*.json",
+      "owner": "orchestrator-pack",
+      "followUp": "Anchor when bulk-send diagnose script fixtures model ao review list output (#223 follow-up)"
+    }
+  ]
+}

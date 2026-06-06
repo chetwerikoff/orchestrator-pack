@@ -182,13 +182,13 @@ describe('planCiGreenWakeActions', () => {
       reports: [
         {
           reportState: 'fixing_ci',
-          headRefOid: 'abc123',
+
           reportedAt: '2026-06-01T00:00:00.000Z',
         },
       ],
     });
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [session],
       ciChecksByPr: { 42: greenChecks },
       tracking: {},
@@ -204,10 +204,10 @@ describe('planCiGreenWakeActions', () => {
   it('(b) skips second identical green observation after nudge recorded', () => {
     const transitionId = buildTransitionId(42, 'abc123', 1);
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -222,10 +222,10 @@ describe('planCiGreenWakeActions', () => {
 
   it('(c) treats renewed red→green on same head as new transition', () => {
     const first = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -241,12 +241,12 @@ describe('planCiGreenWakeActions', () => {
 
   it('(e) does not nudge when ready_for_review accepted for head', () => {
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
           reports: [
-            { reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' },
-            { reportState: 'ready_for_review', headRefOid: 'abc123', reportedAt: '2026-06-01T01:00:00.000Z' },
+            { reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' },
+            { reportState: 'ready_for_review', reportedAt: '2026-06-01T01:00:00.000Z' },
           ],
         }),
       ],
@@ -259,7 +259,7 @@ describe('planCiGreenWakeActions', () => {
   it('nudges when first live PR session is stale but a later session owns the head', () => {
     const headSha = 'currenthead';
     const result = plan({
-      openPrs: [{ number: 77, headRefOid: headSha }],
+      openPrs: [{ number: 77, headRefOid: headSha, headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         {
           name: 'op-stale',
@@ -270,7 +270,7 @@ describe('planCiGreenWakeActions', () => {
           reports: [
             {
               reportState: 'fixing_ci',
-              headRefOid: 'oldhead00',
+
               reportedAt: '2026-06-01T00:00:00.000Z',
             },
           ],
@@ -282,7 +282,7 @@ describe('planCiGreenWakeActions', () => {
           ownedHeadSha: headSha,
           runtime: 'alive',
           reports: [
-            { reportState: 'fixing_ci', headRefOid: headSha, reportedAt: '2026-06-05T00:00:00.000Z' },
+            { reportState: 'fixing_ci', reportedAt: '2026-06-05T00:00:00.000Z' },
           ],
         } as unknown as AoSession,
       ],
@@ -304,11 +304,11 @@ describe('planCiGreenWakeActions', () => {
 
   it('(f) does not nudge when runtime is not alive', () => {
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
           runtime: 'exited',
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -319,10 +319,10 @@ describe('planCiGreenWakeActions', () => {
 
   it('(i) nudges head already green on first evaluation (level recovery)', () => {
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -333,10 +333,10 @@ describe('planCiGreenWakeActions', () => {
 
   it('(d) plans at most one nudge per transition when called once', () => {
     const result = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -348,14 +348,14 @@ describe('planCiGreenWakeActions', () => {
 
 describe('preSendRecheck', () => {
   const baseSession = liveWorker({
-    reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+    reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
   });
 
   it('fails when fresh snapshot shows CI no longer green', () => {
     const recheck = preSendRecheck(
       { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
       {
-        openPrs: [{ number: 42, headRefOid: 'abc123' }],
+        openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
         sessions: [baseSession],
         ciChecksByPr: { 42: redChecks },
         requiredCheckNamesByPr: {},
@@ -369,7 +369,7 @@ describe('preSendRecheck', () => {
     const recheck = preSendRecheck(
       { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
       {
-        openPrs: [{ number: 42, headRefOid: 'newhead9' }],
+        openPrs: [{ number: 42, headRefOid: 'newhead9', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
         sessions: [baseSession],
         ciChecksByPr: { 42: greenChecks },
       },
@@ -381,7 +381,7 @@ describe('preSendRecheck', () => {
     const recheck = preSendRecheck(
       { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
       {
-        openPrs: [{ number: 42, headRefOid: 'abc123' }],
+        openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
         sessions: [{ ...baseSession, runtime: 'exited' }],
         ciChecksByPr: { 42: greenChecks },
       },
@@ -396,10 +396,10 @@ describe('recordSuccessfulNudge / dedupe priority', () => {
     expect(tracking.nudged?.['42:abc123:1']).toBeDefined();
 
     const withoutDedupe = plan({
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
         liveWorker({
-          reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
         }),
       ],
       ciChecksByPr: { 42: greenChecks },
@@ -441,11 +441,11 @@ describe('evaluateCiGreenWakeCandidate', () => {
   it('rejects nudge when required-check lookup failed even if pack checks are green', () => {
     const candidate = evaluateCiGreenWakeCandidate({
       session: liveWorker({
-        reports: [{ reportState: 'fixing_ci', headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+        reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
       }),
       prNumber: 42,
       headSha: 'abc123',
-      openPrs: [{ number: 42, headRefOid: 'abc123' }],
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       ciChecks: greenChecks,
       requiredCheckLookupFailed: true,
     });
@@ -457,11 +457,19 @@ describe('evaluateCiGreenWakeCandidate', () => {
     for (const state of ['pr_created', 'working'] as const) {
       const candidate = evaluateCiGreenWakeCandidate({
         session: liveWorker({
-          reports: [{ reportState: state, headRefOid: 'abc123', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          reports: [
+            state === 'pr_created'
+              ? {
+                  reportState: 'pr_created',
+                  prNumber: 42,
+                  reportedAt: '2026-06-01T00:00:00.000Z',
+                }
+              : { reportState: 'working', reportedAt: '2026-06-01T00:00:00.000Z' },
+          ],
         }),
         prNumber: 42,
         headSha: 'abc123',
-        openPrs: [{ number: 42, headRefOid: 'abc123' }],
+        openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
         ciChecks: greenChecks,
       });
       expect(candidate.eligible).toBe(true);

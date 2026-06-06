@@ -1,0 +1,7 @@
+{
+  "id": "review-run-scrubbed-waiting",
+  "status": "waiting_update",
+  "prNumber": 13,
+  "targetSha": "ddd444",
+  "sentFindingCount": 2
+}

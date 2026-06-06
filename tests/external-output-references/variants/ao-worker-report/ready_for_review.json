@@ -1,0 +1,20 @@
+{
+  "id": "ao-worker-report/ready_for_review",
+  "command": "ao report",
+  "variant": "ready_for_review",
+  "version": 1,
+  "captureRef": "captures/ao-worker-report/ready_for_review.raw.json",
+  "provenanceRef": "captures/ao-worker-report/ready_for_review.provenance.json",
+  "allowedFields": [
+    "reportState",
+    "accepted",
+    "prNumber",
+    "prIsDraft",
+    "prUrl",
+    "note",
+    "reportedAt",
+    "timestamp",
+    "source"
+  ],
+  "forbiddenTogether": []
+}

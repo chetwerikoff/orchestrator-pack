@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "Per-variant references for external-tool output used in pack trigger tests (Issue #223).",
+  "commands": {
+    "ao-worker-report": {
+      "source": "ao report / ao acknowledge",
+      "variantDir": "variants/ao-worker-report",
+      "variantFromField": "reportState"
+    },
+    "gh-pr-open": {
+      "source": "gh pr list --state open --json number,headRefOid,commits (headCommittedAt derived)",
+      "variantDir": "variants/gh-pr-open",
+      "defaultVariant": "open"
+    },
+    "ao-review-run": {
+      "source": "ao review list <project> --json",
+      "variantDir": "variants/ao-review-run",
+      "variantFromField": "status"
+    }
+  }
+}

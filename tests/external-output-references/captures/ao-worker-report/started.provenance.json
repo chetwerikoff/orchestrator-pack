@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao acknowledge",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-06T05:43:13.050Z",
+  "context": "opk-19 .agent-report-audit/opk-19.ndjson acknowledge entry (scrubbed)",
+  "scrubLog": ["Removed actor", "Removed before/after lifecycle envelope"]
+}

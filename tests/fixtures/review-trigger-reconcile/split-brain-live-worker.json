@@ -1,6 +1,12 @@
 {
   "description": "PR #97 split-brain: live worker on branch, uncovered head — review only, no spawn",
-  "openPrs": [{ "number": 97, "headRefOid": "f00ba4" }],
+  "openPrs": [
+    {
+      "number": 97,
+      "headRefOid": "f00ba4",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -12,7 +18,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "f00ba4",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -25,11 +30,26 @@
   ],
   "ciChecksByPr": {
     "97": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
-  "expect": { "startReviewCount": 1, "sessionId": "op-worker-pr97" }
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "op-worker-pr97"
+  }
 }

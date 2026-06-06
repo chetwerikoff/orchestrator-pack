@@ -1,0 +1,8 @@
+{
+  "ciChecksByPr": {
+    "217": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" }
+    ]
+  }
+}
