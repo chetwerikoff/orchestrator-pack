@@ -55,6 +55,33 @@ Collect only what answers the scoped question:
 Stop gathering when additional search is unlikely to change the root-cause
 conclusion.
 
+### Recurrence diagnostic (recurrence-diagnostic — first step when the bug is "already fixed")
+
+When the user reports a **recurring** bug or says a prior fix "should have"
+resolved it, make this the **first** workflow step — before new code patches or
+new acceptance criteria:
+
+1. **Identify the prior fix's own acceptance check** — the criterion or fixture
+   that was green when the last fix merged (issue body AC, regression fixture,
+   documented verification command).
+2. **When safe and representative**, **re-run that check against current live
+   state** (same command/fixture shape; note any environment skew).
+3. **Evidence rule (not an exclusive verdict):** `pass + reproduce` — if the prior
+   check **passes** while the bug **still reproduces**, record that as **strong
+   evidence the spec or fixture is the defect** — descend into the spec/fixture (field shape,
+   production-representative input, wrong binding) before re-patching
+   implementation.
+4. **Record instead of concluding** when the prior check is unidentifiable,
+   unsafe to run live, non-deterministic, or affected by version skew /
+   partial rollout / races / flaky dependencies — a genuine runtime defect
+   remains reachable.
+
+**Worked example (#212→#218):** review did not auto-start after a worker reported
+`ready_for_review` on green CI. The prior acceptance check was green on a fixture
+whose `ao report` record included `headRefOid`, while live AO 0.9.x reports
+carry **no** head SHA. Pass + reproduce ⇒ the binding/spec pointed at a field the
+real tool never emits — fix the predicate contract, not another defer log.
+
 ### 5 Whys (failures and recurrence)
 
 For failures, flaky behavior, or recurring problems, apply **5 Whys** per
@@ -69,6 +96,23 @@ parallel loop here.
 
 Stop at **spec / contract / rule** level (issue body, draft, `prompts/agent_rules.md`,
 declaration, CI guard), not at symptom patches on merged code.
+
+#### 5-Whys stop condition (reject intermediate artifacts)
+
+These are **not** acceptable **terminal root cause** statements — continue the chain until
+you reach a data/contract/field-level fact:
+
+- "A component returned or logged value **X**."
+- "The decision/defer record is imprecise / missing a subreason."
+
+**Rejecting example:** "Reconcile deferred because `ready_for_review` did not
+match the head" → **continue:** AO 0.9.x `ao report` stores no head SHA, so a
+predicate that requires `report.headRefOid` is **unsatisfiable** — the defect is
+the binding assumption about external tool output shape, not the defer log text.
+
+Acceptable terminal causes name a **false assumption about real data** (a field
+the external tool never emits, a fixture that invents a shape) or a missing
+contract/guard.
 
 ### Resolve queue status (before §3 / §4 claims)
 

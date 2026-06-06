@@ -776,6 +776,71 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Draft discipline guards (Issue #221) =='
+$draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'
+$draftDisciplineFixtureDir = Join-Path $Root 'tests/fixtures/draft-discipline'
+if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
+    (Test-Path -LiteralPath $draftDisciplineFixtureDir -PathType Container)) {
+    $positiveCases = @(
+        @{ Name = 'negative-only-action'; Draft = 'negative-only-action.md'; ExpectPass = $false },
+        @{ Name = 'positive-present-action'; Draft = 'positive-present-action.md'; ExpectPass = $true },
+        @{ Name = 'external-input-no-provenance'; Draft = 'external-input-no-provenance.md'; ExpectPass = $false },
+        @{ Name = 'synonym-record-only-backstop'; Draft = 'synonym-record-only-backstop.md'; ExpectPass = $false }
+    )
+    foreach ($case in $positiveCases) {
+        $draftPath = Join-Path $draftDisciplineFixtureDir $case.Draft
+        & $draftDisciplineCheck -Command positive-outcome -DraftPath $draftPath
+        $passed = $LASTEXITCODE -eq 0
+        if ($passed -ne $case.ExpectPass) {
+            Write-Check "draft-discipline/positive/$($case.Name)" 'FAIL' "expected pass=$($case.ExpectPass) got pass=$passed"
+            Add-Failure "Draft discipline positive-outcome fixture failed: $($case.Draft)"
+        }
+        else {
+            Write-Check "draft-discipline/positive/$($case.Name)" 'PASS' 'completed'
+        }
+    }
+
+    $parkedCases = @(
+        @{ Name = 'defer-without-block'; Draft = 'defer-without-block.md'; Mock = $null; ExpectPass = $false },
+        @{ Name = 'parked-valid'; Draft = 'parked-valid.md'; Mock = 'parked-valid-issues.json'; ExpectPass = $true },
+        @{ Name = 'parked-vague-cause'; Draft = 'parked-vague-cause.md'; Mock = 'parked-placeholder-issue.json'; ExpectPass = $false },
+        @{ Name = 'parked-word-overlap'; Draft = 'parked-word-overlap.md'; Mock = 'parked-word-overlap.json'; ExpectPass = $false },
+        @{ Name = 'parked-dual-deferral'; Draft = 'parked-dual-deferral.md'; Mock = 'parked-valid-issues.json'; ExpectPass = $false }
+    )
+    foreach ($case in $parkedCases) {
+        $draftPath = Join-Path $draftDisciplineFixtureDir $case.Draft
+        if ($case.Mock) {
+            $mockPath = Join-Path $draftDisciplineFixtureDir $case.Mock
+            & $draftDisciplineCheck -Command parked-root -DraftPath $draftPath -MockIssuesPath $mockPath
+        }
+        else {
+            & $draftDisciplineCheck -Command parked-root -DraftPath $draftPath
+        }
+        $passed = $LASTEXITCODE -eq 0
+        if ($passed -ne $case.ExpectPass) {
+            Write-Check "draft-discipline/parked/$($case.Name)" 'FAIL' "expected pass=$($case.ExpectPass) got pass=$passed"
+            Add-Failure "Draft discipline parked-root fixture failed: $($case.Draft)"
+        }
+        else {
+            Write-Check "draft-discipline/parked/$($case.Name)" 'PASS' 'completed'
+        }
+    }
+
+    & $draftDisciplineCheck -Command surfaces -RepoRoot $Root
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'draft-discipline/surfaces' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'RCA spec discipline surface consistency check failed (Issue #221)'
+    }
+    else {
+        Write-Check 'draft-discipline/surfaces' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-draft-discipline.ps1' 'FAIL' 'missing script or fixtures'
+    Add-Failure 'Missing draft discipline check or fixtures (Issue #221)'
+}
+
+Write-Host ''
 Write-Host '== Skill pointer drift (Issue #156) =='
 $skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'
 if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {

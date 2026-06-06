@@ -1,0 +1,8 @@
+{
+  "218": {
+    "state": "CLOSED",
+    "title": "Head-ready review trigger must not depend on report-stored SHA",
+    "body": "AO 0.9.x ao report records no headRefOid so SHA-from-report binding is unsatisfiable. The fix lives in pack review trigger helpers.",
+    "intentionallyResolved": true
+  }
+}

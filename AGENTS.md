@@ -95,6 +95,15 @@ When adding behavior, prefer this order:
 
 Never choose a core patch unless the user explicitly asks for an upstream contribution plan.
 
+## RCA spec discipline (Issue #221)
+
+Authoring and investigation invariants (`behavior-kind`, `positive-outcome`,
+`parked-root-cause`, **recurrence-diagnostic**, **5-Whys stop condition**) are
+defined in [`prompts/agent_rules.md`](prompts/agent_rules.md) and
+[`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md). Cursor
+rules mirror via [`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc).
+When `prompts/agent_rules.md` changes, restart AO (`ao stop` / `ao start`).
+
 ## Auto-invoke: root cause investigation
 
 When the user's message matches cause-investigation phrasing (best-effort discovery,

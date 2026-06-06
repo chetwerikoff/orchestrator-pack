@@ -692,6 +692,42 @@ on AO **Cursor worker** hosts is **opt-in**, **passthrough-first**, and **host-g
 
 See [`docs/coworker-rtk-runbook.md`](../coworker-rtk-runbook.md).
 
+## T. RCA and spec discipline against misdirected fixes (Issue #221)
+
+Decision taken 2026-06-06 from the #212→#218 post-mortem (review auto-trigger took
+four fix cycles because each cycle diagnosed defer logs / decision records instead
+of the observed symptom and validated against fixtures that invented fields AO never
+emits).
+
+1. **Positive-outcome acceptance.** Action-producing specs MUST declare
+   `behavior-kind` and include at least one `positive-outcome` criterion on
+   realistic input. External-tool inputs require `capture-backed` or
+   `sample-backed` provenance. Enforced by `scripts/check-draft-discipline.ps1`
+   plus a taxonomy backstop (`scripts/draft-discipline-action-taxonomy.json`).
+   Authoring surfaces: `create-issue-draft`, `publish-issue-draft`,
+   `prompts/agent_rules.md`.
+
+2. **Recurrence diagnostic.** When a bug is reported as already fixed, the root-cause
+   procedure's first step is re-running the prior fix's acceptance check. `pass +
+   reproduce` is strong evidence of spec/fixture defect, not an exclusive verdict.
+   Investigation surfaces: `prompts/investigate_root_cause.md`,
+   `investigate-root-cause` skill.
+
+3. **5-Whys stop condition.** "Returned/logged X" and imprecise defer/decision
+   records are not terminal root causes; continue to field/contract facts.
+
+4. **No parked roots.** Deferring a suspected root cause requires a
+   `parked-root-cause` structured block and an on-topic tracking issue whose body
+   carries the declared cause. Enforced mechanically on publish.
+
+5. **Surface map + consistency check.** `scripts/rca-spec-discipline-surfaces.json`
+   lists each rule's loader files; `draft-discipline surfaces` verifies markers
+   and generated `.cursor/skills/` pointers.
+
+Planner freedom preserved: rules constrain *what must be true*, not file names or
+library choices. Companion mechanical guard for golden-sample field shapes: draft
+#76 (independent merge order).
+
 ## Acceptance for this issue
 
 - This document exists at `docs/issues_drafts/00-architecture-decisions.md`.

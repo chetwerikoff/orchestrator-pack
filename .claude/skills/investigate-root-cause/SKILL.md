@@ -4,3 +4,9 @@ description: Use when the user asks for causes of a failure or recurrence — e.
 ---
 
 Read and execute [`prompts/investigate_root_cause.md`](../../../prompts/investigate_root_cause.md) in full. Do not re-derive the workflow inline.
+
+Issue #221 loaders (canonical text lives in that file):
+
+- **recurrence-diagnostic** — first step when a bug is "already fixed"; `pass + reproduce` ⇒ strong evidence of spec/fixture defect (not exclusive).
+- **5-Whys stop condition** — reject "returned/logged X" and imprecise defer records as **terminal root cause**; continue to field-level facts.
+- **parked root** — defer suspected root causes only via the structured `parked-root-cause` block in draft authoring (see `create-issue-draft`).

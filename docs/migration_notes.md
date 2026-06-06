@@ -960,3 +960,14 @@ recovery to that worker.
 After recovery, the orchestrator re-applies `orchestratorRules` from your live
 YAML (see **Autonomous review loop** above). This path does not add automatic
 recovery or new AO configuration.
+
+## RCA spec discipline (Issue #221)
+
+After merge of the worker PR that adds RCA/spec discipline rules and
+`check-draft-discipline` guards:
+
+1. Pull `prompts/agent_rules.md` (**RCA spec discipline** section),
+   `prompts/investigate_root_cause.md`, and the updated architect skills.
+2. Restart AO so workers load the new rules: `ao stop` then `ao start`.
+3. Optional: run `pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command surfaces -RepoRoot .`
+   to confirm loader surfaces are wired.

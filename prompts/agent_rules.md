@@ -507,6 +507,29 @@ the run for the operator.
   failed review** (reviewer infra/command failure), not a clean review. Read
   `terminationReason`; do not infer success from zero findings alone.
 
+## RCA spec discipline (Issue #221)
+
+Workers and architects share these invariants when authoring specs or
+investigating recurrence. Full procedure: `prompts/investigate_root_cause.md`
+(**recurrence-diagnostic**, **5-Whys stop condition**). Authoring/publish:
+`.claude/skills/create-issue-draft/SKILL.md` and `publish-issue-draft` (**behavior-kind**,
+**positive-outcome**, **parked-root-cause** fences).
+
+- **Positive-outcome acceptance:** action-producing specs MUST declare
+  `behavior-kind` and include a `positive-outcome` block with `input: realistic`
+  (or `external-tool-output` plus `capture-backed` / `sample-backed` provenance).
+  Negative-only defer/failure ACs are insufficient.
+- **No parked roots:** deferring a suspected root cause requires a
+  `parked-root-cause` structured block with cause, evidence, reason-deferred,
+  follow-up-issue, and resolution-policy; the tracking issue body MUST carry the
+  cause statement. Euphemistic deferral without the block is non-compliant.
+- **Operator adoption:** when this file changes, restart AO (`ao stop` /
+  `ao start`) so workers load the updated rules.
+
+Mechanical guards: `scripts/check-draft-discipline.ps1` (positive-outcome,
+parked-root, surfaces). Architecture: §T in
+`docs/issues_drafts/00-architecture-decisions.md`.
+
 ## Operator adoption handoff
 
 When a task changes **operator-facing surfaces** — `agent-orchestrator.yaml.example`

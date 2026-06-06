@@ -62,6 +62,97 @@ Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
 9. **Verification** — exactly how the planner proves done: commands, fixtures,
    test outcomes. Match acceptance criteria 1:1 where possible.
 
+## Behavior kind and positive-outcome acceptance (Issue #221)
+
+Every draft whose spec covers an **action-producing** path (on success it
+*does* something observable — starts a run, sends a message, wakes a worker,
+enacts a transition) MUST declare its behavior kind and include at least one
+**positive-outcome** acceptance criterion on realistic input — not only
+no-op/defer/failure-branch shape checks.
+
+### Required `behavior-kind` fence
+
+Immediately after **Goal** (or inside **Binding surface** when the whole issue
+is record-only observability), declare exactly one fenced block:
+
+````markdown
+```behavior-kind
+action-producing
+```
+````
+
+or
+
+````markdown
+```behavior-kind
+record-only
+```
+````
+
+Use `record-only` only when every success path is pure observability/logging
+with no side effect. The mechanical backstop flags drafts that read
+action-producing (listener/supervisor/wake/retry/submit/route/enqueue/reconcile
+and synonyms in `scripts/draft-discipline-action-taxonomy.json`) but declare
+`record-only` — resolve before sync.
+
+### Required `positive-outcome` block (action-producing only)
+
+For `action-producing` drafts, add at least one fenced block under **Acceptance
+criteria**:
+
+````markdown
+```positive-outcome
+asserts: <observable action on realistic input>
+input: realistic
+```
+````
+
+When the criterion's input is **external-tool output** (CLI JSON, webhook
+payload, `gh`/`ao` capture), require production-representative input:
+
+````markdown
+```positive-outcome
+asserts: <observable action when external tool emits the real shape>
+input: external-tool-output
+provenance: capture-backed
+```
+````
+
+`provenance` MUST be `capture-backed` or `sample-backed` (defer to the golden-sample
+field-shape guard in draft #76 when in force). A plausible-but-impossible fixture
+must not satisfy the criterion.
+
+### Parked root causes (parked root — no silent deferral)
+
+If you defer a suspected **root cause** to a future task, you MUST add a fenced
+`parked-root-cause` block (not euphemistic prose alone). Required fields:
+
+````markdown
+```parked-root-cause
+cause: <specific root-cause statement>
+evidence: <what supports deferring instead of fixing now>
+reason-deferred: <why this issue does not fix it>
+follow-up-issue: #N
+resolution-policy: <when the parked cause is considered resolved>
+```
+````
+
+The follow-up issue MUST exist, be open or intentionally resolved, and its body
+MUST carry the declared `cause` statement. Placeholder/vague causes and generic
+follow-up issues fail `scripts/check-draft-discipline.ps1`.
+
+### Pre-sync mechanical checks
+
+Before `gh issue create` / `gh issue edit`:
+
+```powershell
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
+```
+
+Fix failures before sync. Drafts without a `behavior-kind` fence are not
+checked for positive-outcome (additive guard only).
+
 ## Apply the 5-mode framework when
 
 Run `docs/first_principles_5_operational_framework.md` inline before
