@@ -160,3 +160,28 @@ function Register-WorkerMessageDispatch {
         deliveryPath = [string]$shape.deliveryPath
     }
 }
+
+function Resolve-DispatchJournalSendOutcome {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$DispatchResult
+    )
+
+    if ($DispatchResult.recorded) {
+        return @{ sent = $true; reason = 'sent'; journalRecorded = $true }
+    }
+
+    $dispatchReason = if ($DispatchResult.reason) {
+        [string]$DispatchResult.reason
+    }
+    else {
+        'journal_record_failed'
+    }
+
+    return @{
+        sent                 = $true
+        reason               = 'sent'
+        journalRecorded      = $false
+        journalFailureReason = $dispatchReason
+    }
+}

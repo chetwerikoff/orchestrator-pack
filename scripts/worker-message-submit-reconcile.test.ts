@@ -9,9 +9,11 @@ import {
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
   extractReviewFindingDeliveries,
+  findOverwrittenDeliveries,
   isDeliveryConsumed,
   isSessionAlive,
   mergeDeliveryRecords,
+  selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
 import {
@@ -338,6 +340,38 @@ describe('exactly one submit owner (AC5)', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('duplicate_claim');
+  });
+});
+
+describe('surviving delivery selection (review)', () => {
+  it('ignores stale pending draft after later self-submitted send', () => {
+    const deliveries = [
+      {
+        deliveryId: 'opk-stale:1000:pack-send:long',
+        sessionId: 'opk-stale',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+      },
+      {
+        deliveryId: 'opk-stale:2000:pack-send:short',
+        sessionId: 'opk-stale',
+        deliveredAtMs: 2000,
+        deliveryPath: DELIVERY_PATH_SELF_SUBMITTED,
+      },
+    ];
+    expect(selectSurvivingDelivery(deliveries, 'opk-stale')).toBeNull();
+    expect(findOverwrittenDeliveries(deliveries, 'opk-stale')).toHaveLength(1);
+  });
+
+  it('plans no submit when pending draft was invalidated by later self-submitted send', () => {
+    const { actions } = planFixture('stale-pending-after-self-submitted.json');
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'escalate' && a.reason === 'lost_delivery_overwritten',
+      ),
+    ).toBe(true);
   });
 });
 

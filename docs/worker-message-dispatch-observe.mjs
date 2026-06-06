@@ -315,16 +315,27 @@ export function isSessionAlive(session) {
  * @param {Array<Record<string, unknown>>} deliveries
  * @param {string} sessionId
  */
-export function selectSurvivingDelivery(deliveries, sessionId) {
+function getSessionDeliveriesNewestFirst(deliveries, sessionId) {
   const needle = String(sessionId ?? '').trim();
-  const pending = toArray(deliveries)
-    .filter(
-      (d) =>
-        String(d.sessionId) === needle &&
-        String(d.deliveryPath) === DELIVERY_PATH_PENDING_DRAFT,
-    )
+  return toArray(deliveries)
+    .filter((d) => String(d.sessionId) === needle)
     .sort((a, b) => Number(b.deliveredAtMs) - Number(a.deliveredAtMs));
-  return pending[0] ?? null;
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} deliveries
+ * @param {string} sessionId
+ */
+export function selectSurvivingDelivery(deliveries, sessionId) {
+  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
+  if (forSession.length === 0) {
+    return null;
+  }
+  const latest = forSession[0];
+  if (String(latest.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+    return null;
+  }
+  return latest;
 }
 
 /**
@@ -332,18 +343,17 @@ export function selectSurvivingDelivery(deliveries, sessionId) {
  * @param {string} sessionId
  */
 export function findOverwrittenDeliveries(deliveries, sessionId) {
-  const needle = String(sessionId ?? '').trim();
-  const pending = toArray(deliveries)
-    .filter(
-      (d) =>
-        String(d.sessionId) === needle &&
-        String(d.deliveryPath) === DELIVERY_PATH_PENDING_DRAFT,
-    )
-    .sort((a, b) => Number(b.deliveredAtMs) - Number(a.deliveredAtMs));
-  if (pending.length <= 1) {
+  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
+  if (forSession.length <= 1) {
     return [];
   }
-  return pending.slice(1);
+  const latestId = String(forSession[0]?.deliveryId ?? '');
+  return forSession.filter((d) => {
+    if (String(d.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+      return false;
+    }
+    return String(d.deliveryId) !== latestId;
+  });
 }
 
 runStdinJsonCli('worker-message-dispatch-observe.mjs', {

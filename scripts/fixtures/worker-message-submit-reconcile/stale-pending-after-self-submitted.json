@@ -1,0 +1,37 @@
+{
+  "description": "Review: pending draft invalidated by later self-submitted send",
+  "nowMs": 1717601000000,
+  "sessions": [
+    {
+      "sessionId": "opk-stale-self-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-stale-self-232:1717600900000:pack-send:long-nudge": {
+      "deliveryId": "opk-stale-self-232:1717600900000:pack-send:long-nudge",
+      "sessionId": "opk-stale-self-232",
+      "deliveredAtMs": 1717600900000,
+      "source": "pack-send",
+      "sourceKey": "long-nudge",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 320, "lineCount": 3 }
+    },
+    "opk-stale-self-232:1717600950000:pack-send:short-ack": {
+      "deliveryId": "opk-stale-self-232:1717600950000:pack-send:short-ack",
+      "sessionId": "opk-stale-self-232",
+      "deliveredAtMs": 1717600950000,
+      "source": "pack-send",
+      "sourceKey": "short-ack",
+      "deliveryPath": "self-submitted",
+      "messageShape": { "charLength": 42, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}
