@@ -56,6 +56,7 @@ type FixturePayload = PlanReconcileInput & {
       branch?: string;
       primary?: string;
       failedComponents?: string[];
+      observed?: Record<string, unknown>;
     };
   };
 };
