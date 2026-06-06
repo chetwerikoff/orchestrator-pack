@@ -7,6 +7,7 @@
 $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-wake-trigger.mjs'
 
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
     param([string]$CommandLine)
@@ -30,8 +31,7 @@ function Get-ReviewWakeTriggerSideEffectLockPath {
 
 function Test-ReviewWakeTriggerSideEffectInFlight {
     param([string]$LockPath)
-    if (-not $LockPath) { return $false }
-    return Test-Path -LiteralPath $LockPath -PathType Leaf
+    return Test-OrchestratorSideEffectInFlight -LockPath $LockPath
 }
 
 function Enter-ReviewWakeTriggerSideEffectFence {
@@ -39,27 +39,12 @@ function Enter-ReviewWakeTriggerSideEffectFence {
         [string]$LockPath,
         [hashtable]$Metadata = @{}
     )
-
-    $dir = Split-Path -Parent $LockPath
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-
-    $payload = @{
-        pid       = $PID
-        startedAt = (Get-Date).ToString('o')
-    }
-    foreach ($key in $Metadata.Keys) {
-        $payload[$key] = $Metadata[$key]
-    }
-    $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $LockPath -Encoding utf8 -NoNewline
+    return Enter-OrchestratorSideEffectFence -LockPath $LockPath -Metadata $Metadata
 }
 
 function Exit-ReviewWakeTriggerSideEffectFence {
     param([string]$LockPath)
-    if ($LockPath -and (Test-Path -LiteralPath $LockPath)) {
-        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-    }
+    Exit-OrchestratorSideEffectFence -LockPath $LockPath
 }
 
 function Invoke-ReviewWakeTriggerFilterCli {
@@ -262,10 +247,22 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter "review-wake-trigger: dry-run would run: $commandLine (PR #$($planned.prNumber) head=$($planned.headSha))"
     }
     else {
-        Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
-            prNumber  = $planned.prNumber
-            headSha   = $planned.headSha
-            sessionId = $planned.sessionId
+        if (-not (Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
+                prNumber  = $planned.prNumber
+                headSha   = $planned.headSha
+                sessionId = $planned.sessionId
+            })) {
+            & $LogWriter "review-wake-trigger: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
+            return @{
+                triggered = $false
+                reason    = 'side_effect_in_flight'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
+                    -HeadSha $planned.headSha -ExtraReviewRuns @(@{
+                        prNumber  = $planned.prNumber
+                        targetSha = $planned.headSha
+                        status    = 'queued'
+                    })
+            }
         }
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "requiredChildIds": [
+    "listener",
+    "heartbeat",
+    "review-trigger-reconcile",
+    "ci-green-wake-reconcile",
+    "review-send-reconcile",
+    "review-finding-delivery-confirm"
+  ],
+  "children": [
+    {
+      "id": "listener",
+      "script": "orchestrator-wake-listener.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "listener-side-effect.lock",
+      "requiresOrchestratorSession": true,
+      "passProjectId": true,
+      "cadenceSeconds": 300,
+      "stallGraceMultiplier": 4,
+      "extraArgs": ["-SideEffectStateDir", "{stateRoot}"]
+    },
+    {
+      "id": "heartbeat",
+      "script": "orchestrator-wake-heartbeat.ps1",
+      "sideEffecting": false,
+      "requiresOrchestratorSession": true,
+      "passProjectId": false,
+      "cadenceSeconds": 900,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-trigger-reconcile",
+      "script": "review-trigger-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "review-trigger-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 600,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "ci-green-wake-reconcile",
+      "script": "ci-green-wake-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "ci-green-wake-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 60,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-send-reconcile",
+      "script": "review-send-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "review-send-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 120,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-finding-delivery-confirm",
+      "script": "review-finding-delivery-confirm.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "delivery-confirm-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 300,
+      "stallGraceMultiplier": 4
+    }
+  ]
+}

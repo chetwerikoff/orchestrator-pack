@@ -8,7 +8,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 $listenerScript = Join-Path $Root 'scripts/orchestrator-wake-listener.ps1'
 $triggerMjs = Join-Path $Root 'docs/review-wake-trigger.mjs'
 $triggerLib = Join-Path $Root 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
-$supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-WakeSupervisor.ps1'
+$supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
+$registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $agentRules = Join-Path $Root 'prompts/agent_rules.md'
 $wakeRunbook = Join-Path $Root 'docs/orchestrator-wake-runbook.md'
 
@@ -38,6 +39,10 @@ if ($listener -notmatch 'review_trigger_failed') {
     Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
     exit 1
 }
+if ($listener -notmatch 'Write-OrchestratorSideProcessProgress -ChildId ''listener''') {
+    Write-Host 'orchestrator-wake-listener.ps1 must emit supervised progress heartbeats for the listener child'
+    exit 1
+}
 if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight\.ps1') {
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must compose Invoke-ReviewerWorkspacePreflight.ps1'
     exit 1
@@ -65,13 +70,23 @@ if ($mjs -notmatch "from '\./review-head-ready\.mjs'") {
     exit 1
 }
 
-$supervisor = Get-Content -LiteralPath $supervisorLib -Raw
-if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
-    Write-Host 'Orchestrator-WakeSupervisor.ps1 must define child registry with side-effecting listener'
+if (-not (Test-Path -LiteralPath $registryPath)) {
+    Write-Host "Missing registry: $registryPath"
     exit 1
 }
-if ($supervisor -notmatch 'listener-side-effect\.lock') {
-    Write-Host 'Orchestrator-WakeSupervisor.ps1 must fence listener ao review run side effects'
+$registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+$listener = $registry.children | Where-Object { $_.id -eq 'listener' } | Select-Object -First 1
+if (-not $listener -or -not $listener.sideEffecting) {
+    Write-Host 'orchestrator-side-process-registry.json must classify listener as side-effecting'
+    exit 1
+}
+if ($listener.sideEffectLockFile -ne 'listener-side-effect.lock') {
+    Write-Host 'listener sideEffectLockFile must be listener-side-effect.lock'
+    exit 1
+}
+$supervisor = Get-Content -LiteralPath $supervisorLib -Raw
+if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
+    Write-Host 'Orchestrator-SideProcessSupervisor.ps1 must load child registry'
     exit 1
 }
 

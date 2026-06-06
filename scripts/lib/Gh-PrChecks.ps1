@@ -143,6 +143,7 @@ function Get-GhChecksBundleByPr {
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [array]$OpenPrs,
         [Parameter(Mandatory = $true)]
         [scriptblock]$MergeRequiredNames,
@@ -154,6 +155,13 @@ function Get-GhChecksBundleByPr {
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}
     $requiredCheckLookupFailedByPr = @{}
+    if (-not @($OpenPrs).Count) {
+        return @{
+            ciChecksByPr                  = $ciChecksByPr
+            requiredCheckNamesByPr        = $requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $requiredCheckLookupFailedByPr
+        }
+    }
     foreach ($pr in @($OpenPrs)) {
         $n = [int]$pr.number
         if (-not $n) {

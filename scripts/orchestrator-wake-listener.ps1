@@ -32,8 +32,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewWakeTrigger.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
 $Script:DefaultPort = 17487
+$Script:ListenerProgressPollSeconds = 60
 $Script:GhPrChecksLogWriter = { param([string]$Message) Write-ListenerLog $Message }
 
 function Get-ListenerPort {
@@ -153,6 +155,8 @@ catch {
 }
 
 Write-ListenerLog "listening (loopback only via 127.0.0.1 prefix)"
+Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'listening'
+$lastProgressAt = Get-Date
 
 Register-OrchestratorWakeCancelHandler
 
@@ -163,6 +167,10 @@ try {
             while (-not $async.IsCompleted) {
                 if (Test-OrchestratorWakeCancelled) { break }
                 Start-Sleep -Milliseconds 100
+                if (((Get-Date) - $lastProgressAt).TotalSeconds -ge $Script:ListenerProgressPollSeconds) {
+                    Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'idle'
+                    $lastProgressAt = Get-Date
+                }
                 if ($lastAcceptedAt -and ((Get-Date) - $lastAcceptedAt).TotalSeconds -ge $quietCheckSeconds) {
                     Write-ListenerLog "quiet-period: no accepted wake events in ${quietCheckSeconds}s (AO may not be POSTing)"
                     $lastAcceptedAt = Get-Date
@@ -216,6 +224,7 @@ try {
                 # handoffs within the dedup window still start the first review run.
                 $wakeMessage = $filterResult.wakeMessage
                 if ($filterResult.wakeKind -eq 'merge.ready') {
+                    Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'wake_received'
                     try {
                         $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
                             -FilterResult $filterResult `
@@ -250,6 +259,8 @@ try {
 
                 Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $wakeMessage -DryRun:$DryRun
                 $lastAcceptedAt = Get-Date
+                $lastProgressAt = Get-Date
+                Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'accepted'
                 Write-ListenerLog "accepted: $($filterResult.wakeKind) worker=$($filterResult.sessionId)"
                 $response.StatusCode = 204
                 $response.Close()
