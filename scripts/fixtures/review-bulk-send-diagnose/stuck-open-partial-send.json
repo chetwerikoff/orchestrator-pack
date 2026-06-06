@@ -1,0 +1,19 @@
+{
+  "description": "partial send with remaining open — A′ blocked on 0.9.2",
+  "runs": [
+    {
+      "id": "run-stuck-open",
+      "projectId": "orchestrator-pack",
+      "status": "waiting_update",
+      "openFindingCount": 2,
+      "sentFindingCount": 1,
+      "findingCount": 3,
+      "prNumber": 99,
+      "linkedSessionId": "opk-9"
+    }
+  ],
+  "expect": {
+    "flaggedRuns": 1,
+    "kinds": ["bulk_send_trap", "stuck_open"]
+  }
+}

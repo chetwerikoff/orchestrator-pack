@@ -1,0 +1,19 @@
+{
+  "description": "needs_triage with multiple open findings — bulk-send trap",
+  "runs": [
+    {
+      "id": "run-needs-triage-multi",
+      "projectId": "orchestrator-pack",
+      "status": "needs_triage",
+      "openFindingCount": 3,
+      "sentFindingCount": 0,
+      "findingCount": 3,
+      "prNumber": 140,
+      "linkedSessionId": "opk-15"
+    }
+  ],
+  "expect": {
+    "flaggedRuns": 1,
+    "kinds": ["bulk_send_trap", "multi_open_awaiting_dispatch"]
+  }
+}
