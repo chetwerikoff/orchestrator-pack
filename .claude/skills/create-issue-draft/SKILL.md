@@ -301,6 +301,11 @@ GitHub (`gh issue view`).
 > create / PR / merge mechanics yourself, directly, using the manual `gh`/git
 > commands in the fallback below as your **primary** path. A Cursor session never
 > delegates issue-creation or merge work to another Cursor.
+>
+> Direct `gh issue create` / `gh pr create` / `gh pr merge` is blocked by the RTK
+> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already in
+> Cursor, so the fallback is the correct path, not a workaround; do not stop at
+> the block. If a PR head is behind base, run `gh pr update-branch <N>` first.
 
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
 questions recorded), **you do not run `gh issue create` or open the publish PR

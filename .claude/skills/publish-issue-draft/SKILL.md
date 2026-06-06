@@ -90,6 +90,12 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > (branch, commit, push, PR, merge, issue create/re-sync) yourself, directly,
 > using the manual `gh`/git commands in the steps below as your **primary** path.
 > A Cursor session never delegates publish/issue/merge work to another Cursor.
+>
+> Direct `gh pr merge` / `gh pr create` / `gh issue create` is blocked by the RTK
+> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already in
+> Cursor, so the fallback is the correct path, not a workaround; do not stop at
+> the block. If a PR head is behind base (`not mergeable: head … not up to date`),
+> run `gh pr update-branch <N>` first, then re-run the merge.
 
 > **Publication runs through Cursor by default (every mode, single or batch).**
 > The architect does **not** run the publish mechanics (branch, commit, push, PR,
