@@ -16,13 +16,16 @@ import {
   findSessionById,
   getReportHeadSha,
   getSessionIdentifier,
+  getStoredReportHeadSha,
   normalizeSha,
+  reportCoversHead,
+  resolveHeadCommittedAtMs,
   sessionMatchesIdentifier,
   sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
 
-export { getReportHeadSha };
+export { getReportHeadSha, getStoredReportHeadSha, reportCoversHead };
 
 /** Default bounded grace after first false stuck for (session, PR head). */
 export const DEFAULT_GRACE_MINUTES = 15;
@@ -179,7 +182,7 @@ export function isMergeContractCiGreen(checks, options = {}) {
  *
  * @param {AoSession} session
  * @param {string} headSha
- * @param {{ matchStates?: Set<string> }} [options]
+ * @param {{ matchStates?: Set<string>, headCommittedAtMs?: number }} [options]
  */
 export function findLatestReportForHead(session, headSha, options = {}) {
   const target = normalizeSha(headSha);
@@ -188,6 +191,7 @@ export function findLatestReportForHead(session, headSha, options = {}) {
   }
 
   const matchStates = options.matchStates;
+  const bindingOptions = { headCommittedAtMs: options.headCommittedAtMs };
   let best = null;
   let bestMs = -1;
 
@@ -196,8 +200,7 @@ export function findLatestReportForHead(session, headSha, options = {}) {
     if (matchStates && !matchStates.has(state)) {
       continue;
     }
-    const reportHead = getReportHeadSha(report);
-    if (!reportHead || reportHead !== target) {
+    if (!reportCoversHead(report, target, bindingOptions)) {
       continue;
     }
     const ts = getReportTimestampMs(report);
@@ -213,10 +216,12 @@ export function findLatestReportForHead(session, headSha, options = {}) {
 /**
  * @param {AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function findLastReadyForReviewReport(session, headSha) {
+export function findLastReadyForReviewReport(session, headSha, options = {}) {
   return findLatestReportForHead(session, headSha, {
     matchStates: new Set(['ready_for_review']),
+    headCommittedAtMs: options.headCommittedAtMs,
   });
 }
 
@@ -372,7 +377,8 @@ export function classifyReviewReadySnapshot({
     reasons.push('ci_not_green');
   }
 
-  const readyReport = findLastReadyForReviewReport(session, headSha);
+  const headCommittedAtMs = resolveHeadCommittedAtMs([openPr], prNumber);
+  const readyReport = findLastReadyForReviewReport(session, headSha, { headCommittedAtMs });
   if (!readyReport) {
     reasons.push('no_ready_for_review_for_head');
   }

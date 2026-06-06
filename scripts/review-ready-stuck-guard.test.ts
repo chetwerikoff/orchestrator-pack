@@ -189,6 +189,46 @@ describe('consistent-snapshot classification (AC1)', () => {
     expect(result.reviewReady).toBe(true);
   });
 
+  it('Issue #218: SHA-less ready_for_review is review-ready when head commit predates report', () => {
+    const fixture = loadFixture('positive-review-ready-alive.json');
+    const result = classifyReviewReadySnapshot({
+      session: {
+        sessionId: 'opk-19',
+        role: 'worker',
+        prNumber: 217,
+        status: 'stuck',
+        runtime: 'alive',
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            prNumber: 217,
+            accepted: true,
+            reportedAt: '2026-06-06T06:10:00.000Z',
+          },
+        ],
+      },
+      openPr: {
+        number: 217,
+        headRefOid: '8e35c0052127b8e156b7c1c80b2774286da16e6f',
+        headCommittedAt: '2026-06-06T06:03:16Z',
+      },
+      reviewRuns: [
+        {
+          id: 'run-clean-217',
+          prNumber: 217,
+          targetSha: '8e35c0052127b8e156b7c1c80b2774286da16e6f',
+          status: 'clean',
+          findingCount: 0,
+          linkedSessionId: 'opk-19',
+        },
+      ],
+      ciChecks: fixture.ciChecks,
+      sessions: [],
+    });
+    expect(result.reviewReady).toBe(true);
+    expect(result.reasons).not.toContain('no_ready_for_review_for_head');
+  });
+
   it('stale head-moved is not review-ready', () => {
     const result = classifyFromFixture('negative-stale-head-moved.json');
     expect(result.reviewReady).toBe(false);

@@ -1,0 +1,43 @@
+{
+  "description": "Issue #218 — SHA-less ready_for_review superseded when head commit is newer than report",
+  "openPrs": [
+    {
+      "number": 88,
+      "headRefOid": "newhead88aa",
+      "headCommittedAt": "2026-06-06T12:30:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-88",
+      "role": "worker",
+      "prNumber": 88,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "prNumber": 88,
+          "accepted": true,
+          "reportedAt": "2026-06-06T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "88": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready",
+    "record": {
+      "primary": "no_ready_for_review",
+      "failedComponents": ["no_ready_for_review", "stale_report_binding"]
+    }
+  }
+}

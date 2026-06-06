@@ -103,6 +103,28 @@ describe('isHeadCovered', () => {
 });
 
 describe('planReconcileActions', () => {
+  it('Issue #218 (AC1/AC2): SHA-less ready_for_review on PR #217 shape triggers review', () => {
+    const fixture = loadFixture('ready-sha-less-pr217.json');
+    const actions = planReconcileActions(fixture);
+    const starts = startReviewActions(actions);
+    expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
+    expect(starts[0]).toMatchObject({
+      prNumber: 217,
+      sessionId: fixture.expect?.sessionId ?? 'opk-19',
+      headSha: '8e35c0052127b8e156b7c1c80b2774286da16e6f',
+    });
+  });
+
+  it('Issue #218 (AC3): SHA-less ready_for_review superseded when head commit is newer', () => {
+    const fixture = loadFixture('supersede-sha-less-ready.json');
+    const actions = planReconcileActions(fixture);
+    expect(startReviewActions(actions)).toHaveLength(0);
+    const skip = skipActions(actions)[0];
+    expect(skip?.reason).toBe(fixture.expect?.skipReason);
+    expect(skip?.record?.primary).toBe(fixture.expect?.record?.primary);
+    expect(skip?.record?.failedComponents).toEqual(fixture.expect?.record?.failedComponents);
+  });
+
   it('Issue #195 (a): starts review for ready head with green CI', () => {
     const fixture = loadFixture('ready-head-triggers.json');
     const actions = planReconcileActions(fixture);

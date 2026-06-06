@@ -22,6 +22,7 @@ import {
   isLiveWorkerSession,
   isRunCoveringHead,
   normalizeSha,
+  resolveHeadCommittedAtMs,
   resolveHeadOwningWorkerSessionId,
   toArray,
 } from './review-trigger-reconcile.mjs';
@@ -173,6 +174,7 @@ export function evaluateWakeReviewTrigger(input) {
     ciChecks: toArray(input.ciChecks),
     requiredCheckNames: toArray(input.requiredCheckNames),
     requiredCheckLookupFailed: Boolean(input.requiredCheckLookupFailed),
+    headCommittedAtMs: resolveHeadCommittedAtMs(openPrs, prNumber),
   });
 
   if (!decision.eligible) {

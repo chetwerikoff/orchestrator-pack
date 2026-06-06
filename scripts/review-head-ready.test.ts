@@ -9,6 +9,7 @@ import {
   isWorkerDegradedCiHandoff,
   preRunHeadReadyRecheck,
 } from '../docs/review-head-ready.mjs';
+import { reportCoversHead } from '../docs/review-trigger-reconcile.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -81,7 +82,50 @@ describe('classifyRequiredCiForReviewTrigger', () => {
   });
 });
 
+describe('reportCoversHead (Issue #218)', () => {
+  it('binds SHA-less ready reports via head commit time vs report time', () => {
+    const head = '8e35c0052127b8e156b7c1c80b2774286da16e6f';
+    const report = {
+      reportState: 'ready_for_review',
+      reportedAt: '2026-06-06T06:10:00.000Z',
+    };
+    const headCommittedAtMs = Date.parse('2026-06-06T06:03:16Z');
+    expect(reportCoversHead(report, head, { headCommittedAtMs })).toBe(true);
+    expect(
+      reportCoversHead(report, head, {
+        headCommittedAtMs: Date.parse('2026-06-06T06:15:00.000Z'),
+      }),
+    ).toBe(false);
+  });
+
+  it('still honors explicit stored SHA when present', () => {
+    const report = { reportState: 'ready_for_review', headRefOid: 'deadbeef' };
+    expect(reportCoversHead(report, 'deadbeef', {})).toBe(true);
+    expect(reportCoversHead(report, 'cafebabe', {})).toBe(false);
+  });
+});
+
 describe('evaluateHeadReadyForReview', () => {
+  it('Issue #218: SHA-less latest ready_for_review is eligible on green CI', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+      reviewRuns: [];
+      sessions: Array<Record<string, unknown>>;
+      ciChecksByPr: Record<string, typeof greenChecks>;
+    }>('ready-sha-less-pr217.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: fixture.ciChecksByPr[String(pr.number)],
+      headCommittedAtMs: Date.parse(pr.headCommittedAt),
+    });
+    expect(decision.eligible).toBe(true);
+    expect(decision.reason).toBe('head_ready_for_review');
+  });
+
   it('(a) ready head with green CI is eligible', () => {
     const fixture = loadFixture<{
       openPrs: { number: number; headRefOid: string }[];

@@ -17,7 +17,7 @@ import {
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
-/** @typedef {{ number: number, headRefOid: string }} OpenPr */
+/** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number, terminationReason?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ prNumber?: number, checks?: Array<{ name?: string, state?: string, conclusion?: string, status?: string }> }} CiChecksByPrRow */
@@ -241,9 +241,11 @@ export function sessionMatchesPr(session, prNumber) {
 }
 
 /**
+ * Explicit head SHA stored on a report record (may be absent on AO 0.9.x).
+ *
  * @param {Record<string, unknown>} report
  */
-export function getReportHeadSha(report) {
+export function getStoredReportHeadSha(report) {
   const head =
     report?.headRefOid ??
     report?.head_ref_oid ??
@@ -254,10 +256,15 @@ export function getReportHeadSha(report) {
   return normalizeSha(String(head ?? ''));
 }
 
+/** @deprecated Use getStoredReportHeadSha for observation; reportCoversHead for binding. */
+export function getReportHeadSha(report) {
+  return getStoredReportHeadSha(report);
+}
+
 /**
  * @param {Record<string, unknown>} report
  */
-function getReportTimestampMs(report) {
+export function getReportTimestampMs(report) {
   const raw =
     report?.reportedAt ??
     report?.timestamp ??
@@ -269,16 +276,69 @@ function getReportTimestampMs(report) {
 }
 
 /**
+ * Whether a worker report covers a PR head for binding (Issue #218).
+ * Stored SHA matches when present; otherwise infer from head commit time vs report time.
+ *
+ * @param {Record<string, unknown>} report
+ * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
+ */
+export function reportCoversHead(report, headSha, options = {}) {
+  const target = normalizeSha(headSha);
+  if (!target) {
+    return false;
+  }
+
+  const stored = getStoredReportHeadSha(report);
+  if (stored) {
+    return stored === target;
+  }
+
+  const headCommittedAtMs = Number(options.headCommittedAtMs);
+  const reportMs = getReportTimestampMs(report);
+  if (!Number.isFinite(headCommittedAtMs) || headCommittedAtMs <= 0 || reportMs <= 0) {
+    return false;
+  }
+
+  // Head commit must not be newer than the report — otherwise the hand-off is stale.
+  return headCommittedAtMs <= reportMs;
+}
+
+/**
+ * @param {OpenPr[] | OpenPr} [openPrs]
+ * @param {number} prNumber
+ */
+export function resolveHeadCommittedAtMs(openPrs, prNumber) {
+  for (const pr of toArray(openPrs)) {
+    if (Number(pr?.number) !== prNumber) {
+      continue;
+    }
+    const raw =
+      pr?.headCommittedAt ?? pr?.headCommitCommittedAt ?? pr?.head_commit_committed_at;
+    if (raw == null || raw === '') {
+      return undefined;
+    }
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return raw;
+    }
+    const parsed = Date.parse(String(raw));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
  * @param {AoSession} session
  * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
  */
-function sessionHasReportForHead(session, headSha) {
+function sessionHasReportForHead(session, headSha, options = {}) {
   const target = normalizeSha(headSha);
   if (!target) {
     return false;
   }
   for (const report of toArray(session?.reports)) {
-    if (getReportHeadSha(report) === target) {
+    if (reportCoversHead(report, target, options)) {
       return true;
     }
   }
@@ -336,6 +396,8 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
 export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
   const prList = toArray(openPrs);
   const target = normalizeSha(headSha);
+  const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
+  const reportBindingOptions = { headCommittedAtMs };
   const workers = toArray(sessions).filter((session) => {
     const role = String(session?.role ?? '').toLowerCase();
     return (
@@ -347,7 +409,8 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
 
   const headBound = workers.filter(
     (session) =>
-      sessionExplicitlyOwnsHead(session, headSha) || sessionHasReportForHead(session, headSha),
+      sessionExplicitlyOwnsHead(session, headSha) ||
+      sessionHasReportForHead(session, headSha, reportBindingOptions),
   );
 
   if (headBound.length === 1) {
@@ -360,7 +423,7 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
     for (const session of headBound) {
       let latestMs = -1;
       for (const report of toArray(session?.reports)) {
-        if (getReportHeadSha(report) !== target) {
+        if (!reportCoversHead(report, target, reportBindingOptions)) {
           continue;
         }
         latestMs = Math.max(latestMs, getReportTimestampMs(report));
@@ -518,6 +581,7 @@ export function planReconcileActions({
       prNumber,
     );
     const degradedCiAttempts = getDegradedCiAttempts(tracking, prNumber, headSha);
+    const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
 
     const decision = evaluateHeadReadyForReview({
       reviewRuns: runList,
@@ -529,6 +593,7 @@ export function planReconcileActions({
       requiredCheckLookupFailed,
       degradedCiAttempts,
       maxDegradedCiAttempts: maxDegradedAttempts,
+      headCommittedAtMs,
     });
 
     const decisionRecordBase = {
@@ -539,6 +604,7 @@ export function planReconcileActions({
       ciChecks,
       requiredCheckNames,
       requiredCheckLookupFailed,
+      headCommittedAtMs,
     };
 
     if (decision.eligible) {
