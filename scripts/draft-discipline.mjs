@@ -177,7 +177,7 @@ export function checkPositiveOutcome(markdown) {
   const taxonomyHits = countActionTaxonomyHits(markdown);
 
   if (behaviorKind === 'record-only' && taxonomyHits.length > 0) {
-    warnings.push(
+    errors.push(
       `behavior-kind is record-only but draft reads action-producing (taxonomy hits: ${taxonomyHits.join(', ')})`,
     );
   }

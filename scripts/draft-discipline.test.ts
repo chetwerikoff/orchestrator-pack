@@ -37,11 +37,11 @@ describe('checkPositiveOutcome', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('backstops record-only drafts that read action-producing', () => {
+  it('fails record-only drafts that read action-producing', () => {
     const result = checkPositiveOutcome(loadFixture('synonym-record-only-backstop.md'));
-    expect(result.ok).toBe(true);
-    expect(result.warnings.join(' ')).toMatch(/record-only/);
-    expect(result.warnings.join(' ')).toMatch(/supervisor|reconcile/);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/record-only/);
+    expect(result.errors.join(' ')).toMatch(/supervisor|reconcile/);
   });
 
   it('flags external-tool positive outcomes without provenance', () => {

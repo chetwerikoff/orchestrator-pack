@@ -784,7 +784,8 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
     $positiveCases = @(
         @{ Name = 'negative-only-action'; Draft = 'negative-only-action.md'; ExpectPass = $false },
         @{ Name = 'positive-present-action'; Draft = 'positive-present-action.md'; ExpectPass = $true },
-        @{ Name = 'external-input-no-provenance'; Draft = 'external-input-no-provenance.md'; ExpectPass = $false }
+        @{ Name = 'external-input-no-provenance'; Draft = 'external-input-no-provenance.md'; ExpectPass = $false },
+        @{ Name = 'synonym-record-only-backstop'; Draft = 'synonym-record-only-backstop.md'; ExpectPass = $false }
     )
     foreach ($case in $positiveCases) {
         $draftPath = Join-Path $draftDisciplineFixtureDir $case.Draft
