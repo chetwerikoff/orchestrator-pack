@@ -508,6 +508,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== review bulk-send / stuck-open diagnostic (Issue #140) =='
+$bulkSendDiagCheck = Join-Path $Root 'scripts/check-review-bulk-send-diagnose.ps1'
+if (Test-Path -LiteralPath $bulkSendDiagCheck -PathType Leaf) {
+    & $bulkSendDiagCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-bulk-send-diagnose.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-bulk-send-diagnose.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review bulk-send diagnostic checks failed (Issue #140)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-bulk-send-diagnose.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review bulk-send diagnostic check script (Issue #140)'
+}
+
+Write-Host ''
 Write-Host '== terminal mux flood detection (Issue #173) =='
 $terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
 if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {

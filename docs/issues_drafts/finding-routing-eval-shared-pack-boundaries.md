@@ -73,9 +73,11 @@ output format.
     **A′** (programmatic terminal transition for non-forward — `dismiss`/`backlogged` so
     `openFindingCount` clears). Bulk send alone is insufficient; leaving backlog/drop as
     `open` re-triggers orchestrator rules forever. **B** (`prior_sent`) is additional for
-    `drop`. Gate 0: all three blocked on 0.9.2 CLI — **upstream-or-nothing** (draft 50,
-    #122 class). **Active now:** draft 47 offline corpus/scorer only. **Deferred:** drafts
-    48–49 until upstream unblock (§Q). No pack read-hook or ledger-only workaround.
+    `drop`. Gate 0: all three blocked on 0.9.2 CLI — **upstream-or-nothing** (draft 50 /
+    [pack #140](https://github.com/chetwerikoff/orchestrator-pack/issues/140), #122 class).
+    **Active now:** draft 47 offline corpus/scorer only. **Deferred:** drafts 48–49 until
+    upstream unblock (§Q). No pack read-hook or ledger-only workaround. Optional read-only
+    diagnostic: `scripts/review-bulk-send-diagnose.ps1`.
 13. **Three substrate capabilities (not one ladder).** (a) **Selective enactment** —
     send a subset, not bulk all-open. (a′) **Terminal non-forward status** — `backlog` /
     `drop` must leave the finding non-`open` so `openFindingCount > 0` can clear and

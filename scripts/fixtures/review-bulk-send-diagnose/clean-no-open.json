@@ -1,0 +1,17 @@
+{
+  "description": "terminal clean run — not flagged",
+  "runs": [
+    {
+      "id": "run-clean",
+      "projectId": "orchestrator-pack",
+      "status": "clean",
+      "openFindingCount": 0,
+      "sentFindingCount": 0,
+      "findingCount": 0,
+      "prNumber": 50
+    }
+  ],
+  "expect": {
+    "flaggedRuns": 0
+  }
+}

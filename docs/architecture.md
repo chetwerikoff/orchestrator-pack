@@ -157,6 +157,10 @@ Classifier defaults to **pipeline command / findings JSON**, not legacy-only. Pa
 + docs (#122 discipline); no prod wiring until A + A′ on chosen track. Queue: §Q —
 **#139 + #140 now**; **#141/#142 deferred**.
 
+**Read-only diagnostic (legacy path):** `scripts/review-bulk-send-diagnose.ps1` surfaces
+runs where bulk `ao review send` would ship all open findings or `openFindingCount` stays
+stuck after partial send — no mutation; fixture mode for offline checks.
+
 ### CI layer
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on
