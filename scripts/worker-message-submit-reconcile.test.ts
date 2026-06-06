@@ -446,6 +446,49 @@ describe('escalation on stuck branches (AC9)', () => {
     ).toBe(false);
   });
 
+  it('retries waiting_input delivery after budget expires with attempts remaining', () => {
+    const { actions } = planFixture('waiting-input-budget-retry.json');
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.attempt).toBe(2);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'noop' && a.reason === 'next_prompt_possible',
+      ),
+    ).toBe(false);
+  });
+
+  it('defers waiting_input delivery while budget is still open', () => {
+    const decision = evaluateSubmitDecision({
+      delivery: {
+        deliveryId: 'opk-wait-defer:1000:pack-send:defer',
+        sessionId: 'opk-wait-defer',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+      },
+      session: {
+        sessionId: 'opk-wait-defer',
+        role: 'worker',
+        runtime: 'alive',
+        activity: 'waiting_input',
+      },
+      tracking: {
+        deliveries: {
+          'opk-wait-defer:1000:pack-send:defer': {
+            firstObservedAtMs: 1000,
+            submitAttempts: 1,
+          },
+        },
+      },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 5000,
+      config: { deliveryBudgetMs: 60000, maxSubmitAttempts: 3 },
+    });
+    expect(decision.action).toBe('noop');
+    expect(decision.reason).toBe('next_prompt_possible');
+  });
+
   it('escalates when submit attempts exhausted', () => {
     const { actions } = planFixture('submit-budget-escalate.json');
     expect(submitActions(actions)).toHaveLength(0);

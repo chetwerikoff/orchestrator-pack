@@ -314,7 +314,12 @@ export function evaluateSubmitDecision({
   }
 
   const activity = String(session?.activity ?? '').trim().toLowerCase();
-  if (activity === 'waiting_input' && submitAttempts > 0 && submitAttempts < maxSubmitAttempts) {
+  if (
+    activity === 'waiting_input' &&
+    submitAttempts > 0 &&
+    submitAttempts < maxSubmitAttempts &&
+    nowMs < budgetDeadline
+  ) {
     return { action: 'noop', reason: 'next_prompt_possible', deliveryId, sessionId };
   }
 
