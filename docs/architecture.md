@@ -161,6 +161,22 @@ Classifier defaults to **pipeline command / findings JSON**, not legacy-only. Pa
 runs where bulk `ao review send` would ship all open findings or `openFindingCount` stays
 stuck after partial send — no mutation; fixture mode for offline checks.
 
+Operator usage (Gate 0 — `active-blocked-upstream`, pack #140):
+
+```powershell
+pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1
+pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -ProjectId orchestrator-pack -Json
+pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -FixturePath scripts/fixtures/review-bulk-send-diagnose/needs-triage-multi-open.json
+```
+
+Flagged kinds: `bulk_send_trap`, `stuck_open`, `multi_open_awaiting_dispatch`. Use when
+`needs_triage` / `waiting_update` runs keep `openFindingCount > 0` but per-finding routing
+is expected — bulk send ships all open findings; partial send can leave remainder stuck
+without CLI dismiss/backlog (**A′** blocked). **Do not** hand-edit `code-reviews/findings/`
+(#122 class). Until upstream **A + A′** land (pipeline #1631/#1346 preferred, legacy #2088),
+treat flagged runs as upstream-blocked, not worker defects. Delivery trust still requires
+#1943 / #614 before prod `forward` acceptance (shared invariant #1).
+
 ### CI layer
 
 `.github/workflows/scope-guard.yml` runs the read-only verifier and, on

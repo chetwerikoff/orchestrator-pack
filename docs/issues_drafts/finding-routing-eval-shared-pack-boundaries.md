@@ -77,7 +77,9 @@ output format.
     [pack #140](https://github.com/chetwerikoff/orchestrator-pack/issues/140), #122 class).
     **Active now:** draft 47 offline corpus/scorer only. **Deferred:** drafts 48–49 until
     upstream unblock (§Q). No pack read-hook or ledger-only workaround. Optional read-only
-    diagnostic: `scripts/review-bulk-send-diagnose.ps1`.
+    diagnostic: `scripts/review-bulk-send-diagnose.ps1` (operator notes in
+    [`docs/architecture.md`](../architecture.md#finding-routing-enactment--gate-0-ao-092-2026-06-02);
+    drafts 47 / 50 cite the same entrypoint).
 13. **Three substrate capabilities (not one ladder).** (a) **Selective enactment** —
     send a subset, not bulk all-open. (a′) **Terminal non-forward status** — `backlog` /
     `drop` must leave the finding non-`open` so `openFindingCount > 0` can clear and
