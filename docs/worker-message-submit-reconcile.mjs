@@ -13,7 +13,10 @@ import {
   sessionMatchesIdentifier,
   toArray,
 } from './review-trigger-reconcile.mjs';
-import { isSessionFloodActive } from './worker-input-draft-submit.mjs';
+import {
+  hasInterveningInputActivity,
+  isSessionFloodActive,
+} from './worker-input-draft-submit.mjs';
 import {
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
@@ -193,12 +196,62 @@ export function applySubmitOutcomes(tracking, outcomes, nowMs) {
 }
 
 /**
+ * @param {Record<string, unknown>} [session]
+ * @param {string} [deliverySessionId]
+ */
+export function collectSessionIdentifiers(session, deliverySessionId = '') {
+  /** @type {Set<string>} */
+  const ids = new Set();
+  const push = (value) => {
+    const trimmed = String(value ?? '').trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  };
+  push(deliverySessionId);
+  push(session?.name);
+  push(session?.sessionId);
+  push(session?.id);
+  return [...ids];
+}
+
+/**
+ * @param {Record<string, unknown>} delivery
+ * @param {Record<string, unknown>} [record]
+ */
+export function getDeliveryInputAnchorMs(delivery, record = {}) {
+  return Number(delivery?.deliveredAtMs ?? record?.deliveredAtMs ?? 0);
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} events
+ * @param {Record<string, unknown>} session
+ * @param {Record<string, unknown>} delivery
+ * @param {number} anchorMs
+ */
+export function hasInterveningInputActivityForDelivery(
+  events,
+  session,
+  delivery,
+  anchorMs,
+) {
+  const deliverySessionId = String(delivery?.sessionId ?? '').trim();
+  for (const identifier of collectSessionIdentifiers(session, deliverySessionId)) {
+    if (hasInterveningInputActivity(events, identifier, anchorMs)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @param {object} input
  */
 export function evaluateSubmitDecision({
   delivery,
   session,
   tracking,
+  aoEvents,
   floodActiveSessions,
   nowMs,
   config,
@@ -290,6 +343,18 @@ export function evaluateSubmitDecision({
 
   if (isActiveSubmitClaim(record, nowMs, config)) {
     return { action: 'noop', reason: 'claim_held', deliveryId, sessionId };
+  }
+
+  const inputAnchorMs = getDeliveryInputAnchorMs(delivery, record);
+  if (
+    hasInterveningInputActivityForDelivery(
+      toArray(aoEvents),
+      session ?? {},
+      delivery,
+      inputAnchorMs,
+    )
+  ) {
+    return { action: 'noop', reason: 'stale_input', deliveryId, sessionId };
   }
 
   return {
@@ -384,6 +449,7 @@ export function planWorkerMessageSubmitActions(input) {
       delivery: surviving,
       session,
       tracking: { deliveries: nextDeliveries },
+      aoEvents,
       floodActiveSessions,
       nowMs,
       config,

@@ -114,6 +114,23 @@ export declare function shouldClearStaleSubmitClaim(
   config?: { claimStaleMs?: number },
 ): boolean;
 
+export declare function collectSessionIdentifiers(
+  session?: Record<string, unknown>,
+  deliverySessionId?: string,
+): string[];
+
+export declare function getDeliveryInputAnchorMs(
+  delivery: Record<string, unknown>,
+  record?: Record<string, unknown>,
+): number;
+
+export declare function hasInterveningInputActivityForDelivery(
+  events: Array<Record<string, unknown>>,
+  session: Record<string, unknown>,
+  delivery: Record<string, unknown>,
+  anchorMs: number,
+): boolean;
+
 export declare function applySubmitOutcomes(
   tracking: SubmitTrackingState,
   outcomes: Array<{
@@ -129,6 +146,7 @@ export declare function evaluateSubmitDecision(input: {
   delivery: DeliveryRecord;
   session?: AoSession | Record<string, unknown>;
   tracking: SubmitTrackingState;
+  aoEvents?: Array<Record<string, unknown>>;
   floodActiveSessions?: Record<string, boolean>;
   nowMs: number;
   config?: {

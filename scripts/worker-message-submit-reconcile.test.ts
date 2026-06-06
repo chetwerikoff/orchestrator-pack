@@ -89,6 +89,18 @@ describe('classifyDeliveryPath', () => {
   });
 });
 
+describe('stale input guard (review)', () => {
+  it('refuses submit after intervening input-affecting activity', () => {
+    const { actions } = planFixture('stale-input-after-activity.json');
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'stale_input',
+      ),
+    ).toBe(true);
+  });
+});
+
 describe('session identifier matching (review)', () => {
   it('submits when delivery sessionId matches row sessionId but not name', () => {
     const { actions } = planFixture('linked-session-id-with-name.json');

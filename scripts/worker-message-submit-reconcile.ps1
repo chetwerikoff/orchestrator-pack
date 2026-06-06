@@ -167,10 +167,14 @@ function Invoke-SubmitReconcileTick {
     $escalated = 0
     $noop = 0
     $submitOutcomes = @()
+    $tracking = $plan.tracking
 
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'submit' {
+                if (-not $DryRunMode -and -not $Fixture) {
+                    Set-SubmitReconcileState -Path $StatePath -State $tracking
+                }
                 $submitResult = Invoke-WorkerInputDraftSubmit `
                     -SessionId $action.sessionId `
                     -ExpectedSessionId $action.sessionId `
@@ -212,7 +216,6 @@ function Invoke-SubmitReconcileTick {
         }
     }
 
-    $tracking = $plan.tracking
     if ($submitOutcomes.Count -gt 0) {
         $outcomeResult = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'outcome' `
             -Payload @{
