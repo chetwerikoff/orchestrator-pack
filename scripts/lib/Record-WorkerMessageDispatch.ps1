@@ -133,32 +133,43 @@ function Register-WorkerMessageDispatch {
 
     $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
     $recorded = $false
-    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
-        kind = 'worker-message-dispatch-journal'
-    } -Action {
-        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
-        $journal[$deliveryId] = @{
-            deliveryId    = $deliveryId
-            sessionId     = $SessionId
-            deliveredAtMs = $deliveredMs
-            source        = $Source
-            sourceKey     = $SourceKey
-            deliveryPath  = $resolvedDeliveryPath
-            messageShape  = @{
-                charLength = [int]$shape.charLength
-                lineCount  = [int]$shape.lineCount
+    $lastFailureReason = 'journal_write_failed'
+    $maxJournalAttempts = 3
+    for ($attempt = 1; $attempt -le $maxJournalAttempts; $attempt++) {
+        $recorded = $false
+        $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+            kind = 'worker-message-dispatch-journal'
+        } -Action {
+            $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+            $journal[$deliveryId] = @{
+                deliveryId    = $deliveryId
+                sessionId     = $SessionId
+                deliveredAtMs = $deliveredMs
+                source        = $Source
+                sourceKey     = $SourceKey
+                deliveryPath  = $resolvedDeliveryPath
+                messageShape  = @{
+                    charLength = [int]$shape.charLength
+                    lineCount  = [int]$shape.lineCount
+                }
+                restoreRetry  = [bool]$RestoreRetry
             }
-            restoreRetry  = [bool]$RestoreRetry
+            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+            $recorded = $true
         }
-        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
-        $recorded = $true
+
+        if ($fenced.ok -and $recorded) {
+            break
+        }
+
+        $lastFailureReason = if (-not $fenced.ok) { 'journal_busy' } else { 'journal_write_failed' }
+        if ($attempt -lt $maxJournalAttempts) {
+            Start-Sleep -Milliseconds 200
+        }
     }
 
-    if (-not $fenced.ok) {
-        return @{ recorded = $false; reason = 'journal_busy' }
-    }
     if (-not $recorded) {
-        return @{ recorded = $false; reason = 'journal_write_failed' }
+        return @{ recorded = $false; reason = $lastFailureReason }
     }
 
     return @{
@@ -186,8 +197,8 @@ function Resolve-DispatchJournalSendOutcome {
     }
 
     return @{
-        sent                 = $true
-        reason               = 'sent'
+        sent                 = $false
+        reason               = $dispatchReason
         journalRecorded      = $false
         journalFailureReason = $dispatchReason
     }

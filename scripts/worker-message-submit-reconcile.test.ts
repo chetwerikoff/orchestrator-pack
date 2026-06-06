@@ -135,6 +135,27 @@ describe('dispatch observation helpers (review)', () => {
     );
     expect(consumed).toBe(true);
   });
+
+  it('treats fixing_ci and ready_for_review as consumed for review-send', () => {
+    const deliveredAtMs = Date.parse('2026-06-04T12:00:00.000Z');
+    for (const state of ['fixing_ci', 'ready_for_review'] as const) {
+      expect(
+        isDeliveryConsumed(
+          {
+            reports: [
+              {
+                report_state: state,
+                reportedAt: '2026-06-04T12:05:00.000Z',
+                accepted: true,
+              },
+            ],
+          },
+          { source: DISPATCH_SOURCE_REVIEW_SEND },
+          deliveredAtMs,
+        ),
+      ).toBe(true);
+    }
+  });
 });
 
 describe('stale input guard (review)', () => {
@@ -455,6 +476,17 @@ describe('auditable decisions (AC7)', () => {
 });
 
 describe('review-send journal path (review)', () => {
+  it('does not submit review-send when worker already reported fixing_ci', () => {
+    const { actions } = planFixture('review-send-fixing-ci-consumed.json');
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'mark_consumed' && a.reason === 'consumed',
+      ),
+    ).toBe(true);
+  });
+
   it('submits when review-send journal records pending-draft despite short placeholder', () => {
     const { actions } = planFixture('review-send-journal-pending-draft.json');
     expect(submitActions(actions)).toHaveLength(1);

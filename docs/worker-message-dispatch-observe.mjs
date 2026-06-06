@@ -16,6 +16,7 @@ import {
   getReportTimestampMs,
   getReviewRunId,
   resolveSendObservedAtMs,
+  REVIEW_ROUND_REPORT_STATES,
 } from './review-finding-delivery-confirm.mjs';
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
@@ -302,7 +303,10 @@ export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
       continue;
     }
     const state = getReportState(report);
-    if (state === 'addressing_reviews' && delivery.source === DISPATCH_SOURCE_REVIEW_SEND) {
+    if (
+      delivery.source === DISPATCH_SOURCE_REVIEW_SEND &&
+      REVIEW_ROUND_REPORT_STATES.has(state)
+    ) {
       return true;
     }
     if (

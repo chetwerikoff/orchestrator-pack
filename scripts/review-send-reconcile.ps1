@@ -223,7 +223,7 @@ function Invoke-PlannedFirstReviewSend {
         -DeliveryPath 'pending-draft'
     $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
     if (-not $outcome.journalRecorded) {
-        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (review send already delivered)"
+        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (send not marked complete; will retry journal on next tick)"
     }
     return $outcome
 }

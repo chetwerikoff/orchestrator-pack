@@ -222,7 +222,7 @@ function Invoke-PlannedCiGreenWakeSend {
         -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)"
     $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
     if (-not $outcome.journalRecorded) {
-        Write-CiGreenWakeLog "dispatch journal record failed PR #$($Action.prNumber): $($outcome.journalFailureReason) (nudge already sent)"
+        Write-CiGreenWakeLog "dispatch journal record failed PR #$($Action.prNumber): $($outcome.journalFailureReason) (nudge not marked sent; will retry journal on next tick)"
     }
     return $outcome
 }
