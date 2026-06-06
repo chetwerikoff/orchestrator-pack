@@ -16,6 +16,7 @@
     "docs/migration_notes.md",
     "docs/issues_drafts/00-architecture-decisions.md",
     "scripts/draft-discipline.mjs",
+    "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.test.ts",
     "scripts/draft-discipline-action-taxonomy.json",
     "scripts/rca-spec-discipline-surfaces.json",

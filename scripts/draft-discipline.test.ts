@@ -6,14 +6,8 @@ import {
   checkParkedRoot,
   checkPositiveOutcome,
   checkRcaSpecDisciplineSurfaces,
+  type MockIssue,
 } from './draft-discipline.mjs';
-
-interface MockIssue {
-  state: 'OPEN' | 'CLOSED';
-  title: string;
-  body: string;
-  intentionallyResolved?: boolean;
-}
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
