@@ -43,6 +43,11 @@ export function loadVariantCatalog(referencesRoot: string): {
   catalog: Map<string, unknown>;
 };
 
+export function validateReferenceCaptures(
+  referencesRoot: string,
+  catalog: Map<string, unknown>,
+): ShapeError[];
+
 export function extractAtJsonPath(
   root: unknown,
   jsonPath: string,

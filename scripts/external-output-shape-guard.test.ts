@@ -11,6 +11,7 @@ import {
   runExternalOutputShapeGuard,
   validateExternalObject,
   validateObjectShape,
+  validateReferenceCaptures,
 } from './external-output-shape-guard.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -144,22 +145,26 @@ describe('runExternalOutputShapeGuard', () => {
   });
 });
 
-describe('reference captures', () => {
-  it('accepts scrubbed worker-report captures including source', () => {
-    const capture = JSON.parse(
-      readFileSync(
-        path.join(referencesRoot, 'captures/ao-worker-report/ready_for_review.raw.json'),
-        'utf8',
-      ),
-    );
-    const variant = getVariant('ao-worker-report/ready_for_review');
-    const errors = validateObjectShape(
-      capture,
-      variant,
-      'ready_for_review.raw.json',
-      '$',
-    );
+describe('validateReferenceCaptures', () => {
+  it('validates every catalog capture against its variant reference', () => {
+    const errors = validateReferenceCaptures(referencesRoot, catalog);
     expect(errors).toEqual([]);
+  });
+
+  it('fails when a capture drifts from its variant allowed fields', () => {
+    const variant = getVariant('ao-worker-report/ready_for_review');
+    const brokenVariant = {
+      ...variant,
+      allowedFields: ['reportState'],
+    };
+    const brokenCatalog = new Map(catalog);
+    brokenCatalog.set(variant.id, brokenVariant);
+    brokenCatalog.set('ao-worker-report/ready_for_review', brokenVariant);
+
+    const errors = validateReferenceCaptures(referencesRoot, brokenCatalog);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(formatShapeErrors(errors)).toMatch(/ready_for_review\.raw\.json/);
+    expect(formatShapeErrors(errors)).toMatch(/field not in variant reference|source|timestamp/);
   });
 });
 

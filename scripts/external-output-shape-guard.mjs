@@ -134,13 +134,29 @@ export function loadVariantCatalog(referencesRoot) {
 }
 
 /**
+ * @param {Map<string, VariantRef>} catalog
+ * @returns {VariantRef[]}
+ */
+function uniqueVariants(catalog) {
+  const seen = new Set();
+  /** @type {VariantRef[]} */
+  const variants = [];
+  for (const variant of catalog.values()) {
+    if (seen.has(variant.id)) continue;
+    seen.add(variant.id);
+    variants.push(variant);
+  }
+  return variants;
+}
+
+/**
  * @param {string} referencesRoot
  * @param {Map<string, VariantRef>} catalog
  */
 export function validateReferenceProvenance(referencesRoot, catalog) {
   /** @type {string[]} */
   const errors = [];
-  for (const variant of catalog.values()) {
+  for (const variant of uniqueVariants(catalog)) {
     if (!variant.captureRef || !variant.provenanceRef) continue;
     const capturePath = path.join(referencesRoot, variant.captureRef);
     const provenancePath = path.join(referencesRoot, variant.provenanceRef);
@@ -150,6 +166,56 @@ export function validateReferenceProvenance(referencesRoot, catalog) {
     if (!existsSync(provenancePath)) {
       errors.push(`missing provenance for ${variant.id}: ${variant.provenanceRef}`);
     }
+  }
+  return errors;
+}
+
+/**
+ * @param {string} referencesRoot
+ * @param {Map<string, VariantRef>} catalog
+ * @returns {ShapeError[]}
+ */
+export function validateReferenceCaptures(referencesRoot, catalog) {
+  /** @type {ShapeError[]} */
+  const errors = [];
+  for (const variant of uniqueVariants(catalog)) {
+    if (!variant.captureRef) continue;
+    const capturePath = path.join(referencesRoot, variant.captureRef);
+    if (!existsSync(capturePath)) {
+      continue;
+    }
+    let capture;
+    try {
+      capture = JSON.parse(readFileSync(capturePath, 'utf8'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push({
+        fixture: variant.captureRef,
+        path: capturePath,
+        field: '',
+        reason: `invalid capture JSON: ${message}`,
+        variantId: variant.id,
+      });
+      continue;
+    }
+    if (!capture || typeof capture !== 'object' || Array.isArray(capture)) {
+      errors.push({
+        fixture: variant.captureRef,
+        path: '$',
+        field: '',
+        reason: 'capture must be a JSON object',
+        variantId: variant.id,
+      });
+      continue;
+    }
+    errors.push(
+      ...validateObjectShape(
+        /** @type {Record<string, unknown>} */ (capture),
+        variant,
+        variant.captureRef,
+        '$',
+      ),
+    );
   }
   return errors;
 }
@@ -541,6 +607,7 @@ export function runExternalOutputShapeGuard(repoRoot, options = {}) {
     field: '',
     reason: message,
   })));
+  errors.push(...validateReferenceCaptures(referencesRoot, catalog));
 
   for (const root of toArray(classification.fixtureRoots)) {
     const files = expandFixtureGlob(repoRoot, String(root.glob));
