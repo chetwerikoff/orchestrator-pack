@@ -122,8 +122,16 @@ function Save-PartialCiGreenWakeTracking {
 function Retry-PendingCiGreenDispatchJournals {
     param(
         [hashtable]$PendingJournal,
-        [hashtable]$Nudged
+        [hashtable]$Nudged,
+        [switch]$DryRunMode
     )
+
+    if ($DryRunMode) {
+        if ($PendingJournal.Count -gt 0) {
+            Write-CiGreenWakeLog "dry-run skipping $($PendingJournal.Count) pending dispatch journal replay(s)"
+        }
+        return 0
+    }
 
     $resolved = 0
     foreach ($transitionId in @($PendingJournal.Keys)) {
@@ -334,7 +342,8 @@ function Invoke-CiGreenWakeTick {
             $pendingJournal[$prop.Name] = $prop.Value
         }
     }
-    $journalRetries = Retry-PendingCiGreenDispatchJournals -PendingJournal $pendingJournal -Nudged $nudged
+    $journalRetries = Retry-PendingCiGreenDispatchJournals -PendingJournal $pendingJournal -Nudged $nudged `
+        -DryRunMode:$DryRunMode
     if ($journalRetries -gt 0) {
         Write-CiGreenWakeLog "recovered $journalRetries pending dispatch journal record(s)"
     }
