@@ -133,7 +133,8 @@ function Retry-PendingCiGreenDispatchJournals {
         }
         $dispatchResult = Register-WorkerMessageDispatch -SessionId ([string]$pending.sessionId) `
             -Message ([string]$pending.message) `
-            -Source 'pack-send' -SourceKey "ci-green:$transitionId"
+            -Source 'pack-send' -SourceKey "ci-green:$transitionId" `
+            -DeliveredAtMs ([long]$pending.sentAtMs)
         if (-not $dispatchResult.recorded) {
             continue
         }
@@ -249,8 +250,10 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
+    $deliveredAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId -Message $Action.message `
-        -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)"
+        -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)" `
+        -DeliveredAtMs $deliveredAtMs
     $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
     if ($outcome.journalRecorded) {
         return @{
@@ -277,6 +280,7 @@ function Invoke-PlannedCiGreenWakeSend {
         sessionId            = [string]$Action.sessionId
         message              = [string]$Action.message
         transitionId         = [string]$Action.transitionId
+        deliveredAtMs        = $deliveredAtMs
     }
 }
 
@@ -411,10 +415,15 @@ function Invoke-CiGreenWakeTick {
 
         if ($result.delivered -and -not $result.journalRecorded) {
             if (-not $DryRunMode) {
-                $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                $sentAtMs = if ($result.deliveredAtMs) {
+                    [long]$result.deliveredAtMs
+                }
+                else {
+                    [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                }
                 $pendingJournal[[string]$action.transitionId] = @{
                     sessionId = [string]$action.sessionId
-                    sentAtMs  = $nowMs
+                    sentAtMs  = $sentAtMs
                     message   = [string]$action.message
                 }
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `

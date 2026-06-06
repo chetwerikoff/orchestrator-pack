@@ -167,7 +167,7 @@ function Invoke-SubmitReconcileTick {
                 if (-not $DryRunMode -and -not $Fixture) {
                     Set-SubmitReconcileState -Path $StatePath -State $tracking
                 }
-                if ($DryRunMode) {
+                if ($DryRunMode -or $Fixture) {
                     $submitResult = Invoke-WorkerInputDraftSubmit `
                         -SessionId $action.sessionId `
                         -ExpectedSessionId $action.sessionId `
@@ -257,11 +257,11 @@ $journalPath = if ($DispatchJournalPath) { $DispatchJournalPath } else { Get-Wor
 Write-SubmitReconcileLog "starting (project=$ProjectId, interval=${intervalSeconds}s, state=$statePath, journal=$journalPath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 
 if ($FixturePath) {
-    $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath -JournalPath $journalPath `
-        -DryRunMode:$DryRun -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     if (-not $DryRun) {
-        Set-SubmitReconcileState -Path $statePath -State $result.tracking
+        Write-SubmitReconcileLog 'fixture mode: enforcing dry-run (no live submit side effects)'
     }
+    $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath -JournalPath $journalPath `
+        -DryRunMode -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     Write-SubmitReconcileLog "fixture tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
     exit 0
 }

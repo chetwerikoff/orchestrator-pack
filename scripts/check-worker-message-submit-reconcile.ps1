@@ -53,6 +53,11 @@ if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
     exit 1
 }
 
+if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePath') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live submit side effects)'
+    exit 1
+}
+
 $reviewSendPs1 = Join-Path $Root 'scripts/review-send-reconcile.ps1'
 if (-not (Test-Path -LiteralPath $reviewSendPs1 -PathType Leaf)) {
     Write-Host 'Missing scripts/review-send-reconcile.ps1'
