@@ -4,6 +4,7 @@ import type { AoSession } from './review-trigger-reconcile.d.mts';
 export declare const DEFAULT_SUBMIT_RECONCILE_INTERVAL_MS: number;
 export declare const DEFAULT_MAX_SUBMIT_ATTEMPTS: number;
 export declare const DEFAULT_DELIVERY_BUDGET_MS: number;
+export declare const DEFAULT_CLAIM_STALE_MS: number;
 
 export declare const SUBMIT_STATE_PENDING: string;
 export declare const SUBMIT_STATE_SUBMITTED: string;
@@ -25,6 +26,8 @@ export interface DeliveryTrackingRecord {
   consumedAtMs?: number;
   claimed?: boolean;
   claimKey?: string;
+  provisionalClaimKey?: string;
+  provisionalClaimSinceMs?: number;
 }
 
 export interface SubmitTrackingState {
@@ -95,6 +98,33 @@ export declare function getDeliveryTracking(
   deliveryId: string,
 ): DeliveryTrackingRecord;
 
+export declare function clearSubmitClaimFields(
+  record?: Record<string, unknown>,
+): Record<string, unknown>;
+
+export declare function isActiveSubmitClaim(
+  record: Record<string, unknown>,
+  nowMs: number,
+  config?: { claimStaleMs?: number },
+): boolean;
+
+export declare function shouldClearStaleSubmitClaim(
+  record: Record<string, unknown>,
+  nowMs: number,
+  config?: { claimStaleMs?: number },
+): boolean;
+
+export declare function applySubmitOutcomes(
+  tracking: SubmitTrackingState,
+  outcomes: Array<{
+    deliveryId?: string;
+    claimKey?: string;
+    outcome?: string;
+    reason?: string;
+  }>,
+  nowMs: number,
+): SubmitTrackingState;
+
 export declare function evaluateSubmitDecision(input: {
   delivery: DeliveryRecord;
   session?: AoSession | Record<string, unknown>;
@@ -104,6 +134,7 @@ export declare function evaluateSubmitDecision(input: {
   config?: {
     maxSubmitAttempts?: number;
     deliveryBudgetMs?: number;
+    claimStaleMs?: number;
   };
 }): SubmitDecision;
 
@@ -119,6 +150,7 @@ export declare function planWorkerMessageSubmitActions(input: {
   config?: {
     maxSubmitAttempts?: number;
     deliveryBudgetMs?: number;
+    claimStaleMs?: number;
   };
 }): {
   actions: WorkerMessageSubmitAction[];

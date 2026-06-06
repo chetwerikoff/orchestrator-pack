@@ -30,6 +30,9 @@ export const DEFAULT_MAX_SUBMIT_ATTEMPTS = 3;
 /** Budget window per delivery before escalation (ms). */
 export const DEFAULT_DELIVERY_BUDGET_MS = 5 * 60 * 1000;
 
+/** Active submit claim lease before retry (ms). */
+export const DEFAULT_CLAIM_STALE_MS = 60 * 1000;
+
 export const SUBMIT_STATE_PENDING = 'pending';
 export const SUBMIT_STATE_SUBMITTED = 'submitted';
 export const SUBMIT_STATE_ESCALATED = 'escalated';
@@ -68,6 +71,121 @@ export function resolveSubmitReconcileConfig(config = {}) {
 export function getDeliveryTracking(tracking, deliveryId) {
   const id = String(deliveryId ?? '').trim();
   return tracking?.deliveries?.[id] ?? {};
+}
+
+/**
+ * @param {Record<string, unknown>} record
+ */
+export function clearSubmitClaimFields(record = {}) {
+  const next = { ...record };
+  delete next.claimed;
+  delete next.claimKey;
+  delete next.provisionalClaimKey;
+  delete next.provisionalClaimSinceMs;
+  return next;
+}
+
+/**
+ * @param {Record<string, unknown>} record
+ * @param {number} nowMs
+ * @param {object} [config]
+ */
+export function isActiveSubmitClaim(record, nowMs, config = {}) {
+  const hasClaim = Boolean(record?.claimed || record?.provisionalClaimKey);
+  if (!hasClaim) {
+    return false;
+  }
+
+  const claimSinceMs = Number(
+    record?.lastSubmitAtMs ?? record?.provisionalClaimSinceMs ?? 0,
+  );
+  if (claimSinceMs <= 0) {
+    return Boolean(record?.claimed);
+  }
+
+  const claimStaleMs = resolveBoundedInt(
+    config.claimStaleMs,
+    DEFAULT_CLAIM_STALE_MS,
+    1000,
+  );
+  return nowMs - claimSinceMs < claimStaleMs;
+}
+
+/**
+ * @param {Record<string, unknown>} record
+ * @param {number} nowMs
+ * @param {object} [config]
+ */
+export function shouldClearStaleSubmitClaim(record, nowMs, config = {}) {
+  const hasClaim = Boolean(record?.claimed || record?.provisionalClaimKey);
+  if (!hasClaim) {
+    return false;
+  }
+
+  const claimSinceMs = Number(
+    record?.lastSubmitAtMs ?? record?.provisionalClaimSinceMs ?? 0,
+  );
+  if (claimSinceMs <= 0) {
+    return false;
+  }
+
+  const claimStaleMs = resolveBoundedInt(
+    config.claimStaleMs,
+    DEFAULT_CLAIM_STALE_MS,
+    1000,
+  );
+  return nowMs - claimSinceMs >= claimStaleMs;
+}
+
+/**
+ * @param {object} input
+ */
+export function applySubmitOutcomes(tracking, outcomes, nowMs) {
+  const nextDeliveries = { ...(tracking?.deliveries ?? {}) };
+  const audit = [...toArray(tracking?.audit)];
+
+  for (const item of toArray(outcomes)) {
+    const deliveryId = String(item?.deliveryId ?? '').trim();
+    const outcome = String(item?.outcome ?? '').trim();
+    const claimKey = String(item?.claimKey ?? '').trim();
+    if (!deliveryId || !outcome) {
+      continue;
+    }
+
+    const prior = nextDeliveries[deliveryId] ?? {};
+    if (outcome === 'confirmed') {
+      const cleared = clearSubmitClaimFields(prior);
+      nextDeliveries[deliveryId] = {
+        ...cleared,
+        deliveryId,
+        claimed: true,
+        claimKey: claimKey || String(prior.provisionalClaimKey ?? ''),
+        lastSubmitAtMs: nowMs,
+        submitAttempts: Number(prior.submitAttempts ?? 0) + 1,
+      };
+      audit.push({
+        deliveryId,
+        action: 'confirm_claim',
+        reason: 'submit_succeeded',
+      });
+      continue;
+    }
+
+    if (outcome === 'released') {
+      nextDeliveries[deliveryId] = clearSubmitClaimFields(prior);
+      audit.push({
+        deliveryId,
+        action: 'release_claim',
+        reason: String(item?.reason ?? 'submit_failed'),
+      });
+    }
+  }
+
+  return {
+    ...tracking,
+    deliveries: nextDeliveries,
+    audit: audit.slice(-200),
+  };
 }
 
 /**
@@ -167,7 +285,7 @@ export function evaluateSubmitDecision({
     };
   }
 
-  if (record.claimed) {
+  if (isActiveSubmitClaim(record, nowMs, config)) {
     return { action: 'noop', reason: 'claim_held', deliveryId, sessionId };
   }
 
@@ -276,12 +394,20 @@ export function planWorkerMessageSubmitActions(input) {
 
     switch (decision.action) {
       case 'submit': {
+        let record = nextDeliveries[deliveryId] ?? {};
+        if (shouldClearStaleSubmitClaim(record, nowMs, config)) {
+          record = clearSubmitClaimFields(record);
+          nextDeliveries[deliveryId] = record;
+          audit.push({
+            deliveryId,
+            action: 'release_claim',
+            reason: 'stale_claim',
+          });
+        }
         nextDeliveries[deliveryId] = {
           ...nextDeliveries[deliveryId],
-          submitAttempts: Number(nextDeliveries[deliveryId]?.submitAttempts ?? 0) + 1,
-          lastSubmitAtMs: nowMs,
-          claimed: true,
-          claimKey: `${deliveryId}:${decision.attempt}`,
+          provisionalClaimKey: `${deliveryId}:${decision.attempt}`,
+          provisionalClaimSinceMs: nowMs,
         };
         actions.push({
           type: 'submit',
@@ -371,5 +497,15 @@ runStdinJsonCli('worker-message-submit-reconcile.mjs', {
   interval() {
     const payload = readStdinJson();
     return evaluateMechanicalTickInterval(payload);
+  },
+  outcome() {
+    const payload = readStdinJson();
+    return {
+      tracking: applySubmitOutcomes(
+        payload.tracking ?? { deliveries: {}, audit: [] },
+        payload.outcomes ?? [],
+        Number(payload.nowMs ?? Date.now()),
+      ),
+    };
   },
 });

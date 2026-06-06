@@ -166,6 +166,7 @@ function Invoke-SubmitReconcileTick {
     $submitted = 0
     $escalated = 0
     $noop = 0
+    $submitOutcomes = @()
 
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
@@ -177,10 +178,21 @@ function Invoke-SubmitReconcileTick {
                 if ($submitResult.submitted) {
                     Write-SubmitReconcileLog "submitted: delivery=$($action.deliveryId) session=$($action.sessionId) attempt=$($action.attempt) claim=$($action.claimKey)"
                     $submitted++
+                    $submitOutcomes += @{
+                        deliveryId = [string]$action.deliveryId
+                        claimKey   = [string]$action.claimKey
+                        outcome    = 'confirmed'
+                    }
                 }
                 else {
                     Write-SubmitReconcileLog "submit failed (fail-closed): delivery=$($action.deliveryId) reason=$($submitResult.reason)"
                     $noop++
+                    $submitOutcomes += @{
+                        deliveryId = [string]$action.deliveryId
+                        claimKey   = [string]$action.claimKey
+                        outcome    = 'released'
+                        reason     = [string]$submitResult.reason
+                    }
                 }
             }
             'escalate' {
@@ -200,8 +212,19 @@ function Invoke-SubmitReconcileTick {
         }
     }
 
+    $tracking = $plan.tracking
+    if ($submitOutcomes.Count -gt 0) {
+        $outcomeResult = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'outcome' `
+            -Payload @{
+                tracking = $tracking
+                outcomes = @($submitOutcomes)
+                nowMs    = $now
+            } -Label $Script:ReconcileLogPrefix -JsonDepth 30
+        $tracking = $outcomeResult.tracking
+    }
+
     return @{
-        tracking  = $plan.tracking
+        tracking  = $tracking
         submitted = $submitted
         escalated = $escalated
         noop      = $noop

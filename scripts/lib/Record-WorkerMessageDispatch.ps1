@@ -12,11 +12,20 @@
 $PackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $DispatchCli = Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs'
 
+. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
+
 function Get-WorkerMessageDispatchJournalPath {
     if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
         return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
     }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-worker-message-dispatch-journal.json'
+}
+
+function Get-WorkerMessageDispatchJournalLockPath {
+    param([string]$JournalPath = '')
+
+    $journalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
+    return "${journalPath}.lock"
 }
 
 function Get-WorkerMessageDispatchJournal {
@@ -115,21 +124,35 @@ function Register-WorkerMessageDispatch {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
     }
 
-    $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
-    $journal[$deliveryId] = @{
-        deliveryId    = $deliveryId
-        sessionId     = $SessionId
-        deliveredAtMs = $deliveredMs
-        source        = $Source
-        sourceKey     = $SourceKey
-        deliveryPath  = [string]$shape.deliveryPath
-        messageShape  = @{
-            charLength = [int]$shape.charLength
-            lineCount  = [int]$shape.lineCount
+    $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
+    $recorded = $false
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+        kind = 'worker-message-dispatch-journal'
+    } -Action {
+        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+        $journal[$deliveryId] = @{
+            deliveryId    = $deliveryId
+            sessionId     = $SessionId
+            deliveredAtMs = $deliveredMs
+            source        = $Source
+            sourceKey     = $SourceKey
+            deliveryPath  = [string]$shape.deliveryPath
+            messageShape  = @{
+                charLength = [int]$shape.charLength
+                lineCount  = [int]$shape.lineCount
+            }
+            restoreRetry  = [bool]$RestoreRetry
         }
-        restoreRetry  = [bool]$RestoreRetry
+        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+        $script:recorded = $true
     }
-    Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+
+    if (-not $fenced.ok) {
+        return @{ recorded = $false; reason = 'journal_busy' }
+    }
+    if (-not $recorded) {
+        return @{ recorded = $false; reason = 'journal_write_failed' }
+    }
 
     return @{
         recorded     = $true

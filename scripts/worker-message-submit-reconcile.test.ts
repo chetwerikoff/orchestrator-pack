@@ -11,8 +11,10 @@ import {
   mergeDeliveryRecords,
 } from '../docs/worker-message-dispatch-observe.mjs';
 import {
+  applySubmitOutcomes,
   evaluateConcurrentSubmitClaim,
   evaluateSubmitDecision,
+  isActiveSubmitClaim,
   OPERATOR_ESCALATION_PREFIX,
   planWorkerMessageSubmitActions,
 } from '../docs/worker-message-submit-reconcile.mjs';
@@ -156,6 +158,75 @@ describe('negative AO states (AC4/AC8)', () => {
     });
     expect(decision.action).toBe('noop');
     expect(decision.reason).toBe('already_submitted_path');
+  });
+});
+
+describe('submit claim lifecycle (review)', () => {
+  it('releases claim on failed submit outcome without incrementing attempts', () => {
+    const tracking = applySubmitOutcomes(
+      {
+        deliveries: {
+          'delivery-1': {
+            deliveryId: 'delivery-1',
+            provisionalClaimKey: 'delivery-1:1',
+            provisionalClaimSinceMs: 1000,
+            submitAttempts: 0,
+          },
+        },
+        audit: [],
+      },
+      [{ deliveryId: 'delivery-1', claimKey: 'delivery-1:1', outcome: 'released', reason: 'tmux_unavailable' }],
+      2000,
+    );
+    const record = tracking.deliveries?.['delivery-1'];
+    expect(record?.claimed).toBeUndefined();
+    expect(record?.provisionalClaimKey).toBeUndefined();
+    expect(Number(record?.submitAttempts ?? 0)).toBe(0);
+  });
+
+  it('confirms claim on successful submit outcome', () => {
+    const tracking = applySubmitOutcomes(
+      {
+        deliveries: {
+          'delivery-1': {
+            deliveryId: 'delivery-1',
+            provisionalClaimKey: 'delivery-1:1',
+            provisionalClaimSinceMs: 1000,
+          },
+        },
+        audit: [],
+      },
+      [{ deliveryId: 'delivery-1', claimKey: 'delivery-1:1', outcome: 'confirmed' }],
+      2000,
+    );
+    const record = tracking.deliveries?.['delivery-1'];
+    expect(record?.claimed).toBe(true);
+    expect(record?.submitAttempts).toBe(1);
+    expect(record?.lastSubmitAtMs).toBe(2000);
+    expect(record?.provisionalClaimKey).toBeUndefined();
+  });
+
+  it('retries after stale confirmed claim', () => {
+    const { actions } = planFixture('stale-claim-retry.json');
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'claim_held',
+      ),
+    ).toBe(false);
+  });
+
+  it('fresh provisional claim remains active', () => {
+    expect(
+      isActiveSubmitClaim(
+        {
+          provisionalClaimKey: 'delivery-1:1',
+          provisionalClaimSinceMs: 1000,
+        },
+        1500,
+        { claimStaleMs: 60000 },
+      ),
+    ).toBe(true);
   });
 });
 
