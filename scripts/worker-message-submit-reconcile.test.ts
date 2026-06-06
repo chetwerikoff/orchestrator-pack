@@ -10,6 +10,7 @@ import {
   DELIVERY_PATH_SELF_SUBMITTED,
   extractReviewFindingDeliveries,
   isDeliveryConsumed,
+  isSessionAlive,
   mergeDeliveryRecords,
   DISPATCH_SOURCE_REVIEW_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
@@ -93,6 +94,13 @@ describe('classifyDeliveryPath', () => {
 });
 
 describe('dispatch observation helpers (review)', () => {
+  it('treats non-live AO session statuses as not alive', () => {
+    for (const status of ['errored', 'exited', 'cleanup', 'closed', 'detecting']) {
+      expect(isSessionAlive({ status, runtime: 'alive' })).toBe(false);
+    }
+    expect(isSessionAlive({ status: 'working', runtime: 'alive' })).toBe(true);
+    expect(isSessionAlive({ status: 'working', runtime: 'exited' })).toBe(false);
+  });
   it('uses stable review-run send anchor from updatedAt', () => {
     const run = {
       id: 'run-stable-ts',
@@ -352,6 +360,21 @@ describe('multiple pending deliveries (AC10)', () => {
 });
 
 describe('escalation on stuck branches (AC9)', () => {
+  it('escalates waiting_input delivery after submit budget is exhausted', () => {
+    const { actions } = planFixture('waiting-input-budget-escalate.json');
+    expect(submitActions(actions)).toHaveLength(0);
+    const escalation = actions.find(
+      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
+    );
+    expect(escalation?.reason).toBe('submit_attempts_exhausted');
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'noop' && a.reason === 'next_prompt_possible',
+      ),
+    ).toBe(false);
+  });
+
   it('escalates when submit attempts exhausted', () => {
     const { actions } = planFixture('submit-budget-escalate.json');
     expect(submitActions(actions)).toHaveLength(0);
