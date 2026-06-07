@@ -20,6 +20,7 @@ import {
   isWatchWindowNonConformant,
   mergeWatchState,
   planDeferredWatchTick,
+  revertTriggeredWatchOnAbort,
   seedWatchFromInProgressSignals,
   seedWatchFromWakeDefer,
   watchEntryKey,
@@ -327,6 +328,69 @@ describe('Issue #235 acceptance criteria', () => {
       nowMs: Number(fixture.nowMs) + 2_000,
     });
     expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
+  });
+
+  it('reverts triggered watch when pre-run abort retains watch', () => {
+    const fixture = loadFixture('dropped-wake-in-progress-seed.json');
+    const seed = seedWatchFromInProgressSignals({
+      openPrs: asOpenPrs(fixture.openPrs),
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      existingWatches: fixture.watchEntries,
+      nowMs: fixture.nowMs,
+    });
+    const key = watchEntryKey(235, 'prog235');
+    const triggered = {
+      ...seed.watchEntries,
+      [key]: { ...seed.watchEntries[key], status: 'triggered' },
+    };
+    const reverted = revertTriggeredWatchOnAbort(triggered, key, Number(fixture.nowMs) + 1_000);
+    expect(reverted[key].status).toBe('watching');
+    expect(reverted[key].lastEvaluatedMs).toBe(Number(fixture.nowMs) + 1_000);
+  });
+
+  it('retains watch across ticks after pre-run abort revert', () => {
+    const fixture = loadFixture('dropped-wake-in-progress-seed.json');
+    const readySessions = [
+      {
+        ...fixture.sessions![0],
+        reports: [
+          ...(fixture.sessions![0].reports as Array<Record<string, unknown>>),
+          { reportState: 'ready_for_review', reportedAt: '2026-06-05T14:16:40.000Z' },
+        ],
+      },
+    ];
+    const seed = seedWatchFromInProgressSignals({
+      openPrs: asOpenPrs(fixture.openPrs),
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      existingWatches: fixture.watchEntries,
+      nowMs: fixture.nowMs,
+    });
+    const firstPlan = planDeferredWatchTick({
+      watchEntries: seed.watchEntries,
+      openPrs: asOpenPrs(fixture.openPrs),
+      reviewRuns: fixture.reviewRuns,
+      sessions: readySessions,
+      ciChecksByPr: fixture.ciChecksByPr,
+      nowMs: Number(fixture.nowMs) + 2_000,
+    });
+    const key = watchEntryKey(235, 'prog235');
+    expect(firstPlan.watchEntries[key].status).toBe('triggered');
+    const restored = revertTriggeredWatchOnAbort(
+      firstPlan.watchEntries,
+      key,
+      Number(fixture.nowMs) + 3_000,
+    );
+    const secondPlan = planDeferredWatchTick({
+      watchEntries: restored,
+      openPrs: asOpenPrs(fixture.openPrs),
+      reviewRuns: fixture.reviewRuns,
+      sessions: readySessions,
+      ciChecksByPr: fixture.ciChecksByPr,
+      nowMs: Number(fixture.nowMs) + 4_000,
+    });
+    expect(secondPlan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
   });
 
   it('(14) genuinely zero-signal head is backstop-only', () => {

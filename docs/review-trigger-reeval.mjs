@@ -611,6 +611,33 @@ export function planDeferredWatchTick(input) {
 }
 
 /**
+ * Restore a watch entry optimistically marked `triggered` by planTick when the
+ * side-effecting run aborts before starting (pre-run re-check, fence busy, etc.).
+ *
+ * @param {Record<string, object>} entries
+ * @param {string} watchKey
+ * @param {number} [nowMs]
+ */
+export function revertTriggeredWatchOnAbort(entries, watchKey, nowMs = Date.now()) {
+  const key = String(watchKey ?? '').trim();
+  if (!key || !entries?.[key]) {
+    return entries ?? {};
+  }
+  const entry = entries[key];
+  if (entry.status !== 'triggered') {
+    return entries;
+  }
+  return {
+    ...entries,
+    [key]: {
+      ...entry,
+      status: 'watching',
+      lastEvaluatedMs: nowMs,
+    },
+  };
+}
+
+/**
  * @param {object} input
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} input.openPrs
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
@@ -768,6 +795,16 @@ runStdinJsonCli('review-trigger-reeval.mjs', {
   preRunRecheck: () => {
     const payload = readStdinJson();
     return preRunHeadReadyRecheck(payload.planned, payload.fresh);
+  },
+  revertTriggeredWatchOnAbort: () => {
+    const payload = readStdinJson();
+    return {
+      watchEntries: revertTriggeredWatchOnAbort(
+        payload.watchEntries ?? {},
+        payload.watchKey,
+        payload.nowMs,
+      ),
+    };
   },
   forbidden: () => {
     const payload = readStdinJson();

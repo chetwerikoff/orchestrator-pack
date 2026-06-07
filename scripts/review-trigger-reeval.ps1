@@ -150,8 +150,9 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
     else {
-        $snapshot = Get-ReviewTriggerReevalSnapshot -OpenPrs $scopedPrs -ScopedOnly
         if ($watchMap.Count -eq 0) {
+            # Recovery seeding needs a full PR snapshot; scoped-only with zero watches is empty.
+            $snapshot = Get-ReviewTriggerReevalSnapshot
             $seed = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'seedFromInProgress' -Payload @{
                 openPrs         = @($snapshot.openPrs)
                 reviewRuns      = @($snapshot.reviewRuns)
@@ -163,6 +164,9 @@ function Invoke-ReviewTriggerReevalTick {
                 $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $seed.watchEntries
                 Write-ReviewTriggerReevalLog "recovery seeded $($seed.seededKeys.Count) in-progress watch(es)"
             }
+        }
+        else {
+            $snapshot = Get-ReviewTriggerReevalSnapshot -OpenPrs $scopedPrs -ScopedOnly
         }
     }
 
@@ -179,6 +183,7 @@ function Invoke-ReviewTriggerReevalTick {
     }
 
     $started = 0
+    $watchEntriesToPersist = $plan.watchEntries
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'start_review' {
@@ -198,6 +203,15 @@ function Invoke-ReviewTriggerReevalTick {
                 }
                 elseif ($result.retainWatch) {
                     Write-ReviewTriggerReevalLog "retain watch PR #$($action.prNumber): $($result.reason)"
+                    $watchKey = [string]$action.watchKey
+                    if ($watchKey) {
+                        $revert = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'revertTriggeredWatchOnAbort' -Payload @{
+                            watchEntries = $watchEntriesToPersist
+                            watchKey     = $watchKey
+                            nowMs        = $nowMs
+                        }
+                        $watchEntriesToPersist = $revert.watchEntries
+                    }
                 }
             }
             'retain_watch' {
@@ -220,7 +234,7 @@ function Invoke-ReviewTriggerReevalTick {
 
     if (-not $DryRunMode) {
         Set-ReviewTriggerReevalWatchState -Path $watchPath -State @{
-            watchEntries  = $plan.watchEntries
+            watchEntries  = $watchEntriesToPersist
             lastUpdatedMs = $nowMs
         }
     }
@@ -228,7 +242,7 @@ function Invoke-ReviewTriggerReevalTick {
     return @{
         started      = $started
         actions      = @($plan.actions)
-        watchEntries = $plan.watchEntries
+        watchEntries = $watchEntriesToPersist
     }
 }
 

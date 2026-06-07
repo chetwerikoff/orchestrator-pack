@@ -127,6 +127,12 @@ export declare function planDeferredWatchTick(input: Record<string, unknown>): {
   pollClass: string;
 };
 
+export declare function revertTriggeredWatchOnAbort(
+  entries: Record<string, WatchEntry>,
+  watchKey: string,
+  nowMs?: number,
+): Record<string, WatchEntry>;
+
 export declare function seedWatchFromInProgressSignals(input: Record<string, unknown>): {
   watchEntries: Record<string, WatchEntry>;
   seededKeys: string[];
