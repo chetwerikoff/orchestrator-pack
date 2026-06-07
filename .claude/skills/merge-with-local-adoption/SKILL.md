@@ -120,8 +120,15 @@ One line, then proceed to merge:
 
 Merge only after Step 4 is shown to the user.
 
+Direct `gh pr merge` is blocked by the publish/RTK guard. Prefix the command with
+**`AO_PUBLISH_FALLBACK=1`** — the sanctioned fallback for an agent already running
+in Cursor, and for Claude when the `cursor-agent` default does not apply. Do not
+spawn a second Cursor to merge. If the PR head is behind base
+(`not mergeable: head … not up to date`), run `gh pr update-branch <N>` first,
+then re-run the merge.
+
 ```powershell
-gh pr merge <N> --repo chetwerikoff/orchestrator-pack --merge --delete-branch
+AO_PUBLISH_FALLBACK=1 gh pr merge <N> --repo chetwerikoff/orchestrator-pack --merge --delete-branch
 ```
 
 Use `--squash` or `--rebase` only when the user specifies. On failure, report
