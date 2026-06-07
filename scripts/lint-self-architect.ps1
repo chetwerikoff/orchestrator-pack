@@ -762,6 +762,10 @@ $scanPaths = @(
 if ($FixtureRoot) {
     $comparisonPaths = $scanPaths
 }
+elseif ($BaseRef -and $scanPaths.Count -eq 0) {
+    # Diff mode with no in-scope introduced paths: nothing to compare; do not widen to full scan.
+    $comparisonPaths = @()
+}
 else {
     $comparisonPathSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($path in @(Get-ScanTargetRelativePaths -Root $Root -Config $Config)) {
