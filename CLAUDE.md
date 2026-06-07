@@ -44,10 +44,12 @@ what gets built, in what order, with what boundaries. The planner
   first: critical mechanics (patterns, data structures, integrations, boundary
   conditions), how the industry solves this class, a services architecture
   sketch, and ≥3 options judged on cost/risk/sufficiency (cheapest sufficient
-  executor, not "which is best"). Same applies/skip line as the draft gate
-  (skip operator/config/one-line fixes). When the proposal then becomes a
-  draft, the `create-issue-draft` pre-draft gate carries the same analysis
-  forward — do not redo it.
+  executor, not "which is best") — plus, for a decision / state-machine /
+  event-ordering / retry / concurrency cause, the same full-class scenario
+  enumeration the draft gate's fifth element requires (fix the class, not the
+  case). Same applies/skip line as the draft gate (skip operator/config/one-line
+  fixes). When the proposal then becomes a draft, the `create-issue-draft`
+  pre-draft gate carries the same analysis forward — do not redo it.
 - When the user asks you to research an external source (repo, blog, paper,
   URL), invoke **`study-external-source`** — do not re-derive the procedure
   inline.
