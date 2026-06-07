@@ -1,0 +1,21 @@
+{
+  "issue_number": 242,
+  "iteration_id": "opk-29",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-07T02:40:00.000Z",
+  "baseline": {
+    "commit_sha": "7b3b7d01151142c5522ab7f19b8e28a71c0af248",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8975f1add168456acd1f8a76f9e269391fb52d306eafeb914ca0648dc8f00d16"
+  },
+  "declared_paths": [
+    "docs/declarations/242.opk-29.json",
+    "scripts/lint-self-architect.ps1",
+    "tests/powershell/Lint-SelfArchitect.Tests.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/lint-self-architect/**"
+  ],
+  "amendments": []
+}
