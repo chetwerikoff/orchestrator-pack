@@ -1,0 +1,19 @@
+{
+  "issue_number": 242,
+  "iteration_id": "opk-29",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-07T02:51:25.134Z",
+  "baseline": {
+    "commit_sha": "b9b3bd17f14a2c05a1195d4cb98353603ea94c1f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:28b45b0d70d377bece2016fb20f2f45988540ed1a102a1b41251c9feff02afa8"
+  },
+  "declared_paths": [
+    "scripts/lint-self-architect.ps1",
+    "scripts/lint-self-architect.diff-mode.Tests.ps1",
+    "scripts/test-all.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
