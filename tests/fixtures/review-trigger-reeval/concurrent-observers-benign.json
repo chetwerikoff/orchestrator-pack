@@ -1,0 +1,25 @@
+{
+  "description": "Concurrent observers — at most benign in-flight for correct head",
+  "prNumber": 235,
+  "headSha": "conc235",
+  "sessionId": "opk-28",
+  "openPrs": [{ "number": 235, "headRefOid": "conc235" }],
+  "reviewRuns": [{ "prNumber": 235, "targetSha": "conc235", "status": "queued" }],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": { "triggerReviewRun": false, "benignInFlight": true }
+}

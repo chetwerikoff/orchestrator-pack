@@ -1,0 +1,25 @@
+{
+  "description": "Red CI defers — no run",
+  "prNumber": 235,
+  "headSha": "red235",
+  "sessionId": "opk-28",
+  "openPrs": [{ "number": 235, "headRefOid": "red235", "headCommittedAt": "2026-06-05T14:16:00.000Z" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": { "triggerReviewRun": false, "reason": "ci_red_defer" }
+}

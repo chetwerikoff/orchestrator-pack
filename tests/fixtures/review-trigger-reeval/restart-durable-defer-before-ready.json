@@ -1,0 +1,34 @@
+{
+  "description": "Restart durable: defer before ready, watch persists across tick",
+  "nowMs": 1700000077000,
+  "openPrs": [{ "number": 235, "headRefOid": "dur235", "headCommittedAt": "2026-06-05T14:16:00.000Z" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "watchEntries": {
+    "235:dur235": {
+      "prNumber": 235,
+      "headSha": "dur235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000300000,
+      "seedSource": "wake_defer",
+      "status": "watching"
+    }
+  },
+  "expect": { "triggerReviewRun": true, "withinLatencyBound": true }
+}

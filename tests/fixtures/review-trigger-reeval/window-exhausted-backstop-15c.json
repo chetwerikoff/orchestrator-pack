@@ -1,0 +1,25 @@
+{
+  "description": "Window exhausted — hand to backstop with observable action (15c)",
+  "nowMs": 1700000310000,
+  "openPrs": [{ "number": 235, "headRefOid": "exh235" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "working", "reportedAt": "2026-06-05T14:16:00.000Z" }]
+    }
+  ],
+  "watchEntries": {
+    "235:exh235": {
+      "prNumber": 235,
+      "headSha": "exh235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000300000,
+      "status": "watching"
+    }
+  },
+  "expect": { "handToBackstop": true, "actionReason": "watch_window_expired" }
+}

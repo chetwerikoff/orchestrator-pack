@@ -1,0 +1,57 @@
+{
+  "description": "Incident ordering: wake deferred not-ready, then readiness on same head",
+  "prNumber": 235,
+  "headSha": "abc235",
+  "sessionId": "opk-28",
+  "nowMs": 1700000077000,
+  "readinessObservedMs": 1700000077000,
+  "openPrs": [
+    {
+      "number": 235,
+      "headRefOid": "abc235",
+      "headCommittedAt": "2026-06-05T14:16:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T14:17:58.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "watchEntries": {
+    "235:abc235": {
+      "prNumber": 235,
+      "headSha": "abc235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000300000,
+      "seedSource": "wake_defer",
+      "deferReason": "uncovered_not_ready",
+      "deferPrimary": "no_ready_for_review",
+      "pollClass": "scoped_deferred_head_watch",
+      "lastObservedReadyMs": null,
+      "status": "watching"
+    }
+  },
+  "expect": {
+    "triggerReviewRun": true,
+    "withinLatencyBound": true
+  }
+}

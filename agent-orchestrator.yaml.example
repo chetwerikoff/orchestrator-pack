@@ -342,6 +342,19 @@ projects:
         pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
       See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
 
+      DEFERRED-HEAD REVIEW RE-EVALUATION (Issue #235 — scoped supervised child, review-run
+      only). When merge.ready defers as uncovered_not_ready / no_ready_for_review (#212),
+      scripts/review-trigger-reeval.ps1 watches the small deferred-head set and may
+      ao review run seconds-scale when #195 readiness lands on the current head SHA.
+      Poll classification: scoped_deferred_head_watch (5-minute bounded window; incident
+      wake-to-readiness delay ~77 s). Watch state: {stateRoot}/review-trigger-reeval-watch.json.
+      Default poll: 5 s (-PollSeconds). Side-effect lock: review-trigger-reeval-side-effect.lock.
+      Additive to #207 wake edge and #163 periodic reconcile backstop — not a full-PR sweep.
+      Genuinely zero-signal heads (no wake and no in-progress report) remain backstop-only.
+      Safety: never ao spawn, --claim-pr, ao session kill, ao send, or merge — only ao review run.
+      Verification:
+        pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -Once -DryRun
+
       STATE-DERIVED FIRST REVIEW SEND (Issue #202 — separate process, first ao review send
       only). A low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
         pwsh -NoProfile -File scripts/review-send-reconcile.ps1

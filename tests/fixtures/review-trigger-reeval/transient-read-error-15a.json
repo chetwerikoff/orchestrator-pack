@@ -1,0 +1,26 @@
+{
+  "description": "Transient read error — retain watch as unknown (15a)",
+  "nowMs": 1700000010000,
+  "openPrs": [{ "number": 235, "headRefOid": "unk235" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "working", "reportedAt": "2026-06-05T14:16:00.000Z" }]
+    }
+  ],
+  "watchEntries": {
+    "235:unk235": {
+      "prNumber": 235,
+      "headSha": "unk235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000300000,
+      "status": "watching"
+    }
+  },
+  "snapshotErrorsByKey": { "235:unk235": true },
+  "expect": { "retainWatch": true, "reason": "snapshot_unknown" }
+}

@@ -508,6 +508,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== deferred-head review re-evaluation (Issue #235) =='
+$reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'
+if (Test-Path -LiteralPath $reviewTriggerReevalCheck -PathType Leaf) {
+    & $reviewTriggerReevalCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-trigger-reeval.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-trigger-reeval.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'deferred-head review re-evaluation checks failed (Issue #235)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-trigger-reeval.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing deferred-head review re-evaluation check script (Issue #235)'
+}
+
+Write-Host ''
 Write-Host '== review-finding delivery confirmation (Issue #171) =='
 $deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
 if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {

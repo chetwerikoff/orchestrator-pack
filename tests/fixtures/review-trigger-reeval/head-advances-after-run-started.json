@@ -1,0 +1,35 @@
+{
+  "description": "Head advances after run started — existing run becomes outdated",
+  "prNumber": 235,
+  "headSha": "new235",
+  "openPrs": [
+    {
+      "number": 235,
+      "headRefOid": "new235",
+      "headCommittedAt": "2026-06-05T14:19:00.000Z"
+    }
+  ],
+  "reviewRuns": [{ "prNumber": 235, "targetSha": "old235", "status": "running" }],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T14:20:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": { "triggerReviewRun": true, "priorRunOutdated": true }
+}

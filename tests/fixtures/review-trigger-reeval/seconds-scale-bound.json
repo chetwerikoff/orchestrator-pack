@@ -1,0 +1,28 @@
+{
+  "description": "Seconds-scale bound from readiness observation to run decision",
+  "prNumber": 235,
+  "headSha": "scale235",
+  "sessionId": "opk-28",
+  "nowMs": 1700000003500,
+  "readinessObservedMs": 1700000000000,
+  "openPrs": [{ "number": 235, "headRefOid": "scale235", "headCommittedAt": "2026-06-05T14:16:00.000Z" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "status": "working",
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": { "processingMsMax": 5000, "triggerReviewRun": true }
+}

@@ -119,10 +119,13 @@ function startSupervisorBackground(
   return child;
 }
 
+const detachedSupervisorTimeoutMs = 60_000;
+
 const managedChildRoles = [
   'listener',
   'heartbeat',
   'review-trigger-reconcile',
+  'review-trigger-reeval',
   'ci-green-wake-reconcile',
   'review-send-reconcile',
   'review-finding-delivery-confirm',
@@ -543,7 +546,9 @@ describe('orchestrator-wake-supervisor', () => {
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   });
 
-  it('captures per-child logs and survives launching shell exit when detached', () => {
+  it(
+    'captures per-child logs and survives launching shell exit when detached',
+    () => {
     const stateDir = makeStateDir();
     const start = runSupervisor([
       '-Action',
@@ -561,7 +566,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(start.stdout).toContain('supervisor detached');
 
     const childLogs = managedChildRoles.map((role) => path.join(stateDir, `${role}.log`));
-    const deadline = Date.now() + 12_000;
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       if (childLogs.every((logPath) => fs.existsSync(logPath))) {
         break;
@@ -576,10 +581,13 @@ describe('orchestrator-wake-supervisor', () => {
     expect(statusMid.status).toBe(0);
 
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  });
+    },
+    detachedSupervisorTimeoutMs,
+  );
 
   it.skipIf(process.platform === 'win32')(
     'quotes all launcher arguments on Unix when detached',
+    { timeout: detachedSupervisorTimeoutMs },
     () => {
       const stateDir = makeStateDir();
       const projectId = 'proj&evil;|meta';

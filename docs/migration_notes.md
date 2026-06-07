@@ -133,6 +133,25 @@ up the behaviour and side-effect fencing:
    `review-wake-trigger: starting review` within seconds of the completion wake (not only
    on the next heartbeat/reconcile tick).
 
+### Deferred-head review re-evaluation (Issue #235)
+
+Issue #235 adds `scripts/review-trigger-reeval.ps1`: a **scoped** supervised child that
+re-evaluates recently-deferred-not-ready heads when #195 readiness lands after an early
+completion wake (~77 s incident delay; 5-minute bounded watch window). Additive to #207
+wake edge and #163 periodic reconcile backstop.
+
+To adopt:
+
+1. Pull `prompts/agent_rules.md` (Deferred-head review re-evaluation section) and
+   `docs/orchestrator-wake-runbook.md`.
+2. Restart the wake supervisor so it manages the new child:
+   `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
+   `-Action Start`.
+3. Verify watch persistence: after a wake defer (`uncovered_not_ready`), confirm
+   `{stateRoot}/review-trigger-reeval-watch.json` contains the head entry.
+4. Behavioural acceptance: readiness landing after the early wake triggers
+   `review-trigger-reeval: starting review` within seconds (not only on reconcile tick).
+
 ### First-send review delivery reconcile (Issue #202)
 
 Issue #202 adds a **state-derived first `ao review send` path**: when a review run is in

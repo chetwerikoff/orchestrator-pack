@@ -305,6 +305,25 @@ stale approved-and-green snapshot while review is in-flight / `needs_triage`.
 - The listener is a **side-effecting** supervised child (draft #71 registry); restart
   waits for in-flight `ao review run` to finish or fail closed.
 
+## Deferred-head review re-evaluation (Issue #235)
+
+**Orchestrator LLM turns and the periodic reconcile remain valid paths;**
+`scripts/review-trigger-reeval.ps1` closes the wake-before-readiness ordering race.
+
+When a completion wake defers a head as `uncovered_not_ready` / `no_ready_for_review`
+(#212), a **scoped** supervised child watches that small deferred-head set and may
+`ao review run` seconds-scale when #195 readiness lands on the **current** head SHA —
+without a full open-PR sweep. Poll classification:
+`scoped_deferred_head_watch` (5-minute bounded window per head; incident delay ~77 s).
+
+- Persisted watch entries live under `{stateRoot}/review-trigger-reeval-watch.json`.
+- The wake listener records a watch on defer when `-SideEffectStateDir` / state root is set.
+- AO 0.9.x may emit `ready_for_review` at **info** priority (filtered by the listener);
+  re-evaluation is correct from observed report state either way.
+- This path issues **review run only** — never spawn, claim, kill, merge, or send.
+- Genuinely zero-signal heads (no wake **and** no in-progress report) remain
+  **backstop-only** via `review-trigger-reconcile.ps1`.
+
 ## First-send review delivery reconcile (Issue #202)
 
 **Orchestrator LLM turns remain a valid first-send path;** the

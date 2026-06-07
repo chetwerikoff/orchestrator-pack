@@ -1,0 +1,34 @@
+{
+  "description": "Non-conformant short window expires before incident delay",
+  "nowMs": 1700000100000,
+  "openPrs": [{ "number": 235, "headRefOid": "short235" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "watchEntries": {
+    "235:short235": {
+      "prNumber": 235,
+      "headSha": "short235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000030000,
+      "status": "watching"
+    }
+  },
+  "customWindowMs": 30000,
+  "expect": { "nonConformantWindow": true, "handToBackstop": true }
+}

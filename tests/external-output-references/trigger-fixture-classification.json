@@ -4,6 +4,7 @@
     "scripts/review-head-ready.test.ts",
     "scripts/review-trigger-reconcile.test.ts",
     "scripts/review-wake-trigger.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
     "scripts/ci-green-wake-reconcile.test.ts",
     "scripts/review-orchestrator-loop.test.ts",
     "scripts/review-ready-stuck-guard.test.ts",
@@ -30,6 +31,22 @@
     },
     {
       "glob": "tests/fixtures/review-wake-trigger/*.json",
+      "shapes": [
+        {
+          "jsonPath": "$.sessions[*].reports[*]",
+          "command": "ao-worker-report",
+          "variantFrom": "reportState"
+        },
+        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.reviewRuns[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
+      ]
+    },
+    {
+      "glob": "tests/fixtures/review-trigger-reeval/*.json",
       "shapes": [
         {
           "jsonPath": "$.sessions[*].reports[*]",

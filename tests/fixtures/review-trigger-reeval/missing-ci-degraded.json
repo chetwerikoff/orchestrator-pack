@@ -1,0 +1,19 @@
+{
+  "description": "Missing required CI routes to degraded escalation, not fast run",
+  "prNumber": 235,
+  "headSha": "deg235",
+  "sessionId": "opk-28",
+  "openPrs": [{ "number": 235, "headRefOid": "deg235", "headCommittedAt": "2026-06-05T14:16:00.000Z" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": { "235": [] },
+  "requiredCheckLookupFailedByPr": { "235": true },
+  "expect": { "triggerReviewRun": false, "route": "degraded_ci_retry" }
+}
