@@ -1,0 +1,7 @@
+{
+  "id": "review-run-scrubbed-cancelled",
+  "status": "cancelled",
+  "prNumber": 77,
+  "targetSha": "deadbeef",
+  "findingCount": 0
+}

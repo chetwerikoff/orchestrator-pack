@@ -1,0 +1,28 @@
+{
+  "description": "AC1/AC2: LLM-orchestrator ao send (not pack-originated) via dispatch journal",
+  "nowMs": 1717600500000,
+  "sessions": [
+    {
+      "sessionId": "opk-orch-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-orch-232:1717600400000:ao-send:orchestrator-turn": {
+      "deliveryId": "opk-orch-232:1717600400000:ao-send:orchestrator-turn",
+      "sessionId": "opk-orch-232",
+      "deliveredAtMs": 1717600400000,
+      "source": "ao-send",
+      "sourceKey": "orchestrator-turn",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 480, "lineCount": 3 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

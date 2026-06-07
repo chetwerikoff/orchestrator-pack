@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/sent_to_agent",
+  "command": "ao review list (delivery overlay)",
+  "variant": "sent_to_agent",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/sent_to_agent.raw.json",
+  "provenanceRef": "captures/ao-review-run/sent_to_agent.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

@@ -35,22 +35,23 @@ function Invoke-GhOpenPrList {
 
     Push-Location -LiteralPath $RepoRoot
     try {
-        $raw = gh pr list --state open --json number,headRefOid,commits --limit 200 2>&1
+        # Keep the list query cheap. Requesting the `commits` connection here
+        # pulls every commit (and its `authors` connection) for up to --limit
+        # PRs, whose static GraphQL cost exceeds GitHub's 500k node limit and
+        # fails the whole query. The head commit's committed date is resolved
+        # per-PR below via a single-commit REST lookup instead.
+        $raw = gh pr list --state open --json number,headRefOid --limit 200 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "gh pr list failed (exit $LASTEXITCODE): $raw"
         }
 
         $prs = @($raw | ConvertFrom-Json)
         foreach ($pr in $prs) {
-            $commits = @($pr.commits)
-            if ($commits.Count -gt 0) {
-                $tip = $commits[$commits.Count - 1]
-                if ($tip -and $tip.committedDate) {
-                    $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$tip.committedDate) -Force
-                }
-            }
-            if ($pr.PSObject.Properties['commits']) {
-                $pr.PSObject.Properties.Remove('commits')
+            $headSha = [string]$pr.headRefOid
+            if (-not $headSha) { continue }
+            $committedDate = gh api "repos/{owner}/{repo}/commits/$headSha" --jq '.commit.committer.date' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $committedDate) {
+                $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$committedDate).Trim() -Force
             }
         }
         return $prs

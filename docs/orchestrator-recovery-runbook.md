@@ -561,7 +561,6 @@ pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun
 | Tick interval | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` |
 | Confirmation window (wait before re-deliver) | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` |
 | Max best-effort re-deliveries per run | **2** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` |
-| Max submit attempts per `(runId, head SHA)` | **1** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS` |
 | Persisted delivery state file | `%TEMP%\orchestrator-review-delivery-confirm-state.json` | `AO_REVIEW_DELIVERY_CONFIRM_STATE` |
 
 Confirmation is credited only when the **linked** worker reports
@@ -575,26 +574,24 @@ is still live and owns the PR. It never calls `ao spawn`, `--claim-pr`, `ao sess
 or `ao send`. If the linked session is dead/orphan, the loop **escalates immediately**
 (zero re-sends).
 
-### Submit stuck paste draft (Issue #216)
+### Submit stuck paste draft (Issues #216 / #232)
 
-When re-deliveries are exhausted but the worker still has not reported
-`addressing_reviews` for this run/head, the listener may **submit** the draft AO already
-pasted — a tmux **Enter only** to the linked live session (never composes finding text).
-Submit runs **after** bounded re-delivery and **before** escalation; it is skipped while
-the #173 flood signature is active (defer only — never escalate earlier than #171).
+Draft submit is owned by **`scripts/worker-message-submit-reconcile.ps1`** (Issue #232):
+a source-agnostic arbiter that presses tmux **Enter only** for AO-delivered pending-draft
+messages (multi-line or >200 chars), regardless of sender. It observes AO events, the pack
+dispatch journal, and review-run state — never pane text. Issue #216 submit is folded into
+this process; delivery-confirm (#171) no longer presses Enter.
 
-Read delivery-confirm state (`AO_REVIEW_DELIVERY_CONFIRM_STATE`) for per-run fields:
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Tick interval | **30** seconds | `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` |
+| Submit reconcile state | `%TEMP%\orchestrator-worker-message-submit-state.json` | `AO_WORKER_MESSAGE_SUBMIT_STATE` |
+| Dispatch journal | `%TEMP%\orchestrator-worker-message-dispatch-journal.json` | `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` |
 
-| Field | Meaning |
-|-------|---------|
-| `submitCount` / `lastSubmitAtMs` | Bounded submit attempts for current `(runId, head SHA)` |
-| `submitDecisionKey` | Dedupe key `runId:headSha` — new head resets submit budget |
-| `deliveryState: escalated` with reason `stale_input_refused` | Input changed since controlled delivery — operator must resend manually |
-| `deliveryState: escalated` with reason `max_submits_exhausted` | Submit tried; still unconfirmed — operator remedy below |
+Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
 
-Submit eligibility requires: live head-owning session, no ambiguous overlap, no intervening
-input-affecting `ao events` since the last controlled delivery, flood channel quiet, and
-submit budget remaining. Adapter failure fail-closes to escalation without crashing the tick.
+Escalation lines are prefixed `[worker-message-submit-reconcile] ESCALATION:` with
+operator-visible diagnosis when submit budget is exhausted or observation stayed ambiguous.
 
 ### Escalation message and operator remedy
 

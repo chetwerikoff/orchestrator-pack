@@ -304,7 +304,7 @@ describe('resolveWorkerSessionId', () => {
 
   it('starts review when status payload uses sessionId and head is ready', () => {
     const actions = planReconcileActions({
-      openPrs: [{ number: 66, headRefOid: 'sha66' }],
+      openPrs: [{ number: 66, headRefOid: 'sha66', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       reviewRuns: [],
       sessions: [
         {
@@ -315,7 +315,7 @@ describe('resolveWorkerSessionId', () => {
           reports: [
             {
               reportState: 'ready_for_review',
-              headRefOid: 'sha66',
+
               reportedAt: '2026-06-05T12:00:00.000Z',
             },
           ],
@@ -379,7 +379,7 @@ describe('resolveWorkerSessionId', () => {
 
   it('skips reconcile when only dead workers hold the PR', () => {
     const fixture = {
-      openPrs: [{ number: 55, headRefOid: 'cafe55' }],
+      openPrs: [{ number: 55, headRefOid: 'cafe55', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       reviewRuns: [],
       sessions: [
         {
@@ -443,7 +443,7 @@ describe('resolveWorkerSessionId', () => {
   it('prefers worker with ready_for_review report when multiple live workers match PR', () => {
     const headSha = 'currenthead58';
     const actions = planReconcileActions({
-      openPrs: [{ number: 58, headRefOid: headSha }],
+      openPrs: [{ number: 58, headRefOid: headSha, headCommittedAt: '2026-06-05T11:00:00.000Z' }],
       reviewRuns: [],
       sessions: [
         {
@@ -461,7 +461,6 @@ describe('resolveWorkerSessionId', () => {
           reports: [
             {
               reportState: 'ready_for_review',
-              headRefOid: headSha,
               reportedAt: '2026-06-05T12:00:00.000Z',
             },
           ],
@@ -549,9 +548,9 @@ describe('Issue #212 defer subreason records', () => {
     const skip = skipActions(planReconcileActions(loadFixture('intermediate-commit.json')))[0];
     expect(skip?.record?.primary).toBe('no_ready_for_review');
     expect(skip?.record?.failedComponents).toContain('stale_report_binding');
-    expect(skip?.record?.observed?.reportBoundHeadSha).toBe('newhead55');
-    expect(skip?.record?.observed?.reportRoute).toBe('addressing_reviews');
-    expect(skip?.record?.observed?.staleReadyForReviewHeadSha).toBe('oldhead55');
+    expect(skip?.record?.observed?.reportBoundHeadSha).toBe('stale_sha_less_handoff');
+    expect(skip?.record?.observed?.reportRoute).toBe('ready_for_review');
+    expect(skip?.record?.observed?.staleReadyForReviewHeadSha).toBe('stale_sha_less_handoff');
     expect(skip?.record?.observed?.staleReadyForReviewRoute).toBe('ready_for_review');
   });
 
@@ -649,7 +648,7 @@ describe('Issue #212 defer subreason records', () => {
     const prNumber = 211;
     const headSha = '1607071';
     const base = {
-      openPrs: [{ number: prNumber, headRefOid: headSha }],
+      openPrs: [{ number: prNumber, headRefOid: headSha, headCommittedAt: '2026-06-06T01:00:00.000Z' }],
       reviewRuns: [] as [],
       ciChecksByPr: { [String(prNumber)]: greenChecks },
     };
@@ -674,7 +673,6 @@ describe('Issue #212 defer subreason records', () => {
           reports: [
             {
               reportState: 'ready_for_review',
-              headRefOid: headSha,
               reportedAt: '2026-06-06T01:45:00.000Z',
             },
           ],

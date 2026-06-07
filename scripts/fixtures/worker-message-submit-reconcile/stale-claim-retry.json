@@ -1,0 +1,44 @@
+{
+  "description": "Review: stale confirmed claim releases and plans another submit",
+  "nowMs": 1717601120000,
+  "config": {
+    "claimStaleMs": 60000,
+    "maxSubmitAttempts": 3
+  },
+  "sessions": [
+    {
+      "sessionId": "opk-stale-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-stale-232:1717601000000:pack-send:nudge": {
+      "deliveryId": "opk-stale-232:1717601000000:pack-send:nudge",
+      "sessionId": "opk-stale-232",
+      "deliveredAtMs": 1717601000000,
+      "source": "pack-send",
+      "sourceKey": "nudge",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 320, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-stale-232:1717601000000:pack-send:nudge": {
+        "deliveryId": "opk-stale-232:1717601000000:pack-send:nudge",
+        "firstObservedAtMs": 1717601000000,
+        "submitAttempts": 1,
+        "claimed": true,
+        "claimKey": "opk-stale-232:1717601000000:pack-send:nudge:1",
+        "lastSubmitAtMs": 1717601000000
+      }
+    },
+    "audit": []
+  }
+}

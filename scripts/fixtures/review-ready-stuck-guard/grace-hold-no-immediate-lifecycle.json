@@ -11,12 +11,15 @@
     "reports": [
       {
         "reportState": "ready_for_review",
-        "headRefOid": "grace174",
         "reportedAt": "2026-06-04T12:00:00Z"
       }
     ]
   },
-  "openPr": { "number": 174, "headRefOid": "grace174" },
+  "openPr": {
+    "number": 174,
+    "headRefOid": "grace174",
+    "headCommittedAt": "2026-06-04T12:00:00Z"
+  },
   "reviewRuns": [
     {
       "id": "run-grace",
@@ -27,12 +30,12 @@
       "linkedSessionId": "opk-grace"
     }
   ],
-  "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-    { "name": "PR scope guard", "state": "SUCCESS" },
-    { "name": "Run pack contract tests", "state": "SUCCESS" },
-    { "name": "Self-architect lint", "state": "SUCCESS" }
-  ],
-  "tracking": { "snapshots": {} },
-  "expect": { "actionType": "hold_grace", "forbidImmediateLifecycle": true }
+  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"SUCCESS"},{"name":"Run pack contract tests","state":"SUCCESS"},{"name":"Self-architect lint","state":"SUCCESS"}],
+  "tracking": {
+    "snapshots": {}
+  },
+  "expect": {
+    "actionType": "hold_grace",
+    "forbidImmediateLifecycle": true
+  }
 }

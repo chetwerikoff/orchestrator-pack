@@ -1,0 +1,39 @@
+{
+  "description": "AC5: durable claim prevents second submit on concurrent tick",
+  "nowMs": 1717601100000,
+  "sessions": [
+    {
+      "sessionId": "opk-claim-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-claim-232:1717601000000:review-send:run-claim": {
+      "deliveryId": "opk-claim-232:1717601000000:review-send:run-claim",
+      "sessionId": "opk-claim-232",
+      "deliveredAtMs": 1717601000000,
+      "source": "review-send",
+      "sourceKey": "run-claim",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 400, "lineCount": 5 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-claim-232:1717601000000:review-send:run-claim": {
+        "deliveryId": "opk-claim-232:1717601000000:review-send:run-claim",
+        "firstObservedAtMs": 1717601000000,
+        "submitAttempts": 1,
+        "claimed": true,
+        "claimKey": "opk-claim-232:1717601000000:review-send:run-claim:1"
+      }
+    },
+    "audit": []
+  }
+}

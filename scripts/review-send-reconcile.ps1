@@ -48,6 +48,7 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -216,7 +217,15 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $false; reason = $verify.reason }
     }
 
-    return @{ sent = $true; reason = 'sent' }
+    $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
+        -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
+        -Source 'review-send' -SourceKey ([string]$Action.runId) `
+        -DeliveryPath 'pending-draft'
+    $outcome = Resolve-DispatchJournalSendOutcomeAfterDelivered -DispatchResult $dispatchResult
+    if (-not $outcome.journalRecorded) {
+        Write-ReviewSendLog "dispatch journal record failed run=$($Action.runId): $($outcome.journalFailureReason) (review send delivered; deduped, journal will retry)"
+    }
+    return $outcome
 }
 
 function Invoke-ReviewSendTick {

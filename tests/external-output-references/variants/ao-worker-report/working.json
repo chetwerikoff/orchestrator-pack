@@ -1,0 +1,10 @@
+{
+  "id": "ao-worker-report/working",
+  "command": "ao report",
+  "variant": "working",
+  "version": 1,
+  "captureRef": "captures/ao-worker-report/working.raw.json",
+  "provenanceRef": "captures/ao-worker-report/working.provenance.json",
+  "allowedFields": ["reportState", "accepted", "note", "reportedAt", "timestamp", "source"],
+  "forbiddenTogether": [["prNumber", "prUrl"]]
+}

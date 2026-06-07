@@ -1,0 +1,43 @@
+{
+  "description": "Review: do not escalate overwritten delivery already consumed via worker report",
+  "nowMs": 1717601000000,
+  "sessions": [
+    {
+      "sessionId": "opk-consumed-overwrite",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2024-06-05T15:21:45.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "dispatchJournal": {
+    "opk-consumed-overwrite:1717600900000:pack-send:first": {
+      "deliveryId": "opk-consumed-overwrite:1717600900000:pack-send:first",
+      "sessionId": "opk-consumed-overwrite",
+      "deliveredAtMs": 1717600900000,
+      "source": "pack-send",
+      "sourceKey": "first",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 300, "lineCount": 2 }
+    },
+    "opk-consumed-overwrite:1717600950000:pack-send:second": {
+      "deliveryId": "opk-consumed-overwrite:1717600950000:pack-send:second",
+      "sessionId": "opk-consumed-overwrite",
+      "deliveredAtMs": 1717600950000,
+      "source": "pack-send",
+      "sourceKey": "second",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 280, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

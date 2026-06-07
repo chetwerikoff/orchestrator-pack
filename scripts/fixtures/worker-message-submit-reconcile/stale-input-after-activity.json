@@ -1,0 +1,35 @@
+{
+  "description": "Review: refuse submit after intervening input-affecting activity",
+  "nowMs": 1717600500000,
+  "sessions": [
+    {
+      "sessionId": "opk-stale-input-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-stale-input-232:1717600300000:pack-send:nudge": {
+      "deliveryId": "opk-stale-input-232:1717600300000:pack-send:nudge",
+      "sessionId": "opk-stale-input-232",
+      "deliveredAtMs": 1717600300000,
+      "source": "pack-send",
+      "sourceKey": "nudge",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 320, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [
+    {
+      "kind": "activity.transition",
+      "sessionId": "opk-stale-input-232",
+      "tsEpoch": 1717600400000,
+      "data": { "to": "active" }
+    }
+  ],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

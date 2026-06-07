@@ -1,0 +1,9 @@
+{
+  "id": "run-delivery-scrubbed",
+  "status": "sent_to_agent",
+  "prNumber": 97,
+  "targetSha": "deadbeef",
+  "sentFindingCount": 1,
+  "linkedSessionId": "opk-worker-scrubbed",
+  "sentAt": "2026-06-04T17:00:00Z"
+}

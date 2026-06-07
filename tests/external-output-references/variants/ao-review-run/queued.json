@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/queued",
+  "command": "ao review list",
+  "variant": "queued",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/queued.raw.json",
+  "provenanceRef": "captures/ao-review-run/queued.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

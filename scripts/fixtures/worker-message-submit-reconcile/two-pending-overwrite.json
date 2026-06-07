@@ -1,0 +1,37 @@
+{
+  "description": "AC10: two pending deliveries — submit surviving only, escalate overwritten",
+  "nowMs": 1717601000000,
+  "sessions": [
+    {
+      "sessionId": "opk-dual-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-dual-232:1717600900000:ao-send:first": {
+      "deliveryId": "opk-dual-232:1717600900000:ao-send:first",
+      "sessionId": "opk-dual-232",
+      "deliveredAtMs": 1717600900000,
+      "source": "ao-send",
+      "sourceKey": "first",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 300, "lineCount": 2 }
+    },
+    "opk-dual-232:1717600950000:ao-send:second": {
+      "deliveryId": "opk-dual-232:1717600950000:ao-send:second",
+      "sessionId": "opk-dual-232",
+      "deliveredAtMs": 1717600950000,
+      "source": "ao-send",
+      "sourceKey": "second",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 280, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

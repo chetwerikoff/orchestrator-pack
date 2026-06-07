@@ -871,6 +871,29 @@ To adopt after merge:
 
 See `docs/orchestrator-recovery-runbook.md` (Review finding delivery unconfirmed).
 
+## Source-agnostic worker message submit (Issue #232)
+
+Adds `scripts/worker-message-submit-reconcile.ps1`: unified submit arbiter that presses
+Enter for any AO-delivered pending-draft worker message (multi-line or >200 chars),
+regardless of sender. Folds in Issue #216 submit; delivery-confirm (#171) no longer
+submits. Observes AO events, pack dispatch journal, and review-run state — never pane text.
+
+**New supervised child** under `orchestrator-wake-supervisor.ps1` (#205).
+
+To adopt after merge:
+
+1. Merge updated `scripts/orchestrator-side-process-registry.json` (includes
+   `worker-message-submit-reconcile` child).
+2. Restart the supervisor so the new child starts: `ao stop` then `ao start`.
+3. Optional env: `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` (default **30**),
+   `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`.
+4. Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
+
+Audit signal: submit reconcile state file `audit` array and log lines
+`[worker-message-submit-reconcile]` with submit/no-op/escalation reasons.
+
+See `docs/orchestrator-recovery-runbook.md` (Submit stuck paste draft).
+
 ## Review-ready worker stuck guard (Issue #174)
 
 Adds `docs/review-ready-stuck-guard.mjs`: classifies a **consistent snapshot** when a
@@ -971,3 +994,26 @@ After merge of the worker PR that adds RCA/spec discipline rules and
 2. Restart AO so workers load the new rules: `ao stop` then `ao start`.
 3. Optional: run `pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command surfaces -RepoRoot .`
    to confirm loader surfaces are wired.
+
+## External-output fixture shape guard (Issue #223)
+
+After merge, CI runs `scripts/check-external-output-shape-guard.ps1` (also
+`npm test` via `scripts/external-output-shape-guard.test.ts`). No operator
+adoption beyond normal CI.
+
+**Refresh path (AO / gh version bump):**
+
+1. Capture scrubbed raw output under `tests/external-output-references/captures/`
+   for the affected command variant (see per-variant `*.provenance.json` for the
+   prior capture command and scrub log).
+2. Update the matching `tests/external-output-references/variants/**` reference
+   (`allowedFields`, `forbiddenFields`, `forbiddenTogether`) so fixtures remain
+   anchored to real per-state shapes — do not weaken the guard to silence drift.
+3. Extend `tests/external-output-references/trigger-fixture-classification.json`
+   when new trigger-test fixture roots or inline opt-outs are added; move
+   anchored families out of `inventory.json` when covered.
+4. Run `node scripts/external-output-shape-guard.mjs` and
+   `npm test -- scripts/external-output-shape-guard.test.ts` locally; push so
+   reviewers see the reference diff.
+
+**Owner:** orchestrator-pack maintainers / PR author touching trigger fixtures.

@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/failed",
+  "command": "ao review list",
+  "variant": "failed",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/failed.raw.json",
+  "provenanceRef": "captures/ao-review-run/failed.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

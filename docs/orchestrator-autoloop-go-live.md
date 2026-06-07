@@ -31,6 +31,7 @@ and the matching steps in
 | CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | First-send review delivery reconcile | `scripts/review-send-reconcile.ps1`, `docs/review-send-reconcile.mjs` (Issue #202) |
 | Review-finding delivery confirm | `scripts/review-finding-delivery-confirm.ps1`, `docs/review-finding-delivery-confirm.mjs` (Issue #171) |
+| Worker message submit reconcile | `scripts/worker-message-submit-reconcile.ps1`, `docs/worker-message-submit-reconcile.mjs` (Issue #232) |
 | Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |
 | Review-ready false stuck guard | `docs/review-ready-stuck-guard.mjs` (Issue #174; rules in `orchestratorRules`) |
 | Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
@@ -50,7 +51,8 @@ ao start orchestrator-pack
 Starts **all** orchestrator side-processes from
 `scripts/orchestrator-side-process-registry.json` as **separate managed children**:
 wake listener, heartbeat, review-trigger reconcile, CI-green wake reconcile,
-review-send reconcile, and review-finding delivery-confirm. Resolves the orchestrator
+review-send reconcile, review-finding delivery-confirm, and worker-message submit
+reconcile. Resolves the orchestrator
 session id from `ao status` when unset, restarts children on exit or stall (idle-safe
 threshold per child cadence), debounces session-id flaps, and re-targets session-bound
 children on a confirmed id change. Logs:
@@ -84,6 +86,7 @@ Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (defa
 - CI-green wake: `scripts/ci-green-wake-reconcile.ps1` (default 1 min).
 - First-send delivery: `scripts/review-send-reconcile.ps1` (default 2 min).
 - Delivery confirm: `scripts/review-finding-delivery-confirm.ps1` (default 5 min).
+- Worker message submit: `scripts/worker-message-submit-reconcile.ps1` (default 30 s).
 
 Each supports `-Once -DryRun` for fixture/contract checks without live `ao`/`gh`.
 

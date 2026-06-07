@@ -3,7 +3,13 @@
   "wakeKind": "merge.ready",
   "sessionId": "opk-wait",
   "prNumber": 216,
-  "openPrs": [{ "number": 216, "headRefOid": "wait216" }],
+  "openPrs": [
+    {
+      "number": 216,
+      "headRefOid": "wait216",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "id": "run-wait",
@@ -21,7 +27,6 @@
       "reports": [
         {
           "reportState": "addressing_reviews",
-          "headRefOid": "wait216",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -29,10 +34,22 @@
   ],
   "ciChecksByPr": {
     "216": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

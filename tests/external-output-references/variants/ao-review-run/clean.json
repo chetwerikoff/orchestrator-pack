@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/clean",
+  "command": "ao review list",
+  "variant": "clean",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/clean.raw.json",
+  "provenanceRef": "captures/ao-review-run/clean.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

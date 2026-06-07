@@ -1,6 +1,12 @@
 {
   "description": "Failed run plus covering run on same head — record must prefer failed/cancelled over head_covered",
-  "openPrs": [{ "number": 73, "headRefOid": "both73" }],
+  "openPrs": [
+    {
+      "number": 73,
+      "headRefOid": "both73",
+      "headCommittedAt": "2026-06-06T03:00:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "id": "run-fail-73",
@@ -27,7 +33,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "both73",
           "reportedAt": "2026-06-06T03:00:00.000Z"
         }
       ]
@@ -35,10 +40,22 @@
   ],
   "ciChecksByPr": {
     "73": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {

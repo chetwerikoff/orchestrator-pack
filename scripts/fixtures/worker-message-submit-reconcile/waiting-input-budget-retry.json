@@ -1,0 +1,40 @@
+{
+  "description": "Review: waiting_input past budget with remaining attempts — retry submit",
+  "nowMs": 1717602000000,
+  "config": { "deliveryBudgetMs": 60000, "maxSubmitAttempts": 3, "claimStaleMs": 60000 },
+  "sessions": [
+    {
+      "sessionId": "opk-wait-retry-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "waiting_input",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-wait-retry-232:1717601050000:pack-send:wait-retry": {
+      "deliveryId": "opk-wait-retry-232:1717601050000:pack-send:wait-retry",
+      "sessionId": "opk-wait-retry-232",
+      "deliveredAtMs": 1717601050000,
+      "source": "pack-send",
+      "sourceKey": "wait-retry",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 275, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-wait-retry-232:1717601050000:pack-send:wait-retry": {
+        "deliveryId": "opk-wait-retry-232:1717601050000:pack-send:wait-retry",
+        "firstObservedAtMs": 1717601050000,
+        "submitAttempts": 1,
+        "claimed": true,
+        "lastSubmitAtMs": 1717601100000
+      }
+    },
+    "audit": []
+  }
+}

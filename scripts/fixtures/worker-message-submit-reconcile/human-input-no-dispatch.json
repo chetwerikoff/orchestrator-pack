@@ -1,0 +1,18 @@
+{
+  "description": "AC3: pane activity without AO dispatch record — no submit",
+  "nowMs": 1717600600000,
+  "sessions": [
+    {
+      "sessionId": "opk-human-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {},
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

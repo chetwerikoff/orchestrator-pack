@@ -8,8 +8,8 @@
   and worker reports from ao status --reports full. Confirms delivery only when the
   linked worker reports addressing_reviews (or equivalent) after send; on timeout
   re-delivers via ao review send to the same live session (bounded); when re-deliveries
-  are exhausted may submit the already-pasted draft via tmux Enter only (Issue #216,
-  bounded); escalates when the channel is dead or retries are exhausted. Never ao spawn,
+  are exhausted escalates; draft submit is owned by worker-message-submit-reconcile.ps1
+  (Issue #232). Never ao spawn,
   --claim-pr, ao session kill, or ao send.
 
   Distinct from review-trigger-reconcile.ps1 (Issue #163), which only starts review runs.
@@ -36,15 +36,11 @@ $DeliveryFilterCli = Join-Path $PackRoot 'docs/review-finding-delivery-confirm.m
 $Script:DefaultIntervalMinutes = 5
 $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
-$Script:DefaultMaxSubmits = 1
-
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
-. (Join-Path $PSScriptRoot 'lib/Submit-WorkerInputDraft.ps1')
-
-$FloodDetectCli = Join-Path $PackRoot 'docs/terminal-flood-detect.mjs'
+. (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 
 function Get-DeliveryIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -71,14 +67,6 @@ function Get-DeliveryMaxRedeliveries {
         return [int]$envMax
     }
     return $Script:DefaultMaxRedeliveries
-}
-
-function Get-DeliveryMaxSubmits {
-    $envMax = $env:AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS
-    if ($envMax -and [int]::TryParse($envMax, [ref]$null)) {
-        return [int]$envMax
-    }
-    return $Script:DefaultMaxSubmits
 }
 
 function Get-DeliveryStatePath {
@@ -254,52 +242,6 @@ function Get-FixtureDeliveryPayload {
     }
 }
 
-function Invoke-FloodDetectCli {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $json = @{
-        events = @($Events)
-        nowMs  = $NowMs
-    } | ConvertTo-Json -Depth 30 -Compress
-    $output = $json | & node $FloodDetectCli detect 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "terminal-flood-detect.mjs detect exited ${LASTEXITCODE}: $output"
-    }
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    return $text | ConvertFrom-Json
-}
-
-function Get-FloodActiveSessionMap {
-    param(
-        [array]$Events,
-        [long]$NowMs
-    )
-
-    $map = @{}
-    if (-not $Events -or $Events.Count -eq 0) {
-        return $map
-    }
-    $result = Invoke-FloodDetectCli -Events $Events -NowMs $NowMs
-    foreach ($row in @($result.flaggedSessions)) {
-        if ($row.sessionId) {
-            $map[[string]$row.sessionId] = $true
-        }
-    }
-    return $map
-}
-
-function Get-AoEventsSince {
-    param([int]$SinceMinutes = 30)
-
-    $payload = Invoke-AoCliJson -AoArgs @(
-        'events', 'list', '--since', "${SinceMinutes}m", '--limit', '500', '--json'
-    ) -FailureLabel 'ao events list'
-    return @($payload.events)
-}
-
 function Invoke-PlannedReviewSend {
     param(
         [string]$RunId,
@@ -388,7 +330,6 @@ function Invoke-DeliveryTick {
     }
 
     $redelivered = 0
-    $submitted = 0
     $deferred = 0
     $escalated = 0
     $confirmed = 0
@@ -450,38 +391,6 @@ function Invoke-DeliveryTick {
                 Write-DeliveryLog "deferred: run=$($action.runId) $($action.reason) (flood or channel not ready)"
                 $deferred++
             }
-            'submit' {
-                $submitResult = Invoke-WorkerInputDraftSubmit `
-                    -SessionId $action.sessionId `
-                    -ExpectedSessionId $action.sessionId `
-                    -RunId $action.runId `
-                    -PrNumber $action.prNumber `
-                    -HeadSha $action.headSha `
-                    -DryRun:$DryRunMode
-                if ($submitResult.submitted) {
-                    Write-DeliveryLog "submitted draft: run=$($action.runId) PR #$($action.prNumber) session=$($action.sessionId) attempt=$($action.attempt)"
-                    $submitted++
-                    $record = Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId
-                    if ($record) {
-                        $appliedTracking.runs[$action.runId] = $record
-                        Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
-                    }
-                }
-                else {
-                    Write-DeliveryLog "submit failed (fail-closed escalate): run=$($action.runId) reason=$($submitResult.reason)"
-                    $escalated++
-                    $appliedTracking.runs[$action.runId] = @{
-                        deliveryState    = 'escalated'
-                        sendObservedAtMs = (Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId).sendObservedAtMs
-                        redeliveryCount  = (Get-PlannedDeliveryRunRecord -PlannedTracking $plan.tracking -RunId $action.runId).redeliveryCount
-                        submitCount      = $action.attempt
-                        escalatedAtMs    = $now
-                    }
-                    $msg = "[review-finding-delivery-confirm] ESCALATION: submit adapter failed for review run $($action.runId) (PR #$($action.prNumber), session $($action.sessionId), reason=$($submitResult.reason))."
-                    Write-DeliveryLog $msg
-                    Save-PartialDeliveryTracking -Path $PartialStatePath -AppliedTracking $appliedTracking -DryRunMode:$DryRunMode
-                }
-            }
             'wait' {
                 Write-DeliveryLog "waiting: run=$($action.runId) $($action.reason) (~$([math]::Round($action.remainingMs / 1000))s left)"
             }
@@ -491,7 +400,6 @@ function Invoke-DeliveryTick {
     return @{
         tracking    = Merge-DeliveryTickTracking -PlannedTracking $plan.tracking -AppliedRuns $appliedTracking.runs
         redelivered = $redelivered
-        submitted   = $submitted
         deferred    = $deferred
         escalated   = $escalated
         confirmed   = $confirmed
@@ -503,16 +411,14 @@ $intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
 $windowMinutes = Get-DeliveryConfirmationWindowMinutes
 $windowMs = [Math]::Max(1, $windowMinutes) * 60 * 1000
 $maxRedeliveries = Get-DeliveryMaxRedeliveries
-$maxSubmits = Get-DeliveryMaxSubmits
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-DeliveryStatePath -CliPath $StateFile
 $config = @{
     confirmationWindowMs = $windowMs
     maxRedeliveries      = $maxRedeliveries
-    maxSubmits           = $maxSubmits
 }
 
-Write-DeliveryLog "starting (project=$ProjectId, interval=${intervalMinutes}m, window=${windowMinutes}m, maxRedeliveries=$maxRedeliveries, maxSubmits=$maxSubmits, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+Write-DeliveryLog "starting (project=$ProjectId, interval=${intervalMinutes}m, window=${windowMinutes}m, maxRedeliveries=$maxRedeliveries, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 
 if ($FixturePath) {
     $state = Get-DeliveryState -Path $statePath
@@ -521,7 +427,7 @@ if ($FixturePath) {
     if (-not $DryRun) {
         Set-DeliveryState -Path $statePath -State $result.tracking
     }
-    Write-DeliveryLog "fixture tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) submitted=$($result.submitted) deferred=$($result.deferred) escalated=$($result.escalated))"
+    Write-DeliveryLog "fixture tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) deferred=$($result.deferred) escalated=$($result.escalated))"
     exit 0
 }
 
@@ -559,7 +465,7 @@ try {
                 else {
                     Write-DeliveryLog 'dry-run: delivery state not updated'
                 }
-                Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) submitted=$($result.submitted) deferred=$($result.deferred) escalated=$($result.escalated))"
+                Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) deferred=$($result.deferred) escalated=$($result.escalated))"
             }
             catch {
                 $tickFailed = $true

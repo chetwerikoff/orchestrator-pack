@@ -1,6 +1,12 @@
 {
   "description": "needs_triage on current head blocks re-review",
-  "openPrs": [{ "number": 12, "headRefOid": "ccc333" }],
+  "openPrs": [
+    {
+      "number": 12,
+      "headRefOid": "ccc333",
+      "headCommittedAt": "2026-06-04T11:30:00.000Z"
+    }
+  ],
   "reviewRuns": [
     {
       "prNumber": 12,
@@ -10,5 +16,11 @@
       "openFindingCount": 2
     }
   ],
-  "sessions": [{ "name": "op-12", "role": "worker", "prNumber": 12 }]
+  "sessions": [
+    {
+      "name": "op-12",
+      "role": "worker",
+      "prNumber": 12
+    }
+  ]
 }

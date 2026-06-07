@@ -1,6 +1,12 @@
 {
   "description": "Ready head with missing required-check visibility tracks degraded-ci retry",
-  "openPrs": [{ "number": 46, "headRefOid": "degraded46" }],
+  "openPrs": [
+    {
+      "number": 46,
+      "headRefOid": "degraded46",
+      "headCommittedAt": "2026-06-05T12:00:00.000Z"
+    }
+  ],
   "reviewRuns": [],
   "sessions": [
     {
@@ -11,7 +17,6 @@
       "reports": [
         {
           "reportState": "ready_for_review",
-          "headRefOid": "degraded46",
           "reportedAt": "2026-06-05T12:00:00.000Z"
         }
       ]
@@ -21,7 +26,9 @@
     "46": []
   },
   "requiredCheckNamesByPr": {
-    "46": ["Missing required job"]
+    "46": [
+      "Missing required job"
+    ]
   },
   "expect": {
     "startReviewCount": 0,

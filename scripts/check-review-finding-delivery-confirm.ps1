@@ -30,6 +30,17 @@ if ($mjs -notmatch 'DEFAULT_MAX_REDELIVERIES = 2') {
     exit 1
 }
 
+$dmtPath = Join-Path $Root 'docs/review-finding-delivery-confirm.d.mts'
+if (-not (Test-Path -LiteralPath $dmtPath -PathType Leaf)) {
+    Write-Host 'Missing docs/review-finding-delivery-confirm.d.mts'
+    exit 1
+}
+$dmt = Get-Content -LiteralPath $dmtPath -Raw
+if ($dmt -match "type: 'submit'|maxSubmits") {
+    Write-Host 'docs/review-finding-delivery-confirm.d.mts must not advertise submit rung (Issue #232 owns submit)'
+    exit 1
+}
+
 $submitMjs = Join-Path $Root 'docs/worker-input-draft-submit.mjs'
 if (-not (Test-Path -LiteralPath $submitMjs -PathType Leaf)) {
     Write-Host 'Missing docs/worker-input-draft-submit.mjs (Issue #216)'
@@ -52,9 +63,15 @@ if ($mjs -notmatch 'export \{ sessionOwnsRunHead \}' -or $mjs -notmatch 'session
     exit 1
 }
 
+$submitReconcile = Join-Path $Root 'scripts/worker-message-submit-reconcile.ps1'
+if (-not (Test-Path -LiteralPath $submitReconcile -PathType Leaf)) {
+    Write-Host 'Missing scripts/worker-message-submit-reconcile.ps1 (Issue #232 unified submit owner)'
+    exit 1
+}
+
 $ps1 = Get-Content -LiteralPath $scriptPath -Raw
-if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
-    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must invoke submit adapter (Issue #216)'
+if ($ps1 -match 'Invoke-WorkerInputDraftSubmit') {
+    Write-Host 'scripts/review-finding-delivery-confirm.ps1 must not invoke submit adapter — Issue #232 owns submit'
     exit 1
 }
 
@@ -78,10 +95,8 @@ $runbookRequired = @(
     'review-finding-delivery-confirm',
     'AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES',
     'AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES',
-    'AO_REVIEW_DELIVERY_CONFIRM_MAX_SUBMITS',
     'AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES',
-    'Submit stuck paste draft',
-    'submitDecisionKey',
+    'worker-message-submit-reconcile',
     'ESCALATION: unconfirmed delivery',
     'Operator remedy'
 )
@@ -92,5 +107,5 @@ if ($missingRunbook.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] review-finding delivery confirmation + submit bridge entrypoint and runbook (Issues #171, #216)'
+Write-Host '[PASS] review-finding delivery confirmation entrypoint and runbook (Issues #171; submit owned by #232)'
 exit 0
