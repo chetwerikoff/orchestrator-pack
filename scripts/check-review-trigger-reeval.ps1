@@ -96,5 +96,16 @@ if ($reevalPs1 -match '-FixtureSnapshot\s+\$snapshot' -and $reevalPs1 -notmatch 
     exit 1
 }
 
+if ($reevalPs1 -notmatch 'Update-ReviewTriggerReevalWatchStateMerged') {
+    Write-Host 'review-trigger-reeval.ps1 must merge watch state under a shared lock'
+    exit 1
+}
+
+$commonPs1 = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Review-TriggerReeval-Common.ps1') -Raw
+if ($commonPs1 -notmatch 'System\.Collections\.IDictionary') {
+    Write-Host 'Review-TriggerReeval-Common.ps1 must treat hashtable watch maps as empty when unset'
+    exit 1
+}
+
 Write-Host '[PASS] deferred-head review re-evaluation entrypoint and wiring (Issue #235)'
 exit 0

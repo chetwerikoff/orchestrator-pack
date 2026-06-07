@@ -249,16 +249,16 @@ function Invoke-ReviewTriggerReevalTick {
     }
 
     if (-not $DryRunMode) {
-        Set-ReviewTriggerReevalWatchState -Path $watchPath -State @{
-            watchEntries  = $watchEntriesToPersist
-            lastUpdatedMs = $nowMs
-        }
+        Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath -IncomingWatchEntries $watchEntriesToPersist `
+            -NowMs $nowMs
     }
 
+    $persistedWatchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $watchEntriesToPersist
     return @{
         started      = $started
         actions      = @($plan.actions)
         watchEntries = $watchEntriesToPersist
+        watchCount   = $persistedWatchMap.Count
     }
 }
 
@@ -294,7 +294,7 @@ try {
         try {
             $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
                 -DryRunMode:$DryRun
-            Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$(@($result.watchEntries.PSObject.Properties).Count))"
+            Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$($result.watchCount))"
         }
         catch {
             Write-ReviewTriggerReevalLog "tick error: $_"

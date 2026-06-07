@@ -34,7 +34,16 @@ function ConvertTo-ReviewTriggerReevalWatchMap {
     if (-not $WatchEntries) {
         return $map
     }
+    if ($WatchEntries -is [System.Collections.IDictionary]) {
+        foreach ($key in @($WatchEntries.Keys)) {
+            $map[[string]$key] = $WatchEntries[$key]
+        }
+        return $map
+    }
     foreach ($prop in $WatchEntries.PSObject.Properties) {
+        if ($prop.MemberType -ne 'NoteProperty' -and $prop.MemberType -ne 'Property') {
+            continue
+        }
         $map[$prop.Name] = $prop.Value
     }
     return $map

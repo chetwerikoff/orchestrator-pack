@@ -18,6 +18,61 @@ function Get-ReviewTriggerReevalWatchPath {
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-trigger-reeval-watch.json'
 }
 
+function Get-ReviewTriggerReevalWatchLockPath {
+    param([string]$WatchPath)
+
+    $dir = Split-Path -Parent $WatchPath
+    if (-not $dir) {
+        return Join-Path ([System.IO.Path]::GetTempPath()) 'review-trigger-reeval-watch.lock'
+    }
+    return Join-Path $dir 'review-trigger-reeval-watch.lock'
+}
+
+function Invoke-ReviewTriggerReevalWatchStateLocked {
+    param(
+        [string]$LockPath,
+        [scriptblock]$Action,
+        [int]$MaxWaitMs = 5000
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $MaxWaitMs
+    do {
+        $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $LockPath -Metadata @{
+            purpose = 'review-trigger-reeval-watch-state'
+        } -Action $Action
+        if ($fenced.ok) {
+            return
+        }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadline)
+
+    throw "timed out acquiring review-trigger-reeval watch lock: $LockPath"
+}
+
+function Update-ReviewTriggerReevalWatchStateMerged {
+    param(
+        [string]$Path,
+        [object]$IncomingWatchEntries,
+        [long]$NowMs
+    )
+
+    $lockPath = Get-ReviewTriggerReevalWatchLockPath -WatchPath $Path
+    Invoke-ReviewTriggerReevalWatchStateLocked -LockPath $lockPath -Action {
+        $current = Get-ReviewTriggerReevalWatchState -Path $Path
+        $existing = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $current.watchEntries
+        $incoming = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $IncomingWatchEntries
+        $merged = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'mergeWatchState' -Payload @{
+            existingWatches = $existing
+            incomingWatches = $incoming
+            nowMs           = $NowMs
+        }
+        Set-ReviewTriggerReevalWatchState -Path $Path -State @{
+            watchEntries  = $merged.watchEntries
+            lastUpdatedMs = $NowMs
+        }
+    }
+}
+
 function Get-ReviewTriggerReevalWatchState {
     param([string]$Path)
 
@@ -72,10 +127,8 @@ function Record-ReviewTriggerReevalWatchFromWakeDefer {
     }
 
     if (-not $DryRun) {
-        Set-ReviewTriggerReevalWatchState -Path $path -State @{
-            watchEntries  = $seed.watchEntries
-            lastUpdatedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
+        Update-ReviewTriggerReevalWatchStateMerged -Path $path -IncomingWatchEntries $seed.watchEntries `
+            -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     }
 
     return @{

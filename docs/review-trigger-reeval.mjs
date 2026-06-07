@@ -806,6 +806,16 @@ runStdinJsonCli('review-trigger-reeval.mjs', {
       ),
     };
   },
+  mergeWatchState: () => {
+    const payload = readStdinJson();
+    return {
+      watchEntries: mergeWatchState(
+        payload.existingWatches ?? {},
+        payload.incomingWatches ?? {},
+        payload.nowMs,
+      ),
+    };
+  },
   forbidden: () => {
     const payload = readStdinJson();
     return findForbiddenReviewReevalCommands(toArray(payload.commands));
