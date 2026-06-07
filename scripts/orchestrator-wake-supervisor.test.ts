@@ -123,6 +123,7 @@ const managedChildRoles = [
   'listener',
   'heartbeat',
   'review-trigger-reconcile',
+  'review-trigger-reeval',
   'ci-green-wake-reconcile',
   'review-send-reconcile',
   'review-finding-delivery-confirm',
@@ -632,6 +633,7 @@ describe('orchestrator-wake-supervisor', () => {
       runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
       runSupervisor(['-Action', 'Stop', '-StateDir', apostropheDir]);
     },
+    60_000,
   );
 });
 

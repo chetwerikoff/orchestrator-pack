@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "4df8c67",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:27202009ae78349313585f7627b0c2af54184fa4ba51f5c085ca1eb364e59db8"
+    "active_scope_hash": "sha256:b14d6421e1671224fbc84128f3648ae2818f44b62756f4d14fc5a15de6367f2b"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -26,6 +26,7 @@
     "scripts/orchestrator-side-process-registry.json",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-trigger-reeval.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/review-trigger-reeval.test.ts",
     "scripts/verify.ps1",
     "tests/external-output-references/trigger-fixture-classification.json"
