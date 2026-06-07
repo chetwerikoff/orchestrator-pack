@@ -54,7 +54,10 @@ export const IN_PROGRESS_REPORT_STATES = new Set([
   'completed',
 ]);
 
-export const MECHANICAL_FORBIDDEN_REVIEW_REEVAL = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
+export const MECHANICAL_FORBIDDEN_REVIEW_REEVAL = [
+  ...MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL,
+  /\bgh\s+pr\s+merge\b/i,
+];
 
 /**
  * @param {number} prNumber

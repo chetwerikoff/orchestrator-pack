@@ -9,6 +9,16 @@
 . (Join-Path $PSScriptRoot 'Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 
+function Test-ReviewTriggerReevalForbiddenCommand {
+    param([string]$CommandLine)
+
+    Test-ReviewMechanicalForbiddenCommand -CommandLine $CommandLine
+
+    if ($CommandLine -match '\bgh\s+pr\s+merge\b') {
+        throw 'forbidden merge fragment in review re-eval command: gh pr merge'
+    }
+}
+
 function Invoke-ReviewTriggerReevalPlannedRun {
     param(
         [object]$Action,
@@ -29,7 +39,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
 
     $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
     $commandLine = "ao $($runArgs -join ' ')"
-    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
+    Test-ReviewTriggerReevalForbiddenCommand -CommandLine $commandLine
 
     $fresh = if ($FixtureSnapshot) {
         $FixtureSnapshot

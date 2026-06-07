@@ -107,5 +107,16 @@ if ($commonPs1 -notmatch 'System\.Collections\.IDictionary') {
     exit 1
 }
 
+if ($mjs -notmatch 'gh\\s\+pr\\s\+merge') {
+    Write-Host 'docs/review-trigger-reeval.mjs must forbid gh pr merge in review-run-only command guard'
+    exit 1
+}
+
+$reevalLib = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-ReviewTriggerReeval.ps1') -Raw
+if ($reevalLib -notmatch 'Test-ReviewTriggerReevalForbiddenCommand') {
+    Write-Host 'Invoke-ReviewTriggerReeval.ps1 must reject gh pr merge in ReviewCommand'
+    exit 1
+}
+
 Write-Host '[PASS] deferred-head review re-evaluation entrypoint and wiring (Issue #235)'
 exit 0

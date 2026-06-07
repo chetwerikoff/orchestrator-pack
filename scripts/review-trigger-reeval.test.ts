@@ -243,6 +243,7 @@ describe('Issue #235 acceptance criteria', () => {
       'gh pr merge 1',
     ]);
     expect(violations.length).toBeGreaterThan(0);
+    expect(findForbiddenReviewReevalCommands(['gh pr merge 1'])).toHaveLength(1);
     expect(
       findForbiddenReviewReevalCommands([
         'ao review run opk-1 --execute --command codex',
