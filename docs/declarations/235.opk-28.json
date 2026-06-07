@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-06-07T01:35:00.000Z",
   "baseline": {
-    "commit_sha": "73b648bdbc5f7a1e145d9ea107775bd325ae8df8",
+    "commit_sha": "b00cdb41b82bee8522d6e74b39e28859cd266fac",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:9038f0e6593d6ef72a82a42a5f9f012c7f8678cb9340bcd96f1cfc455f7ec396"
   },
