@@ -10,7 +10,6 @@ import {
 } from './review-mechanical-cli.mjs';
 import {
   buildNoStartDecisionRecord,
-  evaluateHeadReadyForReview,
   hasReadyForReviewForHead,
   preRunHeadReadyRecheck,
   resolveCurrentPrHeadSha,
@@ -19,7 +18,9 @@ import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   buildReviewRunArgv,
   findSessionById,
-  hasFailedOrCancelledOnHead,
+  getCiChecksForPr,
+  getRequiredCheckLookupFailedForPr,
+  getRequiredCheckNamesForPr,
   IN_FLIGHT_REVIEW_STATUSES,
   isHeadCovered,
   isLiveWorkerSession,
@@ -29,6 +30,7 @@ import {
   resolveHeadOwningWorkerSessionId,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import { evaluateWakeReviewTrigger } from './review-wake-trigger.mjs';
 
 /** Captured incident wake→readiness delay (PR #234/opk-27 ~77 s). */
 export const INCIDENT_WAKE_TO_READINESS_DELAY_MS = 77_000;
@@ -351,109 +353,31 @@ export function evaluateHeadReviewTriggerDecision(input) {
     };
   }
 
-  const headSha = currentHead || plannedHead;
-  const reviewRuns = toArray(input.reviewRuns);
-  const sessions = toArray(input.sessions);
-  const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(input.openPrs), prNumber);
-
-  if (hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
-    const failedRun = reviewRuns.find((run) => {
-      const status = String(run?.status ?? '').toLowerCase();
-      return (
-        Number(run?.prNumber) === prNumber &&
-        normalizeSha(run?.targetSha) === headSha &&
-        (status === 'failed' || status === 'cancelled')
-      );
-    });
-    return {
-      triggerReviewRun: false,
-      reason: 'failed_or_cancelled_on_head',
-      route: 'empty_review_trap',
-      terminationReason: String(failedRun?.terminationReason ?? ''),
-      entryPath,
-      processingMs,
-      withinLatencyBound,
-    };
-  }
-
-  const resolvedSessionId =
-    String(input.sessionId ?? '').trim() ||
-    resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, toArray(input.openPrs));
-  const session = resolvedSessionId ? findSessionById(sessions, resolvedSessionId) : null;
-
-  if (!resolvedSessionId || !session || !isLiveWorkerSession(session)) {
-    return {
-      triggerReviewRun: false,
-      reason: 'no_worker_session',
-      route: 'none',
-      entryPath,
-      processingMs,
-      withinLatencyBound,
-      record: buildNoStartDecisionRecord({
-        reason: 'no_worker_session',
-        prNumber,
-        headSha,
-        reviewRuns,
-        session,
-        ciChecks: toArray(input.ciChecks),
-        requiredCheckNames: toArray(input.requiredCheckNames),
-        requiredCheckLookupFailed: Boolean(input.requiredCheckLookupFailed),
-        headCommittedAtMs,
-      }),
-    };
-  }
-
-  const decision = evaluateHeadReadyForReview({
-    reviewRuns,
+  const wakeEval = evaluateWakeReviewTrigger({
+    wakeKind: 'merge.ready',
+    sessionId: String(input.sessionId ?? ''),
     prNumber,
-    headSha,
-    session,
-    ciChecks: toArray(input.ciChecks),
-    requiredCheckNames: toArray(input.requiredCheckNames),
-    requiredCheckLookupFailed: Boolean(input.requiredCheckLookupFailed),
-    headCommittedAtMs,
+    wakeReceivedMs: readinessObservedMs,
+    nowMs,
+    openPrs: input.openPrs,
+    reviewRuns: input.reviewRuns,
+    sessions: input.sessions,
+    ciChecks: input.ciChecks,
+    requiredCheckNames: input.requiredCheckNames,
+    requiredCheckLookupFailed: input.requiredCheckLookupFailed,
   });
 
-  if (!decision.eligible) {
-    const record = buildNoStartDecisionRecord({
-      reason: decision.reason,
-      prNumber,
-      headSha,
-      reviewRuns,
-      session,
-      ciChecks: toArray(input.ciChecks),
-      requiredCheckNames: toArray(input.requiredCheckNames),
-      requiredCheckLookupFailed: Boolean(input.requiredCheckLookupFailed),
-      headCommittedAtMs,
-    });
-    const retainWatch =
-      decision.route === 'degraded_ci_retry' ||
-      decision.reason === 'uncovered_not_ready' ||
-      decision.reason === 'ci_red_defer';
-    return {
-      triggerReviewRun: false,
-      reason: decision.reason,
-      route: decision.route ?? 'none',
-      entryPath,
-      processingMs,
-      withinLatencyBound,
-      record,
-      retainWatch,
-    };
-  }
+  const retainWatch =
+    wakeEval.route === 'degraded_ci_retry' ||
+    wakeEval.reason === 'uncovered_not_ready' ||
+    wakeEval.reason === 'ci_red_defer';
 
   return {
-    triggerReviewRun: true,
-    reason: 'head_ready_for_review',
-    route: 'start_review',
+    ...wakeEval,
     entryPath,
-    planned: {
-      prNumber,
-      headSha,
-      sessionId: resolvedSessionId,
-    },
     processingMs,
     withinLatencyBound,
+    ...(retainWatch ? { retainWatch: true } : {}),
   };
 }
 
@@ -547,55 +471,6 @@ export function evaluateDeferredWatchEntry(input) {
     nextEntry,
     watchKey: watchEntryKey(prNumber, headSha),
   };
-}
-
-/**
- * @param {Record<string, Array<{ name?: string, state?: string, conclusion?: string, status?: string }>> | Array<{ prNumber?: number, checks?: unknown[] }> | undefined} ciChecksByPr
- * @param {number} prNumber
- */
-function getCiChecksForPr(ciChecksByPr, prNumber) {
-  if (!ciChecksByPr) {
-    return [];
-  }
-  if (Array.isArray(ciChecksByPr)) {
-    const row = ciChecksByPr.find((entry) => Number(entry?.prNumber) === prNumber);
-    return toArray(row?.checks);
-  }
-  return toArray(ciChecksByPr[String(prNumber)]);
-}
-
-/**
- * @param {Record<string, string[]> | Array<{ prNumber?: number, requiredCheckNames?: string[] }> | undefined} requiredByPr
- * @param {number} prNumber
- */
-function getRequiredCheckNamesForPr(requiredByPr, prNumber) {
-  if (!requiredByPr) {
-    return [];
-  }
-  if (Array.isArray(requiredByPr)) {
-    const row = requiredByPr.find((entry) => Number(entry?.prNumber) === prNumber);
-    return toArray(row?.requiredCheckNames)
-      .map((name) => String(name ?? '').trim())
-      .filter(Boolean);
-  }
-  return toArray(requiredByPr[String(prNumber)])
-    .map((name) => String(name ?? '').trim())
-    .filter(Boolean);
-}
-
-/**
- * @param {Record<string, boolean> | Array<{ prNumber?: number, failed?: boolean }> | undefined} lookupFailedByPr
- * @param {number} prNumber
- */
-function getRequiredCheckLookupFailedForPr(lookupFailedByPr, prNumber) {
-  if (!lookupFailedByPr) {
-    return false;
-  }
-  if (Array.isArray(lookupFailedByPr)) {
-    const row = lookupFailedByPr.find((entry) => Number(entry?.prNumber) === prNumber);
-    return Boolean(row?.failed);
-  }
-  return Boolean(lookupFailedByPr[String(prNumber)]);
 }
 
 /**

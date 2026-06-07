@@ -4,41 +4,19 @@
   Invoke deferred-head review re-evaluation filter CLI and run review with fence (Issue #235).
 #>
 
-$Script:ReviewTriggerReevalFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reeval.mjs'
-
+. (Join-Path $PSScriptRoot 'Review-TriggerReeval-Common.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
-. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Review-MechanicalForbiddenCommand.ps1')
-. (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
-
-function Get-ReviewTriggerReevalSideEffectLockPath {
-    param([string]$StateRoot = '')
-
-    if ($StateRoot) {
-        return Join-Path $StateRoot 'review-trigger-reeval-side-effect.lock'
-    }
-    return Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-reeval-side-effect.lock'
-}
-
-function Invoke-ReviewTriggerReevalFilterCli {
-    param(
-        [string]$Subcommand,
-        [hashtable]$Payload
-    )
-
-    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:ReviewTriggerReevalFilterCli `
-        -Subcommand $Subcommand -Payload $Payload -Label 'review-trigger-reeval' -JsonDepth 30
-}
 
 function Invoke-ReviewTriggerReevalPlannedRun {
     param(
         [object]$Action,
         [string]$ReviewCommand,
-        [string]$ProjectId = 'orchestrator-pack',
         [string]$RepoRoot = '',
         [string]$StateRoot = '',
         [hashtable]$FixtureSnapshot,
+        [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
@@ -56,8 +34,11 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     $fresh = if ($FixtureSnapshot) {
         $FixtureSnapshot
     }
+    elseif ($ResolveFreshSnapshot) {
+        & $ResolveFreshSnapshot $planned
+    }
     else {
-        throw 'FixtureSnapshot required for Invoke-ReviewTriggerReevalPlannedRun in tests; live path uses review-trigger-reeval.ps1 snapshot helpers'
+        throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
     }
 
     $prKey = [string]$planned.prNumber
@@ -76,8 +57,8 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-trigger-reeval: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
         return @{
-            triggered = $false
-            reason    = [string]$recheck.reason
+            triggered   = $false
+            reason      = [string]$recheck.reason
             retainWatch = $true
         }
     }
@@ -99,15 +80,17 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         })) {
         & $LogWriter "review-trigger-reeval: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
         return @{
-            triggered = $false
-            reason    = 'side_effect_in_flight'
+            triggered   = $false
+            reason      = 'side_effect_in_flight'
             retainWatch = $true
         }
     }
 
     try {
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-        Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+        if ($RepoRoot) {
+            Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+        }
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
             throw "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"

@@ -4,9 +4,7 @@
   Persist scoped deferred-head watch entries (Issue #235).
 #>
 
-. (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-
-$Script:ReviewTriggerReevalFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reeval.mjs'
+. (Join-Path $PSScriptRoot 'Review-TriggerReeval-Common.ps1')
 
 function Get-ReviewTriggerReevalWatchPath {
     param([string]$StateRoot = '')
@@ -34,29 +32,6 @@ function Set-ReviewTriggerReevalWatchState {
     )
 
     Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
-}
-
-function Invoke-ReviewTriggerReevalFilterCli {
-    param(
-        [string]$Subcommand,
-        [hashtable]$Payload
-    )
-
-    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:ReviewTriggerReevalFilterCli `
-        -Subcommand $Subcommand -Payload $Payload -Label 'review-trigger-reeval' -JsonDepth 30
-}
-
-function ConvertTo-ReviewTriggerReevalWatchMap {
-    param([object]$WatchEntries)
-
-    $map = @{}
-    if (-not $WatchEntries) {
-        return $map
-    }
-    foreach ($prop in $WatchEntries.PSObject.Properties) {
-        $map[$prop.Name] = $prop.Value
-    }
-    return $map
 }
 
 function Record-ReviewTriggerReevalWatchFromWakeDefer {

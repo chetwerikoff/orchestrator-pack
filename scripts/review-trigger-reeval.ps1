@@ -38,6 +38,7 @@ $CiGreenWakeFilterCli = Join-Path $PackRoot 'docs/ci-green-wake-reconcile.mjs'
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-TriggerReeval-Common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewTriggerReeval.ps1')
 
@@ -103,97 +104,6 @@ function Get-ReviewTriggerReevalSnapshot {
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
     }
-}
-
-function Get-FixtureReviewTriggerReevalPayload {
-    param([string]$Path)
-
-    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    $payload = @{
-        openPrs       = @($fixture.openPrs)
-        reviewRuns    = @($fixture.reviewRuns)
-        sessions      = @($fixture.sessions)
-        reviewCommand = [string]$fixture.reviewCommand
-    }
-    foreach ($name in @('ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr', 'watchEntries', 'snapshotErrorsByKey')) {
-        if ($fixture.$name) {
-            $payload[$name] = $fixture.$name
-        }
-    }
-    if ($fixture.nowMs) {
-        $payload.nowMs = [long]$fixture.nowMs
-    }
-    return $payload
-}
-
-function Invoke-ReviewTriggerReevalPlannedRunLive {
-    param(
-        [object]$Action,
-        [string]$ReviewCommand,
-        [string]$StateRoot,
-        [hashtable]$FixtureSnapshot,
-        [switch]$DryRunMode
-    )
-
-    $planned = @{
-        prNumber  = [int]$Action.prNumber
-        headSha   = [string]$Action.headSha
-        sessionId = [string]$Action.sessionId
-    }
-
-    $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
-    $commandLine = "ao $($runArgs -join ' ')"
-    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
-
-    $fresh = if ($FixtureSnapshot) {
-        $FixtureSnapshot
-    }
-    else {
-        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-        $targetPr = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
-        Get-ReviewTriggerReevalSnapshot -OpenPrs $targetPr -ScopedOnly
-    }
-
-    $prKey = [string]$planned.prNumber
-    $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
-        planned = $planned
-        fresh   = @{
-            openPrs                     = @($fresh.openPrs)
-            reviewRuns                  = @($fresh.reviewRuns)
-            sessions                    = @($fresh.sessions)
-            ciChecks                    = @($fresh.ciChecksByPr[$prKey])
-            requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
-            requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
-        }
-    }
-
-    if (-not $recheck.emitReviewRun) {
-        Write-ReviewTriggerReevalLog "pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
-        return @{ triggered = $false; reason = [string]$recheck.reason; retainWatch = $true }
-    }
-
-    if ($DryRunMode) {
-        Write-ReviewTriggerReevalLog "dry-run would run: $commandLine (PR #$($planned.prNumber) head=$($planned.headSha))"
-        return @{ triggered = $true; reason = 'dry_run'; planned = $planned }
-    }
-
-    $lockPath = Get-ReviewTriggerReevalSideEffectLockPath -StateRoot $StateRoot
-    Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reeval' -Phase 'side_effect'
-    Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
-    Write-ReviewTriggerReevalLog "starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        & ao @runArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
-        }
-    }
-
-    if (-not $fenced.ok) {
-        Write-ReviewTriggerReevalLog "review run skipped (side-effect busy) PR #$($planned.prNumber)"
-        return @{ triggered = $false; reason = 'side_effect_in_flight'; retainWatch = $true }
-    }
-
-    return @{ triggered = $true; reason = 'head_ready_for_review'; planned = $planned }
 }
 
 function Invoke-ReviewTriggerReevalTick {
@@ -272,8 +182,17 @@ function Invoke-ReviewTriggerReevalTick {
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'start_review' {
-                $result = Invoke-ReviewTriggerReevalPlannedRunLive -Action $action -ReviewCommand $ReviewCommand `
-                    -StateRoot $StateRoot -FixtureSnapshot $snapshot -DryRunMode:$DryRunMode
+                Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reeval' -Phase 'side_effect'
+                $result = Invoke-ReviewTriggerReevalPlannedRun -Action $action -ReviewCommand $ReviewCommand `
+                    -RepoRoot $RepoRoot -StateRoot $StateRoot -FixtureSnapshot $snapshot `
+                    -ResolveFreshSnapshot {
+                        param($planned)
+                        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+                        $targetPr = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
+                        Get-ReviewTriggerReevalSnapshot -OpenPrs $targetPr -ScopedOnly
+                    } `
+                    -DryRun:$DryRunMode `
+                    -LogWriter { param([string]$Message) Write-ReviewTriggerReevalLog $Message }
                 if ($result.triggered) {
                     $started++
                 }

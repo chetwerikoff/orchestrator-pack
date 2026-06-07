@@ -473,7 +473,7 @@ export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
  * @param {Record<string, Array<{ name?: string, state?: string, conclusion?: string, status?: string }>> | Array<CiChecksByPrRow> | undefined} ciChecksByPr
  * @param {number} prNumber
  */
-function getCiChecksForPr(ciChecksByPr, prNumber) {
+export function getCiChecksForPr(ciChecksByPr, prNumber) {
   if (!ciChecksByPr) {
     return [];
   }
@@ -488,7 +488,7 @@ function getCiChecksForPr(ciChecksByPr, prNumber) {
  * @param {Record<string, string[]> | Array<RequiredCheckNamesRow> | undefined} requiredByPr
  * @param {number} prNumber
  */
-function getRequiredCheckNamesForPr(requiredByPr, prNumber) {
+export function getRequiredCheckNamesForPr(requiredByPr, prNumber) {
   if (!requiredByPr) {
     return [];
   }
@@ -507,7 +507,7 @@ function getRequiredCheckNamesForPr(requiredByPr, prNumber) {
  * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow> | undefined} lookupFailedByPr
  * @param {number} prNumber
  */
-function getRequiredCheckLookupFailedForPr(lookupFailedByPr, prNumber) {
+export function getRequiredCheckLookupFailedForPr(lookupFailedByPr, prNumber) {
   if (!lookupFailedByPr) {
     return false;
   }
