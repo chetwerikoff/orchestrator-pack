@@ -8,6 +8,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
     param([string]$CommandLine)
@@ -127,6 +128,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         [string]$RepoRoot = '',
         [string]$ReviewCommand = '',
         [string]$SideEffectLockPath = '',
+        [string]$StateRoot = '',
         [hashtable]$FixtureSnapshot,
         [switch]$DryRun,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
@@ -184,6 +186,33 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if (-not $evaluation.triggerReviewRun) {
         & $LogWriter "review-wake-trigger: defer PR #$prNumber ($($evaluation.reason))"
+        $resolvedStateRoot = if ($StateRoot) {
+            $StateRoot
+        }
+        elseif ($SideEffectLockPath) {
+            Split-Path -Parent $SideEffectLockPath
+        }
+        else {
+            ''
+        }
+        if ($resolvedStateRoot -and $evaluation.reason -eq 'uncovered_not_ready') {
+            $headShaForWatch = ''
+            foreach ($pr in @($snapshot.openPrs)) {
+                if ([int]$pr.number -eq $prNumber) {
+                    $headShaForWatch = [string]$pr.headRefOid
+                    break
+                }
+            }
+            if ($headShaForWatch) {
+                $watchResult = Record-ReviewTriggerReevalWatchFromWakeDefer -StateRoot $resolvedStateRoot `
+                    -PrNumber $prNumber -HeadSha $headShaForWatch -SessionId ([string]$FilterResult.sessionId) `
+                    -DeferReason 'uncovered_not_ready' -DeferRecord @{ primary = 'no_ready_for_review' } `
+                    -DryRun:$DryRun
+                if ($watchResult.recorded) {
+                    & $LogWriter "review-wake-trigger: deferred-head watch recorded key=$($watchResult.watchKey)"
+                }
+            }
+        }
         return @{
             triggered = $false
             reason    = $evaluation.reason

@@ -4,6 +4,7 @@
     "listener",
     "heartbeat",
     "review-trigger-reconcile",
+    "review-trigger-reeval",
     "ci-green-wake-reconcile",
     "review-send-reconcile",
     "review-finding-delivery-confirm",
@@ -39,6 +40,17 @@
       "passProjectId": true,
       "cadenceSeconds": 600,
       "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-trigger-reeval",
+      "script": "review-trigger-reeval.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "review-trigger-reeval-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 5,
+      "stallGraceMultiplier": 4,
+      "extraArgs": ["-StateDir", "{stateRoot}"]
     },
     {
       "id": "ci-green-wake-reconcile",

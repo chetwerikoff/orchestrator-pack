@@ -1,0 +1,10 @@
+{
+  "sourceCommand": "ao webhook notification capture (incident PR #234/opk-27)",
+  "toolVersion": "0.9.x",
+  "capturedAt": "2026-06-05T14:17:58.000Z",
+  "context": "ready_for_review transition emitted at info priority; orchestrator-wake-filter drops info_priority",
+  "scrubLog": [
+    "Representative AO 0.9.x ready_for_review notification shape",
+    "Priority info — filtered by evaluateWakePayload (not_wake_relevant to fast wake path)"
+  ]
+}

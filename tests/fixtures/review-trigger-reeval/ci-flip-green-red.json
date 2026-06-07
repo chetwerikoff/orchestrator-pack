@@ -1,0 +1,35 @@
+{
+  "description": "CI flips green to red after defer — level-truth re-read defers",
+  "prNumber": 235,
+  "headSha": "flip235",
+  "sessionId": "opk-28",
+  "openPrs": [{ "number": 235, "headRefOid": "flip235", "headCommittedAt": "2026-06-05T14:16:00.000Z" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": [{ "reportState": "ready_for_review", "reportedAt": "2026-06-05T14:17:58.000Z" }]
+    }
+  ],
+  "ciChecksByPr": {
+    "235": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "watchEntries": {
+    "235:flip235": {
+      "prNumber": 235,
+      "headSha": "flip235",
+      "sessionId": "opk-28",
+      "seedMs": 1700000000000,
+      "windowExpiresMs": 1700000300000,
+      "status": "watching"
+    }
+  },
+  "expect": { "triggerReviewRun": false, "reason": "ci_red_defer" }
+}

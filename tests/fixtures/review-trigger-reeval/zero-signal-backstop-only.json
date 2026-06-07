@@ -1,0 +1,18 @@
+{
+  "description": "Genuinely zero AO signal — backstop only",
+  "prNumber": 235,
+  "headSha": "zero235",
+  "sessionId": "opk-28",
+  "openPrs": [{ "number": 235, "headRefOid": "zero235" }],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-28",
+      "role": "worker",
+      "prNumber": 235,
+      "reports": []
+    }
+  ],
+  "hadCompletionWake": false,
+  "expect": { "backstopOnly": true, "reason": "zero_signal_backstop_only" }
+}

@@ -10,6 +10,14 @@ Processing bound: **5 seconds** from wake receipt to run decision (excluding AO/
 command latency). The listener is reclassified as **side-effecting** under the wake
 supervisor (`listener-side-effect.lock` drain/fence). See `scripts/lib/Invoke-ReviewWakeTrigger.ps1`.
 
+**Deferred-head re-evaluation (Issue #235):** when the wake defers as not-yet-ready,
+`scripts/review-trigger-reeval.ps1` (supervised child, `review-trigger-reeval-side-effect.lock`)
+watches the scoped deferred-head set and may `ao review run` within **5 seconds** of
+observed readiness (5-minute bounded window; poll default **5 s**). Watch state:
+`{stateRoot}/review-trigger-reeval-watch.json`. Not a full-PR reconcile — classification
+`scoped_deferred_head_watch`. See `docs/review-trigger-reeval.mjs` and
+`scripts/lib/Record-ReviewTriggerReevalWatch.ps1`.
+
 **Heartbeat path (issue #59):** separate process
 `scripts/orchestrator-wake-heartbeat.ps1` → periodic labelled `ao send` on a
 low-frequency interval, independent of webhook traffic.

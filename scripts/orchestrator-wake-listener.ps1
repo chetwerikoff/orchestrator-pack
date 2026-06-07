@@ -232,6 +232,7 @@ try {
                             -RepoRoot $Script:OrchestratorWakeRepoRoot `
                             -ReviewCommand $reviewCommand `
                             -SideEffectLockPath $sideEffectLockPath `
+                            -StateRoot $SideEffectStateDir `
                             -FixtureSnapshot $fixtureSnapshot `
                             -DryRun:($DryRun -or [bool]$FixturePath) `
                             -LogWriter { param([string]$Message) Write-ListenerLog $Message }

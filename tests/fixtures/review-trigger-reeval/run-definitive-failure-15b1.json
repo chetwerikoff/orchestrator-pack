@@ -1,0 +1,5 @@
+{
+  "description": "Definitive ao review run failure pre-create — retain watch, release fence (15b1)",
+  "runFailedBeforeCreate": true,
+  "expect": { "retainWatch": true, "fenceReleased": true }
+}
