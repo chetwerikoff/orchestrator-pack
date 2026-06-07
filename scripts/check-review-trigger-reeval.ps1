@@ -86,5 +86,15 @@ if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) {
     exit 1
 }
 
+$reevalPs1 = Get-Content -LiteralPath $reevalScript -Raw
+if ($reevalPs1 -notmatch 'Get-ReviewTriggerReevalScopedOpenPrsFromGitHub') {
+    Write-Host 'review-trigger-reeval.ps1 must resolve scoped open PRs from GitHub heads'
+    exit 1
+}
+if ($reevalPs1 -match '-FixtureSnapshot\s+\$snapshot' -and $reevalPs1 -notmatch "if \(\`$FixturePayload\) \{[\s\S]*FixtureSnapshot") {
+    Write-Host 'review-trigger-reeval.ps1 must only pass FixtureSnapshot during fixture replay'
+    exit 1
+}
+
 Write-Host '[PASS] deferred-head review re-evaluation entrypoint and wiring (Issue #235)'
 exit 0

@@ -106,6 +106,25 @@ function Get-ReviewTriggerReevalSnapshot {
     }
 }
 
+function Get-ReviewTriggerReevalScopedOpenPrsFromGitHub {
+    param([hashtable]$WatchMap)
+
+    $activePrNumbers = @{}
+    foreach ($entry in $WatchMap.Values) {
+        if (-not $entry) { continue }
+        if ($entry.status -eq 'expired' -or $entry.status -eq 'discarded' -or $entry.status -eq 'triggered') {
+            continue
+        }
+        $activePrNumbers[[string][int]$entry.prNumber] = $true
+    }
+    if ($activePrNumbers.Count -eq 0) {
+        return @()
+    }
+
+    $openPrList = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
+    return @($openPrList | Where-Object { $activePrNumbers.ContainsKey([string][int]$_.number) })
+}
+
 function Invoke-ReviewTriggerReevalTick {
     param(
         [string]$StateRoot,
@@ -122,18 +141,6 @@ function Invoke-ReviewTriggerReevalTick {
     }
     else {
         [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    }
-
-    $scopedPrs = @()
-    foreach ($entry in $watchMap.Values) {
-        if (-not $entry) { continue }
-        if ($entry.status -eq 'expired' -or $entry.status -eq 'discarded' -or $entry.status -eq 'triggered') {
-            continue
-        }
-        $scopedPrs += @{
-            number     = [int]$entry.prNumber
-            headRefOid = [string]$entry.headSha
-        }
     }
 
     if ($FixturePayload) {
@@ -166,6 +173,7 @@ function Invoke-ReviewTriggerReevalTick {
             }
         }
         else {
+            $scopedPrs = Get-ReviewTriggerReevalScopedOpenPrsFromGitHub -WatchMap $watchMap
             $snapshot = Get-ReviewTriggerReevalSnapshot -OpenPrs $scopedPrs -ScopedOnly
         }
     }
@@ -188,16 +196,24 @@ function Invoke-ReviewTriggerReevalTick {
         switch ($action.type) {
             'start_review' {
                 Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reeval' -Phase 'side_effect'
-                $result = Invoke-ReviewTriggerReevalPlannedRun -Action $action -ReviewCommand $ReviewCommand `
-                    -RepoRoot $RepoRoot -StateRoot $StateRoot -FixtureSnapshot $snapshot `
-                    -ResolveFreshSnapshot {
+                $plannedRunParams = @{
+                    Action               = $action
+                    ReviewCommand        = $ReviewCommand
+                    RepoRoot             = $RepoRoot
+                    StateRoot            = $StateRoot
+                    ResolveFreshSnapshot = {
                         param($planned)
                         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
                         $targetPr = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
                         Get-ReviewTriggerReevalSnapshot -OpenPrs $targetPr -ScopedOnly
-                    } `
-                    -DryRun:$DryRunMode `
-                    -LogWriter { param([string]$Message) Write-ReviewTriggerReevalLog $Message }
+                    }
+                    DryRun               = $DryRunMode
+                    LogWriter            = { param([string]$Message) Write-ReviewTriggerReevalLog $Message }
+                }
+                if ($FixturePayload) {
+                    $plannedRunParams['FixtureSnapshot'] = $snapshot
+                }
+                $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
                 if ($result.triggered) {
                     $started++
                 }
