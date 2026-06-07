@@ -149,6 +149,24 @@ export function pruneExpiredWatchEntries(entries, nowMs = Date.now()) {
   return pruned;
 }
 
+const TERMINAL_WATCH_STATUSES = new Set(['triggered', 'discarded', 'expired']);
+
+/**
+ * @param {string | undefined} priorStatus
+ * @param {string | undefined} incomingStatus
+ */
+export function resolveMergedWatchStatus(priorStatus, incomingStatus) {
+  const prior = String(priorStatus ?? '').trim() || 'watching';
+  const incoming = String(incomingStatus ?? '').trim() || 'watching';
+  if (TERMINAL_WATCH_STATUSES.has(incoming)) {
+    return incoming;
+  }
+  if (TERMINAL_WATCH_STATUSES.has(prior)) {
+    return prior;
+  }
+  return 'watching';
+}
+
 /**
  * @param {Record<string, object>} existing
  * @param {Record<string, object>} incoming
@@ -175,7 +193,7 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
       ),
       lastObservedReadyMs:
         entry.lastObservedReadyMs ?? prior.lastObservedReadyMs ?? null,
-      status: entry.status === 'watching' ? 'watching' : prior.status ?? entry.status,
+      status: resolveMergedWatchStatus(prior.status, entry.status),
     };
   }
   return pruneExpiredWatchEntries(merged, nowMs);

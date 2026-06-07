@@ -20,6 +20,7 @@ import {
   isWatchWindowNonConformant,
   mergeWatchState,
   planDeferredWatchTick,
+  resolveMergedWatchStatus,
   revertTriggeredWatchOnAbort,
   seedWatchFromInProgressSignals,
   seedWatchFromWakeDefer,
@@ -502,6 +503,47 @@ describe('scenario matrix cells', () => {
     });
     const merged = mergeWatchState({ '235:x': entry }, { '235:x': entry }, 200);
     expect(Object.keys(merged)).toEqual(['235:x']);
+  });
+
+  it('mergeWatchState preserves terminal incoming statuses over prior watching', () => {
+    const key = '235:term235';
+    const watching = {
+      ...createWatchEntry({
+        prNumber: 235,
+        headSha: 'term235',
+        sessionId: 'opk-28',
+        nowMs: 100,
+      }),
+      status: 'watching',
+    };
+    const mergedTriggered = mergeWatchState(
+      { [key]: watching },
+      { [key]: { ...watching, status: 'triggered', lastEvaluatedMs: 200 } },
+      200,
+    );
+    expect(mergedTriggered[key].status).toBe('triggered');
+    expect(resolveMergedWatchStatus('watching', 'discarded')).toBe('discarded');
+    expect(resolveMergedWatchStatus('watching', 'expired')).toBe('expired');
+  });
+
+  it('mergeWatchState keeps prior terminal status when concurrent seed is watching', () => {
+    const key = '235:term235';
+    const triggered = {
+      ...createWatchEntry({
+        prNumber: 235,
+        headSha: 'term235',
+        sessionId: 'opk-28',
+        nowMs: 100,
+      }),
+      status: 'triggered',
+    };
+    const merged = mergeWatchState(
+      { [key]: triggered },
+      { [key]: { ...triggered, status: 'watching', lastEvaluatedMs: 200 } },
+      200,
+    );
+    expect(merged[key].status).toBe('triggered');
+    expect(resolveMergedWatchStatus('triggered', 'watching')).toBe('triggered');
   });
 
   it('reconcile observer agrees with re-eval verdict on same state', () => {

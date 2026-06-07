@@ -127,6 +127,17 @@ export declare function planDeferredWatchTick(input: Record<string, unknown>): {
   pollClass: string;
 };
 
+export declare function mergeWatchState(
+  existing: Record<string, WatchEntry>,
+  incoming: Record<string, WatchEntry>,
+  nowMs?: number,
+): Record<string, WatchEntry>;
+
+export declare function resolveMergedWatchStatus(
+  priorStatus?: string,
+  incomingStatus?: string,
+): string;
+
 export declare function revertTriggeredWatchOnAbort(
   entries: Record<string, WatchEntry>,
   watchKey: string,
