@@ -72,14 +72,23 @@ if (-not $SkipPester) {
     }
     else {
         Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
-        $pesterRoot = Join-Path $Root 'tests/powershell'
-        $result = Invoke-Pester -Path $pesterRoot -PassThru
-        if ($result.FailedCount -gt 0) {
-            Write-Track 'pester' 'FAIL' ("failed={0}" -f $result.FailedCount)
+        $pesterRoots = @(
+            (Join-Path $Root 'tests/powershell'),
+            (Join-Path $Root 'scripts')
+        )
+        $pesterFailed = 0
+        $pesterPassed = 0
+        foreach ($pesterRoot in $pesterRoots) {
+            $result = Invoke-Pester -Path $pesterRoot -PassThru
+            $pesterFailed += $result.FailedCount
+            $pesterPassed += $result.PassedCount
+        }
+        if ($pesterFailed -gt 0) {
+            Write-Track 'pester' 'FAIL' ("failed={0}" -f $pesterFailed)
             $Failures.Add('Pester track failed') | Out-Null
         }
         else {
-            Write-Track 'pester' 'PASS' ("passed={0}" -f $result.PassedCount)
+            Write-Track 'pester' 'PASS' ("passed={0}" -f $pesterPassed)
         }
     }
     Write-Host ''
