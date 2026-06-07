@@ -44,6 +44,16 @@ export declare function buildDeliveryId(
   sourceKey?: string,
 ): string | null;
 
+export declare function resolveReviewSendObservedAtMs(
+  run: Record<string, unknown>,
+): number | null;
+
+export declare function buildReviewSendDeliveryId(
+  sessionId: string,
+  runId: string,
+  observedAtMs?: number | null,
+): string | null;
+
 export declare function isReactionSendSucceededEvent(
   event: Record<string, unknown>,
 ): boolean;

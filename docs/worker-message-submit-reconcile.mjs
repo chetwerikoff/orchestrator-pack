@@ -220,7 +220,11 @@ export function collectSessionIdentifiers(session, deliverySessionId = '') {
  * @param {Record<string, unknown>} [record]
  */
 export function getDeliveryInputAnchorMs(delivery, record = {}) {
-  return Number(delivery?.deliveredAtMs ?? record?.deliveredAtMs ?? 0);
+  const deliveryMs = Number(delivery?.deliveredAtMs ?? 0);
+  if (deliveryMs > 0) {
+    return deliveryMs;
+  }
+  return Number(record?.deliveredAtMs ?? record?.firstObservedAtMs ?? 0);
 }
 
 /**
@@ -259,10 +263,16 @@ export function evaluateSubmitDecision({
   const deliveryId = String(delivery?.deliveryId ?? '').trim();
   const sessionId = String(delivery?.sessionId ?? '').trim();
   const deliveryPath = String(delivery?.deliveryPath ?? '').trim();
-  const deliveredAtMs = Number(delivery?.deliveredAtMs ?? 0);
+  const deliveryTimestampMs = Number(delivery?.deliveredAtMs ?? 0);
   const { maxSubmitAttempts, deliveryBudgetMs } = resolveSubmitReconcileConfig(config);
 
-  if (!deliveryId || !sessionId || !deliveredAtMs) {
+  const record = getDeliveryTracking(tracking, deliveryId);
+  const observationAnchorMs =
+    deliveryTimestampMs > 0
+      ? deliveryTimestampMs
+      : Number(record.firstObservedAtMs ?? 0);
+
+  if (!deliveryId || !sessionId || !observationAnchorMs) {
     return { action: 'noop', reason: 'missing_delivery_metadata', deliveryId };
   }
 
@@ -290,17 +300,16 @@ export function evaluateSubmitDecision({
     return { action: 'defer', reason: 'flood_active', deliveryId, sessionId, defer: true };
   }
 
-  const record = getDeliveryTracking(tracking, deliveryId);
   const terminalState = String(record.terminalState ?? '').trim();
   if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
     return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
   }
 
   const submitAttempts = Number(record.submitAttempts ?? 0);
-  const firstObservedAtMs = Number(record.firstObservedAtMs ?? deliveredAtMs);
+  const firstObservedAtMs = Number(record.firstObservedAtMs ?? observationAnchorMs);
   const budgetDeadline = firstObservedAtMs + deliveryBudgetMs;
 
-  if (isDeliveryConsumed(session, delivery, deliveredAtMs)) {
+  if (isDeliveryConsumed(session, delivery, observationAnchorMs)) {
     return {
       action: 'mark_consumed',
       reason: 'consumed',

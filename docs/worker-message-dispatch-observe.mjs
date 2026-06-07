@@ -15,7 +15,7 @@ import {
   getReportState,
   getReportTimestampMs,
   getReviewRunId,
-  resolveSendObservedAtMs,
+  parseIsoMs,
   REVIEW_ROUND_REPORT_STATES,
 } from './review-finding-delivery-confirm.mjs';
 
@@ -82,6 +82,31 @@ export function buildDeliveryId(sessionId, deliveredAtMs, source, sourceKey = ''
     return null;
   }
   return `${sid}:${deliveredAtMs}:${src}${key ? `:${key}` : ''}`;
+}
+
+/**
+ * @param {Record<string, unknown>} run
+ */
+export function resolveReviewSendObservedAtMs(run) {
+  return parseIsoMs(run?.sentAt) ?? parseIsoMs(run?.updatedAt) ?? null;
+}
+
+/**
+ * @param {string} sessionId
+ * @param {string} runId
+ * @param {number | null} [observedAtMs]
+ */
+export function buildReviewSendDeliveryId(sessionId, runId, observedAtMs = null) {
+  const sid = String(sessionId ?? '').trim();
+  const rid = String(runId ?? '').trim();
+  if (!sid || !rid) {
+    return null;
+  }
+  const ms = Number(observedAtMs ?? 0);
+  if (ms > 0) {
+    return buildDeliveryId(sid, ms, DISPATCH_SOURCE_REVIEW_SEND, rid);
+  }
+  return `${sid}:${DISPATCH_SOURCE_REVIEW_SEND}:${rid}`;
 }
 
 /**
@@ -201,23 +226,15 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
     if (!runId || !sessionId) {
       continue;
     }
-    const deliveredAtMs = resolveSendObservedAtMs(run, nowMs);
-    if (!Number.isFinite(deliveredAtMs) || deliveredAtMs <= 0) {
-      continue;
-    }
-    const deliveryId = buildDeliveryId(
-      sessionId,
-      deliveredAtMs,
-      DISPATCH_SOURCE_REVIEW_SEND,
-      runId,
-    );
+    const observedAtMs = resolveReviewSendObservedAtMs(run);
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedAtMs);
     if (!deliveryId) {
       continue;
     }
     deliveries.push({
       deliveryId,
       sessionId,
-      deliveredAtMs,
+      deliveredAtMs: observedAtMs ?? 0,
       source: DISPATCH_SOURCE_REVIEW_SEND,
       sourceKey: runId,
       deliveryPath: DELIVERY_PATH_PENDING_DRAFT,

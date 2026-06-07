@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   AO_PASTE_CHAR_THRESHOLD,
+  buildReviewSendDeliveryId,
   classifyDeliveryPath,
   deriveMessageShape,
   DELIVERY_PATH_PENDING_DRAFT,
@@ -116,6 +117,28 @@ describe('dispatch observation helpers (review)', () => {
     expect(first).toHaveLength(1);
     expect(second[0]?.deliveryId).toBe(first[0]?.deliveryId);
     expect(second[0]?.deliveredAtMs).toBe(first[0]?.deliveredAtMs);
+  });
+
+  it('uses stable review-run delivery id when send timestamps are missing', () => {
+    const run = {
+      id: 'run-no-ts',
+      linkedSessionId: 'opk-no-ts',
+      sentFindingCount: 1,
+      status: 'waiting_update',
+    };
+    const first = extractReviewFindingDeliveries([run], 1_000);
+    const second = extractReviewFindingDeliveries([run], 9_999_999);
+    expect(first).toHaveLength(1);
+    expect(first[0]?.deliveryId).toBe('opk-no-ts:review-send:run-no-ts');
+    expect(second[0]?.deliveryId).toBe(first[0]?.deliveryId);
+    expect(second[0]?.deliveredAtMs).toBe(0);
+  });
+
+  it('buildReviewSendDeliveryId keeps timestamped ids when run has sentAt', () => {
+    const ms = Date.parse('2026-06-04T12:00:00.000Z');
+    expect(buildReviewSendDeliveryId('opk-ts', 'run-ts', ms)).toBe(
+      `opk-ts:${ms}:review-send:run-ts`,
+    );
   });
 
   it('honors report timestamp and state aliases for consumption', () => {
