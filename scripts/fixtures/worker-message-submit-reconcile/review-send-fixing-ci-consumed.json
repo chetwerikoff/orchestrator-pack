@@ -1,0 +1,35 @@
+{
+  "description": "Review: fixing_ci report consumes review-send pending draft",
+  "nowMs": 1717600500000,
+  "sessions": [
+    {
+      "sessionId": "opk-fixing-ci",
+      "role": "worker",
+      "prNumber": 234,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": [
+        {
+          "report_state": "fixing_ci",
+          "reportedAt": "2026-06-04T12:05:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "dispatchJournal": {
+    "opk-fixing-ci:1717600400000:review-send:run-fixing-ci": {
+      "deliveryId": "opk-fixing-ci:1717600400000:review-send:run-fixing-ci",
+      "sessionId": "opk-fixing-ci",
+      "deliveredAtMs": 1717600400000,
+      "source": "review-send",
+      "sourceKey": "run-fixing-ci",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 420, "lineCount": 6 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

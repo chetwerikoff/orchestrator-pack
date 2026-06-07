@@ -1,0 +1,37 @@
+{
+  "description": "AC9b: persistently ambiguous — escalate on budget without attempts",
+  "nowMs": 1717603000000,
+  "config": { "deliveryBudgetMs": 60000, "maxSubmitAttempts": 3 },
+  "sessions": [
+    {
+      "sessionId": "opk-ambig-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "waiting_input",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-ambig-232:1717602000000:pack-send:ambig": {
+      "deliveryId": "opk-ambig-232:1717602000000:pack-send:ambig",
+      "sessionId": "opk-ambig-232",
+      "deliveredAtMs": 1717602000000,
+      "source": "pack-send",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 260, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-ambig-232:1717602000000:pack-send:ambig": {
+        "deliveryId": "opk-ambig-232:1717602000000:pack-send:ambig",
+        "firstObservedAtMs": 1717602000000,
+        "submitAttempts": 0
+      }
+    },
+    "audit": []
+  }
+}

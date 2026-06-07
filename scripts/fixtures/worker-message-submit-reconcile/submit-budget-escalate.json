@@ -1,0 +1,38 @@
+{
+  "description": "AC9a: submit attempts exhausted — escalate",
+  "nowMs": 1717602000000,
+  "config": { "deliveryBudgetMs": 60000, "maxSubmitAttempts": 2 },
+  "sessions": [
+    {
+      "sessionId": "opk-budget-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-budget-232:1717601000000:pack-send:budget": {
+      "deliveryId": "opk-budget-232:1717601000000:pack-send:budget",
+      "sessionId": "opk-budget-232",
+      "deliveredAtMs": 1717601000000,
+      "source": "pack-send",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 260, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-budget-232:1717601000000:pack-send:budget": {
+        "deliveryId": "opk-budget-232:1717601000000:pack-send:budget",
+        "firstObservedAtMs": 1717601000000,
+        "submitAttempts": 2,
+        "claimed": true
+      }
+    },
+    "audit": []
+  }
+}

@@ -44,6 +44,7 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -82,7 +83,7 @@ function Invoke-CiGreenWakeFilterCli {
 function Get-CiGreenWakeState {
     param([string]$Path)
 
-    $default = @{ heads = @{}; nudged = @{}; lastTickMs = $null }
+    $default = @{ heads = @{}; nudged = @{}; pendingJournal = @{}; lastTickMs = $null }
     return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
 }
 
@@ -100,6 +101,7 @@ function Save-PartialCiGreenWakeTracking {
         [string]$Path,
         [hashtable]$HeadRecords,
         [hashtable]$Nudged,
+        [hashtable]$PendingJournal,
         [switch]$DryRunMode
     )
 
@@ -109,11 +111,50 @@ function Save-PartialCiGreenWakeTracking {
 
     $existing = Get-CiGreenWakeState -Path $Path
     $merged = @{
-        heads      = $HeadRecords
-        nudged     = $Nudged
-        lastTickMs = $existing.lastTickMs
+        heads          = $HeadRecords
+        nudged         = $Nudged
+        pendingJournal = $PendingJournal
+        lastTickMs     = $existing.lastTickMs
     }
     Set-CiGreenWakeState -Path $Path -State $merged
+}
+
+function Retry-PendingCiGreenDispatchJournals {
+    param(
+        [hashtable]$PendingJournal,
+        [hashtable]$Nudged,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode) {
+        if ($PendingJournal.Count -gt 0) {
+            Write-CiGreenWakeLog "dry-run skipping $($PendingJournal.Count) pending dispatch journal replay(s)"
+        }
+        return 0
+    }
+
+    $resolved = 0
+    foreach ($transitionId in @($PendingJournal.Keys)) {
+        $pending = $PendingJournal[$transitionId]
+        if (-not $pending) {
+            continue
+        }
+        $dispatchResult = Register-WorkerMessageDispatch -SessionId ([string]$pending.sessionId) `
+            -Message ([string]$pending.message) `
+            -Source 'pack-send' -SourceKey "ci-green:$transitionId" `
+            -DeliveredAtMs ([long]$pending.sentAtMs)
+        if (-not $dispatchResult.recorded) {
+            continue
+        }
+        $Nudged[$transitionId] = @{
+            sessionId = [string]$pending.sessionId
+            sentAtMs  = [long]$pending.sentAtMs
+        }
+        $PendingJournal.Remove($transitionId) | Out-Null
+        $resolved++
+        Write-CiGreenWakeLog "dispatch journal recovered transition=$transitionId session=$($pending.sessionId)"
+    }
+    return $resolved
 }
 
 function Get-CiGreenWakeChecksByPr {
@@ -217,7 +258,38 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
-    return @{ sent = $true; reason = 'sent' }
+    $deliveredAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId -Message $Action.message `
+        -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)" `
+        -DeliveredAtMs $deliveredAtMs
+    $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
+    if ($outcome.journalRecorded) {
+        return @{
+            sent            = $true
+            delivered       = $true
+            journalRecorded = $true
+            reason          = 'sent'
+        }
+    }
+
+    $dispatchReason = if ($outcome.journalFailureReason) {
+        [string]$outcome.journalFailureReason
+    }
+    else {
+        [string]$outcome.reason
+    }
+    Write-CiGreenWakeLog "dispatch journal record failed PR #$($Action.prNumber): $dispatchReason (ao send delivered; journal pending retry)"
+    return @{
+        sent                 = $false
+        delivered            = $true
+        journalRecorded      = $false
+        journalFailureReason = $dispatchReason
+        reason               = 'journal_record_failed'
+        sessionId            = [string]$Action.sessionId
+        message              = [string]$Action.message
+        transitionId         = [string]$Action.transitionId
+        deliveredAtMs        = $deliveredAtMs
+    }
 }
 
 function Invoke-CiGreenWakeTick {
@@ -258,6 +330,30 @@ function Invoke-CiGreenWakeTick {
         $requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
     }
 
+    $nudged = @{}
+    if ($tracking.nudged) {
+        foreach ($prop in $tracking.nudged.PSObject.Properties) {
+            $nudged[$prop.Name] = $prop.Value
+        }
+    }
+    $pendingJournal = @{}
+    if ($tracking.pendingJournal) {
+        foreach ($prop in $tracking.pendingJournal.PSObject.Properties) {
+            $pendingJournal[$prop.Name] = $prop.Value
+        }
+    }
+    $journalRetries = Retry-PendingCiGreenDispatchJournals -PendingJournal $pendingJournal -Nudged $nudged `
+        -DryRunMode:$DryRunMode
+    if ($journalRetries -gt 0) {
+        Write-CiGreenWakeLog "recovered $journalRetries pending dispatch journal record(s)"
+    }
+    $tracking = @{
+        heads          = $tracking.heads
+        nudged         = $nudged
+        pendingJournal = $pendingJournal
+        lastTickMs     = $tracking.lastTickMs
+    }
+
     $planPayload = @{
         openPrs                         = @($openPrs)
         sessions                        = @($sessions)
@@ -287,6 +383,12 @@ function Invoke-CiGreenWakeTick {
             $nudged[$prop.Name] = $prop.Value
         }
     }
+    $pendingJournal = @{}
+    if ($tracking.pendingJournal) {
+        foreach ($prop in $tracking.pendingJournal.PSObject.Properties) {
+            $pendingJournal[$prop.Name] = $prop.Value
+        }
+    }
 
     $headRecords = @{}
     if ($plan.headRecords) {
@@ -306,12 +408,36 @@ function Invoke-CiGreenWakeTick {
             continue
         }
 
+        if ($pendingJournal[[string]$action.transitionId]) {
+            Write-CiGreenWakeLog "skip PR #$($action.prNumber): journal_pending"
+            continue
+        }
+
         try {
             $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $fixtureFreshPayload `
                 -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
         }
         catch {
             Write-CiGreenWakeLog "send error PR #$($action.prNumber): $_"
+            continue
+        }
+
+        if ($result.delivered -and -not $result.journalRecorded) {
+            if (-not $DryRunMode) {
+                $sentAtMs = if ($result.deliveredAtMs) {
+                    [long]$result.deliveredAtMs
+                }
+                else {
+                    [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                }
+                $pendingJournal[[string]$action.transitionId] = @{
+                    sessionId = [string]$action.sessionId
+                    sentAtMs  = $sentAtMs
+                    message   = [string]$action.message
+                }
+                Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
+                    -Nudged $nudged -PendingJournal $pendingJournal -DryRunMode:$DryRunMode
+            }
             continue
         }
 
@@ -323,16 +449,17 @@ function Invoke-CiGreenWakeTick {
                     sentAtMs  = $nowMs
                 }
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
-                    -Nudged $nudged -DryRunMode:$DryRunMode
+                    -Nudged $nudged -PendingJournal $pendingJournal -DryRunMode:$DryRunMode
             }
             $sent++
         }
     }
 
     $merged = @{
-        heads      = $headRecords
-        nudged     = $nudged
-        lastTickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        heads          = $headRecords
+        nudged         = $nudged
+        pendingJournal = $pendingJournal
+        lastTickMs     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
 
     if (-not $DryRunMode) {

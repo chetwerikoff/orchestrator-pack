@@ -1,0 +1,47 @@
+{
+  "description": "Review: do not escalate overwritten delivery already in submitted terminal state",
+  "nowMs": 1717601100000,
+  "sessions": [
+    {
+      "sessionId": "opk-submitted-overwrite",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-submitted-overwrite:1717600900000:pack-send:first": {
+      "deliveryId": "opk-submitted-overwrite:1717600900000:pack-send:first",
+      "sessionId": "opk-submitted-overwrite",
+      "deliveredAtMs": 1717600900000,
+      "source": "pack-send",
+      "sourceKey": "first",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 300, "lineCount": 2 }
+    },
+    "opk-submitted-overwrite:1717600950000:pack-send:second": {
+      "deliveryId": "opk-submitted-overwrite:1717600950000:pack-send:second",
+      "sessionId": "opk-submitted-overwrite",
+      "deliveredAtMs": 1717600950000,
+      "source": "pack-send",
+      "sourceKey": "second",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 280, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-submitted-overwrite:1717600900000:pack-send:first": {
+        "deliveryId": "opk-submitted-overwrite:1717600900000:pack-send:first",
+        "sessionId": "opk-submitted-overwrite",
+        "terminalState": "submitted",
+        "submittedAtMs": 1717600920000
+      }
+    },
+    "audit": []
+  }
+}

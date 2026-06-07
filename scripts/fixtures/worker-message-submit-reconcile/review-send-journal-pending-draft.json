@@ -1,0 +1,40 @@
+{
+  "description": "Review: review-send journal must stay pending-draft for submit arbiter",
+  "nowMs": 1717600300000,
+  "sessions": [
+    {
+      "sessionId": "opk-review-journal",
+      "role": "worker",
+      "prNumber": 234,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-review-journal:1717600200000:review-send:run-journal-pending": {
+      "deliveryId": "opk-review-journal:1717600200000:review-send:run-journal-pending",
+      "sessionId": "opk-review-journal",
+      "deliveredAtMs": 1717600200000,
+      "source": "review-send",
+      "sourceKey": "run-journal-pending",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 72, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [
+    {
+      "id": "run-journal-pending",
+      "prNumber": 234,
+      "targetSha": "abc123",
+      "status": "waiting_update",
+      "sentFindingCount": 2,
+      "linkedSessionId": "opk-review-journal",
+      "sentAt": "2024-06-05T15:10:00.000Z",
+      "updatedAt": "2024-06-05T15:10:00.000Z"
+    }
+  ],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

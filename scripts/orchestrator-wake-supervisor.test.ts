@@ -10,6 +10,7 @@ const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-super
 const aoStub = path.join(fixtureDir, 'ao-stub.sh');
 
 const tmpRoots: string[] = [];
+const supervisorHookTimeoutMs = 120_000;
 
 afterEach(() => {
   for (const root of tmpRoots.splice(0)) {
@@ -27,14 +28,14 @@ afterEach(() => {
           '-StateDir',
           root,
         ],
-        { cwd: repoRoot, stdio: 'pipe' },
+        { cwd: repoRoot, stdio: 'pipe', timeout: supervisorHookTimeoutMs },
       );
     } catch {
       // best effort
     }
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}, supervisorHookTimeoutMs);
 
 function makeStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-supervisor-test-'));
@@ -125,11 +126,12 @@ const managedChildRoles = [
   'ci-green-wake-reconcile',
   'review-send-reconcile',
   'review-finding-delivery-confirm',
+  'worker-message-submit-reconcile',
 ] as const;
 
 type ManagedChildRole = (typeof managedChildRoles)[number];
 
-async function waitForMarkers(stateDir: string, timeoutMs = 15_000) {
+async function waitForMarkers(stateDir: string, timeoutMs = 25_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ready = managedChildRoles.every((role) =>

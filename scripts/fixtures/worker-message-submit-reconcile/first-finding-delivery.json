@@ -1,0 +1,29 @@
+{
+  "description": "AC2: first review-finding delivery before confirm path",
+  "nowMs": 1717600300000,
+  "sessions": [
+    {
+      "sessionId": "opk-find-232",
+      "role": "worker",
+      "prNumber": 232,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {},
+  "aoEvents": [],
+  "reviewRuns": [
+    {
+      "id": "run-find-232",
+      "prNumber": 232,
+      "targetSha": "sha232find",
+      "status": "waiting_update",
+      "sentFindingCount": 1,
+      "linkedSessionId": "opk-find-232",
+      "sentAt": "2026-06-04T12:00:00Z"
+    }
+  ],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

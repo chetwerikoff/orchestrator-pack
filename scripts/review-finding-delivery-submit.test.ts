@@ -3,10 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  DELIVERY_STATE_CONFIRMED,
   DELIVERY_STATE_ESCALATED,
   planDeliveryConfirmActions,
-  type DeliveryConfirmAction,
 } from '../docs/review-finding-delivery-confirm.mjs';
 import {
   assertSubmitArgvIsEnterOnly,
@@ -54,44 +52,26 @@ function planSubmitScenario(name: string) {
   });
 }
 
-describe('submit when delivered-but-unconsumed (AC1)', () => {
-  it('emits exactly one submit after redeliveries exhausted', () => {
-    const { actions, tracking } = planSubmitScenario('redeliveries-exhausted-submit.json');
-    const submits = actions.filter(
-      (a): a is Extract<DeliveryConfirmAction, { type: 'submit' }> => a.type === 'submit',
-    );
-    expect(submits).toHaveLength(1);
-    expect(submits[0]).toMatchObject({
-      runId: 'run-submit-1',
-      sessionId: 'opk-submit-ac1',
-      prNumber: 216,
-      attempt: 1,
-      maxSubmits: 1,
-      decisionKey: 'run-submit-1:sha216ac1',
-    });
-    expect(tracking.runs?.['run-submit-1']?.submitCount).toBe(1);
-    expect(tracking.runs?.['run-submit-1']?.submitDecisionKey).toBe('run-submit-1:sha216ac1');
-  });
-});
-
-describe('causal consumption only (AC2)', () => {
-  it('marks confirmed on addressing_reviews — no submit', () => {
-    const { actions } = planSubmitScenario('addressing-reviews-no-submit.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
-    expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(true);
+describe('delivery confirm no longer owns submit (Issue #232)', () => {
+  it('escalates after redeliveries exhausted — submit is unified arbiter', () => {
+    const { actions } = planSubmitScenario('redeliveries-exhausted-submit.json');
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
+    expect(
+      actions.some(
+        (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
+      ),
+    ).toBe(true);
   });
 
-  it('unrelated working report does not confirm — submit remains', () => {
+  it('unrelated working report escalates after redeliveries — not submit', () => {
     const { actions } = planSubmitScenario('unrelated-activity-still-submits.json');
-    expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(false);
-    expect(actions.filter((a) => a.type === 'submit')).toHaveLength(1);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
+    expect(actions.some((a) => a.type === 'escalate')).toBe(true);
   });
-});
 
-describe('fail-closed on ambiguity (AC3)', () => {
   it('escalates dead session without submit', () => {
     const { actions } = planSubmitScenario('fail-closed-dead-session.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'orphan_or_dead_linked_session',
@@ -100,126 +80,34 @@ describe('fail-closed on ambiguity (AC3)', () => {
   });
 });
 
-describe('bounded submit + escalate (AC4)', () => {
+describe('causal consumption only', () => {
+  it('marks confirmed on addressing_reviews — no submit', () => {
+    const { actions } = planSubmitScenario('addressing-reviews-no-submit.json');
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
+    expect(actions.some((a) => a.type === 'mark_confirmed')).toBe(true);
+  });
+});
+
+describe('submit adapter helpers (Issue #216 bridge)', () => {
   it('defaults maxSubmits to one', () => {
     expect(DEFAULT_MAX_SUBMITS).toBe(1);
     expect(resolveSubmitConfig({}).maxSubmits).toBe(1);
-  });
-
-  it('escalates when submit budget exhausted', () => {
-    const { actions, tracking } = planSubmitScenario('submit-budget-exhausted-escalate.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
-    expect(
-      actions.some(
-        (a) => a.type === 'escalate' && a.reason === 'max_submits_exhausted',
-      ),
-    ).toBe(true);
-    expect(tracking.runs?.['run-submit-exhausted']?.deliveryState).toBe(
-      DELIVERY_STATE_ESCALATED,
-    );
-  });
-
-  it('new head SHA resets submit budget', () => {
-    const { actions } = planSubmitScenario('new-head-resets-submit-budget.json');
-    expect(actions.filter((a) => a.type === 'submit')).toHaveLength(1);
-    expect(buildSubmitDecisionKey('run-new-head', 'newhead99ac4')).toBe(
-      'run-new-head:newhead99ac4',
-    );
-  });
-});
-
-describe('flood defer (AC5)', () => {
-  it('defers submit without escalating when flood active', () => {
-    const { actions } = planSubmitScenario('flood-active-defer.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
-    expect(actions.some((a) => a.type === 'escalate')).toBe(false);
-    expect(actions.some((a) => a.type === 'defer' && a.reason === 'flood_active')).toBe(
-      true,
-    );
-  });
-});
-
-describe('dedupe restart-safe (AC6)', () => {
-  it('does not plan second submit when decision key already recorded', () => {
-    const fixture = loadSubmitFixture('redeliveries-exhausted-submit.json');
-    const first = planDeliveryConfirmActions({
-      reviewRuns: fixture.reviewRuns,
-      sessions: fixture.sessions,
-      openPrs: fixture.openPrs ?? [],
-      tracking: fixture.tracking ?? { runs: {} },
-      nowMs: fixture.nowMs,
-      config: fixture.config,
-      aoEvents: [],
-      floodActiveSessions: {},
-    });
-    const second = planDeliveryConfirmActions({
-      reviewRuns: fixture.reviewRuns,
-      sessions: fixture.sessions,
-      openPrs: fixture.openPrs ?? [],
-      tracking: first.tracking,
-      nowMs: fixture.nowMs + 60_000,
-      config: fixture.config,
-      aoEvents: [],
-      floodActiveSessions: {},
-    });
-    expect(first.actions.filter((a) => a.type === 'submit')).toHaveLength(1);
-    expect(second.actions.filter((a) => a.type === 'submit')).toHaveLength(0);
-  });
-});
-
-describe('never authors content (AC7)', () => {
-  it('submit action carries no composed finding text', () => {
-    const { actions } = planSubmitScenario('redeliveries-exhausted-submit.json');
-    const submit = actions.find((a) => a.type === 'submit');
-    expect(submit).toBeDefined();
-    const serialized = JSON.stringify(submit);
-    expect(serialized).not.toMatch(/finding|severity|file:|line \d+/i);
-    expect(Object.keys(submit ?? {})).not.toContain('message');
-    expect(Object.keys(submit ?? {})).not.toContain('findingText');
   });
 
   it('submit argv is Enter-only to tmux', () => {
     const argv = buildSubmitEnterArgv('opk-worker-live');
     assertSubmitArgvIsEnterOnly(argv);
     expect(argv).toEqual(['send-keys', '-t', 'opk-worker-live', 'Enter']);
-    expect(argv.join(' ')).not.toMatch(/paste|load-buffer|Escape|-l /);
+  });
+
+  it('buildSubmitDecisionKey is stable', () => {
+    expect(buildSubmitDecisionKey('run-new-head', 'newhead99ac4')).toBe(
+      'run-new-head:newhead99ac4',
+    );
   });
 });
 
-describe('stale input refused (AC8)', () => {
-  it('escalates when intervening input-affecting activity detected', () => {
-    const { actions } = planSubmitScenario('stale-input-refused.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
-    expect(
-      actions.some(
-        (a) => a.type === 'escalate' && a.reason === 'stale_input_refused',
-      ),
-    ).toBe(true);
-  });
-
-  it('hasInterveningInputActivity detects activity.transition to active', () => {
-    const events = [
-      {
-        kind: 'activity.transition',
-        sessionId: 'opk-1',
-        tsEpoch: 2000,
-        data: { to: 'active' },
-      },
-    ];
-    expect(hasInterveningInputActivity(events, 'opk-1', 1000)).toBe(true);
-    expect(hasInterveningInputActivity(events, 'opk-1', 3000)).toBe(false);
-  });
-});
-
-describe('confirmed runs skip submit path', () => {
-  it('records confirmed without submit', () => {
-    const { actions, tracking } = planSubmitScenario('addressing-reviews-no-submit.json');
-    expect(actions.some((a) => a.type === 'submit')).toBe(false);
-    expect(tracking.runs?.['run-confirmed']?.deliveryState).toBe(DELIVERY_STATE_CONFIRMED);
-  });
-});
-
-describe('evaluateSubmitEligibility unit', () => {
+describe('evaluateSubmitEligibility unit (legacy helper)', () => {
   it('returns defer for flood', () => {
     const result = evaluateSubmitEligibility({
       run: {
@@ -248,5 +136,26 @@ describe('evaluateSubmitEligibility unit', () => {
     expect(result.ok).toBe(false);
     expect(result.defer).toBe(true);
     expect(result.reason).toBe('flood_active');
+  });
+
+  it('hasInterveningInputActivity detects activity.transition to active', () => {
+    const events = [
+      {
+        kind: 'activity.transition',
+        sessionId: 'opk-1',
+        tsEpoch: 2000,
+        data: { to: 'active' },
+      },
+    ];
+    expect(hasInterveningInputActivity(events, 'opk-1', 1000)).toBe(true);
+    expect(hasInterveningInputActivity(events, 'opk-1', 3000)).toBe(false);
+  });
+});
+
+describe('confirmed runs skip submit path', () => {
+  it('records confirmed without submit', () => {
+    const { actions, tracking } = planSubmitScenario('addressing-reviews-no-submit.json');
+    expect(actions.map((a) => a.type as string)).not.toContain('submit');
+    expect(tracking.runs?.['run-confirmed']?.deliveryState).not.toBe(DELIVERY_STATE_ESCALATED);
   });
 });

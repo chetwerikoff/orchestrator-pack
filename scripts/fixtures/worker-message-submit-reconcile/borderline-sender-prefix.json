@@ -1,0 +1,28 @@
+{
+  "description": "AC2: borderline message crosses 200 via [from session] prefix",
+  "nowMs": 1717600200000,
+  "sessions": [
+    {
+      "sessionId": "opk-border-232",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-border-232:1717600100000:ao-send:prefix": {
+      "deliveryId": "opk-border-232:1717600100000:ao-send:prefix",
+      "sessionId": "opk-border-232",
+      "deliveredAtMs": 1717600100000,
+      "source": "ao-send",
+      "sourceKey": "prefix",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 215, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}

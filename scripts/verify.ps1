@@ -526,6 +526,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== worker message submit reconcile (Issue #232) =='
+$workerSubmitCheck = Join-Path $Root 'scripts/check-worker-message-submit-reconcile.ps1'
+if (Test-Path -LiteralPath $workerSubmitCheck -PathType Leaf) {
+    & $workerSubmitCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-worker-message-submit-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-worker-message-submit-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'worker message submit reconcile checks failed (Issue #232)'
+    }
+}
+else {
+    Write-Check 'scripts/check-worker-message-submit-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing worker message submit reconcile check script (Issue #232)'
+}
+
+Write-Host ''
 Write-Host '== review bulk-send / stuck-open diagnostic (Issue #140) =='
 $bulkSendDiagCheck = Join-Path $Root 'scripts/check-review-bulk-send-diagnose.ps1'
 if (Test-Path -LiteralPath $bulkSendDiagCheck -PathType Leaf) {

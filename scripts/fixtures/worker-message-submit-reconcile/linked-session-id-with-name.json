@@ -1,0 +1,30 @@
+{
+  "description": "Review: delivery keyed by sessionId when status row also has name",
+  "nowMs": 1717600400000,
+  "sessions": [
+    {
+      "name": "opk-27",
+      "sessionId": "opk-27-stable",
+      "role": "worker",
+      "prNumber": 234,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-27-stable:1717600300000:review-send:run-linked": {
+      "deliveryId": "opk-27-stable:1717600300000:review-send:run-linked",
+      "sessionId": "opk-27-stable",
+      "deliveredAtMs": 1717600300000,
+      "source": "review-send",
+      "sourceKey": "run-linked",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 420, "lineCount": 6 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": { "deliveries": {}, "audit": [] }
+}
