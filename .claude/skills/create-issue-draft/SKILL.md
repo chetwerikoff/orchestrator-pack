@@ -18,6 +18,55 @@ set boundaries and acceptance criteria. **Over-specification is a bug.**
 
 Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks.
 
+## Pre-draft design-analysis gate (run before authoring)
+
+Before you propose a solution or write a single line of the draft, when the
+task is a **non-trivial build** — a new component, contract, or service that
+becomes its own worker build — you MUST first answer the design questions
+below and let the answers shape the draft. This is the authoring-side twin of
+the RCA design block (`docs/issues_drafts/79-rca-design-recommendation-block.md`,
+GitHub #237): #237 enriches what an RCA *recommends*; this gate enriches what
+you *author*. Keep both surfaces saying the same thing.
+
+**Applies when** the proposal is a non-trivial build (new component / contract /
+service / would-be worker draft). **Skips** for operator/runtime steps, config
+or YAML changes, one-line spec or rule edits, typo/rename fixes — forcing a
+three-option analysis onto those is noise.
+
+When it applies, answer all of, and reflect the conclusions in **Goal** /
+**Binding surface** before finalising:
+
+1. **Critical mechanics for *this* problem** — the patterns, data structures,
+   integrations, and boundary / edge conditions that decide whether the design
+   holds. Name them, not generic ones.
+2. **World / industry best practices** — how this *class* of problem is solved
+   in the field; what the established approach is and why. (Delegate the bulk
+   read/research to `coworker ask --profile code`, or `WebSearch`, per the
+   coworker policy; keep the judgment here.)
+3. **Services / components architecture sketch** — how the pieces fit together
+   (responsibilities, data flow, boundaries). Diagrams as ASCII.
+4. **≥ 3 implementation options, each with an explicit trade-off** — not three
+   restatements of one approach. Judge each on **cost, risk, and sufficiency**
+   (tests + Codex review as the safety net), then land on the **cheapest
+   sufficient executor with acceptable risk** per the repo cost rule — never
+   "which is best." Record the chosen option and why the two rejected ones lost
+   in the draft's decision trail (see **Decision logging**).
+5. **Full-class enumeration for decision / state-machine / event-ordering /
+   retry / concurrency causes** — enumerate the decision's input dimensions ×
+   values, name the sibling cells that share the root cause, and the expected
+   outcome per equivalence class, so the build targets the **class, not the one
+   reproduced case** ([[fix-the-class-not-the-case]]). Mandatory on recurrence;
+   hand the matrix to **Acceptance criteria** as exhaustive fixtures.
+
+**Planner-freedom guard.** The sketch and the chosen option inform *what must be
+true* — they do not become prescriptive spec. Do not let element 3/4 leak
+function signatures, import paths, folder layout, or library pins into the draft
+(see the **Planner-freedom checklist**). The analysis bounds the contract; the
+planner still picks the internals.
+
+Long comparison tables / option matrices go to an OS temp file and are linked,
+not pasted into the draft body (same convention as #237) so the spec stays lean.
+
 ## Draft file structure (fixed order)
 
 Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
