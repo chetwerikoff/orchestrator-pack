@@ -191,13 +191,18 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
 ## Report template
 
 Deliver to the user in **their language**, **fixed section order**, **≤ 900 words**
-unless they asked for depth. Put long tables or raw dumps in `$env:TEMP` (or OS
-temp) and link paths in the memo — do not paste huge tables in chat.
+unless they asked for depth or the **design-analysis block** applies (see below —
+that block may exceed the cap; long comparison tables and option matrices still
+go to OS temp and are linked, not pasted in chat). Put long tables or raw dumps
+in `$env:TEMP` (or OS temp) and link paths in the memo — do not paste huge
+tables in chat.
 
 **Always include sections 1–6 in every report.** Do not stop after technical
 causes or a single “best next step” paragraph. The user should not need a
 follow-up ask for a plain-language summary, immediate steps, or prevention —
-those are mandatory parts of this template.
+those are mandatory parts of this template. The design-analysis block is
+**conditional** — not a seventh always-on section; include it only when the
+applies condition below holds.
 
 **Every recommended action** (including optional improvements, follow-up
 drafts, and trade-offs) must appear as a numbered step in **§5** (now) or **§6**
@@ -217,6 +222,73 @@ drafts, and trade-offs) must appear as a numbered step in **§5** (now) or **§6
 Sections **5** and **6** must be actionable checklists, not prose summaries. If a step
 belongs in a worker PR, say so (`ao spawn` / open draft) instead of implying a
 direct architect patch unless **`direct-fix-checklist`** was authorized.
+
+### Conditional design-analysis block (build-class durable fixes)
+
+When the durable recommendation — the prevention content in **§6** (or a numbered
+step there that names the long-term fix) — is to **build or redesign** a
+non-trivial component, contract, or service (work that would become a
+`create-issue-draft` + worker build), the report must include a **design-analysis
+block** in addition to §1–§6. Placement is the implementer's choice: a clearly
+labeled subsection under **§6**, a linked annex, or an extension of the
+prevention steps — but it must be visibly conditional, not folded into §1–§6 as
+if always required.
+
+**Applies when** the durable fix is a non-trivial build (new component / contract /
+service that would become its own task draft and worker build).
+
+**Skips when** the durable fix is an operator/runtime step, a config or YAML
+change, a one-line spec or rule edit, or another small fix — forcing a
+three-option architecture analysis onto those is noise. The reader must be able
+to decide applies-vs-skips from these conditions without guessing.
+
+When the block **applies**, include **all** of the following (prescribe *what*
+the recommendation must contain — not file names, function signatures, import
+paths, or library choices):
+
+1. **Critical mechanics for *this* problem** — the patterns, data structures,
+   integrations, and boundary / edge conditions that decide whether the design
+   holds.
+2. **Industry / world best practices** — how this *class* of problem is solved in
+   the field; what the established approach is and why.
+3. **Services / components architecture sketch** — how the proposed pieces fit
+   together (responsibilities, data flow, boundaries). ASCII diagrams are fine.
+4. **≥ 3 implementation options, each with an explicit trade-off** — not three
+   restatements of one approach. Judge each on **cost, risk, and sufficiency**
+   (tests + Codex review as the safety net) per the repo **cost rule** in
+   [`CLAUDE.md`](../CLAUDE.md) and
+   [`docs/first_principles_5_operational_framework.md`](../docs/first_principles_5_operational_framework.md)
+   — land on the **cheapest sufficient executor with acceptable risk**, not
+   "which is best." Name the recommended option and why the others lost.
+5. **Full-class scenario enumeration** — **only when** the root cause sits on a
+   **decision / state-machine / event-ordering / concurrency / idempotency** path
+   (including re-execution after an ambiguous failure): enumerate the decision's
+   input dimensions × their values, name the **sibling cells** that share the
+   root cause or are at risk, and the expected outcome per equivalence class, so
+   the build targets the **class, not the one reproduced case**. A single-axis
+   build that is not element-5-eligible still needs elements 1–4.
+
+**Recurrence + class-not-case (element 5).** When the investigation is a
+recurrence (**recurrence-diagnostic** — the prior fix should have covered it)
+**and** the durable fix is a build-class, element-5-eligible cause (the design
+block already applies), element 5 is **mandatory**, not optional: recurrence is
+evidence the prior fix closed one cell, so the recommendation must name the whole
+class. A recurring **config / one-line / operator** fix still **skips** the
+design block entirely — element 5 is **not** forced there; **recurrence-diagnostic**
+governs those without a scenario matrix.
+
+**Build-draft handoff (recommendation only).** When the recommendation is a
+build and element 5 applies, state that the resulting `create-issue-draft`
+**should** carry the enumerated scenario matrix as exhaustive acceptance (each
+cell a fixture; closed sibling issues cross-checked for no-regression).
+**Enforcement** that the build-draft actually preserves the matrix is the
+`create-issue-draft` scenario-completeness gate and `check-draft-discipline.ps1`
+companion — this RCA rule **recommends** the handoff; it does not bind or verify
+that downstream workflow.
+
+**Length and temp files.** The design block may exceed the ≤ 900-word memo cap.
+Long option matrices and comparison tables go to `$env:TEMP` (or OS temp) per the
+existing convention; link the path in the memo. Keep §1–§6 themselves lean.
 
 ---
 
