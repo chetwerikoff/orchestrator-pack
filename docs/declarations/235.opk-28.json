@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-06-07T01:35:00.000Z",
   "baseline": {
-    "commit_sha": "b00cdb41b82bee8522d6e74b39e28859cd266fac",
+    "commit_sha": "4df8c67",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9038f0e6593d6ef72a82a42a5f9f012c7f8678cb9340bcd96f1cfc455f7ec396"
+    "active_scope_hash": "sha256:27202009ae78349313585f7627b0c2af54184fa4ba51f5c085ca1eb364e59db8"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -15,6 +15,7 @@
     "docs/migration_notes.md",
     "docs/orchestrator-wake-runbook.md",
     "docs/review-trigger-reeval.mjs",
+    "docs/review-trigger-reeval.d.mts",
     "docs/review-trigger-reconcile.mjs",
     "prompts/agent_rules.md",
     "scripts/check-review-trigger-reeval.ps1",

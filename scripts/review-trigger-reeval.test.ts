@@ -23,6 +23,7 @@ import {
   seedWatchFromInProgressSignals,
   seedWatchFromWakeDefer,
   watchEntryKey,
+  type ReevalWatchAction,
 } from '../docs/review-trigger-reeval.mjs';
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 
@@ -56,13 +57,9 @@ type ReevalFixture = {
   expect?: Record<string, unknown>;
 };
 
-type WatchAction = {
-  type: string;
-  prNumber?: number;
-  headSha?: string;
-  reason?: string;
-  terminationReason?: string;
-};
+function asOpenPrs(value: ReevalFixture['openPrs']): OpenPr[] | undefined {
+  return value as unknown as OpenPr[] | undefined;
+}
 
 function loadFixture(name: string): ReevalFixture {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as ReevalFixture;
@@ -80,7 +77,7 @@ function evaluateFixtureVerdict(fixture: ReevalFixture, entryPath = 'scoped_defe
     sessionId: fixture.sessionId,
     readinessObservedMs: fixture.readinessObservedMs ?? fixture.nowMs ?? Date.now(),
     nowMs: fixture.nowMs ?? Date.now(),
-    openPrs: fixture.openPrs,
+    openPrs: asOpenPrs(fixture.openPrs),
     reviewRuns: fixture.reviewRuns,
     sessions: fixture.sessions,
     ciChecks: fixture.ciChecksByPr?.[key],
@@ -94,7 +91,7 @@ function planFixtureTick(fixture: ReevalFixture) {
   const nowMs = fixture.nowMs ?? Date.now();
   return planDeferredWatchTick({
     watchEntries: fixture.watchEntries ?? {},
-    openPrs: fixture.openPrs,
+    openPrs: asOpenPrs(fixture.openPrs),
     reviewRuns: fixture.reviewRuns,
     sessions: fixture.sessions,
     ciChecksByPr: fixture.ciChecksByPr,
@@ -142,7 +139,7 @@ describe('Issue #235 acceptance criteria', () => {
   it('(1) closes ordering race: deferred wake then readiness triggers run without backstop', () => {
     const fixture = loadFixture('wake-before-ready-then-ready.json');
     const plan = planFixtureTick(fixture);
-    const starts = plan.actions.filter((a: WatchAction) => a.type === 'start_review');
+    const starts = plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review');
     expect(starts).toHaveLength(1);
     expect(starts[0]).toMatchObject({ prNumber: 235, headSha: 'abc235' });
     expect(plan.pollClass).toBe(SCOPED_DEFERRED_HEAD_WATCH_POLL_CLASS);
@@ -225,15 +222,15 @@ describe('Issue #235 acceptance criteria', () => {
   it('(6) failed/cancelled precedence routes to empty review trap', () => {
     const fixture = loadFixture('failed-cancelled-precedence.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'empty_review_trap')).toBe(true);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'start_review')).toBe(false);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'empty_review_trap')).toBe(true);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'start_review')).toBe(false);
   });
 
   it('(7) bounded never-ready hands to backstop without duplicate runs', () => {
     const fixture = loadFixture('bounded-never-ready.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(0);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'hand_to_backstop')).toBe(true);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(0);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'hand_to_backstop')).toBe(true);
   });
 
   it('(8) review-run-only scope: forbidden lifecycle commands', () => {
@@ -254,13 +251,13 @@ describe('Issue #235 acceptance criteria', () => {
   it('(9) restart-durable watch survives and triggers on readiness', () => {
     const fixture = loadFixture('restart-durable-defer-before-ready.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(1);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
   });
 
   it('(11b) readiness during downtime: recovery re-read triggers run', () => {
     const fixture = loadFixture('readiness-during-downtime.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(1);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
   });
 
   it('(12) delayed readiness >=77s within window still triggers', () => {
@@ -269,14 +266,14 @@ describe('Issue #235 acceptance criteria', () => {
     const nowMs = Number(fixture.nowMs);
     expect(nowMs - seedMs).toBeGreaterThanOrEqual(INCIDENT_WAKE_TO_READINESS_DELAY_MS);
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(1);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
   });
 
   it('(12) non-conformant short window hands to backstop', () => {
     const fixture = loadFixture('non-conformant-short-window.json');
     expect(isWatchWindowNonConformant(fixture.customWindowMs)).toBe(true);
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'hand_to_backstop')).toBe(true);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'hand_to_backstop')).toBe(true);
   });
 
   it('(13) idempotent verdict across entry paths', () => {
@@ -288,11 +285,13 @@ describe('Issue #235 acceptance criteria', () => {
       expect(verdict.reason).toBe('head_ready_for_review');
     }
     const covered = evaluateHeadReviewTriggerDecision({
-      ...fixture,
       prNumber: 235,
       headSha: 'idem235',
       sessionId: 'opk-28',
+      nowMs: fixture.nowMs,
+      openPrs: asOpenPrs(fixture.openPrs),
       reviewRuns: [{ prNumber: 235, targetSha: 'idem235', status: 'clean' }],
+      sessions: fixture.sessions,
       ciChecks: fixture.ciChecksByPr?.['235'],
       entryPath: 'reapply',
     });
@@ -303,7 +302,7 @@ describe('Issue #235 acceptance criteria', () => {
   it('(14) dropped wake with in-progress seed converges seconds-scale', () => {
     const fixture = loadFixture('dropped-wake-in-progress-seed.json');
     const seed = seedWatchFromInProgressSignals({
-      openPrs: fixture.openPrs,
+      openPrs: asOpenPrs(fixture.openPrs),
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
       existingWatches: fixture.watchEntries,
@@ -321,28 +320,28 @@ describe('Issue #235 acceptance criteria', () => {
     ];
     const plan = planDeferredWatchTick({
       watchEntries: seed.watchEntries,
-      openPrs: fixture.openPrs,
+      openPrs: asOpenPrs(fixture.openPrs),
       reviewRuns: fixture.reviewRuns,
       sessions: readySessions,
       ciChecksByPr: fixture.ciChecksByPr,
       nowMs: Number(fixture.nowMs) + 2_000,
     });
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(1);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(1);
   });
 
   it('(14) genuinely zero-signal head is backstop-only', () => {
     const fixture = loadFixture('zero-signal-backstop-only.json');
     const session = fixture.sessions?.[0] ?? null;
     const signal = evaluateBackstopOnlyZeroSignal({
-      prNumber: fixture.prNumber,
-      headSha: fixture.headSha,
+      prNumber: Number(fixture.prNumber ?? fixture.openPrs?.[0]?.number),
+      headSha: String(fixture.headSha ?? fixture.openPrs?.[0]?.headRefOid ?? ''),
       session,
       hadCompletionWake: fixture.hadCompletionWake,
     });
     expect(signal.backstopOnly).toBe(true);
     expect(signal.reason).toBe('zero_signal_backstop_only');
     const seed = seedWatchFromInProgressSignals({
-      openPrs: fixture.openPrs,
+      openPrs: asOpenPrs(fixture.openPrs),
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
       existingWatches: {},
@@ -353,20 +352,20 @@ describe('Issue #235 acceptance criteria', () => {
   it('(15a) transient read error retains watch as unknown', () => {
     const fixture = loadFixture('transient-read-error-15a.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'retain_watch' && a.reason === 'snapshot_unknown')).toBe(true);
-    expect(plan.actions.some((a: WatchAction) => a.type === 'start_review')).toBe(false);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'retain_watch' && a.reason === 'snapshot_unknown')).toBe(true);
+    expect(plan.actions.some((a: ReevalWatchAction) => a.type === 'start_review')).toBe(false);
   });
 
   it('(15b2) ambiguous timeout re-read sees in-flight — no duplicate retry', () => {
     const fixture = loadFixture('run-ambiguous-timeout-15b2.json');
     const plan = planFixtureTick(fixture);
-    expect(plan.actions.filter((a: WatchAction) => a.type === 'start_review')).toHaveLength(0);
+    expect(plan.actions.filter((a: ReevalWatchAction) => a.type === 'start_review')).toHaveLength(0);
   });
 
   it('(15c) window exhausted hands to backstop', () => {
     const fixture = loadFixture('window-exhausted-backstop-15c.json');
     const plan = planFixtureTick(fixture);
-    const handoff = plan.actions.find((a: WatchAction) => a.type === 'hand_to_backstop');
+    const handoff = plan.actions.find((a: ReevalWatchAction) => a.type === 'hand_to_backstop');
     expect(handoff?.reason).toBe('watch_window_expired');
   });
 });
@@ -445,7 +444,7 @@ describe('scenario matrix cells', () => {
     const fixture = loadFixture('wake-before-ready-then-ready.json');
     const reeval = evaluateFixtureVerdict(fixture);
     const reconcile = planReconcileActions({
-      openPrs: (fixture.openPrs ?? []) as OpenPr[],
+      openPrs: (fixture.openPrs ?? []) as unknown as OpenPr[],
       reviewRuns: fixture.reviewRuns ?? [],
       sessions: fixture.sessions ?? [],
       ciChecksByPr: fixture.ciChecksByPr,
@@ -466,6 +465,6 @@ describe('scenario matrix cells', () => {
       ciChecksByPr: fixture.ciChecksByPr,
     });
     expect(evaluation.triggerReviewRun).toBe(true);
-    expect(evaluation.nextEntry.lastObservedReadyMs).not.toBeNull();
+    expect(evaluation.nextEntry?.lastObservedReadyMs).not.toBeNull();
   });
 });
