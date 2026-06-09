@@ -127,7 +127,9 @@ describe('review-send reconcile (production-shape)', () => {
     );
     const { actions } = planReviewSendActions(fixture);
     expect(actions.some((a) => a.type === 'send')).toBe(true);
-    expect(actions.some((a) => a.reason === 'linked_session_runtime_not_alive')).toBe(false);
+    expect(
+      actions.some((a) => a.type === 'skip' && a.reason === 'linked_session_runtime_not_alive'),
+    ).toBe(false);
   });
 
   it('pre-send recheck fails when session disappears', () => {
@@ -284,7 +286,9 @@ describe('worker message submit (isSessionAlive)', () => {
 
 describe('golden-sample ao-status-session catalog', () => {
   it('includes mandatory working-no-runtime variant without runtime in capture', () => {
-    const variant = catalog.get('ao-status-session/working-no-runtime');
+    const variant = catalog.get('ao-status-session/working-no-runtime') as
+      | { forbiddenFields: string[] }
+      | undefined;
     expect(variant).toBeDefined();
     expect(variant?.forbiddenFields).toContain('runtime');
     const capture = loadCapture('working-no-runtime.raw.json');
