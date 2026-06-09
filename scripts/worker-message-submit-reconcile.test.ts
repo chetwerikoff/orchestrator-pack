@@ -101,8 +101,10 @@ describe('dispatch observation helpers (review)', () => {
     for (const status of ['errored', 'exited', 'cleanup', 'closed', 'detecting']) {
       expect(isSessionAlive({ status, runtime: 'alive' })).toBe(false);
     }
+    expect(isSessionAlive({ status: 'working' })).toBe(true);
     expect(isSessionAlive({ status: 'working', runtime: 'alive' })).toBe(true);
     expect(isSessionAlive({ status: 'working', runtime: 'exited' })).toBe(false);
+    expect(isSessionAlive({ status: 'working', runtime: 'unreachable' })).toBe(false);
   });
   it('uses stable review-run send anchor from updatedAt', () => {
     const run = {

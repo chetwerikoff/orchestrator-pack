@@ -10,7 +10,8 @@
     "scripts/review-ready-stuck-guard.test.ts",
     "scripts/review-send-reconcile.test.ts",
     "scripts/review-finding-delivery-confirm.test.ts",
-    "scripts/review-finding-delivery-submit.test.ts"
+    "scripts/review-finding-delivery-submit.test.ts",
+    "scripts/session-runtime-liveness.test.ts"
   ],
   "fixtureRoots": [
     {
@@ -65,6 +66,11 @@
       "glob": "tests/fixtures/ci-green-wake-reconcile/*.json",
       "shapes": [
         {
+          "jsonPath": "$.sessions[*]",
+          "command": "ao-status-session",
+          "variantResolver": "ao-status-session"
+        },
+        {
           "jsonPath": "$.sessions[*].reports[*]",
           "command": "ao-worker-report",
           "variantFrom": "reportState"
@@ -75,6 +81,11 @@
     {
       "glob": "tests/fixtures/review-send-reconcile/*.json",
       "shapes": [
+        {
+          "jsonPath": "$.sessions[*]",
+          "command": "ao-status-session",
+          "variantResolver": "ao-status-session"
+        },
         {
           "jsonPath": "$.sessions[*].reports[*]",
           "command": "ao-worker-report",
@@ -108,6 +119,11 @@
     {
       "glob": "scripts/fixtures/review-ready-stuck-guard/*.json",
       "shapes": [
+        {
+          "jsonPath": "$.session",
+          "command": "ao-status-session",
+          "variantResolver": "ao-status-session"
+        },
         {
           "jsonPath": "$.session.reports[*]",
           "command": "ao-worker-report",

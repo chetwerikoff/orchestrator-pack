@@ -1,0 +1,10 @@
+{
+  "id": "ao-status-session/working-no-runtime",
+  "command": "ao status",
+  "variant": "working-no-runtime",
+  "version": 1,
+  "extends": "_shared.json",
+  "captureRef": "captures/ao-status-session/working-no-runtime.raw.json",
+  "provenanceRef": "captures/ao-status-session/working-no-runtime.provenance.json",
+  "forbiddenFields": ["runtime"]
+}

@@ -6,7 +6,6 @@
     "role": "worker",
     "prNumber": 174,
     "status": "stuck",
-    "runtime": "alive",
     "ownedHeadSha": "beef174",
     "reports": [
       {
@@ -30,7 +29,24 @@
       "linkedSessionId": "opk-worker-pending"
     }
   ],
-  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"SUCCESS"},{"name":"Run pack contract tests","state":"PENDING"},{"name":"Self-architect lint","state":"SUCCESS"}],
+  "ciChecks": [
+    {
+      "name": "Verify orchestrator-pack structure",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "PR scope guard",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Run pack contract tests",
+      "state": "PENDING"
+    },
+    {
+      "name": "Self-architect lint",
+      "state": "SUCCESS"
+    }
+  ],
   "expect": {
     "reviewReady": false
   }

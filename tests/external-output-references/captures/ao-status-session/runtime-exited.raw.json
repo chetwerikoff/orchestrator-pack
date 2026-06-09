@@ -1,0 +1,8 @@
+{
+  "name": "opk-dead",
+  "role": "worker",
+  "status": "working",
+  "runtime": "exited",
+  "activity": "exited",
+  "reports": []
+}

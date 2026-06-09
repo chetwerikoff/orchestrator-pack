@@ -16,6 +16,11 @@
       "source": "ao review list <project> --json",
       "variantDir": "variants/ao-review-run",
       "variantFromField": "status"
+    },
+    "ao-status-session": {
+      "source": "ao status --json --reports full (session row from data[])",
+      "variantDir": "variants/ao-status-session",
+      "defaultVariant": "working-no-runtime"
     }
   }
 }

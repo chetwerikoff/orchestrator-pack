@@ -35,8 +35,8 @@ function liveWorker(overrides: Record<string, unknown> = {}) {
     role: 'worker',
     prNumber: PR,
     ownedHeadSha: HEAD,
-    runtime: 'alive',
     status: 'working',
+    activity: 'ready',
     ...overrides,
   };
 }

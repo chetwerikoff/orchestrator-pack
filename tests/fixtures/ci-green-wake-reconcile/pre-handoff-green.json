@@ -13,7 +13,6 @@
       "role": "worker",
       "prNumber": 77,
       "ownedHeadSha": "cafebabe",
-      "runtime": "alive",
       "status": "fixing_ci",
       "reports": [
         {

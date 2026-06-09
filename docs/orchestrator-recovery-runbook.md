@@ -534,11 +534,28 @@ pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -Once -DryRun
 | Persisted dedupe state file | `%TEMP%\orchestrator-review-send-reconcile-state.json` | `AO_REVIEW_SEND_RECONCILE_STATE` |
 
 The loop sends only when `needs_triage`, `sentFindingCount: 0`, `openFindingCount > 0`,
-`targetSha` equals the PR current head, linked session is runtime-alive and head-owning,
-and the PR is not merged. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
-`ao send`, `ao report`, or `ao review run`. After send, `#171` owns confirmation /
-re-delivery. Prefer the wake supervisor (`orchestrator-wake-supervisor.ps1 -Action Status`)
-so the process is supervised — not a hand-started orphan daemon.
+`targetSha` equals the PR current head, linked session is live and head-owning (see
+**Session runtime liveness** below), and the PR is not merged. It never calls
+`ao spawn`, `--claim-pr`, `ao session kill`, `ao send`, `ao report`, or `ao review run`.
+After send, `#171` owns confirmation / re-delivery. Prefer the wake supervisor
+(`orchestrator-wake-supervisor.ps1 -Action Status`) so the process is supervised — not
+a hand-started orphan daemon.
+
+### Session runtime liveness (`linked_session_runtime_not_alive`; Issue #250)
+
+Supervised reconcile logs `linked_session_runtime_not_alive` or `runtime_not_alive` when
+the linked worker fails the shared **runtime-field** rule in
+`docs/session-runtime-liveness.mjs`. Distinguish three cases before killing a session:
+
+| Case | Signals | Action |
+|------|---------|--------|
+| **Genuine death** | `runtime: exited` / `process_missing`, or terminal session `status` (`killed`, `terminated`, `exited`, …) | Respawn / `--claim-pr` per dead-session runbook; do not expect reconcile send/nudge |
+| **Shape / contract mismatch (historical)** | Worker operable, `ao status` row has **no** `runtime` field (AO 0.9.x), manual `ao review send` works | Fixed in Issue #250 — upgrade pack; absent `runtime` falls back to status + head ownership |
+| **False stuck / flood (#174)** | `stuck` / `probe_failure` with review-ready snapshot, no unreachability evidence | Review-ready stuck guard grace — separate from runtime liveness; see **Review-ready worker false stuck** |
+
+Present but non-`alive` `runtime` (including empty string or values like `unreachable`) is
+**non-live** on all action-producing paths — fail closed even when session `status` is
+`working`.
 
 Run the sender-side delivery-confirmation loop (mechanical; no LLM-orchestrator turn
 required):

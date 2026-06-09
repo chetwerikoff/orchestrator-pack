@@ -167,3 +167,12 @@ export declare function planStuckGuardReaction(input: {
   graceMs?: number;
   deliveryTracking?: { runs?: Record<string, { deliveryState?: string }> };
 }): StuckGuardPlanResult;
+export declare function preShieldRecheck(
+  planned: { sessionId: string; prNumber: number; headSha: string },
+  fresh: {
+    sessions: AoSession[];
+    openPrs: OpenPr[];
+    reviewRuns: ReviewRun[];
+    ciChecks: CiCheck[];
+  },
+): { ok: boolean; reason: string };

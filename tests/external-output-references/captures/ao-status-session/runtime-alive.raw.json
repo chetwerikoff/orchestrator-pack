@@ -1,0 +1,8 @@
+{
+  "name": "opk-forward",
+  "role": "worker",
+  "status": "working",
+  "runtime": "alive",
+  "activity": "ready",
+  "reports": []
+}

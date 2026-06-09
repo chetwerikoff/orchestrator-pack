@@ -1,0 +1,38 @@
+{
+  "name": "opk-33",
+  "role": "worker",
+  "branch": "feat/250",
+  "status": "working",
+  "summary": null,
+  "claudeSummary": null,
+  "pr": null,
+  "prNumber": null,
+  "issue": "250",
+  "lastActivity": "1m ago",
+  "project": "orchestrator-pack",
+  "ciStatus": null,
+  "reviewDecision": null,
+  "pendingThreads": null,
+  "activity": "ready",
+  "reports": [
+    {
+      "timestamp": "2026-06-09T13:25:49.783Z",
+      "actor": "che",
+      "source": "acknowledge",
+      "reportState": "started",
+      "accepted": true,
+      "before": {
+        "legacyStatus": "spawning",
+        "sessionState": "not_started",
+        "sessionReason": "spawn_requested",
+        "lastTransitionAt": "2026-06-09T13:25:36.946Z"
+      },
+      "after": {
+        "legacyStatus": "working",
+        "sessionState": "working",
+        "sessionReason": "agent_acknowledged",
+        "lastTransitionAt": "2026-06-09T13:25:49.783Z"
+      }
+    }
+  ]
+}

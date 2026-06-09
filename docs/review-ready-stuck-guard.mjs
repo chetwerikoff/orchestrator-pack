@@ -12,11 +12,13 @@ import {
 } from './review-finding-delivery-confirm.mjs';
 
 export { DELIVERY_STATE_ESCALATED, DELIVERY_STATE_UNCONFIRMED };
+import { isRuntimeAlive } from './session-runtime-liveness.mjs';
 import {
   findSessionById,
   getReportHeadSha,
   getSessionIdentifier,
   getStoredReportHeadSha,
+  isLiveWorkerSession,
   normalizeSha,
   reportCoversHead,
   resolveHeadCommittedAtMs,
@@ -24,6 +26,8 @@ import {
   sessionMatchesPr,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+export { isRuntimeAlive } from './session-runtime-liveness.mjs';
 
 export { getReportHeadSha, getStoredReportHeadSha, reportCoversHead };
 
@@ -55,16 +59,6 @@ export const BLIND_RECOVERY_FORBIDDEN = [/\bao\s+spawn\b/i, /--claim-pr\b/i];
 /** @typedef {{ firstFalseStuckAtMs?: number }} GraceRecord */
 /** @typedef {{ snapshots?: Record<string, GraceRecord> }} GraceTrackingState */
 /** @typedef {{ reachabilityFailed?: boolean, deliveryEscalated?: boolean, floodNotCleared?: boolean }} UnreachabilityEvidence */
-
-/**
- * Review-ready protection requires affirmative `runtime: alive` only.
- * Missing or unrecognized runtime values fail closed (no session-status fallback).
- *
- * @param {AoSession} session
- */
-export function isRuntimeAlive(session) {
-  return String(session?.runtime ?? '').trim().toLowerCase() === 'alive';
-}
 
 /**
  * @param {unknown} value
@@ -369,6 +363,10 @@ export function classifyReviewReadySnapshot({
     reasons.push('session_does_not_own_current_head');
   }
 
+  if (!isLiveWorkerSession(session)) {
+    reasons.push('session_not_live');
+  }
+
   if (!isRuntimeAlive(session)) {
     reasons.push('runtime_not_alive');
   }
@@ -548,6 +546,59 @@ export function planStuckGuardReaction({
     graceAnchorMs: anchorMs,
     graceDeadlineMs: deadlineMs,
   };
+}
+
+/**
+ * Pre-shield snapshot recheck (Issue #250 AC11).
+ *
+ * @param {object} planned
+ * @param {string} planned.sessionId
+ * @param {number} planned.prNumber
+ * @param {string} planned.headSha
+ * @param {object} fresh
+ * @param {AoSession[]} fresh.sessions
+ * @param {OpenPr[]} fresh.openPrs
+ * @param {ReviewRun[]} fresh.reviewRuns
+ * @param {CiCheck[]} fresh.ciChecks
+ */
+export function preShieldRecheck(planned, fresh) {
+  const { sessionId, prNumber, headSha } = planned;
+  const sessionList = toArray(fresh.sessions);
+  const session = findSessionById(sessionList, sessionId);
+  if (!session) {
+    return { ok: false, reason: 'session_missing_at_shield' };
+  }
+  if (getSessionIdentifier(session) !== sessionId) {
+    return { ok: false, reason: 'session_id_changed' };
+  }
+
+  const openPr = toArray(fresh.openPrs).find((pr) => Number(pr?.number) === prNumber);
+  if (!openPr) {
+    return { ok: false, reason: 'open_pr_missing_at_shield' };
+  }
+  if (normalizeSha(openPr.headRefOid) !== normalizeSha(headSha)) {
+    return { ok: false, reason: 'head_changed_at_shield' };
+  }
+
+  const classification = classifyReviewReadySnapshot({
+    session,
+    openPr,
+    reviewRuns: toArray(fresh.reviewRuns),
+    ciChecks: toArray(fresh.ciChecks),
+    sessions: sessionList,
+  });
+
+  if (!classification.reviewReady) {
+    return { ok: false, reason: `recheck_failed:${classification.reasons.join(',')}` };
+  }
+  if (classification.sessionId !== sessionId) {
+    return { ok: false, reason: 'session_id_changed' };
+  }
+  if (classification.headSha !== normalizeSha(headSha)) {
+    return { ok: false, reason: 'head_changed_at_shield' };
+  }
+
+  return { ok: true, reason: 'ok' };
 }
 
 runStdinJsonCli('review-ready-stuck-guard.mjs', {
