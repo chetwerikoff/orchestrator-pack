@@ -41,6 +41,23 @@ Describe 'Mechanical JSON state round-trip' {
         Test-MapHasNoReflectionKeys -Map $second.sent | Should -Be $true
     }
 
+    It 'does not mutate script default when returning missing-file state' {
+        $path = New-TempStatePath
+        $sharedDefault = @{ sent = @{}; lastTickMs = $null }
+        $first = Get-MechanicalJsonStateFile -Path $path -DefaultState $sharedDefault
+        $first.sent['run-mut'] = @{ sessionId = 'sess-mut' }
+        $first['_recovery'] = @{ fenceTrusted = $false; reason = 'synthetic' }
+        $first.lastTickMs = 99999
+
+        $second = Get-MechanicalJsonStateFile -Path $path -DefaultState $sharedDefault
+        $second.sent.Count | Should -Be 0
+        $second.ContainsKey('_recovery') | Should -Be $false
+        $second.lastTickMs | Should -Be $null
+        $sharedDefault.sent.Count | Should -Be 0
+        $sharedDefault.ContainsKey('_recovery') | Should -Be $false
+        $sharedDefault.lastTickMs | Should -Be $null
+    }
+
     It 'writes clean genesis from default hashtable maps' {
         $path = New-TempStatePath
         $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault

@@ -152,9 +152,6 @@ function Get-MechanicalJsonStateRecoveryReason {
 function ConvertTo-MechanicalJsonStateHashtable {
     param([object]$Value)
 
-    if ($Value -is [hashtable]) {
-        return $Value
-    }
     if ($Value -is [System.Collections.IDictionary]) {
         $copy = @{}
         foreach ($key in @($Value.Keys)) {
