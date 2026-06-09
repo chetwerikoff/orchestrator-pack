@@ -170,6 +170,77 @@ Describe 'Mechanical JSON state round-trip' {
     }
 }
 
+Describe 'side process progress pid rollover' {
+    BeforeAll {
+        . (Join-Path $script:LibDir 'Orchestrator-SideProcessProgress.ps1')
+    }
+
+    function script:New-TempProgressDir {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("side-progress-test-" + [guid]::NewGuid().ToString())
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        return $dir
+    }
+
+    It 'discards prior process recentOutcomes when pid changes' {
+        $dir = New-TempProgressDir
+        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
+        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        try {
+            $path = Join-Path $dir 'test-child.progress.json'
+            @{
+                childId        = 'test-child'
+                pid            = 1
+                recentOutcomes = @('error', 'error')
+                lastProgressMs = 1000
+                phase          = 'tick_error'
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding utf8 -NoNewline
+
+            Write-OrchestratorSideProcessTickError -ChildId 'test-child' -ErrorMessage 'new process error'
+            $read = Read-OrchestratorSideProcessProgress -ChildId 'test-child'
+            @($read.recentOutcomes) | Should -Be @('error')
+            [int]$read.pid | Should -Be $PID
+        }
+        finally {
+            if ($null -eq $previous) {
+                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+            }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'preserves recentOutcomes for the same pid' {
+        $dir = New-TempProgressDir
+        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
+        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        try {
+            $path = Join-Path $dir 'test-child.progress.json'
+            @{
+                childId        = 'test-child'
+                pid            = $PID
+                recentOutcomes = @('error', 'error')
+                lastProgressMs = 1000
+                phase          = 'tick_error'
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding utf8 -NoNewline
+
+            Write-OrchestratorSideProcessTickError -ChildId 'test-child' -ErrorMessage 'third error'
+            $read = Read-OrchestratorSideProcessProgress -ChildId 'test-child'
+            @($read.recentOutcomes) | Should -Be @('error', 'error', 'error')
+        }
+        finally {
+            if ($null -eq $previous) {
+                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+            }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'supervisor side-effect drain exemption' {
     BeforeAll {
         . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')

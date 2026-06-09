@@ -50,7 +50,11 @@ function Write-OrchestratorSideProcessProgress {
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         try {
             $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-            if ($existing.recentOutcomes) {
+            $existingPid = 0
+            if ($existing.pid) {
+                $existingPid = [int]$existing.pid
+            }
+            if ($existingPid -eq $PID -and $existing.recentOutcomes) {
                 $existingOutcomes = @($existing.recentOutcomes)
             }
         }
