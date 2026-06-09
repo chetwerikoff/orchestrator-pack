@@ -170,6 +170,46 @@ Describe 'Mechanical JSON state round-trip' {
     }
 }
 
+Describe 'supervisor side-effect drain exemption' {
+    BeforeAll {
+        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+    }
+
+    function script:New-TempSupervisorStateRoot {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("wake-sup-test-" + [guid]::NewGuid().ToString())
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        return $dir
+    }
+
+    It 'defers stalled health while a side-effect lock is held' {
+        $stateRoot = New-TempSupervisorStateRoot
+        $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
+        New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
+        $oldMs = [DateTimeOffset]::UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds()
+        $progress = @{
+            childId        = 'ci-green-wake-reconcile'
+            phase          = 'side_effect'
+            pid            = 99999
+            lastProgressMs = $oldMs
+        }
+        $progressPath = Join-Path $paths.ProgressDir 'ci-green-wake-reconcile.progress.json'
+        $progress | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding utf8 -NoNewline
+        '{"owner":"test"}' | Set-Content -LiteralPath $paths.'ci-green-wake-reconcileLock' -Encoding utf8 -NoNewline
+
+        $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId 'ci-green-wake-reconcile'
+        $health = Get-OrchestratorSideProcessHealthVerdict -ChildEntry $entry -Paths $paths -ChildAlive $true `
+            -Progress $progress -ChildPid 99999 -StallThresholdMs 60000 -ChildStartedMs $oldMs
+        $health.Status | Should -Be 'stalled'
+
+        if ($health.Status -eq 'stalled' -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $paths -ChildId 'ci-green-wake-reconcile')) {
+            $health.Status = 'working'
+            $health.Reason = ''
+        }
+
+        $health.Status | Should -Be 'working'
+    }
+}
+
 Describe 'supervisor health classification' {
     It 'reports stalled when alive child has no current progress past grace window' {
         $startedMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()

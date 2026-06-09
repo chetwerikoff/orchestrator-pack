@@ -859,6 +859,10 @@ function Get-OrchestratorWakeSupervisorChildStatusEntry {
     $health = Get-OrchestratorSideProcessHealthVerdict -ChildEntry $entry -Paths $Paths `
         -SupervisorPhase $SupervisorPhase -ChildAlive $alive -Progress $progress -ChildPid $pidVal `
         -StallThresholdMs $stallThreshold -ChildStartedMs $childStartedMs
+    if ($health.Status -eq 'stalled' -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -ChildId $ChildId)) {
+        $health.Status = 'working'
+        $health.Reason = ''
+    }
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
     if ($recovery.terminal -and $health.Status -in @('degraded', 'stalled')) {
         $health.Status = 'degraded'
@@ -1235,6 +1239,9 @@ function Invoke-OrchestratorWakeSupervisorLoop {
 
                 $needsRecovery = $status.Health -in @('degraded', 'stalled') -or
                     (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)
+                if ($needsRecovery -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -ChildId $child.Id)) {
+                    continue
+                }
                 if (-not $needsRecovery) {
                     continue
                 }
