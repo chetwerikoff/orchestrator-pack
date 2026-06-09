@@ -241,6 +241,26 @@ all 900 lines — the reasoning exception does not cover the reading.
 commits, and AO transitions. `coworker` must not run `ao-declare`, `ao report`, or
 open PRs.
 
+## RTK read-exploration (low-risk shapes; Issue #199)
+
+On hosts with coworker RTK enabled, noisy read-only shell (`grep`, `find`, `cat`, `ls`,
+`wc`, `head`, and similar exploration where exact bytes are not decision-bearing) is a
+primary missed-savings opportunity — see
+[`docs/rtk-missed-savings-inventory.md`](../docs/rtk-missed-savings-inventory.md).
+
+**For reads, prefer this agent's dedicated file tools** (`Read`, `Grep`, `Glob`, and
+equivalents on your entrypoint). **Reach for RTK shell wrappers only for raw shell that is
+genuinely needed** (pipelines, flags, or binaries without a first-class tool). Do not chase
+RTK adoption percentage; optimising net saved tokens on low-risk shapes is the goal.
+
+**Never compact** output that may carry secrets/credentials, private logs, raw declaration or
+scope file contents, or exact-byte decision-bearing config — regardless of command family.
+`ao` control/signal commands, `git diff`, and `gh pr checks` stay verbatim per §R passthrough;
+do not route them through RTK compaction.
+
+Architecture: §R.7 in
+[`docs/issues_drafts/00-architecture-decisions.md`](../docs/issues_drafts/00-architecture-decisions.md).
+
 ## Required CI (CI green)
 
 Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use

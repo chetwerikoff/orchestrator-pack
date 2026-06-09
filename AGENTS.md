@@ -17,6 +17,15 @@ truth: triggers, `--profile` usage, anti-delegation, reviewer carve-out, provide
 Do not duplicate that policy here. Architecture: §S in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
+## RTK read-exploration (canonical policy)
+
+On RTK-enabled hosts, read and follow the **RTK read-exploration** section in
+[`prompts/agent_rules.md`](prompts/agent_rules.md) (prefer dedicated file tools for reads;
+RTK shell wrappers only when raw shell is genuinely needed). Do not duplicate that guidance
+here. Inventory method: [`docs/rtk-missed-savings-inventory.md`](docs/rtk-missed-savings-inventory.md).
+Architecture: §R.7 in
+[`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
+
 ## Hard Rule
 
 Do not patch or vendor-modify `ComposioHQ/agent-orchestrator` core packages.

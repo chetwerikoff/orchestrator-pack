@@ -726,6 +726,22 @@ affects orchestrator and workers on the same machine). No tracked yaml change is
 Architecture: decision §R in
 [`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
 
+### RTK net-savings inventory (Issue #199)
+
+Measured missed-savings follow-up to #145. No passthrough manifest change on the current
+**no-go** kill-gate path.
+
+**Operator adoption** — after merge:
+
+1. Regenerate the missed-savings inventory on the operator host:
+   `pwsh -NoProfile -File scripts/invoke-rtk-discover-inventory.ps1` (optionally
+   `-AllProjects -SinceDays 90`). Archive output if useful — numbers are machine-local.
+2. No RTK enable/disable or passthrough change required for **no-go** (broad `ao ` unchanged).
+3. Restart AO (`ao stop` / `ao start`) so workers load updated **RTK read-exploration**
+   guidance in `prompts/agent_rules.md`.
+
+Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
+
 ## Operator adoption contract
 
 Merged worker PRs often change `agent-orchestrator.yaml.example` and docs while

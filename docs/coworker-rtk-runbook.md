@@ -9,7 +9,9 @@ verbatim for review and CI triage.
 **Prerequisites:** [Ubuntu setup runbook](ubuntu-setup-runbook.md) (ext4 paths, pwsh 7+,
 Cursor CLI). Worker pickup contract: [`docs/issues_drafts/32-worker-acknowledge-pickup-contract.md`](issues_drafts/32-worker-acknowledge-pickup-contract.md).
 
-**Architecture:** decision [§R](issues_drafts/00-architecture-decisions.md#r-coworker-rtk-passthrough-first-adoption-on-worker-hosts-issue-145).
+**Architecture:** decision [§R](issues_drafts/00-architecture-decisions.md#r-coworker-rtk-passthrough-first-adoption-on-worker-hosts-issue-145)
+(includes measured net-savings follow-up §R.7 per
+[#199](https://github.com/chetwerikoff/orchestrator-pack/issues/199)).
 
 ## Scope and limitations
 
@@ -172,8 +174,29 @@ Also invoked from `scripts/verify.ps1`. The guard asserts the **canonical five-f
 (including both `ao-declare` forms) and that the helper **merge preview** would apply every pack
 pattern additively.
 
+## Missed-savings inventory (Issue #199)
+
+Token-savings opportunity is measured with `rtk discover`, not adoption %. Regenerate the
+inventory on the operator host (machine-local numbers):
+
+```bash
+pwsh -NoProfile -File scripts/invoke-rtk-discover-inventory.ps1
+pwsh -NoProfile -File scripts/invoke-rtk-discover-inventory.ps1 -AllProjects -SinceDays 90
+```
+
+Full method, risk tiers, kill-gate record, and medium/high-risk gating:
+[`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
+
+Current kill-gate: **no-go** for field-preservation harness and `ao ` passthrough narrowing —
+low-risk guidance + inventory only. Re-evaluate when regeneration shows high-risk `ao` share
+≥ 15% per the inventory doc.
+
+Worker read-exploration guidance (prefer file tools for reads): **RTK read-exploration** in
+[`prompts/agent_rules.md`](../prompts/agent_rules.md).
+
 ## Related docs
 
+- [RTK missed-savings inventory](rtk-missed-savings-inventory.md)
 - [Ubuntu / WSL2 setup](ubuntu-setup-runbook.md)
 - [Coworker CLI delegation](../prompts/agent_rules.md) (separate from RTK)
 - Upstream RTK plugin: https://github.com/Arcanada-one/coworker/blob/main/docs/rtk-plugin.md

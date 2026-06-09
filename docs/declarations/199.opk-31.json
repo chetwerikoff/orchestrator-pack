@@ -1,0 +1,23 @@
+{
+  "issue_number": 199,
+  "iteration_id": "opk-31",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-09T09:00:44.686Z",
+  "baseline": {
+    "commit_sha": "65dc5d22905f1e560f44689f2a417b38fe08142a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d49810208c078a0b50490a19949a439ae3e33a34aa8178a7cbce6409fc17ce8b"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "prompts/agent_rules.md",
+    "docs/declarations/199.opk-31.json"
+  ],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**",
+    ".cursor/rules/**"
+  ],
+  "amendments": []
+}
