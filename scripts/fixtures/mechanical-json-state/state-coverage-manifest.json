@@ -10,36 +10,42 @@
     {
       "id": "ci-green-wake-reconcile",
       "stateFile": "orchestrator-ci-green-wake-state.json",
+      "callerScripts": ["scripts/ci-green-wake-reconcile.ps1"],
       "mapFields": ["heads", "nudged", "pendingJournal"],
       "actionTracking": true
     },
     {
       "id": "review-send-reconcile",
       "stateFile": "orchestrator-review-send-reconcile-state.json",
+      "callerScripts": ["scripts/review-send-reconcile.ps1"],
       "mapFields": ["sent"],
       "actionTracking": true
     },
     {
       "id": "review-trigger-reconcile",
       "stateFile": "orchestrator-review-trigger-reconcile-state.json",
+      "callerScripts": ["scripts/review-trigger-reconcile.ps1"],
       "mapFields": ["degradedCi"],
       "actionTracking": true
     },
     {
       "id": "worker-message-submit-reconcile",
       "stateFile": "orchestrator-worker-message-submit-state.json",
+      "callerScripts": ["scripts/worker-message-submit-reconcile.ps1"],
       "mapFields": ["deliveries"],
       "actionTracking": true
     },
     {
       "id": "review-trigger-reeval",
       "stateFile": "review-trigger-reeval-watch.json",
+      "callerScripts": ["scripts/lib/Record-ReviewTriggerReevalWatch.ps1"],
       "mapFields": ["watchEntries"],
       "actionTracking": true
     },
     {
       "id": "review-finding-delivery-confirm",
       "stateFile": "orchestrator-review-delivery-confirm-state.json",
+      "callerScripts": ["scripts/review-finding-delivery-confirm.ps1"],
       "mapFields": ["runs"],
       "actionTracking": true,
       "bespoke": true

@@ -134,11 +134,7 @@ function Invoke-SubmitReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         $tracking = Get-SubmitReconcileState -Path $StatePath
-        if (-not (Test-MechanicalJsonStateFencesTrusted -State $tracking)) {
-            $reason = Get-MechanicalJsonStateRecoveryReason -State $tracking
-            Write-SubmitReconcileLog "STATE FENCES UNTRUSTED: $reason; failing closed for side effects"
-            return @{ submitted = 0; escalated = 0; noop = 0; tracking = $tracking }
-        }
+        Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = @{}
         $reactionMessages = @{

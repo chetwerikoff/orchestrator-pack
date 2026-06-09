@@ -66,17 +66,47 @@ function Get-MechanicalJsonStateMapFieldNames {
     return $names
 }
 
+function Test-MechanicalJsonStateRecoveryIsUntrusted {
+    param([object]$Recovery)
+
+    if (-not $Recovery) { return $false }
+    if ($Recovery -is [System.Collections.IDictionary]) {
+        return $Recovery.Contains('fenceTrusted') -and $Recovery['fenceTrusted'] -eq $false
+    }
+    return ($null -ne $Recovery.fenceTrusted) -and ($Recovery.fenceTrusted -eq $false)
+}
+
 function Remove-MechanicalJsonStateRecoveryMeta {
     param([hashtable]$State)
 
     $clean = @{}
     foreach ($key in @($State.Keys)) {
         if ($key -eq '_recovery') {
+            if (Test-MechanicalJsonStateRecoveryIsUntrusted -Recovery $State[$key]) {
+                $clean[$key] = $State[$key]
+            }
             continue
         }
         $clean[$key] = $State[$key]
     }
     return $clean
+}
+
+function Assert-MechanicalJsonStateFencesTrusted {
+    param(
+        [object]$State,
+        [string]$Context = 'side effects'
+    )
+
+    if (Test-MechanicalJsonStateFencesTrusted -State $State) {
+        return
+    }
+
+    $reason = Get-MechanicalJsonStateRecoveryReason -State $State
+    if (-not $reason) {
+        $reason = 'fences untrusted'
+    }
+    throw "STATE FENCES UNTRUSTED: $reason; failing closed for $Context"
 }
 
 function Test-MechanicalJsonStateFencesTrusted {
@@ -311,6 +341,7 @@ function Get-MechanicalJsonStateFile {
                 reason       = 'unparseable_no_backup'
                 quarantined  = $quarantinePath
             }
+            Set-MechanicalJsonStateFile -Path $Path -State $state -DefaultState $DefaultState -JsonDepth 30
             return $state
         }
 

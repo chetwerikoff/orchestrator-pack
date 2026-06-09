@@ -302,11 +302,7 @@ function Invoke-CiGreenWakeTick {
     )
 
     $tracking = Get-CiGreenWakeState -Path $StatePath
-    if (-not (Test-MechanicalJsonStateFencesTrusted -State $tracking)) {
-        $reason = Get-MechanicalJsonStateRecoveryReason -State $tracking
-        Write-CiGreenWakeLog "STATE FENCES UNTRUSTED: $reason; failing closed for side effects"
-        return 0
-    }
+    Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
 
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}

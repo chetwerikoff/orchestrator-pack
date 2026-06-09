@@ -238,11 +238,7 @@ function Invoke-ReviewSendTick {
     )
 
     $tracking = Get-ReviewSendState -Path $StatePath
-    if (-not (Test-MechanicalJsonStateFencesTrusted -State $tracking)) {
-        $reason = Get-MechanicalJsonStateRecoveryReason -State $tracking
-        Write-ReviewSendLog "STATE FENCES UNTRUSTED: $reason; failing closed for side effects"
-        return 0
-    }
+    Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
 
     if ($Fixture) {
         $payload = Get-FixtureReviewSendPayload -Path $Fixture

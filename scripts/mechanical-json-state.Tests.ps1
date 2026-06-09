@@ -79,7 +79,21 @@ Describe 'Mechanical JSON state round-trip' {
         $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
 
         Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $false
-        Test-Path -LiteralPath $path | Should -Be $false
+        Test-Path -LiteralPath $path | Should -Be $true
+        $again = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
+        Test-MechanicalJsonStateFencesTrusted -State $again | Should -Be $false
+    }
+
+    It 'throws when tick helpers assert untrusted fences' {
+        $untrusted = @{
+            sent      = @{}
+            lastTickMs = $null
+            _recovery = @{
+                fenceTrusted = $false
+                reason       = 'unparseable_no_backup'
+            }
+        }
+        { Assert-MechanicalJsonStateFencesTrusted -State $untrusted } | Should -Throw '*STATE FENCES UNTRUSTED*'
     }
 
     It 'restores action-tracking state from backup after unparseable write' {
