@@ -62,11 +62,12 @@ function Write-SubmitReconcileLog {
     Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
 
+$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; audit = @(); lastTickMs = $null }
+
 function Get-SubmitReconcileState {
     param([string]$Path)
 
-    $default = @{ deliveries = @{}; audit = @(); lastTickMs = $null }
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
 }
 
 function Set-SubmitReconcileState {
@@ -75,7 +76,7 @@ function Set-SubmitReconcileState {
         [object]$State
     )
 
-    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:SubmitReconcileDefaultState -JsonDepth 30
 }
 
 function Get-FixtureSubmitPayload {
@@ -133,6 +134,7 @@ function Invoke-SubmitReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         $tracking = Get-SubmitReconcileState -Path $StatePath
+        Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = @{}
         $reactionMessages = @{
@@ -296,15 +298,15 @@ try {
                     Set-SubmitReconcileState -Path $statePath -State $result.tracking
                 }
                 Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
             }
             catch {
                 $tickFailed = $true
                 Write-SubmitReconcileLog "tick failed: $_"
+                Write-OrchestratorSideProcessTickError -ChildId 'worker-message-submit-reconcile' -ErrorMessage "$_"
                 if ($Once) { throw }
             }
         }
-
-        Write-OrchestratorSideProcessProgress -ChildId 'worker-message-submit-reconcile' -Phase 'tick_complete'
         if ($Once) { break }
         Start-Sleep -Milliseconds $pollMs
     } while ($true)

@@ -562,6 +562,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== side-process state round-trip coverage (Issue #248) =='
+$stateCoverageCheck = Join-Path $Root 'scripts/check-side-process-state-coverage.ps1'
+if (Test-Path -LiteralPath $stateCoverageCheck -PathType Leaf) {
+    & $stateCoverageCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-side-process-state-coverage.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-side-process-state-coverage.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'side-process state coverage checks failed (Issue #248)'
+    }
+}
+else {
+    Write-Check 'scripts/check-side-process-state-coverage.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing side-process state coverage check script (Issue #248)'
+}
+
+Write-Host ''
 Write-Host '== review bulk-send / stuck-open diagnostic (Issue #140) =='
 $bulkSendDiagCheck = Join-Path $Root 'scripts/check-review-bulk-send-diagnose.ps1'
 if (Test-Path -LiteralPath $bulkSendDiagCheck -PathType Leaf) {

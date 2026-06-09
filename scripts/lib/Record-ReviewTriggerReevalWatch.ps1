@@ -59,6 +59,7 @@ function Update-ReviewTriggerReevalWatchStateMerged {
     $lockPath = Get-ReviewTriggerReevalWatchLockPath -WatchPath $Path
     Invoke-ReviewTriggerReevalWatchStateLocked -LockPath $lockPath -Action {
         $current = Get-ReviewTriggerReevalWatchState -Path $Path
+        Assert-MechanicalJsonStateFencesTrusted -State $current -Context 'watch state merge'
         $existing = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $current.watchEntries
         $incoming = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $IncomingWatchEntries
         $merged = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'mergeWatchState' -Payload @{
@@ -73,11 +74,12 @@ function Update-ReviewTriggerReevalWatchStateMerged {
     }
 }
 
+$Script:ReviewTriggerReevalWatchDefaultState = @{ watchEntries = @{}; lastUpdatedMs = $null }
+
 function Get-ReviewTriggerReevalWatchState {
     param([string]$Path)
 
-    $default = @{ watchEntries = @{}; lastUpdatedMs = $null }
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:ReviewTriggerReevalWatchDefaultState -ActionTracking
 }
 
 function Set-ReviewTriggerReevalWatchState {
@@ -86,7 +88,7 @@ function Set-ReviewTriggerReevalWatchState {
         [object]$State
     )
 
-    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReviewTriggerReevalWatchDefaultState -JsonDepth 30
 }
 
 function Record-ReviewTriggerReevalWatchFromWakeDefer {
@@ -110,6 +112,7 @@ function Record-ReviewTriggerReevalWatchFromWakeDefer {
 
     $path = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
     $state = Get-ReviewTriggerReevalWatchState -Path $path
+    Assert-MechanicalJsonStateFencesTrusted -State $state -Context 'watch state recording'
     $existing = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $state.watchEntries
 
     $seed = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'seedFromWakeDefer' -Payload @{

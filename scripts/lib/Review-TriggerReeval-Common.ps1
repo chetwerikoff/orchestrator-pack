@@ -30,23 +30,13 @@ function Invoke-ReviewTriggerReevalFilterCli {
 function ConvertTo-ReviewTriggerReevalWatchMap {
     param([object]$WatchEntries)
 
-    $map = @{}
     if (-not $WatchEntries) {
-        return $map
+        return @{}
     }
     if ($WatchEntries -is [System.Collections.IDictionary]) {
-        foreach ($key in @($WatchEntries.Keys)) {
-            $map[[string]$key] = $WatchEntries[$key]
-        }
-        return $map
+        return Copy-MechanicalJsonMap -Map $WatchEntries
     }
-    foreach ($prop in $WatchEntries.PSObject.Properties) {
-        if ($prop.MemberType -ne 'NoteProperty' -and $prop.MemberType -ne 'Property') {
-            continue
-        }
-        $map[$prop.Name] = $prop.Value
-    }
-    return $map
+    return Copy-MechanicalJsonMap -Map $WatchEntries
 }
 
 function Get-FixtureReviewTriggerReevalPayload {

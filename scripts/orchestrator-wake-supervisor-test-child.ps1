@@ -10,7 +10,7 @@ param(
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
     [string]$MarkerDir = '',
-    [ValidateSet('normal', 'hang', 'slow-side-effect')]
+    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error')]
     [string]$Mode = 'normal'
 )
 
@@ -82,6 +82,12 @@ while ($true) {
         Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
             Start-Sleep -Seconds 8
         } | Out-Null
+    }
+
+    if ($Mode -eq 'tick-error') {
+        Write-OrchestratorSideProcessTickError -ChildId $Role -ErrorMessage 'synthetic sustained tick failure'
+        Start-Sleep -Seconds 1
+        continue
     }
 
     Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'idle'

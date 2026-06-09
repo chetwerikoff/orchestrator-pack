@@ -59,7 +59,7 @@ switch ($Action) {
         }
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
-        if (Test-OrchestratorWakeSupervisorAllChildrenAlive -Report $report) {
+        if (Test-OrchestratorWakeSupervisorAllChildrenHealthy -Report $report) {
             exit 0
         }
         exit 1

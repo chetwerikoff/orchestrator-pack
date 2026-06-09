@@ -80,11 +80,12 @@ function Invoke-CiGreenWakeFilterCli {
         -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
+$Script:CiGreenWakeDefaultState = @{ heads = @{}; nudged = @{}; pendingJournal = @{}; lastTickMs = $null }
+
 function Get-CiGreenWakeState {
     param([string]$Path)
 
-    $default = @{ heads = @{}; nudged = @{}; pendingJournal = @{}; lastTickMs = $null }
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:CiGreenWakeDefaultState -ActionTracking
 }
 
 function Set-CiGreenWakeState {
@@ -93,7 +94,7 @@ function Set-CiGreenWakeState {
         [object]$State
     )
 
-    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:CiGreenWakeDefaultState -JsonDepth 30
 }
 
 function Save-PartialCiGreenWakeTracking {
@@ -301,6 +302,7 @@ function Invoke-CiGreenWakeTick {
     )
 
     $tracking = Get-CiGreenWakeState -Path $StatePath
+    Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
 
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}
@@ -330,18 +332,8 @@ function Invoke-CiGreenWakeTick {
         $requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
     }
 
-    $nudged = @{}
-    if ($tracking.nudged) {
-        foreach ($prop in $tracking.nudged.PSObject.Properties) {
-            $nudged[$prop.Name] = $prop.Value
-        }
-    }
-    $pendingJournal = @{}
-    if ($tracking.pendingJournal) {
-        foreach ($prop in $tracking.pendingJournal.PSObject.Properties) {
-            $pendingJournal[$prop.Name] = $prop.Value
-        }
-    }
+    $nudged = Copy-MechanicalJsonMap -Map $tracking.nudged
+    $pendingJournal = Copy-MechanicalJsonMap -Map $tracking.pendingJournal
     $journalRetries = Retry-PendingCiGreenDispatchJournals -PendingJournal $pendingJournal -Nudged $nudged `
         -DryRunMode:$DryRunMode
     if ($journalRetries -gt 0) {
@@ -377,25 +369,10 @@ function Invoke-CiGreenWakeTick {
     }
 
     $sent = 0
-    $nudged = @{}
-    if ($tracking.nudged) {
-        foreach ($prop in $tracking.nudged.PSObject.Properties) {
-            $nudged[$prop.Name] = $prop.Value
-        }
-    }
-    $pendingJournal = @{}
-    if ($tracking.pendingJournal) {
-        foreach ($prop in $tracking.pendingJournal.PSObject.Properties) {
-            $pendingJournal[$prop.Name] = $prop.Value
-        }
-    }
+    $nudged = Copy-MechanicalJsonMap -Map $tracking.nudged
+    $pendingJournal = Copy-MechanicalJsonMap -Map $tracking.pendingJournal
 
-    $headRecords = @{}
-    if ($plan.headRecords) {
-        foreach ($prop in $plan.headRecords.PSObject.Properties) {
-            $headRecords[$prop.Name] = $prop.Value
-        }
-    }
+    $headRecords = Copy-MechanicalJsonMap -Map $plan.headRecords
 
     $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
 
@@ -506,12 +483,11 @@ try {
             try {
                 $count = Invoke-CiGreenWakeTick -Project $ProjectId -StatePath $statePath -DryRunMode:$DryRun
                 Write-CiGreenWakeLog "tick complete (sent=$count)"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'ci-green-wake-reconcile'
             }
             catch {
                 Write-CiGreenWakeLog "tick error: $_"
-            }
-            finally {
-                Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'tick_complete'
+                Write-OrchestratorSideProcessTickError -ChildId 'ci-green-wake-reconcile' -ErrorMessage "$_"
             }
         }
 

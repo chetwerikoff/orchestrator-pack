@@ -1,0 +1,40 @@
+{
+  "issue_number": 248,
+  "iteration_id": "opk-32",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-09T11:25:00.000Z",
+  "baseline": {
+    "commit_sha": "5cc2c9464dc631e03d351eea881e0f5f2d1e6d9d",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:59f03f1d0e6191cb83e44a9da8653ee0ea6683487669443999e192f306fa5d20"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:pending",
+      "new_active_scope_hash": "sha256:59f03f1d0e6191cb83e44a9da8653ee0ea6683487669443999e192f306fa5d20",
+      "changed": {
+        "added": [],
+        "removed": [
+          "docs/declarations/248.opk-32.json",
+          "scripts/check-side-process-state-coverage.ps1",
+          "scripts/lib/MechanicalReconcileNode.ps1",
+          "scripts/lib/Orchestrator-SideProcessHealth.ps1",
+          "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+          "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+          "scripts/mechanical-json-state.Tests.ps1",
+          "scripts/mechanical-json-state.test.ts",
+          "scripts/verify.ps1"
+        ]
+      },
+      "reason": "regenerate scope hash after CI fixes",
+      "actor": "opk-32",
+      "timestamp": "2026-06-09T11:25:26.117Z",
+      "applied": true
+    }
+  ]
+}

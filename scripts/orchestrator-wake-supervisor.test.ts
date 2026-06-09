@@ -480,9 +480,9 @@ describe('orchestrator-wake-supervisor', () => {
     const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusUp.status).toBe(0);
     expect(statusUp.stdout).toContain('supervisor: running');
-    expect(statusUp.stdout).toContain('listener:   running');
-    expect(statusUp.stdout).toContain('heartbeat:  running');
-    expect(statusUp.stdout).toContain('review-send-reconcile: running');
+    expect(statusUp.stdout).toContain('listener:   working');
+    expect(statusUp.stdout).toContain('heartbeat:  working');
+    expect(statusUp.stdout).toContain('review-send-reconcile: working');
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 500));

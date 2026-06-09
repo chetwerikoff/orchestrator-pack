@@ -82,11 +82,12 @@ function Invoke-ReviewSendFilterCli {
         -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
+$Script:ReviewSendDefaultState = @{ sent = @{}; lastTickMs = $null }
+
 function Get-ReviewSendState {
     param([string]$Path)
 
-    $default = @{ sent = @{}; lastTickMs = $null }
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:ReviewSendDefaultState -ActionTracking
 }
 
 function Set-ReviewSendState {
@@ -95,7 +96,7 @@ function Set-ReviewSendState {
         [object]$State
     )
 
-    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReviewSendDefaultState -JsonDepth 30
 }
 
 function Save-PartialReviewSendTracking {
@@ -237,6 +238,7 @@ function Invoke-ReviewSendTick {
     )
 
     $tracking = Get-ReviewSendState -Path $StatePath
+    Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
 
     if ($Fixture) {
         $payload = Get-FixtureReviewSendPayload -Path $Fixture
@@ -279,12 +281,7 @@ function Invoke-ReviewSendTick {
     }
 
     $sent = 0
-    $sentRecords = @{}
-    if ($tracking.sent) {
-        foreach ($prop in $tracking.sent.PSObject.Properties) {
-            $sentRecords[$prop.Name] = $prop.Value
-        }
-    }
+    $sentRecords = Copy-MechanicalJsonMap -Map $tracking.sent
 
     $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
 
@@ -375,12 +372,11 @@ try {
             try {
                 $count = Invoke-ReviewSendTick -Project $ProjectId -StatePath $statePath -DryRunMode:$DryRun
                 Write-ReviewSendLog "tick complete (sent=$count)"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'review-send-reconcile'
             }
             catch {
                 Write-ReviewSendLog "tick error: $_"
-            }
-            finally {
-                Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'tick_complete'
+                Write-OrchestratorSideProcessTickError -ChildId 'review-send-reconcile' -ErrorMessage "$_"
             }
         }
 
