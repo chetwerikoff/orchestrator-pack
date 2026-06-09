@@ -20,24 +20,7 @@
     "headCommittedAt": "2026-06-04T11:00:00Z"
   },
   "reviewRuns": [],
-  "ciChecks": [
-    {
-      "name": "Verify orchestrator-pack structure",
-      "state": "SUCCESS"
-    },
-    {
-      "name": "PR scope guard",
-      "state": "SUCCESS"
-    },
-    {
-      "name": "Run pack contract tests",
-      "state": "SUCCESS"
-    },
-    {
-      "name": "Self-architect lint",
-      "state": "SUCCESS"
-    }
-  ],
+  "ciChecks": [{"name":"Verify orchestrator-pack structure","state":"SUCCESS"},{"name":"PR scope guard","state":"SUCCESS"},{"name":"Run pack contract tests","state":"SUCCESS"},{"name":"Self-architect lint","state":"SUCCESS"}],
   "expect": {
     "reviewReady": false,
     "actionType": "allow_normal"
