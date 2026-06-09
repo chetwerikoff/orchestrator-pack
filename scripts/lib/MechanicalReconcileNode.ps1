@@ -189,7 +189,8 @@ function Read-MechanicalJsonStateRawObject {
     if ([string]::IsNullOrWhiteSpace($rawText)) {
         throw 'empty state file'
     }
-    return $rawText | ConvertFrom-Json -AsHashtable
+    $parsed = $rawText | ConvertFrom-Json
+    return ConvertTo-MechanicalJsonStateHashtable -Value $parsed
 }
 
 function Test-MechanicalJsonStateFileParseable {

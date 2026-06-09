@@ -1244,8 +1244,8 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                 }
 
                 $nextAttempts = $recovery.attempts + 1
-                if ($nextAttempts -ge $maxAttempts) {
-                    $terminalReason = "recovery exhausted after $nextAttempts attempts: $reason"
+                if (Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts $recovery.attempts -MaxAttempts $maxAttempts) {
+                    $terminalReason = "recovery exhausted after $maxAttempts attempts: $reason"
                     Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) terminal degraded: $terminalReason" -LogPath $Paths.SupervisorLog
                     Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id -RecoveryEntry @{
                         attempts = $nextAttempts

@@ -4,6 +4,7 @@ BeforeAll {
     $script:LibDir = Join-Path $script:RepoRoot 'scripts/lib'
     $script:FixtureDir = Join-Path $script:RepoRoot 'scripts/fixtures/mechanical-json-state'
     . (Join-Path $script:LibDir 'MechanicalReconcileNode.ps1')
+    . (Join-Path $script:LibDir 'Orchestrator-SideProcessHealth.ps1')
 
     $script:ReflectionKeys = Get-MechanicalJsonReflectionKeys
     $script:ReviewSendDefault = @{ sent = @{}; lastTickMs = $null }
@@ -91,5 +92,25 @@ Describe 'Mechanical JSON state round-trip' {
         $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
         Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $true
         $state.sent['run-abc'].sessionId | Should -Be 'sess-1'
+    }
+}
+
+Describe 'supervisor bounded recovery' {
+    It 'allows exactly maxAttempts recovery restarts before terminal escalation' {
+        $max = 3
+        $restartAttempts = @()
+        for ($prior = 0; $prior -lt 10; $prior++) {
+            if (Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts $prior -MaxAttempts $max) {
+                break
+            }
+            $restartAttempts += ($prior + 1)
+        }
+
+        $restartAttempts | Should -Be @(1, 2, 3)
+    }
+
+    It 'performs one recovery restart when maxAttempts is 1' {
+        Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts 0 -MaxAttempts 1 | Should -Be $false
+        Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts 1 -MaxAttempts 1 | Should -Be $true
     }
 }

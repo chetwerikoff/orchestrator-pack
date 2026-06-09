@@ -19,6 +19,15 @@ function Get-OrchestratorSideProcessHealthRecoveryMaxAttempts {
     return 3
 }
 
+function Test-OrchestratorSideProcessRecoveryShouldEscalate {
+    param(
+        [int]$PriorRecoveryAttempts,
+        [int]$MaxAttempts
+    )
+
+    return ($PriorRecoveryAttempts + 1) -gt $MaxAttempts
+}
+
 function Get-OrchestratorSideProcessRecentOutcomes {
     param($Progress)
 
