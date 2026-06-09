@@ -189,12 +189,16 @@ function ConvertFrom-RtkDiscoverJson {
 
     foreach ($entry in @($doc.unsupported)) {
         $shape = [string]$entry.base_command
+        $example = [string]$entry.example
         if (-not $shape) {
-            $shape = [string]$entry.example
+            $shape = $example
         }
-        $tier = Get-RtkCommandRiskTier -CommandShape $shape
-        $sensitivity = Test-RtkSensitivityExactnessOverride -CommandShape $shape
-        $match = Test-RtkPassthroughMatch -CommandShape $shape -PassthroughPatterns $PassthroughPatterns
+        # discover's base_command is often just the executable; match tier/passthrough on the
+        # full example so patterns like `ao ` (trailing space) hit real `ao …` invocations.
+        $classifyShape = if ($example) { $example } else { $shape }
+        $tier = Get-RtkCommandRiskTier -CommandShape $classifyShape
+        $sensitivity = Test-RtkSensitivityExactnessOverride -CommandShape $classifyShape
+        $match = Test-RtkPassthroughMatch -CommandShape $classifyShape -PassthroughPatterns $PassthroughPatterns
         $rows.Add([pscustomobject]@{
                 CommandShape                 = $shape
                 OccurrenceCount              = [int]$entry.count
