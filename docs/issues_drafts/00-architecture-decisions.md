@@ -690,6 +690,18 @@ on AO **Cursor worker** hosts is **opt-in**, **passthrough-first**, and **host-g
 6. **Disable rollback.** Primary rollback: `coworker rtk disable` — no routine manual
    `hooks.json` surgery.
 
+7. **Measured net-savings follow-up (Issue #199).** Token-savings opportunity is sized with
+   `rtk discover` and a repeatable inventory
+   ([`docs/rtk-missed-savings-inventory.md`](../rtk-missed-savings-inventory.md)); optimise
+   **net saved tokens on low-risk command shapes**, not adoption %. Source/caller attribution
+   is **best-effort** — when `rtk discover` lacks a caller dimension, decisions use
+   command-shape × risk-tier only. Medium-tier and existing §R.3 passthrough families are
+   inventory/guidance-only unless a **kill-gate go** authorizes work. Touching the broad
+   `ao ` passthrough requires a pinned **field-preservation test** (CI via existing verify
+   entry points) plus fixture-refresh / schema-snapshot before narrowing; never blanket
+   `ao` removal. Current kill-gate record: **no-go** — low-risk guidance + inventory method
+   only; broad `ao ` remains in the tracked pack manifest until a future go.
+
 See [`docs/coworker-rtk-runbook.md`](../coworker-rtk-runbook.md).
 
 ## T. RCA and spec discipline against misdirected fixes (Issue #221)
