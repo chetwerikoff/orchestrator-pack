@@ -75,7 +75,8 @@ function Get-OrchestratorSideProcessHealthVerdict {
         [bool]$ChildAlive = $false,
         $Progress = $null,
         [int]$ChildPid = 0,
-        [int]$StallThresholdMs = 0
+        [int]$StallThresholdMs = 0,
+        [long]$ChildStartedMs = 0
     )
 
     $reason = ''
@@ -127,8 +128,9 @@ function Get-OrchestratorSideProcessHealthVerdict {
         $progressPid = [int]$Progress.pid
     }
     $freshStart = ($ChildPid -gt 0 -and $progressPid -gt 0 -and $progressPid -ne $ChildPid)
+    $hasCurrentProgress = ($Progress -and -not $freshStart)
 
-    if ($Progress -and -not $freshStart) {
+    if ($hasCurrentProgress) {
         if (Test-OrchestratorSideProcessSustainedErrors -Progress $Progress) {
             $errorReason = if ($lastError) { $lastError } else { 'sustained tick errors' }
             return @{
@@ -158,6 +160,27 @@ function Get-OrchestratorSideProcessHealthVerdict {
                 Status    = 'working'
                 Reason    = ''
                 LastError = $errorReason
+            }
+        }
+    }
+
+    if ($StallThresholdMs -gt 0 -and $ChildStartedMs -gt 0) {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if (($nowMs - $ChildStartedMs) -ge $StallThresholdMs) {
+            if (-not $hasCurrentProgress) {
+                $stallReason = if ($freshStart) { 'stale progress from prior process' } else { 'no progress heartbeat' }
+                return @{
+                    Status    = 'stalled'
+                    Reason    = $stallReason
+                    LastError = $lastError
+                }
+            }
+            if (-not $Progress.lastProgressMs) {
+                return @{
+                    Status    = 'stalled'
+                    Reason    = 'no progress timestamp'
+                    LastError = $lastError
+                }
             }
         }
     }

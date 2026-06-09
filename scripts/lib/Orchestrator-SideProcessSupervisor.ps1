@@ -851,9 +851,13 @@ function Get-OrchestratorWakeSupervisorChildStatusEntry {
     else {
         0
     }
+    $childStartedMs = 0
+    if (Test-Path -LiteralPath $pidFile) {
+        $childStartedMs = [long]([System.IO.File]::GetCreationTimeUtc($pidFile)).Subtract([datetime]'1970-01-01').TotalMilliseconds
+    }
     $health = Get-OrchestratorSideProcessHealthVerdict -ChildEntry $entry -Paths $Paths `
         -SupervisorPhase $SupervisorPhase -ChildAlive $alive -Progress $progress -ChildPid $pidVal `
-        -StallThresholdMs $stallThreshold
+        -StallThresholdMs $stallThreshold -ChildStartedMs $childStartedMs
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
     if ($recovery.terminal -and $health.Status -in @('degraded', 'stalled')) {
         $health.Status = 'degraded'

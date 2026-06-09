@@ -312,10 +312,26 @@ function Get-MechanicalJsonStateFile {
                 $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
                 Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
                 $state = Normalize-MechanicalJsonState -State $parsed -DefaultState $DefaultState
-                $state['_recovery'] = @{
-                    fenceTrusted = $true
-                    reason       = 'restored_from_backup'
-                    quarantined  = $quarantinePath
+                if (Test-MechanicalJsonStateFencesTrusted -State $state) {
+                    $state['_recovery'] = @{
+                        fenceTrusted = $true
+                        reason       = 'restored_from_backup'
+                        quarantined  = $quarantinePath
+                    }
+                }
+                else {
+                    $recoveryReason = Get-MechanicalJsonStateRecoveryReason -State $state
+                    if (-not $recoveryReason) {
+                        $recoveryReason = 'restored_untrusted_backup'
+                    }
+                    $state['_recovery'] = @{
+                        fenceTrusted = $false
+                        reason       = $recoveryReason
+                        quarantined  = $quarantinePath
+                    }
+                    if ($ActionTracking) {
+                        Set-MechanicalJsonStateFile -Path $Path -State $state -DefaultState $DefaultState -JsonDepth 30
+                    }
                 }
                 return $state
             }
@@ -382,5 +398,7 @@ function Set-MechanicalJsonStateFile {
     $json = $toWrite | ConvertTo-Json -Depth $JsonDepth -Compress
     Set-Content -LiteralPath $tempPath -Value $json -Encoding utf8 -NoNewline
     Move-Item -LiteralPath $tempPath -Destination $Path -Force
-    Copy-MechanicalJsonStateBackup -Path $Path
+    if (Test-MechanicalJsonStateFencesTrusted -State $toWrite) {
+        Copy-MechanicalJsonStateBackup -Path $Path
+    }
 }

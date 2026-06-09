@@ -124,6 +124,74 @@ Describe 'Mechanical JSON state round-trip' {
         Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $true
         $state.sent['run-abc'].sessionId | Should -Be 'sess-1'
     }
+
+    It 'keeps untrusted backup fail-closed when main file becomes unparseable' {
+        $path = New-TempStatePath
+        $untrusted = @{
+            sent       = @{}
+            lastTickMs = $null
+            _recovery  = @{
+                fenceTrusted = $false
+                reason       = 'unparseable_no_backup'
+            }
+        }
+        Set-MechanicalJsonStateFile -Path $path -State $untrusted -DefaultState $script:ReviewSendDefault -JsonDepth 30
+        $backupPath = Get-MechanicalJsonStateBackupPath -Path $path
+        Copy-Item -LiteralPath $path -Destination $backupPath -Force
+        Set-Content -LiteralPath $path -Value '{"sent":{' -Encoding utf8 -NoNewline
+
+        $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
+        Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $false
+        Get-MechanicalJsonStateRecoveryReason -State $state | Should -Be 'unparseable_no_backup'
+    }
+
+    It 'does not overwrite a trusted backup when persisting untrusted recovery' {
+        $path = New-TempStatePath
+        $good = Get-Content -LiteralPath (Join-Path $script:FixtureDir 'clean-sent-populated.json') -Raw |
+            ConvertFrom-Json -AsHashtable
+        Set-MechanicalJsonStateFile -Path $path -State $good -DefaultState $script:ReviewSendDefault -JsonDepth 30
+        $backupPath = Get-MechanicalJsonStateBackupPath -Path $path
+        $untrusted = @{
+            sent       = @{}
+            lastTickMs = $null
+            _recovery  = @{
+                fenceTrusted = $false
+                reason       = 'unparseable_no_backup'
+            }
+        }
+        Set-MechanicalJsonStateFile -Path $path -State $untrusted -DefaultState $script:ReviewSendDefault -JsonDepth 30
+
+        $backup = Get-Content -LiteralPath $backupPath -Raw | ConvertFrom-Json -AsHashtable
+        $backup.sent['run-abc'].sessionId | Should -Be 'sess-1'
+        $backup.ContainsKey('_recovery') | Should -Be $false
+    }
+}
+
+Describe 'supervisor health classification' {
+    It 'reports stalled when alive child has no current progress past grace window' {
+        $startedMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
+        $verdict = Get-OrchestratorSideProcessHealthVerdict -ChildEntry @{ RequiresOrchestratorSession = $false } `
+            -Paths @{} -SupervisorPhase 'running' -ChildAlive $true -Progress $null -ChildPid 42 `
+            -StallThresholdMs 60000 -ChildStartedMs $startedMs
+
+        $verdict.Status | Should -Be 'stalled'
+        $verdict.Reason | Should -Be 'no progress heartbeat'
+    }
+
+    It 'reports stalled when progress belongs to a prior process' {
+        $startedMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
+        $staleProgress = [pscustomobject]@{
+            pid            = 1
+            lastProgressMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            phase          = 'tick_success'
+        }
+        $verdict = Get-OrchestratorSideProcessHealthVerdict -ChildEntry @{ RequiresOrchestratorSession = $false } `
+            -Paths @{} -SupervisorPhase 'running' -ChildAlive $true -Progress $staleProgress -ChildPid 42 `
+            -StallThresholdMs 60000 -ChildStartedMs $startedMs
+
+        $verdict.Status | Should -Be 'stalled'
+        $verdict.Reason | Should -Be 'stale progress from prior process'
+    }
 }
 
 Describe 'supervisor bounded recovery' {

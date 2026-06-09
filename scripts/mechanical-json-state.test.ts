@@ -66,6 +66,15 @@ describe('supervisor health classification (Issue #248)', () => {
     `);
     expect(status).toBe('waiting');
   });
+
+  it('reports stalled when alive child has no progress past grace window', () => {
+    const status = runHealthProbe(`
+      $startedMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
+      $v = Get-OrchestratorSideProcessHealthVerdict -ChildEntry @{ RequiresOrchestratorSession = $false } -Paths @{} -SupervisorPhase 'running' -ChildAlive $true -Progress $null -ChildPid 42 -StallThresholdMs 60000 -ChildStartedMs $startedMs
+      Write-Output $v.Status
+    `);
+    expect(status).toBe('stalled');
+  });
 });
 
 describe('reflection key pollution', () => {
