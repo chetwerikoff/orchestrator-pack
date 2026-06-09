@@ -47,10 +47,10 @@ function Write-OrchestratorSideProcessProgress {
 
     $path = Join-Path $dir "$ChildId.progress.json"
     $existingOutcomes = @()
+    $existingPid = 0
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         try {
             $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-            $existingPid = 0
             if ($existing.pid) {
                 $existingPid = [int]$existing.pid
             }
@@ -60,6 +60,7 @@ function Write-OrchestratorSideProcessProgress {
         }
         catch {
             $existingOutcomes = @()
+            $existingPid = 0
         }
     }
 
@@ -84,7 +85,7 @@ function Write-OrchestratorSideProcessProgress {
         $payload.tickOutcome = $resolvedOutcome
         $payload.recentOutcomes = Add-OrchestratorSideProcessRecentOutcome -Existing $existingOutcomes -Outcome $resolvedOutcome
     }
-    elseif ($existingOutcomes.Count -gt 0) {
+    elseif ($existingPid -eq $PID -and $existingOutcomes.Count -gt 0) {
         $payload.recentOutcomes = $existingOutcomes
     }
     if ($LastError) {

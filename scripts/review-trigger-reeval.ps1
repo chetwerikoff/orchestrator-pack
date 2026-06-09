@@ -135,6 +135,7 @@ function Invoke-ReviewTriggerReevalTick {
 
     $watchPath = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
     $state = Get-ReviewTriggerReevalWatchState -Path $watchPath
+    Assert-MechanicalJsonStateFencesTrusted -State $state -Context 'review reeval side effects'
     $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $state.watchEntries
     $nowMs = if ($FixturePayload -and $FixturePayload.nowMs) {
         [long]$FixturePayload.nowMs

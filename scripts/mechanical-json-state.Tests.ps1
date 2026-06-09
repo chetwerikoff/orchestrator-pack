@@ -211,6 +211,38 @@ Describe 'side process progress pid rollover' {
         }
     }
 
+    It 'does not copy recentOutcomes on poll when pid changes' {
+        $dir = New-TempProgressDir
+        $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
+        $env:AO_SIDE_PROCESS_PROGRESS_DIR = $dir
+        try {
+            $path = Join-Path $dir 'test-child.progress.json'
+            @{
+                childId        = 'test-child'
+                pid            = 1
+                recentOutcomes = @('error', 'error', 'error')
+                lastProgressMs = 1000
+                phase          = 'tick_error'
+                lastError      = 'old process failure'
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding utf8 -NoNewline
+
+            Write-OrchestratorSideProcessProgress -ChildId 'test-child' -Phase 'poll'
+            $read = Read-OrchestratorSideProcessProgress -ChildId 'test-child'
+            $read.PSObject.Properties.Name | Should -Not -Contain 'recentOutcomes'
+            [int]$read.pid | Should -Be $PID
+            $read.phase | Should -Be 'poll'
+        }
+        finally {
+            if ($null -eq $previous) {
+                Remove-Item Env:AO_SIDE_PROCESS_PROGRESS_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AO_SIDE_PROCESS_PROGRESS_DIR = $previous
+            }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'preserves recentOutcomes for the same pid' {
         $dir = New-TempProgressDir
         $previous = $env:AO_SIDE_PROCESS_PROGRESS_DIR
@@ -238,6 +270,28 @@ Describe 'side process progress pid rollover' {
             }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
+    }
+}
+
+Describe 'review trigger reeval watch fail-closed' {
+    BeforeAll {
+        . (Join-Path $script:LibDir 'Record-ReviewTriggerReevalWatch.ps1')
+        $script:ReevalWatchDefault = @{ watchEntries = @{}; lastUpdatedMs = $null }
+    }
+
+    function script:New-TempWatchPath {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("reeval-watch-test-" + [guid]::NewGuid().ToString())
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        return Join-Path $dir 'review-trigger-reeval-watch.json'
+    }
+
+    It 'fails closed when watch state is untrusted' {
+        $path = New-TempWatchPath
+        Copy-Item -LiteralPath (Join-Path $script:FixtureDir 'unparseable-truncated.json') -Destination $path
+        $state = Get-ReviewTriggerReevalWatchState -Path $path
+        Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $false
+        { Assert-MechanicalJsonStateFencesTrusted -State $state -Context 'review reeval side effects' } |
+            Should -Throw '*STATE FENCES UNTRUSTED*'
     }
 }
 

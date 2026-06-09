@@ -59,6 +59,7 @@ function Update-ReviewTriggerReevalWatchStateMerged {
     $lockPath = Get-ReviewTriggerReevalWatchLockPath -WatchPath $Path
     Invoke-ReviewTriggerReevalWatchStateLocked -LockPath $lockPath -Action {
         $current = Get-ReviewTriggerReevalWatchState -Path $Path
+        Assert-MechanicalJsonStateFencesTrusted -State $current -Context 'watch state merge'
         $existing = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $current.watchEntries
         $incoming = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $IncomingWatchEntries
         $merged = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'mergeWatchState' -Payload @{
@@ -111,6 +112,7 @@ function Record-ReviewTriggerReevalWatchFromWakeDefer {
 
     $path = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
     $state = Get-ReviewTriggerReevalWatchState -Path $path
+    Assert-MechanicalJsonStateFencesTrusted -State $state -Context 'watch state recording'
     $existing = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $state.watchEntries
 
     $seed = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'seedFromWakeDefer' -Payload @{
