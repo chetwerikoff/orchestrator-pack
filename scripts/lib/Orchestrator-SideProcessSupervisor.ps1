@@ -342,13 +342,14 @@ function Read-OrchestratorWakeSupervisorState {
 function Write-OrchestratorWakeSupervisorState {
     param(
         [string]$StateJsonPath,
-        [hashtable]$State
+        [hashtable]$State,
+        [int]$JsonDepth = 10
     )
     $dir = Split-Path -Parent $StateJsonPath
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    $State | ConvertTo-Json -Compress | Set-Content -LiteralPath $StateJsonPath -Encoding utf8
+    $State | ConvertTo-Json -Depth $JsonDepth -Compress | Set-Content -LiteralPath $StateJsonPath -Encoding utf8
 }
 
 function Test-StartProcessSupportsEnvironmentParameter {

@@ -318,6 +318,9 @@ function Get-MechanicalJsonStateFile {
                         reason       = 'restored_from_backup'
                         quarantined  = $quarantinePath
                     }
+                    if ($ActionTracking) {
+                        Set-MechanicalJsonStateFile -Path $Path -State $state -DefaultState $DefaultState -JsonDepth 30
+                    }
                 }
                 else {
                     $recoveryReason = Get-MechanicalJsonStateRecoveryReason -State $state

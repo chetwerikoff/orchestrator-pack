@@ -123,6 +123,9 @@ Describe 'Mechanical JSON state round-trip' {
         $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
         Test-MechanicalJsonStateFencesTrusted -State $state | Should -Be $true
         $state.sent['run-abc'].sessionId | Should -Be 'sess-1'
+        Test-Path -LiteralPath $path | Should -Be $true
+        $again = Get-MechanicalJsonStateFile -Path $path -DefaultState $script:ReviewSendDefault -ActionTracking
+        $again.sent['run-abc'].sessionId | Should -Be 'sess-1'
     }
 
     It 'keeps untrusted backup fail-closed when main file becomes unparseable' {

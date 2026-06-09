@@ -67,6 +67,30 @@ describe('supervisor health classification (Issue #248)', () => {
     expect(status).toBe('waiting');
   });
 
+  it('serializes nested childRecovery with sufficient JSON depth', () => {
+    const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-state-depth-'));
+    const statePath = path.join(stateDir, 'supervisor-state.json');
+    try {
+      const attempts = execFileSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-Command',
+          `. '${supervisorLib.replace(/'/g, "''")}'; $paths = @{ StateJson = '${statePath.replace(/'/g, "''")}' }; Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'review-send-reconcile' -RecoveryEntry @{ attempts = 2; terminal = $false; reason = 'synthetic' }; $read = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'review-send-reconcile'; Write-Output $read.attempts`,
+        ],
+        { cwd: repoRoot, encoding: 'utf8' },
+      ).trim();
+      expect(attempts).toBe('2');
+      const raw = fs.readFileSync(statePath, 'utf8');
+      expect(raw).toContain('"attempts":2');
+      expect(raw).toContain('"terminal":false');
+      expect(raw).toContain('"reason":"synthetic"');
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports stalled when alive child has no progress past grace window', () => {
     const status = runHealthProbe(`
       $startedMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
