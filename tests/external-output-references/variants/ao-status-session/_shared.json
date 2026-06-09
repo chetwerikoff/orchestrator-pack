@@ -1,0 +1,24 @@
+{
+  "allowedFields": [
+    "name",
+    "sessionId",
+    "id",
+    "role",
+    "branch",
+    "status",
+    "summary",
+    "claudeSummary",
+    "pr",
+    "prNumber",
+    "issue",
+    "lastActivity",
+    "project",
+    "ciStatus",
+    "reviewDecision",
+    "pendingThreads",
+    "activity",
+    "reports",
+    "ownedHeadSha",
+    "headRefOid"
+  ]
+}

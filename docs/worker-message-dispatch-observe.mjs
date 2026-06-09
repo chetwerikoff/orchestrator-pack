@@ -6,6 +6,7 @@
  * state — never from pane text. Human keystrokes carry no AO dispatch record.
  */
 import { readStdinJson, resolveBoundedInt, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { isRuntimeFieldLive } from './session-runtime-liveness.mjs';
 import { isLiveWorkerSession, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
 import {
   getEventTimestampMs,
@@ -368,8 +369,7 @@ export function isSessionStreaming(session) {
  * @param {Record<string, unknown>} session
  */
 export function isSessionAlive(session) {
-  const runtime = String(session?.runtime ?? '').trim().toLowerCase();
-  if (runtime === 'exited' || runtime === 'process_missing') {
+  if (!isRuntimeFieldLive(session)) {
     return false;
   }
   return isLiveWorkerSession(session);

@@ -6,7 +6,6 @@
     "role": "worker",
     "prNumber": 174,
     "status": "stuck",
-    "runtime": "alive",
     "ownedHeadSha": "beef174",
     "reports": [
       {

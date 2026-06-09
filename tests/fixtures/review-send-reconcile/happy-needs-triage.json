@@ -16,10 +16,16 @@
       "role": "worker",
       "prNumber": 42,
       "ownedHeadSha": "deadbeef",
-      "runtime": "alive",
       "status": "working"
     }
   ],
-  "openPrs": [{ "number": 42, "headRefOid": "deadbeef" }],
-  "tracking": { "sent": {} }
+  "openPrs": [
+    {
+      "number": 42,
+      "headRefOid": "deadbeef"
+    }
+  ],
+  "tracking": {
+    "sent": {}
+  }
 }

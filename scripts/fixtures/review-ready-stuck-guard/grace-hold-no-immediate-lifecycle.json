@@ -6,7 +6,6 @@
     "role": "worker",
     "prNumber": 174,
     "status": "probe_failure",
-    "runtime": "alive",
     "ownedHeadSha": "grace174",
     "reports": [
       {

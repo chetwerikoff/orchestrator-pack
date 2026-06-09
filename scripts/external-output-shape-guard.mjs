@@ -50,7 +50,8 @@ function resolveVariant(raw, dir) {
   let merged = { ...raw };
   if (raw.extends) {
     const parentPath = path.join(dir, String(raw.extends));
-    const parent = JSON.parse(readFileSync(parentPath, 'utf8'));
+    const parentRaw = JSON.parse(readFileSync(parentPath, 'utf8'));
+    const parent = resolveVariant(parentRaw, dir);
     merged = {
       ...parent,
       ...raw,
@@ -67,6 +68,8 @@ function resolveVariant(raw, dir) {
         ]),
       ],
       forbiddenTogether: raw.forbiddenTogether ?? parent.forbiddenTogether ?? [],
+      captureRef: raw.captureRef ?? parent.captureRef,
+      provenanceRef: raw.provenanceRef ?? parent.provenanceRef,
     };
     delete merged.extends;
   }
@@ -480,8 +483,54 @@ export function expandFixtureGlob(repoRoot, glob) {
 }
 
 /**
+ * @param {Record<string, unknown>} record
+ */
+export function resolveAoStatusSessionVariant(record) {
+  if (!Object.prototype.hasOwnProperty.call(record, 'runtime')) {
+    const status = String(record.status ?? '').trim().toLowerCase();
+    if (status === 'stuck') {
+      return 'stuck-no-runtime';
+    }
+    if (status === 'probe_failure') {
+      return 'probe_failure-no-runtime';
+    }
+    return 'working-no-runtime';
+  }
+  const runtime = String(record.runtime ?? '').trim().toLowerCase();
+  if (runtime === 'alive') {
+    return 'runtime-alive';
+  }
+  if (runtime === 'exited') {
+    return 'runtime-exited';
+  }
+  if (runtime === 'process_missing') {
+    return 'runtime-process_missing';
+  }
+  return 'runtime-present-unknown';
+}
+
+/**
+ * @param {Record<string, unknown>} record
+ * @param {{ command: string, variant?: string, variantFrom?: string, defaultVariant?: string, variantPrefix?: string, variantResolver?: string, jsonPath: string }} shape
+ */
+export function resolveShapeVariantKey(record, shape) {
+  if (shape.variantResolver === 'ao-status-session') {
+    return resolveAoStatusSessionVariant(record);
+  }
+  if (shape.variantFrom) {
+    const raw = String(record[shape.variantFrom] ?? '').trim();
+    if (!raw) {
+      return String(shape.defaultVariant ?? '');
+    }
+    const prefix = String(shape.variantPrefix ?? '');
+    return prefix ? `${prefix}${raw}` : raw;
+  }
+  return String(shape.variant ?? shape.defaultVariant ?? '');
+}
+
+/**
  * @param {string} filePath
- * @param {{ command: string, variant?: string, variantFrom?: string, jsonPath: string }} shape
+ * @param {{ command: string, variant?: string, variantFrom?: string, defaultVariant?: string, variantPrefix?: string, variantResolver?: string, jsonPath: string }} shape
  * @param {Map<string, VariantRef>} catalog
  */
 export function validateFixtureFileShapes(filePath, shape, catalog) {
@@ -492,9 +541,7 @@ export function validateFixtureFileShapes(filePath, shape, catalog) {
   for (const { value, path: objectPath } of extractAtJsonPath(payload, shape.jsonPath)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const record = /** @type {Record<string, unknown>} */ (value);
-    const variantKey = shape.variantFrom
-      ? String(record[shape.variantFrom] ?? '')
-      : String(shape.variant ?? '');
+    const variantKey = resolveShapeVariantKey(record, shape);
     if (!variantKey) {
       errors.push({
         fixture: label,

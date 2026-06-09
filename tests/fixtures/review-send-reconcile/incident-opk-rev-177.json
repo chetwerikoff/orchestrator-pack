@@ -1,0 +1,32 @@
+{
+  "description": "Incident 2026-06-09 opk-rev-177: needs_triage never-sent with production-shape session row (no runtime)",
+  "reviewRuns": [
+    {
+      "id": "opk-rev-177",
+      "prNumber": 247,
+      "targetSha": "9ff9d58",
+      "status": "needs_triage",
+      "openFindingCount": 2,
+      "sentFindingCount": 0,
+      "linkedSessionId": "opk-31"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-31",
+      "role": "worker",
+      "prNumber": 247,
+      "ownedHeadSha": "9ff9d58",
+      "status": "working",
+      "activity": "ready",
+      "reports": [
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-09T09:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "openPrs": [{ "number": 247, "headRefOid": "9ff9d58" }],
+  "tracking": { "sent": {} }
+}

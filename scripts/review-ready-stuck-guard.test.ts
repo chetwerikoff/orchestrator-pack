@@ -66,16 +66,17 @@ function planFromFixture(name: string) {
   });
 }
 
-describe('isRuntimeAlive (explicit runtime only)', () => {
-  it('is true only for runtime alive', () => {
+describe('isRuntimeAlive (shared runtime-field rule)', () => {
+  it('is true when runtime is absent or affirmative alive', () => {
+    expect(isRuntimeAlive({ status: 'working' })).toBe(true);
     expect(isRuntimeAlive({ runtime: 'alive' })).toBe(true);
     expect(isRuntimeAlive({ runtime: 'ALIVE' })).toBe(true);
   });
 
-  it('fails closed when runtime is missing or unrecognized', () => {
-    expect(isRuntimeAlive({ status: 'working' })).toBe(false);
+  it('fails closed when runtime is present but not affirmative alive', () => {
     expect(isRuntimeAlive({ runtime: 'exited' })).toBe(false);
     expect(isRuntimeAlive({ runtime: 'detecting' })).toBe(false);
+    expect(isRuntimeAlive({ runtime: 'unreachable' })).toBe(false);
     expect(isRuntimeAlive({ runtime: '' })).toBe(false);
   });
 });
@@ -269,17 +270,17 @@ describe('consistent-snapshot classification (AC1)', () => {
     expect(result.reasons).toContain('no_ready_for_review_for_head');
   });
 
-  it('missing runtime is not review-ready (fail closed)', () => {
+  it('missing runtime does not block review-ready when other signals hold (Issue #250)', () => {
     const fixture = loadFixture('positive-review-ready-alive.json');
     const result = classifyReviewReadySnapshot({
-      session: { ...fixture.session, runtime: undefined },
+      session: { ...fixture.session },
       openPr: fixture.openPr,
       reviewRuns: fixture.reviewRuns,
       ciChecks: fixture.ciChecks,
       sessions: [fixture.session],
     });
-    expect(result.reviewReady).toBe(false);
-    expect(result.reasons).toContain('runtime_not_alive');
+    expect(result.reviewReady).toBe(true);
+    expect(result.reasons).not.toContain('runtime_not_alive');
   });
 });
 

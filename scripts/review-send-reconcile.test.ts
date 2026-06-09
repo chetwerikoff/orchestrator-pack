@@ -35,8 +35,8 @@ function liveWorker(overrides: Record<string, unknown> = {}) {
     role: 'worker',
     prNumber: PR,
     ownedHeadSha: HEAD,
-    runtime: 'alive',
     status: 'working',
+    activity: 'ready',
     ...overrides,
   };
 }
@@ -357,6 +357,15 @@ describe('fixture ticks', () => {
     const fixture = loadFixture('merged-pr.json');
     const { actions } = plan(fixture);
     expect(sendActions(actions)).toHaveLength(0);
+  });
+
+  it('incident opk-rev-177 plans send without runtime_not_alive skip', () => {
+    const fixture = loadFixture('incident-opk-rev-177.json');
+    const { actions } = plan(fixture);
+    expect(sendActions(actions)).toHaveLength(1);
+    expect(actions.some((a) => a.type === 'skip' && a.reason === 'linked_session_runtime_not_alive')).toBe(
+      false,
+    );
   });
 });
 

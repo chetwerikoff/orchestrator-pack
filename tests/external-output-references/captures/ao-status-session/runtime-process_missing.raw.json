@@ -1,0 +1,8 @@
+{
+  "name": "opk-missing-proc",
+  "role": "worker",
+  "status": "working",
+  "runtime": "process_missing",
+  "activity": "exited",
+  "reports": []
+}

@@ -36,8 +36,8 @@ if ($mjs -notmatch "GRACE_MINUTES_ENV_VAR = 'AO_REVIEW_READY_STUCK_GRACE_MINUTES
     exit 1
 }
 
-if ($mjs -notmatch "=== 'alive'") {
-    Write-Host 'docs/review-ready-stuck-guard.mjs must require explicit runtime alive (fail closed)'
+if ($mjs -notmatch 'session-runtime-liveness\.mjs') {
+    Write-Host 'docs/review-ready-stuck-guard.mjs must import shared session-runtime-liveness contract (Issue #250)'
     exit 1
 }
 

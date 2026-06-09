@@ -26,6 +26,24 @@ function Get-OrchestratorPromptLaunchFeasibilityWarning {
         -Role Orchestrator -IssueNumber 91 -ArgvLimitBytes $ArgvLimitBytes
 }
 
+function Test-SessionRuntimeFieldLive {
+    <#
+    .SYNOPSIS
+      Shared runtime-field rule (Issue #250): absent falls back; present non-alive fails closed.
+    #>
+    param($Session)
+
+    if (-not $Session) { return $false }
+    if ($Session.PSObject.Properties.Name -notcontains 'runtime') {
+        return $true
+    }
+    $normalized = [string]$Session.runtime
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return $false
+    }
+    return ($normalized.Trim().ToLowerInvariant() -eq 'alive')
+}
+
 function Test-OrchestratorSessionLaunchHealthy {
     <#
     .SYNOPSIS
@@ -36,10 +54,8 @@ function Test-OrchestratorSessionLaunchHealthy {
     if (-not $Session) { return $false }
     if ($Session.status -ne 'working') { return $false }
     if ($Session.activity -eq 'exited') { return $false }
-    if ($Session.PSObject.Properties.Name -contains 'runtime') {
-        if ($Session.runtime -and $Session.runtime -ne 'alive') {
-            return $false
-        }
+    if (-not (Test-SessionRuntimeFieldLive -Session $Session)) {
+        return $false
     }
     return $true
 }

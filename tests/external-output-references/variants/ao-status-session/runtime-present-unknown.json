@@ -1,0 +1,10 @@
+{
+  "id": "ao-status-session/runtime-present-unknown",
+  "command": "ao status",
+  "variant": "runtime-present-unknown",
+  "version": 1,
+  "extends": "_shared.json",
+  "allowedFields": ["runtime"],
+  "captureRef": "captures/ao-status-session/runtime-present-unknown.raw.json",
+  "provenanceRef": "captures/ao-status-session/runtime-present-unknown.provenance.json"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "ao-status-session/runtime-process_missing",
+  "command": "ao status",
+  "variant": "runtime-process_missing",
+  "version": 1,
+  "extends": "_shared.json",
+  "allowedFields": ["runtime"],
+  "captureRef": "captures/ao-status-session/runtime-process_missing.raw.json",
+  "provenanceRef": "captures/ao-status-session/runtime-process_missing.provenance.json"
+}

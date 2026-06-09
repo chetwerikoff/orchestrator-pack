@@ -1,0 +1,11 @@
+{
+  "id": "ao-status-session/probe_failure-no-runtime",
+  "command": "ao status",
+  "variant": "probe_failure-no-runtime",
+  "version": 1,
+  "extends": "working-no-runtime.json",
+  "forbiddenFields": ["runtime"],
+  "captureRef": "captures/ao-status-session/working-no-runtime.raw.json",
+  "provenanceRef": "captures/ao-status-session/working-no-runtime.provenance.json",
+  "shapeException": "Issue #250 AC10(c): status probe_failure overlaid on capture-backed field shape; refresh from live degraded capture when observed"
+}

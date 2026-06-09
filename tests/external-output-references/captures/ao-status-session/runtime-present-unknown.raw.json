@@ -1,0 +1,8 @@
+{
+  "name": "opk-unreachable",
+  "role": "worker",
+  "status": "working",
+  "runtime": "unreachable",
+  "activity": "idle",
+  "reports": []
+}
