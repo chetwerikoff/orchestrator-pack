@@ -295,12 +295,11 @@ try {
             $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
                 -DryRunMode:$DryRun
             Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$($result.watchCount))"
+            Write-OrchestratorSideProcessTickSuccess -ChildId 'review-trigger-reeval'
         }
         catch {
             Write-ReviewTriggerReevalLog "tick error: $_"
-        }
-        finally {
-            Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reeval' -Phase 'tick_complete'
+            Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reeval' -ErrorMessage "$_"
         }
 
         if ($Once) { break }

@@ -38,9 +38,12 @@ $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
+
+$Script:DeliveryDefaultState = @{ runs = @{}; lastTickMs = $null }
 
 function Get-DeliveryIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -101,20 +104,7 @@ function Invoke-DeliveryFilterCli {
 function Get-DeliveryState {
     param([string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return @{ runs = @{}; lastTickMs = $null }
-    }
-
-    try {
-        $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-        if (-not $raw.runs) {
-            $raw | Add-Member -NotePropertyName runs -NotePropertyValue @{} -Force
-        }
-        return $raw
-    }
-    catch {
-        return @{ runs = @{}; lastTickMs = $null }
-    }
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:DeliveryDefaultState -ActionTracking
 }
 
 function Set-DeliveryState {
@@ -123,24 +113,17 @@ function Set-DeliveryState {
         [object]$State
     )
 
-    $dir = Split-Path -Parent $Path
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-
-    $State | ConvertTo-Json -Depth 30 -Compress | Set-Content -LiteralPath $Path -Encoding utf8
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:DeliveryDefaultState -JsonDepth 30
 }
 
 function Copy-DeliveryTrackingRuns {
     param([object]$Tracking)
 
-    $runs = @{}
-    if ($Tracking -and $Tracking.runs) {
-        foreach ($prop in $Tracking.runs.PSObject.Properties) {
-            $runs[$prop.Name] = $prop.Value
-        }
+    if (-not $Tracking) { return @{} }
+    if ($Tracking -is [System.Collections.IDictionary]) {
+        return Copy-MechanicalJsonMap -Map $Tracking['runs']
     }
-    return $runs
+    return Copy-MechanicalJsonMap -Map $Tracking.runs
 }
 
 function Get-PlannedDeliveryRunRecord {
@@ -453,26 +436,33 @@ try {
             Write-DeliveryLog "tick skipped: $($gate.reason)"
         }
         else {
-            try {
-                $partialStatePath = if ($DryRun) { '' } else { $statePath }
-                $result = Invoke-DeliveryTick -Project $ProjectId -Config $config -DryRunMode:$DryRun `
-                    -TrackingState $state -NowMs $nowMs -PartialStatePath $partialStatePath
-                $nextState = $result.tracking
-                $nextState.lastTickMs = $nowMs
-                if (-not $DryRun) {
-                    Set-DeliveryState -Path $statePath -State $nextState
-                }
-                else {
-                    Write-DeliveryLog 'dry-run: delivery state not updated'
-                }
-                Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) deferred=$($result.deferred) escalated=$($result.escalated))"
+            if (-not (Test-MechanicalJsonStateFencesTrusted -State $state)) {
+                $reason = Get-MechanicalJsonStateRecoveryReason -State $state
+                Write-DeliveryLog "STATE FENCES UNTRUSTED: $reason; failing closed for side effects"
+                Write-OrchestratorSideProcessTickError -ChildId 'review-finding-delivery-confirm' `
+                    -ErrorMessage "fences untrusted: $reason"
             }
-            catch {
-                $tickFailed = $true
-                Write-DeliveryLog "tick error: $_"
-            }
-            finally {
-                Write-OrchestratorSideProcessProgress -ChildId 'review-finding-delivery-confirm' -Phase 'tick_complete'
+            else {
+                try {
+                    $partialStatePath = if ($DryRun) { '' } else { $statePath }
+                    $result = Invoke-DeliveryTick -Project $ProjectId -Config $config -DryRunMode:$DryRun `
+                        -TrackingState $state -NowMs $nowMs -PartialStatePath $partialStatePath
+                    $nextState = $result.tracking
+                    $nextState.lastTickMs = $nowMs
+                    if (-not $DryRun) {
+                        Set-DeliveryState -Path $statePath -State $nextState
+                    }
+                    else {
+                        Write-DeliveryLog 'dry-run: delivery state not updated'
+                    }
+                    Write-DeliveryLog "tick complete (confirmed=$($result.confirmed) redelivered=$($result.redelivered) deferred=$($result.deferred) escalated=$($result.escalated))"
+                    Write-OrchestratorSideProcessTickSuccess -ChildId 'review-finding-delivery-confirm'
+                }
+                catch {
+                    $tickFailed = $true
+                    Write-DeliveryLog "tick error: $_"
+                    Write-OrchestratorSideProcessTickError -ChildId 'review-finding-delivery-confirm' -ErrorMessage "$_"
+                }
             }
         }
 

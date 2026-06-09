@@ -1,0 +1,48 @@
+{
+  "jsExempt": [
+    {
+      "path": "/tmp/orchestrator-wake-dedup.json",
+      "owner": "docs/orchestrator-wake-filter.mjs",
+      "reason": "JS-owned dedup state is outside the PowerShell hashtable reflection class"
+    }
+  ],
+  "children": [
+    {
+      "id": "ci-green-wake-reconcile",
+      "stateFile": "orchestrator-ci-green-wake-state.json",
+      "mapFields": ["heads", "nudged", "pendingJournal"],
+      "actionTracking": true
+    },
+    {
+      "id": "review-send-reconcile",
+      "stateFile": "orchestrator-review-send-reconcile-state.json",
+      "mapFields": ["sent"],
+      "actionTracking": true
+    },
+    {
+      "id": "review-trigger-reconcile",
+      "stateFile": "orchestrator-review-trigger-reconcile-state.json",
+      "mapFields": ["degradedCi"],
+      "actionTracking": true
+    },
+    {
+      "id": "worker-message-submit-reconcile",
+      "stateFile": "orchestrator-worker-message-submit-state.json",
+      "mapFields": ["deliveries"],
+      "actionTracking": true
+    },
+    {
+      "id": "review-trigger-reeval",
+      "stateFile": "review-trigger-reeval-watch.json",
+      "mapFields": ["watchEntries"],
+      "actionTracking": true
+    },
+    {
+      "id": "review-finding-delivery-confirm",
+      "stateFile": "orchestrator-review-delivery-confirm-state.json",
+      "mapFields": ["runs"],
+      "actionTracking": true,
+      "bespoke": true
+    }
+  ]
+}

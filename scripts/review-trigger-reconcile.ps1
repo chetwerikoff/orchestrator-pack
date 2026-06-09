@@ -80,11 +80,12 @@ function Invoke-ReconcileFilterCli {
         -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
+$Script:ReconcileDefaultState = @{ lastTickMs = $null; degradedCi = @{} }
+
 function Get-ReconcileState {
     param([string]$Path)
 
-    $default = @{ lastTickMs = $null; degradedCi = @{} }
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:ReconcileDefaultState -ActionTracking
 }
 
 function Set-ReconcileState {
@@ -93,7 +94,7 @@ function Set-ReconcileState {
         [object]$State
     )
 
-    Set-MechanicalJsonStateFile -Path $Path -State $State -JsonDepth 30
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReconcileDefaultState -JsonDepth 30
 }
 
 function Get-ReconcileChecksByPr {
@@ -363,13 +364,7 @@ Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, 
 
 if ($FixturePath) {
     $state = Get-ReconcileState -Path $statePath
-    $tracking = @{ degradedCi = @{} }
-    if ($state.degradedCi) {
-        $tracking.degradedCi = @{}
-        foreach ($prop in $state.degradedCi.PSObject.Properties) {
-            $tracking.degradedCi[$prop.Name] = $prop.Value
-        }
-    }
+    $tracking = @{ degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi) }
     $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml -DryRunMode:$DryRun `
         -Fixture $FixturePath -TrackingState $tracking
     Write-ReconcileLog "fixture tick complete (started=$($result.started))"
@@ -396,23 +391,25 @@ try {
             Write-ReconcileLog "tick skipped: $($gate.reason)"
         }
         else {
-            $tickTracking = @{ degradedCi = @{} }
-            if ($state.degradedCi) {
-                foreach ($prop in $state.degradedCi.PSObject.Properties) {
-                    $tickTracking.degradedCi[$prop.Name] = $prop.Value
-                }
+            if (-not (Test-MechanicalJsonStateFencesTrusted -State $state)) {
+                $reason = Get-MechanicalJsonStateRecoveryReason -State $state
+                Write-ReconcileLog "STATE FENCES UNTRUSTED: $reason; failing closed for side effects"
+                Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reconcile' -ErrorMessage "fences untrusted: $reason"
             }
+            else {
+            $tickTracking = @{ degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi) }
             try {
                 $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml `
                     -DryRunMode:$DryRun -TrackingState $tickTracking
                 Write-ReconcileLog "tick complete (started=$($result.started))"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'review-trigger-reconcile'
             }
             catch {
                 Write-ReconcileLog "tick error: $_"
+                Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reconcile' -ErrorMessage "$_"
                 $result = $null
             }
             finally {
-                Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'tick_complete'
                 if (-not $DryRun) {
                     $degradedCi = $tickTracking.degradedCi
                     if ($result -and $result.plan) {
@@ -427,6 +424,7 @@ try {
                 else {
                     Write-ReconcileLog 'dry-run: interval state not updated'
                 }
+            }
             }
         }
 
