@@ -78,13 +78,12 @@ export function isTrustedLocalReviewContext(
 }
 
 export function buildCodexSpawnEnv(
-  source?: ReviewSource,
+  _source?: ReviewSource,
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
-  if (isTrustedLocalReviewContext(source, env)) {
-    return childEnv;
-  }
+  // Always strip exfiltratable tokens — trusted local review grants network access
+  // and reviews attacker-controlled PR diffs; Codex auth uses ~/.codex on disk.
   for (const key of CODEX_SPAWN_ENV_STRIP) {
     delete childEnv[key];
   }

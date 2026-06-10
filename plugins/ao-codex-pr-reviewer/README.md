@@ -94,8 +94,12 @@ external `coworker` CLI (exec + outbound network) per pack policy.
 
 Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, omitted
 `--source`, or `codex-local` under a CI/Actions signal) keep fail-closed
-`--sandbox read-only` containment. The child process env omits `GH_TOKEN` and
-related CI secrets so prompt injection cannot exfiltrate them.
+`--sandbox read-only` containment.
+
+Both paths omit `GH_TOKEN`, `GITHUB_TOKEN`, `CODEX_AUTH_JSON`, and related CI
+secrets from the Codex child env so prompt injection cannot exfiltrate them
+(trusted local review is network-capable and still reviews PR diffs). Codex
+CLI auth uses `~/.codex` on disk, not those env vars.
 
 Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
 `codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always

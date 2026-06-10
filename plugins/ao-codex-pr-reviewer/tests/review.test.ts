@@ -201,7 +201,7 @@ describe('buildCodexSpawnEnv', () => {
     ACTIONS_ID_TOKEN_REQUEST_URL: 'https://actions.example/token',
   };
 
-  it('preserves secrets for trusted codex-local', () => {
+  it('strips secrets for trusted codex-local (network-capable sandbox)', () => {
     const env = buildCodexSpawnEnv('codex-local', {
       ...secrets,
       PR_REPO_ROOT: '',
@@ -209,7 +209,7 @@ describe('buildCodexSpawnEnv', () => {
       GITHUB_ACTIONS: '',
     });
     for (const key of Object.keys(secrets)) {
-      expect(env[key]).toBe(secrets[key as keyof typeof secrets]);
+      expect(env[key]).toBeUndefined();
     }
   });
 
