@@ -464,6 +464,30 @@ describe('Claude and shell transcript compatibility', () => {
     expect(events.some((event) => event.readKind === 'diff' && event.lines === 250)).toBe(true);
   });
 
+  it('counts non-follow tail log reads from captured shell output', () => {
+    const captured = Array.from({ length: 300 }, (_, index) => `log-line-${index + 1}`).join('\n');
+    expect(measureShellDiffLogLines('tail -n 300 app.log', captured)).toBe(300);
+
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command: 'tail -n 300 app.log' },
+      'req-tail',
+      { shellOutput: captured },
+    );
+    expect(events.some((event) => event.readKind === 'diff' && event.lines === 300)).toBe(true);
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: partitionEventsIntoWorkUnits(events.map((event) => ({
+        ...event,
+        inboundRequestId: 'req-tail',
+        workUnitKey: 'unit-tail',
+      }))),
+    }) as StopAuditResult;
+    expect(result.verdicts[0].trigger.diffLog).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(true);
+  });
+
   it('keeps tool_result user messages inside the same work unit', () => {
     expect(
       isInboundUserRequest({

@@ -83,7 +83,7 @@ const EDIT_TOOL_NAMES = new Set([
 const SHELL_TOOL_NAMES = new Set(['Shell', 'shell', 'run_terminal_cmd', 'Bash', 'bash']);
 
 const DIFF_LOG_SHELL_PATTERN =
-  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b[^|\n]{0,40}\b-[^\s]*f\b)/i;
+  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b)/i;
 
 const LOCK_RETRY_MS = 5;
 const LOCK_MAX_ATTEMPTS = 200;
