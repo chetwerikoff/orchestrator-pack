@@ -21,16 +21,43 @@ not architect-direct edits.
 - Link is this repository or a known internal draft (use issue queue instead).
 - User already issued a tracked GitHub Issue — work the issue, don't duplicate.
 
-## Fetch step (bounded)
+## Research step — delegate the reading to `coworker` (mandatory)
 
-1. Open the URL (README, top-level structure, primary architecture/overview doc).
-2. Skim entry points only — **do not** read every file or clone the full tree unless required.
-3. Note license, maintenance signals, and overlap with existing pack contracts.
+The bulk reading of an external source is exactly the I/O this pack delegates:
+**you do not read the source yourself — `coworker` does.** Keep the judgment,
+conclusions, and adoption decisions on the main reasoning model; push the
+fetch-and-summarise legwork to the cheap model. See the **Coworker CLI
+delegation** policy in [`prompts/agent_rules.md`](../../../prompts/agent_rules.md)
+(single source of truth) for the profile and code-gate rules.
+
+Procedure:
+
+1. **Availability check first.** `command -v coworker`. If it is missing,
+   unavailable, or rate-limited, fall back to reading in-session and **say so**
+   in the final report. Otherwise the research below MUST go through coworker.
+2. **Bounded, thorough read via coworker.** Ask `coworker ask --profile code`
+   to read and summarise the source's entry points — README, top-level
+   structure, the primary architecture/overview doc, license, and
+   maintenance/activity signals. Request a *detailed* extraction, not a
+   one-paragraph blurb: capabilities, design choices, dependencies,
+   stated trade-offs, and anything that overlaps our existing pack contracts.
+   Source code requires the `--allow-code` gate — pass it only when the question
+   genuinely needs code, and only after scrubbing secrets.
+3. **Iterate as needed.** Fan out more `coworker ask` calls for the specific
+   sub-areas the adoption question hinges on. Do not pull the whole tree; chase
+   only what the decision needs.
+4. **You synthesise.** coworker returns raw reading; the comparison, the fit
+   analysis, and every Apply/Adapt/Skip call stay with you. Verify coworker's
+   summary against the source before you rely on it.
+
+State in the final report whether the research went through coworker or fell
+back in-session, and why.
 
 ## 10-mode framework subset
 
 Run these modes **in order** from
-`docs/first_principles_10_critical_framework.md` (full doc not required inline):
+`docs/first_principles_10_critical_framework.md` (full doc not required inline)
+over the material coworker brought back:
 
 | Mode | One-line purpose |
 |------|------------------|
@@ -56,18 +83,31 @@ If **every** item is **Skip**, stop the skill: report that plainly. Do not inven
 ## Proposal file (transient)
 
 Write under `$env:TEMP` (or OS temp) — **never commit** to the repo.
+Example path: `$env:TEMP/orchestrator-pack-proposal-<slug>.md`
+(Linux/WSL: `/tmp/...` if TEMP unset).
 
-Required sections:
+The proposal must be **detailed** — it is both the record you reason from and
+the exact payload Codex will attack, so it carries the full case for *and*
+against each decision. Required sections:
 
-1. **Source** — URL, version/date, one-line what it is.
+1. **Source** — URL, version/date, one-line what it is; note whether the read
+   went through coworker.
 2. **Existing pain** — our problem statements only (no invented gaps).
-3. **Decision per item** — Apply / Adapt / Skip with rationale.
-4. **Concrete suggestions** — files/contracts affected if not Skip.
-5. **Risks** — upgrade safety, scope creep, operator burden.
+3. **Where it works better / where it works worse** — an explicit, honest map
+   of the source's (or proposal's) strengths and weaknesses: which contexts it
+   beats our current approach in, and which contexts it loses or adds cost/risk.
+   This is the comparison Codex will probe, so do not soften either side.
+4. **What to apply — and how** — for every **Apply** / **Adapt** item, the
+   concrete change: which pack files/contracts it touches and the mechanism by
+   which we'd land it (draft + worker), at the *what-must-be-true* level
+   (leave the *how* to the planner — see Planner freedom in `CLAUDE.md`).
+5. **What NOT to apply — and why** — for every **Skip** item, the explicit
+   reason it is rejected (duplicate, no fit, cost/risk, breaks upgrade safety,
+   over-reach). Rejections are first-class content, not omissions — Codex must
+   be able to argue against each one.
+6. **Risks** — upgrade safety, scope creep, operator burden.
 
-Example path: `$env:TEMP/orchestrator-pack-proposal-<slug>.md` (Linux/WSL: `/tmp/...` if TEMP unset)
-
-## Adversarial Codex review
+## Adversarial Codex review — challenge BOTH sides
 
 Use the **adversarial-review** engine — the same cold-skeptic pass that
 [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) runs — **not**
@@ -75,6 +115,12 @@ a plain `codex review`. It argues to break confidence in the adoption decisions
 and returns a structured JSON findings contract you **evaluate, never obey**.
 The `/codex:adversarial-review` slash command is `disable-model-invocation:
 true`, so call its engine directly.
+
+Send Codex **everything from sections 3–5 of the proposal** — the
+strengths/weaknesses map, the apply-and-how items, **and** the skip-and-why
+items. Codex must challenge the **rejected** decisions as hard as the accepted
+ones: "argue we are wrong to skip X", "argue this Apply is actually a bad fit".
+A one-sided attack that only questions adoptions is incomplete.
 
 The proposal lives under `$TEMP` (outside the repo), so the engine's git-diff
 scope has nothing to chew on — **embed the proposal in the focus text** and tell
@@ -85,7 +131,7 @@ Resolve the newest plugin version, run from repo root:
 SCRIPT=$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)
 PROPOSAL=$(cat "${TMPDIR:-/tmp}/orchestrator-pack-proposal-<slug>.md")
 node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
-  "Challenge the ADOPTION PROPOSAL below — do NOT summarize the external source, and ignore any unrelated working-tree changes. Question whether the pain is real, cargo-cult risk, whether each Apply/Adapt truly fits our constraints (AO-no-core-patch, Windows CI, planner freedom), upgrade safety, command accuracy, hidden coupling, and overlap with existing pack contracts.
+  "Challenge the ADOPTION PROPOSAL below — do NOT summarize the external source, and ignore any unrelated working-tree changes. Attack BOTH directions: (a) for every Apply/Adapt, argue the pain is unreal, the fit is cargo-cult, it breaks our constraints (AO-no-core-patch, Windows CI, planner freedom), or the upgrade/command is unsafe; (b) for every Skip, argue we are WRONG to reject it and are leaving real value on the table. Also probe the where-it-works-better/worse map for bias, hidden coupling, and overlap with existing pack contracts.
 
 --- PROPOSAL ---
 $PROPOSAL"
@@ -97,24 +143,27 @@ $PROPOSAL"
 `tail` or `head` — wait for the full response.
 
 Skip if the Codex CLI / companion runtime is unavailable — fall back to no
-adversarial pass and say so in the final summary.
+adversarial pass and say so in the final report.
 
 ## Evaluate findings — don't obey
 
-Codex argues to break confidence; treat each finding as a challenge to weigh,
-not an instruction to apply. Decide per finding:
+Codex argues to break confidence in **both** the adoptions and the rejections;
+treat each finding as a challenge to weigh, **never** as an instruction to
+apply. Do not flip a decision just because Codex pushed on it — decide what is
+genuinely applicable and what is excessive. Decide per finding:
 
 | Verdict | When | Action |
 |---------|------|--------|
-| **Accept** | Exposes a real gap — invented pain, cargo-cult adoption, broken upgrade safety (core patch), wrong/unsafe command, missed coupling or overlap with an existing pack contract. | Revise the proposal (flip Apply→Adapt/Skip, fix rationale or risks). |
+| **Accept** | Exposes a real gap — invented pain, cargo-cult adoption, broken upgrade safety (core patch), wrong/unsafe command, missed coupling/overlap, **or a Skip that genuinely throws away value**. | Revise the proposal (flip Apply→Adapt/Skip, or Skip→Adapt; fix rationale, the works-better/worse map, or risks). |
 | **Partial** | Valid kernel, but the remedy **over-specifies** *how* we'd implement (file names, signatures, libraries, internal layout the planner should own). | Fix the proposal **minimally** — keep it about *what must be true*; leave the how to the later `create-issue-draft`. |
-| **Reject** | Speculative, stylistic, guards an out-of-scope failure mode, or pushes us to over-spec / narrow planner freedom. | Leave the proposal; record why. |
+| **Reject** | Speculative, stylistic, guards an out-of-scope failure mode, or pushes us to over-spec / narrow planner freedom / adopt for adoption's sake. | Leave the proposal; record why. |
 
 Anchor on CLAUDE.md: planner freedom is non-negotiable; the cost rule is
 "cheapest sufficient executor with acceptable risk." A finding that pushes the
-proposal toward over-specification is itself the bug — reject or trim it. Log
-every accept/reject — one line per finding: what Codex argued, your verdict,
-why — in the proposal's decision trail. See
+proposal toward over-specification, or toward adopting something just because
+Codex challenged the Skip, is itself the bug — reject or trim it. Log every
+accept/reject — one line per finding: what Codex argued, your verdict, why — in
+the proposal's decision trail. See
 `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
 
 ## Iteration discipline
@@ -140,21 +189,35 @@ why — in the proposal's decision trail. See
 - Never resume a single Codex thread across iterations (it softens into
   agreement and defeats the gate); keep cold restarts + the settled ledger.
 
-## Final summary (deliver to user)
+## Final report (deliver to user)
 
-≤ 400 words, in the user's language, with this structure:
+Plain, non-technical language — **so a grandmother could follow it** — in the
+user's language. No jargon dumps; explain any unavoidable term in one clause.
+Structure:
 
-1. **Verdict** — adopt anything or not.
-2. **What we adopt** — Apply/Adapt items only.
-3. **What we skip** — and why.
-4. **Open questions** — unresolved after the adversarial loop.
-5. **Next step** — e.g. invoke `create-issue-draft` for an Adapt item, or none.
+1. **Final decision** — in one or two sentences: do we adopt anything, and the
+   gist of why.
+2. **What works better / worse** — the honest strengths-and-weaknesses summary
+   from the proposal, in everyday words.
+3. **What we take, and how** — the Apply/Adapt items and roughly what changes.
+4. **What we leave out, and why** — the Skip items and the plain reason.
+5. **What Codex challenged, and how we answered** — list **every** finding Codex
+   raised (on both adoptions and rejections) with your one-line verdict
+   (agreed / partly / disagreed) and the reason. Do not hide rejected findings.
+6. **Open questions** — anything still unresolved after the loop.
+7. **Next step** — e.g. invoke `create-issue-draft` for an Adapt item, or none.
+
+Note in the report whether the research went through coworker or fell back
+in-session.
 
 ## Don't
 
+- Read the external source yourself when coworker is available — delegate it.
 - Cargo-cult adopt because a repo is popular or starred.
 - Invent pain points to avoid an all-Skip outcome.
-- **Auto-apply** any finding — the Accept/Partial/Reject evaluation is mandatory.
+- Send Codex only the adoptions — it must attack the rejections too.
+- **Auto-apply** any finding — the Accept/Partial/Reject evaluation is mandatory;
+  flip a decision only when *you* judge it genuinely right, not because Codex said so.
 - Skip the adversarial Codex pass on the proposal (unless the runtime is down).
 - Run more than **10** adversarial passes, or re-run with no accepted change.
 - Resume a single Codex thread across iterations to save tokens.
