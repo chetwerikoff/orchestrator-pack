@@ -14,6 +14,7 @@ import {
   extractEventsFromTranscriptRecords,
   isInboundUserRequest,
   loadMetricWindowSummary,
+  measureReadToolLines,
   measureShellDiffLogLines,
   partitionEventsIntoWorkUnits,
   populateStopAuditPayload,
@@ -95,6 +96,15 @@ function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResul
 function firstVerdict(result: StopAuditResult) {
   expect(result.verdicts.length).toBeGreaterThan(0);
   return result.verdicts[0];
+}
+
+function createBulkReadFile(dir: string, lines = 450) {
+  const filePath = path.join(dir, `bulk-read-${lines}.txt`);
+  fs.writeFileSync(
+    filePath,
+    Array.from({ length: lines }, (_, index) => `bulk-line-${index + 1}`).join('\n'),
+  );
+  return filePath;
 }
 
 const equivalenceFixtures = [
@@ -252,7 +262,8 @@ describe('fail-open and fail-loud', () => {
 
 describe('Claude and shell transcript compatibility', () => {
   it('resolves Claude Read file_path inputs for line measurement', () => {
-    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-limit-'));
+    const readPath = createBulkReadFile(dir, 450);
     expect(resolveReadToolPath({ file_path: readPath })).toBe(readPath);
 
     const events = toolUseToAuditEvents(
@@ -265,8 +276,39 @@ describe('Claude and shell transcript compatibility', () => {
     expect(events[0].lines).toBe(450);
   });
 
-  it('flags Claude transcript reads the same as Cursor reads', () => {
+  it('treats Read limits as caps when the file is shorter than the limit', () => {
     const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const actualLines = measureReadToolLines({ path: readPath });
+    expect(measureReadToolLines({ path: readPath, limit: 450 })).toBe(actualLines);
+    expect(actualLines).toBeLessThan(T1_VOLUME_FLOOR);
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extractEventsFromTranscriptRecords([
+        {
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'inspect policy' }] },
+        },
+        {
+          role: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                name: 'Read',
+                input: { path: readPath, limit: 450 },
+              },
+            ],
+          },
+        },
+      ]).workUnits,
+    }) as StopAuditResult;
+    expect(result.flags.length).toBe(0);
+  });
+
+  it('flags Claude transcript reads the same as Cursor reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-bulk-'));
+    const readPath = createBulkReadFile(dir, 450);
     const records = [
       {
         role: 'user',
@@ -374,7 +416,8 @@ describe('Claude and shell transcript compatibility', () => {
 
 describe('stop hook transcript population', () => {
   it('extracts read events from Cursor transcript records', () => {
-    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-bulk-'));
+    const readPath = createBulkReadFile(dir, 450);
     const records = [
       {
         role: 'user',
@@ -412,7 +455,7 @@ describe('stop hook transcript population', () => {
 
   it('populates work units from transcript_path when hook payload is sparse', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-transcript-'));
-    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const readPath = createBulkReadFile(dir, 450);
     const transcriptPath = path.join(dir, 'transcript.jsonl');
     const template = fs.readFileSync(
       path.join(fixturesDir, 'stop-hook-transcript.jsonl'),
@@ -442,7 +485,7 @@ describe('stop hook transcript population', () => {
 
   it('reads transcript_path from disk via extractEventsFromTranscript', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-transcript-'));
-    const readPath = path.join(fixturesDir, 'delegated-machine-observed.json');
+    const readPath = createBulkReadFile(dir, 450);
     const transcriptPath = path.join(dir, 'transcript.jsonl');
     fs.writeFileSync(
       transcriptPath,
@@ -472,6 +515,44 @@ describe('stop hook transcript population', () => {
     });
     expect(extracted.workUnits).toHaveLength(1);
     expect(extracted.workUnits[0].reads?.[0]?.lines).toBe(450);
+  });
+
+  it('prefers captured Read tool_result length over the requested limit', () => {
+    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const captured = Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n');
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'task' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'Read',
+              input: { path: readPath, limit: 450 },
+            },
+          ],
+        },
+      },
+      {
+        role: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'read-1', content: captured }],
+        },
+      },
+    ];
+
+    const extracted = extractEventsFromTranscriptRecords(records);
+    expect(extracted.workUnits[0].reads?.[0]?.lines).toBe(450);
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extracted.workUnits,
+    }) as StopAuditResult;
+    expect(result.flags.length).toBe(1);
   });
 });
 

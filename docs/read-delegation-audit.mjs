@@ -416,22 +416,31 @@ export function resolveReadToolPath(input) {
 
 /**
  * @param {Record<string, unknown>} input
+ * @param {unknown} [capturedOutput]
  */
-export function measureReadToolLines(input) {
+export function measureReadToolLines(input, capturedOutput) {
   const offset = Math.max(0, Number(input.offset) || 0);
   const limit = input.limit === undefined ? undefined : Math.max(0, Number(input.limit) || 0);
-  if (limit !== undefined && !Number.isNaN(limit)) {
-    return limit;
+
+  if (capturedOutput !== undefined && capturedOutput !== null) {
+    const capturedText = extractToolResultText(capturedOutput);
+    if (capturedText !== '') {
+      return capturedText.split('\n').length;
+    }
   }
 
   const filePath = resolveReadToolPath(input) ?? '';
-  if (!filePath || !existsSync(filePath)) {
-    return 0;
+  if (filePath && existsSync(filePath)) {
+    const text = readFileSync(filePath, 'utf8');
+    const totalLines = text === '' ? 0 : text.split('\n').length;
+    const available = Math.max(0, totalLines - offset);
+    if (limit !== undefined && !Number.isNaN(limit)) {
+      return Math.min(limit, available);
+    }
+    return available;
   }
 
-  const text = readFileSync(filePath, 'utf8');
-  const totalLines = text === '' ? 0 : text.split('\n').length;
-  return Math.max(0, totalLines - offset);
+  return 0;
 }
 
 /**
@@ -614,7 +623,7 @@ function transcriptToolUses(record) {
  * @param {string} toolName
  * @param {Record<string, unknown>} input
  * @param {string} inboundRequestId
- * @param {{ shellOutput?: unknown }} [options]
+ * @param {{ shellOutput?: unknown, toolOutput?: unknown }} [options]
  */
 export function toolUseToAuditEvents(toolName, input, inboundRequestId, options = {}) {
   /** @type {Array<Record<string, unknown>>} */
@@ -627,7 +636,7 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
       kind: 'read',
       inboundRequestId,
       path,
-      lines: measureReadToolLines(input),
+      lines: measureReadToolLines(input, options.toolOutput),
       readKind: 'file',
       isCodeClass: isCodeClassPath(path),
     });
@@ -712,11 +721,12 @@ export function extractEventsFromTranscriptRecords(records, options = {}) {
       continue;
     }
     for (const toolUse of transcriptToolUses(record)) {
-      const shellOutput =
+      const capturedOutput =
         typeof toolUse.id === 'string' ? toolResults.get(toolUse.id) : undefined;
       events.push(
         ...toolUseToAuditEvents(toolUse.name, toolUse.input, inboundRequestId, {
-          shellOutput,
+          shellOutput: capturedOutput,
+          toolOutput: capturedOutput,
         }).map((event) => ({
           ...event,
           workUnitKey,
