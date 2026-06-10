@@ -1,0 +1,23 @@
+{
+  "description": "cumulative sub-floor chunks summing past T1 — flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-chunks",
+      "inboundRequestId": "req-1",
+      "reads": [
+        { "path": "docs/a.md", "lines": 150, "kind": "file" },
+        { "path": "docs/b.md", "lines": 150, "kind": "file" },
+        { "path": "docs/c.md", "lines": 150, "kind": "file" }
+      ],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
+  }
+}

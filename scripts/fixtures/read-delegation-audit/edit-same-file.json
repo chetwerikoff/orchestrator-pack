@@ -1,0 +1,19 @@
+{
+  "description": "near-floor read followed by edit of same file — not flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-edit-same",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "edits": [{ "path": "docs/a.md" }],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": false,
+    "inDenominator": true
+  }
+}

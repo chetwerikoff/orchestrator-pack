@@ -1,0 +1,24 @@
+{
+  "description": "duplicate stop events do not double-count; concurrent unique events append",
+  "surface": "cursor",
+  "events": [
+    {
+      "eventId": "evt-1",
+      "workUnitKey": "unit-a",
+      "windowId": "win-1",
+      "duplicate": false
+    },
+    {
+      "eventId": "evt-1",
+      "workUnitKey": "unit-a",
+      "windowId": "win-1",
+      "duplicate": true
+    },
+    {
+      "eventId": "evt-2",
+      "workUnitKey": "unit-b",
+      "windowId": "win-1",
+      "duplicate": false
+    }
+  ]
+}

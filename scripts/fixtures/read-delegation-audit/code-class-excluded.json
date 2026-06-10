@@ -1,0 +1,20 @@
+{
+  "description": "code-class gated reads — excluded from denominator",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-code",
+      "inboundRequestId": "req-1",
+      "codeClassGated": true,
+      "reads": [{ "path": "plugins/foo.ts", "lines": 900, "kind": "file", "isCodeClass": true }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "description": "250-line diff below T1 file floor — flagged via independent diff trigger",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-diff",
+      "inboundRequestId": "req-1",
+      "reads": [{ "lines": 250, "kind": "diff" }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true,
+    "diffLog": true
+  }
+}

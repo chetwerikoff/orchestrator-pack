@@ -1,0 +1,21 @@
+{
+  "description": "machine-observed coworker ask — not flagged, counted in denominator",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-delegated",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "edits": [],
+      "shellCommands": ["coworker ask --profile code --question 'summarize' docs/a.md"],
+      "statusText": "Used coworker for bulk read."
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": false,
+    "inDenominator": true,
+    "machineObservedDelegation": true
+  }
+}

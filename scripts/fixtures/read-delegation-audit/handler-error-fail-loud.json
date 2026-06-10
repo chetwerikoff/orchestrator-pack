@@ -1,0 +1,6 @@
+{
+  "description": "handler error records health and marks window degraded",
+  "injectError": true,
+  "expectHealth": true,
+  "expectDegraded": true
+}

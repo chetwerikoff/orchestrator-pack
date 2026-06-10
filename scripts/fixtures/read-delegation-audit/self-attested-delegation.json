@@ -1,0 +1,21 @@
+{
+  "description": "status claims delegation without coworker event — flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-self-attest",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "edits": [],
+      "statusText": "Delegated the bulk read through coworker ask."
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true,
+    "selfAttestedDelegation": true,
+    "machineObservedDelegation": false
+  }
+}

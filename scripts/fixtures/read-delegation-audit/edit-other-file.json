@@ -1,0 +1,19 @@
+{
+  "description": "near-floor read followed by edit of other file in unit — not flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-edit-other",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "edits": [{ "path": "scripts/b.ps1" }],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": false,
+    "inDenominator": true
+  }
+}

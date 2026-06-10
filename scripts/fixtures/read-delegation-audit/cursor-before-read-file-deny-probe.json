@@ -1,0 +1,16 @@
+{
+  "description": "Captured Cursor beforeReadFile deny-capability probe (Phase-2 feasibility; Issue #255)",
+  "capturedAt": "2026-06-10",
+  "hook": "beforeReadFile",
+  "attempt": "deny",
+  "request": {
+    "filePath": "/tmp/read-delegation-probe.txt",
+    "content": "probe"
+  },
+  "response": {
+    "permission": "deny",
+    "userMessage": "Read blocked by probe hook",
+    "agentMessage": "The beforeReadFile hook denied this read."
+  },
+  "notes": "Probe records whether Cursor honors a deny decision on beforeReadFile. Phase 1 audit does not block reads; this artifact informs the deferred Phase-2 hard-block follow-up only."
+}

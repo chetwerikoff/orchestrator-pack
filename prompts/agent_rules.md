@@ -159,8 +159,10 @@ fence-clean **and** the work is not an excepted reasoning step (below), you **MU
 route the read through `coworker ask --profile code` rather than inline it on the
 reasoning model. Read delegation is a **floor**, not a ceiling: triggers bound when
 delegation becomes mandatory; they are not permission to decline for convenience.
-This MUST is a **prompt-level obligation** with **no hard hook** — backstops are
-visible delegation outcome (below), reviewer judgment, and operator observation.
+This MUST is a **prompt-level obligation** with **no pre-read hard block** in Phase 1 —
+backstops are visible delegation outcome (below), the **stop-time read-delegation audit**
+([`docs/coworker-read-delegation-audit.md`](../docs/coworker-read-delegation-audit.md)),
+reviewer judgment, and operator observation.
 
 **Bounded fallback.** Fall back to deterministic in-session reading — and **state the
 reason** in your final status — only when: `coworker` is missing, unavailable, or
@@ -172,13 +174,11 @@ Ask triggers (any one is sufficient; count **all** corpus you would otherwise re
 the reasoning model, including out-of-tree operational evidence, subject only to the
 provider-input fence):
 
-- Combined corpus for one question is **more than 600 lines** across all paths in that
-  invocation.
-- **3 or more files** under one question (same `coworker ask` call).
+- Combined corpus for one question is **more than 400 lines** across all paths in that
+  invocation (includes multi-file/bootstrap bulk reads that sum past this floor).
+- **3 or more files** under one question **only when** combined corpus is also **≥400
+  lines** (file count alone with a trivial line total does not fire).
 - Diff or log material to summarize is **more than 200 lines**.
-- Bootstrap read of **2 or more** config/doc paths that together total **more than 600
-  lines** (or each path is **more than 200 lines**) where bulk read is the work, not
-  synthesis.
 
 ### Write delegation (`coworker write`)
 
@@ -216,7 +216,8 @@ Keep on the reasoning model (independent of corpus size):
   reasoning” does not license cheap review.
 
 **Worked example.** Root-cause work must read ~900 lines across `prompts/agent_rules.md`,
-a config file, and a runtime log. The 600-line and 3-file triggers fire. **Correct:**
+a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
+**Correct:**
 scrub the log fence-clean, then `coworker ask --profile code` extracts/summarises the
 minimal needed excerpt; you reason over the cheap-model summary and write the
 root-cause conclusion yourself. **Wrong:** label the whole task “root-cause” and inline

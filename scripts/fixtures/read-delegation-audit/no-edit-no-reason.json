@@ -1,0 +1,19 @@
+{
+  "description": "trigger fired, not delegated, no edit — flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-flagged",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
+  }
+}

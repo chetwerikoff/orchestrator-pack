@@ -1,0 +1,21 @@
+{
+  "description": "reviewer-path session — excluded from denominator",
+  "surface": "cursor",
+  "reviewerPath": true,
+  "env": { "PACK_REVIEWER": "codex" },
+  "workUnits": [
+    {
+      "key": "unit-review",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 900, "kind": "file" }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false
+  }
+}

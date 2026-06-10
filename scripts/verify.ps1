@@ -913,6 +913,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Coworker delegation threshold drift (Issue #255) =='
+$coworkerThresholdDriftCheck = Join-Path $Root 'scripts/check-coworker-delegation-threshold-drift.ps1'
+if (Test-Path -LiteralPath $coworkerThresholdDriftCheck -PathType Leaf) {
+    & $coworkerThresholdDriftCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Coworker delegation threshold drift check failed (Issue #255)'
+    }
+}
+else {
+    Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing coworker delegation threshold drift check script (Issue #255)'
+}
+
+Write-Host ''
 Write-Host '== Skill pointer drift (Issue #156) =='
 $skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'
 if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {
