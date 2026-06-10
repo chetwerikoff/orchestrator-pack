@@ -388,6 +388,59 @@ describe('Claude and shell transcript compatibility', () => {
     );
   });
 
+  it('recognizes coworker ask --profile=code as machine-observed delegation', () => {
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        {
+          key: 'unit-profile-equals',
+          inboundRequestId: 'req-1',
+          reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
+          shellCommands: ["coworker ask --profile=code --question 'summarize' docs/a.md"],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].machineObservedDelegation).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(false);
+    expect(result.verdicts[0].inDenominator).toBe(true);
+  });
+
+  it('recognizes Claude Edit and MultiEdit tools for edit-exempt units', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-claude-edit-'));
+    const readPath = createBulkReadFile(dir, 450);
+    for (const editTool of ['Edit', 'MultiEdit'] as const) {
+      const records = [
+        {
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'read then edit' }] },
+        },
+        {
+          role: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                name: 'Read',
+                input: { file_path: readPath, limit: 450 },
+              },
+              {
+                type: 'tool_use',
+                name: editTool,
+                input: { file_path: readPath, old_string: 'bulk-line-1', new_string: 'edited-line-1' },
+              },
+            ],
+          },
+        },
+      ];
+      const result = evaluateStopAudit({
+        surface: 'claude',
+        workUnits: extractEventsFromTranscriptRecords(records).workUnits,
+      }) as StopAuditResult;
+      expect(result.verdicts[0].editExempt).toBe(true);
+      expect(result.verdicts[0].flagged).toBe(false);
+    }
+  });
+
   it('does not re-execute shell commands without captured transcript output', () => {
     expect(measureShellDiffLogLines('git diff HEAD~1')).toBe(0);
     const events = toolUseToAuditEvents(

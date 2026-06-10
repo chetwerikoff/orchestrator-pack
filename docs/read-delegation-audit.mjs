@@ -40,7 +40,8 @@ const EXCEPTED_REASON_PATTERNS = [
 const DELEGATION_STATUS_PATTERN =
   /\b(delegated|coworker ask|used coworker|routed through coworker)\b/i;
 
-const COWORKER_ASK_PATTERN = /\bcoworker\s+ask\b[^|\n]*--profile\s+code\b/i;
+const COWORKER_ASK_PATTERN =
+  /\bcoworker\s+ask\b[^|\n]*--profile(?:\s*=|\s+)code\b/i;
 
 const CODE_CLASS_EXTENSIONS = new Set([
   '.ts',
@@ -72,6 +73,10 @@ const EDIT_TOOL_NAMES = new Set([
   'StrReplace',
   'str_replace',
   'search_replace',
+  'Edit',
+  'edit',
+  'MultiEdit',
+  'multi_edit',
   'EditNotebook',
   'edit_notebook',
 ]);
