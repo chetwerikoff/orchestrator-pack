@@ -268,6 +268,47 @@ describe('line counting and missing-window handling', () => {
     expect(result.verdicts[0].flagged).toBe(false);
   });
 
+  it('returns fail-open when transcript_path exists but cannot be read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-transcript-unreadable-'));
+    const transcriptPath = path.join(dir, 'unreadable.jsonl');
+    const artifactPath = path.join(dir, 'metrics.jsonl');
+    fs.writeFileSync(transcriptPath, '{"role":"user"}\n');
+    fs.chmodSync(transcriptPath, 0o000);
+
+    try {
+      const result = runStopAudit({
+        surface: 'cursor',
+        transcript_path: transcriptPath,
+        artifactPath,
+        eventId: 'evt-transcript-read-fail',
+        nowMs: 1_700_000_000_001,
+      }) as StopAuditResult;
+      expect(result.ok).toBe(false);
+      expect(result.failOpen).toBe(true);
+      expect(result.error).toBeTruthy();
+
+      const stdout = execFileSync(
+        'node',
+        [auditModule, 'stop'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({
+            surface: 'cursor',
+            transcript_path: transcriptPath,
+            artifactPath,
+            eventId: 'evt-transcript-cli-fail',
+          }),
+          encoding: 'utf8',
+        },
+      );
+      const parsed = JSON.parse(stdout);
+      expect(parsed.failOpen).toBe(true);
+      expect(parsed.ok).toBe(false);
+    } finally {
+      fs.chmodSync(transcriptPath, 0o600);
+    }
+  });
+
   it('records missing_window when transcript_path yields no tool events', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-missing-'));
     const artifactPath = path.join(dir, 'missing-window.jsonl');

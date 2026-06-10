@@ -1123,9 +1123,10 @@ function appendAuditHealthRecord(artifactPath, health) {
 
 /**
  * @param {Record<string, unknown>} payload
+ * @param {{ skipPopulate?: boolean }} [options]
  */
-export function evaluateStopAudit(payload) {
-  const enriched = populateStopAuditPayload(payload);
+export function evaluateStopAudit(payload, options = {}) {
+  const enriched = options.skipPopulate ? payload : populateStopAuditPayload(payload);
   const surface = String(enriched.surface ?? 'cursor');
   if (!SURFACES.includes(surface)) {
     throw new Error(`unsupported surface: ${surface}`);
@@ -1158,14 +1159,17 @@ export function evaluateStopAudit(payload) {
  * @param {Record<string, unknown>} payload
  */
 export function runStopAudit(payload) {
-  const enriched = populateStopAuditPayload(payload);
-  const artifactPath =
-    typeof enriched.artifactPath === 'string' ? enriched.artifactPath : undefined;
-  const windowId = String(enriched.windowId ?? 'default');
-  const eventId = String(enriched.eventId ?? enriched.workUnitKey ?? `stop:${Date.now()}`);
+  const raw = isRecord(payload) ? payload : {};
+  const normalized = normalizeStopHookPayload(raw);
 
   try {
-    const result = evaluateStopAudit(enriched);
+    const enriched = populateStopAuditPayload(raw);
+    const artifactPath =
+      typeof enriched.artifactPath === 'string' ? enriched.artifactPath : undefined;
+    const windowId = String(enriched.windowId ?? 'default');
+    const eventId = String(enriched.eventId ?? enriched.workUnitKey ?? `stop:${Date.now()}`);
+
+    const result = evaluateStopAudit(enriched, { skipPopulate: true });
     const records = [];
 
     for (const verdict of result.verdicts) {
@@ -1222,12 +1226,24 @@ export function runStopAudit(payload) {
         : undefined,
     };
   } catch (error) {
+    const artifactPath =
+      typeof normalized.artifactPath === 'string' ? normalized.artifactPath : undefined;
+    const windowId = String(normalized.windowId ?? 'default');
+    const conversationId = String(
+      normalized.conversationId ?? normalized.conversation_id ?? 'conversation',
+    );
+    const generationId = String(
+      normalized.generationId ?? normalized.generation_id ?? 'generation',
+    );
+    const eventId = String(
+      normalized.eventId ?? normalized.workUnitKey ?? `stop:${conversationId}:${generationId}`,
+    );
     const health = {
       kind: 'audit_error',
       windowId,
-      surface: String(enriched.surface ?? 'unknown'),
+      surface: String(normalized.surface ?? 'unknown'),
       eventId: `error:${eventId}`,
-      emittedAtMs: Number(enriched.nowMs) || Date.now(),
+      emittedAtMs: Number(normalized.nowMs) || Date.now(),
       message: error instanceof Error ? error.message : String(error),
     };
 

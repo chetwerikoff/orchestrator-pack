@@ -96,7 +96,10 @@ export declare function appendMetricRecord(
   record: Record<string, unknown>,
 ): { appended: boolean; duplicate: boolean; artifactPath: string };
 export declare function loadMetricWindowSummary(artifactPath: string): Record<string, unknown>;
-export declare function evaluateStopAudit(payload: Record<string, unknown>): Record<string, unknown>;
+export declare function evaluateStopAudit(
+  payload: Record<string, unknown>,
+  options?: { skipPopulate?: boolean },
+): Record<string, unknown>;
 export declare function runStopAudit(payload: Record<string, unknown>): Record<string, unknown>;
 export declare function normalizeStopHookPayload(
   hookPayload: Record<string, unknown>,
