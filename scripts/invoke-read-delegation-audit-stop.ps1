@@ -38,8 +38,8 @@ if ($ArtifactPath) {
   $payload | Add-Member -NotePropertyName artifactPath -NotePropertyValue $ArtifactPath -Force
 }
 elseif (-not $payload.PSObject.Properties.Match('artifactPath').Count) {
-  $home = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
-  $payload | Add-Member -NotePropertyName artifactPath -NotePropertyValue (Join-Path $home '.orchestrator-pack/read-delegation-audit.jsonl') -Force
+  $homeDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+  $payload | Add-Member -NotePropertyName artifactPath -NotePropertyValue (Join-Path $homeDir '.orchestrator-pack/read-delegation-audit.jsonl') -Force
 }
 
 if (-not $payload.PSObject.Properties.Match('surface').Count) {
@@ -51,7 +51,7 @@ if (-not $payload.PSObject.Properties.Match('surface').Count) {
     $hookEventName = $payload.hook_event_name
   }
 
-  if ($hookEventName -eq 'Stop') {
+  if ($hookEventName -ceq 'Stop') {
     $payload | Add-Member -NotePropertyName surface -NotePropertyValue 'claude' -Force
   }
   else {
@@ -70,7 +70,7 @@ $jsonIn = $payload | ConvertTo-Json -Depth 30 -Compress
 try {
   $jsonOut = $jsonIn | node $auditModule stop 2>&1
   if ($LASTEXITCODE -ne 0) {
-    throw "audit module exited $LASTEXITCODE: $jsonOut"
+    throw "audit module exited ${LASTEXITCODE}: $jsonOut"
   }
 }
 catch {
@@ -80,7 +80,7 @@ catch {
     kind        = 'audit_error'
     surface     = $surface
     eventId     = "hook-error:$(Get-Date -Format 'yyyyMMddHHmmss')"
-    emittedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    emittedAtMs = [int64](([DateTimeOffset]::UtcNow).UtcDateTime - [datetime]'1970-01-01Z').TotalMilliseconds
     message     = $_.Exception.Message
   } | ConvertTo-Json -Compress
   try {

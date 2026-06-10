@@ -713,6 +713,49 @@ describe('concurrency and idempotency', () => {
   });
 });
 
+describe('invoke-read-delegation-audit-stop.ps1', () => {
+  const invokeScript = path.join(repoRoot, 'scripts/invoke-read-delegation-audit-stop.ps1');
+  const powershellBin =
+    process.platform === 'win32'
+      ? 'powershell.exe'
+      : (() => {
+          try {
+            execFileSync('powershell', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], {
+              encoding: 'utf8',
+            });
+            return 'powershell';
+          } catch {
+            return null;
+          }
+        })();
+
+  it('parses hook stdin with PS 5.1-compatible code', () => {
+    if (!powershellBin) {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-hook-'));
+    const artifactPath = path.join(dir, 'hook.jsonl');
+    execFileSync(
+      powershellBin,
+      ['-NoProfile', '-File', invokeScript, '-ArtifactPath', artifactPath],
+      {
+        cwd: repoRoot,
+        input: JSON.stringify({
+          hook_event_name: 'stop',
+          conversation_id: 'conv-hook',
+          generation_id: 'gen-hook',
+          workUnits: loadFixture('no-edit-no-reason.json').workUnits,
+        }),
+        encoding: 'utf8',
+      },
+    );
+    const lines = fs.readFileSync(artifactPath, 'utf8').trim().split('\n').filter(Boolean);
+    expect(lines.length).toBeGreaterThan(0);
+    const record = JSON.parse(lines[0]) as { surface?: string };
+    expect(record.surface).toBe('cursor');
+  });
+});
+
 describe('stop hook CLI', () => {
   it('runs stop subcommand from stdin JSON', () => {
     const stdout = execFileSync(
