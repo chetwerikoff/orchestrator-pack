@@ -164,6 +164,34 @@ describe('buildCodexExecReviewArgs', () => {
   });
 });
 
+describe('executeReview explicit source for sandbox trust', () => {
+  it('uses read-only sandbox when source is env-derived (not passed in options)', () => {
+    const previousGithubActions = process.env.GITHUB_ACTIONS;
+    const previousCi = process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
+    delete process.env.CI;
+    try {
+      const args = buildCodexExecReviewArgs({
+        outputFile: '/tmp/out.txt',
+        source: undefined,
+        env: { PR_REPO_ROOT: '', CI: '', GITHUB_ACTIONS: '' },
+      });
+      expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
+    } finally {
+      if (previousGithubActions !== undefined) {
+        process.env.GITHUB_ACTIONS = previousGithubActions;
+      } else {
+        delete process.env.GITHUB_ACTIONS;
+      }
+      if (previousCi !== undefined) {
+        process.env.CI = previousCi;
+      } else {
+        delete process.env.CI;
+      }
+    }
+  });
+});
+
 describe('buildCodexSpawnEnv', () => {
   const secrets = {
     GH_TOKEN: 'gh_secret',

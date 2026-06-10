@@ -58,7 +58,8 @@ function isCiOrActionsSignal(env: NodeJS.ProcessEnv): boolean {
 
 /**
  * Fail-closed trust for local PR review: coworker-capable sandbox only when
- * source is positively `codex-local` with no CI/Actions signal and no PR_REPO_ROOT.
+ * `--source codex-local` was passed explicitly (not env-derived), with no
+ * CI/Actions signal and no PR_REPO_ROOT.
  */
 export function isTrustedLocalReviewContext(
   source: ReviewSource | undefined,

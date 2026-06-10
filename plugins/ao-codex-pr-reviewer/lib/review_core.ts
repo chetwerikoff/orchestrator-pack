@@ -148,7 +148,8 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     baseRef: options.baseRef,
     prompt,
     model: options.model,
-    source,
+    // Sandbox trust is fail-closed: only an explicit --source may grant coworker-capable mode.
+    source: options.source,
     fixtureStdout: options.fixtureStdout,
     fixtureProcessJsonl: options.fixtureProcessJsonl,
     fixtureSessionJsonl: options.fixtureSessionJsonl,

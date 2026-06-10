@@ -84,15 +84,15 @@ populated for the called reusable workflow pin — do not rely on them or on
 
 ### Sandbox trust split (coworker delegation)
 
-Trusted local PR review (`--source codex-local`, no CI/Actions signal, no
-`PR_REPO_ROOT`) runs `codex exec` with `--sandbox workspace-write` and
+Trusted local PR review requires an **explicit** `--source codex-local` on the
+CLI (the canonical `run-pack-review.ps1` / `invoke-pack-review.ps1` entrypoints
+inject this on non-CI hosts). Env-derived defaults apply only to finding
+metadata, not sandbox trust. With explicit `codex-local`, no CI/Actions signal,
+and no `PR_REPO_ROOT`, Codex runs with `--sandbox workspace-write` and
 `sandbox_workspace_write.network_access=true` so the reviewer can spawn the
-external `coworker` CLI (exec + outbound network) per pack policy. This grants
-workspace-scoped write capability to Codex; the wrapper regression tests assert
-the checkout is not mutated by the wrapper itself — operators run trusted review
-on their own machine.
+external `coworker` CLI (exec + outbound network) per pack policy.
 
-Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, missing/ambiguous
+Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, omitted
 `--source`, or `codex-local` under a CI/Actions signal) keep fail-closed
 `--sandbox read-only` containment. The child process env omits `GH_TOKEN` and
 related CI secrets so prompt injection cannot exfiltrate them.
