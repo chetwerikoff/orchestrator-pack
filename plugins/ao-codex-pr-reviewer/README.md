@@ -98,7 +98,7 @@ Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, omitted
 related CI secrets so prompt injection cannot exfiltrate them.
 
 Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
-`codex review -c sandbox_workspace_write.network_access=true`) is always
+`codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always
 trusted-local and coworker-capable.
 
 The Windows AO 0.9.2 patch path (`scripts/patch-codex-review4.ps1`) is legacy:
