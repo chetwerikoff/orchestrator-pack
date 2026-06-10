@@ -1094,6 +1094,36 @@ export function populateStopAuditPayload(rawPayload) {
 /**
  * @param {Record<string, unknown>} payload
  */
+export function resolveAuditWorkUnits(payload) {
+  const workUnits = Array.isArray(payload.workUnits) ? payload.workUnits : [];
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  if (workUnits.length > 0) {
+    return workUnits;
+  }
+  if (events.length > 0) {
+    return partitionEventsIntoWorkUnits(events);
+  }
+  return [];
+}
+
+/**
+ * @param {string | undefined} artifactPath
+ * @param {Record<string, unknown>} health
+ */
+function appendAuditHealthRecord(artifactPath, health) {
+  if (!artifactPath) {
+    return;
+  }
+  try {
+    appendMetricRecord(artifactPath, health);
+  } catch {
+    // fail-open: health persistence is best-effort
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} payload
+ */
 export function evaluateStopAudit(payload) {
   const enriched = populateStopAuditPayload(payload);
   const surface = String(enriched.surface ?? 'cursor');
@@ -1107,11 +1137,7 @@ export function evaluateStopAudit(payload) {
     env: isRecord(enriched.env) ? enriched.env : {},
   };
 
-  const units = Array.isArray(enriched.workUnits)
-    ? enriched.workUnits
-    : partitionEventsIntoWorkUnits(
-        Array.isArray(enriched.events) ? enriched.events : [],
-      );
+  const units = resolveAuditWorkUnits(enriched);
 
   const verdicts = auditWorkUnits(units, session);
   const summary = summarizeAuditVerdicts(verdicts);
@@ -1205,8 +1231,15 @@ export function runStopAudit(payload) {
       message: error instanceof Error ? error.message : String(error),
     };
 
+    appendAuditHealthRecord(artifactPath, health);
+
+    let metric;
     if (artifactPath) {
-      appendMetricRecord(artifactPath, health);
+      try {
+        metric = { artifactPath, window: loadMetricWindowSummary(artifactPath) };
+      } catch {
+        metric = { artifactPath };
+      }
     }
 
     return {
@@ -1214,9 +1247,7 @@ export function runStopAudit(payload) {
       failOpen: true,
       error: health.message,
       health,
-      metric: artifactPath
-        ? { artifactPath, window: loadMetricWindowSummary(artifactPath) }
-        : undefined,
+      metric,
     };
   }
 }

@@ -292,6 +292,20 @@ describe('line counting and missing-window handling', () => {
 });
 
 describe('fail-open and fail-loud', () => {
+  it('returns fail-open when metric append and health persistence both fail', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-append-fail-'));
+    const result = runStopAudit({
+      surface: 'cursor',
+      workUnits: (loadFixture('no-edit-no-reason.json').workUnits ?? []) as WorkUnit[],
+      artifactPath: dir,
+      eventId: 'evt-append-fail',
+      nowMs: 1_700_000_000_000,
+    }) as StopAuditResult;
+    expect(result.ok).toBe(false);
+    expect(result.failOpen).toBe(true);
+    expect(result.error).toBeTruthy();
+  });
+
   it('records health error and marks window degraded without blocking', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
     const artifactPath = path.join(dir, 'health.jsonl');
@@ -647,6 +661,27 @@ describe('Claude and shell transcript compatibility', () => {
       workUnits: extracted.workUnits,
     }) as StopAuditResult;
     expect(result.flags.length).toBe(1);
+  });
+});
+
+describe('work unit resolution', () => {
+  it('partitions events when workUnits is an empty array', () => {
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [],
+      events: [
+        {
+          kind: 'read',
+          inboundRequestId: 'req-1',
+          workUnitKey: 'unit-events',
+          lines: 450,
+          readKind: 'file',
+          path: 'docs/a.md',
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts).toHaveLength(1);
+    expect(result.verdicts[0].flagged).toBe(true);
   });
 });
 

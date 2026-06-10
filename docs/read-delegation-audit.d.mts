@@ -159,4 +159,7 @@ export declare function extractEventsFromTranscript(
 export declare function populateStopAuditPayload(
   rawPayload: Record<string, unknown>,
 ): Record<string, unknown>;
+export declare function resolveAuditWorkUnits(
+  payload: Record<string, unknown>,
+): WorkUnit[];
 export declare function resolveAuditArtifactDefaultPath(): string;
