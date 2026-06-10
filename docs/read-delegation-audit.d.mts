@@ -103,6 +103,13 @@ export declare function normalizeStopHookPayload(
 ): Record<string, unknown>;
 export declare function isCodeClassPath(filePath: string | undefined): boolean;
 export declare function countTextLines(text: string): number;
+export declare function countFileLinesFromDisk(
+  filePath: string,
+  offset?: number,
+  limit?: number,
+): number;
+export declare function normalizeShellCommandForAudit(command: string): string;
+export declare function matchesCoworkerAskCommand(command: string): boolean;
 export declare function resolveReadToolPath(input: Record<string, unknown>): string | undefined;
 export declare function measureReadToolLines(
   input: Record<string, unknown>,
