@@ -26,8 +26,8 @@ if ($canonicalText -notmatch 'more than 400 lines') {
 
 $staleVolumePatterns = @(
     'more than 600 lines',
-    'total \*\*more than 600',
-    'together total \*\*more than 600'
+    'total **more than 600',
+    'together total **more than 600'
 )
 
 $trackedPolicyGlobs = @(
@@ -46,7 +46,7 @@ foreach ($rel in $trackedPolicyGlobs) {
     }
     $text = Get-Content -LiteralPath $path -Raw
     foreach ($pattern in $staleVolumePatterns) {
-        if ($text -match [regex]::Escape($pattern)) {
+        if ($text.Contains($pattern)) {
             $failures.Add("$rel still contains stale volume-floor literal: $pattern")
         }
     }
