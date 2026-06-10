@@ -72,8 +72,9 @@ $text
 Write-Host "== architect codex review ($Kind) =="
 Write-Host "Artifact: $resolved"
 Write-Host 'Invoker: codex review (NOT codex exec / codex exec review)'
+Write-Host 'Sandbox: workspace-write + sandbox_workspace_write.network_access=true (coworker-capable)'
 
-$output = & codex review $prompt 2>&1
+$output = & codex review -c 'sandbox_workspace_write.network_access=true' $prompt 2>&1
 $joined = ($output | Out-String).TrimEnd()
 if ($joined) {
     Write-Host $joined

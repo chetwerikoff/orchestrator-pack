@@ -82,9 +82,28 @@ populated for the called reusable workflow pin — do not rely on them or on
 `./node_modules/.bin/tsx` inside the pack checkout so caller repos do not need
 `tsx` installed.
 
-For untrusted PR workspaces (`codex-github-action` / `PR_REPO_ROOT`), Codex runs
-with `--sandbox read-only` (no sandbox bypass) and the child process env omits
-`GH_TOKEN` and related CI secrets so prompt injection cannot exfiltrate them.
+### Sandbox trust split (coworker delegation)
+
+Trusted local PR review (`--source codex-local`, no CI/Actions signal, no
+`PR_REPO_ROOT`) runs `codex exec` with `--sandbox workspace-write` and
+`sandbox_workspace_write.network_access=true` so the reviewer can spawn the
+external `coworker` CLI (exec + outbound network) per pack policy. This grants
+workspace-scoped write capability to Codex; the wrapper regression tests assert
+the checkout is not mutated by the wrapper itself — operators run trusted review
+on their own machine.
+
+Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, missing/ambiguous
+`--source`, or `codex-local` under a CI/Actions signal) keep fail-closed
+`--sandbox read-only` containment. The child process env omits `GH_TOKEN` and
+related CI secrets so prompt injection cannot exfiltrate them.
+
+Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
+`codex review -c sandbox_workspace_write.network_access=true`) is always
+trusted-local and coworker-capable.
+
+The Windows AO 0.9.2 patch path (`scripts/patch-codex-review4.ps1`) is legacy:
+it still invokes `codex exec --sandbox read-only` without network and is **not**
+coworker-capable. Pack review uses the scoped wrapper above, not that path.
 
 Use this path if you want review results visible on the GitHub PR rather than
 only in the local AO dashboard.

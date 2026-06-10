@@ -284,15 +284,17 @@ If no concrete issues remain, respond with exactly NO_FINDINGS on its own line.
 --- DRAFT ---
 $draft
 "@
-codex review $prompt
+codex review -c sandbox_workspace_write.network_access=true $prompt
 ```
+
+Trusted architect review enables outbound network (`-c sandbox_workspace_write.network_access=true`) so Codex can spawn `coworker` during draft review.
 
 **Bash equivalent (same contract):**
 
 ```bash
 draft_path="docs/issues_drafts/NN-<slug>.md"
 draft="$(cat "$draft_path")"
-codex review "$(cat <<EOF
+codex review -c sandbox_workspace_write.network_access=true "$(cat <<EOF
 You are the lead architect reviewer for orchestrator-pack (read-only issue-draft spec review).
 Review the DRAFT below for planner-freedom, observable acceptance criteria,
 command accuracy, denylist/allowed-roots fences, and cross-draft consistency.

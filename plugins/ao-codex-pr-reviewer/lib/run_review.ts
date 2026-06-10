@@ -37,6 +37,9 @@ const CODEX_SPAWN_ENV_STRIP = [
   'ACTIONS_ID_TOKEN_REQUEST_URL',
 ] as const;
 
+/** Config override enabling outbound network for workspace-write sandbox (Codex CLI). */
+export const CODEX_WORKSPACE_WRITE_NETWORK_CONFIG = 'sandbox_workspace_write.network_access=true';
+
 function readOutputFile(path: string): string | null {
   try {
     return readFileSync(path, 'utf8');
@@ -45,17 +48,46 @@ function readOutputFile(path: string): string | null {
   }
 }
 
-function buildCodexSpawnEnv(source?: ReviewSource): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  const untrusted =
-    source === 'codex-github-action' || Boolean(process.env.PR_REPO_ROOT?.trim());
-  if (!untrusted) {
-    return env;
+function isCiOrActionsSignal(env: NodeJS.ProcessEnv): boolean {
+  if (env.GITHUB_ACTIONS === 'true') {
+    return true;
+  }
+  const ci = env.CI?.trim().toLowerCase();
+  return ci === 'true' || ci === '1' || ci === 'yes';
+}
+
+/**
+ * Fail-closed trust for local PR review: coworker-capable sandbox only when
+ * source is positively `codex-local` with no CI/Actions signal and no PR_REPO_ROOT.
+ */
+export function isTrustedLocalReviewContext(
+  source: ReviewSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (source !== 'codex-local') {
+    return false;
+  }
+  if (isCiOrActionsSignal(env)) {
+    return false;
+  }
+  if (env.PR_REPO_ROOT?.trim()) {
+    return false;
+  }
+  return true;
+}
+
+export function buildCodexSpawnEnv(
+  source?: ReviewSource,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const childEnv = { ...env };
+  if (isTrustedLocalReviewContext(source, env)) {
+    return childEnv;
   }
   for (const key of CODEX_SPAWN_ENV_STRIP) {
-    delete env[key];
+    delete childEnv[key];
   }
-  return env;
+  return childEnv;
 }
 
 /**
@@ -65,8 +97,20 @@ function buildCodexSpawnEnv(source?: ReviewSource): NodeJS.ProcessEnv {
 export function buildCodexExecReviewArgs(options: {
   outputFile: string;
   model?: string;
+  source?: ReviewSource;
+  env?: NodeJS.ProcessEnv;
 }): string[] {
-  const args = ['exec', '--sandbox', 'read-only', 'review'];
+  const env = options.env ?? process.env;
+  const trusted = isTrustedLocalReviewContext(options.source, env);
+
+  const args = ['exec'];
+  if (trusted) {
+    args.push('--sandbox', 'workspace-write', '-c', CODEX_WORKSPACE_WRITE_NETWORK_CONFIG);
+  } else {
+    args.push('--sandbox', 'read-only');
+  }
+  args.push('review');
+
   if (options.model) {
     args.push('-m', options.model);
   }
@@ -93,6 +137,7 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
     const args = buildCodexExecReviewArgs({
       outputFile,
       model: options.model,
+      source: options.source,
     });
 
     const spawnOptions = {

@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildCodexExecReviewArgs } from '../lib/run_review.js';
+import {
+  buildCodexExecReviewArgs,
+  buildCodexSpawnEnv,
+  CODEX_WORKSPACE_WRITE_NETWORK_CONFIG,
+  isTrustedLocalReviewContext,
+} from '../lib/run_review.js';
 import {
   emitAoReviewPayload,
   formatGithubComment,
@@ -87,19 +92,135 @@ describe('summarizeReviewerProcessFailure', () => {
   });
 });
 
+describe('review trust derivation (fail-closed)', () => {
+  const baseEnv = { PR_REPO_ROOT: '', CI: '', GITHUB_ACTIONS: '' };
+
+  it('trusts only explicit codex-local without CI/Actions or PR_REPO_ROOT', () => {
+    expect(isTrustedLocalReviewContext('codex-local', baseEnv)).toBe(true);
+  });
+
+  it.each([
+    ['missing source', undefined],
+    ['codex-github-action', 'codex-github-action' as const],
+    ['codex-local under GITHUB_ACTIONS', 'codex-local' as const],
+    ['codex-local under generic CI', 'codex-local' as const],
+    ['codex-local with PR_REPO_ROOT', 'codex-local' as const],
+  ])('rejects untrusted context: %s', (_label, source) => {
+    const env = { ...baseEnv };
+    if (_label.includes('GITHUB_ACTIONS')) {
+      env.GITHUB_ACTIONS = 'true';
+    } else if (_label.includes('generic CI')) {
+      env.CI = 'true';
+    } else if (_label.includes('PR_REPO_ROOT')) {
+      env.PR_REPO_ROOT = '/tmp/untrusted-pr-checkout';
+    }
+    expect(isTrustedLocalReviewContext(source, env)).toBe(false);
+  });
+});
+
 describe('buildCodexExecReviewArgs', () => {
-  it('uses stdin prompt mode without --base (Codex CLI mutual-exclusion)', () => {
+  const trustedEnv = { PR_REPO_ROOT: '', CI: '', GITHUB_ACTIONS: '' };
+
+  it('uses coworker-capable workspace-write sandbox for trusted codex-local', () => {
     const args = buildCodexExecReviewArgs({
       outputFile: '/tmp/out.txt',
       model: 'gpt-5.5',
+      source: 'codex-local',
+      env: trustedEnv,
     });
     expect(args).toContain('-m');
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.5');
-    expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
+    const reviewIdx = args.indexOf('review');
+    expect(args.slice(0, reviewIdx + 1)).toEqual([
+      'exec',
+      '--sandbox',
+      'workspace-write',
+      '-c',
+      CODEX_WORKSPACE_WRITE_NETWORK_CONFIG,
+      'review',
+    ]);
+    expect(args).not.toContain('read-only');
     expect(args).not.toContain('--base');
     expect(args).toContain('--json');
     expect(args[args.length - 1]).toBe('-');
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it.each([
+    ['codex-github-action', 'codex-github-action' as const, trustedEnv],
+    ['missing source', undefined, trustedEnv],
+    ['codex-local under GITHUB_ACTIONS', 'codex-local' as const, { ...trustedEnv, GITHUB_ACTIONS: 'true' }],
+    ['codex-local with PR_REPO_ROOT', 'codex-local' as const, { ...trustedEnv, PR_REPO_ROOT: '/tmp/pr' }],
+  ])('keeps read-only sandbox for untrusted context: %s', (_label, source, env) => {
+    const args = buildCodexExecReviewArgs({
+      outputFile: '/tmp/out.txt',
+      source,
+      env,
+    });
+    expect(args.slice(0, 4)).toEqual(['exec', '--sandbox', 'read-only', 'review']);
+    expect(args).not.toContain('workspace-write');
+    expect(args).not.toContain(CODEX_WORKSPACE_WRITE_NETWORK_CONFIG);
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+});
+
+describe('buildCodexSpawnEnv', () => {
+  const secrets = {
+    GH_TOKEN: 'gh_secret',
+    GITHUB_TOKEN: 'github_secret',
+    CODEX_AUTH_JSON: '{"token":"x"}',
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'actions_token',
+    ACTIONS_ID_TOKEN_REQUEST_URL: 'https://actions.example/token',
+  };
+
+  it('preserves secrets for trusted codex-local', () => {
+    const env = buildCodexSpawnEnv('codex-local', {
+      ...secrets,
+      PR_REPO_ROOT: '',
+      CI: '',
+      GITHUB_ACTIONS: '',
+    });
+    for (const key of Object.keys(secrets)) {
+      expect(env[key]).toBe(secrets[key as keyof typeof secrets]);
+    }
+  });
+
+  it('strips secrets for untrusted codex-github-action', () => {
+    const env = buildCodexSpawnEnv('codex-github-action', secrets);
+    for (const key of Object.keys(secrets)) {
+      expect(env[key]).toBeUndefined();
+    }
+  });
+});
+
+describe('executeReview working tree (wrapper regression guard)', () => {
+  it('does not modify tracked or untracked files when using fixtures', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-wt-guard-'));
+    const tracked = join(dir, 'tracked.txt');
+    const untracked = join(dir, 'untracked.txt');
+    writeFileSync(tracked, 'tracked-before\n', 'utf8');
+    writeFileSync(untracked, 'untracked-before\n', 'utf8');
+
+    const snapshot = () =>
+      new Map([
+        [tracked, readFileSync(tracked, 'utf8')],
+        [untracked, readFileSync(untracked, 'utf8')],
+      ]);
+
+    const before = snapshot();
+    try {
+      executeReview({
+        repoRoot: dir,
+        baseRef: 'origin/main',
+        issueNumber: SCOPED_ISSUE_NUMBER,
+        source: 'codex-local',
+        fixtureStdout: NO_FINDINGS_TOKEN,
+      });
+    } finally {
+      const after = snapshot();
+      expect(after).toEqual(before);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
