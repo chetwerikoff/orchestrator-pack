@@ -831,6 +831,31 @@ describe('invoke-read-delegation-audit-stop.ps1', () => {
     const record = JSON.parse(lines[0]) as { surface?: string };
     expect(record.surface).toBe('cursor');
   });
+
+  it('creates the metric directory before writing wrapper errors', () => {
+    if (!powershellBin) {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-hook-error-'));
+    const artifactPath = path.join(dir, 'nested', 'metrics.jsonl');
+    execFileSync(
+      powershellBin,
+      ['-NoProfile', '-File', invokeScript, '-ArtifactPath', artifactPath, '-RepoRoot', repoRoot],
+      {
+        cwd: repoRoot,
+        input: JSON.stringify({
+          surface: 'not-a-surface',
+          workUnits: [],
+        }),
+        encoding: 'utf8',
+      },
+    );
+    expect(fs.existsSync(artifactPath)).toBe(true);
+    const record = JSON.parse(fs.readFileSync(artifactPath, 'utf8').trim()) as {
+      kind?: string;
+    };
+    expect(record.kind).toBe('audit_error');
+  });
 });
 
 describe('stop hook CLI', () => {

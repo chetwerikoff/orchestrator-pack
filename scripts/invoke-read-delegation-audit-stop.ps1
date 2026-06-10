@@ -84,6 +84,10 @@ catch {
     message     = $_.Exception.Message
   } | ConvertTo-Json -Compress
   try {
+    $artifactDir = Split-Path -Parent $artifact
+    if ($artifactDir -and -not (Test-Path -LiteralPath $artifactDir)) {
+      New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+    }
     Add-Content -LiteralPath $artifact -Value $health -Encoding utf8
   }
   catch {
