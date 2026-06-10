@@ -9,6 +9,7 @@ import {
   appendMetricRecord,
   auditWorkUnit,
   auditWorkUnits,
+  countTextLines,
   evaluateStopAudit,
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
@@ -239,6 +240,52 @@ describe('metric emission', () => {
     expect(summary.flaggedUnits).toBe(1);
     expect(summary.residualNonCompliance).toBe(0.25);
     expect(summary.degraded).toBe(false);
+  });
+});
+
+describe('line counting and missing-window handling', () => {
+  it('does not count a trailing newline as an extra line at thresholds', () => {
+    const exactly400 = `${Array.from({ length: 400 }, (_, index) => `line-${index + 1}`).join('\n')}\n`;
+    expect(countTextLines(exactly400)).toBe(400);
+    expect(measureReadToolLines({}, exactly400)).toBe(400);
+
+    const exactly200Diff = `${Array.from({ length: 200 }, (_, index) => `diff-${index + 1}`).join('\n')}\n`;
+    expect(measureShellDiffLogLines('git diff HEAD~1', exactly200Diff)).toBe(200);
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        {
+          key: 'unit-threshold',
+          inboundRequestId: 'req-1',
+          reads: [{ lines: 400, kind: 'file' }],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].triggerFired).toBe(false);
+    expect(result.verdicts[0].flagged).toBe(false);
+  });
+
+  it('records missing_window when transcript_path yields no tool events', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-missing-'));
+    const artifactPath = path.join(dir, 'missing-window.jsonl');
+    const transcriptPath = path.join(dir, 'empty-transcript.jsonl');
+    fs.writeFileSync(transcriptPath, '');
+
+    const result = runStopAudit({
+      surface: 'cursor',
+      transcript_path: transcriptPath,
+      artifactPath,
+      windowId: 'win-missing',
+      eventId: 'evt-missing',
+      nowMs: 1_700_000_000_002,
+    }) as StopAuditResult;
+
+    expect(result.ok).toBe(true);
+    const summary = loadMetricWindowSummary(artifactPath);
+    expect(summary.missingWindows).toBe(1);
+    expect(summary.degraded).toBe(true);
+    expect(result.verdicts).toHaveLength(0);
   });
 });
 

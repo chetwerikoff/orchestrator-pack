@@ -102,6 +102,7 @@ export declare function normalizeStopHookPayload(
   hookPayload: Record<string, unknown>,
 ): Record<string, unknown>;
 export declare function isCodeClassPath(filePath: string | undefined): boolean;
+export declare function countTextLines(text: string): number;
 export declare function resolveReadToolPath(input: Record<string, unknown>): string | undefined;
 export declare function measureReadToolLines(
   input: Record<string, unknown>,

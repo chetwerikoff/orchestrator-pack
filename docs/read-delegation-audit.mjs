@@ -415,6 +415,20 @@ export function resolveReadToolPath(input) {
 }
 
 /**
+ * @param {string} text
+ */
+export function countTextLines(text) {
+  if (text === '') {
+    return 0;
+  }
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  return lines.length;
+}
+
+/**
  * @param {Record<string, unknown>} input
  * @param {unknown} [capturedOutput]
  */
@@ -425,14 +439,14 @@ export function measureReadToolLines(input, capturedOutput) {
   if (capturedOutput !== undefined && capturedOutput !== null) {
     const capturedText = extractToolResultText(capturedOutput);
     if (capturedText !== '') {
-      return capturedText.split('\n').length;
+      return countTextLines(capturedText);
     }
   }
 
   const filePath = resolveReadToolPath(input) ?? '';
   if (filePath && existsSync(filePath)) {
     const text = readFileSync(filePath, 'utf8');
-    const totalLines = text === '' ? 0 : text.split('\n').length;
+    const totalLines = countTextLines(text);
     const available = Math.max(0, totalLines - offset);
     if (limit !== undefined && !Number.isNaN(limit)) {
       return Math.min(limit, available);
@@ -484,7 +498,7 @@ export function measureShellDiffLogLines(command, capturedOutput) {
   }
 
   const text = extractToolResultText(capturedOutput);
-  return text === '' ? 0 : text.split('\n').length;
+  return text === '' ? 0 : countTextLines(text);
 }
 
 /**
@@ -1066,7 +1080,10 @@ export function runStopAudit(payload) {
     if (artifactPath) {
       if (records.length === 0 && !result.verdicts.length) {
         const transcriptPath = enriched.transcriptPath ?? enriched.transcript_path;
-        if (!transcriptPath) {
+        const hasExtractedData =
+          (Array.isArray(enriched.workUnits) && enriched.workUnits.length > 0) ||
+          (Array.isArray(enriched.events) && enriched.events.length > 0);
+        if (!hasExtractedData) {
           appendResults.push(
             appendMetricRecord(artifactPath, {
               kind: 'missing_window',
@@ -1074,7 +1091,10 @@ export function runStopAudit(payload) {
               surface: result.surface,
               eventId: `missing:${eventId}`,
               emittedAtMs: Number(enriched.nowMs) || Date.now(),
-              message: 'stop hook payload lacked workUnits/events and transcript_path',
+              message:
+                typeof transcriptPath === 'string' && transcriptPath.trim()
+                  ? 'transcript_path present but produced no recognizable tool events'
+                  : 'stop hook payload lacked workUnits/events and transcript_path',
             }),
           );
         }
