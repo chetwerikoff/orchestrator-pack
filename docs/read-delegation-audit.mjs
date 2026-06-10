@@ -66,7 +66,7 @@ const CODE_CLASS_EXTENSIONS = new Set([
   '.svelte',
 ]);
 
-const READ_TOOL_NAMES = new Set(['Read', 'read']);
+const READ_TOOL_NAMES = new Set(['Read', 'read', 'read_file', 'ReadFile']);
 const EDIT_TOOL_NAMES = new Set([
   'Write',
   'write',
@@ -412,6 +412,9 @@ export function isCodeClassPath(filePath) {
 export function resolveReadToolPath(input) {
   if (typeof input.path === 'string' && input.path.trim()) {
     return input.path;
+  }
+  if (typeof input.target_file === 'string' && input.target_file.trim()) {
+    return input.target_file;
   }
   if (typeof input.file_path === 'string' && input.file_path.trim()) {
     return input.file_path;

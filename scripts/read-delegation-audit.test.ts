@@ -308,6 +308,74 @@ describe('fail-open and fail-loud', () => {
 });
 
 describe('Claude and shell transcript compatibility', () => {
+  it('resolves Cursor read_file target_file inputs for line measurement', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-cursor-read-'));
+    const readPath = createBulkReadFile(dir, 450);
+    expect(resolveReadToolPath({ target_file: readPath })).toBe(readPath);
+
+    const events = toolUseToAuditEvents(
+      'read_file',
+      { target_file: readPath, limit: 450 },
+      'req-cursor',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].path).toBe(readPath);
+    expect(events[0].lines).toBe(450);
+  });
+
+  it('flags Cursor read_file transcript reads the same as Read reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-cursor-bulk-'));
+    const readPath = createBulkReadFile(dir, 450);
+    const readRecords = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'inspect policy' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Read',
+              input: { path: readPath, limit: 450 },
+            },
+          ],
+        },
+      },
+    ];
+    const cursorFileRecords = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'inspect policy' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'read_file',
+              input: { target_file: readPath, limit: 450 },
+            },
+          ],
+        },
+      },
+    ];
+    const readStyle = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extractEventsFromTranscriptRecords(readRecords).workUnits,
+    }) as StopAuditResult;
+    const readFileStyle = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extractEventsFromTranscriptRecords(cursorFileRecords).workUnits,
+    }) as StopAuditResult;
+    expect(readFileStyle.flags.length).toBe(1);
+    expect(readFileStyle.flags.map((row) => row.flagged)).toEqual(
+      readStyle.flags.map((row) => row.flagged),
+    );
+  });
+
   it('resolves Claude Read file_path inputs for line measurement', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-limit-'));
     const readPath = createBulkReadFile(dir, 450);
