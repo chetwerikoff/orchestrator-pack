@@ -14,7 +14,9 @@
     "prompts/investigate_root_cause.md",
     "plugins/ao-codex-pr-reviewer/README.md",
     "plugins/ao-codex-pr-reviewer/lib/run_review.ts",
+    "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
     "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
+    "scripts/lib/Get-AutoReviewPrContext.ps1",
     "scripts/review-architect-artifact.ps1",
     "docs/declarations/258.opk-37.json"
   ],
