@@ -5,12 +5,13 @@
     {
       "key": "unit-flagged",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "reads": [{ "path": "docs/flagged-target.md", "lines": 450, "kind": "file" }],
       "edits": [],
-      "statusText": ""
+      "statusText": "single bulk read without delegation"
     }
   ],
   "expect": {
+    "fixtureClass": "no-edit-no-reason",
     "triggerFired": true,
     "excludedFromDenominator": false,
     "flagged": true,

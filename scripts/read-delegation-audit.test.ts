@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { AuditVerdict, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
 import {
   appendMetricRecord,
   auditWorkUnit,
@@ -15,6 +16,25 @@ import {
   SURFACES,
   T1_VOLUME_FLOOR,
 } from '../docs/read-delegation-audit.mjs';
+
+type StopAuditResult = {
+  ok: boolean;
+  failOpen?: boolean;
+  verdicts: AuditVerdict[];
+  summary: {
+    delegableTriggerUnits: number;
+    flaggedUnits: number;
+    flaggedReadLines: number;
+    residualNonCompliance: number;
+  };
+  flags: AuditVerdict[];
+  error?: string;
+  health?: Record<string, unknown>;
+  metric?: {
+    artifactPath: string;
+    window: Record<string, unknown>;
+  };
+};
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/read-delegation-audit');
@@ -53,7 +73,7 @@ function loadFixture(name: string): FixturePayload {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
 }
 
-function evaluateFixture(name: string, surfaceOverride?: string) {
+function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResult {
   const fixture = loadFixture(name);
   const surface = surfaceOverride ?? fixture.surface ?? 'cursor';
   return evaluateStopAudit({
@@ -62,10 +82,10 @@ function evaluateFixture(name: string, surfaceOverride?: string) {
     env: fixture.env,
     workUnits: fixture.workUnits,
     events: fixture.events,
-  });
+  }) as StopAuditResult;
 }
 
-function firstVerdict(result: ReturnType<typeof evaluateStopAudit>) {
+function firstVerdict(result: StopAuditResult) {
   expect(result.verdicts.length).toBeGreaterThan(0);
   return result.verdicts[0];
 }
@@ -176,7 +196,7 @@ describe('metric emission', () => {
     const result = evaluateStopAudit({
       surface: 'cursor',
       workUnits: fixture.workUnits,
-    });
+    }) as StopAuditResult;
     expect(result.summary.delegableTriggerUnits).toBe(fixture.expectSummary?.delegableTriggerUnits);
     expect(result.summary.flaggedUnits).toBe(fixture.expectSummary?.flaggedUnits);
     expect(result.summary.residualNonCompliance).toBe(
@@ -195,7 +215,7 @@ describe('metric emission', () => {
       windowId: 'win-test',
       eventId: 'evt-metrics',
       nowMs: 1_700_000_000_000,
-    });
+    }) as StopAuditResult;
     expect(stop.ok).toBe(true);
     const summary = loadMetricWindowSummary(artifactPath);
     expect(summary.delegableTriggerUnits).toBe(4);
@@ -214,7 +234,7 @@ describe('fail-open and fail-loud', () => {
       artifactPath,
       eventId: 'evt-error',
       nowMs: 1_700_000_000_000,
-    });
+    }) as StopAuditResult;
     expect(result.ok).toBe(false);
     expect(result.failOpen).toBe(true);
     const summary = loadMetricWindowSummary(artifactPath);
@@ -254,16 +274,16 @@ describe('concurrency and idempotency', () => {
   it('appends concurrent unique events without loss', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
     const artifactPath = path.join(dir, 'concurrent.jsonl');
-    const units = [
+    const units: WorkUnit[] = [
       {
         key: 'unit-a',
         inboundRequestId: 'req-1',
-        reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
+        reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' as ReadKind }],
       },
       {
         key: 'unit-b',
         inboundRequestId: 'req-2',
-        reads: [{ path: 'docs/b.md', lines: 450, kind: 'file' }],
+        reads: [{ path: 'docs/b.md', lines: 450, kind: 'file' as ReadKind }],
       },
     ];
 
@@ -315,7 +335,7 @@ describe('beforeReadFile deny probe artifact', () => {
 describe('surface enumeration', () => {
   it('covers both Claude and Cursor audit paths', () => {
     expect(SURFACES).toEqual(['cursor', 'claude']);
-    const units = loadFixture('no-edit-no-reason.json').workUnits ?? [];
+    const units = (loadFixture('no-edit-no-reason.json').workUnits ?? []) as WorkUnit[];
     const cursor = auditWorkUnits(units, { surface: 'cursor' });
     const claude = auditWorkUnits(units, { surface: 'claude' });
     expect(cursor[0].flagged).toBe(claude[0].flagged);

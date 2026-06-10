@@ -7,12 +7,13 @@
     {
       "key": "unit-review",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 900, "kind": "file" }],
+      "reads": [{ "path": "docs/review-corpus.md", "lines": 900, "kind": "file" }],
       "edits": [],
-      "statusText": ""
+      "statusText": "review path session bulk read"
     }
   ],
   "expect": {
+    "fixtureClass": "reviewer-path-excluded",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

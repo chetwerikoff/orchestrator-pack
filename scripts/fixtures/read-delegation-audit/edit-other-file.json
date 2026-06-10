@@ -5,12 +5,13 @@
     {
       "key": "unit-edit-other",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
-      "edits": [{ "path": "scripts/b.ps1" }],
-      "statusText": ""
+      "reads": [{ "path": "docs/read-prep.md", "lines": 450, "kind": "file" }],
+      "edits": [{ "path": "scripts/edit-target.ps1" }],
+      "statusText": "read-for-edit cross file"
     }
   ],
   "expect": {
+    "fixtureClass": "edit-other-file",
     "triggerFired": true,
     "excludedFromDenominator": false,
     "flagged": false,

@@ -6,12 +6,13 @@
       "key": "unit-code",
       "inboundRequestId": "req-1",
       "codeClassGated": true,
-      "reads": [{ "path": "plugins/foo.ts", "lines": 900, "kind": "file", "isCodeClass": true }],
+      "reads": [{ "path": "plugins/code-gated.ts", "lines": 900, "kind": "file", "isCodeClass": true }],
       "edits": [],
-      "statusText": ""
+      "statusText": "code-class gated source read"
     }
   ],
   "expect": {
+    "fixtureClass": "code-class-excluded",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,
