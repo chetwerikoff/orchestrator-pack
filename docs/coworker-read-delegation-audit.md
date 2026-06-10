@@ -72,7 +72,9 @@ Add a `stop` entry alongside existing hooks (e.g. RTK `beforeShellExecution`):
 Replace `/ABS/PATH/TO/orchestrator-pack` with your checkout path.
 
 **Verify:** complete one Cursor worker turn with a known fixture or a >400-line read; confirm
-`~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line.
+`~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line. The stop
+hook passes `transcript_path` in its stdin JSON; the handler derives reads/edits/shell events
+from that transcript when `workUnits` / `events` are not pre-populated.
 
 ### 3. Claude `.claude/settings.json`
 

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,8 +10,11 @@ import {
   auditWorkUnit,
   auditWorkUnits,
   evaluateStopAudit,
+  extractEventsFromTranscript,
+  extractEventsFromTranscriptRecords,
   loadMetricWindowSummary,
   partitionEventsIntoWorkUnits,
+  populateStopAuditPayload,
   runStopAudit,
   SURFACES,
   T1_VOLUME_FLOOR,
@@ -243,6 +246,109 @@ describe('fail-open and fail-loud', () => {
   });
 });
 
+describe('stop hook transcript population', () => {
+  it('extracts read events from Cursor transcript records', () => {
+    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'inspect policy' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Read',
+              input: { path: readPath, limit: 450 },
+            },
+          ],
+        },
+      },
+    ];
+
+    const extracted = extractEventsFromTranscriptRecords(records, {
+      conversationId: 'conv-test',
+      generationId: 'gen-test',
+    });
+    expect(extracted.events.length).toBeGreaterThan(0);
+    expect(extracted.workUnits).toHaveLength(1);
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      hook_event_name: 'stop',
+      conversation_id: 'conv-test',
+      generation_id: 'gen-test',
+      workUnits: extracted.workUnits,
+    }) as StopAuditResult;
+    expect(result.flags.length).toBe(1);
+  });
+
+  it('populates work units from transcript_path when hook payload is sparse', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-transcript-'));
+    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const transcriptPath = path.join(dir, 'transcript.jsonl');
+    const template = fs.readFileSync(
+      path.join(fixturesDir, 'stop-hook-transcript.jsonl'),
+      'utf8',
+    );
+    fs.writeFileSync(transcriptPath, template.replace('REPLACE_READ_PATH', readPath));
+
+    const populated = populateStopAuditPayload({
+      hook_event_name: 'stop',
+      conversation_id: 'conv-populate',
+      generation_id: 'gen-populate',
+      transcript_path: transcriptPath,
+      surface: 'cursor',
+    });
+    expect(Array.isArray(populated.workUnits)).toBe(true);
+    expect((populated.workUnits as WorkUnit[]).length).toBe(1);
+
+    const result = runStopAudit({
+      ...populated,
+      artifactPath: path.join(dir, 'metrics.jsonl'),
+      windowId: 'win-transcript',
+      nowMs: 1_700_000_000_001,
+    }) as StopAuditResult;
+    expect(result.ok).toBe(true);
+    expect(result.flags.length).toBe(1);
+  });
+
+  it('reads transcript_path from disk via extractEventsFromTranscript', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-transcript-'));
+    const readPath = path.join(fixturesDir, 'delegated-machine-observed.json');
+    const transcriptPath = path.join(dir, 'transcript.jsonl');
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({
+          role: 'user',
+          message: { content: [{ type: 'text', text: 'task' }] },
+        }),
+        JSON.stringify({
+          role: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                name: 'Read',
+                input: { path: readPath, limit: 450 },
+              },
+            ],
+          },
+        }),
+      ].join('\n'),
+    );
+
+    const extracted = extractEventsFromTranscript(transcriptPath, {
+      conversationId: 'conv-file',
+      generationId: 'gen-file',
+    });
+    expect(extracted.workUnits).toHaveLength(1);
+    expect(extracted.workUnits[0].reads?.[0]?.lines).toBe(450);
+  });
+});
+
 describe('concurrency and idempotency', () => {
   it('does not double-count duplicate event ids', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
@@ -300,6 +406,56 @@ describe('concurrency and idempotency', () => {
     const summary = loadMetricWindowSummary(artifactPath);
     expect(summary.delegableTriggerUnits).toBe(2);
     expect(summary.flaggedUnits).toBe(2);
+  });
+
+  it('does not double-count concurrent duplicate appends', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
+    const artifactPath = path.join(dir, 'concurrent-dup.jsonl');
+    const record = JSON.stringify({
+      kind: 'work_unit_verdict',
+      eventId: 'evt-concurrent-dup',
+      windowId: 'win-1',
+      surface: 'cursor',
+      verdict: auditWorkUnit(
+        {
+          key: 'unit-a',
+          inboundRequestId: 'req-1',
+          reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
+        },
+        { surface: 'cursor' },
+      ),
+    });
+    const child = `
+      import { appendMetricRecord } from ${JSON.stringify(path.join(repoRoot, 'docs/read-delegation-audit.mjs'))};
+      const result = appendMetricRecord(process.argv[1], JSON.parse(process.argv[2]));
+      console.log(JSON.stringify(result));
+    `;
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        new Promise<{ code: number | null; stdout: string }>((resolve) => {
+          const proc = spawn(
+            'node',
+            ['--input-type=module', '-e', child, artifactPath, record],
+            { stdio: ['ignore', 'pipe', 'inherit'] },
+          );
+          let stdout = '';
+          proc.stdout.on('data', (chunk) => {
+            stdout += chunk.toString();
+          });
+          proc.on('close', (code) => resolve({ code, stdout }));
+        }),
+      ),
+    );
+
+    for (const result of results) {
+      expect(result.code).toBe(0);
+    }
+    const parsed = results.map((result) => JSON.parse(result.stdout.trim()));
+    expect(parsed.filter((row) => row.appended).length).toBe(1);
+    expect(parsed.filter((row) => row.duplicate).length).toBe(3);
+    const summary = loadMetricWindowSummary(artifactPath);
+    expect(summary.delegableTriggerUnits).toBe(1);
   });
 });
 

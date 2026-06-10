@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"Implement the audit fix."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Reading the audit module."},{"type":"tool_use","name":"Read","input":{"path":"REPLACE_READ_PATH","limit":450}}]}}

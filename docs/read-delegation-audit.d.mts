@@ -101,4 +101,44 @@ export declare function runStopAudit(payload: Record<string, unknown>): Record<s
 export declare function normalizeStopHookPayload(
   hookPayload: Record<string, unknown>,
 ): Record<string, unknown>;
+export declare function isCodeClassPath(filePath: string | undefined): boolean;
+export declare function measureReadToolLines(input: Record<string, unknown>): number;
+export declare function measureShellDiffLogLines(command: string): number;
+export declare function parseTranscriptJsonl(transcriptPath: string): Array<Record<string, unknown>>;
+export declare function toolUseToAuditEvents(
+  toolName: string,
+  input: Record<string, unknown>,
+  inboundRequestId: string,
+): Array<Record<string, unknown>>;
+export declare function extractEventsFromTranscriptRecords(
+  records: Array<Record<string, unknown>>,
+  options?: {
+    generationId?: string;
+    conversationId?: string;
+    statusText?: string;
+    workUnitIndex?: number;
+  },
+): {
+  events: Array<Record<string, unknown>>;
+  workUnits: WorkUnit[];
+  eventId?: string;
+  workUnitKey?: string;
+};
+export declare function extractEventsFromTranscript(
+  transcriptPath: string,
+  options?: {
+    generationId?: string;
+    conversationId?: string;
+    statusText?: string;
+    workUnitIndex?: number;
+  },
+): {
+  events: Array<Record<string, unknown>>;
+  workUnits: WorkUnit[];
+  eventId?: string;
+  workUnitKey?: string;
+};
+export declare function populateStopAuditPayload(
+  rawPayload: Record<string, unknown>,
+): Record<string, unknown>;
 export declare function resolveAuditArtifactDefaultPath(): string;

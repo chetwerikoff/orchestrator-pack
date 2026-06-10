@@ -4,7 +4,16 @@
  *
  * Tolerant compliance signal at work-unit completion — never blocks reads.
  */
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
@@ -33,6 +42,47 @@ const DELEGATION_STATUS_PATTERN =
   /\b(delegated|coworker ask|used coworker|routed through coworker)\b/i;
 
 const COWORKER_ASK_PATTERN = /\bcoworker\s+ask\b[^|\n]*--profile\s+code\b/i;
+
+const CODE_CLASS_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.go',
+  '.rs',
+  '.java',
+  '.cs',
+  '.cpp',
+  '.c',
+  '.h',
+  '.swift',
+  '.kt',
+  '.rb',
+  '.php',
+  '.vue',
+  '.svelte',
+]);
+
+const READ_TOOL_NAMES = new Set(['Read', 'read']);
+const EDIT_TOOL_NAMES = new Set([
+  'Write',
+  'write',
+  'StrReplace',
+  'str_replace',
+  'search_replace',
+  'EditNotebook',
+  'edit_notebook',
+]);
+const SHELL_TOOL_NAMES = new Set(['Shell', 'shell', 'run_terminal_cmd', 'Bash', 'bash']);
+
+const DIFF_LOG_SHELL_PATTERN =
+  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b[^|\n]{0,40}\b-[^\s]*f\b)/i;
+
+const LOCK_RETRY_MS = 5;
+const LOCK_MAX_ATTEMPTS = 200;
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -337,6 +387,332 @@ export function summarizeAuditVerdicts(verdicts) {
 }
 
 /**
+ * @param {string | undefined} filePath
+ */
+export function isCodeClassPath(filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return false;
+  }
+  const lower = filePath.toLowerCase();
+  for (const ext of CODE_CLASS_EXTENSIONS) {
+    if (lower.endsWith(ext)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {Record<string, unknown>} input
+ */
+export function measureReadToolLines(input) {
+  const offset = Math.max(0, Number(input.offset) || 0);
+  const limit = input.limit === undefined ? undefined : Math.max(0, Number(input.limit) || 0);
+  if (limit !== undefined && !Number.isNaN(limit)) {
+    return limit;
+  }
+
+  const filePath = typeof input.path === 'string' ? input.path : '';
+  if (!filePath || !existsSync(filePath)) {
+    return 0;
+  }
+
+  const text = readFileSync(filePath, 'utf8');
+  const totalLines = text === '' ? 0 : text.split('\n').length;
+  return Math.max(0, totalLines - offset);
+}
+
+/**
+ * @param {string} command
+ */
+export function measureShellDiffLogLines(command) {
+  const trimmed = String(command ?? '').trim();
+  if (!trimmed || !DIFF_LOG_SHELL_PATTERN.test(trimmed)) {
+    return 0;
+  }
+
+  try {
+    const output = execFileSync('bash', ['-lc', trimmed], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return output === '' ? 0 : output.split('\n').length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @param {string} transcriptPath
+ */
+export function parseTranscriptJsonl(transcriptPath) {
+  if (!existsSync(transcriptPath)) {
+    return [];
+  }
+
+  const records = [];
+  const text = readFileSync(transcriptPath, 'utf8');
+  for (const line of text.split('\n')) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      // skip corrupt lines
+    }
+  }
+  return records;
+}
+
+/**
+ * @param {unknown} record
+ */
+function transcriptRole(record) {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  if (typeof record.role === 'string') {
+    return record.role;
+  }
+  if (typeof record.type === 'string') {
+    return record.type;
+  }
+  return undefined;
+}
+
+/**
+ * @param {unknown} record
+ * @returns {Array<Record<string, unknown>>}
+ */
+function transcriptToolUses(record) {
+  if (!isRecord(record)) {
+    return [];
+  }
+
+  const uses = [];
+  const message = isRecord(record.message) ? record.message : record;
+  const content = message.content;
+
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!isRecord(part)) {
+        continue;
+      }
+      if (part.type === 'tool_use' && typeof part.name === 'string') {
+        uses.push({
+          name: part.name,
+          input: isRecord(part.input) ? part.input : {},
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(record.tool_uses)) {
+    for (const toolUse of record.tool_uses) {
+      if (!isRecord(toolUse)) {
+        continue;
+      }
+      uses.push({
+        name: String(toolUse.name ?? toolUse.tool_name ?? ''),
+        input: isRecord(toolUse.input) ? toolUse.input : isRecord(toolUse.tool_input) ? toolUse.tool_input : {},
+      });
+    }
+  }
+
+  return uses;
+}
+
+/**
+ * @param {string} toolName
+ * @param {Record<string, unknown>} input
+ * @param {string} inboundRequestId
+ */
+export function toolUseToAuditEvents(toolName, input, inboundRequestId) {
+  /** @type {Array<Record<string, unknown>>} */
+  const events = [];
+  const name = String(toolName ?? '');
+
+  if (READ_TOOL_NAMES.has(name)) {
+    const path = typeof input.path === 'string' ? input.path : undefined;
+    events.push({
+      kind: 'read',
+      inboundRequestId,
+      path,
+      lines: measureReadToolLines(input),
+      readKind: 'file',
+      isCodeClass: isCodeClassPath(path),
+    });
+  }
+
+  if (EDIT_TOOL_NAMES.has(name)) {
+    const path =
+      (typeof input.path === 'string' && input.path) ||
+      (typeof input.target_file === 'string' && input.target_file) ||
+      (typeof input.file_path === 'string' && input.file_path) ||
+      (typeof input.target_notebook === 'string' && input.target_notebook) ||
+      undefined;
+    events.push({ kind: 'edit', inboundRequestId, path });
+  }
+
+  if (SHELL_TOOL_NAMES.has(name)) {
+    const command = String(input.command ?? '');
+    events.push({ kind: 'shell', inboundRequestId, command });
+    if (COWORKER_ASK_PATTERN.test(command)) {
+      events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
+    }
+    const diffLogLines = measureShellDiffLogLines(command);
+    if (diffLogLines > 0) {
+      events.push({
+        kind: 'read',
+        inboundRequestId,
+        lines: diffLogLines,
+        readKind: 'diff',
+      });
+    }
+  }
+
+  return events;
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} records
+ * @param {{ generationId?: string, conversationId?: string, statusText?: string, workUnitIndex?: number }} [options]
+ */
+export function extractEventsFromTranscriptRecords(records, options = {}) {
+  /** @type {Array<{ inboundRequestId: string, records: Array<Record<string, unknown>> }>} */
+  const units = [];
+  let current = null;
+
+  for (const record of records) {
+    const role = transcriptRole(record);
+    if (role === 'user') {
+      const inboundRequestId =
+        options.generationId && units.length === 0
+          ? String(options.generationId)
+          : `req-${units.length + 1}`;
+      current = { inboundRequestId, records: [record] };
+      units.push(current);
+      continue;
+    }
+    if (current) {
+      current.records.push(record);
+    }
+  }
+
+  if (units.length === 0) {
+    return { events: [], workUnits: [], eventId: undefined };
+  }
+
+  const targetIndex =
+    typeof options.workUnitIndex === 'number'
+      ? Math.min(Math.max(options.workUnitIndex, 0), units.length - 1)
+      : units.length - 1;
+  const target = units[targetIndex];
+  const conversationId = options.conversationId ? String(options.conversationId) : 'conversation';
+  const inboundRequestId =
+    options.generationId && targetIndex === units.length - 1
+      ? String(options.generationId)
+      : target.inboundRequestId;
+  const workUnitKey = `${conversationId}:${inboundRequestId}`;
+
+  /** @type {Array<Record<string, unknown>>} */
+  const events = [];
+  for (const record of target.records) {
+    if (transcriptRole(record) !== 'assistant') {
+      continue;
+    }
+    for (const toolUse of transcriptToolUses(record)) {
+      events.push(
+        ...toolUseToAuditEvents(toolUse.name, toolUse.input, inboundRequestId).map((event) => ({
+          ...event,
+          workUnitKey,
+        })),
+      );
+    }
+  }
+
+  const workUnits = [
+    partitionEventsIntoWorkUnits(
+      events.map((event) => ({
+        ...event,
+        inboundRequestId,
+        workUnitKey,
+        statusText: options.statusText ?? '',
+      })),
+    )[0],
+  ].filter(Boolean);
+
+  if (workUnits[0]) {
+    workUnits[0].key = workUnitKey;
+    workUnits[0].inboundRequestId = inboundRequestId;
+    if (options.statusText) {
+      workUnits[0].statusText = options.statusText;
+    }
+  }
+
+  return {
+    events,
+    workUnits,
+    eventId: `stop:${workUnitKey}`,
+    workUnitKey,
+  };
+}
+
+/**
+ * @param {string} transcriptPath
+ * @param {{ generationId?: string, conversationId?: string, statusText?: string, workUnitIndex?: number }} [options]
+ */
+export function extractEventsFromTranscript(transcriptPath, options = {}) {
+  const records = parseTranscriptJsonl(transcriptPath);
+  return extractEventsFromTranscriptRecords(records, options);
+}
+
+/**
+ * @param {string} artifactPath
+ */
+function acquireArtifactLock(artifactPath) {
+  const lockPath = `${artifactPath}.lock`;
+  for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      return { fd, lockPath };
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'EEXIST') {
+        const waitUntil = Date.now() + LOCK_RETRY_MS;
+        while (Date.now() < waitUntil) {
+          // spin
+        }
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`failed to acquire append lock for ${artifactPath}`);
+}
+
+/**
+ * @param {{ fd: number, lockPath: string } | undefined} lock
+ */
+function releaseArtifactLock(lock) {
+  if (!lock) {
+    return;
+  }
+  try {
+    closeSync(lock.fd);
+  } catch {
+    // ignore
+  }
+  try {
+    unlinkSync(lock.lockPath);
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * @param {string} artifactPath
  * @param {Record<string, unknown>} record
  */
@@ -372,25 +748,30 @@ export function appendMetricRecord(artifactPath, record) {
     throw new Error('metric record requires eventId');
   }
 
-  const existingIds = readMetricEventIds(artifactPath);
-  if (existingIds.has(eventId)) {
-    return { appended: false, duplicate: true, artifactPath };
-  }
-
   const parent = dirname(artifactPath);
   if (!existsSync(parent)) {
     mkdirSync(parent, { recursive: true });
   }
 
-  const line = `${JSON.stringify(record)}\n`;
-  const fd = openSync(artifactPath, 'a');
+  const lock = acquireArtifactLock(artifactPath);
   try {
-    writeSync(fd, line);
-  } finally {
-    closeSync(fd);
-  }
+    const existingIds = readMetricEventIds(artifactPath);
+    if (existingIds.has(eventId)) {
+      return { appended: false, duplicate: true, artifactPath };
+    }
 
-  return { appended: true, duplicate: false, artifactPath };
+    const line = `${JSON.stringify(record)}\n`;
+    const fd = openSync(artifactPath, 'a');
+    try {
+      writeSync(fd, line);
+    } finally {
+      closeSync(fd);
+    }
+
+    return { appended: true, duplicate: false, artifactPath };
+  } finally {
+    releaseArtifactLock(lock);
+  }
 }
 
 /**
@@ -477,24 +858,66 @@ export function loadMetricWindowSummary(artifactPath) {
 }
 
 /**
+ * @param {Record<string, unknown>} rawPayload
+ */
+export function populateStopAuditPayload(rawPayload) {
+  const payload = normalizeStopHookPayload(isRecord(rawPayload) ? rawPayload : {});
+
+  const hasWorkUnits = Array.isArray(payload.workUnits) && payload.workUnits.length > 0;
+  const hasEvents = Array.isArray(payload.events) && payload.events.length > 0;
+
+  if (!hasWorkUnits && !hasEvents) {
+    const transcriptPath = payload.transcriptPath ?? payload.transcript_path;
+    if (typeof transcriptPath === 'string' && transcriptPath.trim()) {
+      const extracted = extractEventsFromTranscript(transcriptPath, {
+        generationId: String(payload.generationId ?? payload.generation_id ?? ''),
+        conversationId: String(payload.conversationId ?? payload.conversation_id ?? ''),
+        statusText: typeof payload.statusText === 'string' ? payload.statusText : '',
+      });
+      if (extracted.events.length > 0) {
+        payload.events = extracted.events;
+      }
+      if (extracted.workUnits.length > 0) {
+        payload.workUnits = extracted.workUnits;
+      }
+      if (!payload.eventId && extracted.eventId) {
+        payload.eventId = extracted.eventId;
+      }
+      if (!payload.workUnitKey && extracted.workUnitKey) {
+        payload.workUnitKey = extracted.workUnitKey;
+      }
+    }
+  }
+
+  if (!payload.eventId) {
+    const conversationId = String(payload.conversationId ?? payload.conversation_id ?? 'conversation');
+    const generationId = String(payload.generationId ?? payload.generation_id ?? 'generation');
+    payload.eventId = `stop:${conversationId}:${generationId}`;
+  }
+
+  return payload;
+}
+
+/**
  * @param {Record<string, unknown>} payload
  */
 export function evaluateStopAudit(payload) {
-  const surface = String(payload.surface ?? 'cursor');
+  const enriched = populateStopAuditPayload(payload);
+  const surface = String(enriched.surface ?? 'cursor');
   if (!SURFACES.includes(surface)) {
     throw new Error(`unsupported surface: ${surface}`);
   }
 
   const session = {
     surface,
-    reviewerPath: payload.reviewerPath === true,
-    env: isRecord(payload.env) ? payload.env : {},
+    reviewerPath: enriched.reviewerPath === true,
+    env: isRecord(enriched.env) ? enriched.env : {},
   };
 
-  const units = Array.isArray(payload.workUnits)
-    ? payload.workUnits
+  const units = Array.isArray(enriched.workUnits)
+    ? enriched.workUnits
     : partitionEventsIntoWorkUnits(
-        Array.isArray(payload.events) ? payload.events : [],
+        Array.isArray(enriched.events) ? enriched.events : [],
       );
 
   const verdicts = auditWorkUnits(units, session);
@@ -505,6 +928,10 @@ export function evaluateStopAudit(payload) {
     verdicts,
     summary,
     flags: verdicts.filter((verdict) => verdict.flagged),
+    populatedFromTranscript:
+      Boolean(enriched.transcriptPath ?? enriched.transcript_path) &&
+      !Array.isArray(payload.workUnits) &&
+      !Array.isArray(payload.events),
   };
 }
 
@@ -512,12 +939,14 @@ export function evaluateStopAudit(payload) {
  * @param {Record<string, unknown>} payload
  */
 export function runStopAudit(payload) {
-  const artifactPath = typeof payload.artifactPath === 'string' ? payload.artifactPath : undefined;
-  const windowId = String(payload.windowId ?? 'default');
-  const eventId = String(payload.eventId ?? payload.workUnitKey ?? `stop:${Date.now()}`);
+  const enriched = populateStopAuditPayload(payload);
+  const artifactPath =
+    typeof enriched.artifactPath === 'string' ? enriched.artifactPath : undefined;
+  const windowId = String(enriched.windowId ?? 'default');
+  const eventId = String(enriched.eventId ?? enriched.workUnitKey ?? `stop:${Date.now()}`);
 
   try {
-    const result = evaluateStopAudit(payload);
+    const result = evaluateStopAudit(enriched);
     const records = [];
 
     for (const verdict of result.verdicts) {
@@ -527,13 +956,29 @@ export function runStopAudit(payload) {
         windowId,
         surface: result.surface,
         eventId: perUnitEventId,
-        emittedAtMs: Number(payload.nowMs) || Date.now(),
+        emittedAtMs: Number(enriched.nowMs) || Date.now(),
         verdict,
       });
     }
 
     const appendResults = [];
     if (artifactPath) {
+      if (records.length === 0 && !result.verdicts.length) {
+        const transcriptPath = enriched.transcriptPath ?? enriched.transcript_path;
+        if (!transcriptPath) {
+          appendResults.push(
+            appendMetricRecord(artifactPath, {
+              kind: 'missing_window',
+              windowId,
+              surface: result.surface,
+              eventId: `missing:${eventId}`,
+              emittedAtMs: Number(enriched.nowMs) || Date.now(),
+              message: 'stop hook payload lacked workUnits/events and transcript_path',
+            }),
+          );
+        }
+      }
+
       for (const record of records) {
         appendResults.push(appendMetricRecord(artifactPath, record));
       }
@@ -555,9 +1000,9 @@ export function runStopAudit(payload) {
     const health = {
       kind: 'audit_error',
       windowId,
-      surface: String(payload.surface ?? 'unknown'),
+      surface: String(enriched.surface ?? 'unknown'),
       eventId: `error:${eventId}`,
-      emittedAtMs: Number(payload.nowMs) || Date.now(),
+      emittedAtMs: Number(enriched.nowMs) || Date.now(),
       message: error instanceof Error ? error.message : String(error),
     };
 
@@ -581,10 +1026,19 @@ export function runStopAudit(payload) {
  * @param {Record<string, unknown>} hookPayload
  */
 export function normalizeStopHookPayload(hookPayload) {
-  const surface = hookPayload.hookEventName === 'Stop' ? 'claude' : 'cursor';
+  const hookEventName = String(
+    hookPayload.hookEventName ?? hookPayload.hook_event_name ?? '',
+  );
+  const surface =
+    hookPayload.surface ?? (hookEventName === 'Stop' ? 'claude' : 'cursor');
+
   return {
     ...hookPayload,
-    surface: hookPayload.surface ?? surface,
+    surface,
+    transcriptPath: hookPayload.transcriptPath ?? hookPayload.transcript_path,
+    conversationId: hookPayload.conversationId ?? hookPayload.conversation_id,
+    generationId: hookPayload.generationId ?? hookPayload.generation_id,
+    hookEventName,
   };
 }
 

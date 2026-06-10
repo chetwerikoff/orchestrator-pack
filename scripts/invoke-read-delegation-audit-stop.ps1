@@ -28,34 +28,42 @@ if (-not $stdin.Trim()) {
 }
 
 try {
-  $payload = $stdin | ConvertFrom-Json -AsHashtable
+  $payload = $stdin | ConvertFrom-Json
 }
 catch {
-  $payload = @{ parseError = $_.Exception.Message }
+  $payload = [pscustomobject]@{ parseError = $_.Exception.Message }
 }
 
 if ($ArtifactPath) {
-  $payload['artifactPath'] = $ArtifactPath
+  $payload | Add-Member -NotePropertyName artifactPath -NotePropertyValue $ArtifactPath -Force
 }
-elseif (-not $payload['artifactPath']) {
+elseif (-not $payload.PSObject.Properties.Match('artifactPath').Count) {
   $home = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
-  $payload['artifactPath'] = Join-Path $home '.orchestrator-pack/read-delegation-audit.jsonl'
+  $payload | Add-Member -NotePropertyName artifactPath -NotePropertyValue (Join-Path $home '.orchestrator-pack/read-delegation-audit.jsonl') -Force
 }
 
-if (-not $payload['surface']) {
-  if ($payload['hookEventName'] -eq 'Stop') {
-    $payload['surface'] = 'claude'
+if (-not $payload.PSObject.Properties.Match('surface').Count) {
+  $hookEventName = $null
+  if ($payload.PSObject.Properties.Match('hookEventName').Count) {
+    $hookEventName = $payload.hookEventName
+  }
+  elseif ($payload.PSObject.Properties.Match('hook_event_name').Count) {
+    $hookEventName = $payload.hook_event_name
+  }
+
+  if ($hookEventName -eq 'Stop') {
+    $payload | Add-Member -NotePropertyName surface -NotePropertyValue 'claude' -Force
   }
   else {
-    $payload['surface'] = 'cursor'
+    $payload | Add-Member -NotePropertyName surface -NotePropertyValue 'cursor' -Force
   }
 }
 
-if (-not $payload['env']) {
-  $payload['env'] = @{
-    PACK_REVIEWER = $env:PACK_REVIEWER
-    REVIEW_COMMAND = $env:REVIEW_COMMAND
-  }
+if (-not $payload.PSObject.Properties.Match('env').Count) {
+  $payload | Add-Member -NotePropertyName env -NotePropertyValue ([ordered]@{
+      PACK_REVIEWER   = $env:PACK_REVIEWER
+      REVIEW_COMMAND  = $env:REVIEW_COMMAND
+    }) -Force
 }
 
 $jsonIn = $payload | ConvertTo-Json -Depth 30 -Compress
@@ -66,14 +74,15 @@ try {
   }
 }
 catch {
+  $artifact = $payload.artifactPath
+  $surface = if ($payload.PSObject.Properties.Match('surface').Count) { $payload.surface } else { 'unknown' }
   $health = @{
-    kind = 'audit_error'
-    surface = $payload['surface']
-    eventId = "hook-error:$(Get-Date -Format 'yyyyMMddHHmmss')"
+    kind        = 'audit_error'
+    surface     = $surface
+    eventId     = "hook-error:$(Get-Date -Format 'yyyyMMddHHmmss')"
     emittedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    message = $_.Exception.Message
+    message     = $_.Exception.Message
   } | ConvertTo-Json -Compress
-  $artifact = $payload['artifactPath']
   try {
     Add-Content -LiteralPath $artifact -Value $health -Encoding utf8
   }
