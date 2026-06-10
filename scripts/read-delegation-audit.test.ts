@@ -1,16 +1,18 @@
 import { execFileSync, spawn } from 'node:child_process';
-import fs from 'node:fs';
+import fs, { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AuditVerdict, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
 import {
   appendMetricRecord,
   auditWorkUnit,
   auditWorkUnits,
+  countFileLinesFromDisk,
   countTextLines,
   evaluateStopAudit,
+  matchesCoworkerAskCommand,
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
   isInboundUserRequest,
@@ -454,6 +456,48 @@ describe('Claude and shell transcript compatibility', () => {
     expect(claude.flags.map((row) => row.flagged)).toEqual(
       cursor.flags.map((row) => row.flagged),
     );
+  });
+
+  it('counts file lines from disk without loading the entire file for limited reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-bounded-'));
+    const readPath = path.join(dir, 'large.txt');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 1000 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const readFileSpy = vi.spyOn(fs, 'readFileSync');
+    expect(countFileLinesFromDisk(readPath, 0, 450)).toBe(450);
+    expect(measureReadToolLines({ path: readPath, limit: 450 })).toBe(450);
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
+
+    const fullText = readFileSync(readPath, 'utf8');
+    expect(countFileLinesFromDisk(readPath)).toBe(countTextLines(fullText));
+    expect(countFileLinesFromDisk(readPath, 10, 20)).toBe(20);
+  });
+
+  it('recognizes multiline coworker ask commands as machine-observed delegation', () => {
+    const multilineCommands = [
+      "coworker ask \\\n  --profile code --question 'summarize' docs/a.md",
+      "coworker ask\n  --profile=code --question 'summarize' docs/a.md",
+    ];
+    for (const command of multilineCommands) {
+      expect(matchesCoworkerAskCommand(command)).toBe(true);
+    }
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        {
+          key: 'unit-multiline-delegation',
+          inboundRequestId: 'req-1',
+          reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
+          shellCommands: [multilineCommands[0]],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].machineObservedDelegation).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(false);
   });
 
   it('recognizes coworker ask --profile=code as machine-observed delegation', () => {

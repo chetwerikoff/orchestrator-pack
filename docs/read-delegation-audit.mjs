@@ -10,6 +10,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -41,7 +42,25 @@ const DELEGATION_STATUS_PATTERN =
   /\b(delegated|coworker ask|used coworker|routed through coworker)\b/i;
 
 const COWORKER_ASK_PATTERN =
-  /\bcoworker\s+ask\b[^|\n]*--profile(?:\s*=|\s+)code\b/i;
+  /\bcoworker\s+ask\b[\s\S]*?--profile(?:\s*=|\s+)code\b/i;
+
+/**
+ * @param {string} command
+ */
+export function normalizeShellCommandForAudit(command) {
+  return String(command ?? '')
+    .replace(/\\\r?\n/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * @param {string} command
+ */
+export function matchesCoworkerAskCommand(command) {
+  return COWORKER_ASK_PATTERN.test(normalizeShellCommandForAudit(command));
+}
 
 const CODE_CLASS_EXTENSIONS = new Set([
   '.ts',
@@ -235,7 +254,7 @@ export function hasMachineObservedDelegation(unit) {
   }
 
   const commands = Array.isArray(unit.shellCommands) ? unit.shellCommands : [];
-  return commands.some((command) => COWORKER_ASK_PATTERN.test(String(command ?? '')));
+  return commands.some((command) => matchesCoworkerAskCommand(String(command ?? '')));
 }
 
 /**
@@ -437,6 +456,63 @@ export function countTextLines(text) {
 }
 
 /**
+ * @param {string} filePath
+ * @param {number} [offset]
+ * @param {number} [limit]
+ */
+export function countFileLinesFromDisk(filePath, offset = 0, limit) {
+  const fd = openSync(filePath, 'r');
+  try {
+    const chunkSize = 64 * 1024;
+    const buffer = Buffer.alloc(chunkSize);
+    let position = 0;
+    let lineCount = 0;
+    let carry = '';
+    const maxLinesToCount =
+      limit !== undefined && !Number.isNaN(limit)
+        ? offset + limit
+        : Number.POSITIVE_INFINITY;
+
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, chunkSize, position);
+      if (bytesRead <= 0) {
+        break;
+      }
+      position += bytesRead;
+      const text = carry + buffer.toString('utf8', 0, bytesRead);
+      let start = 0;
+      while (start < text.length) {
+        const newline = text.indexOf('\n', start);
+        if (newline === -1) {
+          carry = text.slice(start);
+          break;
+        }
+        lineCount += 1;
+        if (lineCount >= maxLinesToCount) {
+          return limit;
+        }
+        start = newline + 1;
+      }
+      if (start >= text.length) {
+        carry = '';
+      }
+    }
+
+    if (carry.length > 0) {
+      lineCount += 1;
+    }
+
+    const available = Math.max(0, lineCount - offset);
+    if (limit !== undefined && !Number.isNaN(limit)) {
+      return Math.min(limit, available);
+    }
+    return available;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * @param {Record<string, unknown>} input
  * @param {unknown} [capturedOutput]
  */
@@ -453,13 +529,7 @@ export function measureReadToolLines(input, capturedOutput) {
 
   const filePath = resolveReadToolPath(input) ?? '';
   if (filePath && existsSync(filePath)) {
-    const text = readFileSync(filePath, 'utf8');
-    const totalLines = countTextLines(text);
-    const available = Math.max(0, totalLines - offset);
-    if (limit !== undefined && !Number.isNaN(limit)) {
-      return Math.min(limit, available);
-    }
-    return available;
+    return countFileLinesFromDisk(filePath, offset, limit);
   }
 
   return 0;
@@ -677,7 +747,7 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
   if (SHELL_TOOL_NAMES.has(name)) {
     const command = String(input.command ?? '');
     events.push({ kind: 'shell', inboundRequestId, command });
-    if (COWORKER_ASK_PATTERN.test(command)) {
+    if (matchesCoworkerAskCommand(command)) {
       events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
     }
     const diffLogLines = measureShellDiffLogLines(command, options.shellOutput);
