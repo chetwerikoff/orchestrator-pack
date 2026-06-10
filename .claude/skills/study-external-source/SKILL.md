@@ -67,56 +67,78 @@ Required sections:
 
 Example path: `$env:TEMP/orchestrator-pack-proposal-<slug>.md` (Linux/WSL: `/tmp/...` if TEMP unset)
 
-## Codex critical reviewer
+## Adversarial Codex review
 
-Run **without** `--base` — the artifact is the proposal, not a git diff.
+Use the **adversarial-review** engine — the same cold-skeptic pass that
+[`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) runs — **not**
+a plain `codex review`. It argues to break confidence in the adoption decisions
+and returns a structured JSON findings contract you **evaluate, never obey**.
+The `/codex:adversarial-review` slash command is `disable-model-invocation:
+true`, so call its engine directly.
 
-**Command discipline:** use `codex review` or
-`scripts/review-architect-artifact.ps1 -Kind adoption-proposal` only.
-Never `codex exec` / `codex exec review` (PR worker path).
+The proposal lives under `$TEMP` (outside the repo), so the engine's git-diff
+scope has nothing to chew on — **embed the proposal in the focus text** and tell
+Codex to attack the PROPOSAL, disregarding any unrelated working-tree changes.
+Resolve the newest plugin version, run from repo root:
 
-**Preferred (Linux / WSL2 / pwsh 7+):**
-
-```powershell
-pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
-  -ArtifactPath $env:TEMP/orchestrator-pack-proposal-<slug>.md `
-  -Kind adoption-proposal
-```
-
-On Linux when `$env:TEMP` is unset, use `/tmp/orchestrator-pack-proposal-<slug>.md`.
-
-**Manual equivalent (pwsh — append proposal to prompt; no stdin `<` redirect):**
-
-```powershell
-$proposal = Get-Content -Raw "$env:TEMP/orchestrator-pack-proposal-<slug>.md"
-$prompt = @"
-You are a critical reviewer for orchestrator-pack adoption proposals.
-Critique the ADOPTION DECISIONS below — do not summarize the external source.
-Check: cargo-cult risk, planner-freedom if we spec work, upgrade-safety (no core patch),
-command accuracy, and whether pain is real.
-Do NOT explore the repository unless the proposal is ambiguous.
-
-Severity: tag valid issues P0/P1/P2.
-If no concrete issues remain after your review, respond with exactly:
-NO_FINDINGS
-(on its own line, no other prose).
+```bash
+SCRIPT=$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)
+PROPOSAL=$(cat "${TMPDIR:-/tmp}/orchestrator-pack-proposal-<slug>.md")
+node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
+  "Challenge the ADOPTION PROPOSAL below — do NOT summarize the external source, and ignore any unrelated working-tree changes. Question whether the pain is real, cargo-cult risk, whether each Apply/Adapt truly fits our constraints (AO-no-core-patch, Windows CI, planner freedom), upgrade safety, command accuracy, hidden coupling, and overlap with existing pack contracts.
 
 --- PROPOSAL ---
-$proposal
-"@
-codex review $prompt
+$PROPOSAL"
 ```
 
-Do not pipe stdout through `tail` or `head` — wait for the full response.
+`--json` returns the structured contract: `verdict` (`approve` |
+`needs-attention`), `summary`, `findings[]` (`severity`, `title`, `body`,
+`confidence`, `recommendation`), `next_steps[]`. Do not pipe stdout through
+`tail` or `head` — wait for the full response.
 
-Contract: `NO_FINDINGS` = clean; otherwise address P0/P1/P2 findings. See
+Skip if the Codex CLI / companion runtime is unavailable — fall back to no
+adversarial pass and say so in the final summary.
+
+## Evaluate findings — don't obey
+
+Codex argues to break confidence; treat each finding as a challenge to weigh,
+not an instruction to apply. Decide per finding:
+
+| Verdict | When | Action |
+|---------|------|--------|
+| **Accept** | Exposes a real gap — invented pain, cargo-cult adoption, broken upgrade safety (core patch), wrong/unsafe command, missed coupling or overlap with an existing pack contract. | Revise the proposal (flip Apply→Adapt/Skip, fix rationale or risks). |
+| **Partial** | Valid kernel, but the remedy **over-specifies** *how* we'd implement (file names, signatures, libraries, internal layout the planner should own). | Fix the proposal **minimally** — keep it about *what must be true*; leave the how to the later `create-issue-draft`. |
+| **Reject** | Speculative, stylistic, guards an out-of-scope failure mode, or pushes us to over-spec / narrow planner freedom. | Leave the proposal; record why. |
+
+Anchor on CLAUDE.md: planner freedom is non-negotiable; the cost rule is
+"cheapest sufficient executor with acceptable risk." A finding that pushes the
+proposal toward over-specification is itself the bug — reject or trim it. Log
+every accept/reject — one line per finding: what Codex argued, your verdict,
+why — in the proposal's decision trail. See
 `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
 
 ## Iteration discipline
 
-- **Hard cap: 5 cycles** (proposal → Codex → revise or rebut → repeat).
-- Revise the proposal for valid findings; rebut wrong ones in the proposal.
-- After cycle 5, stop revising — list remaining concerns as **open questions**.
+- **Hard cap: 10 adversarial passes total**, and *you* carry the
+  cross-iteration memory — each re-run of the review step is a fresh **cold**
+  Codex thread with no memory of prior passes (by design: a cold skeptic
+  re-attacks without anchoring or sycophantic drift).
+- Re-run only after you accepted/partially-accepted at least one finding and
+  revised the proposal. Append a settled-decisions block to the re-run focus
+  text so the cold skeptic does not relitigate:
+
+  ```
+  Already decided in earlier passes — do NOT re-raise (settled):
+  - <finding>: rejected — <one-line reason>
+  - <finding>: resolved — proposal now <what changed>
+  Attack the current proposal afresh for NEW weaknesses only.
+  ```
+
+- **Stop** when any holds: `verdict` is `approve`; every remaining finding is
+  rejected (nothing left to apply); or 10 passes done — record any still-open
+  findings as **open questions**.
+- Never resume a single Codex thread across iterations (it softens into
+  agreement and defeats the gate); keep cold restarts + the settled ledger.
 
 ## Final summary (deliver to user)
 
@@ -125,14 +147,16 @@ Contract: `NO_FINDINGS` = clean; otherwise address P0/P1/P2 findings. See
 1. **Verdict** — adopt anything or not.
 2. **What we adopt** — Apply/Adapt items only.
 3. **What we skip** — and why.
-4. **Open questions** — unresolved after 5 Codex cycles.
+4. **Open questions** — unresolved after the adversarial loop.
 5. **Next step** — e.g. invoke `create-issue-draft` for an Adapt item, or none.
 
 ## Don't
 
 - Cargo-cult adopt because a repo is popular or starred.
 - Invent pain points to avoid an all-Skip outcome.
-- Skip Codex review on the proposal.
-- Run more than **5** Codex iterations silently.
+- **Auto-apply** any finding — the Accept/Partial/Reject evaluation is mandatory.
+- Skip the adversarial Codex pass on the proposal (unless the runtime is down).
+- Run more than **10** adversarial passes, or re-run with no accepted change.
+- Resume a single Codex thread across iterations to save tokens.
 - Commit the proposal file (use `create-issue-draft` for durable specs).
 - Implement adoption directly — open a draft and spawn a worker.
