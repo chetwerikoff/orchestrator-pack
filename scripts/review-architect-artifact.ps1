@@ -74,10 +74,34 @@ Write-Host "Artifact: $resolved"
 Write-Host 'Invoker: codex review (NOT codex exec / codex exec review)'
 Write-Host 'Sandbox: sandbox_mode=workspace-write + sandbox_workspace_write.network_access=true (coworker-capable)'
 
-$output = & codex review `
-    -c 'sandbox_mode=workspace-write' `
-    -c 'sandbox_workspace_write.network_access=true' `
-    $prompt 2>&1
+# Match ao-codex-pr-reviewer CODEX_SPAWN_ENV_STRIP — network-capable review must not inherit exfiltratable tokens.
+$codexEnvStrip = @(
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'CODEX_AUTH_JSON',
+    'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+    'ACTIONS_ID_TOKEN_REQUEST_URL'
+)
+$savedCodexEnv = @{}
+foreach ($name in $codexEnvStrip) {
+    if (Test-Path -LiteralPath "Env:$name") {
+        $savedCodexEnv[$name] = (Get-Item -LiteralPath "Env:$name").Value
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    }
+}
+
+try {
+    $output = & codex review `
+        -c 'sandbox_mode=workspace-write' `
+        -c 'sandbox_workspace_write.network_access=true' `
+        $prompt 2>&1
+}
+finally {
+    foreach ($entry in $savedCodexEnv.GetEnumerator()) {
+        Set-Item -LiteralPath "Env:$($entry.Key)" -Value $entry.Value
+    }
+}
+
 $joined = ($output | Out-String).TrimEnd()
 if ($joined) {
     Write-Host $joined

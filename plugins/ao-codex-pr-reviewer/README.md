@@ -103,7 +103,8 @@ CLI auth uses `~/.codex` on disk, not those env vars.
 
 Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
 `codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always
-trusted-local and coworker-capable.
+trusted-local and coworker-capable. The script strips the same exfiltratable env
+vars as the PR wrapper before spawning Codex.
 
 The Windows AO 0.9.2 patch path (`scripts/patch-codex-review4.ps1`) is legacy:
 it still invokes `codex exec --sandbox read-only` without network and is **not**
