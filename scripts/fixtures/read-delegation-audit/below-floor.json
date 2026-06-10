@@ -1,0 +1,19 @@
+{
+  "description": "below-floor aggregate read — never flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-below-floor",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 200, "kind": "file" }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expect": {
+    "triggerFired": false,
+    "excludedFromDenominator": false,
+    "flagged": false,
+    "inDenominator": false
+  }
+}

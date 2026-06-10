@@ -1019,6 +1019,23 @@ After recovery, the orchestrator re-applies `orchestratorRules` from your live
 YAML (see **Autonomous review loop** above). This path does not add automatic
 recovery or new AO configuration.
 
+## Coworker read-delegation audit (Issue #255)
+
+Phase 1 lowers the ask volume floor to **400 lines**, folds pure file-count and bootstrap
+triggers into T1, and adds a **stop-time read-delegation audit** on Claude (`Stop`) and
+Cursor (`stop`). The audit flags missed bulk reads; it does **not** block reads.
+
+**Operator adoption** — after merge (full steps in
+[`docs/coworker-read-delegation-audit.md`](coworker-read-delegation-audit.md)):
+
+1. Resync machine-local policy mirrors (`~/agent-rules/coworker-policy.md`,
+   `~/.codex/AGENTS.md`, `~/.cursor-global`) from `prompts/agent_rules.md`.
+2. Add `scripts/invoke-read-delegation-audit-stop.ps1` to `~/.cursor/hooks.json` (`stop`)
+   and `.claude/settings.json` (`Stop`) using the documented JSON snippets.
+3. Verify `~/.orchestrator-pack/read-delegation-audit.jsonl` receives `work_unit_verdict`
+   lines after a completed work unit on each surface.
+4. Restart AO: `ao stop` then `ao start` so workers load recalibrated thresholds.
+
 ## RCA spec discipline (Issue #221)
 
 After merge of the worker PR that adds RCA/spec discipline rules and

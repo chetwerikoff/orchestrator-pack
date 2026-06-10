@@ -1,0 +1,32 @@
+{
+  "description": "two independent inbound requests — evaluated separately, neither flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-q1",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/a.md", "lines": 150, "kind": "file" }],
+      "edits": [],
+      "statusText": ""
+    },
+    {
+      "key": "unit-q2",
+      "inboundRequestId": "req-2",
+      "reads": [{ "path": "docs/b.md", "lines": 150, "kind": "file" }],
+      "edits": [],
+      "statusText": ""
+    }
+  ],
+  "expectUnits": [
+    {
+      "key": "unit-q1",
+      "triggerFired": false,
+      "flagged": false
+    },
+    {
+      "key": "unit-q2",
+      "triggerFired": false,
+      "flagged": false
+    }
+  ]
+}
