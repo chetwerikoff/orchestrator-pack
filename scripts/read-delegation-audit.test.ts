@@ -12,12 +12,16 @@ import {
   evaluateStopAudit,
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
+  isInboundUserRequest,
   loadMetricWindowSummary,
+  measureShellDiffLogLines,
   partitionEventsIntoWorkUnits,
   populateStopAuditPayload,
+  resolveReadToolPath,
   runStopAudit,
   SURFACES,
   T1_VOLUME_FLOOR,
+  toolUseToAuditEvents,
 } from '../docs/read-delegation-audit.mjs';
 
 type StopAuditResult = {
@@ -243,6 +247,128 @@ describe('fail-open and fail-loud', () => {
     const summary = loadMetricWindowSummary(artifactPath);
     expect(summary.auditErrors).toBeGreaterThan(0);
     expect(summary.degraded).toBe(true);
+  });
+});
+
+describe('Claude and shell transcript compatibility', () => {
+  it('resolves Claude Read file_path inputs for line measurement', () => {
+    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    expect(resolveReadToolPath({ file_path: readPath })).toBe(readPath);
+
+    const events = toolUseToAuditEvents(
+      'Read',
+      { file_path: readPath, limit: 450 },
+      'req-claude',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].path).toBe(readPath);
+    expect(events[0].lines).toBe(450);
+  });
+
+  it('flags Claude transcript reads the same as Cursor reads', () => {
+    const readPath = path.join(fixturesDir, 'no-edit-no-reason.json');
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'inspect policy' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Read',
+              input: { file_path: readPath, limit: 450 },
+            },
+          ],
+        },
+      },
+    ];
+    const cursor = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extractEventsFromTranscriptRecords(records).workUnits,
+    }) as StopAuditResult;
+    const claude = evaluateStopAudit({
+      surface: 'claude',
+      workUnits: extractEventsFromTranscriptRecords(records).workUnits,
+    }) as StopAuditResult;
+    expect(claude.flags.length).toBe(1);
+    expect(claude.flags.map((row) => row.flagged)).toEqual(
+      cursor.flags.map((row) => row.flagged),
+    );
+  });
+
+  it('does not re-execute shell commands without captured transcript output', () => {
+    expect(measureShellDiffLogLines('git diff HEAD~1')).toBe(0);
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command: 'git diff HEAD~1' },
+      'req-shell',
+    );
+    expect(events.some((event) => event.readKind === 'diff')).toBe(false);
+  });
+
+  it('measures diff/log volume only from captured shell output', () => {
+    const captured = Array.from({ length: 250 }, (_, index) => `line-${index + 1}`).join('\n');
+    expect(measureShellDiffLogLines('git diff HEAD~1', captured)).toBe(250);
+
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command: 'git diff HEAD~1' },
+      'req-shell',
+      { shellOutput: captured },
+    );
+    expect(events.some((event) => event.readKind === 'diff' && event.lines === 250)).toBe(true);
+  });
+
+  it('keeps tool_result user messages inside the same work unit', () => {
+    expect(
+      isInboundUserRequest({
+        role: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] },
+      }),
+    ).toBe(false);
+
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'first question' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tool-1',
+              name: 'Shell',
+              input: { command: 'git diff HEAD~1' },
+            },
+          ],
+        },
+      },
+      {
+        role: 'user',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool-1',
+              content: Array.from({ length: 250 }, (_, index) => `line-${index + 1}`).join('\n'),
+            },
+          ],
+        },
+      },
+    ];
+
+    const extracted = extractEventsFromTranscriptRecords(records);
+    expect(extracted.workUnits).toHaveLength(1);
+    const result = evaluateStopAudit({
+      surface: 'claude',
+      workUnits: extracted.workUnits,
+    }) as StopAuditResult;
+    expect(result.flags.length).toBe(1);
   });
 });
 

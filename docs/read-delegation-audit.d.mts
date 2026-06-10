@@ -102,13 +102,20 @@ export declare function normalizeStopHookPayload(
   hookPayload: Record<string, unknown>,
 ): Record<string, unknown>;
 export declare function isCodeClassPath(filePath: string | undefined): boolean;
+export declare function resolveReadToolPath(input: Record<string, unknown>): string | undefined;
 export declare function measureReadToolLines(input: Record<string, unknown>): number;
-export declare function measureShellDiffLogLines(command: string): number;
+export declare function extractToolResultText(value: unknown): string;
+export declare function measureShellDiffLogLines(command: string, capturedOutput?: unknown): number;
+export declare function isInboundUserRequest(record: unknown): boolean;
+export declare function buildTranscriptToolResultIndex(
+  records: Array<Record<string, unknown>>,
+): Map<string, string>;
 export declare function parseTranscriptJsonl(transcriptPath: string): Array<Record<string, unknown>>;
 export declare function toolUseToAuditEvents(
   toolName: string,
   input: Record<string, unknown>,
   inboundRequestId: string,
+  options?: { shellOutput?: unknown },
 ): Array<Record<string, unknown>>;
 export declare function extractEventsFromTranscriptRecords(
   records: Array<Record<string, unknown>>,

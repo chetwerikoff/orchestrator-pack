@@ -13,7 +13,6 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
@@ -405,6 +404,19 @@ export function isCodeClassPath(filePath) {
 /**
  * @param {Record<string, unknown>} input
  */
+export function resolveReadToolPath(input) {
+  if (typeof input.path === 'string' && input.path.trim()) {
+    return input.path;
+  }
+  if (typeof input.file_path === 'string' && input.file_path.trim()) {
+    return input.file_path;
+  }
+  return undefined;
+}
+
+/**
+ * @param {Record<string, unknown>} input
+ */
 export function measureReadToolLines(input) {
   const offset = Math.max(0, Number(input.offset) || 0);
   const limit = input.limit === undefined ? undefined : Math.max(0, Number(input.limit) || 0);
@@ -412,7 +424,7 @@ export function measureReadToolLines(input) {
     return limit;
   }
 
-  const filePath = typeof input.path === 'string' ? input.path : '';
+  const filePath = resolveReadToolPath(input) ?? '';
   if (!filePath || !existsSync(filePath)) {
     return 0;
   }
@@ -423,25 +435,47 @@ export function measureReadToolLines(input) {
 }
 
 /**
- * @param {string} command
+ * @param {unknown} value
  */
-export function measureShellDiffLogLines(command) {
+export function extractToolResultText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return '';
+  }
+  return value
+    .map((part) => {
+      if (!isRecord(part)) {
+        return '';
+      }
+      if (part.type === 'text' && typeof part.text === 'string') {
+        return part.text;
+      }
+      if (typeof part.content === 'string') {
+        return part.content;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * @param {string} command
+ * @param {unknown} [capturedOutput]
+ */
+export function measureShellDiffLogLines(command, capturedOutput) {
   const trimmed = String(command ?? '').trim();
   if (!trimmed || !DIFF_LOG_SHELL_PATTERN.test(trimmed)) {
     return 0;
   }
-
-  try {
-    const output = execFileSync('bash', ['-lc', trimmed], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 5_000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    return output === '' ? 0 : output.split('\n').length;
-  } catch {
+  if (capturedOutput === undefined || capturedOutput === null) {
     return 0;
   }
+
+  const text = extractToolResultText(capturedOutput);
+  return text === '' ? 0 : text.split('\n').length;
 }
 
 /**
@@ -485,6 +519,55 @@ function transcriptRole(record) {
 
 /**
  * @param {unknown} record
+ */
+export function isInboundUserRequest(record) {
+  const role = transcriptRole(record);
+  if (role !== 'user') {
+    return false;
+  }
+
+  const message = isRecord(record) && isRecord(record.message) ? record.message : record;
+  const content = isRecord(message) ? message.content : undefined;
+  if (!Array.isArray(content) || content.length === 0) {
+    return true;
+  }
+
+  return content.some((part) => isRecord(part) && part.type !== 'tool_result');
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} records
+ */
+export function buildTranscriptToolResultIndex(records) {
+  /** @type {Map<string, string>} */
+  const index = new Map();
+
+  for (const record of records) {
+    if (transcriptRole(record) !== 'user') {
+      continue;
+    }
+    const message = isRecord(record.message) ? record.message : record;
+    const content = isRecord(message) ? message.content : undefined;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const part of content) {
+      if (!isRecord(part) || part.type !== 'tool_result') {
+        continue;
+      }
+      const toolUseId = String(part.tool_use_id ?? '');
+      if (!toolUseId) {
+        continue;
+      }
+      index.set(toolUseId, extractToolResultText(part.content));
+    }
+  }
+
+  return index;
+}
+
+/**
+ * @param {unknown} record
  * @returns {Array<Record<string, unknown>>}
  */
 function transcriptToolUses(record) {
@@ -503,6 +586,7 @@ function transcriptToolUses(record) {
       }
       if (part.type === 'tool_use' && typeof part.name === 'string') {
         uses.push({
+          id: typeof part.id === 'string' ? part.id : undefined,
           name: part.name,
           input: isRecord(part.input) ? part.input : {},
         });
@@ -516,6 +600,7 @@ function transcriptToolUses(record) {
         continue;
       }
       uses.push({
+        id: typeof toolUse.id === 'string' ? toolUse.id : undefined,
         name: String(toolUse.name ?? toolUse.tool_name ?? ''),
         input: isRecord(toolUse.input) ? toolUse.input : isRecord(toolUse.tool_input) ? toolUse.tool_input : {},
       });
@@ -529,14 +614,15 @@ function transcriptToolUses(record) {
  * @param {string} toolName
  * @param {Record<string, unknown>} input
  * @param {string} inboundRequestId
+ * @param {{ shellOutput?: unknown }} [options]
  */
-export function toolUseToAuditEvents(toolName, input, inboundRequestId) {
+export function toolUseToAuditEvents(toolName, input, inboundRequestId, options = {}) {
   /** @type {Array<Record<string, unknown>>} */
   const events = [];
   const name = String(toolName ?? '');
 
   if (READ_TOOL_NAMES.has(name)) {
-    const path = typeof input.path === 'string' ? input.path : undefined;
+    const path = resolveReadToolPath(input);
     events.push({
       kind: 'read',
       inboundRequestId,
@@ -563,7 +649,7 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId) {
     if (COWORKER_ASK_PATTERN.test(command)) {
       events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
     }
-    const diffLogLines = measureShellDiffLogLines(command);
+    const diffLogLines = measureShellDiffLogLines(command, options.shellOutput);
     if (diffLogLines > 0) {
       events.push({
         kind: 'read',
@@ -587,8 +673,7 @@ export function extractEventsFromTranscriptRecords(records, options = {}) {
   let current = null;
 
   for (const record of records) {
-    const role = transcriptRole(record);
-    if (role === 'user') {
+    if (isInboundUserRequest(record)) {
       const inboundRequestId =
         options.generationId && units.length === 0
           ? String(options.generationId)
@@ -618,6 +703,8 @@ export function extractEventsFromTranscriptRecords(records, options = {}) {
       : target.inboundRequestId;
   const workUnitKey = `${conversationId}:${inboundRequestId}`;
 
+  const toolResults = buildTranscriptToolResultIndex(target.records);
+
   /** @type {Array<Record<string, unknown>>} */
   const events = [];
   for (const record of target.records) {
@@ -625,8 +712,12 @@ export function extractEventsFromTranscriptRecords(records, options = {}) {
       continue;
     }
     for (const toolUse of transcriptToolUses(record)) {
+      const shellOutput =
+        typeof toolUse.id === 'string' ? toolResults.get(toolUse.id) : undefined;
       events.push(
-        ...toolUseToAuditEvents(toolUse.name, toolUse.input, inboundRequestId).map((event) => ({
+        ...toolUseToAuditEvents(toolUse.name, toolUse.input, inboundRequestId, {
+          shellOutput,
+        }).map((event) => ({
           ...event,
           workUnitKey,
         })),
