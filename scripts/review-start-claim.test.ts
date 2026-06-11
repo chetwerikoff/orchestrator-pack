@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
 const reevalInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
+const wakeInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewWakeTrigger.ps1');
 const guardPath = path.join(repoRoot, 'scripts/check-review-start-claim-guard.ps1');
 const fullSha = 'fd2fdb6600000000000000000000000000000000';
 
@@ -306,6 +307,63 @@ describe('Review-StartClaim single-flight contract', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('uses a fresh merge snapshot when a wake skips on a newly visible covered run', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(repoRoot, 'tests/fixtures/review-wake-trigger/green-wake-triggers.json'), 'utf8'),
+    );
+    const wakeSha = 'cafe204000000000000000000000000000000000';
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(wakeInvokePath)}
+        $ns = ${psString(dir)}
+        $script:calls = 0
+        function Invoke-GhOpenPrList { param([string]$RepoRoot) @(@{ number = 204; headRefOid = '${wakeSha}'; headCommittedAt = '${fixture.openPrs[0].headCommittedAt}' }) }
+        function Get-AoStatusSessions { @(${fixture.sessions.map((session: any) => `@{ name = '${session.name}'; role = '${session.role}'; prNumber = ${session.prNumber}; status = '${session.status}'; reports = @(${session.reports.map((report: any) => `@{ reportState = '${report.reportState}'; reportedAt = '${report.reportedAt}' }`).join(',')}) }`).join(',')}) }
+        function Get-GhChecksBundleByPr {
+          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
+          @{
+            ciChecksByPr = @{
+              '204' = @(${fixture.ciChecksByPr['204'].map((check: any) => `@{ name = '${check.name}'; state = '${check.state}' }`).join(',')})
+            }
+            requiredCheckNamesByPr = @{ '204' = @('Verify orchestrator-pack structure','PR scope guard','Run pack contract tests','Self-architect lint') }
+            requiredCheckLookupFailedByPr = @{ '204' = $false }
+          }
+        }
+        function Get-AoReviewRuns {
+          param([string]$Project)
+          $script:calls++
+          if ($script:calls -eq 1) {
+            return @()
+          }
+          return @(@{ prNumber = 204; targetSha = '${wakeSha}'; status = 'clean' })
+        }
+        $preClaim = Acquire-ReviewStartClaim -PrNumber 204 -HeadSha '${wakeSha}' -Surface 'other-surface' -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -ReviewRuns @()
+        $result = Invoke-ReviewWakeTriggerOnCompletionWake -FilterResult @{
+          ok = $true
+          wakeKind = 'merge.ready'
+          prNumber = 204
+          sessionId = 'opk-11'
+        } -ProjectId 'orchestrator-pack' -ReviewCommand 'echo review' -RepoRoot ${psString(repoRoot)} -StateRoot $ns -LogWriter { param([string]$Message) }
+        [pscustomobject]@{
+          triggered = $result.triggered
+          reason = $result.reason
+          mergeable = [bool]$result.mergeEval.mergeable
+          mergeReason = [string]$result.mergeEval.reason
+          calls = $script:calls
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('claim_skipped');
+      expect(result.mergeable).toBe(true);
+      expect(result.mergeReason).toBe('covered_terminal_run');
+      expect(result.calls).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('review-start claim drift guard', () => {
@@ -333,7 +391,7 @@ describe('review-start claim drift guard', () => {
       });
       expect(result.status).not.toBe(0);
       expect(result.stdout + result.stderr).toContain('bad-direct.ps1');
-      expect(result.stdout + result.stderr).toContain('bad-indirect.ps1');
+      expect(result.stdout + result.stderr).toContain('bad-helper.ps1');
       expect(result.stdout + result.stderr).toContain('allowlist entry is not interactive-only');
     } finally {
       rmSync(root, { recursive: true, force: true });

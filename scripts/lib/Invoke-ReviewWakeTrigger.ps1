@@ -131,6 +131,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         [string]$SideEffectLockPath = '',
         [string]$StateRoot = '',
         [hashtable]$FixtureSnapshot,
+        [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
@@ -259,15 +260,31 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
         & $LogWriter "review-wake-trigger: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
+        $mergeSnapshot = if ($claim.reason -eq 'covered_by_run') {
+            if ($ResolveFreshSnapshot) {
+                & $ResolveFreshSnapshot $planned
+            }
+            else {
+                Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
+            }
+        }
+        else {
+            $null
+        }
         return @{
             triggered = $false
             reason    = 'claim_skipped'
-            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
-                -HeadSha $planned.headSha -ExtraReviewRuns @(@{
-                    prNumber  = $planned.prNumber
-                    targetSha = $planned.headSha
-                    status    = 'queued'
-                })
+            mergeEval = if ($claim.reason -eq 'covered_by_run') {
+                Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $mergeSnapshot -HeadSha $planned.headSha
+            }
+            else {
+                Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
+                    -HeadSha $planned.headSha -ExtraReviewRuns @(@{
+                        prNumber  = $planned.prNumber
+                        targetSha = $planned.headSha
+                        status    = 'queued'
+                    })
+            }
         }
     }
     if ($claim.recovered) {

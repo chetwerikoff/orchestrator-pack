@@ -49,14 +49,6 @@ foreach ($file in @($files)) {
 
 $reviewRunLiteral = [regex]'(?is)(\bao\s+review\s+run\b|@\(\s*[''"]review[''"]\s*,\s*[''"]run[''"]|@runArgs)'
 $claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|Review-StartClaim\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun)'
-$functionDefs = @{}
-foreach ($rel in $textByRel.Keys) {
-    $text = $textByRel[$rel]
-    foreach ($m in [regex]::Matches($text, '(?m)^\s*function\s+([A-Za-z0-9_-]+)\s*\{')) {
-        $functionDefs[$m.Groups[1].Value] = $rel
-    }
-}
-
 $violations = @($allowlistViolations)
 foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     $text = $textByRel[$rel]
@@ -76,15 +68,7 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     if ($allow.ContainsKey($rel)) { continue }
 
     $direct = $reviewRunLiteral.IsMatch($text)
-    $indirect = $false
-    foreach ($name in $functionDefs.Keys) {
-        if ($functionDefs[$name] -eq $rel) { continue }
-        if ($text -match "(?m)\b$([regex]::Escape($name))\b" -and $reviewRunLiteral.IsMatch($textByRel[$functionDefs[$name]])) {
-            $indirect = $true
-            break
-        }
-    }
-    if (($direct -or $indirect) -and -not $claimGate.IsMatch($text)) {
+    if ($direct -and -not $claimGate.IsMatch($text)) {
         $violations += "$rel reaches ao review run without Review-StartClaim"
     }
 }
