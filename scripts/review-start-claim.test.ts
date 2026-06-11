@@ -134,6 +134,39 @@ describe('Review-StartClaim single-flight contract', () => {
     }
   });
 
+  it('allows recovery again when a previously recovered claim goes stale and its terminal record remains', () => {
+    const dir = tempClaimDir();
+    try {
+      const output = runPwsh(`
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'crashed-starter' -Reason 'fixture'
+        $record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
+        Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha) -Record $record
+        $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
+        $first = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer-a' -Namespace $ns -ReviewRuns @()
+        $firstPath = Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha
+        $fresh = Read-ReviewStartClaimRecord -Path $firstPath
+        $fresh.record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
+        ($fresh.record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $firstPath -Encoding UTF8
+        $second = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer-b' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          first = @{ acquired=[bool]$first.acquired; recovered=[bool]$first.recovered }
+          second = @{ acquired=[bool]$second.acquired; recovered=[bool]$second.recovered; reason=[string]$second.reason }
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
+        } | ConvertTo-Json -Compress -Depth 6
+      `);
+      const result = JSON.parse(output);
+      expect(result.first).toMatchObject({ acquired: true, recovered: true });
+      expect(result.second).toMatchObject({ acquired: true, recovered: true });
+      expect(result.terminal.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed for ambiguous partial/unreadable records, divergent SHA forms, and anomalous timestamps', () => {
     const dir = tempClaimDir();
     try {

@@ -284,18 +284,6 @@ function Test-ReviewStartClaimRecordSameGeneration {
     )
 }
 
-function Test-ReviewStartClaimRecoveredStaleTerminalExists {
-    param(
-        [string]$Namespace,
-        [int]$PrNumber,
-        [string]$HeadSha
-    )
-
-    $leaf = Split-Path -Leaf (Get-ReviewStartClaimPath -Namespace $Namespace -PrNumber $PrNumber -HeadSha $HeadSha)
-    $pattern = "$leaf.recovered_stale.*.json"
-    return [bool]@(Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) -File -Filter $pattern -ErrorAction SilentlyContinue).Count
-}
-
 function Test-ReviewStartClaimRunVisible {
     param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
@@ -432,9 +420,6 @@ function Acquire-ReviewStartClaim {
             if (-not $existing.ok) {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
             }
-            if (Test-ReviewStartClaimRecoveredStaleTerminalExists -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized) {
-                return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
-            }
             if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
                 if ([string]$existing.record.state -eq 'active') {
                     $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $existing.record -Outcome 'run_started' -Extra @{
@@ -458,9 +443,6 @@ function Acquire-ReviewStartClaim {
                     return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $again.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
                 }
                 if (-not (Test-ReviewStartClaimRecordSameGeneration -Expected $existing.record -Actual $again.record)) {
-                    return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
-                }
-                if (Test-ReviewStartClaimRecoveredStaleTerminalExists -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized) {
                     return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
                 }
                 if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
