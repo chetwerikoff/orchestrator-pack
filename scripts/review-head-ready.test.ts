@@ -262,6 +262,39 @@ describe('evaluateHeadReadyForReview', () => {
     expect(decision.eligible).toBe(true);
   });
 
+  it('orphaned PR with degraded CI returns no_worker_session before degraded retry', () => {
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 99,
+      headSha: 'orphan99',
+      session: null,
+      ciChecks: [],
+      requiredCheckNames: ['Missing required job'],
+      requiredCheckLookupFailed: false,
+    });
+    expect(decision.reason).toBe('no_worker_session');
+    expect(decision.route).not.toBe('degraded_ci_retry');
+  });
+
+  it('fail-closed owner without session returns defer before degraded retry', () => {
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 99,
+      headSha: 'orphan99',
+      session: null,
+      ciChecks: [],
+      requiredCheckLookupFailed: true,
+      ownerResolution: {
+        sessionId: null,
+        reason: 'no_live_review_target',
+        failClosed: true,
+      },
+    });
+    expect(decision.reason).toBe('no_live_review_target');
+    expect(decision.route).toBe('defer');
+    expect(decision.route).not.toBe('degraded_ci_retry');
+  });
+
   it('(e3) worker degraded-CI handoff is not uncovered-not-ready', () => {
     const fixture = loadFixture<{
       openPrs: { number: number; headRefOid: string }[];

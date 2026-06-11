@@ -526,6 +526,17 @@ export function evaluateHeadReadyForReview({
     };
   }
 
+  if (!session) {
+    if (ownerResolution?.failClosed) {
+      return {
+        eligible: false,
+        reason: String(ownerResolution.reason ?? 'no_live_review_target'),
+        route: 'defer',
+      };
+    }
+    return { eligible: false, reason: 'no_worker_session', route: 'none' };
+  }
+
   if (ciLevel === 'degraded') {
     const attempts = Math.max(0, Number(degradedCiAttempts) || 0);
     if (attempts >= maxDegradedCiAttempts) {
@@ -546,17 +557,6 @@ export function evaluateHeadReadyForReview({
       route: 'degraded_ci_retry',
       degradedCiAttempts: attempts + 1,
     };
-  }
-
-  if (!session) {
-    if (ownerResolution?.failClosed) {
-      return {
-        eligible: false,
-        reason: String(ownerResolution.reason ?? 'no_live_review_target'),
-        route: 'defer',
-      };
-    }
-    return { eligible: false, reason: 'no_worker_session', route: 'none' };
   }
 
   const latestReport = findLatestAcceptedReportForHead(session, headSha, reportBindingOptions);
