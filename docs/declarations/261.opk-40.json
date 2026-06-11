@@ -1,0 +1,27 @@
+{
+  "issue_number": 261,
+  "iteration_id": "opk-40",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-11T03:12:13.771Z",
+  "baseline": {
+    "commit_sha": "cad12292979fcc633d06428a7fe549b5dcfa8177",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1474184692beeb68e7e3089b092891877489942b7ef5c777b445e93ad4635281"
+  },
+  "declared_paths": [
+    "docs/architecture.md",
+    "docs/review-head-ready.mjs",
+    "docs/review-head-ready.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
+    "tests/external-output-references/trigger-fixture-classification.json"
+  ],
+  "declared_globs": [
+    "tests/fixtures/review-trigger-reconcile/**"
+  ],
+  "amendments": []
+}
