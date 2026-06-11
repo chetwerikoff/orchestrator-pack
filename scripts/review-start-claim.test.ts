@@ -82,25 +82,53 @@ describe('Review-StartClaim single-flight contract', () => {
         $record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
         Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha) -Record $record
         $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
-        $jobs = foreach ($surface in @('recoverer-a','recoverer-b')) {
-          Start-Job -ArgumentList ${psString(helperPath)},$ns,$surface,$sha -ScriptBlock {
-            param($helper,$ns,$surface,$sha)
-            . $helper
-            $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
-            $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface $surface -Namespace $ns -ReviewRuns @()
-            [pscustomobject]@{ surface=$surface; acquired=[bool]$r.acquired; recovered=[bool]$r.recovered; reason=[string]$r.reason } | ConvertTo-Json -Compress
-          }
-        }
-        $rows = $jobs | Receive-Job -Wait -AutoRemoveJob | ForEach-Object { $_ | ConvertFrom-Json }
+        $first = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer-a' -Namespace $ns -ReviewRuns @()
+        $second = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer-b' -Namespace $ns -ReviewRuns @()
         [pscustomobject]@{
-          rows = @($rows)
+          first = @{ acquired=[bool]$first.acquired; recovered=[bool]$first.recovered; reason=[string]$first.reason }
+          second = @{ acquired=[bool]$second.acquired; recovered=[bool]$second.recovered; reason=[string]$second.reason }
           terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
         } | ConvertTo-Json -Compress -Depth 6
       `;
       const result = JSON.parse(runPwsh(script));
-      expect(result.rows.filter((r: any) => r.acquired && r.recovered)).toHaveLength(1);
-      expect(result.rows.filter((r: any) => !r.acquired)).toHaveLength(1);
+      expect(result.first).toMatchObject({ acquired: true, recovered: true });
+      expect(result.second).toMatchObject({ acquired: false, reason: 'claimed' });
       expect(result.terminal).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a stale claim after abandoning a leftover mutex directory', () => {
+    const dir = tempClaimDir();
+    try {
+      const output = runPwsh(`
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'crashed-starter' -Reason 'fixture'
+        $record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
+        $path = Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha
+        Write-ReviewStartClaimAtomic -Path $path -Record $record
+        $lockDir = Get-ReviewStartClaimLockDir -Namespace $ns -PrNumber 266 -HeadSha $sha
+        New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+        [System.IO.Directory]::SetLastWriteTimeUtc($lockDir, (Get-Date).ToUniversalTime().AddMinutes(-10))
+        $env:AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS = '1'
+        $result = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          acquired = [bool]$result.acquired
+          recovered = [bool]$result.recovered
+          reason = [string]$result.reason
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
+          lockExists = Test-Path -LiteralPath $lockDir
+        } | ConvertTo-Json -Compress
+      `);
+      const result = JSON.parse(output);
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(true);
+      expect(result.terminal).toHaveLength(1);
+      expect(result.lockExists).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

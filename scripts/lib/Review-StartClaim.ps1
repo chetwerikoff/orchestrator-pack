@@ -11,6 +11,7 @@
 $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
+$Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
 
 function Resolve-ReviewStartClaimNamespace {
@@ -76,6 +77,11 @@ function Get-ReviewStartClaimTerminalDir {
     return (Join-Path $Namespace 'terminal')
 }
 
+function Get-ReviewStartClaimMutexOwnerPath {
+    param([string]$LockDir)
+    return (Join-Path $LockDir 'owner.json')
+}
+
 function Get-ReviewStartClaimTerminalRetentionCount {
     $count = $Script:ReviewStartClaimTerminalRetentionCount
     if ($env:AO_REVIEW_CLAIM_TERMINAL_COUNT) {
@@ -101,6 +107,18 @@ function Prune-ReviewStartClaimTerminalRecords {
     }
 }
 
+function Get-ReviewStartClaimMutexStaleSeconds {
+    $seconds = $Script:ReviewStartClaimMutexStaleSeconds
+    if ($env:AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS) {
+        $parsed = 0
+        if ([int]::TryParse($env:AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS, [ref]$parsed)) {
+            $seconds = $parsed
+        }
+    }
+    if ($seconds -lt 1) { return 1 }
+    return $seconds
+}
+
 function New-ReviewStartClaimHolder {
     param([string]$Surface)
     $hostName = try { [System.Net.Dns]::GetHostName() } catch { 'unknown-host' }
@@ -124,6 +142,99 @@ function Format-ReviewStartClaimHolder {
         }
     }
     return ($parts -join ',')
+}
+
+function New-ReviewStartClaimMutexOwnerRecord {
+    param([string]$LockDir)
+    $hostName = try { [System.Net.Dns]::GetHostName() } catch { 'unknown-host' }
+    return @{
+        pid          = $PID
+        host         = $hostName
+        processGuid  = [guid]::NewGuid().ToString('n')
+        acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        lockDir      = $LockDir
+    }
+}
+
+function Write-ReviewStartClaimMutexOwner {
+    param(
+        [string]$LockDir,
+        [hashtable]$Owner
+    )
+    $ownerPath = Get-ReviewStartClaimMutexOwnerPath -LockDir $LockDir
+    $tmp = Join-Path $LockDir ".$([guid]::NewGuid().ToString('n')).tmp"
+    ($Owner | ConvertTo-Json -Compress -Depth 10) | Set-Content -LiteralPath $tmp -Encoding UTF8
+    try {
+        [System.IO.File]::Move($tmp, $ownerPath, $false)
+    }
+    catch [System.Management.Automation.MethodException] {
+        [System.IO.File]::Move($tmp, $ownerPath)
+    }
+}
+
+function Read-ReviewStartClaimMutexOwner {
+    param([string]$LockDir)
+    $ownerPath = Get-ReviewStartClaimMutexOwnerPath -LockDir $LockDir
+    try {
+        if (-not (Test-Path -LiteralPath $ownerPath -PathType Leaf)) {
+            return @{ ok = $false; reason = 'missing' }
+        }
+        $raw = Get-Content -LiteralPath $ownerPath -Raw -ErrorAction Stop
+        if (-not $raw -or -not $raw.Trim()) { return @{ ok = $false; reason = 'empty' } }
+        $record = $raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($required in @('pid', 'host', 'processGuid', 'acquiredAtUtc')) {
+            if ($null -eq $record.$required -or -not [string]$record.$required) {
+                return @{ ok = $false; reason = "missing_$required" }
+            }
+        }
+        $acquired = $null
+        try { $acquired = [datetimeoffset]::Parse([string]$record.acquiredAtUtc).UtcDateTime } catch { return @{ ok = $false; reason = 'bad_timestamp' } }
+        return @{ ok = $true; record = $record; acquiredAtUtc = $acquired }
+    }
+    catch {
+        return @{ ok = $false; reason = 'unreadable'; error = [string]$_ }
+    }
+}
+
+function Test-ReviewStartClaimProcessAlive {
+    param([object]$Owner)
+    try {
+        $pid = [int]$Owner.pid
+        if ($pid -le 0) { return $false }
+        $process = Get-Process -Id $pid -ErrorAction Stop
+        return [bool]$process
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-ReviewStartClaimMutexAbandoned {
+    param([string]$LockDir)
+
+    if (-not (Test-Path -LiteralPath $LockDir -PathType Container)) {
+        return $false
+    }
+    $owner = Read-ReviewStartClaimMutexOwner -LockDir $LockDir
+    if ($owner.ok) {
+        if (Test-ReviewStartClaimProcessAlive -Owner $owner.record) {
+            return $false
+        }
+        return $true
+    }
+
+    $ageSeconds = ((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $LockDir).LastWriteTimeUtc).TotalSeconds
+    return ($ageSeconds -ge (Get-ReviewStartClaimMutexStaleSeconds))
+}
+
+function Recover-ReviewStartClaimMutex {
+    param([string]$LockDir)
+
+    if (-not (Test-ReviewStartClaimMutexAbandoned -LockDir $LockDir)) {
+        return $false
+    }
+    Remove-Item -LiteralPath $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    return -not (Test-Path -LiteralPath $LockDir -PathType Container)
 }
 
 function Initialize-ReviewStartClaimNamespace {
@@ -161,6 +272,30 @@ function Read-ReviewStartClaimRecord {
     }
 }
 
+function Test-ReviewStartClaimRecordSameGeneration {
+    param(
+        [object]$Expected,
+        [object]$Actual
+    )
+    if (-not $Expected -or -not $Actual) { return $false }
+    return (
+        ([string]$Expected.holder.processGuid -eq [string]$Actual.holder.processGuid) -and
+        ([string]$Expected.acquiredAtUtc -eq [string]$Actual.acquiredAtUtc)
+    )
+}
+
+function Test-ReviewStartClaimRecoveredStaleTerminalExists {
+    param(
+        [string]$Namespace,
+        [int]$PrNumber,
+        [string]$HeadSha
+    )
+
+    $leaf = Split-Path -Leaf (Get-ReviewStartClaimPath -Namespace $Namespace -PrNumber $PrNumber -HeadSha $HeadSha)
+    $pattern = "$leaf.recovered_stale.*.json"
+    return [bool]@(Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) -File -Filter $pattern -ErrorAction SilentlyContinue).Count
+}
+
 function Test-ReviewStartClaimRunVisible {
     param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
@@ -188,9 +323,20 @@ function Enter-ReviewStartClaimMutex {
     param([string]$LockDir)
     try {
         New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+        Write-ReviewStartClaimMutexOwner -LockDir $LockDir -Owner (New-ReviewStartClaimMutexOwnerRecord -LockDir $LockDir)
         return $true
     }
     catch {
+        if (Recover-ReviewStartClaimMutex -LockDir $LockDir) {
+            try {
+                New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+                Write-ReviewStartClaimMutexOwner -LockDir $LockDir -Owner (New-ReviewStartClaimMutexOwnerRecord -LockDir $LockDir)
+                return $true
+            }
+            catch {
+                return $false
+            }
+        }
         return $false
     }
 }
@@ -286,6 +432,9 @@ function Acquire-ReviewStartClaim {
             if (-not $existing.ok) {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
             }
+            if (Test-ReviewStartClaimRecoveredStaleTerminalExists -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized) {
+                return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
+            }
             if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
                 if ([string]$existing.record.state -eq 'active') {
                     $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $existing.record -Outcome 'run_started' -Extra @{
@@ -307,6 +456,12 @@ function Acquire-ReviewStartClaim {
                 $again = Read-ReviewStartClaimRecord -Path $path
                 if (-not $again.ok) {
                     return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $again.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
+                }
+                if (-not (Test-ReviewStartClaimRecordSameGeneration -Expected $existing.record -Actual $again.record)) {
+                    return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
+                }
+                if (Test-ReviewStartClaimRecoveredStaleTerminalExists -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized) {
+                    return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
                 }
                 if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
                     if ([string]$again.record.state -eq 'active') {
