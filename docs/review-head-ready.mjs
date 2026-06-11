@@ -479,6 +479,7 @@ export function degradedCiTrackingKey(prNumber, headSha) {
  * @param {{ headCommittedAtMs?: number }} input.reportBindingOptions
  * @param {number} input.degradedCiAttempts
  * @param {number} input.maxDegradedCiAttempts
+ * @param {boolean} [input.pendingHandoff]
  */
 function buildDegradedCiRetryDecision({
   session,
@@ -486,6 +487,7 @@ function buildDegradedCiRetryDecision({
   reportBindingOptions,
   degradedCiAttempts,
   maxDegradedCiAttempts,
+  pendingHandoff = false,
 }) {
   const attempts = Math.max(0, Number(degradedCiAttempts) || 0);
   if (attempts >= maxDegradedCiAttempts) {
@@ -496,13 +498,16 @@ function buildDegradedCiRetryDecision({
       degradedCiAttempts: attempts,
     };
   }
+  const handoff = isWorkerDegradedCiHandoff(
+    findLatestAcceptedReportForHead(session, headSha, reportBindingOptions),
+  );
   return {
     eligible: false,
-    reason: isWorkerDegradedCiHandoff(
-      findLatestAcceptedReportForHead(session, headSha, reportBindingOptions),
-    )
-      ? 'degraded_ci_worker_handoff'
-      : 'degraded_ci_visibility',
+    reason: pendingHandoff
+      ? 'degraded_ci_worker_handoff_pending_resolution'
+      : handoff
+        ? 'degraded_ci_worker_handoff'
+        : 'degraded_ci_visibility',
     route: 'degraded_ci_retry',
     degradedCiAttempts: attempts + 1,
   };
@@ -581,12 +586,14 @@ export function evaluateHeadReadyForReview({
   const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
 
   if (degradedHandoff && !readyForReview) {
-    return {
-      eligible: false,
-      reason: 'degraded_ci_worker_handoff_pending_resolution',
-      route: 'degraded_ci_retry',
-      degradedCiAttempts: Math.max(0, Number(degradedCiAttempts) || 0) + 1,
-    };
+    return buildDegradedCiRetryDecision({
+      session,
+      headSha,
+      reportBindingOptions,
+      degradedCiAttempts,
+      maxDegradedCiAttempts,
+      pendingHandoff: true,
+    });
   }
 
   if (readyForReview) {

@@ -316,6 +316,29 @@ describe('evaluateHeadReadyForReview', () => {
     expect(decision.route).not.toBe('degraded_ci_retry');
   });
 
+  it('degraded-CI handoff pending escalates at max attempts', () => {
+    const fixture = loadFixture<{
+      openPrs: { number: number; headRefOid: string }[];
+      reviewRuns: [];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      requiredCheckLookupFailedByPr: Record<string, boolean>;
+    }>('degraded-ci-worker-handoff.json');
+    const pr = fixture.openPrs[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: fixture.reviewRuns,
+      prNumber: pr.number,
+      headSha: pr.headRefOid,
+      session: fixture.sessions[0] as never,
+      ciChecks: [],
+      requiredCheckLookupFailed: true,
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
+      degradedCiAttempts: 3,
+      maxDegradedCiAttempts: 3,
+    });
+    expect(decision.reason).toBe('degraded_ci_escalate_operator');
+    expect(decision.route).toBe('escalate_operator');
+  });
+
   it('(e3) worker degraded-CI handoff is not uncovered-not-ready', () => {
     const fixture = loadFixture<{
       openPrs: { number: number; headRefOid: string }[];
@@ -444,6 +467,23 @@ describe('preRunHeadReadyRecheck', () => {
       };
       expect: { emitReviewRun: boolean; reasonPrefix: string };
     }>('pre-run-abort.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
+  it('Issue #261 AC11c: pre-run recheck resolves single implicit owner for quiescence', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string; startReason: string };
+      fresh: {
+        nowMs: number;
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reasonPrefix: string };
+    }>('pre-run-single-implicit-owner.json');
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));

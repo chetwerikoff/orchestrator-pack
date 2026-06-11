@@ -479,6 +479,14 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
     };
   }
 
+  if (liveImplicitOwners.length === 1) {
+    return {
+      sessionId: getSessionIdentifier(liveImplicitOwners[0]),
+      reason: 'resolved',
+      failClosed: false,
+    };
+  }
+
   if (implicitOwners.some((session) => !isLiveWorkerSession(session))) {
     return {
       sessionId: null,

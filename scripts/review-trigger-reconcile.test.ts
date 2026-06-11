@@ -305,6 +305,28 @@ describe('planReconcileActions', () => {
       expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
     });
 
+    it('resolves a single live implicit owner for strict pre-run validation', () => {
+      expect(
+        resolveStrictHeadOwningWorkerSession(
+          [
+            {
+              name: 'op-implicit',
+              role: 'worker',
+              prNumber: 95,
+              status: 'working',
+            },
+          ],
+          95,
+          'head95ab',
+          [{ number: 95, headRefOid: 'head95ab' }],
+        ),
+      ).toEqual({
+        sessionId: 'op-implicit',
+        reason: 'resolved',
+        failClosed: false,
+      });
+    });
+
     it('AC10d: implicit owner ambiguity still honors ready_for_review report binding', () => {
       const fixture = loadFixture('implicit-ready-report-handoff.json');
       const starts = startReviewActions(planReconcileActions(fixture));
