@@ -1,0 +1,49 @@
+{
+  "description": "Issue #261: reaction pending delivery blocks quiescence when reactionMessages supplied",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 260,
+      "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-37",
+      "role": "worker",
+      "prNumber": 260,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "lastActivity": "20m ago",
+      "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "reports": []
+    }
+  ],
+  "aoEvents": [
+    {
+      "kind": "reaction.action_succeeded",
+      "sessionId": "opk-37",
+      "tsEpoch": 1781095200000,
+      "data": { "action": "send-to-agent", "reactionKey": "report-stale" }
+    }
+  ],
+  "dispatchJournal": {},
+  "ciChecksByPr": {
+    "260": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "reactionMessages": {
+    "report-stale": "Agent report is stale (30 minutes since last report). Continue your task and push fixes when ready. This nudge is long enough to use the pending-draft delivery path so reconcile can observe unconsumed worker input before starting review."
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready"
+  }
+}

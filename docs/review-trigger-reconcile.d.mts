@@ -11,6 +11,10 @@ export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;
 
+export declare function collectSessionIdentifiers(
+  session: AoSession | null | undefined,
+): string[];
+
 export declare function sessionMatchesIdentifier(
   session: AoSession,
   needle: string,

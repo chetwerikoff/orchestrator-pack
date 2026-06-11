@@ -13,6 +13,7 @@ import {
   findForbiddenLifecycleCommands,
   isHeadCovered,
   isRunCoveringHead,
+  collectSessionIdentifiers,
   findSessionById,
   getSessionIdentifier,
   isLiveWorkerSession,
@@ -252,6 +253,22 @@ describe('planReconcileActions', () => {
       expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
     });
 
+    it('AC3a-alt: pending delivery keyed by sessionId matches display name owner', () => {
+      const fixture = loadFixture('quiescent-pending-delivery-dual-id.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
+    });
+
+    it('AC3b: reaction pending delivery defers when reactionMessages supplied', () => {
+      const fixture = loadFixture('quiescent-reaction-pending.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      const withoutMessages = planReconcileActions({
+        ...fixture,
+        reactionMessages: {},
+      });
+      expect(startReviewActions(withoutMessages)).toHaveLength(1);
+    });
+
     it('AC5: stale ready on older head with quiescent owner starts', () => {
       const fixture = loadFixture('stale-ready-quiescent-starts.json');
       const starts = startReviewActions(planReconcileActions(fixture));
@@ -327,6 +344,18 @@ describe('getSessionIdentifier', () => {
     expect(getSessionIdentifier({ sessionId: 'op-b' })).toBe('op-b');
     expect(getSessionIdentifier({ id: 'op-c' })).toBe('op-c');
     expect(getSessionIdentifier({})).toBeNull();
+  });
+});
+
+describe('collectSessionIdentifiers', () => {
+  it('returns every non-empty identifier field', () => {
+    expect(
+      collectSessionIdentifiers({
+        name: 'opk-display',
+        sessionId: 'opk-stable',
+        id: 'legacy-id',
+      }),
+    ).toEqual(['opk-display', 'opk-stable', 'legacy-id']);
   });
 });
 

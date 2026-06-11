@@ -110,6 +110,25 @@ function Get-ReconcileChecksByPr {
         -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as degraded'
 }
 
+function Get-ReconcileReactionMessages {
+    param(
+        [object]$Fixture
+    )
+
+    if ($Fixture -and $Fixture.reactionMessages) {
+        $map = @{}
+        foreach ($prop in $Fixture.reactionMessages.PSObject.Properties) {
+            $map[$prop.Name] = [string]$prop.Value
+        }
+        return $map
+    }
+
+    return @{
+        'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
+        'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    }
+}
+
 function Get-FixtureReconcilePayload {
     param([string]$Path)
 
@@ -148,6 +167,7 @@ function Get-FixtureReconcilePayload {
         }
         $payload.dispatchJournal = $dispatchJournal
     }
+    $payload.reactionMessages = Get-ReconcileReactionMessages -Fixture $fixture
     return $payload
 }
 
@@ -166,9 +186,10 @@ function Get-ReconcileDeliveryPayload {
     }
 
     return @{
-        aoEvents        = @(Get-AoEventsSince -SinceMinutes 30)
-        dispatchJournal = Get-WorkerMessageDispatchJournal
-        reviewRuns      = @(Get-AoReviewRuns -Project $Project)
+        aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
+        dispatchJournal    = Get-WorkerMessageDispatchJournal
+        reviewRuns         = @(Get-AoReviewRuns -Project $Project)
+        reactionMessages   = Get-ReconcileReactionMessages
     }
 }
 
@@ -196,6 +217,7 @@ function Get-PreRunRecheckSnapshot {
         aoEvents                        = @($deliveryPayload.aoEvents)
         dispatchJournal                 = $deliveryPayload.dispatchJournal
         workerDeliveries                = @($deliveryPayload.workerDeliveries)
+        reactionMessages                = $deliveryPayload.reactionMessages
     }
 }
 
@@ -231,6 +253,7 @@ function Test-PreRunHeadReadyRecheck {
             aoEvents                      = @($fresh.aoEvents)
             dispatchJournal               = $fresh.dispatchJournal
             workerDeliveries              = @($fresh.workerDeliveries)
+            reactionMessages              = $fresh.reactionMessages
             nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
     }
@@ -339,6 +362,7 @@ function Invoke-ReconcileTick {
             aoEvents                      = @($payload.aoEvents)
             dispatchJournal               = $payload.dispatchJournal
             workerDeliveries              = @($payload.workerDeliveries)
+            reactionMessages              = $payload.reactionMessages
         }
     }
     else {
@@ -356,6 +380,7 @@ function Invoke-ReconcileTick {
             requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
             aoEvents                      = @($deliveryPayload.aoEvents)
             dispatchJournal               = $deliveryPayload.dispatchJournal
+            reactionMessages              = $deliveryPayload.reactionMessages
         }
         $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
     }

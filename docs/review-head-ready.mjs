@@ -19,6 +19,7 @@ import {
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
 import {
+  collectSessionIdentifiers,
   findCoveringRunForHead,
   findFailedOrCancelledRunForHead,
   findSessionById,
@@ -254,16 +255,28 @@ export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
  * @param {Array<Record<string, unknown>>} workerDeliveries
  */
 export function hasPendingUnconsumedDelivery(session, sessionId, workerDeliveries = []) {
-  const needle = String(sessionId ?? '').trim();
-  if (!needle || !session) {
+  if (!session) {
     return false;
   }
-  const surviving = selectSurvivingDelivery(toArray(workerDeliveries), needle);
-  if (!surviving) {
+  const needles = collectSessionIdentifiers(session);
+  const fallback = String(sessionId ?? '').trim();
+  if (fallback && !needles.includes(fallback)) {
+    needles.push(fallback);
+  }
+  if (needles.length === 0) {
     return false;
   }
-  const deliveredAtMs = Number(surviving.deliveredAtMs ?? 0);
-  return !isDeliveryConsumed(session, surviving, deliveredAtMs);
+  for (const needle of needles) {
+    const surviving = selectSurvivingDelivery(toArray(workerDeliveries), needle);
+    if (!surviving) {
+      continue;
+    }
+    const deliveredAtMs = Number(surviving.deliveredAtMs ?? 0);
+    if (!isDeliveryConsumed(session, surviving, deliveredAtMs)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

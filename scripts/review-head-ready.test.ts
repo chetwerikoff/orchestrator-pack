@@ -6,6 +6,7 @@ import {
   classifyRequiredCiForReviewTrigger,
   evaluateHeadReadyForReview,
   evaluateQuiescentHandoffFallback,
+  hasPendingUnconsumedDelivery,
   hasReadyForReviewForHead,
   isWorkerActivelyWorking,
   isWorkerDegradedCiHandoff,
@@ -313,6 +314,23 @@ describe('Issue #261 quiescence helpers', () => {
         { debounceMs: QUIESCENCE_DEBOUNCE_MS },
       ),
     ).toBe(true);
+  });
+
+  it('hasPendingUnconsumedDelivery matches deliveries keyed by any session identifier', () => {
+    const session = {
+      name: 'opk-37',
+      sessionId: 'opk-37-stable',
+      reports: [],
+    } as never;
+    const deliveries = [
+      {
+        deliveryId: 'opk-37-stable:1:pack-send:ci-green',
+        sessionId: 'opk-37-stable',
+        deliveredAtMs: 1,
+        deliveryPath: 'pending-draft',
+      },
+    ];
+    expect(hasPendingUnconsumedDelivery(session, 'opk-37', deliveries)).toBe(true);
   });
 
   it('evaluateQuiescentHandoffFallback matches PR #260 idle owner', () => {

@@ -190,6 +190,23 @@ export function getSessionIdentifier(session) {
 }
 
 /**
+ * All non-empty session identifiers (name, sessionId, id) for delivery matching.
+ *
+ * @param {AoSession | null | undefined} session
+ */
+export function collectSessionIdentifiers(session) {
+  /** @type {string[]} */
+  const ids = [];
+  for (const field of [session?.name, session?.sessionId, session?.id]) {
+    const value = String(field ?? '').trim();
+    if (value && !ids.includes(value)) {
+      ids.push(value);
+    }
+  }
+  return ids;
+}
+
+/**
  * True when needle matches any stable session identifier field (name, sessionId, id).
  * Review runs may store linkedSessionId as sessionId while status rows also carry name.
  *
