@@ -274,27 +274,38 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter "review-wake-trigger: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
-    $fresh = if ($FixtureSnapshot) {
-        $FixtureSnapshot
-    }
-    else {
-        Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
-    }
-    $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
-    $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
-        planned = @{
-            prNumber  = $planned.prNumber
-            headSha   = $planned.headSha
-            sessionId = $planned.sessionId
+    try {
+        $fresh = if ($FixtureSnapshot) {
+            $FixtureSnapshot
         }
-        fresh   = @{
-            openPrs                     = @($fresh.openPrs)
-            reviewRuns                  = @($fresh.reviewRuns)
-            sessions                    = @($fresh.sessions)
-            ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
-            requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
-            requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+        else {
+            Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
         }
+        $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
+            planned = @{
+                prNumber  = $planned.prNumber
+                headSha   = $planned.headSha
+                sessionId = $planned.sessionId
+            }
+            fresh   = @{
+                openPrs                     = @($fresh.openPrs)
+                reviewRuns                  = @($fresh.reviewRuns)
+                sessions                    = @($fresh.sessions)
+                ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
+                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
+                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+            }
+        }
+    }
+    catch {
+        if (-not $DryRun) {
+            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
+                reason = 'pre_run_recheck_exception'
+                error  = [string]$_
+            } | Out-Null
+        }
+        throw
     }
 
     if (-not $recheck.emitReviewRun) {

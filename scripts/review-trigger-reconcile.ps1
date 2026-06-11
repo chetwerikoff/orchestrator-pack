@@ -309,12 +309,21 @@ function Invoke-PlannedReviewRun {
         Write-ReconcileLog "review-start-claim recovered stale claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
-    $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
-        prNumber    = $PrNumber
-        headSha     = $HeadSha
-        sessionId   = $SessionId
-        startReason = $StartReason
-    } -Project $Project -FixtureSnapshot $FixtureSnapshot
+    try {
+        $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
+            prNumber    = $PrNumber
+            headSha     = $HeadSha
+            sessionId   = $SessionId
+            startReason = $StartReason
+        } -Project $Project -FixtureSnapshot $FixtureSnapshot
+    }
+    catch {
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
+            reason = 'pre_run_recheck_exception'
+            error  = [string]$_
+        } | Out-Null
+        throw
+    }
 
     if (-not $recheck.emitReviewRun) {
         Write-ReconcileLog "pre-run re-check aborted review for PR #$PrNumber head=$HeadSha ($($recheck.reason))"

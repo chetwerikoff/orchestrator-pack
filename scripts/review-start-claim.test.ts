@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+const reevalInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
 const guardPath = path.join(repoRoot, 'scripts/check-review-start-claim-guard.ps1');
 const fullSha = 'fd2fdb6600000000000000000000000000000000';
 
@@ -182,6 +183,75 @@ describe('Review-StartClaim single-flight contract', () => {
     const result = JSON.parse(output);
     expect(result.minutes).toBe(2);
     expect(result.messages.join('\n')).toContain('below safe floor');
+  });
+
+  it('releases a held reeval claim when the in-claim recheck snapshot throws', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(reevalInvokePath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $calls = 0
+        try {
+          $params = @{
+            Action = @{ prNumber=266; headSha=$sha; sessionId='opk-52' }
+            ReviewCommand = 'echo review'
+            StateRoot = $ns
+            ResolveFreshSnapshot = {
+              param($planned)
+              $script:calls++
+              if ($script:calls -eq 1) {
+                return @{ reviewRuns=@(); openPrs=@(); sessions=@(); ciChecksByPr=@{}; requiredCheckNamesByPr=@{}; requiredCheckLookupFailedByPr=@{} }
+              }
+              throw 'fresh snapshot exploded'
+            }
+            LogWriter = { param($m) }
+          }
+          Invoke-ReviewTriggerReevalPlannedRun @params | Out-Null
+        }
+        catch { }
+        $path = Get-ReviewStartClaimPath -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -PrNumber 266 -HeadSha $sha
+        $terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns)) -Filter '*released_for_retry*.json').Name)
+        [pscustomobject]@{ activeExists=(Test-Path -LiteralPath $path); terminal=$terminal; calls=$calls } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.calls).toBe(2);
+      expect(result.activeExists).toBe(false);
+      expect(result.terminal).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops a reeval watch when a visible covering run is found under an existing claim', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(reevalInvokePath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -ReviewRuns @() | Out-Null
+        $params = @{
+          Action = @{ prNumber=266; headSha=$sha; sessionId='opk-52' }
+          ReviewCommand = 'echo review'
+          StateRoot = $ns
+          ResolveFreshSnapshot = {
+            param($planned)
+            return @{ reviewRuns=@(@{ prNumber=266; targetSha=$sha; status='queued' }); openPrs=@(); sessions=@(); ciChecksByPr=@{}; requiredCheckNamesByPr=@{}; requiredCheckLookupFailedByPr=@{} }
+          }
+          LogWriter = { param($m) }
+        }
+        $result = Invoke-ReviewTriggerReevalPlannedRun @params
+        $result | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('covered_by_run');
+      expect(result.retainWatch).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

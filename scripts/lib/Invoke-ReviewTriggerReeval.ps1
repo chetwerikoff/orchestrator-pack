@@ -70,35 +70,46 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         & $LogWriter "review-trigger-reeval: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
         return @{
             triggered   = $false
-            reason      = 'claim_skipped'
-            retainWatch = $true
+            reason      = [string]$claim.reason
+            retainWatch = ([string]$claim.reason -ne 'covered_by_run')
         }
     }
     if ($claim.recovered) {
         & $LogWriter "review-trigger-reeval: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
-    $fresh = if ($FixtureSnapshot) {
-        $FixtureSnapshot
-    }
-    elseif ($ResolveFreshSnapshot) {
-        & $ResolveFreshSnapshot $planned
-    }
-    else {
-        throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
-    }
-
-    $prKey = [string]$planned.prNumber
-    $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
-        planned = $planned
-        fresh   = @{
-            openPrs                     = @($fresh.openPrs)
-            reviewRuns                  = @($fresh.reviewRuns)
-            sessions                    = @($fresh.sessions)
-            ciChecks                    = @($fresh.ciChecksByPr[$prKey])
-            requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
-            requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
+    try {
+        $fresh = if ($FixtureSnapshot) {
+            $FixtureSnapshot
         }
+        elseif ($ResolveFreshSnapshot) {
+            & $ResolveFreshSnapshot $planned
+        }
+        else {
+            throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
+        }
+
+        $prKey = [string]$planned.prNumber
+        $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
+            planned = $planned
+            fresh   = @{
+                openPrs                     = @($fresh.openPrs)
+                reviewRuns                  = @($fresh.reviewRuns)
+                sessions                    = @($fresh.sessions)
+                ciChecks                    = @($fresh.ciChecksByPr[$prKey])
+                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
+                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
+            }
+        }
+    }
+    catch {
+        if (-not $DryRun) {
+            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
+                reason = 'pre_run_recheck_exception'
+                error  = [string]$_
+            } | Out-Null
+        }
+        throw
     }
 
     if (-not $recheck.emitReviewRun) {
