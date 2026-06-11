@@ -1069,3 +1069,13 @@ adoption beyond normal CI.
    reviewers see the reference diff.
 
 **Owner:** orchestrator-pack maintainers / PR author touching trigger fixtures.
+
+## Read-delegation audit reviewer-path capability (#264)
+
+Post-merge, no machine-local hook JSON rewrite is required if Claude and Cursor
+already invoke `scripts/invoke-read-delegation-audit-stop.ps1`. Operators should
+run a fresh no-side-effect ordinary session on each surface and confirm the live
+JSONL artifact records `reviewerPath:false` and `inDenominator:true` for an
+ordinary trigger-firing unit. The metric summary now also exposes
+`denominatorCause` and `reviewHookCaptureBranch`; `unknown` capability or
+`all-excluded` denominator cause is degraded/fail-loud, not a clean zero.

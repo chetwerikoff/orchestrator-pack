@@ -1,0 +1,30 @@
+{
+  "kind": "read-delegation-review-hook-capture.v1",
+  "branch": "world-a-no-review-hook",
+  "surfaces": [
+    "cursor",
+    "claude"
+  ],
+  "derivesCapabilityRecord": "docs/read-delegation-review-hook-capability.json",
+  "ordinaryPositiveControl": {
+    "emittedAuditEvent": true,
+    "reviewerPath": false,
+    "inDenominator": true
+  },
+  "reviewExecution": {
+    "entrypoint": "scripts/invoke-pack-review.ps1",
+    "terminalStatus": "dry-run-success",
+    "reachedEmissionStage": true,
+    "emittedAuditEvent": false,
+    "externalMutation": "none"
+  },
+  "hookWiringFingerprint": {
+    "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
+    "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
+    "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
+  },
+  "codeHashes": {
+    "docs/read-delegation-audit.mjs": "0c2101e900d3b6bf9c8075a3076e6191fb026628b59cbd9b66ccd3e9971870ab",
+    "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+  }
+}

@@ -60,9 +60,22 @@ if (-not $payload.PSObject.Properties.Match('surface').Count) {
 }
 
 if (-not $payload.PSObject.Properties.Match('env').Count) {
+  # Ambient reviewer-selection values are carried only as ambient environment
+  # evidence; the audit predicate must not treat them as a per-work-unit
+  # review-execution marker.
   $payload | Add-Member -NotePropertyName env -NotePropertyValue ([ordered]@{
       PACK_REVIEWER   = $env:PACK_REVIEWER
       REVIEW_COMMAND  = $env:REVIEW_COMMAND
+      REVIEW_SIGNAL_SOURCE = 'ambient-env'
+    }) -Force
+}
+
+if (-not $payload.PSObject.Properties.Match('hookWiringFingerprint').Count) {
+  $wrapperHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $payload | Add-Member -NotePropertyName hookWiringFingerprint -NotePropertyValue ([ordered]@{
+      wrapper = 'scripts/invoke-read-delegation-audit-stop.ps1'
+      wrapperHash = $wrapperHash
+      commandShape = 'pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]'
     }) -Force
 }
 

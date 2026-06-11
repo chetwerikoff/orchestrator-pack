@@ -1,0 +1,68 @@
+{
+  "kind": "read-delegation-review-hook-capability.v1",
+  "schemaVersion": 1,
+  "description": "Scrubbed capability record for issue #264. World (a): bounded dry-run capture of the tracked pack-review entrypoint reached the no-publish terminal stage and emitted no read-delegation audit work-unit event; positive-control ordinary stop-hook payload emitted an audit event under the same wrapper. Values are redacted; hashes/fingerprints are machine-checkable.",
+  "derivation": "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json",
+  "surfaces": {
+    "cursor": {
+      "surface": "cursor",
+      "branch": "world-a-no-review-hook",
+      "entrypoint": {
+        "identity": "scripts/invoke-pack-review.ps1",
+        "terminalStatus": "dry-run-success",
+        "reachedEmissionStage": true,
+        "externalMutation": "none"
+      },
+      "positiveControlEventKey": "positive-control-cursor",
+      "observedProcessBoundary": "parent-plus-child-process-tree",
+      "credentialBoundary": {
+        "mode": "null-dry-run-transport",
+        "envAllowlist": [
+          "PATH",
+          "HOME",
+          "SystemRoot"
+        ],
+        "credentialValuesSerialized": false
+      },
+      "hookWiringFingerprint": {
+        "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
+        "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
+        "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
+      },
+      "codeHashes": {
+        "docs/read-delegation-audit.mjs": "0c2101e900d3b6bf9c8075a3076e6191fb026628b59cbd9b66ccd3e9971870ab",
+        "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+      }
+    },
+    "claude": {
+      "surface": "claude",
+      "branch": "world-a-no-review-hook",
+      "entrypoint": {
+        "identity": "scripts/invoke-pack-review.ps1",
+        "terminalStatus": "dry-run-success",
+        "reachedEmissionStage": true,
+        "externalMutation": "none"
+      },
+      "positiveControlEventKey": "positive-control-claude",
+      "observedProcessBoundary": "parent-plus-child-process-tree",
+      "credentialBoundary": {
+        "mode": "null-dry-run-transport",
+        "envAllowlist": [
+          "PATH",
+          "HOME",
+          "SystemRoot"
+        ],
+        "credentialValuesSerialized": false
+      },
+      "hookWiringFingerprint": {
+        "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
+        "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
+        "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
+      },
+      "codeHashes": {
+        "docs/read-delegation-audit.mjs": "0c2101e900d3b6bf9c8075a3076e6191fb026628b59cbd9b66ccd3e9971870ab",
+        "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+      }
+    }
+  }
+}
