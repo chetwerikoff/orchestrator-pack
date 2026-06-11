@@ -37,8 +37,9 @@ what gets built, in what order, with what boundaries. The planner
  For a **non-trivial build** (new component/contract/service), run that skill's
  **pre-draft design-analysis gate first** — critical mechanics, world practices,
  architecture sketch, and ≥3 cost/risk-judged options — before proposing or
- writing the draft. Then invoke **`publish-issue-draft`** (default) to commit,
- PR, and merge the spec to `main` unless the user opts out.
+ writing the draft. Then invoke **`publish-issue-draft`** (default **sync-only:**
+ the Issue is the queue, the draft stays local) — commit, PR, and merge the spec
+ to `main` only when the user explicitly asks to publish/ship the draft.
 - **Before proposing a non-trivial build at all — even verbally, with no draft
   yet** (a new component/contract/service) — answer the same design questions
   first: critical mechanics (patterns, data structures, integrations, boundary
