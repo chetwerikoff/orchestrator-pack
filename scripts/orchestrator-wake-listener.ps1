@@ -109,6 +109,8 @@ $script:dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $lastAcceptedAt = $null
 $quietCheckSeconds = 300
 $sideEffectLockPath = Get-ReviewWakeTriggerSideEffectLockPath -StateRoot $SideEffectStateDir
+$claimNamespace = Resolve-ReviewStartClaimNamespace -StateRoot $SideEffectStateDir
+Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ListenerLog $m } | Out-Null
 $fixtureSnapshot = $null
 if ($FixturePath) {
     $fixture = Get-Content -LiteralPath $FixturePath -Raw | ConvertFrom-Json
@@ -142,7 +144,7 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
 }
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 
-Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, project=$projectId, dedup=${DedupWindowSeconds}s, dryRun=$DryRun, reviewWakeTrigger=on)"
+Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, project=$projectId, dedup=${DedupWindowSeconds}s, claimNamespace=$claimNamespace, dryRun=$DryRun, reviewWakeTrigger=on)"
 
 $httpListener = New-Object System.Net.HttpListener
 $httpListener.Prefixes.Add($prefix)

@@ -1,0 +1,11 @@
+[
+  {
+    "id": "opk-rev-221",
+    "projectId": "orchestrator-pack",
+    "prNumber": 260,
+    "targetSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "linkedSessionId": "opk-40",
+    "status": "clean",
+    "createdAt": "2026-06-11T04:20:00.000Z"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "266:fd2fdb66": {
+    "prNumber": 266,
+    "headSha": "fd2fdb6600000000000000000000000000000000",
+    "sessionId": "opk-52",
+    "source": "wake_defer",
+    "deferReason": "uncovered_not_ready",
+    "createdAtUtc": "2026-06-11T04:29:57.000Z",
+    "expiresAtUtc": "2026-06-11T04:34:57.000Z"
+  }
+}

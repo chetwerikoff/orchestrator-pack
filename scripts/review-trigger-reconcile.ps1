@@ -45,6 +45,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-ReconcileIntervalMinutes {
@@ -289,7 +290,23 @@ function Invoke-PlannedReviewRun {
 
     if ($DryRunMode) {
         Write-ReconcileLog "dry-run would run: $commandLine (PR #$PrNumber head=$HeadSha)"
-        return
+        return @{ started = $true; reason = 'dry_run' }
+    }
+
+    $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $Project) }
+    $claim = Acquire-ReviewStartClaim -PrNumber $PrNumber -HeadSha $HeadSha -Surface 'review-trigger-reconcile' `
+        -ReviewRuns $claimRuns -StartReason $StartReason -LogWriter { param($m) Write-ReconcileLog $m }
+    if (-not $claim.acquired) {
+        if ($claim.escalation) {
+            Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): $($claim.reason) $($claim.detail)"
+            return @{ started = $false; reason = [string]$claim.reason; escalated = $true }
+        }
+        $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
+        Write-ReconcileLog "claim-skip PR #$PrNumber head=$HeadSha key=$($claim.key): held by $holder reason=$($claim.reason)"
+        return @{ started = $false; reason = [string]$claim.reason; claimSkipped = $true }
+    }
+    if ($claim.recovered) {
+        Write-ReconcileLog "review-start-claim recovered stale claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
     $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
@@ -301,23 +318,46 @@ function Invoke-PlannedReviewRun {
 
     if (-not $recheck.emitReviewRun) {
         Write-ReconcileLog "pre-run re-check aborted review for PR #$PrNumber head=$HeadSha ($($recheck.reason))"
-        return
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true }
     }
 
-    Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
+        Write-ReconcileLog "review-start-claim ownership lost before invocation PR #$PrNumber head=$HeadSha key=$($claim.key); aborting"
+        return @{ started = $false; reason = 'claim_ownership_lost' }
+    }
+
+    try {
+        Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+    }
+    catch {
+        Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
+        throw
+    }
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
-            throw "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+            $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+            $postFailureRuns = @(Get-AoReviewRuns -Project $Project)
+            Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+            throw $failure
         }
     }
     if (-not $fenced.ok) {
         Write-ReconcileLog "review run skipped (side-effect busy) PR #$PrNumber"
-        return
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{ reason = 'side_effect_in_flight' } | Out-Null
+        return @{ started = $false; reason = 'side_effect_in_flight' }
     }
+
+    $postRuns = @(Get-AoReviewRuns -Project $Project)
+    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    if (-not $complete.ok) {
+        Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"
+    }
+    return @{ started = $true; reason = 'started' }
 }
 
 function Merge-DegradedCiTracking {
@@ -431,10 +471,12 @@ function Invoke-ReconcileTick {
             Write-ReconcileLog "quiescent handoff fallback PR #$($action.prNumber) head=$($action.headSha) session=$($action.sessionId) basis=$basis"
         }
 
-        Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
+        $startResult = Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
             -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -StartReason $action.startReason
-        $started++
+        if ($startResult.started) {
+            $started++
+        }
     }
 
     return @{
@@ -455,7 +497,9 @@ else {
     if (Test-Path -LiteralPath $live -PathType Leaf) { $live } else { Join-Path $PackRoot 'agent-orchestrator.yaml.example' }
 }
 
-Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+$claimNamespace = Resolve-ReviewStartClaimNamespace
+Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null
+Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 
 if ($FixturePath) {
     $state = Get-ReconcileState -Path $statePath

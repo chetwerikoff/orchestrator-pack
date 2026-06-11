@@ -1,0 +1,229 @@
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { describe, expect, it } from 'vitest';
+
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+const guardPath = path.join(repoRoot, 'scripts/check-review-start-claim-guard.ps1');
+const fullSha = 'fd2fdb6600000000000000000000000000000000';
+
+function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
+  const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, ...extraEnv },
+  });
+  if (result.status !== 0) {
+    throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+function tempClaimDir() {
+  return mkdtempSync(path.join(tmpdir(), 'review-start-claim-'));
+}
+
+function psString(value: string) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+describe('Review-StartClaim single-flight contract', () => {
+  it('races three automated surfaces on the incident PR/head and produces one winner plus attributable claim skips', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        $helper = ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $surfaces = @('review-trigger-reeval','review-trigger-reconcile','review-wake-trigger')
+        $jobs = foreach ($surface in $surfaces) {
+          Start-Job -ArgumentList $helper,$ns,$surface,$sha -ScriptBlock {
+            param($helper,$ns,$surface,$sha)
+            . $helper
+            $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface $surface -Namespace $ns -ReviewRuns @()
+            [pscustomobject]@{
+              surface = $surface
+              acquired = [bool]$r.acquired
+              reason = [string]$r.reason
+              holder = if ($r.holder) { Format-ReviewStartClaimHolder -Holder $r.holder } else { '' }
+              key = [string]$r.key
+            } | ConvertTo-Json -Compress
+          }
+        }
+        $rows = $jobs | Receive-Job -Wait -AutoRemoveJob | ForEach-Object { $_ | ConvertFrom-Json }
+        $rows | ConvertTo-Json -Compress
+      `;
+      const rows = JSON.parse(runPwsh(script));
+      expect(rows.filter((r: any) => r.acquired)).toHaveLength(1);
+      const losers = rows.filter((r: any) => !r.acquired);
+      expect(losers).toHaveLength(2);
+      expect(losers.every((r: any) => r.reason === 'claimed')).toBe(true);
+      expect(losers.every((r: any) => String(r.holder).includes('processGuid='))).toBe(true);
+      expect(new Set(rows.map((r: any) => r.key))).toEqual(new Set([`pr-266-${fullSha}`]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers one stale crashed claimant under concurrent recoverers and keeps an audit record', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'crashed-starter' -Reason 'fixture'
+        $record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
+        Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha) -Record $record
+        $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
+        $jobs = foreach ($surface in @('recoverer-a','recoverer-b')) {
+          Start-Job -ArgumentList ${psString(helperPath)},$ns,$surface,$sha -ScriptBlock {
+            param($helper,$ns,$surface,$sha)
+            . $helper
+            $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
+            $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface $surface -Namespace $ns -ReviewRuns @()
+            [pscustomobject]@{ surface=$surface; acquired=[bool]$r.acquired; recovered=[bool]$r.recovered; reason=[string]$r.reason } | ConvertTo-Json -Compress
+          }
+        }
+        $rows = $jobs | Receive-Job -Wait -AutoRemoveJob | ForEach-Object { $_ | ConvertFrom-Json }
+        [pscustomobject]@{
+          rows = @($rows)
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
+        } | ConvertTo-Json -Compress -Depth 6
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.rows.filter((r: any) => r.acquired && r.recovered)).toHaveLength(1);
+      expect(result.rows.filter((r: any) => !r.acquired)).toHaveLength(1);
+      expect(result.terminal).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for ambiguous partial/unreadable records, divergent SHA forms, and anomalous timestamps', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $path = Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha
+        Set-Content -LiteralPath $path -Value '{' -Encoding UTF8
+        $partial = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace $ns -ReviewRuns @()
+        Remove-Item -LiteralPath $path -Force
+        $future = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'future' -Reason 'fixture'
+        $future.acquiredAtUtc = (Get-Date).ToUniversalTime().AddDays(1).ToString('o')
+        Write-ReviewStartClaimAtomic -Path $path -Record $future
+        $futureResult = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
+        $short = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha 'fd2fdb66' -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          partial = @{ acquired=[bool]$partial.acquired; escalation=[bool]$partial.escalation; reason=[string]$partial.reason; detail=[string]$partial.detail }
+          future = @{ acquired=[bool]$futureResult.acquired; escalation=[bool]$futureResult.escalation; reason=[string]$futureResult.reason; detail=[string]$futureResult.detail }
+          short = @{ acquired=[bool]$short.acquired; escalation=[bool]$short.escalation; reason=[string]$short.reason }
+        } | ConvertTo-Json -Compress -Depth 6
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.partial).toMatchObject({ acquired: false, escalation: true, reason: 'ambiguous_claim' });
+      expect(result.future).toMatchObject({ acquired: false, escalation: true, reason: 'ambiguous_claim' });
+      expect(result.future.detail).toBe('future_timestamp');
+      expect(result.short).toMatchObject({ acquired: false, escalation: true, reason: 'storage_failure' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the claim active across invocation lag, releases for retry after definitive failure, and supports operator resolution', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $second = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace $ns -ReviewRuns @()
+        $release = Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure 'fixture non-zero'
+        $retry = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
+        Complete-ReviewStartClaim -ClaimResult $retry -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason='covered_after_claim' } | Out-Null
+        $badPath = Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha
+        Set-Content -LiteralPath $badPath -Value '{' -Encoding UTF8
+        $resolved = Resolve-ReviewStartClaimEscalation -PrNumber 266 -HeadSha $sha -Namespace $ns -ReviewRuns @(@{ prNumber=266; targetSha=$sha; status='queued' })
+        [pscustomobject]@{
+          second = @{ acquired=[bool]$second.acquired; reason=[string]$second.reason }
+          release = @{ ok=[bool]$release.ok; outcome=[string]$release.outcome }
+          retry = @{ acquired=[bool]$retry.acquired }
+          resolved = $resolved
+          activeExists = Test-Path -LiteralPath $badPath
+        } | ConvertTo-Json -Compress -Depth 8
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.second).toMatchObject({ acquired: false, reason: 'claimed' });
+      expect(result.release).toMatchObject({ ok: true, outcome: 'released_for_retry' });
+      expect(result.retry).toMatchObject({ acquired: true });
+      expect(result.resolved.outcome).toBe('operator_resolved_covered');
+      expect(result.activeExists).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('clamps unsafe recovery intervals with a visible warning', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $messages = @()
+      $env:AO_REVIEW_CLAIM_STALE_MINUTES = '1'
+      $minutes = Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) $script:messages += $m }
+      [pscustomobject]@{ minutes=$minutes; messages=$messages } | ConvertTo-Json -Compress
+    `);
+    const result = JSON.parse(output);
+    expect(result.minutes).toBe(2);
+    expect(result.messages.join('\n')).toContain('below safe floor');
+  });
+});
+
+describe('review-start claim drift guard', () => {
+  it('passes shipped automated starter surfaces', () => {
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, '-RepoRoot', repoRoot], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it('fails direct and indirect unclaimed automated review-run fixtures and governed noninteractive allowlist entries', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claim-guard-fixture-'));
+    try {
+      mkdirSync(path.join(root, 'scripts/lib'), { recursive: true });
+      writeFileSync(path.join(root, 'scripts/bad-direct.ps1'), "& ao review run opk-1 --execute --command 'x'\n");
+      writeFileSync(path.join(root, 'scripts/lib/bad-helper.ps1'), "function Invoke-Bad { & ao @('review','run','opk-1','--execute','--command','x') }\n");
+      writeFileSync(path.join(root, 'scripts/bad-indirect.ps1'), ". `$PSScriptRoot/lib/bad-helper.ps1\nInvoke-Bad\n");
+      writeFileSync(path.join(root, 'scripts/manual.ps1'), "& ao review run opk-1 --execute --command 'x'\n");
+      const allow = path.join(root, 'allow.json');
+      writeFileSync(allow, JSON.stringify([{ path: 'scripts/manual.ps1', justification: 'fixture', interactiveOnly: false }]));
+      const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, '-RepoRoot', root, '-AllowlistPath', allow], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain('bad-direct.ps1');
+      expect(result.stdout + result.stderr).toContain('bad-indirect.ps1');
+      expect(result.stdout + result.stderr).toContain('allowlist entry is not interactive-only');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('incident capture fixtures', () => {
+  it('keeps redacted production-shaped PR #266 incident captures in the repo', () => {
+    const list = JSON.parse(readFileSync(path.join(repoRoot, 'tests/fixtures/review-start-claim/incident-pr266-review-list.json'), 'utf8'));
+    const watch = JSON.parse(readFileSync(path.join(repoRoot, 'tests/fixtures/review-start-claim/incident-pr266-reeval-watch.json'), 'utf8'));
+    expect(list.every((run: any) => run.prNumber !== 266 || run.targetSha !== fullSha)).toBe(true);
+    expect(watch['266:fd2fdb66']?.headSha).toBe(fullSha);
+    expect(watch['266:fd2fdb66']?.source).toBe('wake_defer');
+  });
+});
