@@ -364,6 +364,38 @@ describe('evaluateHeadReadyForReview', () => {
 });
 
 describe('mergeWorkerDeliveriesFromPlanInput', () => {
+  it('merges explicit deliveries with synthesized reaction deliveries', () => {
+    const deliveries = mergeWorkerDeliveriesFromPlanInput({
+      workerDeliveries: [
+        {
+          deliveryId: 'journal:opk-37:pack-send',
+          sessionId: 'opk-37',
+          deliveredAtMs: 1781095000000,
+          deliveryPath: 'journal',
+        },
+      ],
+      aoEvents: [
+        {
+          kind: 'reaction.action_succeeded',
+          sessionId: 'opk-37',
+          tsEpoch: 1781095200000,
+          data: { action: 'send-to-agent', reactionKey: 'report-stale' },
+        },
+      ],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: {
+        'report-stale':
+          'Agent report is stale (30 minutes since last report). Continue your task and push fixes when ready. This nudge is long enough to use the pending-draft delivery path so reconcile can observe unconsumed worker input before starting review.',
+      },
+      nowMs: 1781096400000,
+    });
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries.map((row) => row.deliveryId)).toEqual(
+      expect.arrayContaining(['journal:opk-37:pack-send', expect.stringContaining('opk-37')]),
+    );
+  });
+
   it('ignores null explicit delivery placeholders and merges aoEvents', () => {
     const deliveries = mergeWorkerDeliveriesFromPlanInput({
       workerDeliveries: [null as unknown as Record<string, unknown>],
@@ -521,6 +553,22 @@ describe('preRunHeadReadyRecheck', () => {
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
+  it('aborts when fail-closed ownership would reuse a ready planned session', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reason: string };
+    }>('pre-run-fail-closed-ready-report.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toBe(fixture.expect.reason);
   });
 
   it('aborts non-quiescent start when strict head owner drifts before run', () => {

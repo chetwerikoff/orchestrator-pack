@@ -238,19 +238,42 @@ export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
   const explicit = toArray(input.workerDeliveries).filter(
     (entry) => entry != null && typeof entry === 'object',
   );
-  if (
-    explicit.length > 0 ||
-    (!input.aoEvents && !input.dispatchJournal && !input.reviewRuns)
-  ) {
+  const hasSynthesisSources =
+    input.aoEvents != null ||
+    input.dispatchJournal != null ||
+    input.reviewRuns != null;
+  const synthesized = hasSynthesisSources
+    ? mergeDeliveryRecords({
+        aoEvents: toArray(input.aoEvents),
+        dispatchJournal: input.dispatchJournal ?? {},
+        reviewRuns: toArray(input.reviewRuns),
+        reactionMessages: input.reactionMessages ?? {},
+        nowMs: Number(input.nowMs) || Date.now(),
+      })
+    : [];
+
+  if (explicit.length === 0) {
+    return synthesized;
+  }
+  if (synthesized.length === 0) {
     return explicit;
   }
-  return mergeDeliveryRecords({
-    aoEvents: toArray(input.aoEvents),
-    dispatchJournal: input.dispatchJournal ?? {},
-    reviewRuns: toArray(input.reviewRuns),
-    reactionMessages: input.reactionMessages ?? {},
-    nowMs: Number(input.nowMs) || Date.now(),
-  });
+
+  const byId = new Map();
+  const withoutId = [];
+  for (const row of [...explicit, ...synthesized]) {
+    const id = String(row.deliveryId ?? '');
+    if (!id) {
+      withoutId.push(row);
+      continue;
+    }
+    if (!byId.has(id)) {
+      byId.set(id, row);
+    }
+  }
+  return [...byId.values(), ...withoutId].sort(
+    (a, b) => Number(a.deliveredAtMs) - Number(b.deliveredAtMs),
+  );
 }
 
 /**
@@ -753,6 +776,19 @@ export function preRunHeadReadyRecheck(planned, fresh) {
         );
   const ownerResolution = resolved.ownerResolution;
   const session = resolved.session;
+
+  if (ownerResolution?.failClosed) {
+    const reason = String(ownerResolution.reason ?? 'owner_unresolved');
+    return {
+      emitReviewRun: false,
+      reason: `pre_run_recheck_${reason}`,
+      decision: {
+        eligible: false,
+        reason,
+        route: 'none',
+      },
+    };
+  }
 
   const plannedSessionId = String(planned?.sessionId ?? '');
   if (
