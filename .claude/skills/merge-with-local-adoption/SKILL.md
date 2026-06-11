@@ -121,9 +121,10 @@ One line, then proceed to merge:
 Merge only after Step 4 is shown to the user.
 
 Direct `gh pr merge` is blocked by the publish/RTK guard. Prefix the command with
-**`AO_PUBLISH_FALLBACK=1`** — the sanctioned fallback for an agent already running
-in Cursor, and for Claude when the `cursor-agent` default does not apply. Do not
-spawn a second Cursor to merge. If the PR head is behind base
+**`AO_PUBLISH_FALLBACK=1`** — this is the **default**, sanctioned path for the
+merge (cheaper and deterministic: the merge is a fixed command, nothing to reason
+about, so there is nothing to offload to a second agent). Do not spawn a Cursor to
+merge. If the PR head is behind base
 (`not mergeable: head … not up to date`), run `gh pr update-branch <N>` first,
 then re-run the merge.
 
