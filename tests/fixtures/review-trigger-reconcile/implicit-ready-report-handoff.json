@@ -1,0 +1,44 @@
+{
+  "description": "Issue #261: SHA-less ready_for_review wins over implicit owner ambiguity",
+  "openPrs": [
+    {
+      "number": 94,
+      "headRefOid": "implicitready94",
+      "headCommittedAt": "2026-06-05T11:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-earlier",
+      "role": "worker",
+      "prNumber": 94,
+      "status": "working",
+      "reports": []
+    },
+    {
+      "name": "op-ready",
+      "role": "worker",
+      "prNumber": 94,
+      "status": "idle",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T12:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "94": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "op-ready"
+  }
+}

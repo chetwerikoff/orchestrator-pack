@@ -1,0 +1,52 @@
+{
+  "description": "Pre-run recheck aborts when strict head owner changes before a non-quiescent start",
+  "planned": {
+    "prNumber": 99,
+    "headSha": "deadbeef",
+    "sessionId": "opk-old"
+  },
+  "fresh": {
+    "openPrs": [
+      {
+        "number": 99,
+        "headRefOid": "deadbeef",
+        "headCommittedAt": "2026-06-05T12:00:00.000Z"
+      }
+    ],
+    "reviewRuns": [],
+    "sessions": [
+      {
+        "name": "opk-old",
+        "role": "worker",
+        "prNumber": 99,
+        "status": "working",
+        "runtime": "alive",
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "reportedAt": "2026-06-05T12:00:00.000Z"
+          }
+        ]
+      },
+      {
+        "name": "opk-new",
+        "role": "worker",
+        "prNumber": 99,
+        "status": "working",
+        "runtime": "alive",
+        "ownedHeadSha": "deadbeef",
+        "reports": []
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": false,
+    "reason": "pre_run_recheck_owner_drift"
+  }
+}

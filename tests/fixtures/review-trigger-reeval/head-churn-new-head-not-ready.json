@@ -5,10 +5,12 @@
   "sessionId": "opk-28",
   "openPrs": [{ "number": 235, "headRefOid": "new235", "headCommittedAt": "2026-06-05T14:20:00.000Z" }],
   "reviewRuns": [],
+  "nowMs": 1717597260000,
   "sessions": [
     {
       "name": "opk-28",
       "role": "worker",
+      "status": "working",
       "prNumber": 235,
       "reports": [
         {

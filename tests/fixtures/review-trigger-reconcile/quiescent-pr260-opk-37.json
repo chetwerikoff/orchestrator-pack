@@ -1,0 +1,63 @@
+{
+  "description": "Issue #261 AC1 / PR #260 incident: live idle opk-37, green CI, no ready_for_review, head stable past debounce",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 260,
+      "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-37",
+      "role": "worker",
+      "prNumber": 260,
+      "issue": "258",
+      "branch": "feat/258",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "lastActivity": "20m ago",
+      "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "reports": [
+        {
+          "reportState": "started",
+          "reportedAt": "2026-06-10T10:21:49.783Z",
+          "accepted": true
+        },
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-10T11:05:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "pr_created",
+          "reportedAt": "2026-06-10T11:30:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-10T12:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "260": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "aoEvents": [],
+  "dispatchJournal": {},
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "opk-37",
+    "startReason": "quiescent_worker_handoff_fallback"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "description": "Issue #261 AC3a: idle stable head past debounce but pending unconsumed delivery defers",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 260,
+      "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-37",
+      "role": "worker",
+      "prNumber": 260,
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "lastActivity": "20m ago",
+      "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-37:1781095200000:pack-send:ci-green:tr-260": {
+      "deliveryId": "opk-37:1781095200000:pack-send:ci-green:tr-260",
+      "sessionId": "opk-37",
+      "deliveredAtMs": 1781095200000,
+      "source": "pack-send",
+      "sourceKey": "ci-green:tr-260",
+      "deliveryPath": "pending-draft",
+      "messageShape": { "charLength": 245, "lineCount": 1 }
+    }
+  },
+  "aoEvents": [],
+  "ciChecksByPr": {
+    "260": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready"
+  }
+}

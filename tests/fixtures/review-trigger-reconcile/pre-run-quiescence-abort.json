@@ -1,0 +1,48 @@
+{
+  "description": "Issue #261 AC11: pre-run recheck aborts quiescence start when worker resumes activity",
+  "planned": {
+    "prNumber": 260,
+    "headSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+    "sessionId": "opk-37",
+    "startReason": "quiescent_worker_handoff_fallback"
+  },
+  "fresh": {
+    "nowMs": 1781096460000,
+    "openPrs": [
+      {
+        "number": 260,
+        "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+        "headCommittedAt": "2026-06-10T12:40:00.000Z"
+      }
+    ],
+    "reviewRuns": [],
+    "sessions": [
+      {
+        "name": "opk-37",
+        "role": "worker",
+        "prNumber": 260,
+        "status": "working",
+        "activity": "active",
+        "lastActivity": "just now",
+        "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+        "reports": [
+          {
+            "reportState": "working",
+            "reportedAt": "2026-06-10T13:01:00.000Z",
+            "accepted": true
+          }
+        ]
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": false,
+    "reasonPrefix": "pre_run_recheck_uncovered_not_ready"
+  }
+}

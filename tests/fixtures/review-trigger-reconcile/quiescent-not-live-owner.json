@@ -1,0 +1,42 @@
+{
+  "description": "Issue #261 AC8: green uncovered head owned only by a not-live session — fail closed",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 260,
+      "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-37",
+      "role": "worker",
+      "prNumber": 260,
+      "status": "terminated",
+      "activity": "idle",
+      "lastActivity": "45m ago",
+      "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "reports": [
+        {
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-10T12:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "260": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "no_live_review_target"
+  }
+}

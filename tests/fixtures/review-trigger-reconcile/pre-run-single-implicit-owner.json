@@ -1,0 +1,42 @@
+{
+  "description": "Issue #261: pre-run recheck keeps single implicit owner for quiescence starts",
+  "planned": {
+    "prNumber": 260,
+    "headSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+    "sessionId": "opk-37",
+    "startReason": "quiescent_worker_handoff_fallback"
+  },
+  "fresh": {
+    "nowMs": 1781096400000,
+    "openPrs": [
+      {
+        "number": 260,
+        "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+        "headCommittedAt": "2026-06-10T12:40:00.000Z"
+      }
+    ],
+    "reviewRuns": [],
+    "sessions": [
+      {
+        "name": "opk-37",
+        "role": "worker",
+        "prNumber": 260,
+        "status": "working",
+        "runtime": "alive",
+        "activity": "idle",
+        "lastActivity": "20m ago",
+        "reports": []
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": true,
+    "reasonPrefix": "head_ready_after_recheck"
+  }
+}

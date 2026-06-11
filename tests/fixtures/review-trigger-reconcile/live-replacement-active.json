@@ -1,0 +1,42 @@
+{
+  "description": "Issue #261 AC9 defer branch: live replacement still actively working",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 92,
+      "headRefOid": "replacementhead92",
+      "headCommittedAt": "2026-06-10T12:55:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-live-replacement-active",
+      "role": "worker",
+      "prNumber": 92,
+      "status": "working",
+      "activity": "ready",
+      "lastActivity": "2m ago",
+      "ownedHeadSha": "replacementhead92",
+      "reports": [
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-10T12:58:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "92": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready"
+  }
+}

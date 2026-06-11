@@ -14,6 +14,7 @@ import {
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
   formatDecisionRecordForLog,
+  mergeWorkerDeliveriesFromPlanInput,
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
@@ -62,6 +63,9 @@ export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
 
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
+
+/** Strict resolver defers to legacy report binding; quiescence must still fail closed. */
+export const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON = 'ambiguous_implicit_head_owner';
 
 const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
 
@@ -186,6 +190,23 @@ export function getSessionIdentifier(session) {
     return id;
   }
   return null;
+}
+
+/**
+ * All non-empty session identifiers (name, sessionId, id) for delivery matching.
+ *
+ * @param {AoSession | null | undefined} session
+ */
+export function collectSessionIdentifiers(session) {
+  /** @type {string[]} */
+  const ids = [];
+  for (const field of [session?.name, session?.sessionId, session?.id]) {
+    const value = String(field ?? '').trim();
+    if (value && !ids.includes(value)) {
+      ids.push(value);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -386,6 +407,152 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
 }
 
 /**
+ * Live worker sessions linked to a PR (any liveness).
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ */
+export function listWorkersForPr(sessions, prNumber) {
+  return toArray(sessions).filter((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+  });
+}
+
+/**
+ * Fail-closed owner resolution for quiescence fallback (Issue #261).
+ * Returns exactly one live head owner, or a visible defer reason.
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = []) {
+  const prList = toArray(openPrs);
+  const workers = listWorkersForPr(sessions, prNumber);
+  const explicitOwners = workers.filter((session) =>
+    sessionExplicitlyOwnsHead(session, headSha),
+  );
+  const liveExplicitOwners = explicitOwners.filter((session) =>
+    isLiveWorkerSession(session),
+  );
+
+  if (liveExplicitOwners.length === 1) {
+    return {
+      sessionId: getSessionIdentifier(liveExplicitOwners[0]),
+      reason: 'resolved',
+      failClosed: false,
+    };
+  }
+
+  if (liveExplicitOwners.length > 1) {
+    return {
+      sessionId: null,
+      reason: 'ambiguous_head_owner',
+      failClosed: true,
+    };
+  }
+
+  if (explicitOwners.some((session) => !isLiveWorkerSession(session))) {
+    return {
+      sessionId: null,
+      reason: 'no_live_review_target',
+      failClosed: true,
+    };
+  }
+
+  const implicitOwners = workers.filter(
+    (session) =>
+      !sessionExplicitlyOwnsHead(session, headSha) &&
+      sessionOwnsRunHead(session, prNumber, headSha, prList),
+  );
+  const liveImplicitOwners = implicitOwners.filter((session) =>
+    isLiveWorkerSession(session),
+  );
+
+  if (liveImplicitOwners.length > 1) {
+    return {
+      sessionId: null,
+      reason: AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
+      failClosed: false,
+    };
+  }
+
+  if (liveImplicitOwners.length === 1) {
+    return {
+      sessionId: getSessionIdentifier(liveImplicitOwners[0]),
+      reason: 'resolved',
+      failClosed: false,
+    };
+  }
+
+  if (implicitOwners.some((session) => !isLiveWorkerSession(session))) {
+    return {
+      sessionId: null,
+      reason: 'no_live_review_target',
+      failClosed: true,
+    };
+  }
+
+  return {
+    sessionId: null,
+    reason: 'no_worker_session',
+    failClosed: false,
+  };
+}
+
+/**
+ * Resolve the worker session used for reconcile eligibility and review starts.
+ * Prefer the strict head owner when resolved; never fall back to legacy selection
+ * when strict resolution fails closed.
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = []) {
+  const sessionList = toArray(sessions);
+  const prList = toArray(openPrs);
+  const ownerResolution = resolveStrictHeadOwningWorkerSession(
+    sessionList,
+    prNumber,
+    headSha,
+    prList,
+  );
+
+  if (ownerResolution.failClosed) {
+    return {
+      ownerResolution,
+      sessionId: null,
+      session: null,
+    };
+  }
+
+  if (ownerResolution.sessionId) {
+    const sessionId = ownerResolution.sessionId;
+    return {
+      ownerResolution,
+      sessionId,
+      session: findSessionById(sessionList, sessionId),
+    };
+  }
+
+  const sessionId = resolveHeadOwningWorkerSessionId(
+    sessionList,
+    prNumber,
+    headSha,
+    prList,
+  );
+  return {
+    ownerResolution,
+    sessionId,
+    session: sessionId ? findSessionById(sessionList, sessionId) : null,
+  };
+}
+
+/**
  * Pick the live worker session that owns the current PR head (not merely the first PR match).
  *
  * @param {AoSession[]} sessions
@@ -547,6 +714,10 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow>} [input.requiredCheckLookupFailedByPr]
  * @param {DegradedCiTrackingState} [input.tracking]
  * @param {number} [input.nowMs]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
+ * @param {Record<string, string>} [input.reactionMessages]
  */
 export function planReconcileActions({
   openPrs,
@@ -557,13 +728,25 @@ export function planReconcileActions({
   requiredCheckLookupFailedByPr,
   tracking,
   nowMs = Date.now(),
+  workerDeliveries,
+  aoEvents,
+  dispatchJournal,
+  reactionMessages,
 }) {
-  /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
+  /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
   const prList = toArray(openPrs);
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries,
+    aoEvents,
+    dispatchJournal,
+    reviewRuns: runList,
+    reactionMessages,
+    nowMs,
+  });
 
   for (const pr of prList) {
     const prNumber = Number(pr?.number);
@@ -572,8 +755,12 @@ export function planReconcileActions({
       continue;
     }
 
-    const sessionId = resolveHeadOwningWorkerSessionId(sessionList, prNumber, headSha, prList);
-    const session = sessionId ? findSessionById(sessionList, sessionId) : null;
+    const { ownerResolution, sessionId, session } = resolveReconcileEvaluationSession(
+      sessionList,
+      prNumber,
+      headSha,
+      prList,
+    );
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);
     const requiredCheckLookupFailed = getRequiredCheckLookupFailedForPr(
@@ -594,6 +781,10 @@ export function planReconcileActions({
       degradedCiAttempts,
       maxDegradedCiAttempts: maxDegradedAttempts,
       headCommittedAtMs,
+      ownerResolution,
+      nowMs,
+      workerDeliveries: mergedDeliveries,
+      openPrs: prList,
     });
 
     const decisionRecordBase = {
@@ -621,12 +812,19 @@ export function planReconcileActions({
         });
         continue;
       }
-      actions.push({
+      const startAction = {
         type: 'start_review',
         prNumber,
         headSha,
         sessionId,
-      });
+      };
+      if (decision.reason === 'quiescent_worker_handoff_fallback') {
+        startAction.startReason = decision.reason;
+        if (decision.quiescenceBasis) {
+          startAction.quiescenceBasis = decision.quiescenceBasis;
+        }
+      }
+      actions.push(startAction);
       continue;
     }
 
@@ -651,15 +849,19 @@ export function planReconcileActions({
       });
     }
 
-    if (decision.reason === 'no_worker_session') {
+    if (
+      decision.reason === 'no_worker_session' ||
+      decision.reason === 'no_live_review_target' ||
+      decision.reason === 'ambiguous_head_owner'
+    ) {
       actions.push({
         type: 'skip',
         prNumber,
         headSha,
-        reason: 'no_worker_session',
+        reason: decision.reason,
         record: buildNoStartDecisionRecord({
           ...decisionRecordBase,
-          reason: 'no_worker_session',
+          reason: decision.reason,
         }),
       });
       continue;

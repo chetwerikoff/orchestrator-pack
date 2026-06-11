@@ -7,9 +7,15 @@ export declare const COVERED_TERMINAL_REVIEW_STATUSES: ReadonlySet<string>;
 export declare const NON_LIVE_WORKER_SESSION_STATUSES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 
+export declare const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON: 'ambiguous_implicit_head_owner';
+
 export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;
+
+export declare function collectSessionIdentifiers(
+  session: AoSession | null | undefined,
+): string[];
 
 export declare function sessionMatchesIdentifier(
   session: AoSession,
@@ -89,6 +95,8 @@ export interface StartReviewAction {
   prNumber: number;
   headSha: string;
   sessionId: string;
+  startReason?: string;
+  quiescenceBasis?: Record<string, unknown>;
 }
 
 export interface NoStartDecisionRecord {
@@ -153,6 +161,10 @@ export interface PlanReconcileInput {
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: DegradedCiTrackingState;
   nowMs?: number;
+  workerDeliveries?: Array<Record<string, unknown>>;
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
 }
 
 export interface ReconcileIntervalAccept {
@@ -230,6 +242,37 @@ export declare function sessionOwnsRunHead(
   headSha: string,
   openPrs?: OpenPr[],
 ): boolean;
+
+export declare function listWorkersForPr(
+  sessions: AoSession[],
+  prNumber: number,
+): AoSession[];
+
+export declare function resolveStrictHeadOwningWorkerSession(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): {
+  sessionId: string | null;
+  reason: string;
+  failClosed: boolean;
+};
+
+export declare function resolveReconcileEvaluationSession(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): {
+  ownerResolution: {
+    sessionId: string | null;
+    reason: string;
+    failClosed: boolean;
+  };
+  sessionId: string | null;
+  session: AoSession | null;
+};
 
 export declare function resolveHeadOwningWorkerSessionId(
   sessions: AoSession[],

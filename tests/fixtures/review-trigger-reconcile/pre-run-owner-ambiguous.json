@@ -1,0 +1,52 @@
+{
+  "description": "Issue #261: pre-run recheck aborts quiescence when strict ownership becomes ambiguous",
+  "planned": {
+    "prNumber": 90,
+    "headSha": "sharedhead90aa",
+    "sessionId": "opk-owner-a",
+    "startReason": "quiescent_worker_handoff_fallback"
+  },
+  "fresh": {
+    "nowMs": 1781096400000,
+    "openPrs": [
+      {
+        "number": 90,
+        "headRefOid": "sharedhead90aa",
+        "headCommittedAt": "2026-06-10T12:40:00.000Z"
+      }
+    ],
+    "reviewRuns": [],
+    "sessions": [
+      {
+        "name": "opk-owner-a",
+        "role": "worker",
+        "prNumber": 90,
+        "status": "working",
+        "activity": "idle",
+        "lastActivity": "30m ago",
+        "ownedHeadSha": "sharedhead90aa",
+        "reports": []
+      },
+      {
+        "name": "opk-owner-b",
+        "role": "worker",
+        "prNumber": 90,
+        "status": "idle",
+        "activity": "idle",
+        "lastActivity": "30m ago",
+        "ownedHeadSha": "sharedhead90aa",
+        "reports": []
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "emitReviewRun": false,
+    "reasonPrefix": "pre_run_recheck_ambiguous_head_owner"
+  }
+}

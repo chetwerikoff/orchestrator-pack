@@ -1,0 +1,53 @@
+{
+  "description": "Issue #261: strict explicit head owner wins over legacy report-history selection for quiescence",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 92,
+      "headRefOid": "newhead92abcd",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-strict-owner",
+      "role": "worker",
+      "prNumber": 92,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "22m ago",
+      "ownedHeadSha": "newhead92abcd",
+      "reports": []
+    },
+    {
+      "name": "opk-stale-report",
+      "role": "worker",
+      "prNumber": 92,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "5m ago",
+      "ownedHeadSha": "stalehead92old",
+      "reports": [
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-10T13:05:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "92": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "opk-strict-owner",
+    "startReason": "quiescent_worker_handoff_fallback"
+  }
+}
