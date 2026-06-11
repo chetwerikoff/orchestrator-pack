@@ -10,6 +10,7 @@
 
 $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
+$Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
 
 function Resolve-ReviewStartClaimNamespace {
@@ -73,6 +74,31 @@ function Get-ReviewStartClaimLockDir {
 function Get-ReviewStartClaimTerminalDir {
     param([string]$Namespace)
     return (Join-Path $Namespace 'terminal')
+}
+
+function Get-ReviewStartClaimTerminalRetentionCount {
+    $count = $Script:ReviewStartClaimTerminalRetentionCount
+    if ($env:AO_REVIEW_CLAIM_TERMINAL_COUNT) {
+        $parsed = 0
+        if ([int]::TryParse($env:AO_REVIEW_CLAIM_TERMINAL_COUNT, [ref]$parsed)) {
+            $count = $parsed
+        }
+    }
+    if ($count -lt 1) { return 1 }
+    return $count
+}
+
+function Prune-ReviewStartClaimTerminalRecords {
+    param([string]$Namespace)
+
+    $limit = Get-ReviewStartClaimTerminalRetentionCount
+    $terminalDir = Get-ReviewStartClaimTerminalDir -Namespace $Namespace
+    $records = @(Get-ChildItem -LiteralPath $terminalDir -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending)
+    if ($records.Count -le $limit) { return }
+
+    foreach ($file in @($records[$limit..($records.Count - 1)])) {
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function New-ReviewStartClaimHolder {
@@ -195,6 +221,7 @@ function Move-ReviewStartClaimToTerminal {
     $name = "$(Split-Path -Leaf $ActivePath).$($Outcome).$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()).json"
     $target = Join-Path (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) $name
     ($terminal | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $target -Encoding UTF8
+    Prune-ReviewStartClaimTerminalRecords -Namespace $Namespace
     Remove-Item -LiteralPath $ActivePath -Force -ErrorAction SilentlyContinue
     return $target
 }
@@ -260,6 +287,13 @@ function Acquire-ReviewStartClaim {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
             }
             if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
+                if ([string]$existing.record.state -eq 'active') {
+                    $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $existing.record -Outcome 'run_started' -Extra @{
+                        coverage = 'covered_by_run'
+                        coveredBy = 'claim_skip'
+                    }
+                    return @{ acquired = $false; reason = 'covered_by_run'; holder = $existing.record.holder; claim = $existing.record; path = $terminalPath; namespace = $resolved; key = $existing.record.key }
+                }
                 return @{ acquired = $false; reason = 'covered_by_run'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
             }
             $age = ((Get-Date).ToUniversalTime() - $existing.acquiredAtUtc).TotalMinutes
@@ -275,6 +309,13 @@ function Acquire-ReviewStartClaim {
                     return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $again.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
                 }
                 if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
+                    if ([string]$again.record.state -eq 'active') {
+                        $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $again.record -Outcome 'run_started' -Extra @{
+                            coverage = 'covered_by_run'
+                            coveredBy = 'claim_skip'
+                        }
+                        return @{ acquired = $false; reason = 'covered_by_run'; holder = $again.record.holder; claim = $again.record; path = $terminalPath; namespace = $resolved; key = $again.record.key }
+                    }
                     return @{ acquired = $false; reason = 'covered_by_run'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
                 }
                 $ageAgain = ((Get-Date).ToUniversalTime() - $again.acquiredAtUtc).TotalMinutes

@@ -239,6 +239,57 @@ describe('Review-StartClaim single-flight contract', () => {
     }
   });
 
+  it('terminalizes a stale active claim once coverage appears later', () => {
+    const dir = tempClaimDir();
+    try {
+      const output = runPwsh(`
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $result = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace $ns -ReviewRuns @(
+          @{ prNumber = 266; targetSha = $sha; status = 'clean' }
+        )
+        [pscustomobject]@{
+          reason = [string]$result.reason
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*run_started*.json').Name)
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
+        } | ConvertTo-Json -Compress
+      `);
+      const result = JSON.parse(output);
+      expect(result.reason).toBe('covered_by_run');
+      expect(result.terminal).toHaveLength(1);
+      expect(result.activeExists).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes terminal claim records with a bounded retention count', () => {
+    const dir = tempClaimDir();
+    try {
+      const output = runPwsh(`
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $env:AO_REVIEW_CLAIM_TERMINAL_COUNT = '1'
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $path1 = Join-Path (Get-ReviewStartClaimTerminalDir -Namespace $ns) 'one.json'
+        $path2 = Join-Path (Get-ReviewStartClaimTerminalDir -Namespace $ns) 'two.json'
+        Set-Content -LiteralPath $path1 -Value '{}' -Encoding UTF8
+        Start-Sleep -Milliseconds 20
+        Set-Content -LiteralPath $path2 -Value '{}' -Encoding UTF8
+        Prune-ReviewStartClaimTerminalRecords -Namespace $ns
+        [pscustomobject]@{
+          names = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -File | Sort-Object Name | Select-Object -ExpandProperty Name))
+        } | ConvertTo-Json -Compress
+      `);
+      const result = JSON.parse(output);
+      expect(result.names).toEqual(['two.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('releases a held reeval claim when the in-claim recheck snapshot throws', () => {
     const dir = tempClaimDir();
     try {
