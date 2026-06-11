@@ -1,0 +1,44 @@
+{
+  "description": "Issue #261: multiple live implicit PR owners fail closed instead of legacy pick",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 93,
+      "headRefOid": "implicithead93ab",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-implicit-a",
+      "role": "worker",
+      "prNumber": 93,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "25m ago",
+      "reports": []
+    },
+    {
+      "name": "opk-implicit-b",
+      "role": "worker",
+      "prNumber": 93,
+      "status": "idle",
+      "activity": "idle",
+      "lastActivity": "30m ago",
+      "reports": []
+    }
+  ],
+  "ciChecksByPr": {
+    "93": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "ambiguous_head_owner"
+  }
+}

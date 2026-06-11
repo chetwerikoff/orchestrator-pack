@@ -468,6 +468,14 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
     isLiveWorkerSession(session),
   );
 
+  if (liveImplicitOwners.length > 1) {
+    return {
+      sessionId: null,
+      reason: 'ambiguous_head_owner',
+      failClosed: true,
+    };
+  }
+
   if (implicitOwners.some((session) => !isLiveWorkerSession(session))) {
     return {
       sessionId: null,

@@ -305,6 +305,12 @@ describe('planReconcileActions', () => {
       expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
     });
 
+    it('AC10c: ambiguous implicit live owners fail closed without legacy pick', () => {
+      const fixture = loadFixture('ambiguous-implicit-owners.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture))[0]?.reason).toBe('ambiguous_head_owner');
+    });
+
     it('AC10: ambiguous live owners fail closed', () => {
       const skip = skipActions(planReconcileActions(loadFixture('ambiguous-head-owner.json')))[0];
       expect(skip?.reason).toBe('ambiguous_head_owner');
@@ -578,6 +584,7 @@ describe('resolveWorkerSessionId', () => {
           role: 'worker',
           prNumber: 58,
           status: 'idle',
+          ownedHeadSha: headSha,
           reports: [
             {
               reportState: 'ready_for_review',
