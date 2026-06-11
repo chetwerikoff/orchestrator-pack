@@ -1,0 +1,43 @@
+{
+  "description": "Issue #261 AC5: stale ready_for_review on older head treated as absent; quiescent owner starts",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 88,
+      "headRefOid": "currenthead88aa",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-stale-ready",
+      "role": "worker",
+      "prNumber": 88,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "25m ago",
+      "ownedHeadSha": "currenthead88aa",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-10T10:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "88": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "opk-stale-ready",
+    "startReason": "quiescent_worker_handoff_fallback"
+  }
+}

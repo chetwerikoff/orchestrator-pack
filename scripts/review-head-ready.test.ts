@@ -5,9 +5,13 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyRequiredCiForReviewTrigger,
   evaluateHeadReadyForReview,
+  evaluateQuiescentHandoffFallback,
   hasReadyForReviewForHead,
+  isWorkerActivelyWorking,
   isWorkerDegradedCiHandoff,
+  parseLastActivityAgeMs,
   preRunHeadReadyRecheck,
+  QUIESCENCE_DEBOUNCE_MS,
 } from '../docs/review-head-ready.mjs';
 import { reportCoversHead } from '../docs/review-trigger-reconcile.mjs';
 
@@ -211,6 +215,8 @@ describe('evaluateHeadReadyForReview', () => {
       session: session as never,
       ciChecks: greenChecks,
       headCommittedAtMs,
+      nowMs: headCommittedAtMs + 5 * 60 * 1000,
+      ownerResolution: { sessionId: 'op-worker-superseded', reason: 'resolved', failClosed: false },
     });
     expect(decision.eligible).toBe(false);
     expect(decision.reason).toBe('uncovered_not_ready');
@@ -279,6 +285,56 @@ describe('evaluateHeadReadyForReview', () => {
   });
 });
 
+describe('Issue #261 quiescence helpers', () => {
+  it('parseLastActivityAgeMs reads ao status shapes', () => {
+    expect(parseLastActivityAgeMs('20m ago')).toBe(20 * 60 * 1000);
+    expect(parseLastActivityAgeMs('just now')).toBe(0);
+  });
+
+  it('treats streaming and recent activity as actively working', () => {
+    const nowMs = 1781096400000;
+    expect(
+      isWorkerActivelyWorking(
+        { status: 'working', activity: 'active', reports: [] } as never,
+        'head',
+        nowMs,
+      ),
+    ).toBe(true);
+    expect(
+      isWorkerActivelyWorking(
+        {
+          status: 'working',
+          activity: 'ready',
+          lastActivity: '2m ago',
+          reports: [],
+        } as never,
+        'head',
+        nowMs,
+        { debounceMs: QUIESCENCE_DEBOUNCE_MS },
+      ),
+    ).toBe(true);
+  });
+
+  it('evaluateQuiescentHandoffFallback matches PR #260 idle owner', () => {
+    const fixture = loadFixture<{
+      nowMs: number;
+      openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+    }>('quiescent-pr260-opk-37.json');
+    const pr = fixture.openPrs[0]!;
+    const session = fixture.sessions[0]!;
+    const result = evaluateQuiescentHandoffFallback({
+      session,
+      headSha: pr.headRefOid,
+      nowMs: fixture.nowMs,
+      headCommittedAtMs: Date.parse(pr.headCommittedAt),
+      ownerResolution: { sessionId: 'opk-37', reason: 'resolved', failClosed: false },
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.basis?.pendingUnconsumedDelivery).toBe(false);
+  });
+});
+
 describe('preRunHeadReadyRecheck', () => {
   it('(g) aborts when head becomes covered before run', () => {
     const fixture = loadFixture<{
@@ -291,6 +347,23 @@ describe('preRunHeadReadyRecheck', () => {
       };
       expect: { emitReviewRun: boolean; reasonPrefix: string };
     }>('pre-run-abort.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
+  it('Issue #261 AC11: aborts quiescence start when worker resumes activity', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string; startReason: string };
+      fresh: {
+        nowMs: number;
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reasonPrefix: string };
+    }>('pre-run-quiescence-abort.json');
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));

@@ -1,0 +1,45 @@
+{
+  "description": "Issue #261 AC9: live replacement session quiescent past debounce becomes review target",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 91,
+      "headRefOid": "replacementhead91",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-dead-old",
+      "role": "worker",
+      "prNumber": 91,
+      "status": "terminated",
+      "ownedHeadSha": "oldhead91dead",
+      "reports": []
+    },
+    {
+      "name": "opk-live-replacement",
+      "role": "worker",
+      "prNumber": 91,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "22m ago",
+      "ownedHeadSha": "replacementhead91",
+      "reports": []
+    }
+  ],
+  "ciChecksByPr": {
+    "91": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "opk-live-replacement",
+    "startReason": "quiescent_worker_handoff_fallback"
+  }
+}

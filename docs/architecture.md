@@ -106,6 +106,14 @@ feedback back to Cursor workers through AO reactions such as
 On AO 0.9.x, a `reviewer:` YAML block is silently ignored — wire review through
 `orchestratorRules` and `ao review`, not a `reviewer:` key.
 
+The periodic `review-trigger-reconcile` backstop still requires
+`ready_for_review` on the current head while a worker is actively working
+(Issue #195). When a live owner has gone quiescent — idle, no pending
+unconsumed delivery, stable green head past the stuck-grace debounce — without
+ever handing off, the reconciler may start review against that live session
+(Issue #261). Not-live or ambiguous owners fail closed (`no_live_review_target`,
+`ambiguous_head_owner`).
+
 GitHub Actions Codex review remains an optional path for PR comments, reusable
 workflow consumers, and external visibility. It must use the same prompt, scope
 context, and structured finding format as the local path; it must not define an

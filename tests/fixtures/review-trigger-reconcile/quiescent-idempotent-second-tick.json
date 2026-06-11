@@ -1,0 +1,44 @@
+{
+  "description": "Issue #261 AC12: second reconcile tick does not start a duplicate review",
+  "nowMs": 1781096400000,
+  "openPrs": [
+    {
+      "number": 260,
+      "headRefOid": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "headCommittedAt": "2026-06-10T12:40:00.000Z"
+    }
+  ],
+  "reviewRuns": [
+    {
+      "id": "run-quiescent-260",
+      "prNumber": 260,
+      "targetSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "status": "running",
+      "linkedSessionId": "opk-37"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-37",
+      "role": "worker",
+      "prNumber": 260,
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "20m ago",
+      "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
+      "reports": []
+    }
+  ],
+  "ciChecksByPr": {
+    "260": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "head_covered"
+  }
+}

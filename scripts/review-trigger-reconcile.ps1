@@ -45,6 +45,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -131,7 +132,44 @@ function Get-FixtureReconcilePayload {
     if ($fixture.tracking) {
         $payload.tracking = $fixture.tracking
     }
+    if ($fixture.nowMs) {
+        $payload.nowMs = [long]$fixture.nowMs
+    }
+    if ($fixture.workerDeliveries) {
+        $payload.workerDeliveries = @($fixture.workerDeliveries)
+    }
+    if ($fixture.aoEvents) {
+        $payload.aoEvents = @($fixture.aoEvents)
+    }
+    if ($fixture.dispatchJournal) {
+        $dispatchJournal = @{}
+        foreach ($prop in $fixture.dispatchJournal.PSObject.Properties) {
+            $dispatchJournal[$prop.Name] = $prop.Value
+        }
+        $payload.dispatchJournal = $dispatchJournal
+    }
     return $payload
+}
+
+function Get-ReconcileDeliveryPayload {
+    param(
+        [string]$FixturePath,
+        [string]$Project
+    )
+
+    if ($FixturePath) {
+        return @{
+            workerDeliveries = @()
+            aoEvents         = @()
+            dispatchJournal  = @{}
+        }
+    }
+
+    return @{
+        aoEvents        = @(Get-AoEventsSince -SinceMinutes 30)
+        dispatchJournal = Get-WorkerMessageDispatchJournal
+        reviewRuns      = @(Get-AoReviewRuns -Project $Project)
+    }
 }
 
 function Get-PreRunRecheckSnapshot {
@@ -140,12 +178,13 @@ function Get-PreRunRecheckSnapshot {
         [string]$Project
     )
 
-    $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-    $reviewRuns = Get-AoReviewRuns -Project $Project
-    $sessions = Get-AoStatusSessions
-    $checksBundle = Get-ReconcileChecksByPr -OpenPrs @(
-        @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
-    )
+        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+        $reviewRuns = Get-AoReviewRuns -Project $Project
+        $sessions = Get-AoStatusSessions
+        $checksBundle = Get-ReconcileChecksByPr -OpenPrs @(
+            @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
+        )
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
 
     return @{
         openPrs                         = @($openPrs)
@@ -154,6 +193,9 @@ function Get-PreRunRecheckSnapshot {
         ciChecksByPr                    = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
+        aoEvents                        = @($deliveryPayload.aoEvents)
+        dispatchJournal                 = $deliveryPayload.dispatchJournal
+        workerDeliveries                = @($deliveryPayload.workerDeliveries)
     }
 }
 
@@ -174,9 +216,10 @@ function Test-PreRunHeadReadyRecheck {
     $prKey = [string]$PlannedAction.prNumber
     $recheck = Invoke-ReconcileFilterCli -Subcommand 'preRunRecheck' -Payload @{
         planned = @{
-            prNumber  = $PlannedAction.prNumber
-            headSha   = $PlannedAction.headSha
-            sessionId = $PlannedAction.sessionId
+            prNumber    = $PlannedAction.prNumber
+            headSha     = $PlannedAction.headSha
+            sessionId   = $PlannedAction.sessionId
+            startReason = [string]$PlannedAction.startReason
         }
         fresh   = @{
             openPrs                       = @($fresh.openPrs)
@@ -185,6 +228,10 @@ function Test-PreRunHeadReadyRecheck {
             ciChecks                      = @($fresh.ciChecksByPr[$prKey])
             requiredCheckNames            = @($fresh.requiredCheckNamesByPr[$prKey])
             requiredCheckLookupFailed     = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
+            aoEvents                      = @($fresh.aoEvents)
+            dispatchJournal               = $fresh.dispatchJournal
+            workerDeliveries              = @($fresh.workerDeliveries)
+            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
     }
 
@@ -199,7 +246,8 @@ function Invoke-PlannedReviewRun {
         [string]$HeadSha,
         [string]$Project,
         [switch]$DryRunMode,
-        [hashtable]$FixtureSnapshot
+        [hashtable]$FixtureSnapshot,
+        [string]$StartReason = ''
     )
 
     $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
@@ -212,9 +260,10 @@ function Invoke-PlannedReviewRun {
     }
 
     $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
-        prNumber  = $PrNumber
-        headSha   = $HeadSha
-        sessionId = $SessionId
+        prNumber    = $PrNumber
+        headSha     = $HeadSha
+        sessionId   = $SessionId
+        startReason = $StartReason
     } -Project $Project -FixtureSnapshot $FixtureSnapshot
 
     if (-not $recheck.emitReviewRun) {
@@ -287,6 +336,9 @@ function Invoke-ReconcileTick {
             ciChecksByPr                  = $payload.ciChecksByPr
             requiredCheckNamesByPr        = $payload.requiredCheckNamesByPr
             requiredCheckLookupFailedByPr = $payload.requiredCheckLookupFailedByPr
+            aoEvents                      = @($payload.aoEvents)
+            dispatchJournal               = $payload.dispatchJournal
+            workerDeliveries              = @($payload.workerDeliveries)
         }
     }
     else {
@@ -294,6 +346,7 @@ function Invoke-ReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
         $checksBundle = Get-ReconcileChecksByPr -OpenPrs @($openPrs)
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
         $payload = @{
             openPrs                       = @($openPrs)
             reviewRuns                    = @($reviewRuns)
@@ -301,6 +354,8 @@ function Invoke-ReconcileTick {
             ciChecksByPr                  = $checksBundle.ciChecksByPr
             requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
             requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+            aoEvents                      = @($deliveryPayload.aoEvents)
+            dispatchJournal               = $deliveryPayload.dispatchJournal
         }
         $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
     }
@@ -336,9 +391,14 @@ function Invoke-ReconcileTick {
             continue
         }
 
+        if ($action.startReason -eq 'quiescent_worker_handoff_fallback') {
+            $basis = if ($action.quiescenceBasis) { $action.quiescenceBasis | ConvertTo-Json -Compress -Depth 6 } else { '{}' }
+            Write-ReconcileLog "quiescent handoff fallback PR #$($action.prNumber) head=$($action.headSha) session=$($action.sessionId) basis=$basis"
+        }
+
         Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
-            -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot
+            -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -StartReason $action.startReason
         $started++
     }
 

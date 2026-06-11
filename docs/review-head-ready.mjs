@@ -6,21 +6,55 @@
 import { classifyRequiredCiLevel } from './ci-green-wake-reconcile.mjs';
 import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
+  DEFAULT_GRACE_MS,
   findLatestReportForHead,
   getStoredReportHeadSha,
   PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
 import {
+  getSessionActivity,
+  isDeliveryConsumed,
+  isSessionStreaming,
+  mergeDeliveryRecords,
+  selectSurvivingDelivery,
+} from './worker-message-dispatch-observe.mjs';
+import {
   findCoveringRunForHead,
   findFailedOrCancelledRunForHead,
   findSessionById,
   getReportTimestampMs,
+  getSessionIdentifier,
   hasFailedOrCancelledOnHead,
   isHeadCovered,
+  isLiveWorkerSession,
   normalizeSha,
+  reportCoversHead,
   resolveHeadCommittedAtMs,
   toArray,
 } from './review-trigger-reconcile.mjs';
+
+/** Sustained-quiescence debounce — tied to review-ready stuck grace (Issue #174 / #261). */
+export const QUIESCENCE_DEBOUNCE_MS = DEFAULT_GRACE_MS;
+
+/** Report states that imply the worker is still mid-hand-off (Issue #261 row 2). */
+export const ACTIVELY_WORKING_REPORT_STATES = new Set([
+  'working',
+  'fixing_ci',
+  'started',
+  'pr_created',
+  'addressing_reviews',
+]);
+
+/** Session AO statuses that imply the worker has not gone quiescent yet. */
+export const ACTIVELY_WORKING_SESSION_STATUSES = new Set([
+  'working',
+  'fixing_ci',
+  'started',
+  'pr_created',
+  'addressing_reviews',
+]);
+
+export const QUIESCENT_HANDOFF_START_REASON = 'quiescent_worker_handoff_fallback';
 
 export { hasFailedOrCancelledOnHead } from './review-trigger-reconcile.mjs';
 
@@ -156,6 +190,264 @@ export function hasReadyForReviewForHead(session, headSha, options = {}) {
 }
 
 /**
+ * @param {string | undefined | null} lastActivity
+ */
+export function parseLastActivityAgeMs(lastActivity) {
+  const raw = String(lastActivity ?? '')
+    .trim()
+    .toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw === 'just now' || raw === 'now') {
+    return 0;
+  }
+  const match = raw.match(
+    /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*ago$/,
+  );
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const unit = match[2];
+  if (unit.startsWith('s')) {
+    return value * 1000;
+  }
+  if (unit.startsWith('m')) {
+    return value * 60 * 1000;
+  }
+  if (unit.startsWith('h')) {
+    return value * 60 * 60 * 1000;
+  }
+  if (unit.startsWith('d')) {
+    return value * 24 * 60 * 60 * 1000;
+  }
+  return null;
+}
+
+/**
+ * @param {object} input
+ */
+export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
+  const explicit = toArray(input.workerDeliveries);
+  if (
+    explicit.length > 0 ||
+    (!input.aoEvents && !input.dispatchJournal && !input.reviewRuns)
+  ) {
+    return explicit;
+  }
+  return mergeDeliveryRecords({
+    aoEvents: toArray(input.aoEvents),
+    dispatchJournal: input.dispatchJournal ?? {},
+    reviewRuns: toArray(input.reviewRuns),
+    reactionMessages: input.reactionMessages ?? {},
+    nowMs: Number(input.nowMs) || Date.now(),
+  });
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} sessionId
+ * @param {Array<Record<string, unknown>>} workerDeliveries
+ */
+export function hasPendingUnconsumedDelivery(session, sessionId, workerDeliveries = []) {
+  const needle = String(sessionId ?? '').trim();
+  if (!needle || !session) {
+    return false;
+  }
+  const surviving = selectSurvivingDelivery(toArray(workerDeliveries), needle);
+  if (!surviving) {
+    return false;
+  }
+  const deliveredAtMs = Number(surviving.deliveredAtMs ?? 0);
+  return !isDeliveryConsumed(session, surviving, deliveredAtMs);
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} headSha
+ * @param {number} nowMs
+ * @param {{ headCommittedAtMs?: number, debounceMs?: number, workerDeliveries?: Array<Record<string, unknown>> }} [options]
+ */
+export function isWorkerActivelyWorking(session, headSha, nowMs, options = {}) {
+  if (!session) {
+    return false;
+  }
+
+  const debounceMs = Number(options.debounceMs) || QUIESCENCE_DEBOUNCE_MS;
+  const reportBindingOptions = { headCommittedAtMs: options.headCommittedAtMs };
+  const activity = getSessionActivity(session);
+  const status = String(session?.status ?? '').toLowerCase();
+
+  if (isSessionStreaming(session) || activity === 'active') {
+    return true;
+  }
+
+  if (ACTIVELY_WORKING_SESSION_STATUSES.has(status) && activity !== 'idle') {
+    return true;
+  }
+
+  const lastActivityAgeMs = parseLastActivityAgeMs(session?.lastActivity);
+  if (lastActivityAgeMs != null && lastActivityAgeMs < debounceMs) {
+    return true;
+  }
+
+  if (status === 'working' && activity !== 'idle') {
+    return true;
+  }
+
+  const headCommittedAtMs = Number(options.headCommittedAtMs);
+  if (
+    Number.isFinite(headCommittedAtMs) &&
+    headCommittedAtMs > 0 &&
+    nowMs - headCommittedAtMs < debounceMs
+  ) {
+    return true;
+  }
+
+  const sessionId = getSessionIdentifier(session);
+  if (
+    sessionId &&
+    hasPendingUnconsumedDelivery(session, sessionId, options.workerDeliveries)
+  ) {
+    return true;
+  }
+
+  let latestActiveReportMs = -1;
+  for (const report of toArray(session?.reports)) {
+    if (!reportCoversHead(report, headSha, reportBindingOptions)) {
+      continue;
+    }
+    const state = getReportState(report);
+    if (!ACTIVELY_WORKING_REPORT_STATES.has(state)) {
+      continue;
+    }
+    latestActiveReportMs = Math.max(latestActiveReportMs, getReportTimestampMs(report));
+  }
+  if (latestActiveReportMs > 0 && nowMs - latestActiveReportMs < debounceMs) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} headSha
+ * @param {number} nowMs
+ * @param {{ headCommittedAtMs?: number, debounceMs?: number, workerDeliveries?: Array<Record<string, unknown>> }} [options]
+ */
+export function evaluateWorkerQuiescenceBasis(session, headSha, nowMs, options = {}) {
+  const debounceMs = Number(options.debounceMs) || QUIESCENCE_DEBOUNCE_MS;
+  const headCommittedAtMs = Number(options.headCommittedAtMs);
+  const lastActivityAgeMs = parseLastActivityAgeMs(session?.lastActivity);
+  const sessionId = getSessionIdentifier(session);
+  const headStableMs =
+    Number.isFinite(headCommittedAtMs) && headCommittedAtMs > 0
+      ? nowMs - headCommittedAtMs
+      : null;
+  const pendingUnconsumedDelivery = Boolean(
+    sessionId &&
+      hasPendingUnconsumedDelivery(session, sessionId, options.workerDeliveries),
+  );
+
+  return {
+    activity: getSessionActivity(session) || 'unknown',
+    status: String(session?.status ?? ''),
+    lastActivity: String(session?.lastActivity ?? ''),
+    lastActivityAgeMs,
+    headStableMs,
+    pendingUnconsumedDelivery,
+    debounceMs,
+    live: isLiveWorkerSession(session),
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {string} input.headSha
+ * @param {number} input.nowMs
+ * @param {number} [input.headCommittedAtMs]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {{ sessionId?: string | null, reason?: string, failClosed?: boolean }} [input.ownerResolution]
+ */
+export function evaluateQuiescentHandoffFallback({
+  session,
+  headSha,
+  nowMs,
+  headCommittedAtMs,
+  workerDeliveries = [],
+  ownerResolution = null,
+}) {
+  if (ownerResolution?.failClosed) {
+    return {
+      eligible: false,
+      reason: String(ownerResolution.reason ?? 'owner_unresolved'),
+      failClosed: true,
+    };
+  }
+
+  if (!session || !isLiveWorkerSession(session)) {
+    return { eligible: false, reason: 'no_live_review_target', failClosed: true };
+  }
+
+  const basis = evaluateWorkerQuiescenceBasis(session, headSha, nowMs, {
+    headCommittedAtMs,
+    workerDeliveries,
+  });
+
+  if (basis.pendingUnconsumedDelivery) {
+    return {
+      eligible: false,
+      reason: 'pending_unconsumed_delivery',
+      failClosed: false,
+      basis,
+    };
+  }
+
+  if (isWorkerActivelyWorking(session, headSha, nowMs, {
+    headCommittedAtMs,
+    workerDeliveries,
+  })) {
+    return {
+      eligible: false,
+      reason: 'worker_actively_working',
+      failClosed: false,
+      basis,
+    };
+  }
+
+  if (basis.headStableMs == null || basis.headStableMs < basis.debounceMs) {
+    return {
+      eligible: false,
+      reason: 'quiescence_debounce_pending',
+      failClosed: false,
+      basis,
+    };
+  }
+
+  if (basis.lastActivityAgeMs != null && basis.lastActivityAgeMs < basis.debounceMs) {
+    return {
+      eligible: false,
+      reason: 'quiescence_debounce_pending',
+      failClosed: false,
+      basis,
+    };
+  }
+
+  return {
+    eligible: true,
+    reason: QUIESCENT_HANDOFF_START_REASON,
+    failClosed: false,
+    basis,
+  };
+}
+
+/**
  * @param {number} prNumber
  * @param {string} headSha
  */
@@ -175,6 +467,9 @@ export function degradedCiTrackingKey(prNumber, headSha) {
  * @param {number} [input.degradedCiAttempts]
  * @param {number} [input.maxDegradedCiAttempts]
  * @param {number} [input.headCommittedAtMs]
+ * @param {{ sessionId?: string | null, reason?: string, failClosed?: boolean }} [input.ownerResolution]
+ * @param {number} [input.nowMs]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
  */
 export function evaluateHeadReadyForReview({
   reviewRuns,
@@ -187,6 +482,9 @@ export function evaluateHeadReadyForReview({
   degradedCiAttempts = 0,
   maxDegradedCiAttempts = resolveMaxDegradedCiAttempts(),
   headCommittedAtMs,
+  ownerResolution = null,
+  nowMs = Date.now(),
+  workerDeliveries = [],
 }) {
   const reportBindingOptions = { headCommittedAtMs };
   if (hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
@@ -199,22 +497,6 @@ export function evaluateHeadReadyForReview({
 
   if (isHeadCovered(reviewRuns, prNumber, headSha)) {
     return { eligible: false, reason: 'head_covered', route: 'none' };
-  }
-
-  if (!session) {
-    return { eligible: false, reason: 'no_worker_session', route: 'none' };
-  }
-
-  const latestReport = findLatestAcceptedReportForHead(session, headSha, reportBindingOptions);
-  const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
-  const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
-
-  if (!readyForReview && !degradedHandoff) {
-    return {
-      eligible: false,
-      reason: 'uncovered_not_ready',
-      route: 'defer',
-    };
   }
 
   const ciLevel = classifyRequiredCiForReviewTrigger(ciChecks, {
@@ -242,13 +524,32 @@ export function evaluateHeadReadyForReview({
     }
     return {
       eligible: false,
-      reason: degradedHandoff ? 'degraded_ci_worker_handoff' : 'degraded_ci_visibility',
+      reason: isWorkerDegradedCiHandoff(
+        findLatestAcceptedReportForHead(session, headSha, reportBindingOptions),
+      )
+        ? 'degraded_ci_worker_handoff'
+        : 'degraded_ci_visibility',
       route: 'degraded_ci_retry',
       degradedCiAttempts: attempts + 1,
     };
   }
 
-  if (!readyForReview && degradedHandoff) {
+  if (!session) {
+    if (ownerResolution?.failClosed) {
+      return {
+        eligible: false,
+        reason: String(ownerResolution.reason ?? 'no_live_review_target'),
+        route: 'defer',
+      };
+    }
+    return { eligible: false, reason: 'no_worker_session', route: 'none' };
+  }
+
+  const latestReport = findLatestAcceptedReportForHead(session, headSha, reportBindingOptions);
+  const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
+  const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
+
+  if (degradedHandoff && !readyForReview) {
     return {
       eligible: false,
       reason: 'degraded_ci_worker_handoff_pending_resolution',
@@ -257,11 +558,46 @@ export function evaluateHeadReadyForReview({
     };
   }
 
+  if (readyForReview) {
+    return {
+      eligible: true,
+      reason: 'head_ready_for_review',
+      route: 'start_review',
+      ciLevel,
+    };
+  }
+
+  const quiescence = evaluateQuiescentHandoffFallback({
+    session,
+    headSha,
+    nowMs,
+    headCommittedAtMs,
+    workerDeliveries,
+    ownerResolution,
+  });
+
+  if (quiescence.eligible) {
+    return {
+      eligible: true,
+      reason: QUIESCENT_HANDOFF_START_REASON,
+      route: 'start_review',
+      ciLevel,
+      quiescenceBasis: quiescence.basis,
+    };
+  }
+
+  if (quiescence.failClosed) {
+    return {
+      eligible: false,
+      reason: quiescence.reason,
+      route: 'defer',
+    };
+  }
+
   return {
-    eligible: true,
-    reason: 'head_ready_for_review',
-    route: 'start_review',
-    ciLevel,
+    eligible: false,
+    reason: 'uncovered_not_ready',
+    route: 'defer',
   };
 }
 
@@ -291,12 +627,24 @@ export function resolveCurrentPrHeadSha(openPrs, prNumber) {
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [fresh.ciChecks]
  * @param {string[]} [fresh.requiredCheckNames]
  * @param {boolean} [fresh.requiredCheckLookupFailed]
+ * @param {number} [fresh.nowMs]
+ * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
+ * @param {{ sessionId?: string | null, reason?: string, failClosed?: boolean }} [fresh.ownerResolution]
  */
 export function preRunHeadReadyRecheck(planned, fresh) {
   const prNumber = Number(planned?.prNumber);
   const plannedHead = normalizeSha(String(planned?.headSha ?? ''));
   const currentHead = normalizeSha(resolveCurrentPrHeadSha(fresh?.openPrs, prNumber));
   const session = findSessionById(toArray(fresh.sessions), String(planned?.sessionId ?? ''));
+  const nowMs = Number(fresh?.nowMs) || Date.now();
+  const workerDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries: fresh?.workerDeliveries,
+    aoEvents: fresh?.aoEvents,
+    dispatchJournal: fresh?.dispatchJournal,
+    reviewRuns: fresh?.reviewRuns,
+    reactionMessages: fresh?.reactionMessages,
+    nowMs,
+  });
 
   if (!plannedHead || !currentHead) {
     return {
@@ -322,6 +670,12 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     };
   }
 
+  const ownerResolution =
+    fresh?.ownerResolution ??
+    (session
+      ? { sessionId: String(planned?.sessionId ?? ''), reason: 'resolved', failClosed: false }
+      : null);
+
   const decision = evaluateHeadReadyForReview({
     reviewRuns: toArray(fresh.reviewRuns),
     prNumber,
@@ -333,6 +687,9 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     degradedCiAttempts: Number(fresh.degradedCiAttempts ?? 0),
     maxDegradedCiAttempts: resolveMaxDegradedCiAttempts(fresh),
     headCommittedAtMs: resolveHeadCommittedAtMs(fresh?.openPrs, prNumber),
+    ownerResolution,
+    nowMs,
+    workerDeliveries,
   });
 
   return {
@@ -708,6 +1065,24 @@ export function buildNoStartDecisionRecord({
         prNumber,
         headSha: normalizedHead,
         session: null,
+        ciChecks,
+        requiredCheckNames,
+        requiredCheckLookupFailed,
+        headCommittedAtMs,
+      }),
+    };
+  }
+
+  if (reason === 'no_live_review_target' || reason === 'ambiguous_head_owner') {
+    return {
+      branch: reason,
+      reason,
+      primary: reason,
+      failedComponents: [reason],
+      observed: buildReportCiObserved({
+        prNumber,
+        headSha: normalizedHead,
+        session,
         ciChecks,
         requiredCheckNames,
         requiredCheckLookupFailed,

@@ -14,6 +14,7 @@ import {
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
   formatDecisionRecordForLog,
+  mergeWorkerDeliveriesFromPlanInput,
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
@@ -386,6 +387,67 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
 }
 
 /**
+ * Live worker sessions linked to a PR (any liveness).
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ */
+export function listWorkersForPr(sessions, prNumber) {
+  return toArray(sessions).filter((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+  });
+}
+
+/**
+ * Fail-closed owner resolution for quiescence fallback (Issue #261).
+ * Returns exactly one live head owner, or a visible defer reason.
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = []) {
+  const prList = toArray(openPrs);
+  const workers = listWorkersForPr(sessions, prNumber);
+  const owners = workers.filter((session) =>
+    sessionOwnsRunHead(session, prNumber, headSha, prList),
+  );
+  const liveOwners = owners.filter((session) => isLiveWorkerSession(session));
+
+  if (liveOwners.length === 1) {
+    return {
+      sessionId: getSessionIdentifier(liveOwners[0]),
+      reason: 'resolved',
+      failClosed: false,
+    };
+  }
+
+  if (liveOwners.length > 1) {
+    return {
+      sessionId: null,
+      reason: 'ambiguous_head_owner',
+      failClosed: true,
+    };
+  }
+
+  if (owners.some((session) => !isLiveWorkerSession(session))) {
+    return {
+      sessionId: null,
+      reason: 'no_live_review_target',
+      failClosed: true,
+    };
+  }
+
+  return {
+    sessionId: null,
+    reason: 'no_worker_session',
+    failClosed: false,
+  };
+}
+
+/**
  * Pick the live worker session that owns the current PR head (not merely the first PR match).
  *
  * @param {AoSession[]} sessions
@@ -547,6 +609,10 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {Record<string, boolean> | Array<RequiredCheckLookupFailedRow>} [input.requiredCheckLookupFailedByPr]
  * @param {DegradedCiTrackingState} [input.tracking]
  * @param {number} [input.nowMs]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
+ * @param {Record<string, string>} [input.reactionMessages]
  */
 export function planReconcileActions({
   openPrs,
@@ -557,13 +623,25 @@ export function planReconcileActions({
   requiredCheckLookupFailedByPr,
   tracking,
   nowMs = Date.now(),
+  workerDeliveries,
+  aoEvents,
+  dispatchJournal,
+  reactionMessages,
 }) {
-  /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
+  /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
   const prList = toArray(openPrs);
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries,
+    aoEvents,
+    dispatchJournal,
+    reviewRuns: runList,
+    reactionMessages,
+    nowMs,
+  });
 
   for (const pr of prList) {
     const prNumber = Number(pr?.number);
@@ -572,6 +650,12 @@ export function planReconcileActions({
       continue;
     }
 
+    const ownerResolution = resolveStrictHeadOwningWorkerSession(
+      sessionList,
+      prNumber,
+      headSha,
+      prList,
+    );
     const sessionId = resolveHeadOwningWorkerSessionId(sessionList, prNumber, headSha, prList);
     const session = sessionId ? findSessionById(sessionList, sessionId) : null;
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
@@ -594,6 +678,10 @@ export function planReconcileActions({
       degradedCiAttempts,
       maxDegradedCiAttempts: maxDegradedAttempts,
       headCommittedAtMs,
+      ownerResolution,
+      nowMs,
+      workerDeliveries: mergedDeliveries,
+      openPrs: prList,
     });
 
     const decisionRecordBase = {
@@ -621,12 +709,19 @@ export function planReconcileActions({
         });
         continue;
       }
-      actions.push({
+      const startAction = {
         type: 'start_review',
         prNumber,
         headSha,
         sessionId,
-      });
+      };
+      if (decision.reason === 'quiescent_worker_handoff_fallback') {
+        startAction.startReason = decision.reason;
+        if (decision.quiescenceBasis) {
+          startAction.quiescenceBasis = decision.quiescenceBasis;
+        }
+      }
+      actions.push(startAction);
       continue;
     }
 
@@ -651,15 +746,19 @@ export function planReconcileActions({
       });
     }
 
-    if (decision.reason === 'no_worker_session') {
+    if (
+      decision.reason === 'no_worker_session' ||
+      decision.reason === 'no_live_review_target' ||
+      decision.reason === 'ambiguous_head_owner'
+    ) {
       actions.push({
         type: 'skip',
         prNumber,
         headSha,
-        reason: 'no_worker_session',
+        reason: decision.reason,
         record: buildNoStartDecisionRecord({
           ...decisionRecordBase,
-          reason: 'no_worker_session',
+          reason: decision.reason,
         }),
       });
       continue;

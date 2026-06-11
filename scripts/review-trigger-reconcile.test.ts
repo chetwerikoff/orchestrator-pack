@@ -19,6 +19,7 @@ import {
   sessionMatchesIdentifier,
   planReconcileActions,
   resolveHeadOwningWorkerSessionId,
+  resolveStrictHeadOwningWorkerSession,
   resolveWorkerSessionId,
   type PlanReconcileInput,
   type ReconcileAction,
@@ -218,6 +219,80 @@ describe('planReconcileActions', () => {
     expect(actions.some((a) => a.type === 'track_degraded_ci')).toBe(true);
   });
 
+  describe('Issue #261 quiescent handoff fallback', () => {
+    it('AC1: PR #260 / opk-37 idle green head starts via quiescence fallback', () => {
+      const fixture = loadFixture('quiescent-pr260-opk-37.json');
+      const actions = planReconcileActions(fixture);
+      const starts = startReviewActions(actions);
+      expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
+      expect(starts[0]).toMatchObject({
+        prNumber: 260,
+        sessionId: fixture.expect?.sessionId ?? 'opk-37',
+        headSha: '42bf1490dbe8829667d2835b937a33e7af9d82f1',
+        startReason: 'quiescent_worker_handoff_fallback',
+      });
+      expect(starts[0]?.quiescenceBasis?.pendingUnconsumedDelivery).toBe(false);
+    });
+
+    it('AC2: actively working owner without ready_for_review still defers', () => {
+      const fixture = loadFixture('uncovered-no-report.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
+    });
+
+    it('AC3: idle owner within debounce window defers', () => {
+      const fixture = loadFixture('quiescent-within-debounce.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
+    });
+
+    it('AC3a: pending unconsumed delivery defers despite idle stable head', () => {
+      const fixture = loadFixture('quiescent-pending-delivery.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'uncovered_not_ready')).toBe(true);
+    });
+
+    it('AC5: stale ready on older head with quiescent owner starts', () => {
+      const fixture = loadFixture('stale-ready-quiescent-starts.json');
+      const starts = startReviewActions(planReconcileActions(fixture));
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
+    });
+
+    it('AC8: not-live owner fails closed with no_live_review_target', () => {
+      const fixture = loadFixture('quiescent-not-live-owner.json');
+      const skip = skipActions(planReconcileActions(fixture))[0];
+      expect(skip?.reason).toBe('no_live_review_target');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+    });
+
+    it('AC9: live replacement quiescent owner starts; active replacement defers', () => {
+      const starts = startReviewActions(planReconcileActions(loadFixture('live-replacement-quiescent.json')));
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.sessionId).toBe('opk-live-replacement');
+      expect(startReviewActions(planReconcileActions(loadFixture('live-replacement-active.json')))).toHaveLength(0);
+    });
+
+    it('AC10: ambiguous live owners fail closed', () => {
+      const skip = skipActions(planReconcileActions(loadFixture('ambiguous-head-owner.json')))[0];
+      expect(skip?.reason).toBe('ambiguous_head_owner');
+      expect(
+        resolveStrictHeadOwningWorkerSession(
+          loadFixture('ambiguous-head-owner.json').sessions,
+          90,
+          'sharedhead90aa',
+          loadFixture('ambiguous-head-owner.json').openPrs,
+        ).failClosed,
+      ).toBe(true);
+    });
+
+    it('AC12: covered head on second tick does not start again', () => {
+      const fixture = loadFixture('quiescent-idempotent-second-tick.json');
+      expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
+      expect(skipActions(planReconcileActions(fixture)).some((a) => a.reason === 'head_covered')).toBe(true);
+    });
+  });
+
   it('AC4: split-brain uses live worker session only (no lifecycle in review argv)', () => {
     const fixture = loadFixture('split-brain-live-worker.json');
     const actions = planReconcileActions(fixture);
@@ -389,17 +464,18 @@ describe('resolveWorkerSessionId', () => {
           status: 'detecting',
         },
       ],
+      ciChecksByPr: {
+        '55': greenChecks,
+      },
     };
     const actions = planReconcileActions(fixture);
     expect(startReviewActions(actions)).toHaveLength(0);
     const skip = actions.find(
       (a): a is Extract<ReconcileAction, { type: 'skip' }> =>
-        a.type === 'skip' && a.reason === 'no_worker_session',
+        a.type === 'skip' && a.reason === 'no_live_review_target',
     );
     expect(skip).toBeDefined();
-    expect(skip?.record?.branch).toBe('no_worker_session');
-    expect(skip?.record?.primary).toBe('no_worker_session');
-    expect(skip?.record?.failedComponents).toEqual(['no_worker_session']);
+    expect(skip?.record?.reason).toBe('no_live_review_target');
   });
 
   it('ignores orchestrator sessions', () => {
