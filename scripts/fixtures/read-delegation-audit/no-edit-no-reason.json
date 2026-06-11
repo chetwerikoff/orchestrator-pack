@@ -1,11 +1,17 @@
 {
-  "description": "trigger fired, not delegated, no edit — flagged",
+  "description": "trigger fired, not delegated, no edit \u2014 flagged",
   "surface": "cursor",
   "workUnits": [
     {
       "key": "unit-flagged",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/flagged-target.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/flagged-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "edits": [],
       "statusText": "single bulk read without delegation"
     }
@@ -15,6 +21,8 @@
     "triggerFired": true,
     "excludedFromDenominator": false,
     "flagged": true,
-    "inDenominator": true
+    "inDenominator": true,
+    "reviewerPath": false,
+    "codeClass": false
   }
 }

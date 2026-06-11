@@ -1,8 +1,8 @@
 {
-  "description": "reviewer-path session — excluded from denominator",
+  "description": "captured reviewer execution marker from tracked review wrapper — excluded from denominator",
   "surface": "cursor",
-  "reviewerPath": true,
-  "env": { "PACK_REVIEWER": "codex" },
+  "reviewSignal": { "present": true, "source": "tracked-review-wrapper", "kind": "review-execution" },
+  "env": { "PACK_REVIEWER": "<redacted>", "REVIEW_COMMAND": "<redacted>" },
   "workUnits": [
     {
       "key": "unit-review",
@@ -17,6 +17,8 @@
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,
-    "inDenominator": false
+    "inDenominator": false,
+    "reviewerPath": true,
+    "codeClass": false
   }
 }

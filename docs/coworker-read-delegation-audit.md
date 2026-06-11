@@ -17,7 +17,7 @@ Hook entry: [`scripts/invoke-read-delegation-audit-stop.ps1`](../scripts/invoke-
 | **Triggers** | T1 file-read floor **>400 lines**; diff/log **>200 lines** (independent of T1). File-count fires only with **≥400 combined lines** (folded T2). |
 | **Tolerant signal** | Emits a compliance finding; never blocks. |
 | **Not flagged** (still in denominator) | Machine-observed `coworker ask --profile code`; edit of any file in unit; excepted reason in status. |
-| **Excluded from denominator** | Code-class (`--allow-code`) reads; reviewer-path session (`PACK_REVIEWER` / `REVIEW_COMMAND`). |
+| **Excluded from denominator** | Code-class (`--allow-code`) reads; actual review executions carrying a trusted per-work-unit marker from the tracked review wrapper. Ambient machine-global reviewer env such as `PACK_REVIEWER` / `REVIEW_COMMAND` never excludes an ordinary unit. |
 | **Delegation proof** | Status text alone does **not** count — coworker invocation or coworker-log record tied to the work-unit key. |
 | **Fail-open + fail-loud** | Handler errors exit 0 (no wedge) and append `audit_error` health records; degraded windows never read as zero residual. |
 | **Concurrency** | Append-only JSONL metric artifact; stable `eventId` per work unit; duplicate stop events do not double-count. |
@@ -30,7 +30,9 @@ Per adoption window the summarize command reports:
 
 - `residualNonCompliance` = flagged work units ÷ delegable trigger-firing work units
 - `flaggedReadLines` — aggregate volume of flagged reads
-- `auditErrors` / `missingWindows` — per-surface health (degraded when >0)
+- `denominatorCause` — closed-set cause for the window: `normal`, `no-trigger`, or `all-excluded`
+- `reviewHookCaptureBranch` — standing capability loaded from the versioned capture record: `world-a-no-review-hook`, `world-b-hook-present`, or runtime `unknown` when missing/stale/malformed
+- `auditErrors` / `missingWindows` — per-surface health (degraded when >0); all-excluded and unknown capability windows are also degraded/fail-loud
 
 ```bash
 node docs/read-delegation-audit.mjs summarize <<'EOF'
@@ -40,7 +42,7 @@ EOF
 
 ## Operator adoption (post-merge)
 
-Machine-local hook JSON is **not** tracked. Wire the same handler on both surfaces.
+For installations that already point both Stop/stop hooks at `scripts/invoke-read-delegation-audit-stop.ps1`, no hook JSON wiring change is required for #264. Machine-local hook JSON is **not** tracked; new installations should wire the same handler on both surfaces.
 
 ### 1. Resync tracked policy copies
 
@@ -71,8 +73,8 @@ Add a `stop` entry alongside existing hooks (e.g. RTK `beforeShellExecution`):
 
 Replace `/ABS/PATH/TO/orchestrator-pack` with your checkout path.
 
-**Verify:** complete one Cursor worker turn with a known fixture or a >400-line read; confirm
-`~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line. The stop
+**Verify:** complete one fresh no-side-effect Cursor worker turn with an ordinary >400-line read; confirm
+`~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line with `reviewerPath:false` and `inDenominator:true`. The stop
 hook passes `transcript_path` in its stdin JSON; the handler derives reads/edits/shell events
 from that transcript when `workUnits` / `events` are not pre-populated.
 
@@ -93,7 +95,7 @@ Add a `Stop` hook (file is gitignored — operator-local only):
 }
 ```
 
-**Verify:** same JSONL artifact append as Cursor after a Claude session completes one work unit.
+**Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >400-line work unit (`reviewerPath:false`, `inDenominator:true`).
 
 ### 4. Restart AO
 

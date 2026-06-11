@@ -1,0 +1,23 @@
+{
+  "description": "hook event has marker-shaped review signal without trusted source — not excluded; capability degrades unknown",
+  "surface": "cursor",
+  "reviewSignal": { "present": true, "kind": "review-execution" },
+  "workUnits": [
+    {
+      "key": "unit-undecidable-marker",
+      "inboundRequestId": "req-1",
+      "reads": [{ "path": "docs/flagged-target.md", "lines": 450, "kind": "file" }],
+      "edits": [],
+      "statusText": "ambiguous marker"
+    }
+  ],
+  "expect": {
+    "fixtureClass": "undecidable-review-marker",
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true,
+    "reviewerPath": false,
+    "codeClass": false
+  }
+}

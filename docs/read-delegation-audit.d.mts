@@ -27,10 +27,25 @@ export type WorkUnit = {
   codeClassGated?: boolean;
 };
 
+export type ReviewSignal = {
+  present?: boolean;
+  isReviewExecution?: boolean;
+  kind?: string;
+  source?: string;
+};
+
+export type HookWiringFingerprint = {
+  wrapper?: string;
+  wrapperHash?: string;
+  commandShape?: string;
+};
+
 export type SessionContext = {
   surface: 'cursor' | 'claude';
   reviewerPath?: boolean;
   env?: Record<string, string | undefined>;
+  reviewSignal?: ReviewSignal;
+  hookWiringFingerprint?: HookWiringFingerprint;
 };
 
 export type TriggerDetail = {
@@ -53,6 +68,9 @@ export type AuditVerdict = {
   flagged: boolean;
   trigger: TriggerDetail;
   reviewerPath: boolean;
+  reviewSignalState?: string;
+  auditSchemaVersion?: number;
+  hookWiringFingerprint?: HookWiringFingerprint;
   codeClass: boolean;
   selfAttestedDelegation: boolean;
   machineObservedDelegation: boolean;
@@ -64,13 +82,17 @@ export declare const T1_VOLUME_FLOOR: 400;
 export declare const DIFF_LOG_FLOOR: 200;
 export declare const T2_MIN_FILES: 3;
 export declare const SURFACES: readonly ['cursor', 'claude'];
+export declare const AUDIT_SCHEMA_VERSION: 2;
+export declare const REVIEW_HOOK_CAPABILITY_RECORD_PATH: string;
 
 export declare function normalizeReads(value: unknown): ReadEntry[];
 export declare function aggregateDelegableFileLines(reads: ReadEntry[]): number;
 export declare function aggregateDiffLogLines(reads: ReadEntry[]): number;
 export declare function countDelegableFiles(reads: ReadEntry[]): number;
 export declare function didAskTriggerFire(reads: ReadEntry[]): TriggerDetail;
+export declare function normalizeReviewSignal(value: unknown): { present: boolean; source: string; trusted: boolean; undecidable: boolean };
 export declare function isReviewerPathSession(session: SessionContext): boolean;
+export declare function reviewMarkerState(session: SessionContext): string;
 export declare function isCodeClassUnit(unit: WorkUnit): boolean;
 export declare function hasExceptedReason(statusText: string | undefined): boolean;
 export declare function hasSelfAttestedDelegation(unit: WorkUnit): boolean;
@@ -84,18 +106,24 @@ export declare function auditWorkUnits(
 export declare function partitionEventsIntoWorkUnits(
   events: Array<Record<string, unknown>>,
 ): WorkUnit[];
+export declare function computeDenominatorCause(verdicts: AuditVerdict[]): string;
 export declare function summarizeAuditVerdicts(verdicts: AuditVerdict[]): {
   delegableTriggerUnits: number;
   flaggedUnits: number;
   flaggedReadLines: number;
   residualNonCompliance: number;
+  denominatorCause: string;
+  denominatorEmptyCause?: string;
 };
 export declare function readMetricEventIds(artifactPath: string): Set<string>;
 export declare function appendMetricRecord(
   artifactPath: string,
   record: Record<string, unknown>,
 ): { appended: boolean; duplicate: boolean; artifactPath: string };
-export declare function loadMetricWindowSummary(artifactPath: string): Record<string, unknown>;
+export declare function currentAuditCodeHashes(): Record<string, string>;
+export declare function currentHookWiringFingerprint(): HookWiringFingerprint;
+export declare function loadReviewHookCapability(recordPath?: string): Record<string, unknown>;
+export declare function loadMetricWindowSummary(artifactPath: string, options?: { capabilityRecordPath?: string }): Record<string, unknown>;
 export declare function evaluateStopAudit(
   payload: Record<string, unknown>,
   options?: { skipPopulate?: boolean },

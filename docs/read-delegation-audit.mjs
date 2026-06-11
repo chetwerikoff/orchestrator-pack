@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 /** T1 single-question volume floor (canonical; drift-checked in tracked policy). */
@@ -28,6 +29,30 @@ export const DIFF_LOG_FLOOR = 200;
 export const T2_MIN_FILES = 3;
 
 export const SURFACES = ['cursor', 'claude'];
+
+export const AUDIT_SCHEMA_VERSION = 2;
+export const REVIEW_HOOK_CAPTURE_BRANCHES = {
+  WORLD_A_NO_REVIEW_HOOK: 'world-a-no-review-hook',
+  WORLD_B_HOOK_PRESENT: 'world-b-hook-present',
+  UNKNOWN: 'unknown',
+};
+export const DENOMINATOR_CAUSES = {
+  NO_TRIGGER: 'no-trigger',
+  ALL_EXCLUDED: 'all-excluded',
+  NORMAL: 'normal',
+};
+export const REVIEW_SIGNAL_SOURCES = {
+  TRACKED_REVIEW_WRAPPER: 'tracked-review-wrapper',
+  AMBIENT_ENV: 'ambient-env',
+};
+
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+export const REVIEW_HOOK_CAPABILITY_RECORD_PATH = join(
+  repoRoot,
+  'docs',
+  'read-delegation-review-hook-capability.json',
+);
+const STOP_HOOK_WRAPPER_RELATIVE_PATH = 'scripts/invoke-read-delegation-audit-stop.ps1';
 
 const EXCEPTED_REASON_PATTERNS = [
   /\bbelow the floor\b/i,
@@ -193,15 +218,41 @@ export function didAskTriggerFire(reads) {
 /**
  * @param {import('./read-delegation-audit.d.mts').SessionContext} session
  */
-export function isReviewerPathSession(session) {
-  if (session.reviewerPath === true) {
-    return true;
+export function normalizeReviewSignal(value) {
+  if (!isRecord(value)) {
+    return { present: false, source: 'absent', trusted: false, undecidable: false };
   }
-  const env = session.env ?? {};
-  return Boolean(
-    (typeof env.PACK_REVIEWER === 'string' && env.PACK_REVIEWER.trim()) ||
-      (typeof env.REVIEW_COMMAND === 'string' && env.REVIEW_COMMAND.trim()),
-  );
+  const present = value.present === true || value.isReviewExecution === true || value.kind === 'review-execution';
+  const source = String(value.source ?? '');
+  const trusted = present && source === REVIEW_SIGNAL_SOURCES.TRACKED_REVIEW_WRAPPER;
+  const ambient = present && source === REVIEW_SIGNAL_SOURCES.AMBIENT_ENV;
+  return {
+    present,
+    source: source || (present ? 'undecidable' : 'absent'),
+    trusted,
+    undecidable: present && !trusted && !ambient,
+  };
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').SessionContext} session
+ */
+export function isReviewerPathSession(session) {
+  return normalizeReviewSignal(session.reviewSignal).trusted;
+}
+
+export function reviewMarkerState(session) {
+  const signal = normalizeReviewSignal(session.reviewSignal);
+  if (signal.trusted) {
+    return 'trusted-review-execution';
+  }
+  if (signal.undecidable) {
+    return 'undecidable';
+  }
+  if (signal.present) {
+    return 'ambient';
+  }
+  return 'absent';
 }
 
 /**
@@ -273,6 +324,7 @@ export function auditWorkUnit(unit, session) {
   const reads = normalizeReads(unit.reads);
   const trigger = didAskTriggerFire(reads);
   const reviewerPath = isReviewerPathSession(session);
+  const reviewSignalState = reviewMarkerState(session);
   const codeClass = isCodeClassUnit({ ...unit, reads });
   const excludedFromDenominator = reviewerPath || codeClass;
   const triggerFired = excludedFromDenominator ? trigger.rawFired : trigger.fired;
@@ -288,6 +340,9 @@ export function auditWorkUnit(unit, session) {
       flagged: false,
       trigger,
       reviewerPath,
+      reviewSignalState,
+      auditSchemaVersion: AUDIT_SCHEMA_VERSION,
+      hookWiringFingerprint: session.hookWiringFingerprint,
       codeClass,
       selfAttestedDelegation: false,
       machineObservedDelegation: false,
@@ -314,6 +369,9 @@ export function auditWorkUnit(unit, session) {
     flagged,
     trigger,
     reviewerPath,
+    reviewSignalState,
+    auditSchemaVersion: AUDIT_SCHEMA_VERSION,
+    hookWiringFingerprint: session.hookWiringFingerprint,
     codeClass,
     selfAttestedDelegation,
     machineObservedDelegation,
@@ -389,6 +447,17 @@ export function partitionEventsIntoWorkUnits(events) {
   return [...units.values()];
 }
 
+export function computeDenominatorCause(verdicts) {
+  const triggerFiring = verdicts.filter((verdict) => verdict.triggerFired);
+  if (triggerFiring.some((verdict) => verdict.inDenominator)) {
+    return DENOMINATOR_CAUSES.NORMAL;
+  }
+  if (triggerFiring.some((verdict) => verdict.excludedFromDenominator)) {
+    return DENOMINATOR_CAUSES.ALL_EXCLUDED;
+  }
+  return DENOMINATOR_CAUSES.NO_TRIGGER;
+}
+
 /**
  * @param {import('./read-delegation-audit.d.mts').AuditVerdict[]} verdicts
  */
@@ -400,12 +469,16 @@ export function summarizeAuditVerdicts(verdicts) {
     0,
   );
 
+  const denominatorCause = computeDenominatorCause(verdicts);
+
   return {
     delegableTriggerUnits: denominator.length,
     flaggedUnits: flagged.length,
     flaggedReadLines,
     residualNonCompliance:
       denominator.length === 0 ? 0 : flagged.length / denominator.length,
+    denominatorCause,
+    denominatorEmptyCause: denominator.length === 0 ? denominatorCause : undefined,
   };
 }
 
@@ -967,10 +1040,150 @@ export function appendMetricRecord(artifactPath, record) {
   }
 }
 
+
+export function sha256File(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+export function currentAuditCodeHashes() {
+  const files = [
+    'docs/read-delegation-audit.mjs',
+    STOP_HOOK_WRAPPER_RELATIVE_PATH,
+  ];
+  const hashes = {};
+  for (const relativePath of files) {
+    hashes[relativePath] = sha256File(join(repoRoot, relativePath));
+  }
+  return hashes;
+}
+
+export function currentHookWiringFingerprint() {
+  const wrapperHash = sha256File(join(repoRoot, STOP_HOOK_WRAPPER_RELATIVE_PATH));
+  return {
+    wrapper: STOP_HOOK_WRAPPER_RELATIVE_PATH,
+    wrapperHash,
+    commandShape: 'pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]',
+  };
+}
+
+function validateCapabilityEntry(entry, surface) {
+  if (!isRecord(entry)) {
+    return { branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN, degraded: true, reason: 'missing-entry' };
+  }
+  const branch = String(entry.branch ?? '');
+  if (
+    branch !== REVIEW_HOOK_CAPTURE_BRANCHES.WORLD_A_NO_REVIEW_HOOK &&
+    branch !== REVIEW_HOOK_CAPTURE_BRANCHES.WORLD_B_HOOK_PRESENT
+  ) {
+    return { branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN, degraded: true, reason: 'invalid-branch' };
+  }
+  if (String(entry.surface ?? surface) !== surface) {
+    return { branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN, degraded: true, reason: 'surface-mismatch' };
+  }
+
+  const expectedHashes = currentAuditCodeHashes();
+  const recordedHashes = isRecord(entry.codeHashes) ? entry.codeHashes : {};
+  for (const [relativePath, hash] of Object.entries(expectedHashes)) {
+    if (recordedHashes[relativePath] !== hash) {
+      return { branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN, degraded: true, reason: `hash-mismatch:${relativePath}` };
+    }
+  }
+
+  const expectedFingerprint = currentHookWiringFingerprint();
+  const recordedFingerprint = isRecord(entry.hookWiringFingerprint) ? entry.hookWiringFingerprint : {};
+  if (
+    recordedFingerprint.wrapper !== expectedFingerprint.wrapper ||
+    recordedFingerprint.wrapperHash !== expectedFingerprint.wrapperHash ||
+    recordedFingerprint.commandShape !== expectedFingerprint.commandShape
+  ) {
+    return { branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN, degraded: true, reason: 'hook-fingerprint-mismatch' };
+  }
+
+  return { branch, degraded: false, reason: 'ok' };
+}
+
+export function loadReviewHookCapability(recordPath = REVIEW_HOOK_CAPABILITY_RECORD_PATH) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(recordPath, 'utf8'));
+  } catch {
+    return {
+      branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+      degraded: true,
+      reason: 'missing-or-unreadable',
+      bySurface: Object.fromEntries(SURFACES.map((surface) => [surface, {
+        branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+        degraded: true,
+        reason: 'missing-or-unreadable',
+      }])),
+    };
+  }
+  if (!isRecord(parsed) || parsed.kind !== 'read-delegation-review-hook-capability.v1') {
+    return {
+      branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+      degraded: true,
+      reason: 'malformed',
+      bySurface: Object.fromEntries(SURFACES.map((surface) => [surface, {
+        branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+        degraded: true,
+        reason: 'malformed',
+      }])),
+    };
+  }
+  const entries = isRecord(parsed.surfaces) ? parsed.surfaces : {};
+  const bySurface = {};
+  for (const surface of SURFACES) {
+    bySurface[surface] = validateCapabilityEntry(entries[surface], surface);
+  }
+  const degraded = Object.values(bySurface).some((entry) => entry.degraded);
+  const branches = [...new Set(Object.values(bySurface).map((entry) => entry.branch))];
+  return {
+    branch: degraded || branches.length !== 1 ? REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN : branches[0],
+    degraded: degraded || branches.length !== 1,
+    reason: degraded ? 'surface-capability-degraded' : 'ok',
+    bySurface,
+  };
+}
+
+function capabilityForVerdicts(capability, verdicts) {
+  if (verdicts.some((verdict) => verdict.reviewSignalState === 'undecidable')) {
+    return {
+      branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+      degraded: true,
+      reason: 'undecidable-review-marker',
+      bySurface: capability.bySurface,
+    };
+  }
+  const observedFingerprints = verdicts
+    .map((verdict) => verdict.hookWiringFingerprint)
+    .filter((fingerprint) => fingerprint !== undefined);
+  if (observedFingerprints.length > 0) {
+    const expected = currentHookWiringFingerprint();
+    const mismatch = observedFingerprints.some((fingerprint) => {
+      if (!isRecord(fingerprint)) return true;
+      return fingerprint.wrapper !== expected.wrapper ||
+        fingerprint.wrapperHash !== expected.wrapperHash ||
+        fingerprint.commandShape !== expected.commandShape;
+    });
+    if (mismatch) {
+      return {
+        branch: REVIEW_HOOK_CAPTURE_BRANCHES.UNKNOWN,
+        degraded: true,
+        reason: 'live-hook-fingerprint-mismatch',
+        bySurface: capability.bySurface,
+      };
+    }
+  }
+  return capability;
+}
+
 /**
  * @param {string} artifactPath
  */
-export function loadMetricWindowSummary(artifactPath) {
+export function loadMetricWindowSummary(artifactPath, options = {}) {
+  const capability = loadReviewHookCapability(
+    typeof options.capabilityRecordPath === 'string' ? options.capabilityRecordPath : REVIEW_HOOK_CAPABILITY_RECORD_PATH,
+  );
   if (!existsSync(artifactPath)) {
     return {
       delegableTriggerUnits: 0,
@@ -979,7 +1192,10 @@ export function loadMetricWindowSummary(artifactPath) {
       residualNonCompliance: 0,
       auditErrors: 0,
       missingWindows: 0,
-      degraded: false,
+      denominatorCause: DENOMINATOR_CAUSES.NO_TRIGGER,
+      reviewHookCaptureBranch: capability.branch,
+      reviewHookCapability: capability,
+      degraded: capability.degraded,
       bySurface: {},
     };
   }
@@ -988,7 +1204,7 @@ export function loadMetricWindowSummary(artifactPath) {
   const verdicts = [];
   let auditErrors = 0;
   let missingWindows = 0;
-  /** @type {Record<string, { delegableTriggerUnits: number, flaggedUnits: number, auditErrors: number }>} */
+  /** @type {Record<string, { delegableTriggerUnits: number, flaggedUnits: number, auditErrors: number, denominatorCause?: string, reviewHookCaptureBranch?: string }>} */
   const bySurface = {};
 
   const text = readFileSync(artifactPath, 'utf8');
@@ -1024,6 +1240,12 @@ export function loadMetricWindowSummary(artifactPath) {
       continue;
     }
     if (parsed.kind === 'work_unit_verdict' && isRecord(parsed.verdict)) {
+      if (parsed.verdict.auditSchemaVersion !== AUDIT_SCHEMA_VERSION) {
+        continue;
+      }
+      if (parsed.hookWiringFingerprint !== undefined && parsed.verdict.hookWiringFingerprint === undefined) {
+        parsed.verdict.hookWiringFingerprint = parsed.hookWiringFingerprint;
+      }
       verdicts.push(/** @type {import('./read-delegation-audit.d.mts').AuditVerdict} */ (parsed.verdict));
       const surface = String(parsed.surface ?? parsed.verdict.surface ?? 'unknown');
       bySurface[surface] = bySurface[surface] ?? {
@@ -1041,11 +1263,21 @@ export function loadMetricWindowSummary(artifactPath) {
   }
 
   const summary = summarizeAuditVerdicts(verdicts);
+  const effectiveCapability = capabilityForVerdicts(capability, verdicts);
+  for (const surface of Object.keys(bySurface)) {
+    const surfaceVerdicts = verdicts.filter((verdict) => String(verdict.surface ?? surface) === surface);
+    bySurface[surface].denominatorCause = summarizeAuditVerdicts(surfaceVerdicts).denominatorCause;
+    bySurface[surface].reviewHookCaptureBranch = isRecord(effectiveCapability.bySurface?.[surface])
+      ? effectiveCapability.bySurface[surface].branch
+      : effectiveCapability.branch;
+  }
   return {
     ...summary,
     auditErrors,
     missingWindows,
-    degraded: auditErrors > 0 || missingWindows > 0,
+    reviewHookCaptureBranch: effectiveCapability.branch,
+    reviewHookCapability: effectiveCapability,
+    degraded: auditErrors > 0 || missingWindows > 0 || effectiveCapability.degraded || summary.denominatorCause === DENOMINATOR_CAUSES.ALL_EXCLUDED,
     bySurface,
   };
 }
@@ -1134,14 +1366,31 @@ export function evaluateStopAudit(payload, options = {}) {
 
   const session = {
     surface,
-    reviewerPath: enriched.reviewerPath === true,
     env: isRecord(enriched.env) ? enriched.env : {},
+    reviewSignal: isRecord(enriched.reviewSignal)
+      ? enriched.reviewSignal
+      : isRecord(enriched.reviewExecution)
+        ? enriched.reviewExecution
+        : {
+            present: enriched.reviewerPath === true || enriched.reviewMarkerPresent === true,
+            source: String(enriched.reviewerPathSource ?? enriched.reviewMarkerSource ?? 'undecidable'),
+          },
+    hookWiringFingerprint: isRecord(enriched.hookWiringFingerprint)
+      ? enriched.hookWiringFingerprint
+      : currentHookWiringFingerprint(),
   };
 
   const units = resolveAuditWorkUnits(enriched);
 
   const verdicts = auditWorkUnits(units, session);
-  const summary = summarizeAuditVerdicts(verdicts);
+  const baseSummary = summarizeAuditVerdicts(verdicts);
+  const effectiveCapability = capabilityForVerdicts(loadReviewHookCapability(), verdicts);
+  const summary = {
+    ...baseSummary,
+    reviewHookCaptureBranch: effectiveCapability.branch,
+    reviewHookCapability: effectiveCapability,
+    degraded: effectiveCapability.degraded || baseSummary.denominatorCause === DENOMINATOR_CAUSES.ALL_EXCLUDED,
+  };
 
   return {
     surface,
@@ -1180,6 +1429,8 @@ export function runStopAudit(payload) {
         surface: result.surface,
         eventId: perUnitEventId,
         emittedAtMs: Number(enriched.nowMs) || Date.now(),
+        auditSchemaVersion: AUDIT_SCHEMA_VERSION,
+        hookWiringFingerprint: verdict.hookWiringFingerprint,
         verdict,
       });
     }

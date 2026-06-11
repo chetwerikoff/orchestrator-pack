@@ -11,6 +11,7 @@ import {
   auditWorkUnits,
   countFileLinesFromDisk,
   countTextLines,
+  currentHookWiringFingerprint,
   evaluateStopAudit,
   matchesCoworkerAskCommand,
   extractEventsFromTranscript,
@@ -37,6 +38,8 @@ type StopAuditResult = {
     flaggedUnits: number;
     flaggedReadLines: number;
     residualNonCompliance: number;
+    denominatorCause?: string;
+    reviewHookCaptureBranch?: string;
   };
   flags: AuditVerdict[];
   error?: string;
@@ -59,12 +62,16 @@ type FixtureExpect = {
   diffLog?: boolean;
   selfAttestedDelegation?: boolean;
   machineObservedDelegation?: boolean;
+  reviewerPath?: boolean;
+  codeClass?: boolean;
 };
 
 type FixturePayload = {
   description?: string;
   surface?: string;
   reviewerPath?: boolean;
+  reviewerPathSource?: string;
+  reviewSignal?: Record<string, unknown>;
   env?: Record<string, string>;
   workUnits?: Array<Record<string, unknown>>;
   events?: Array<Record<string, unknown>>;
@@ -74,6 +81,8 @@ type FixturePayload = {
     delegableTriggerUnits: number;
     flaggedUnits: number;
     residualNonCompliance: number;
+    denominatorCause?: string;
+    reviewHookCaptureBranch?: string;
   };
   injectError?: boolean;
   expectHealth?: boolean;
@@ -90,6 +99,8 @@ function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResul
   return evaluateStopAudit({
     surface,
     reviewerPath: fixture.reviewerPath,
+    reviewerPathSource: fixture.reviewerPathSource,
+    reviewSignal: fixture.reviewSignal,
     env: fixture.env,
     workUnits: fixture.workUnits,
     events: fixture.events,
@@ -120,6 +131,9 @@ const equivalenceFixtures = [
   'cumulative-chunks.json',
   'code-class-excluded.json',
   'reviewer-path-excluded.json',
+  'ambient-reviewer-env-ordinary.json',
+  'ambient-review-marker-ordinary.json',
+  'undecidable-review-marker.json',
   'diff-log-below-t1.json',
   'self-attested-delegation.json',
 ];
@@ -168,6 +182,12 @@ describe('equivalence-class fixtures', () => {
       if (expectRow.machineObservedDelegation !== undefined) {
         expect(verdict.machineObservedDelegation).toBe(expectRow.machineObservedDelegation);
       }
+      if (expectRow.reviewerPath !== undefined) {
+        expect(verdict.reviewerPath).toBe(expectRow.reviewerPath);
+      }
+      if (expectRow.codeClass !== undefined) {
+        expect(verdict.codeClass).toBe(expectRow.codeClass);
+      }
     });
   }
 });
@@ -186,6 +206,8 @@ describe('detection parity (Claude vs Cursor)', () => {
       expect(cursor.verdicts.map((row) => row.excludedFromDenominator)).toEqual(
         claude.verdicts.map((row) => row.excludedFromDenominator),
       );
+      expect(cursor.summary.denominatorCause).toBe(claude.summary.denominatorCause);
+      expect(cursor.summary.reviewHookCaptureBranch).toBe(claude.summary.reviewHookCaptureBranch);
     });
   }
 });
@@ -222,6 +244,110 @@ describe('metric emission', () => {
     expect(result.summary.residualNonCompliance).toBe(
       fixture.expectSummary?.residualNonCompliance,
     );
+  });
+
+
+  it('distinguishes all-excluded from no-trigger windows by structured cause', () => {
+    const noTrigger = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        { key: 'unit-low', inboundRequestId: 'req-1', reads: [{ path: 'docs/a.md', lines: 20, kind: 'file' }] },
+      ],
+    }) as StopAuditResult;
+    expect(noTrigger.summary.denominatorCause).toBe('no-trigger');
+
+    const allExcluded = evaluateStopAudit({
+      surface: 'cursor',
+      reviewSignal: { present: true, source: 'tracked-review-wrapper', kind: 'review-execution' },
+      workUnits: [
+        { key: 'unit-review', inboundRequestId: 'req-1', reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }] },
+        { key: 'unit-low', inboundRequestId: 'req-2', reads: [{ path: 'docs/b.md', lines: 20, kind: 'file' }] },
+      ],
+    }) as StopAuditResult;
+    expect(allExcluded.summary.denominatorCause).toBe('all-excluded');
+  });
+
+  it('loads the persisted review-hook capability on ordinary live summaries', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
+    const artifactPath = path.join(dir, 'metrics.jsonl');
+    runStopAudit({
+      surface: 'cursor',
+      workUnits: (loadFixture('ambient-reviewer-env-ordinary.json').workUnits ?? []) as WorkUnit[],
+      artifactPath,
+      eventId: 'evt-live-capability',
+      nowMs: 1_700_000_000_003,
+    }) as StopAuditResult;
+    const summary = loadMetricWindowSummary(artifactPath);
+    expect(summary.reviewHookCaptureBranch).toBe('world-a-no-review-hook');
+    expect(summary.degraded).toBe(false);
+  });
+
+  it('fails loud for malformed, stale, and live-mismatched capability provenance', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-capability-'));
+    const artifactPath = path.join(dir, 'metrics.jsonl');
+    const malformed = path.join(dir, 'malformed.json');
+    fs.writeFileSync(malformed, '{');
+    expect(loadMetricWindowSummary(artifactPath, { capabilityRecordPath: malformed }).reviewHookCaptureBranch).toBe('unknown');
+
+    const stale = path.join(dir, 'stale.json');
+    const capability = JSON.parse(fs.readFileSync(path.join(repoRoot, 'docs/read-delegation-review-hook-capability.json'), 'utf8'));
+    capability.surfaces.cursor.codeHashes['docs/read-delegation-audit.mjs'] = 'stale';
+    fs.writeFileSync(stale, JSON.stringify(capability));
+    const staleSummary = loadMetricWindowSummary(artifactPath, { capabilityRecordPath: stale });
+    expect(staleSummary.reviewHookCaptureBranch).toBe('unknown');
+    expect(staleSummary.degraded).toBe(true);
+
+    appendMetricRecord(artifactPath, {
+      kind: 'work_unit_verdict',
+      eventId: 'evt-bad-fingerprint',
+      surface: 'cursor',
+      auditSchemaVersion: 2,
+      hookWiringFingerprint: { ...currentHookWiringFingerprint(), wrapperHash: 'stale' },
+      verdict: {
+        ...auditWorkUnit(
+          { key: 'unit-a', inboundRequestId: 'req-1', reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }] },
+          { surface: 'cursor' },
+        ),
+        hookWiringFingerprint: { ...currentHookWiringFingerprint(), wrapperHash: 'stale' },
+      },
+    });
+    const mismatchSummary = loadMetricWindowSummary(artifactPath);
+    expect(mismatchSummary.reviewHookCaptureBranch).toBe('unknown');
+    expect(mismatchSummary.degraded).toBe(true);
+  });
+
+  it('quarantines pre-fix schema rows in mixed JSONL artifacts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-mixed-schema-'));
+    const artifactPath = path.join(dir, 'mixed.jsonl');
+    fs.writeFileSync(artifactPath, `${JSON.stringify({
+      kind: 'work_unit_verdict',
+      eventId: 'legacy-poison',
+      surface: 'cursor',
+      verdict: {
+        workUnitKey: 'legacy',
+        inboundRequestId: 'req-old',
+        surface: 'cursor',
+        triggerFired: true,
+        excludedFromDenominator: true,
+        inDenominator: false,
+        flagged: false,
+        reviewerPath: true,
+        trigger: { fileLines: 900, diffLogLines: 0 },
+      },
+    })}\n`);
+    appendMetricRecord(artifactPath, {
+      kind: 'work_unit_verdict',
+      eventId: 'new-good',
+      surface: 'cursor',
+      verdict: auditWorkUnit(
+        { key: 'new', inboundRequestId: 'req-new', reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }] },
+        { surface: 'cursor' },
+      ),
+    });
+    const summary = loadMetricWindowSummary(artifactPath);
+    expect(summary.delegableTriggerUnits).toBe(1);
+    expect(summary.flaggedUnits).toBe(1);
+    expect(summary.denominatorCause).toBe('normal');
   });
 
   it('emits machine-readable window summary from artifact', () => {
