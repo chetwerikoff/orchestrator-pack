@@ -89,6 +89,8 @@ export interface StartReviewAction {
   prNumber: number;
   headSha: string;
   sessionId: string;
+  startReason?: string;
+  quiescenceBasis?: Record<string, unknown>;
 }
 
 export interface NoStartDecisionRecord {
@@ -153,6 +155,10 @@ export interface PlanReconcileInput {
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: DegradedCiTrackingState;
   nowMs?: number;
+  workerDeliveries?: Array<Record<string, unknown>>;
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
 }
 
 export interface ReconcileIntervalAccept {
@@ -230,6 +236,22 @@ export declare function sessionOwnsRunHead(
   headSha: string,
   openPrs?: OpenPr[],
 ): boolean;
+
+export declare function listWorkersForPr(
+  sessions: AoSession[],
+  prNumber: number,
+): AoSession[];
+
+export declare function resolveStrictHeadOwningWorkerSession(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): {
+  sessionId: string | null;
+  reason: string;
+  failClosed: boolean;
+};
 
 export declare function resolveHeadOwningWorkerSessionId(
   sessions: AoSession[],

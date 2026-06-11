@@ -33,12 +33,79 @@ export declare function hasReadyForReviewForHead(
 
 export declare function degradedCiTrackingKey(prNumber: number, headSha: string): string;
 
+export declare const QUIESCENCE_DEBOUNCE_MS: number;
+export declare const ACTIVELY_WORKING_REPORT_STATES: ReadonlySet<string>;
+export declare const ACTIVELY_WORKING_SESSION_STATUSES: ReadonlySet<string>;
+export declare const QUIESCENT_HANDOFF_START_REASON: 'quiescent_worker_handoff_fallback';
+
+export declare function parseLastActivityAgeMs(
+  lastActivity: string | undefined | null,
+): number | null;
+
+export declare function mergeWorkerDeliveriesFromPlanInput(input?: {
+  workerDeliveries?: Array<Record<string, unknown>>;
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reviewRuns?: ReviewRun[];
+  reactionMessages?: Record<string, string>;
+  nowMs?: number;
+}): Array<Record<string, unknown>>;
+
+export declare function hasPendingUnconsumedDelivery(
+  session: AoSession,
+  sessionId: string,
+  workerDeliveries?: Array<Record<string, unknown>>,
+): boolean;
+
+export declare function isWorkerActivelyWorking(
+  session: AoSession,
+  headSha: string,
+  nowMs: number,
+  options?: {
+    headCommittedAtMs?: number;
+    debounceMs?: number;
+    workerDeliveries?: Array<Record<string, unknown>>;
+  },
+): boolean;
+
+export declare function evaluateWorkerQuiescenceBasis(
+  session: AoSession,
+  headSha: string,
+  nowMs: number,
+  options?: {
+    headCommittedAtMs?: number;
+    debounceMs?: number;
+    workerDeliveries?: Array<Record<string, unknown>>;
+  },
+): Record<string, unknown>;
+
+export interface OwnerResolution {
+  sessionId?: string | null;
+  reason?: string;
+  failClosed?: boolean;
+}
+
+export declare function evaluateQuiescentHandoffFallback(input: {
+  session: AoSession | null;
+  headSha: string;
+  nowMs: number;
+  headCommittedAtMs?: number;
+  workerDeliveries?: Array<Record<string, unknown>>;
+  ownerResolution?: OwnerResolution | null;
+}): {
+  eligible: boolean;
+  reason: string;
+  failClosed?: boolean;
+  basis?: Record<string, unknown>;
+};
+
 export interface HeadReadyDecision {
   eligible: boolean;
   reason: string;
   route?: string;
   ciLevel?: ReviewTriggerCiLevel;
   degradedCiAttempts?: number;
+  quiescenceBasis?: Record<string, unknown>;
 }
 
 export declare function evaluateHeadReadyForReview(input: {
@@ -52,6 +119,9 @@ export declare function evaluateHeadReadyForReview(input: {
   degradedCiAttempts?: number;
   maxDegradedCiAttempts?: number;
   headCommittedAtMs?: number;
+  ownerResolution?: OwnerResolution | null;
+  nowMs?: number;
+  workerDeliveries?: Array<Record<string, unknown>>;
 }): HeadReadyDecision;
 
 export interface PreRunHeadReadyRecheckResult {
@@ -66,7 +136,12 @@ export declare function resolveCurrentPrHeadSha(
 ): string;
 
 export declare function preRunHeadReadyRecheck(
-  planned: { prNumber?: number; headSha?: string; sessionId?: string },
+  planned: {
+    prNumber?: number;
+    headSha?: string;
+    sessionId?: string;
+    startReason?: string;
+  },
   fresh: {
     openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
     reviewRuns?: ReviewRun[];
@@ -76,6 +151,12 @@ export declare function preRunHeadReadyRecheck(
     requiredCheckLookupFailed?: boolean;
     degradedCiAttempts?: number;
     maxDegradedCiAttempts?: number;
+    nowMs?: number;
+    workerDeliveries?: Array<Record<string, unknown>>;
+    ownerResolution?: OwnerResolution | null;
+    aoEvents?: Array<Record<string, unknown>>;
+    dispatchJournal?: Record<string, Record<string, unknown>>;
+    reactionMessages?: Record<string, string>;
   },
 ): PreRunHeadReadyRecheckResult;
 
