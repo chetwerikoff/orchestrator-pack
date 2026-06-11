@@ -370,6 +370,23 @@ describe('preRunHeadReadyRecheck', () => {
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
   });
 
+  it('Issue #261 AC11b: aborts quiescence start when strict ownership becomes ambiguous', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string; startReason: string };
+      fresh: {
+        nowMs: number;
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reasonPrefix: string };
+    }>('pre-run-owner-ambiguous.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
   it('Issue #261 AC11: aborts quiescence start when worker resumes activity', () => {
     const fixture = loadFixture<{
       planned: { prNumber: number; headSha: string; sessionId: string; startReason: string };

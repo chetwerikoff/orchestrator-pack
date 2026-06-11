@@ -428,20 +428,22 @@ export function listWorkersForPr(sessions, prNumber) {
 export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = []) {
   const prList = toArray(openPrs);
   const workers = listWorkersForPr(sessions, prNumber);
-  const owners = workers.filter((session) =>
-    sessionOwnsRunHead(session, prNumber, headSha, prList),
+  const explicitOwners = workers.filter((session) =>
+    sessionExplicitlyOwnsHead(session, headSha),
   );
-  const liveOwners = owners.filter((session) => isLiveWorkerSession(session));
+  const liveExplicitOwners = explicitOwners.filter((session) =>
+    isLiveWorkerSession(session),
+  );
 
-  if (liveOwners.length === 1) {
+  if (liveExplicitOwners.length === 1) {
     return {
-      sessionId: getSessionIdentifier(liveOwners[0]),
+      sessionId: getSessionIdentifier(liveExplicitOwners[0]),
       reason: 'resolved',
       failClosed: false,
     };
   }
 
-  if (liveOwners.length > 1) {
+  if (liveExplicitOwners.length > 1) {
     return {
       sessionId: null,
       reason: 'ambiguous_head_owner',
@@ -449,7 +451,24 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
     };
   }
 
-  if (owners.some((session) => !isLiveWorkerSession(session))) {
+  if (explicitOwners.some((session) => !isLiveWorkerSession(session))) {
+    return {
+      sessionId: null,
+      reason: 'no_live_review_target',
+      failClosed: true,
+    };
+  }
+
+  const implicitOwners = workers.filter(
+    (session) =>
+      !sessionExplicitlyOwnsHead(session, headSha) &&
+      sessionOwnsRunHead(session, prNumber, headSha, prList),
+  );
+  const liveImplicitOwners = implicitOwners.filter((session) =>
+    isLiveWorkerSession(session),
+  );
+
+  if (implicitOwners.some((session) => !isLiveWorkerSession(session))) {
     return {
       sessionId: null,
       reason: 'no_live_review_target',
@@ -461,6 +480,56 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
     sessionId: null,
     reason: 'no_worker_session',
     failClosed: false,
+  };
+}
+
+/**
+ * Resolve the worker session used for reconcile eligibility and review starts.
+ * Prefer the strict head owner when resolved; never fall back to legacy selection
+ * when strict resolution fails closed.
+ *
+ * @param {AoSession[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {OpenPr[]} [openPrs]
+ */
+export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = []) {
+  const sessionList = toArray(sessions);
+  const prList = toArray(openPrs);
+  const ownerResolution = resolveStrictHeadOwningWorkerSession(
+    sessionList,
+    prNumber,
+    headSha,
+    prList,
+  );
+
+  if (ownerResolution.failClosed) {
+    return {
+      ownerResolution,
+      sessionId: null,
+      session: null,
+    };
+  }
+
+  if (ownerResolution.sessionId) {
+    const sessionId = ownerResolution.sessionId;
+    return {
+      ownerResolution,
+      sessionId,
+      session: findSessionById(sessionList, sessionId),
+    };
+  }
+
+  const sessionId = resolveHeadOwningWorkerSessionId(
+    sessionList,
+    prNumber,
+    headSha,
+    prList,
+  );
+  return {
+    ownerResolution,
+    sessionId,
+    session: sessionId ? findSessionById(sessionList, sessionId) : null,
   };
 }
 
@@ -667,14 +736,12 @@ export function planReconcileActions({
       continue;
     }
 
-    const ownerResolution = resolveStrictHeadOwningWorkerSession(
+    const { ownerResolution, sessionId, session } = resolveReconcileEvaluationSession(
       sessionList,
       prNumber,
       headSha,
       prList,
     );
-    const sessionId = resolveHeadOwningWorkerSessionId(sessionList, prNumber, headSha, prList);
-    const session = sessionId ? findSessionById(sessionList, sessionId) : null;
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);
     const requiredCheckLookupFailed = getRequiredCheckLookupFailedForPr(

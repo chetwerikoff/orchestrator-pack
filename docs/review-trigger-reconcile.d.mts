@@ -257,6 +257,21 @@ export declare function resolveStrictHeadOwningWorkerSession(
   failClosed: boolean;
 };
 
+export declare function resolveReconcileEvaluationSession(
+  sessions: AoSession[],
+  prNumber: number,
+  headSha: string,
+  openPrs?: OpenPr[],
+): {
+  ownerResolution: {
+    sessionId: string | null;
+    reason: string;
+    failClosed: boolean;
+  };
+  sessionId: string | null;
+  session: AoSession | null;
+};
+
 export declare function resolveHeadOwningWorkerSessionId(
   sessions: AoSession[],
   prNumber: number,

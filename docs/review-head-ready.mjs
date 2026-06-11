@@ -31,6 +31,7 @@ import {
   normalizeSha,
   reportCoversHead,
   resolveHeadCommittedAtMs,
+  resolveReconcileEvaluationSession,
   toArray,
 } from './review-trigger-reconcile.mjs';
 
@@ -648,7 +649,6 @@ export function preRunHeadReadyRecheck(planned, fresh) {
   const prNumber = Number(planned?.prNumber);
   const plannedHead = normalizeSha(String(planned?.headSha ?? ''));
   const currentHead = normalizeSha(resolveCurrentPrHeadSha(fresh?.openPrs, prNumber));
-  const session = findSessionById(toArray(fresh.sessions), String(planned?.sessionId ?? ''));
   const nowMs = Number(fresh?.nowMs) || Date.now();
   const workerDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries: fresh?.workerDeliveries,
@@ -683,11 +683,45 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     };
   }
 
-  const ownerResolution =
-    fresh?.ownerResolution ??
-    (session
-      ? { sessionId: String(planned?.sessionId ?? ''), reason: 'resolved', failClosed: false }
-      : null);
+  const resolved =
+    fresh?.ownerResolution != null
+      ? {
+          ownerResolution: fresh.ownerResolution,
+          session:
+            fresh.ownerResolution.sessionId && !fresh.ownerResolution.failClosed
+              ? findSessionById(
+                  toArray(fresh.sessions),
+                  String(fresh.ownerResolution.sessionId),
+                )
+              : null,
+        }
+      : resolveReconcileEvaluationSession(
+          toArray(fresh.sessions),
+          prNumber,
+          currentHead,
+          toArray(fresh.openPrs),
+        );
+  const ownerResolution = resolved.ownerResolution;
+  const session = resolved.session;
+
+  const plannedSessionId = String(planned?.sessionId ?? '');
+  const plannedStartReason = String(planned?.startReason ?? '');
+  if (
+    plannedStartReason === QUIESCENT_HANDOFF_START_REASON &&
+    ownerResolution.sessionId &&
+    plannedSessionId &&
+    plannedSessionId !== ownerResolution.sessionId
+  ) {
+    return {
+      emitReviewRun: false,
+      reason: 'pre_run_recheck_owner_drift',
+      decision: {
+        eligible: false,
+        reason: 'owner_drift_since_plan',
+        route: 'none',
+      },
+    };
+  }
 
   const decision = evaluateHeadReadyForReview({
     reviewRuns: toArray(fresh.reviewRuns),

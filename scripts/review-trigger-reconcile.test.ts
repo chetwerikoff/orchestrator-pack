@@ -290,6 +290,21 @@ describe('planReconcileActions', () => {
       expect(startReviewActions(planReconcileActions(loadFixture('live-replacement-active.json')))).toHaveLength(0);
     });
 
+    it('AC10b: strict explicit owner wins over legacy report-history pick for quiescence', () => {
+      const fixture = loadFixture('quiescent-strict-owner-over-legacy-report.json');
+      const legacyId = resolveHeadOwningWorkerSessionId(
+        fixture.sessions,
+        92,
+        'newhead92abcd',
+        fixture.openPrs,
+      );
+      expect(legacyId).toBe('opk-stale-report');
+      const starts = startReviewActions(planReconcileActions(fixture));
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.sessionId).toBe('opk-strict-owner');
+      expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
+    });
+
     it('AC10: ambiguous live owners fail closed', () => {
       const skip = skipActions(planReconcileActions(loadFixture('ambiguous-head-owner.json')))[0];
       expect(skip?.reason).toBe('ambiguous_head_owner');
