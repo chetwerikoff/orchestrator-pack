@@ -523,6 +523,22 @@ describe('preRunHeadReadyRecheck', () => {
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
   });
 
+  it('aborts non-quiescent start when strict head owner drifts before run', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: [];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+      };
+      expect: { emitReviewRun: boolean; reason: string };
+    }>('pre-run-owner-drift.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toBe(fixture.expect.reason);
+  });
+
   it('aborts when PR head advanced since plan', () => {
     const fixture = loadFixture<{
       planned: { prNumber: number; headSha: string; sessionId: string };

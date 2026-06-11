@@ -755,9 +755,7 @@ export function preRunHeadReadyRecheck(planned, fresh) {
   const session = resolved.session;
 
   const plannedSessionId = String(planned?.sessionId ?? '');
-  const plannedStartReason = String(planned?.startReason ?? '');
   if (
-    plannedStartReason === QUIESCENT_HANDOFF_START_REASON &&
     ownerResolution.sessionId &&
     plannedSessionId &&
     plannedSessionId !== ownerResolution.sessionId
@@ -773,11 +771,16 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     };
   }
 
+  const sessionForRecheck =
+    plannedSessionId
+      ? findSessionById(toArray(fresh.sessions), plannedSessionId)
+      : session;
+
   const decision = evaluateHeadReadyForReview({
     reviewRuns: toArray(fresh.reviewRuns),
     prNumber,
     headSha: currentHead,
-    session: session ?? null,
+    session: sessionForRecheck ?? null,
     ciChecks: toArray(fresh.ciChecks),
     requiredCheckNames: toArray(fresh.requiredCheckNames),
     requiredCheckLookupFailed: Boolean(fresh.requiredCheckLookupFailed),
