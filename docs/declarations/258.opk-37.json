@@ -1,0 +1,43 @@
+{
+  "issue_number": 258,
+  "iteration_id": "opk-37",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-10T10:21:01.858Z",
+  "baseline": {
+    "commit_sha": "5d1b90129b7c5d05a4bea85eb4fc366d09a1850b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9c8ffe3c1f9c2dbbbbf0f49f9656ee241edaf0f119c8c65cc0ce6f02ca81292a"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "prompts/investigate_root_cause.md",
+    "plugins/ao-codex-pr-reviewer/README.md",
+    "plugins/ao-codex-pr-reviewer/lib/run_review.ts",
+    "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
+    "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
+    "scripts/lib/Get-AutoReviewPrContext.ps1",
+    "scripts/review-architect-artifact.ps1",
+    "docs/declarations/258.opk-37.json"
+  ],
+  "declared_globs": [
+    "plugins/ao-codex-pr-reviewer/lib/**",
+    "plugins/ao-codex-pr-reviewer/tests/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:b7c270466ad33b43dbe3031741e21d2c9a386d93883709afc95897a68a03008e",
+      "new_active_scope_hash": "sha256:9c8ffe3c1f9c2dbbbbf0f49f9656ee241edaf0f119c8c65cc0ce6f02ca81292a",
+      "changed": {
+        "added": [
+          "docs/declarations/258.opk-37.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in scope",
+      "actor": "opk-37",
+      "timestamp": "2026-06-10T10:21:20.802Z",
+      "applied": true
+    }
+  ]
+}

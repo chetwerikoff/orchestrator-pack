@@ -378,5 +378,12 @@ function Add-PackReviewAutoForwardArgs {
         }
     }
 
+  # Trusted local AO review: pass explicit --source codex-local (fail-closed sandbox
+  # in the wrapper rejects env-derived defaults). CI callers must pass their own source.
+    if ($ForwardArgs -notcontains '--source' -and $env:GITHUB_ACTIONS -ne 'true') {
+        $ForwardArgs.Add('--source') | Out-Null
+        $ForwardArgs.Add('codex-local') | Out-Null
+    }
+
     return $autoCtx
 }

@@ -82,9 +82,33 @@ populated for the called reusable workflow pin — do not rely on them or on
 `./node_modules/.bin/tsx` inside the pack checkout so caller repos do not need
 `tsx` installed.
 
-For untrusted PR workspaces (`codex-github-action` / `PR_REPO_ROOT`), Codex runs
-with `--sandbox read-only` (no sandbox bypass) and the child process env omits
-`GH_TOKEN` and related CI secrets so prompt injection cannot exfiltrate them.
+### Sandbox trust split (coworker delegation)
+
+Trusted local PR review requires an **explicit** `--source codex-local` on the
+CLI (the canonical `run-pack-review.ps1` / `invoke-pack-review.ps1` entrypoints
+inject this on non-CI hosts). Env-derived defaults apply only to finding
+metadata, not sandbox trust. With explicit `codex-local`, no CI/Actions signal,
+and no `PR_REPO_ROOT`, Codex runs with `--sandbox workspace-write` and
+`sandbox_workspace_write.network_access=true` so the reviewer can spawn the
+external `coworker` CLI (exec + outbound network) per pack policy.
+
+Untrusted PR workspaces (`codex-github-action`, `PR_REPO_ROOT`, omitted
+`--source`, or `codex-local` under a CI/Actions signal) keep fail-closed
+`--sandbox read-only` containment.
+
+Both paths omit `GH_TOKEN`, `GITHUB_TOKEN`, `CODEX_AUTH_JSON`, and related CI
+secrets from the Codex child env so prompt injection cannot exfiltrate them
+(trusted local review is network-capable and still reviews PR diffs). Codex
+CLI auth uses `~/.codex` on disk, not those env vars.
+
+Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
+`codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always
+trusted-local and coworker-capable. The script strips the same exfiltratable env
+vars as the PR wrapper before spawning Codex.
+
+The Windows AO 0.9.2 patch path (`scripts/patch-codex-review4.ps1`) is legacy:
+it still invokes `codex exec --sandbox read-only` without network and is **not**
+coworker-capable. Pack review uses the scoped wrapper above, not that path.
 
 Use this path if you want review results visible on the GitHub PR rather than
 only in the local AO dashboard.

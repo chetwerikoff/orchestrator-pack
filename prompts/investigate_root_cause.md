@@ -325,8 +325,10 @@ NO_FINDINGS
 --- MEMO ---
 $memo
 "@
-codex review $prompt
+codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true $prompt
 ```
+
+Trusted architect review selects `workspace-write` and enables outbound network (`-c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) so Codex can spawn `coworker` during memo review.
 
 Revise the memo for valid findings; stop after cycle 3 and list open questions.
 
