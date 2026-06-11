@@ -10,6 +10,7 @@
 
 $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
+$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
 
 function Resolve-ReviewStartClaimNamespace {
     param([string]$StateRoot = '')
@@ -144,27 +145,17 @@ function Test-ReviewStartClaimRunVisible {
         if ($runPr -ne $PrNumber) { continue }
         $target = ([string]$run.targetSha).Trim().ToLowerInvariant()
         if ($target -ne $normalized) { continue }
-        return $true
+        $status = ([string]$run.status).Trim().ToLowerInvariant()
+        if ($status -in $Script:ReviewStartClaimCoveredRunStatuses) {
+            return $true
+        }
     }
     return $false
 }
 
 function Test-ReviewStartClaimRetryEligible {
     param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
-    $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
-    $matched = @()
-    foreach ($run in @($ReviewRuns)) {
-        $runPr = 0
-        if (-not [int]::TryParse([string]$run.prNumber, [ref]$runPr)) { continue }
-        if ($runPr -ne $PrNumber) { continue }
-        if (([string]$run.targetSha).Trim().ToLowerInvariant() -eq $normalized) { $matched += $run }
-    }
-    if ($matched.Count -eq 0) { return $true }
-    foreach ($run in $matched) {
-        $status = ([string]$run.status).Trim().ToLowerInvariant()
-        if ($status -in @('failed', 'cancelled')) { return $true }
-    }
-    return $false
+    return -not (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $HeadSha)
 }
 
 function Enter-ReviewStartClaimMutex {

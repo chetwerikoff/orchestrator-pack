@@ -185,6 +185,59 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.messages.join('\n')).toContain('below safe floor');
   });
 
+  it('treats failed and cancelled runs as non-covering while covered statuses still count', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $runs = @(
+        @{ prNumber = 266; targetSha = $sha; status = 'failed' },
+        @{ prNumber = 266; targetSha = $sha; status = 'cancelled' },
+        @{ prNumber = 266; targetSha = $sha; status = 'running' }
+      )
+      [pscustomobject]@{
+        visibleFailedOnly = (Test-ReviewStartClaimRunVisible -ReviewRuns @(@{ prNumber = 266; targetSha = $sha; status = 'failed' }) -PrNumber 266 -HeadSha $sha)
+        visibleQueued = (Test-ReviewStartClaimRunVisible -ReviewRuns @(@{ prNumber = 266; targetSha = $sha; status = 'queued' }) -PrNumber 266 -HeadSha $sha)
+        retryFailedOnly = (Test-ReviewStartClaimRetryEligible -ReviewRuns @(@{ prNumber = 266; targetSha = $sha; status = 'failed' }) -PrNumber 266 -HeadSha $sha)
+        retryFailedPlusRunning = (Test-ReviewStartClaimRetryEligible -ReviewRuns $runs -PrNumber 266 -HeadSha $sha)
+      } | ConvertTo-Json -Compress
+    `);
+    const result = JSON.parse(output);
+    expect(result.visibleFailedOnly).toBe(false);
+    expect(result.visibleQueued).toBe(true);
+    expect(result.retryFailedOnly).toBe(true);
+    expect(result.retryFailedPlusRunning).toBe(false);
+  });
+
+  it('does not release a claim for retry when a covering run is visible alongside a failed one', () => {
+    const dir = tempClaimDir();
+    try {
+      const output = runPwsh(`
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $result = Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @(
+          @{ prNumber = 266; targetSha = $sha; status = 'failed' },
+          @{ prNumber = 266; targetSha = $sha; status = 'running' }
+        ) -Failure 'fixture non-zero'
+        [pscustomobject]@{
+          ok = [bool]$result.ok
+          outcome = [string]$result.outcome
+          reason = [string]$result.reason
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*escalated_ambiguous*.json').Name)
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
+        } | ConvertTo-Json -Compress
+      `);
+      const result = JSON.parse(output);
+      expect(result.ok).toBe(true);
+      expect(result.outcome).toBe('escalated_ambiguous');
+      expect(result.terminal).toHaveLength(1);
+      expect(result.activeExists).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('releases a held reeval claim when the in-claim recheck snapshot throws', () => {
     const dir = tempClaimDir();
     try {
