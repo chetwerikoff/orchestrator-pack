@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "cad12292979fcc633d06428a7fe549b5dcfa8177",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:1474184692beeb68e7e3089b092891877489942b7ef5c777b445e93ad4635281"
+    "active_scope_hash": "sha256:5a54d521f329a45b6c34e92d364acb3b2e6ca47d4343ea92cd4858a1a5c5405b"
   },
   "declared_paths": [
     "docs/architecture.md",
@@ -18,10 +18,26 @@
     "scripts/review-head-ready.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
-    "tests/external-output-references/trigger-fixture-classification.json"
+    "tests/external-output-references/trigger-fixture-classification.json",
+    "docs/declarations/261.opk-40.json"
   ],
   "declared_globs": [
     "tests/fixtures/review-trigger-reconcile/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:1474184692beeb68e7e3089b092891877489942b7ef5c777b445e93ad4635281",
+      "new_active_scope_hash": "sha256:5a54d521f329a45b6c34e92d364acb3b2e6ca47d4343ea92cd4858a1a5c5405b",
+      "changed": {
+        "added": [
+          "docs/declarations/261.opk-40.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in scope",
+      "actor": "opk-40",
+      "timestamp": "2026-06-11T03:12:25.719Z",
+      "applied": true
+    }
+  ]
 }
