@@ -97,17 +97,23 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > the block. If a PR head is behind base (`not mergeable: head … not up to date`),
 > run `gh pr update-branch <N>` first, then re-run the merge.
 
-> **Publication runs through Cursor by default (every mode, single or batch).**
-> The architect does **not** run the publish mechanics (branch, commit, push, PR,
-> merge, issue create/re-sync) by hand when `cursor-agent` is on `PATH`. Delegate
-> the whole publish to **one** `cursor-agent -p --force` call in the architect
-> working tree (workspace defaults to the current directory — do **not** pass
-> `-w`/`--worktree`) so it acts on the drafts exactly as they sit on disk. The
-> manual PowerShell/`gh` commands in the steps below are the **fallback** — use
-> them only when `cursor-agent` is missing, errors out, or leaves the PR/issues
-> half-done, and tell the user Cursor was unavailable.
+> **Publication runs DIRECTLY by default (every mode, single or batch).** The
+> architect runs the publish mechanics (branch, commit, push, PR, merge, issue
+> create/re-sync) itself, using the manual PowerShell/`gh` steps below. Direct
+> `gh pr create` / `gh pr merge` / `gh issue create` is blocked by the publish
+> hook — prefix **`AO_PUBLISH_FALLBACK=1`** on those commands; that is the
+> sanctioned path, not a workaround. This is the default because it is **cheaper
+> and deterministic**: no second agent, and fewer architect tokens than composing
+> a delegation prompt — the publish is a fixed command with nothing to reason
+> about, so there is nothing to offload.
+>
+> **Optional — delegate to Cursor.** Handing the whole publish to **one**
+> `cursor-agent -p --force` call (prompt below) is an OPTIONAL alternative; use it
+> only if you specifically want to offload to Cursor. It is **no longer the
+> default**. (If you are yourself the Cursor CLI, never call `cursor-agent` — no
+> nested Cursor — just run the direct steps.)
 
-**Delegation prompt** (fill the `<…>` placeholders; covers single draft and batch):
+**Optional delegation prompt** (only if offloading to Cursor; fill the `<…>` placeholders; covers single draft and batch):
 
 ```bash
 cursor-agent -p --force "$(cat <<'EOF'
@@ -300,10 +306,10 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 ## Do not
 
-- Run the publish git/`gh` mechanics by hand when `cursor-agent` is available —
-  delegate to Cursor first; the manual commands are the fallback only.
-- Hand-edit, wholesale-stage, or reset `docs/issue_queue_index.md` — Cursor owns the index
-  during publish; selective single-row staging only (see Index ownership).
+- Delegate publish to `cursor-agent` by default — the direct
+  `AO_PUBLISH_FALLBACK=1` path is the default now; Cursor delegation is optional.
+- Hand-edit, wholesale-stage, or reset `docs/issue_queue_index.md` — selective
+  single-row staging only (see Index ownership), whoever runs the publish.
 - Put any issue reference (`Refs #N`, bare `#N`, issue URL) in a spec-only PR body —
   the no-ceremony scope guard rejects it.
 - Open a PR in sync-only mode — that is the whole point of the default.

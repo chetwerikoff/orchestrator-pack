@@ -343,7 +343,7 @@ Whenever you add a new draft or first sync a draft to GitHub:
 Do not add open/closed/shipped columns to the registry — live state stays in
 GitHub (`gh issue view`).
 
-## Publish via Cursor CLI (default)
+## Publish (default: direct via AO_PUBLISH_FALLBACK; Cursor optional)
 
 > **Self-delegation guard — am I Cursor?** The `cursor-agent` delegation in this
 > section is **only** for a non-Cursor architect (Claude Code) handing the GitHub
@@ -359,9 +359,14 @@ GitHub (`gh issue view`).
 > the block. If a PR head is behind base, run `gh pr update-branch <N>` first.
 
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
-questions recorded), **you do not run `gh issue create` or open the publish PR
-yourself.** Delegate publishing to the Cursor CLI worker; it reads the local
-draft from the current working tree and lands it.
+questions recorded), **run `gh issue create` and open the publish PR yourself**,
+directly, prefixing **`AO_PUBLISH_FALLBACK=1`** on the hook-blocked
+`gh issue create` / `gh pr create` / `gh pr merge` commands. This is the default:
+cheaper and deterministic — no second agent, and fewer architect tokens than
+composing a delegation prompt; the publish is a fixed command with nothing to
+reason about, so there is nothing to offload. Delegating to the Cursor CLI worker
+(mechanism below) is an **optional** alternative — use it only if you specifically
+want to offload to Cursor.
 
 **Mechanism — direct `cursor-agent`, not `ao spawn`.** `ao spawn` revives a
 worker against an issue that *already exists*, in a fresh checkout; it can
