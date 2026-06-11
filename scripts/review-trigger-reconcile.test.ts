@@ -305,6 +305,14 @@ describe('planReconcileActions', () => {
       expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
     });
 
+    it('AC10d: implicit owner ambiguity still honors ready_for_review report binding', () => {
+      const fixture = loadFixture('implicit-ready-report-handoff.json');
+      const starts = startReviewActions(planReconcileActions(fixture));
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.sessionId).toBe('op-ready');
+      expect(starts[0]?.startReason).toBeUndefined();
+    });
+
     it('AC10c: ambiguous implicit live owners fail closed without legacy pick', () => {
       const fixture = loadFixture('ambiguous-implicit-owners.json');
       expect(startReviewActions(planReconcileActions(fixture))).toHaveLength(0);
@@ -584,7 +592,6 @@ describe('resolveWorkerSessionId', () => {
           role: 'worker',
           prNumber: 58,
           status: 'idle',
-          ownedHeadSha: headSha,
           reports: [
             {
               reportState: 'ready_for_review',

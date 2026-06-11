@@ -7,6 +7,8 @@ export declare const COVERED_TERMINAL_REVIEW_STATUSES: ReadonlySet<string>;
 export declare const NON_LIVE_WORKER_SESSION_STATUSES: ReadonlySet<string>;
 export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 
+export declare const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON: 'ambiguous_implicit_head_owner';
+
 export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;

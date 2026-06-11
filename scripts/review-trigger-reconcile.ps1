@@ -186,11 +186,21 @@ function Get-ReconcileDeliveryPayload {
     }
 
     return @{
+        workerDeliveries   = @()
         aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
         dispatchJournal    = Get-WorkerMessageDispatchJournal
         reviewRuns         = @(Get-AoReviewRuns -Project $Project)
         reactionMessages   = Get-ReconcileReactionMessages
     }
+}
+
+function Get-ReconcileWorkerDeliveries {
+    param($Deliveries)
+
+    if ($null -eq $Deliveries) {
+        return @()
+    }
+    return @($Deliveries)
 }
 
 function Get-PreRunRecheckSnapshot {
@@ -216,7 +226,7 @@ function Get-PreRunRecheckSnapshot {
         requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
         aoEvents                        = @($deliveryPayload.aoEvents)
         dispatchJournal                 = $deliveryPayload.dispatchJournal
-        workerDeliveries                = @($deliveryPayload.workerDeliveries)
+        workerDeliveries                = Get-ReconcileWorkerDeliveries $deliveryPayload.workerDeliveries
         reactionMessages                = $deliveryPayload.reactionMessages
     }
 }
@@ -252,7 +262,7 @@ function Test-PreRunHeadReadyRecheck {
             requiredCheckLookupFailed     = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
             aoEvents                      = @($fresh.aoEvents)
             dispatchJournal               = $fresh.dispatchJournal
-            workerDeliveries              = @($fresh.workerDeliveries)
+            workerDeliveries              = Get-ReconcileWorkerDeliveries $fresh.workerDeliveries
             reactionMessages              = $fresh.reactionMessages
             nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
@@ -361,7 +371,7 @@ function Invoke-ReconcileTick {
             requiredCheckLookupFailedByPr = $payload.requiredCheckLookupFailedByPr
             aoEvents                      = @($payload.aoEvents)
             dispatchJournal               = $payload.dispatchJournal
-            workerDeliveries              = @($payload.workerDeliveries)
+            workerDeliveries              = Get-ReconcileWorkerDeliveries $payload.workerDeliveries
             reactionMessages              = $payload.reactionMessages
         }
     }

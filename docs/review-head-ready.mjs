@@ -19,6 +19,7 @@ import {
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
 import {
+  AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
   collectSessionIdentifiers,
   findCoveringRunForHead,
   findFailedOrCancelledRunForHead,
@@ -234,7 +235,9 @@ export function parseLastActivityAgeMs(lastActivity) {
  * @param {object} input
  */
 export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
-  const explicit = toArray(input.workerDeliveries);
+  const explicit = toArray(input.workerDeliveries).filter(
+    (entry) => entry != null && typeof entry === 'object',
+  );
   if (
     explicit.length > 0 ||
     (!input.aoEvents && !input.dispatchJournal && !input.reviewRuns)
@@ -471,6 +474,42 @@ export function degradedCiTrackingKey(prNumber, headSha) {
 
 /**
  * @param {object} input
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} input.session
+ * @param {string} input.headSha
+ * @param {{ headCommittedAtMs?: number }} input.reportBindingOptions
+ * @param {number} input.degradedCiAttempts
+ * @param {number} input.maxDegradedCiAttempts
+ */
+function buildDegradedCiRetryDecision({
+  session,
+  headSha,
+  reportBindingOptions,
+  degradedCiAttempts,
+  maxDegradedCiAttempts,
+}) {
+  const attempts = Math.max(0, Number(degradedCiAttempts) || 0);
+  if (attempts >= maxDegradedCiAttempts) {
+    return {
+      eligible: false,
+      reason: 'degraded_ci_escalate_operator',
+      route: 'escalate_operator',
+      degradedCiAttempts: attempts,
+    };
+  }
+  return {
+    eligible: false,
+    reason: isWorkerDegradedCiHandoff(
+      findLatestAcceptedReportForHead(session, headSha, reportBindingOptions),
+    )
+      ? 'degraded_ci_worker_handoff'
+      : 'degraded_ci_visibility',
+    route: 'degraded_ci_retry',
+    degradedCiAttempts: attempts + 1,
+  };
+}
+
+/**
+ * @param {object} input
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
  * @param {string} input.headSha
@@ -537,28 +576,6 @@ export function evaluateHeadReadyForReview({
     return { eligible: false, reason: 'no_worker_session', route: 'none' };
   }
 
-  if (ciLevel === 'degraded') {
-    const attempts = Math.max(0, Number(degradedCiAttempts) || 0);
-    if (attempts >= maxDegradedCiAttempts) {
-      return {
-        eligible: false,
-        reason: 'degraded_ci_escalate_operator',
-        route: 'escalate_operator',
-        degradedCiAttempts: attempts,
-      };
-    }
-    return {
-      eligible: false,
-      reason: isWorkerDegradedCiHandoff(
-        findLatestAcceptedReportForHead(session, headSha, reportBindingOptions),
-      )
-        ? 'degraded_ci_worker_handoff'
-        : 'degraded_ci_visibility',
-      route: 'degraded_ci_retry',
-      degradedCiAttempts: attempts + 1,
-    };
-  }
-
   const latestReport = findLatestAcceptedReportForHead(session, headSha, reportBindingOptions);
   const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
   const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
@@ -573,11 +590,28 @@ export function evaluateHeadReadyForReview({
   }
 
   if (readyForReview) {
+    if (ciLevel === 'degraded') {
+      return buildDegradedCiRetryDecision({
+        session,
+        headSha,
+        reportBindingOptions,
+        degradedCiAttempts,
+        maxDegradedCiAttempts,
+      });
+    }
     return {
       eligible: true,
       reason: 'head_ready_for_review',
       route: 'start_review',
       ciLevel,
+    };
+  }
+
+  if (ownerResolution?.reason === AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON) {
+    return {
+      eligible: false,
+      reason: 'ambiguous_head_owner',
+      route: 'defer',
     };
   }
 
@@ -591,6 +625,15 @@ export function evaluateHeadReadyForReview({
   });
 
   if (quiescence.eligible) {
+    if (ciLevel === 'degraded') {
+      return buildDegradedCiRetryDecision({
+        session,
+        headSha,
+        reportBindingOptions,
+        degradedCiAttempts,
+        maxDegradedCiAttempts,
+      });
+    }
     return {
       eligible: true,
       reason: QUIESCENT_HANDOFF_START_REASON,

@@ -7,6 +7,7 @@ import {
   evaluateHeadReadyForReview,
   evaluateQuiescentHandoffFallback,
   hasPendingUnconsumedDelivery,
+  mergeWorkerDeliveriesFromPlanInput,
   hasReadyForReviewForHead,
   isWorkerActivelyWorking,
   isWorkerDegradedCiHandoff,
@@ -262,6 +263,26 @@ describe('evaluateHeadReadyForReview', () => {
     expect(decision.eligible).toBe(true);
   });
 
+  it('active worker with degraded CI visibility stays uncovered_not_ready', () => {
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 99,
+      headSha: 'active99',
+      session: {
+        name: 'op-live',
+        role: 'worker',
+        status: 'working',
+        reports: [{ reportState: 'working', reportedAt: '2026-06-05T12:00:00.000Z' }],
+      } as never,
+      ciChecks: [],
+      requiredCheckNames: ['Missing required job'],
+      requiredCheckLookupFailed: false,
+    });
+    expect(decision.reason).toBe('uncovered_not_ready');
+    expect(decision.route).toBe('defer');
+    expect(decision.route).not.toBe('degraded_ci_retry');
+  });
+
   it('orphaned PR with degraded CI returns no_worker_session before degraded retry', () => {
     const decision = evaluateHeadReadyForReview({
       reviewRuns: [],
@@ -316,6 +337,31 @@ describe('evaluateHeadReadyForReview', () => {
     });
     expect(decision.reason).not.toBe('uncovered_not_ready');
     expect(decision.route).toBe('degraded_ci_retry');
+  });
+});
+
+describe('mergeWorkerDeliveriesFromPlanInput', () => {
+  it('ignores null explicit delivery placeholders and merges aoEvents', () => {
+    const deliveries = mergeWorkerDeliveriesFromPlanInput({
+      workerDeliveries: [null as unknown as Record<string, unknown>],
+      aoEvents: [
+        {
+          kind: 'reaction.action_succeeded',
+          sessionId: 'opk-37',
+          tsEpoch: 1781095200000,
+          data: { action: 'send-to-agent', reactionKey: 'report-stale' },
+        },
+      ],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: {
+        'report-stale':
+          'Agent report is stale (30 minutes since last report). Continue your task and push fixes when ready. This nudge is long enough to use the pending-draft delivery path so reconcile can observe unconsumed worker input before starting review.',
+      },
+      nowMs: 1781096400000,
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.sessionId).toBe('opk-37');
   });
 });
 

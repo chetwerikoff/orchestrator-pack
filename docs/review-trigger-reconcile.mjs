@@ -64,6 +64,9 @@ export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
 
+/** Strict resolver defers to legacy report binding; quiescence must still fail closed. */
+export const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON = 'ambiguous_implicit_head_owner';
+
 const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
 
 /** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
@@ -471,8 +474,8 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
   if (liveImplicitOwners.length > 1) {
     return {
       sessionId: null,
-      reason: 'ambiguous_head_owner',
-      failClosed: true,
+      reason: AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
+      failClosed: false,
     };
   }
 
