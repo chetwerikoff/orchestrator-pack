@@ -299,12 +299,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
     }
     catch {
-        if (-not $DryRun) {
-            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
-                reason = 'pre_run_recheck_exception'
-                error  = [string]$_
-            } | Out-Null
-        }
+        Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
         throw
     }
 

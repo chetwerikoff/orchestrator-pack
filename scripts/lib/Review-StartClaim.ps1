@@ -360,6 +360,21 @@ function Release-ReviewStartClaimAfterRunFailure {
     return Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'escalated_ambiguous' -ReviewRuns @() -Extra @{ failure = $Failure; reason = 'post_exit_state_ambiguous' }
 }
 
+function Release-ReviewStartClaimAfterRecheckException {
+    param(
+        [hashtable]$ClaimResult,
+        [switch]$DryRun,
+        [object]$ErrorRecord
+    )
+
+    if (-not $DryRun -and $ClaimResult -and $ClaimResult.acquired) {
+        Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
+            reason = 'pre_run_recheck_exception'
+            error  = [string]$ErrorRecord
+        } | Out-Null
+    }
+}
+
 function Resolve-ReviewStartClaimEscalation {
     param(
         [int]$PrNumber,
