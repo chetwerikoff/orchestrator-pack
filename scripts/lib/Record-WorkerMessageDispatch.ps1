@@ -97,7 +97,9 @@ function New-WorkerMessageDispatchJournalRecord {
         [string]$DispatchOutcome = 'dispatch_unknown',
         [string]$DraftState = 'unknown',
         [switch]$RestoreRetry,
-        [switch]$AdoptionProbe
+        [switch]$AdoptionProbe,
+        [string]$AoEpochHash = '',
+        [string]$ConfigPathHash = ''
     )
 
     return @{
@@ -115,6 +117,8 @@ function New-WorkerMessageDispatchJournalRecord {
         draftState      = $DraftState
         restoreRetry    = [bool]$RestoreRetry
         adoptionProbe   = [bool]$AdoptionProbe
+        aoEpochHash     = $AoEpochHash
+        configPathHash  = $ConfigPathHash
     }
 }
 
@@ -154,7 +158,9 @@ function Register-WorkerMessageDispatch {
         [string]$DispatchOutcome = 'dispatched',
         [string]$DraftState = '',
         [switch]$HashIdentity,
-        [switch]$AdoptionProbe
+        [switch]$AdoptionProbe,
+        [string]$AoEpoch = '',
+        [string]$ConfigPath = ''
     )
 
     $deliveredMs = if ($DeliveredAtMs -gt 0) { $DeliveredAtMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
@@ -173,6 +179,9 @@ function Register-WorkerMessageDispatch {
     if (-not $deliveryId) {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
     }
+
+    $aoEpochHash = if ($AoEpoch) { ConvertTo-WorkerMessageSafeIdComponent -Value $AoEpoch } else { '' }
+    $configPathHash = if ($ConfigPath) { ConvertTo-WorkerMessageSafeIdComponent -Value $ConfigPath } else { '' }
 
     $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
     $recorded = $false
@@ -199,6 +208,8 @@ function Register-WorkerMessageDispatch {
                 draftState    = if ($DraftState) { $DraftState } elseif ($resolvedDeliveryPath -eq 'self-submitted') { 'auto_submitted' } else { 'draft_present' }
                 restoreRetry  = [bool]$RestoreRetry
                 adoptionProbe = [bool]$AdoptionProbe
+                aoEpochHash = $aoEpochHash
+                configPathHash = $configPathHash
             }
             Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
             $recordHolder.recorded = $true

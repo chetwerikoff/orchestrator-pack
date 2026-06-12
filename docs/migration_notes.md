@@ -1138,9 +1138,9 @@ outcome, authoritative draft state), and never stores or logs the raw message.
 2. Restart AO from the operator terminal (`ao stop` / `ao start`) so the live process loads
    the rule. Managed worker sessions must not run those commands.
 3. Run the adoption preflight for the running AO epoch/config path:
-   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1`.
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path>`.
    It passes only when side-effect-isolated probe entries are observed in the outbox for
-   every required routing branch; a present but ineffective rule escalates
+   every required routing branch with matching epoch/config hashes; a present but ineffective or stale-epoch rule escalates
    `wrapper_not_adopted`.
 4. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
    Optional env vars: `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`,

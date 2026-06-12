@@ -1001,7 +1001,7 @@ payloads must never appear in argv, temp files, logs, transcripts, or the journa
 If a worker message is stuck unsubmitted:
 
 1. Check adoption first: run
-   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1` from the
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path>` from the
    operator checkout. `wrapper_not_adopted` means the live AO routing rule is missing or
    ineffective; fix live `agent-orchestrator.yaml` and restart AO from the operator terminal.
 2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the

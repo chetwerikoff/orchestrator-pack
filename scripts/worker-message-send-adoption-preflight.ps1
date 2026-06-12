@@ -51,8 +51,8 @@ foreach ($key in @($journal.Keys)) {
     if (Test-MechanicalJsonReflectionKey -Key ([string]$key)) { continue }
     $record = ConvertTo-MechanicalJsonMap -Value $journal[$key]
     if (-not [bool]$record['adoptionProbe']) { continue }
-    $epochOk = (-not $AoEpoch) -or ([string]$record['aoEpochHash'] -eq (ConvertTo-SafeHashText $AoEpoch)) -or (-not $record.ContainsKey('aoEpochHash'))
-    $configOk = (-not $ConfigPath) -or ([string]$record['configPathHash'] -eq (ConvertTo-SafeHashText $ConfigPath)) -or (-not $record.ContainsKey('configPathHash'))
+    $epochOk = (-not $AoEpoch) -or ($record.ContainsKey('aoEpochHash') -and [string]$record['aoEpochHash'] -eq (ConvertTo-SafeHashText $AoEpoch))
+    $configOk = (-not $ConfigPath) -or ($record.ContainsKey('configPathHash') -and [string]$record['configPathHash'] -eq (ConvertTo-SafeHashText $ConfigPath))
     if (-not ($epochOk -and $configOk)) { continue }
     $branch = [string]$record['sourceKey']
     if ($branch) { $seen[$branch] = $true }

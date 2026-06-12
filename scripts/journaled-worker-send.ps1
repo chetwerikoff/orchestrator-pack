@@ -21,6 +21,8 @@ param(
     [int]$TimeoutSeconds = 600,
     [switch]$DryRun,
     [switch]$AdoptionProbe,
+    [string]$AoEpoch = '',
+    [string]$ConfigPath = '',
     [switch]$NoWait
 )
 
@@ -123,7 +125,9 @@ $register = Register-WorkerMessageDispatch `
     -DispatchOutcome $dispatchOutcome `
     -DraftState $draftState `
     -HashIdentity `
-    -AdoptionProbe:$AdoptionProbe
+    -AdoptionProbe:$AdoptionProbe `
+    -AoEpoch $AoEpoch `
+    -ConfigPath $ConfigPath
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"

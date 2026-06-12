@@ -1,5 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -909,5 +910,25 @@ describe('worker-message-send adoption preflight', () => {
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state], { encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('effective routing adopted');
+  });
+
+  it('requires adoption probe hash to match supplied AO epoch and config path', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-epoch-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({
+      staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+      staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const stale = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml'], { encoding: 'utf8' });
+    expect(stale.status).toBe(46);
+
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+      probe2: { deliveryId: 'probe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const current = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml'], { encoding: 'utf8' });
+    expect(current.status).toBe(0);
   });
 });
