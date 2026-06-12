@@ -170,7 +170,7 @@ function Invoke-AoSendViaStdin {
 $payload = [Console]::In.ReadToEnd()
 if ($null -eq $payload) { $payload = '' }
 
-if ($payload -match '^(?s)AO_WORKER_MESSAGE_ADOPTION_PROBE_V1\r?\n') {
+if ($payload -match '^(?s)AO_WORKER_MESSAGE_ADOPTION_PROBE_V1(?:\s|$)') {
     $AdoptionProbe = $true
     $Source = 'adoption-probe'
     foreach ($line in ($payload -split "`r?`n")) {
@@ -179,6 +179,10 @@ if ($payload -match '^(?s)AO_WORKER_MESSAGE_ADOPTION_PROBE_V1\r?\n') {
         elseif ($line -match '^configPathHash=(sha256-[0-9a-f]{24})$' -and -not $ConfigPathHash) { $ConfigPathHash = $Matches[1] }
         elseif ($line -match '^adoptionProbeRunIdHash=(sha256-[0-9a-f]{24})$' -and -not $AdoptionProbeRunIdHash) { $AdoptionProbeRunIdHash = $Matches[1] }
     }
+    if ($payload -match '(?:^|\s)b=([^\s]+)' -and -not $SourceKey) { $SourceKey = $Matches[1] }
+    if ($payload -match '(?:^|\s)e=(sha256-[0-9a-f]{24})(?:\s|$)' -and -not $AoEpochHash) { $AoEpochHash = $Matches[1] }
+    if ($payload -match '(?:^|\s)c=(sha256-[0-9a-f]{24})(?:\s|$)' -and -not $ConfigPathHash) { $ConfigPathHash = $Matches[1] }
+    if ($payload -match '(?:^|\s)r=(sha256-[0-9a-f]{24})(?:\s|$)' -and -not $AdoptionProbeRunIdHash) { $AdoptionProbeRunIdHash = $Matches[1] }
 }
 
 if ($env:AO_WORKER_MESSAGE_ADOPTION_PROBE -eq '1') {

@@ -45,11 +45,11 @@ function New-AdoptionProbePayload {
     )
 
     if ($Branch -match ':self-submitted$') {
-        return 'AO_WORKER_MESSAGE_ADOPTION_PROBE_SELF_SUBMITTED'
+        return "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1 b=$Branch e=$EpochHash c=$ConfigHash r=$RunIdHash"
     }
 
     $filler = 'x' * 240
-    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_PENDING_DRAFT`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
+    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
 }
 
 $probeRunIdHash = ''
