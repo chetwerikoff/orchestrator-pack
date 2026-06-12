@@ -1000,10 +1000,15 @@ payloads must never appear in argv, temp files, logs, transcripts, or the journa
 
 If a worker message is stuck unsubmitted:
 
-1. Check adoption first: run
+1. Check adoption first: generate the side-effect-isolated adoption probes through the
+   live routing rule for each required branch (for example `plain-ao-send:pending-draft`
+   and `plain-ao-send:self-submitted`) using the current `-AoEpoch <running-epoch>` and
+   `-ConfigPath <loaded-config-path>`, then run
    `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path>` from the
-   operator checkout. `wrapper_not_adopted` means the live AO routing rule is missing or
-   ineffective; fix live `agent-orchestrator.yaml` and restart AO from the operator terminal.
+   operator checkout. `wrapper_not_adopted` means the live AO routing rule is missing,
+   ineffective, stale, or the probes were not generated through that rule; fix live
+   `agent-orchestrator.yaml`, restart AO from the operator terminal, regenerate probes,
+   and rerun preflight.
 2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
    temp default). A `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
    must not receive blind Enter; have the source resend if needed.
