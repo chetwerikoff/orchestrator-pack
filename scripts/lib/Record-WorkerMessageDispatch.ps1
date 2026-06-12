@@ -99,7 +99,8 @@ function New-WorkerMessageDispatchJournalRecord {
         [switch]$RestoreRetry,
         [switch]$AdoptionProbe,
         [string]$AoEpochHash = '',
-        [string]$ConfigPathHash = ''
+        [string]$ConfigPathHash = '',
+        [string]$AdoptionProbeRunIdHash = ''
     )
 
     return @{
@@ -119,6 +120,7 @@ function New-WorkerMessageDispatchJournalRecord {
         adoptionProbe   = [bool]$AdoptionProbe
         aoEpochHash     = $AoEpochHash
         configPathHash  = $ConfigPathHash
+        adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
     }
 }
 
@@ -162,7 +164,8 @@ function Register-WorkerMessageDispatch {
         [string]$AoEpoch = '',
         [string]$ConfigPath = '',
         [string]$AoEpochHash = '',
-        [string]$ConfigPathHash = ''
+        [string]$ConfigPathHash = '',
+        [string]$AdoptionProbeRunIdHash = ''
     )
 
     $deliveredMs = if ($DeliveredAtMs -gt 0) { $DeliveredAtMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
@@ -212,6 +215,7 @@ function Register-WorkerMessageDispatch {
                 adoptionProbe = [bool]$AdoptionProbe
                 aoEpochHash = $aoEpochHash
                 configPathHash = $configPathHash
+                adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
             }
             Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
             $recordHolder.recorded = $true

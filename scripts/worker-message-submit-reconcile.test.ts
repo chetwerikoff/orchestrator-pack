@@ -1041,6 +1041,26 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(existsSync(journal)).toBe(false);
   });
 
+  it('sets reentrancy sentinel while probing ao send stdin help', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-help-sentinel-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 88; fi
+  echo "Usage: ao send --stdin <session>"
+  exit 0
+fi
+if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 89; fi
+cat >/dev/null
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
+  });
+
   it('passes multiline payload through stdin and stores metadata only', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stdin-'));
     const fakeAo = path.join(dir, 'ao');
@@ -1178,6 +1198,25 @@ describe('worker-message-send adoption preflight', () => {
       nowMs: 1717601010000,
     });
     expect(deliveries).toHaveLength(0);
+  });
+
+  it('requires WriteProbeEntries validation to observe probes from the current run', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-current-run-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({
+      staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: hash('plain-ao-send:pending-draft'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
+      staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: hash('plain-ao-send:self-submitted'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 20, lineCount: 1 } },
+    }));
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then cat >/dev/null; exit 0; fi\nexit 64\n');
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
+
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
   });
 
   it('keeps dry-run generated probes out of the live dispatch journal', () => {

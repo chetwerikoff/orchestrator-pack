@@ -40,7 +40,8 @@ function New-AdoptionProbePayload {
     param(
         [string]$Branch,
         [string]$EpochHash,
-        [string]$ConfigHash
+        [string]$ConfigHash,
+        [string]$RunIdHash = ''
     )
 
     if ($Branch -match ':self-submitted$') {
@@ -48,9 +49,10 @@ function New-AdoptionProbePayload {
     }
 
     $filler = 'x' * 240
-    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_PENDING_DRAFT`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`n$filler"
+    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_PENDING_DRAFT`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
 }
 
+$probeRunIdHash = ''
 $effectiveJournalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
 $statePath = Get-AdoptionPreflightStatePath -Path $StateFile
 if ($DryRun) {
@@ -62,6 +64,7 @@ if ($DryRun) {
 
 
 if ($WriteProbeEntries) {
+    $probeRunIdHash = ConvertTo-SafeHashText ([guid]::NewGuid().ToString('n'))
     foreach ($branch in $RequiredBranches) {
         $savedEnv = @{}
         foreach ($name in @(
@@ -69,6 +72,7 @@ if ($WriteProbeEntries) {
             'AO_WORKER_MESSAGE_ADOPTION_BRANCH',
             'AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH',
             'AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH',
+            'AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH',
             'AO_WORKER_MESSAGE_DISPATCH_JOURNAL'
         )) {
             $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
@@ -82,8 +86,9 @@ if ($WriteProbeEntries) {
             $configHash = ConvertTo-SafeHashText $ConfigPath
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH', $epochHash, 'Process')
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH', $configHash, 'Process')
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH', $probeRunIdHash, 'Process')
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_DISPATCH_JOURNAL', $effectiveJournalPath, 'Process')
-            $probePayload = New-AdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash
+            $probePayload = New-AdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $probeRunIdHash
             $probeOutput = $probePayload | & $AoPath send synthetic-adoption-probe --stdin --no-wait 2>&1
             $probeExit = $LASTEXITCODE
             if ($null -eq $probeExit) { $probeExit = 0 }
@@ -116,7 +121,8 @@ foreach ($key in @($journal.Keys)) {
     if (-not [bool]$record['adoptionProbe']) { continue }
     $epochOk = (-not $AoEpoch) -or ($record.ContainsKey('aoEpochHash') -and [string]$record['aoEpochHash'] -eq (ConvertTo-SafeHashText $AoEpoch))
     $configOk = (-not $ConfigPath) -or ($record.ContainsKey('configPathHash') -and [string]$record['configPathHash'] -eq (ConvertTo-SafeHashText $ConfigPath))
-    if (-not ($epochOk -and $configOk)) { continue }
+    $runOk = (-not $WriteProbeEntries) -or ($record.ContainsKey('adoptionProbeRunIdHash') -and [string]$record['adoptionProbeRunIdHash'] -eq $probeRunIdHash)
+    if (-not ($epochOk -and $configOk -and $runOk)) { continue }
     $branch = [string]$record['sourceKey']
     if ($branch) { $seen[$branch] = $true }
 }

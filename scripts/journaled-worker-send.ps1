@@ -25,6 +25,7 @@ param(
     [string]$ConfigPath = '',
     [string]$AoEpochHash = '',
     [string]$ConfigPathHash = '',
+    [string]$AdoptionProbeRunIdHash = '',
     [switch]$NoWait
 )
 
@@ -41,11 +42,16 @@ function Write-JournaledWorkerSendLog {
 function Test-AoSendStdinContract {
     param([string]$AoPath = 'ao')
     if ($env:AO_JOURNALED_SEND_ASSUME_STDIN -eq '1') { return $true }
+    $savedSentinel = [System.Environment]::GetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', 'Process')
     try {
+        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', [guid]::NewGuid().ToString('n'), 'Process')
         $help = (& $AoPath send --help 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
     }
     catch {
         return $false
+    }
+    finally {
+        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', $savedSentinel, 'Process')
     }
     return ($help -match '(?im)(--stdin|stdin|standard input|pipe)')
 }
@@ -171,6 +177,7 @@ if ($payload -match '^(?s)AO_WORKER_MESSAGE_ADOPTION_PROBE_V1\r?\n') {
         if ($line -match '^branch=(.+)$' -and -not $SourceKey) { $SourceKey = $Matches[1] }
         elseif ($line -match '^aoEpochHash=(sha256-[0-9a-f]{24})$' -and -not $AoEpochHash) { $AoEpochHash = $Matches[1] }
         elseif ($line -match '^configPathHash=(sha256-[0-9a-f]{24})$' -and -not $ConfigPathHash) { $ConfigPathHash = $Matches[1] }
+        elseif ($line -match '^adoptionProbeRunIdHash=(sha256-[0-9a-f]{24})$' -and -not $AdoptionProbeRunIdHash) { $AdoptionProbeRunIdHash = $Matches[1] }
     }
 }
 
@@ -182,6 +189,7 @@ if ($env:AO_WORKER_MESSAGE_ADOPTION_PROBE -eq '1') {
     if (-not $ConfigPath -and $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH) { $ConfigPath = $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH }
     if (-not $AoEpochHash -and $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH) { $AoEpochHash = $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH }
     if (-not $ConfigPathHash -and $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH) { $ConfigPathHash = $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH }
+    if (-not $AdoptionProbeRunIdHash -and $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH) { $AdoptionProbeRunIdHash = $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH }
 }
 
 $effectiveJournalPath = $JournalPath
@@ -211,7 +219,8 @@ $register = Register-WorkerMessageDispatch `
     -AoEpoch $AoEpoch `
     -ConfigPath $ConfigPath `
     -AoEpochHash $AoEpochHash `
-    -ConfigPathHash $ConfigPathHash
+    -ConfigPathHash $ConfigPathHash `
+    -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"
