@@ -478,6 +478,15 @@ briefly allowing the orchestrator to `ao review send` if status is
 **Inspect before reporting.** Use `ao review list --json` to confirm run status
 and counts; do not infer cleanliness from finding prose.
 
+## Managed session constraints (Issue #275)
+
+Managed sessions — both orchestrator and workers — MUST NOT:
+- Run `ao stop`, `ao start`, `ao restart`, or any command that stops or restarts the AO
+  process. These are operator-only actions; execute them only from the operator terminal.
+- Edit user shell dotfiles (`~/.bashrc`, `~/.zshrc`, `~/.profile`, `~/.bash_profile`, etc.).
+  PACK_REVIEWER changes and AO restarts are operator-only — never touch env vars or
+  dotfiles from within a managed session.
+
 ## Orchestrator review-run coverage (Issue #189)
 
 Orchestrator sessions (not workers) follow `orchestratorRules` in
@@ -577,7 +586,8 @@ investigating recurrence. Full procedure: `prompts/investigate_root_cause.md`
   follow-up-issue, and resolution-policy; the tracking issue body MUST carry the
   cause statement. Euphemistic deferral without the block is non-compliant.
 - **Operator adoption:** when this file changes, restart AO (`ao stop` /
-  `ao start`) so workers load the updated rules.
+  `ao start`) so workers load the updated rules. (operator terminal only —
+  not from within a managed session)
 
 Mechanical guards: `scripts/check-draft-discipline.ps1` (positive-outcome,
 parked-root, surfaces). Architecture: §T in
