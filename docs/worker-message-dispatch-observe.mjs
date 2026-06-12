@@ -433,7 +433,21 @@ function isDispatchedDelivery(delivery) {
 }
 
 export function selectSurvivingDelivery(deliveries, sessionId) {
-  const effectiveForSession = getSessionDeliveriesNewestFirst(deliveries, sessionId).filter(isDispatchedDelivery);
+  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
+  const latestPendingDraft = forSession.find(
+    (d) => String(d.deliveryPath) === DELIVERY_PATH_PENDING_DRAFT,
+  );
+  const latestPendingOutcome = String(
+    latestPendingDraft?.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED,
+  );
+  if (
+    latestPendingOutcome === DISPATCH_OUTCOME_IN_FLIGHT ||
+    latestPendingOutcome === DISPATCH_OUTCOME_UNKNOWN
+  ) {
+    return null;
+  }
+
+  const effectiveForSession = forSession.filter(isDispatchedDelivery);
   if (effectiveForSession.length === 0) {
     return null;
   }
