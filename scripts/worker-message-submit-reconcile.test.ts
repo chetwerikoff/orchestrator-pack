@@ -963,14 +963,27 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
     expect(expired.actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
   });
 
-  it('corrupt journal recovery metadata escalates fail-closed', () => {
+  it('corrupt journal recovery metadata escalates fail-closed once', () => {
     const { actions } = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' }],
       dispatchJournal: { _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown> },
       tracking: { deliveries: {}, audit: [] },
       nowMs: 1717601010000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('unparseable_no_backup');
+    const escalations = actions.filter((a: WorkerMessageSubmitAction) => a.type === 'escalate');
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.reason).toBe('unparseable_no_backup');
+  });
+
+  it('does not re-escalate corrupt journal recovery after terminal tracking state', () => {
+    const deliveryId = 'corrupt-dispatch-journal:/tmp/corrupt';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' }],
+      dispatchJournal: { _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown> },
+      tracking: { deliveries: { [deliveryId]: { deliveryId, terminalState: 'escalated', escalatedAtMs: 1717601000000 } }, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate')).toBe(false);
   });
 
   it('untrusted journal recovery metadata suppresses normal delivery records fail-closed', () => {

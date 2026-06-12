@@ -299,6 +299,15 @@ export function evaluateSubmitDecision({
       ? deliveryTimestampMs
       : Number(record.firstObservedAtMs ?? 0);
 
+  if (!deliveryId || !sessionId || !observationAnchorMs) {
+    return { action: 'noop', reason: 'missing_delivery_metadata', deliveryId };
+  }
+
+  const terminalState = String(record.terminalState ?? '').trim();
+  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+    return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
+  }
+
   if (delivery?.corruptObservation) {
     return {
       action: 'escalate',
@@ -307,15 +316,6 @@ export function evaluateSubmitDecision({
       sessionId,
       diagnosis: `${OPERATOR_ESCALATION_PREFIX} dispatch journal/state is corrupt or untrusted; quarantined=${String(delivery?.deliveryId ?? '')}. Failing closed.`,
     };
-  }
-
-  if (!deliveryId || !sessionId || !observationAnchorMs) {
-    return { action: 'noop', reason: 'missing_delivery_metadata', deliveryId };
-  }
-
-  const terminalState = String(record.terminalState ?? '').trim();
-  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
-    return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
   }
 
   const submitAttempts = Number(record.submitAttempts ?? 0);
