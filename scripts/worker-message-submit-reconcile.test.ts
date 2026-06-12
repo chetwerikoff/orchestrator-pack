@@ -883,6 +883,46 @@ exit 0
     expect(journalText).toContain('"dispatchOutcome":"dispatched"');
     expect(journalText).toContain('"lineCount":3');
   });
+
+  it('fails closed when post-send outcome update cannot be recorded', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-update-fail-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+printf '{"startedAt":"2999-01-01T00:00:00Z"}' > "${journal}.lock"
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+    expect(result.status).toBe(47);
+    expect(result.stdout).toContain('dispatch outcome update failed');
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatch_unknown"');
+  });
+
+  it('drains redirected ao stdout and stderr while waiting', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-drain-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+python3 - <<'PY2'
+import sys
+sys.stdout.write('o' * 1048576)
+sys.stdout.flush()
+sys.stderr.write('e' * 1048576)
+sys.stderr.flush()
+PY2
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8', timeout: 15000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.length).toBeLessThan(1000);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
+  });
 });
 
 

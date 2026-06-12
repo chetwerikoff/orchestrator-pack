@@ -304,7 +304,7 @@ function Update-WorkerMessageDispatchOutcome {
     )
 
     $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
-    $updated = $false
+    $updateHolder = @{ updated = $false }
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{ kind = 'worker-message-dispatch-journal-outcome' } -Action {
         $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         if (-not $journal.ContainsKey($DeliveryId)) { return }
@@ -313,7 +313,8 @@ function Update-WorkerMessageDispatchOutcome {
         if ($DraftState) { $record['draftState'] = $DraftState }
         $journal[$DeliveryId] = $record
         Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
-        $updated = $true
+        $updateHolder.updated = $true
     }
-    return @{ updated = [bool]$updated; ok = [bool]$fenced.ok; reason = if ($fenced.ok) { if ($updated) { 'updated' } else { 'not_found' } } else { 'journal_busy' } }
+    $updated = [bool]$updateHolder.updated
+    return @{ updated = $updated; ok = [bool]$fenced.ok; reason = if ($fenced.ok) { if ($updated) { 'updated' } else { 'not_found' } } else { 'journal_busy' } }
 }

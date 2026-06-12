@@ -48,6 +48,23 @@ function Test-AoSendStdinContract {
     return ($help -match '(?im)(--stdin|stdin|standard input|pipe)')
 }
 
+function Update-JournaledWorkerSendOutcome {
+    param(
+        [string]$DeliveryId,
+        [string]$DispatchOutcome,
+        [string]$DraftState,
+        [string]$JournalPath
+    )
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $update = Update-WorkerMessageDispatchOutcome -DeliveryId $DeliveryId -DispatchOutcome $DispatchOutcome -DraftState $DraftState -JournalPath $JournalPath
+        if ($update.ok -and $update.updated) { return @{ ok = $true; reason = 'updated' } }
+        if ($attempt -lt 3) { Start-Sleep -Milliseconds (200 * $attempt) }
+        $lastReason = if ($update.reason) { [string]$update.reason } else { 'outcome_update_failed' }
+    }
+    return @{ ok = $false; reason = $lastReason }
+}
+
 function Invoke-AoSendViaStdin {
     param(
         [string]$AoPath,
@@ -78,13 +95,17 @@ function Invoke-AoSendViaStdin {
     $proc.StartInfo = $psi
     try {
         if (-not $proc.Start()) { return @{ outcome = 'send_failed'; reason = 'process_not_started' } }
+        $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
+        $stderrDrain = $proc.StandardError.ReadToEndAsync()
         $proc.StandardInput.Write($Payload)
         $proc.StandardInput.Close()
         $limitMs = [Math]::Max(1, $TimeoutSeconds) * 1000
         if (-not $proc.WaitForExit($limitMs)) {
             try { $proc.Kill() } catch { }
+            try { $proc.WaitForExit(1000) | Out-Null } catch { }
             return @{ outcome = 'dispatch_unknown'; reason = 'timeout_interrupted' }
         }
+        try { $stdoutDrain.Wait(1000) | Out-Null; $stderrDrain.Wait(1000) | Out-Null } catch { }
         if ($proc.ExitCode -eq 0) { return @{ outcome = 'dispatched'; reason = 'sent' } }
         return @{ outcome = 'send_failed'; reason = "exit_$($proc.ExitCode)" }
     }
@@ -135,21 +156,33 @@ if (-not $register.recorded) {
 }
 
 if ($AdoptionProbe) {
-    [void](Update-WorkerMessageDispatchOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'dispatched' -DraftState 'auto_submitted' -JournalPath $effectiveJournalPath)
+    $update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'dispatched' -DraftState 'auto_submitted' -JournalPath $effectiveJournalPath
+    if (-not $update.ok) {
+        Write-JournaledWorkerSendLog "adoption probe outcome update failed: delivery=$($register.deliveryId) reason=$($update.reason)"
+        exit 47
+    }
     Write-JournaledWorkerSendLog "adoption probe observed: delivery=$($register.deliveryId) journal=$effectiveJournalPath"
     exit 0
 }
 
 if ($DryRun) {
     $dryDraftState = if ($register.deliveryPath -eq 'self-submitted') { 'auto_submitted' } else { 'draft_present' }
-    [void](Update-WorkerMessageDispatchOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'dispatched' -DraftState $dryDraftState -JournalPath $effectiveJournalPath)
+    $update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'dispatched' -DraftState $dryDraftState -JournalPath $effectiveJournalPath
+    if (-not $update.ok) {
+        Write-JournaledWorkerSendLog "dry-run outcome update failed: delivery=$($register.deliveryId) reason=$($update.reason)"
+        exit 47
+    }
     Write-JournaledWorkerSendLog "dry-run recorded metadata-only delivery=$($register.deliveryId) journal=$effectiveJournalPath"
     exit 0
 }
 
 $result = Invoke-AoSendViaStdin -AoPath $AoPath -SessionId $SessionId -Payload $payload -TimeoutSeconds $TimeoutSeconds -NoWait:$NoWait
 $shapeDraftState = if ($register.deliveryPath -eq 'self-submitted') { 'auto_submitted' } elseif ($result.outcome -eq 'dispatched') { 'draft_present' } else { 'unknown' }
-[void](Update-WorkerMessageDispatchOutcome -DeliveryId $register.deliveryId -DispatchOutcome $result.outcome -DraftState $shapeDraftState -JournalPath $effectiveJournalPath)
+$update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome $result.outcome -DraftState $shapeDraftState -JournalPath $effectiveJournalPath
+if (-not $update.ok) {
+    Write-JournaledWorkerSendLog "dispatch outcome update failed: delivery=$($register.deliveryId) outcome=$($result.outcome) reason=$($update.reason)"
+    exit 47
+}
 Write-JournaledWorkerSendLog "dispatch outcome recorded: delivery=$($register.deliveryId) outcome=$($result.outcome) reason=$($result.reason)"
 if ($result.outcome -eq 'dispatched') { exit 0 }
 if ($result.outcome -eq 'dispatch_unknown') { exit 44 }
