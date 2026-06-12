@@ -8,6 +8,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 
 function Test-ReviewTriggerReevalForbiddenCommand {
     param([string]$CommandLine)
@@ -41,31 +42,76 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     $commandLine = "ao $($runArgs -join ' ')"
     Test-ReviewTriggerReevalForbiddenCommand -CommandLine $commandLine
 
-    $fresh = if ($FixtureSnapshot) {
-        $FixtureSnapshot
+    $claim = @{ acquired = $true; dryRun = $true; key = "dry-run:$($planned.prNumber):$($planned.headSha)" }
+    if (-not $DryRun) {
+        $claimRuns = if ($FixtureSnapshot) {
+            @($FixtureSnapshot.reviewRuns)
+        }
+        elseif ($ResolveFreshSnapshot) {
+            @((& $ResolveFreshSnapshot $planned).reviewRuns)
+        }
+        else {
+            @()
+        }
+        $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
+            -Surface 'review-trigger-reeval' -ReviewRuns $claimRuns -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot) `
+            -StartReason 'deferred_head_watch' -LogWriter $LogWriter
     }
-    elseif ($ResolveFreshSnapshot) {
-        & $ResolveFreshSnapshot $planned
+    if (-not $claim.acquired) {
+        if ($claim.escalation) {
+            & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): $($claim.reason) $($claim.detail)"
+            return @{
+                triggered   = $false
+                reason      = [string]$claim.reason
+                retainWatch = $true
+            }
+        }
+        $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
+        & $LogWriter "review-trigger-reeval: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
+        return @{
+            triggered   = $false
+            reason      = [string]$claim.reason
+            retainWatch = ([string]$claim.reason -ne 'covered_by_run')
+        }
     }
-    else {
-        throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
+    if ($claim.recovered) {
+        & $LogWriter "review-trigger-reeval: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
-    $prKey = [string]$planned.prNumber
-    $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
-        planned = $planned
-        fresh   = @{
-            openPrs                     = @($fresh.openPrs)
-            reviewRuns                  = @($fresh.reviewRuns)
-            sessions                    = @($fresh.sessions)
-            ciChecks                    = @($fresh.ciChecksByPr[$prKey])
-            requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
-            requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
+    try {
+        $fresh = if ($FixtureSnapshot) {
+            $FixtureSnapshot
         }
+        elseif ($ResolveFreshSnapshot) {
+            & $ResolveFreshSnapshot $planned
+        }
+        else {
+            throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
+        }
+
+        $prKey = [string]$planned.prNumber
+        $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
+            planned = $planned
+            fresh   = @{
+                openPrs                     = @($fresh.openPrs)
+                reviewRuns                  = @($fresh.reviewRuns)
+                sessions                    = @($fresh.sessions)
+                ciChecks                    = @($fresh.ciChecksByPr[$prKey])
+                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
+                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
+            }
+        }
+    }
+    catch {
+        Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
+        throw
     }
 
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-trigger-reeval: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
+        if (-not $DryRun) {
+            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        }
         return @{
             triggered   = $false
             reason      = [string]$recheck.reason
@@ -82,13 +128,23 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
     }
 
+    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
+        & $LogWriter "review-trigger-reeval: review-start-claim ownership lost before invocation PR #$($planned.prNumber) key=$($claim.key); aborting"
+        return @{
+            triggered   = $false
+            reason      = 'claim_ownership_lost'
+            retainWatch = $true
+        }
+    }
+
     $lockPath = Get-ReviewTriggerReevalSideEffectLockPath -StateRoot $StateRoot
     if (-not (Enter-OrchestratorSideEffectFence -LockPath $lockPath -Metadata @{
             prNumber  = $planned.prNumber
             headSha   = $planned.headSha
             sessionId = $planned.sessionId
-        })) {
+    })) {
         & $LogWriter "review-trigger-reeval: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{ reason = 'side_effect_in_flight' } | Out-Null
         return @{
             triggered   = $false
             reason      = 'side_effect_in_flight'
@@ -99,15 +155,30 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     try {
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         if ($RepoRoot) {
-            Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            try {
+                Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            }
+            catch {
+                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
+                throw
+            }
         }
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
-            throw "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+            $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+            $postFailureRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @() }
+            Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+            throw $failure
         }
     }
     finally {
         Exit-OrchestratorSideEffectFence -LockPath $lockPath
+    }
+
+    $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
+    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    if (-not $complete.ok) {
+        & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
     }
 
     return @{

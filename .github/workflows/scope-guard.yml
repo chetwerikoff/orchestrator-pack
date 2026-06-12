@@ -168,6 +168,10 @@ jobs:
       - name: Type-check TypeScript sources
         run: npx tsc --project tsconfig.base.json --noEmit
 
+      - name: Enforce review-start claim drift guard
+        shell: pwsh
+        run: ./scripts/check-review-start-claim-guard.ps1
+
       - name: Install Pester
         shell: pwsh
         run: |

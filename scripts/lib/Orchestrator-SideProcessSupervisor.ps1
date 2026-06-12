@@ -202,6 +202,25 @@ function Get-OrchestratorWakeSupervisorChildPidPath {
     return $Paths["${ChildId}Pid"]
 }
 
+function Save-OrchestratorWakeSupervisorPreviousChildLog {
+    param(
+        [string]$LogPath,
+        [int]$Retain = 3
+    )
+    foreach ($path in @($LogPath, "${LogPath}.err")) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $item = Get-Item -LiteralPath $path
+        if ($item.Length -le 0) { continue }
+        $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')
+        $archive = "$path.previous-$stamp"
+        Move-Item -LiteralPath $path -Destination $archive -Force
+        $pattern = "$(Split-Path -Leaf $path).previous-*"
+        $dir = Split-Path -Parent $path
+        @(Get-ChildItem -LiteralPath $dir -Filter $pattern -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip $Retain) |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-OrchestratorWakeSupervisorChildLogPath {
     param(
         [hashtable]$Paths,
@@ -643,6 +662,7 @@ function Start-OrchestratorWakeSupervisorChild {
     if (-not (Test-Path -LiteralPath $logDir)) {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     }
+    Save-OrchestratorWakeSupervisorPreviousChildLog -LogPath $logPath
 
     $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
     if ($TestMode) {
