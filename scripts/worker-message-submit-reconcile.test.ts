@@ -978,15 +978,30 @@ describe('worker-message-send adoption preflight', () => {
     expect(result.stdout).toContain('effective routing adopted');
   });
 
-  it('can generate current epoch/config probe entries before validating a fresh journal', () => {
+  it('can generate current epoch/config probe entries through the wrapper before validating a fresh journal', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-generate-'));
     const journal = path.join(dir, 'journal.json');
     const state = path.join(dir, 'state.json');
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-fresh', '-ConfigPath', '/cfg/fresh.yaml', '-WriteProbeEntries'], { encoding: 'utf8' });
+    const fakeAo = path.join(dir, 'ao');
+    const wrapperPath = path.resolve('scripts/journaled-worker-send.ps1').replace(/'/g, `'\''`);
+    writeFileSync(fakeAo, [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" != "send" ]]; then exit 64; fi',
+      'payload=$(cat)',
+      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      '',
+    ].join('\n'));
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-fresh', '-ConfigPath', '/cfg/fresh.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('effective routing adopted');
     const journalText = readFileSync(journal, 'utf8');
     expect(journalText).toContain('\"adoptionProbe\":true');
+    const branchHash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    expect(journalText).toContain(branchHash('plain-ao-send:pending-draft'));
+    expect(journalText).toContain(branchHash('plain-ao-send:self-submitted'));
     const deliveries = mergeDeliveryRecords({
       dispatchJournal: JSON.parse(journalText) as Record<string, Record<string, unknown>>,
       aoEvents: [],

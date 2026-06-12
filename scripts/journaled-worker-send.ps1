@@ -23,6 +23,8 @@ param(
     [switch]$AdoptionProbe,
     [string]$AoEpoch = '',
     [string]$ConfigPath = '',
+    [string]$AoEpochHash = '',
+    [string]$ConfigPathHash = '',
     [switch]$NoWait
 )
 
@@ -162,6 +164,26 @@ function Invoke-AoSendViaStdin {
 $payload = [Console]::In.ReadToEnd()
 if ($null -eq $payload) { $payload = '' }
 
+if ($payload -match '^(?s)AO_WORKER_MESSAGE_ADOPTION_PROBE_V1\r?\n') {
+    $AdoptionProbe = $true
+    $Source = 'adoption-probe'
+    foreach ($line in ($payload -split "`r?`n")) {
+        if ($line -match '^branch=(.+)$' -and -not $SourceKey) { $SourceKey = $Matches[1] }
+        elseif ($line -match '^aoEpochHash=(sha256-[0-9a-f]{24})$' -and -not $AoEpochHash) { $AoEpochHash = $Matches[1] }
+        elseif ($line -match '^configPathHash=(sha256-[0-9a-f]{24})$' -and -not $ConfigPathHash) { $ConfigPathHash = $Matches[1] }
+    }
+}
+
+if ($env:AO_WORKER_MESSAGE_ADOPTION_PROBE -eq '1') {
+    $AdoptionProbe = $true
+    $Source = 'adoption-probe'
+    if (-not $SourceKey -and $env:AO_WORKER_MESSAGE_ADOPTION_BRANCH) { $SourceKey = $env:AO_WORKER_MESSAGE_ADOPTION_BRANCH }
+    if (-not $AoEpoch -and $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH) { $AoEpoch = $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH }
+    if (-not $ConfigPath -and $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH) { $ConfigPath = $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH }
+    if (-not $AoEpochHash -and $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH) { $AoEpochHash = $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH }
+    if (-not $ConfigPathHash -and $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH) { $ConfigPathHash = $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH }
+}
+
 $effectiveJournalPath = $JournalPath
 if ($DryRun) {
     $dryRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'journaled-worker-send-dryrun'
@@ -187,7 +209,9 @@ $register = Register-WorkerMessageDispatch `
     -HashIdentity `
     -AdoptionProbe:$AdoptionProbe `
     -AoEpoch $AoEpoch `
-    -ConfigPath $ConfigPath
+    -ConfigPath $ConfigPath `
+    -AoEpochHash $AoEpochHash `
+    -ConfigPathHash $ConfigPathHash
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"

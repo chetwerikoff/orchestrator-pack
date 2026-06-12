@@ -1140,12 +1140,14 @@ outcome, authoritative draft state), and never stores or logs the raw message.
 3. Generate the side-effect-isolated adoption probes and validate them for the running AO
    epoch/config path with the preflight's `-WriteProbeEntries` mode:
    `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries`.
-   The generated probes use branch source keys such as `plain-ao-send:pending-draft` and
-   `plain-ao-send:self-submitted`; they are synthetic/outbox-only: no real worker terminal
-   input, no active-delivery record, and no attempt budget. The command passes only when
-   those probe entries are observed in the outbox for every required routing branch with
-   matching epoch/config hashes; a missing probe, present-but-ineffective rule, or
-   stale-epoch rule escalates `wrapper_not_adopted`.
+   Probe generation invokes a synthetic `ao send` carrying adoption-probe markers so the live routing rule must call `scripts/journaled-worker-send.ps1`; the
+   preflight does not create probe records by directly editing the journal. The generated probes use
+   branch source keys such as `plain-ao-send:pending-draft` and
+   `plain-ao-send:self-submitted`; they are synthetic/outbox-only: no real worker
+   terminal input, no active-delivery record, and no attempt budget. The command passes
+   only when those probe entries are observed in the outbox for every required routing
+   branch with matching epoch/config hashes; a missing probe, present-but-ineffective
+   rule, or stale-epoch rule escalates `wrapper_not_adopted`.
 4. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
    Optional env vars: `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`,
    `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_ADOPTION_STATE`.

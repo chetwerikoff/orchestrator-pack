@@ -15,6 +15,7 @@ param(
     [string]$AoEpoch = '',
     [string]$ConfigPath = '',
     [switch]$WriteProbeEntries,
+    [string]$AoPath = 'ao',
     [string[]]$RequiredBranches = @('plain-ao-send:pending-draft','plain-ao-send:self-submitted'),
     [switch]$DryRun
 )
@@ -46,21 +47,43 @@ if ($DryRun) {
 
 if ($WriteProbeEntries) {
     foreach ($branch in $RequiredBranches) {
-        $probeResult = Register-WorkerMessageDispatch `
-            -SessionId 'synthetic-adoption-probe' `
-            -Message 'adoption probe' `
-            -Source 'adoption-probe' `
-            -SourceKey $branch `
-            -JournalPath $effectiveJournalPath `
-            -DeliveryPath 'self-submitted' `
-            -DispatchOutcome 'dispatched' `
-            -DraftState 'auto_submitted' `
-            -HashIdentity `
-            -AdoptionProbe `
-            -AoEpoch $AoEpoch `
-            -ConfigPath $ConfigPath
-        if (-not $probeResult.recorded) {
-            Write-Host "[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted probe_write_failed branch=$branch reason=$($probeResult.reason)"
+        $savedEnv = @{}
+        foreach ($name in @(
+            'AO_WORKER_MESSAGE_ADOPTION_PROBE',
+            'AO_WORKER_MESSAGE_ADOPTION_BRANCH',
+            'AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH',
+            'AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH',
+            'AO_WORKER_MESSAGE_DISPATCH_JOURNAL'
+        )) {
+            $savedEnv[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        $probeOutput = @()
+        $probeExit = 1
+        try {
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_PROBE', '1', 'Process')
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_BRANCH', $branch, 'Process')
+            $epochHash = ConvertTo-SafeHashText $AoEpoch
+            $configHash = ConvertTo-SafeHashText $ConfigPath
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH', $epochHash, 'Process')
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH', $configHash, 'Process')
+            [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_DISPATCH_JOURNAL', $effectiveJournalPath, 'Process')
+            $probePayload = "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$branch`naoEpochHash=$epochHash`nconfigPathHash=$configHash`n"
+            $probeOutput = $probePayload | & $AoPath send synthetic-adoption-probe --stdin --no-wait 2>&1
+            $probeExit = $LASTEXITCODE
+            if ($null -eq $probeExit) { $probeExit = 0 }
+        }
+        catch {
+            $probeOutput = @($_.Exception.Message)
+            $probeExit = 1
+        }
+        finally {
+            foreach ($entry in $savedEnv.GetEnumerator()) {
+                [System.Environment]::SetEnvironmentVariable([string]$entry.Key, $entry.Value, 'Process')
+            }
+        }
+        if ($probeExit -ne 0) {
+            $diagnostic = ($probeOutput | ForEach-Object { $_.ToString() }) -join ' '
+            Write-Host "[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted probe_route_failed branch=$branch exit=$probeExit diagnostic=$diagnostic"
             exit 46
         }
     }

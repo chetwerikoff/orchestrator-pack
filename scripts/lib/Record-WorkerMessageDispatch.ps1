@@ -160,7 +160,9 @@ function Register-WorkerMessageDispatch {
         [switch]$HashIdentity,
         [switch]$AdoptionProbe,
         [string]$AoEpoch = '',
-        [string]$ConfigPath = ''
+        [string]$ConfigPath = '',
+        [string]$AoEpochHash = '',
+        [string]$ConfigPathHash = ''
     )
 
     $deliveredMs = if ($DeliveredAtMs -gt 0) { $DeliveredAtMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
@@ -180,8 +182,8 @@ function Register-WorkerMessageDispatch {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
     }
 
-    $aoEpochHash = if ($AoEpoch) { ConvertTo-WorkerMessageSafeIdComponent -Value $AoEpoch } else { '' }
-    $configPathHash = if ($ConfigPath) { ConvertTo-WorkerMessageSafeIdComponent -Value $ConfigPath } else { '' }
+    $aoEpochHash = if ($AoEpochHash) { $AoEpochHash } elseif ($AoEpoch) { ConvertTo-WorkerMessageSafeIdComponent -Value $AoEpoch } else { '' }
+    $configPathHash = if ($ConfigPathHash) { $ConfigPathHash } elseif ($ConfigPath) { ConvertTo-WorkerMessageSafeIdComponent -Value $ConfigPath } else { '' }
 
     $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
     $recorded = $false
