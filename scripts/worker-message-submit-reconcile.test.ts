@@ -845,6 +845,13 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
 
 
 describe('journaled-worker-send wrapper transport', () => {
+  it('uses Windows PowerShell 5.1-compatible ProcessStartInfo APIs', () => {
+    const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
+    expect(text).not.toContain('.ArgumentList');
+    expect(text).not.toContain('.Environment[');
+    expect(text).toContain('.EnvironmentVariables[');
+  });
+
   it('fails closed when ao send stdin contract is absent', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-stdin-'));
     const fakeAo = path.join(dir, 'ao');
