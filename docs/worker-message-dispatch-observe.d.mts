@@ -2,6 +2,15 @@ export declare const AO_PASTE_CHAR_THRESHOLD: number;
 
 export declare const DELIVERY_PATH_PENDING_DRAFT: 'pending-draft';
 export declare const DELIVERY_PATH_SELF_SUBMITTED: 'self-submitted';
+export declare const DELIVERY_PATH_UNKNOWN: 'unknown';
+
+export declare const DISPATCH_OUTCOME_DISPATCHED: 'dispatched';
+export declare const DISPATCH_OUTCOME_SEND_FAILED: 'send_failed';
+export declare const DISPATCH_OUTCOME_UNKNOWN: 'dispatch_unknown';
+
+export declare const DRAFT_STATE_DRAFT_PRESENT: 'draft_present';
+export declare const DRAFT_STATE_AUTO_SUBMITTED: 'auto_submitted';
+export declare const DRAFT_STATE_UNKNOWN: 'unknown';
 
 export declare const DISPATCH_SOURCE_REACTION: 'reaction';
 export declare const DISPATCH_SOURCE_PACK_SEND: 'pack-send';
@@ -24,6 +33,11 @@ export interface DeliveryRecord {
   source?: string;
   sourceKey?: string;
   messageShape?: MessageShape;
+  dispatchOutcome?: string;
+  draftState?: string;
+  ambiguousSessionInflight?: boolean;
+  corruptObservation?: boolean;
+  corruptionReason?: string;
 }
 
 export declare function classifyDeliveryPath(shape: {

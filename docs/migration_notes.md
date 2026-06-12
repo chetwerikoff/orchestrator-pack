@@ -1119,3 +1119,36 @@ JSONL artifact records `reviewerPath:false` and `inDenominator:true` for an
 ordinary trigger-firing unit. The metric summary now also exposes
 `denominatorCause` and `reviewHookCaptureBranch`; `unknown` capability or
 `all-excluded` denominator cause is degraded/fail-loud, not a clean zero.
+
+## Journaled worker-send wrapper adoption (Issue #281)
+
+Extends source-agnostic worker-message submit so plain orchestrator `ao send` deliveries
+can be observed through a metadata-only transactional outbox before the send side effect.
+The new wrapper is `scripts/journaled-worker-send.ps1`; it reads the worker payload from
+stdin/pipe only, records shape metadata (`delivery_id`, char length, line count, dispatch
+outcome, authoritative draft state), and never stores or logs the raw message.
+
+**Operator adoption** — after merge:
+
+1. Add an `orchestratorRules` send-routing line in the live `agent-orchestrator.yaml` so
+   orchestrator-originated worker sends call the wrapper, for example:
+   `pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>` with the
+   message piped on stdin. Include the wrapper's child-scoped reentrancy sentinel in the
+   routing exclusion so the wrapper's internal `ao send` is not wrapped again.
+2. Restart AO from the operator terminal (`ao stop` / `ao start`) so the live process loads
+   the rule. Managed worker sessions must not run those commands.
+3. Run the adoption preflight for the running AO epoch/config path:
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1`.
+   It passes only when side-effect-isolated probe entries are observed in the outbox for
+   every required routing branch; a present but ineffective rule escalates
+   `wrapper_not_adopted`.
+4. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
+   Optional env vars: `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`,
+   `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_ADOPTION_STATE`.
+5. Manual live smoke (not CI): send one synthetic non-secret multi-line message through the
+   wrapper to a live Codex worker and record only sanitized metadata evidence (delivery id,
+   outcome, draft state, timestamps). Do not record the message body, terminal transcript,
+   session URL, or worker output.
+
+Current AO versions that do not advertise stdin/pipe ingestion for `ao send` remain a hard
+gate: the wrapper exits fail-closed and refuses argv or raw temp-file payload fallback.

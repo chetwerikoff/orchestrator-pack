@@ -1,1 +1,1 @@
-{"deliveries":{"msg-1":{"sessionId":"sess-2","deliveredAtMs":7000}},"lastTickMs":8000}
+{"deliveries":{"msg-1":{"deliveryId":"msg-1","sessionId":"sess-2","deliveredAtMs":7000}},"lastTickMs":8000}

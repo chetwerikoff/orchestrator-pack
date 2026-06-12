@@ -20,6 +20,11 @@ import {
 import {
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
+  DISPATCH_OUTCOME_DISPATCHED,
+  DISPATCH_OUTCOME_SEND_FAILED,
+  DISPATCH_OUTCOME_UNKNOWN,
+  DRAFT_STATE_DRAFT_PRESENT,
+  DRAFT_STATE_AUTO_SUBMITTED,
   findOverwrittenDeliveries,
   isDeliveryConsumed,
   isSessionAlive,
@@ -69,6 +74,25 @@ export function resolveSubmitReconcileConfig(config = {}) {
       1000,
     ),
   };
+}
+
+
+/**
+ * @param {object} [config]
+ */
+export function validateSubmitReconcileConfig(config = {}) {
+  const checks = [
+    ['maxSubmitAttempts', config.maxSubmitAttempts, 25],
+    ['deliveryBudgetMs', config.deliveryBudgetMs, 24 * 60 * 60 * 1000],
+  ];
+  for (const [name, value, max] of checks) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0 || n > max) {
+      return { ok: false, reason: 'config_invalid', field: name };
+    }
+  }
+  return { ok: true };
 }
 
 /**
@@ -263,6 +287,8 @@ export function evaluateSubmitDecision({
   const deliveryId = String(delivery?.deliveryId ?? '').trim();
   const sessionId = String(delivery?.sessionId ?? '').trim();
   const deliveryPath = String(delivery?.deliveryPath ?? '').trim();
+  const dispatchOutcome = String(delivery?.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED).trim();
+  const draftState = String(delivery?.draftState ?? (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED ? DRAFT_STATE_AUTO_SUBMITTED : DRAFT_STATE_DRAFT_PRESENT)).trim();
   const deliveryTimestampMs = Number(delivery?.deliveredAtMs ?? 0);
   const { maxSubmitAttempts, deliveryBudgetMs } = resolveSubmitReconcileConfig(config);
 
@@ -272,16 +298,38 @@ export function evaluateSubmitDecision({
       ? deliveryTimestampMs
       : Number(record.firstObservedAtMs ?? 0);
 
+  if (delivery?.corruptObservation) {
+    return {
+      action: 'escalate',
+      reason: String(delivery.corruptionReason ?? 'corrupt_dispatch_journal'),
+      deliveryId,
+      sessionId,
+      diagnosis: `${OPERATOR_ESCALATION_PREFIX} dispatch journal/state is corrupt or untrusted; quarantined=${String(delivery?.deliveryId ?? '')}. Failing closed.`,
+    };
+  }
+
   if (!deliveryId || !sessionId || !observationAnchorMs) {
     return { action: 'noop', reason: 'missing_delivery_metadata', deliveryId };
   }
 
-  if (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED) {
-    return { action: 'noop', reason: 'already_submitted_path', deliveryId };
+  if (dispatchOutcome === DISPATCH_OUTCOME_SEND_FAILED) {
+    return {
+      action: 'escalate',
+      reason: 'send_failed',
+      deliveryId,
+      sessionId,
+      diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} failed before/at ao send; never pressing Enter. Source must resend.`,
+    };
   }
 
-  if (deliveryPath !== DELIVERY_PATH_PENDING_DRAFT) {
-    return { action: 'noop', reason: 'unknown_delivery_path', deliveryId };
+  if (dispatchOutcome !== DISPATCH_OUTCOME_DISPATCHED) {
+    return {
+      action: 'escalate',
+      reason: dispatchOutcome === DISPATCH_OUTCOME_UNKNOWN ? 'dispatch_unknown' : 'dispatch_not_dispatched',
+      deliveryId,
+      sessionId,
+      diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} dispatch outcome is ambiguous (${dispatchOutcome}); never replaying payload or blind-Enter. Source must resend if needed.`,
+    };
   }
 
   if (!session) {
@@ -316,6 +364,36 @@ export function evaluateSubmitDecision({
       deliveryId,
       sessionId,
     };
+  }
+
+  if (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED || draftState === DRAFT_STATE_AUTO_SUBMITTED) {
+    if (nowMs >= budgetDeadline) {
+      return {
+        action: 'escalate',
+        reason: 'self_submitted_unconsumed_budget_exhausted',
+        deliveryId,
+        sessionId,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} was auto-submitted/short but not consumed within the finite budget; no Enter will be pressed.`,
+      };
+    }
+    return { action: 'noop', reason: 'tracking_auto_submitted', deliveryId, sessionId };
+  }
+
+  if (deliveryPath !== DELIVERY_PATH_PENDING_DRAFT) {
+    return { action: 'noop', reason: 'unknown_delivery_path', deliveryId };
+  }
+
+  if (draftState !== DRAFT_STATE_DRAFT_PRESENT) {
+    if (nowMs >= budgetDeadline) {
+      return {
+        action: 'escalate',
+        reason: 'draft_state_unknown',
+        deliveryId,
+        sessionId,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} has no authoritative draft-present signal (${draftState || 'missing'}); refusing blind Enter and escalating.`,
+      };
+    }
+    return { action: 'noop', reason: 'draft_state_not_enter_eligible', deliveryId, sessionId };
   }
 
   if (isSessionStreaming(session)) {
@@ -397,6 +475,21 @@ export function planWorkerMessageSubmitActions(input) {
     config,
   } = input;
 
+  const configCheck = validateSubmitReconcileConfig(config ?? {});
+  if (!configCheck.ok) {
+    return {
+      actions: [{
+        type: 'escalate',
+        deliveryId: 'config-invalid',
+        sessionId: 'operator',
+        reason: 'config_invalid',
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} invalid worker-message submit config field ${configCheck.field}; refusing to track unbounded deliveries.`,
+      }],
+      tracking: tracking ?? { deliveries: {}, audit: [] },
+      deliveryCount: 0,
+    };
+  }
+
   const deliveries = mergeDeliveryRecords({
     aoEvents,
     dispatchJournal,
@@ -414,6 +507,14 @@ export function planWorkerMessageSubmitActions(input) {
   const audit = [];
 
   const sessionIds = new Set(deliveries.map((d) => String(d.sessionId)));
+  const inFlightBySession = new Map();
+  for (const d of deliveries) {
+    const sid = String(d.sessionId ?? '');
+    if (!sid) continue;
+    const arr = inFlightBySession.get(sid) ?? [];
+    arr.push(d);
+    inFlightBySession.set(sid, arr);
+  }
 
   for (const sessionId of sessionIds) {
     const session = findSessionById(sessionList, sessionId);
@@ -427,6 +528,7 @@ export function planWorkerMessageSubmitActions(input) {
       ) {
         continue;
       }
+      if ((inFlightBySession.get(sessionId) ?? []).length > 1) { lost.ambiguousSessionInflight = true; }
       if (isDeliveryConsumed(session, lost, Number(lost.deliveredAtMs ?? 0))) {
         nextDeliveries[lostId] = {
           ...existing,
@@ -461,7 +563,18 @@ export function planWorkerMessageSubmitActions(input) {
       audit.push({ deliveryId: lostId, action: 'escalate', reason: 'lost_delivery_overwritten' });
     }
 
-    const surviving = selectSurvivingDelivery(deliveries, sessionId);
+    let surviving = selectSurvivingDelivery(deliveries, sessionId);
+    if (!surviving) {
+      const latestForSession = deliveries
+        .filter((d) => String(d.sessionId ?? '') === sessionId)
+        .sort((a, b) => Number(b.deliveredAtMs ?? 0) - Number(a.deliveredAtMs ?? 0))[0];
+      if (latestForSession && (latestForSession.corruptObservation || String(latestForSession.deliveryPath) === DELIVERY_PATH_SELF_SUBMITTED || String(latestForSession.draftState ?? '') === DRAFT_STATE_AUTO_SUBMITTED)) {
+        surviving = latestForSession;
+      }
+    }
+    if (surviving && (inFlightBySession.get(sessionId) ?? []).length > 1) {
+      surviving.ambiguousSessionInflight = true;
+    }
     if (!surviving) {
       continue;
     }
@@ -473,7 +586,7 @@ export function planWorkerMessageSubmitActions(input) {
         ...prior,
         deliveryId,
         sessionId,
-        firstObservedAtMs: nowMs,
+        firstObservedAtMs: Number(surviving.deliveredAtMs) > 0 ? Number(surviving.deliveredAtMs) : nowMs,
         deliveredAtMs: Number(surviving.deliveredAtMs),
       };
     }

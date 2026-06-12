@@ -93,6 +93,11 @@ export declare function resolveSubmitReconcileConfig(config?: {
   deliveryBudgetMs: number;
 };
 
+export declare function validateSubmitReconcileConfig(config?: {
+  maxSubmitAttempts?: number;
+  deliveryBudgetMs?: number;
+}): { ok: boolean; reason?: string; field?: string };
+
 export declare function getDeliveryTracking(
   tracking: SubmitTrackingState,
   deliveryId: string,

@@ -989,3 +989,32 @@ alive, workers idle but review run in `waiting_update`.
 - `docs/migration_notes.md` — autonomous review loop and wake listener adoption
 - `docs/orchestrator-wake-runbook.md` — event-driven wakes (#39)
 - `agent-orchestrator.yaml.example` — `orchestratorRules` (Issue #28)
+
+### Plain `ao send` journaled delivery (Issue #281)
+
+Plain orchestrator-to-worker sends must route through
+`pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>` with the worker
+message on stdin. The wrapper writes only metadata to the dispatch journal before invoking
+`ao send`, then records `dispatched`, `send_failed`, or `dispatch_unknown` afterward. Raw
+payloads must never appear in argv, temp files, logs, transcripts, or the journal.
+
+If a worker message is stuck unsubmitted:
+
+1. Check adoption first: run
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1` from the
+   operator checkout. `wrapper_not_adopted` means the live AO routing rule is missing or
+   ineffective; fix live `agent-orchestrator.yaml` and restart AO from the operator terminal.
+2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
+   temp default). A `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
+   must not receive blind Enter; have the source resend if needed.
+3. Run the submit arbiter dry-run:
+   `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`.
+   Pending-draft deliveries are Enter-eligible only when the journal outcome is
+   `dispatched` and the authoritative draft state is `draft_present`.
+4. For live smoke evidence, use only synthetic non-secret payloads and record sanitized
+   metadata (delivery id, shape, outcome, draft state). Do not capture pane text or worker
+   output.
+
+If local `ao send --help` does not advertise stdin/pipe ingestion, this pack intentionally
+fails closed. Do not bypass with argv payloads or raw-payload temp files; that would expose
+credentials in process surfaces or persistent files.

@@ -25,6 +25,15 @@ export const AO_PASTE_CHAR_THRESHOLD = 200;
 
 export const DELIVERY_PATH_PENDING_DRAFT = 'pending-draft';
 export const DELIVERY_PATH_SELF_SUBMITTED = 'self-submitted';
+export const DELIVERY_PATH_UNKNOWN = 'unknown';
+
+export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched';
+export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed';
+export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown';
+
+export const DRAFT_STATE_DRAFT_PRESENT = 'draft_present';
+export const DRAFT_STATE_AUTO_SUBMITTED = 'auto_submitted';
+export const DRAFT_STATE_UNKNOWN = 'unknown';
 
 export const DISPATCH_SOURCE_REACTION = 'reaction';
 export const DISPATCH_SOURCE_PACK_SEND = 'pack-send';
@@ -182,6 +191,20 @@ export function extractReactionDeliveries(events, reactionMessages = {}) {
 export function extractJournalDeliveries(journal) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
+  const recovery = journal?._recovery;
+  if (recovery && recovery.fenceTrusted === false) {
+    deliveries.push({
+      deliveryId: `corrupt-dispatch-journal:${String(recovery.quarantined ?? 'unknown')}`,
+      sessionId: 'operator',
+      deliveredAtMs: Number(Date.now()),
+      source: 'dispatch-journal',
+      deliveryPath: DELIVERY_PATH_UNKNOWN,
+      dispatchOutcome: DISPATCH_OUTCOME_UNKNOWN,
+      draftState: DRAFT_STATE_UNKNOWN,
+      corruptObservation: true,
+      corruptionReason: String(recovery.reason ?? 'corrupt_dispatch_journal'),
+    });
+  }
   for (const [deliveryId, record] of Object.entries(journal ?? {})) {
     if (!record || typeof record !== 'object') {
       continue;
@@ -200,6 +223,8 @@ export function extractJournalDeliveries(journal) {
       sourceKey: String(record.sourceKey ?? ''),
       deliveryPath: deliveryPath || DELIVERY_PATH_PENDING_DRAFT,
       messageShape: record.messageShape ?? {},
+      dispatchOutcome: String(record.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED),
+      draftState: String(record.draftState ?? (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED ? DRAFT_STATE_AUTO_SUBMITTED : DRAFT_STATE_DRAFT_PRESENT)),
       restoreRetry: Boolean(record.restoreRetry),
     });
   }
@@ -330,6 +355,14 @@ export function getSessionActivity(session) {
  * @param {number} deliveredAtMs
  */
 export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
+  if (delivery?.ambiguousSessionInflight) {
+    const id = String(delivery?.deliveryId ?? '');
+    const reports = toArray(session?.reports);
+    return reports.some((report) => {
+      const ts = getReportTimestampMs(report);
+      return ts && ts > deliveredAtMs && id && String(report?.note ?? '').includes(id);
+    });
+  }
   const reports = toArray(session?.reports);
   for (const report of reports) {
     const ts = getReportTimestampMs(report);
