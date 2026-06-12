@@ -427,16 +427,20 @@ function getSessionDeliveriesNewestFirst(deliveries, sessionId) {
  * @param {Array<Record<string, unknown>>} deliveries
  * @param {string} sessionId
  */
+function isDispatchedDelivery(delivery) {
+  return String(delivery?.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED) === DISPATCH_OUTCOME_DISPATCHED;
+}
+
 export function selectSurvivingDelivery(deliveries, sessionId) {
-  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
-  if (forSession.length === 0) {
+  const effectiveForSession = getSessionDeliveriesNewestFirst(deliveries, sessionId).filter(isDispatchedDelivery);
+  if (effectiveForSession.length === 0) {
     return null;
   }
-  const latest = forSession[0];
-  if (String(latest.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+  const latestEffective = effectiveForSession[0];
+  if (String(latestEffective.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
     return null;
   }
-  return latest;
+  return latestEffective;
 }
 
 /**
@@ -444,16 +448,16 @@ export function selectSurvivingDelivery(deliveries, sessionId) {
  * @param {string} sessionId
  */
 export function findOverwrittenDeliveries(deliveries, sessionId) {
-  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
-  if (forSession.length <= 1) {
+  const effectiveForSession = getSessionDeliveriesNewestFirst(deliveries, sessionId).filter(isDispatchedDelivery);
+  if (effectiveForSession.length <= 1) {
     return [];
   }
-  const latestId = String(forSession[0]?.deliveryId ?? '');
-  return forSession.filter((d) => {
+  const latestEffectiveId = String(effectiveForSession[0]?.deliveryId ?? '');
+  return effectiveForSession.filter((d) => {
     if (String(d.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
       return false;
     }
-    return String(d.deliveryId) !== latestId;
+    return String(d.deliveryId) !== latestEffectiveId;
   });
 }
 

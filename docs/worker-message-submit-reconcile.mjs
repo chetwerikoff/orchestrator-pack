@@ -518,6 +518,57 @@ export function planWorkerMessageSubmitActions(input) {
 
   for (const sessionId of sessionIds) {
     const session = findSessionById(sessionList, sessionId);
+    const terminalDispatchFailures = deliveries.filter((d) => {
+      if (String(d.sessionId ?? '') !== sessionId) return false;
+      const outcome = String(d.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED);
+      return outcome !== DISPATCH_OUTCOME_DISPATCHED;
+    });
+    for (const failed of terminalDispatchFailures) {
+      const failedId = String(failed.deliveryId ?? '');
+      if (!failedId) continue;
+      const existing = nextDeliveries[failedId] ?? {};
+      if (
+        existing.terminalState === SUBMIT_STATE_ESCALATED ||
+        existing.terminalState === SUBMIT_STATE_SUBMITTED
+      ) {
+        continue;
+      }
+      if (!existing.firstObservedAtMs) {
+        nextDeliveries[failedId] = {
+          ...existing,
+          deliveryId: failedId,
+          sessionId,
+          firstObservedAtMs: Number(failed.deliveredAtMs) > 0 ? Number(failed.deliveredAtMs) : nowMs,
+          deliveredAtMs: Number(failed.deliveredAtMs),
+        };
+      }
+      const decision = evaluateSubmitDecision({
+        delivery: failed,
+        session,
+        tracking: { deliveries: nextDeliveries },
+        aoEvents,
+        floodActiveSessions,
+        nowMs,
+        config,
+      });
+      audit.push({ deliveryId: failedId, action: decision.action, reason: decision.reason });
+      if (decision.action === 'escalate') {
+        nextDeliveries[failedId] = {
+          ...nextDeliveries[failedId],
+          terminalState: SUBMIT_STATE_ESCALATED,
+          escalatedAtMs: nowMs,
+          escalationReason: decision.reason,
+        };
+        actions.push({
+          type: 'escalate',
+          deliveryId: failedId,
+          sessionId,
+          reason: decision.reason,
+          diagnosis: decision.diagnosis,
+        });
+      }
+    }
+
     const overwritten = findOverwrittenDeliveries(deliveries, sessionId);
     for (const lost of overwritten) {
       const lostId = String(lost.deliveryId);

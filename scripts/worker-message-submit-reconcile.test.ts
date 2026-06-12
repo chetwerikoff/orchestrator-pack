@@ -423,6 +423,67 @@ describe('surviving delivery selection (review)', () => {
       ),
     ).toBe(true);
   });
+  it('does not let a later failed or unknown pending send overwrite an earlier dispatched draft', () => {
+    for (const dispatchOutcome of ['send_failed', 'dispatch_unknown']) {
+      const deliveries = [
+        {
+          deliveryId: `opk-failed-overwrite:1000:ao-send:first:${dispatchOutcome}`,
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 1000,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+        },
+        {
+          deliveryId: `opk-failed-overwrite:2000:ao-send:failed:${dispatchOutcome}`,
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 2000,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome,
+        },
+      ];
+      expect(selectSurvivingDelivery(deliveries, 'opk-failed-overwrite')?.deliveryId).toBe(
+        `opk-failed-overwrite:1000:ao-send:first:${dispatchOutcome}`,
+      );
+      expect(findOverwrittenDeliveries(deliveries, 'opk-failed-overwrite')).toHaveLength(0);
+    }
+  });
+
+  it('submits earlier dispatched draft and escalates a later failed pending send', () => {
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-failed-overwrite', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {
+        'opk-failed-overwrite:1000:ao-send:first': {
+          deliveryId: 'opk-failed-overwrite:1000:ao-send:first',
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 1000,
+          source: 'ao-send',
+          sourceKey: 'first',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 300, lineCount: 2 },
+        },
+        'opk-failed-overwrite:2000:ao-send:failed': {
+          deliveryId: 'opk-failed-overwrite:2000:ao-send:failed',
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 2000,
+          source: 'ao-send',
+          sourceKey: 'failed',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'send_failed',
+          draftState: 'unknown',
+          messageShape: { charLength: 280, lineCount: 2 },
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 3000,
+    });
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe('opk-failed-overwrite:1000:ao-send:first');
+    expect(actions.some((a) => a.type === 'escalate' && a.reason === 'send_failed' && a.deliveryId === 'opk-failed-overwrite:2000:ao-send:failed')).toBe(true);
+  });
 });
 
 describe('multiple pending deliveries (AC10)', () => {
