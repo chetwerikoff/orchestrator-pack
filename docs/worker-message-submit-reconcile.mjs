@@ -521,13 +521,19 @@ export function planWorkerMessageSubmitActions(input) {
   const audit = [];
 
   const sessionIds = new Set(deliveries.map((d) => String(d.sessionId)));
-  const inFlightBySession = new Map();
+  const paneCompetingBySession = new Map();
   for (const d of deliveries) {
     const sid = String(d.sessionId ?? '');
     if (!sid) continue;
-    const arr = inFlightBySession.get(sid) ?? [];
+    const outcome = String(d.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED);
+    const couldHavePaneDraft =
+      outcome === DISPATCH_OUTCOME_DISPATCHED || outcome === DISPATCH_OUTCOME_IN_FLIGHT;
+    if (!couldHavePaneDraft || String(d.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+      continue;
+    }
+    const arr = paneCompetingBySession.get(sid) ?? [];
     arr.push(d);
-    inFlightBySession.set(sid, arr);
+    paneCompetingBySession.set(sid, arr);
   }
 
   for (const sessionId of sessionIds) {
@@ -593,7 +599,7 @@ export function planWorkerMessageSubmitActions(input) {
       ) {
         continue;
       }
-      if ((inFlightBySession.get(sessionId) ?? []).length > 1) { lost.ambiguousSessionInflight = true; }
+      if ((paneCompetingBySession.get(sessionId) ?? []).length > 1) { lost.ambiguousSessionInflight = true; }
       if (isDeliveryConsumed(session, lost, Number(lost.deliveredAtMs ?? 0))) {
         nextDeliveries[lostId] = {
           ...existing,
@@ -637,7 +643,7 @@ export function planWorkerMessageSubmitActions(input) {
         surviving = latestForSession;
       }
     }
-    if (surviving && (inFlightBySession.get(sessionId) ?? []).length > 1) {
+    if (surviving && (paneCompetingBySession.get(sessionId) ?? []).length > 1) {
       surviving.ambiguousSessionInflight = true;
     }
     if (!surviving) {

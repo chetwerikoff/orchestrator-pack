@@ -867,6 +867,23 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
   });
 
+  it('does not make a dispatched draft ambiguous because a later send failed before reaching the pane', () => {
+    const id1 = 'opk-plain-send:1717601000000:ao-send:first';
+    const id2 = 'opk-plain-send:1717601010000:ao-send:failed';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: 'generic progress' }] }],
+      dispatchJournal: {
+        [id1]: { deliveryId: id1, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+        [id2]: { deliveryId: id2, sessionId: 'opk-plain-send', deliveredAtMs: 1717601010000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'send_failed', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601025000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.deliveryId === id1)).toBe(true);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.reason === 'send_failed' && a.deliveryId === id2)).toBe(true);
+    expect(submitActions(actions)).toHaveLength(0);
+  });
+
   it('dispatch_unknown escalates instead of looping or replaying payload', () => {
     const id = 'opk-plain-send:1717601000000:ao-send:unknown';
     const { actions } = planWorkerMessageSubmitActions({
