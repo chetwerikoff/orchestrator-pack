@@ -55,6 +55,46 @@ The pack therefore adds contracts around AO instead of replacing AO orchestratio
    - build on AO per-session cost when available;
    - not a Tracker plugin.
 
+
+## Automated review-start claim (Issue #267)
+
+All supervised automated review starters share one machine-local claim namespace for
+`(prNumber, full normalized head SHA)`: periodic reconcile, wake listener, and deferred-head
+reeval. The default namespace is `${AO_REVIEW_CLAIM_DIR}` when set, otherwise
+`${AO_SIDE_PROCESS_STATE_DIR}/review-start-claims`, otherwise the OS temp fallback used by
+legacy unsupervised dry runs. All children log the resolved namespace at startup.
+
+Operator adoption after merge:
+
+1. Stop all supervised children, then start the new generation (do not rolling-restart only one
+   child).
+2. Verify no stray pre-claim starter remains outside the supervisor by checking process command
+   lines for `review-trigger-reconcile.ps1`, `orchestrator-wake-listener.ps1`, and
+   `review-trigger-reeval.ps1`.
+3. Check `ao review list --json` coverage before trusting the first new-generation tick; a
+   one-time old-generation run that began immediately before stop-all may still be registering.
+4. Exercise one reconcile tick and a synthetic completion wake that drives both listener and
+   reeval paths. Expect one claim owner and claim-skip log lines naming the key and holder; do
+   not accept duplicate runs for a test head.
+
+Recovery / escalation:
+
+- Claim store missing, unwritable, unreadable, corrupt, future-dated, or ambiguous fails closed:
+  no automated `ao review run` starts. Fix the storage problem first.
+- Use the audited operator-resolution path (`Resolve-ReviewStartClaimEscalation` in
+  `scripts/lib/Review-StartClaim.ps1`) only after re-checking current `ao review list --json`
+  coverage and PR head state. Resolution moves the active/ambiguous record to `terminal/` and
+  either leaves the visible run as coverage or re-arms the key for normal claim arbitration.
+- The stale recovery interval is configurable with `AO_REVIEW_CLAIM_STALE_MINUTES`; values below
+  the documented safe floor of 2 minutes are clamped with a warning. The default is 10 minutes,
+  intentionally much larger than seconds-scale AO run registration.
+- Manual operator `ao review run` is still manual and outside the claim. Once its run record is
+  visible, automation treats it as coverage. A manual run racing an automated start inside AO's
+  registration-lag window is the accepted operator-owned residual.
+
+Supervisor child logs are rotated to `*.previous-*` before child start; the previous generation
+remains readable after restart for incident reconstruction.
+
 ## Correct terminology
 
 - Say "runtime scope gate + PR CI check", not "commit-gate plugin".

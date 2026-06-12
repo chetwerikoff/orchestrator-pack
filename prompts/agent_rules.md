@@ -313,8 +313,9 @@ has gone idle — not a substitute for fixing CI yourself.
 a review-ready head (AO 0.9.x emits no dedicated `ready_for_review` webhook).
 
 On `merge.ready` (approved-and-green), `scripts/orchestrator-wake-listener.ps1` evaluates
-HEAD READY FOR REVIEW (#195) and covered-head dedupe (#189), then may `ao review run`
-**before** forwarding the merge-intent wake. The periodic `review-trigger-reconcile.ps1`
+HEAD READY FOR REVIEW (#195) and covered-head dedupe (#189), acquires the shared
+review-start claim (#267), then may `ao review run` **before** forwarding the merge-intent wake.
+The periodic `review-trigger-reconcile.ps1`
 (#163) and heartbeat remain backstops. Merge handling on that wake must **re-read** review
 run state afterward — a wake annotated `mergeable=false` is not permission to merge on a
 stale approved-and-green snapshot while review is in-flight / `needs_triage`.
@@ -333,8 +334,8 @@ stale approved-and-green snapshot while review is in-flight / `needs_triage`.
 
 When a completion wake defers a head as `uncovered_not_ready` / `no_ready_for_review`
 (#212), a **scoped** supervised child watches that small deferred-head set and may
-`ao review run` seconds-scale when #195 readiness lands on the **current** head SHA —
-without a full open-PR sweep. Poll classification:
+acquire the shared review-start claim (#267) and `ao review run` seconds-scale when #195
+readiness lands on the **current** head SHA — without a full open-PR sweep. Poll classification:
 `scoped_deferred_head_watch` (5-minute bounded window per head; incident delay ~77 s).
 
 - Persisted watch entries live under `{stateRoot}/review-trigger-reeval-watch.json`.
@@ -489,9 +490,21 @@ on a different PR, or same PR on a different SHA, does **not** count as coverage
 
 `failed` / `cancelled` on the current head are **not** covered and are **not** plain
 uncovered either: read `terminationReason`, retry at most once after diagnosis, then
-escalate (EMPTY REVIEW TRAP). **PRE-RUN COVERAGE RE-CHECK:** immediately before emitting
-`ao review run`, re-read `ao review list --json` and re-apply the covered-head predicate.
-The mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; see
+escalate (EMPTY REVIEW TRAP).
+
+**AUTOMATED REVIEW-START CLAIM (#267):** every noninteractive automated starter
+(`review-trigger-reconcile.ps1`, `orchestrator-wake-listener.ps1`, and
+`review-trigger-reeval.ps1`) must acquire the shared machine-local claim for
+`(prNumber, full normalized targetSha)` before `ao review run`. The in-claim pre-run
+coverage/head-ready recheck happens after acquisition. Claim/storage ambiguity fails
+closed with a visible escalation; claim losers log the key and holder identity. The claim
+is held until a covering run record is visible or a terminal claim outcome is recorded.
+Manual operator `ao review run` remains outside the claim; automation consumes its visible
+run record as coverage, and a manual race inside AO registration lag is operator-owned.
+
+**PRE-RUN COVERAGE RE-CHECK:** immediately before emitting `ao review run`, after holding
+the claim, re-read `ao review list --json` and re-apply the covered-head predicate. The
+mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; see
 `docs/review-orchestrator-loop.mjs`.
 
 ## Head ready for review (Issue #195)

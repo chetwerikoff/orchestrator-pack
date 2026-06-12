@@ -271,7 +271,9 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
 }
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 
-Write-ReviewTriggerReevalLog "starting (project=$ProjectId, poll=${PollSeconds}s, stateRoot=$stateRoot, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+$claimNamespace = Resolve-ReviewStartClaimNamespace -StateRoot $stateRoot
+Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReviewTriggerReevalLog $m } | Out-Null
+Write-ReviewTriggerReevalLog "starting (project=$ProjectId, poll=${PollSeconds}s, stateRoot=$stateRoot, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 Write-ReviewTriggerReevalLog "pollClass=scoped_deferred_head_watch windowMs=300000 incidentDelayMs=77000"
 
 if ($FixturePath) {

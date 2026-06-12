@@ -9,6 +9,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
     param([string]$CommandLine)
@@ -130,6 +131,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         [string]$SideEffectLockPath = '',
         [string]$StateRoot = '',
         [hashtable]$FixtureSnapshot,
+        [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
@@ -236,35 +238,93 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     prNumber  = $planned.prNumber
                     targetSha = $planned.headSha
                     status    = 'queued'
-                })
+            })
         }
     }
 
-    $fresh = if ($FixtureSnapshot) {
-        $FixtureSnapshot
+    $claim = @{ acquired = $true; dryRun = $true; key = "dry-run:$($planned.prNumber):$($planned.headSha)" }
+    if (-not $DryRun) {
+        $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $ProjectId) }
+        $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
+            -Surface 'review-wake-trigger' -ReviewRuns $claimRuns -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot) `
+            -StartReason 'completion_wake' -LogWriter $LogWriter
     }
-    else {
-        Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
+    if (-not $claim.acquired) {
+        if ($claim.escalation) {
+            & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): $($claim.reason) $($claim.detail)"
+            return @{
+                triggered = $false
+                reason    = [string]$claim.reason
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot
+            }
+        }
+        $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
+        & $LogWriter "review-wake-trigger: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
+        $mergeSnapshot = if ($claim.reason -eq 'covered_by_run') {
+            if ($ResolveFreshSnapshot) {
+                & $ResolveFreshSnapshot $planned
+            }
+            else {
+                Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
+            }
+        }
+        else {
+            $null
+        }
+        return @{
+            triggered = $false
+            reason    = 'claim_skipped'
+            mergeEval = if ($claim.reason -eq 'covered_by_run') {
+                Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $mergeSnapshot -HeadSha $planned.headSha
+            }
+            else {
+                Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot `
+                    -HeadSha $planned.headSha -ExtraReviewRuns @(@{
+                        prNumber  = $planned.prNumber
+                        targetSha = $planned.headSha
+                        status    = 'queued'
+                    })
+            }
+        }
     }
-    $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
-    $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
-        planned = @{
-            prNumber  = $planned.prNumber
-            headSha   = $planned.headSha
-            sessionId = $planned.sessionId
+    if ($claim.recovered) {
+        & $LogWriter "review-wake-trigger: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
+    }
+
+    try {
+        $fresh = if ($FixtureSnapshot) {
+            $FixtureSnapshot
         }
-        fresh   = @{
-            openPrs                     = @($fresh.openPrs)
-            reviewRuns                  = @($fresh.reviewRuns)
-            sessions                    = @($fresh.sessions)
-            ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
-            requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
-            requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+        else {
+            Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
         }
+        $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
+            planned = @{
+                prNumber  = $planned.prNumber
+                headSha   = $planned.headSha
+                sessionId = $planned.sessionId
+            }
+            fresh   = @{
+                openPrs                     = @($fresh.openPrs)
+                reviewRuns                  = @($fresh.reviewRuns)
+                sessions                    = @($fresh.sessions)
+                ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
+                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
+                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+            }
+        }
+    }
+    catch {
+        Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
+        throw
     }
 
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-wake-trigger: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
+        if (-not $DryRun) {
+            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        }
         return @{
             triggered = $false
             reason    = $recheck.reason
@@ -276,12 +336,21 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter "review-wake-trigger: dry-run would run: $commandLine (PR #$($planned.prNumber) head=$($planned.headSha))"
     }
     else {
+        if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
+            & $LogWriter "review-wake-trigger: review-start-claim ownership lost before invocation PR #$($planned.prNumber) key=$($claim.key); aborting"
+            return @{
+                triggered = $false
+                reason    = 'claim_ownership_lost'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+            }
+        }
         if (-not (Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
                 prNumber  = $planned.prNumber
                 headSha   = $planned.headSha
                 sessionId = $planned.sessionId
             })) {
             & $LogWriter "review-wake-trigger: side-effect fence busy; skip duplicate run PR #$($planned.prNumber)"
+            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{ reason = 'side_effect_in_flight' } | Out-Null
             return @{
                 triggered = $false
                 reason    = 'side_effect_in_flight'
@@ -295,10 +364,19 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-            Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            try {
+                Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            }
+            catch {
+                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
+                throw
+            }
             & ao @runArgs
             if ($LASTEXITCODE -ne 0) {
-                throw "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+                $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+                $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
+                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+                throw $failure
             }
         }
         finally {
@@ -324,6 +402,13 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
     else {
         @(Get-AoReviewRuns -Project $ProjectId)
+    }
+
+    if (-not $DryRun) {
+        $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+        if (-not $complete.ok) {
+            & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
+        }
     }
 
     $mergeEval = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'mergeIntent' -Payload @{

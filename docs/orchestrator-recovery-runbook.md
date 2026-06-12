@@ -884,6 +884,16 @@ today; document the gap, do not invent one in this pack.
 the listener; suppression is on the orchestrator turn via `orchestratorRules`
 (see `docs/orchestrator-wake-runbook.md`), not by editing wake-filter code.
 
+
+## Automated review-start claim recovery (Issue #267)
+
+Use the canonical operator adoption and recovery checklist in
+[`docs/migration_notes.md`](migration_notes.md#automated-review-start-claim-issue-267).
+For runbook triage, the key operational rules are: automated starters must not run when
+the claim store is ambiguous or unavailable; operator resolution must first re-check current
+review coverage and PR head state; and previous-generation child logs are retained as
+`*.previous-*` files for incident reconstruction.
+
 ## Quick reference — safety checks
 
 | Step | Before | After |

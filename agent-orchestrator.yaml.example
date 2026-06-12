@@ -257,12 +257,26 @@ projects:
       path; follow EMPTY REVIEW TRAP: read terminationReason, retry at most once after
       diagnosis, escalate otherwise.
 
-      PRE-RUN COVERAGE RE-CHECK (Issue #189). Immediately before emitting ao review run,
-      re-read ao review list --json and re-apply the covered-head predicate above with the
-      smallest gap between read and run. If the head became covered between the turn's first
-      observation and this re-check, do not run. The low-frequency reconcile process uses the
-      same covered-head definition; rare double-runs from simultaneous observation are
-      acceptable residual risk (one run goes outdated; no worker-lifecycle effect).
+      AUTOMATED REVIEW-START CLAIM (Issue #267, closes the #189/#207/#235 concurrent
+      window). Every automated starter surface must acquire the shared machine-local
+      review-start claim keyed by (prNumber, full normalized head SHA) before ao review run:
+      periodic reconcile (including quiescent-worker fallback), wake listener, deferred-head
+      re-eval, and future noninteractive starters. The claim is an atomic cross-process
+      test-and-set and stays effective until a covering run record is visible or a terminal
+      outcome is recorded. Claim storage failure, unreadable/partial records, short SHAs,
+      divergent SHA normalization, anomalous timestamps, or unknowable registration state
+      fail closed with a visible escalation — never claim unavailable / proceed anyway.
+      Losing surfaces log claim-skip with the key and restart-correlatable holder identity.
+      Operator-invoked manual ao review run remains outside the claim; automation treats a
+      visible manual run record as coverage, while an operator racing inside AO registration
+      lag is the accepted manual residual.
+
+      PRE-RUN COVERAGE RE-CHECK / HEAD-READY RE-CHECK INSIDE THE CLAIM. After acquiring the claim and
+      immediately before emitting ao review run, re-read ao review list --json and re-apply
+      the covered-head predicate above with the smallest gap between read and run. If the
+      head became covered between the turn's first observation and this re-check, abort and
+      terminalize the claim as recheck-aborted. A stalled claimant that lost ownership to
+      stale recovery must abort at the final ownership fence instead of starting.
 
       HEAD READY FOR REVIEW (Issue #195 — one predicate for all review-trigger paths).
       Before any ao review run (report-driven trigger, ROUND PROGRESSION, or the #163
@@ -309,12 +323,12 @@ projects:
 
       EVENT-DRIVEN REVIEW TRIGGER (Issue #207 — wake listener, review-run only). On
       merge.ready (approved-and-green completion wake), orchestrator-wake-listener.ps1
-      evaluates HEAD READY FOR REVIEW (#195) and may ao review run before forwarding the
-      merge-intent wake. Merge handling must re-read run state (mergeable=false annotation
-      when review is in-flight). Processing bound: 5s wake-to-run decision (listener-local).
-      Side-effecting supervised child (listener-side-effect.lock). Additive to the periodic
-      reconcile below and heartbeat — not a replacement. Safety: never ao spawn, --claim-pr,
-      ao session kill, ao send, or merge from this path — only ao review run.
+      evaluates HEAD READY FOR REVIEW (#195), acquires the shared review-start claim, then
+      may ao review run before forwarding the merge-intent wake. Merge handling must re-read
+      run state (mergeable=false annotation when review is in-flight). Processing bound: 5s
+      wake-to-run decision (listener-local). Side-effecting supervised child; additive to
+      periodic reconcile below and heartbeat — not a replacement. Safety: never ao spawn,
+      --claim-pr, ao session kill, ao send, or merge from this path — only ao review run.
 
       STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
       low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
@@ -332,8 +346,9 @@ projects:
         4. gh pr checks + branch-protection required-check names — classify required CI per
            HEAD READY FOR REVIEW (#195; red defers, green/pending eligible, missing routes to
            degraded-CI orchestrator branch)
-        5. For each head that is ready for review with a linked worker session: STALE
-           REVIEWER WORKSPACE preflight, PRE-RUN HEAD-READY RE-CHECK, then ao review run
+        5. For each head that is ready for review with a linked worker session: acquire the
+           shared review-start claim, run STALE REVIEWER WORKSPACE preflight, PRE-RUN
+           HEAD-READY RE-CHECK inside the claim, then ao review run
            <worker-session-id> --execute with --command set to REVIEW_COMMAND
       Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send
       from this process — only ao review run for a head ready for review. Skip uncovered-but-
@@ -345,7 +360,8 @@ projects:
       DEFERRED-HEAD REVIEW RE-EVALUATION (Issue #235 — scoped supervised child, review-run
       only). When merge.ready defers as uncovered_not_ready / no_ready_for_review (#212),
       scripts/review-trigger-reeval.ps1 watches the small deferred-head set and may
-      ao review run seconds-scale when #195 readiness lands on the current head SHA.
+      acquire the shared review-start claim and ao review run seconds-scale when #195
+      readiness lands on the current head SHA.
       Poll classification: scoped_deferred_head_watch (5-minute bounded window; incident
       wake-to-readiness delay ~77 s). Watch state: {stateRoot}/review-trigger-reeval-watch.json.
       Default poll: 5 s (-PollSeconds). Side-effect lock: review-trigger-reeval-side-effect.lock.
