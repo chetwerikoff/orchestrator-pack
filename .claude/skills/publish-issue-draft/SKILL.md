@@ -83,40 +83,36 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 
 ## Common steps (Modes B and C only)
 
-> **Self-delegation guard — am I Cursor?** The `cursor-agent` delegation below is
-> **only** for a non-Cursor architect (Claude Code) handing the GitHub work to
-> Cursor. **If you are yourself the Cursor CLI, do NOT call `cursor-agent`** —
-> that spawns a redundant nested Cursor. Instead run the publish mechanics
-> (branch, commit, push, PR, merge, issue create/re-sync) yourself, directly,
-> using the manual `gh`/git commands in the steps below as your **primary** path.
-> A Cursor session never delegates publish/issue/merge work to another Cursor.
+> **Self-delegation guard — am I already inside OpenCode?** The `opencode run`
+> delegation below is **only** for an architect surface (Claude Code, Cursor CLI)
+> handing the GitHub work to a fresh deepseek session. **If you are yourself
+> running inside an OpenCode session** (e.g. the `opk-orchestrator` worktree or
+> any AO-managed session — check `echo $AO_SESSION_ID`), do NOT call
+> `opencode run` — that spawns a nested OpenCode. Instead run the publish
+> mechanics (branch, commit, push, PR, merge, issue create/re-sync) yourself,
+> directly, using the manual `gh`/git commands in the steps below as your
+> **primary** path.
 >
 > Direct `gh pr merge` / `gh pr create` / `gh issue create` is blocked by the RTK
-> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already in
-> Cursor, so the fallback is the correct path, not a workaround; do not stop at
-> the block. If a PR head is behind base (`not mergeable: head … not up to date`),
-> run `gh pr update-branch <N>` first, then re-run the merge.
+> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already the
+> executing agent, so the fallback is the correct path. If a PR head is behind
+> base (`not mergeable: head … not up to date`), run `gh pr update-branch <N>`
+> first, then re-run the merge.
 
-> **Publication runs DIRECTLY by default (every mode, single or batch).** The
-> architect runs the publish mechanics (branch, commit, push, PR, merge, issue
-> create/re-sync) itself, using the manual PowerShell/`gh` steps below. Direct
+> **Publication delegates to deepseek via OpenCode by default (every mode, single
+> or batch).** The architect hands the publish mechanics to `opencode run
+> --dangerously-skip-permissions --dir .` with a temp-file prompt (below). Direct
 > `gh pr create` / `gh pr merge` / `gh issue create` is blocked by the publish
-> hook — prefix **`AO_PUBLISH_FALLBACK=1`** on those commands; that is the
-> sanctioned path, not a workaround. This is the default because it is **cheaper
-> and deterministic**: no second agent, and fewer architect tokens than composing
-> a delegation prompt — the publish is a fixed command with nothing to reason
-> about, so there is nothing to offload.
->
-> **Optional — delegate to Cursor.** Handing the whole publish to **one**
-> `cursor-agent -p --force` call (prompt below) is an OPTIONAL alternative; use it
-> only if you specifically want to offload to Cursor. It is **no longer the
-> default**. (If you are yourself the Cursor CLI, never call `cursor-agent` — no
-> nested Cursor — just run the direct steps.)
+> hook for the architect — use `opencode run` as the delegate so deepseek runs
+> those commands. The **direct `AO_PUBLISH_FALLBACK=1`** path (manual
+> PowerShell/`gh` steps below) is the **fallback** — use it only when
+> `opencode run` is unavailable, errors, or leaves the publish half-done.
 
-**Optional delegation prompt** (only if offloading to Cursor; fill the `<…>` placeholders; covers single draft and batch):
+**Delegation prompt** (fill the `<…>` placeholders; covers single draft and batch):
 
 ```bash
-cursor-agent -p --force "$(cat <<'EOF'
+PROMPT_FILE="$(mktemp)"
+cat > "$PROMPT_FILE" <<'EOF'
 You are publishing already-reviewed architect docs for orchestrator-pack from the
 current working tree. Do NOT edit the drafts' content — they passed Codex review.
 
@@ -127,10 +123,10 @@ Registry rows to land (one per published draft): <for each draft, the exact inde
 Issues to handle after merge: <for each, "#N <- draft path" to re-sync an existing issue
   body, or "new <- draft path" to create one>.
 
-Index ownership: Cursor owns docs/issue_queue_index.md during publish. Add each new registry
-row (from the draft or from the row text above) and stage ONLY that row's hunk — never
-wholesale-stage or reset the file. The architect does NOT pre-edit, post-edit, or restore
-the index by hand.
+Index ownership: the delegated agent owns docs/issue_queue_index.md during publish. Add
+each new registry row (from the draft or from the row text above) and stage ONLY that
+row's hunk — never wholesale-stage or reset the file. The architect does NOT pre-edit,
+post-edit, or restore the index by hand.
 
 Steps:
 1. git fetch origin; branch from main: git checkout main && git pull origin main &&
@@ -158,13 +154,20 @@ Steps:
    row to docs/issue_queue_index.md (selective staging only — see Index ownership above).
 7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
 EOF
-)"
+opencode run --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
+
+**Verify state after the run — `opencode run` can exit 0 mid-failure.** A
+connection drop or context exhaustion can leave `opencode run` reporting exit 0
+while the publish is half-done (e.g. issue created, PR not opened, or index row
+left uncommitted). Do **not** trust the exit code alone: confirm with
+`gh issue view <N>`, `gh pr list --search <slug>`, and `git status` before
+reporting success, and complete any missing step via the fallback below.
 
 If the published change is an **amendment to an already-closed issue** whose spec
 materially changed, note in your report that the issue may need reopening for
-re-implementation — the architect decides that with the user; Cursor only re-syncs
-the body.
+re-implementation — the architect decides that with the user; deepseek only
+re-syncs the body.
 
 ### Pre-flight
 
@@ -182,7 +185,7 @@ cut for this draft). Record implementation issue number **N** from the draft hea
 Include **only** what the draft session touched:
 
 - `docs/issues_drafts/NN-<slug>.md`
-- **Only this draft's registry row** in `docs/issue_queue_index.md` (Cursor adds/updates the
+- **Only this draft's registry row** in `docs/issue_queue_index.md` (the delegated agent adds/updates the
   row and stages it selectively — see Index ownership below; other drafts' pending rows stay
   uncommitted in the working tree)
 - `docs/issues_drafts/00-architecture-decisions.md` (if decision log updated)
@@ -190,13 +193,13 @@ Include **only** what the draft session touched:
 
 Do **not** bundle unrelated local edits (other skills, `agent-orchestrator.yaml`, WIP code).
 
-**Index ownership (Cursor during publish):** `docs/issue_queue_index.md` is Cursor-owned for
-the publish commit. Cursor derives each new row from the draft (or from row text in the
-delegation prompt), writes it into the working tree, and stages **only** that row's hunk.
-The architect does **not** pre-edit, post-edit, or restore `docs/issue_queue_index.md` by
-hand. **Forbidden scoping shortcuts:** `git add docs/issue_queue_index.md` (wholesale) and
-`git checkout HEAD -- docs/issue_queue_index.md` (or any reset-to-HEAD) — both drop other
-drafts' pending registry rows.
+**Index ownership (delegated agent during publish):** `docs/issue_queue_index.md` is owned by
+the delegated agent (deepseek via opencode run) for the publish commit. The agent derives
+each new row from the draft (or from row text in the delegation prompt), writes it into the
+working tree, and stages **only** that row's hunk. The architect does **not** pre-edit,
+post-edit, or restore `docs/issue_queue_index.md` by hand. **Forbidden scoping shortcuts:**
+`git add docs/issue_queue_index.md` (wholesale) and `git checkout HEAD --
+docs/issue_queue_index.md` (or any reset-to-HEAD) — both drop other drafts' pending rows.
 
 Spec-only docs PRs use the **spec-only scope-guard path** (no declaration
 snapshot, no `Closes #N`, no reopen step). See
@@ -306,8 +309,9 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 ## Do not
 
-- Delegate publish to `cursor-agent` by default — the direct
-  `AO_PUBLISH_FALLBACK=1` path is the default now; Cursor delegation is optional.
+- Run publish mechanics directly by default — delegate to `opencode run
+  --dangerously-skip-permissions --dir .` first; use `AO_PUBLISH_FALLBACK=1`
+  only as fallback (opencode unavailable or half-done).
 - Hand-edit, wholesale-stage, or reset `docs/issue_queue_index.md` — selective
   single-row staging only (see Index ownership), whoever runs the publish.
 - Put any issue reference (`Refs #N`, bare `#N`, issue URL) in a spec-only PR body —
