@@ -1180,6 +1180,34 @@ describe('worker-message-send adoption preflight', () => {
     expect(deliveries).toHaveLength(0);
   });
 
+  it('keeps dry-run generated probes out of the live dispatch journal', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-dryrun-'));
+    const prodJournal = path.join(dir, 'prod-journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const wrapperPath = path.resolve('scripts/journaled-worker-send.ps1').replace(/'/g, `'\''`);
+    writeFileSync(prodJournal, JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
+    writeFileSync(fakeAo, [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" != "send" ]]; then exit 64; fi',
+      'payload=$(cat)',
+      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      '',
+    ].join('\n'));
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-StateFile', state, '-AoEpoch', 'epoch-dry', '-ConfigPath', '/cfg/dry.yaml', '-AoPath', fakeAo, '-WriteProbeEntries', '-DryRun'], {
+      encoding: 'utf8',
+      env: { ...process.env, AO_WORKER_MESSAGE_DISPATCH_JOURNAL: prodJournal, TMPDIR: dir },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('effective routing adopted');
+    expect(readFileSync(prodJournal, 'utf8')).toBe(JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
+  });
+
   it('requires adoption probe hash to match supplied AO epoch and config path', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-epoch-'));
     const journal = path.join(dir, 'journal.json');

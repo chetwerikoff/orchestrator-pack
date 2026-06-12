@@ -57,6 +57,7 @@ if ($DryRun) {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) 'worker-message-send-adoption-dryrun'
     if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
     $statePath = Join-Path $root 'adoption-state.json'
+    $effectiveJournalPath = Join-Path $root 'dispatch-journal.json'
 }
 
 
