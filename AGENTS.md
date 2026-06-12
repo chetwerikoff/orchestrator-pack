@@ -147,12 +147,52 @@ to merge yet.
 **Loader entry points (optional):** `.cursor/skills/merge-with-local-adoption/SKILL.md`,
 `.claude/skills/merge-with-local-adoption/SKILL.md`.
 
+## Auto-invoke: adversarial draft review
+
+When the user asks to author a task draft/issue **and** involve Codex to
+challenge the approach first (best-effort discovery, not a deterministic gate),
+follow
+[`.claude/skills/adversarial-draft-review/SKILL.md`](.claude/skills/adversarial-draft-review/SKILL.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «с кодексом», «обсуди с кодексом»,
+«посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом»,
+«создай задачу с кодексом», «придирчиво», «оспорь подход»; «draft with codex»,
+«adversarial draft», «challenge the approach».
+
+**Skip:** plain «создай драфт» with no adversarial marker — use
+`create-issue-draft` instead; «с gpt» — use `discuss-with-gpt`.
+
+**Loader entry points (optional):** `.cursor/skills/adversarial-draft-review/SKILL.md`,
+`.claude/skills/adversarial-draft-review/SKILL.md`.
+
+## Auto-invoke: discuss with GPT
+
+When the user asks to author a task draft/issue **and** involve GPT (the custom
+ChatGPT project) to challenge the approach first (best-effort discovery, not a
+deterministic gate), follow
+[`.claude/skills/discuss-with-gpt/SKILL.md`](.claude/skills/discuss-with-gpt/SKILL.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «с gpt», «с гпт», «обсуди с gpt»,
+«обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt»,
+«создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt».
+
+**Skip:** plain «создай драфт» with no «с gpt» marker — use `create-issue-draft`
+instead; «с кодексом» — use `adversarial-draft-review`.
+
+**Loader entry points (optional):** `.cursor/skills/discuss-with-gpt/SKILL.md`,
+`.claude/skills/discuss-with-gpt/SKILL.md`.
+
 ## Auto-invoke: create issue draft
 
 When authoring or rewriting a task draft (`docs/issues_drafts/NN-<slug>.md`) or
 syncing a new GitHub Issue spec, follow
 [`.claude/skills/create-issue-draft/SKILL.md`](.claude/skills/create-issue-draft/SKILL.md)
 immediately.
+
+**Skip:** adversarial markers («с кодексом», «придирчиво», …) →
+`adversarial-draft-review`; «с gpt» / «с гпт» → `discuss-with-gpt`.
 
 **Loader entry points (optional):** `.cursor/skills/create-issue-draft/SKILL.md`,
 `.claude/skills/create-issue-draft/SKILL.md`.
@@ -168,12 +208,15 @@ When the user asks to study an external repo/URL for adoption, follow
 ## Auto-invoke: publish issue draft
 
 After [`create-issue-draft`](.claude/skills/create-issue-draft/SKILL.md) completes (Codex
-`NO_FINDINGS`, GitHub issue synced, registry updated), follow
+draft review done, GitHub issue synced, registry updated), follow
 [`.claude/skills/publish-issue-draft/SKILL.md`](.claude/skills/publish-issue-draft/SKILL.md)
-by default — commit, PR, merge to `main`, reopen the implementation issue if auto-closed.
+to decide how the local draft is persisted. **Default is sync-only:** the GitHub
+Issue is the queue; the draft file stays local and is NOT committed or PR'd.
 
-**Also invoke when the user says:** «опубликуй драфт», «закоммить драфт», «pr для драфта»,
-«publish draft», «смержи драфт» (spec land, not implementation).
+**Also invoke (commit/PR/merge path)** when the user says: «опубликуй драфт»,
+«закоммить драфт», «pr для драфта», «publish draft», «смержи драфт» (spec land,
+not implementation) — then branch, commit, PR, merge to `main`, and reopen the
+implementation issue if auto-closed.
 
 **Skip:** user opts out of PR/merge; unrelated work on the branch.
 
@@ -194,3 +237,22 @@ tasks that belong in a GitHub issue draft.
 
 **Loader entry points (optional):** `.cursor/skills/switch-pack-reviewer/SKILL.md`,
 `.claude/skills/switch-pack-reviewer/SKILL.md`.
+
+## Auto-invoke: change orchestrator runtime
+
+When the user wants to change the orchestrator's model, prompt/rules, or runtime
+and make the change actually take effect (best-effort discovery, not a
+deterministic gate), follow
+[`.claude/skills/change-orchestrator-runtime/SKILL.md`](.claude/skills/change-orchestrator-runtime/SKILL.md)
+immediately — no skill name required.
+
+**Triggers (substring or clear paraphrase):** «поменяй модель оркестратора»,
+«смени промпт оркестратора», «другой оркестратор»; «change orchestrator model»,
+«edit orchestrator rules», «switch orchestrator runtime».
+
+**Skip:** architecture-only discussion with no machine change; editing
+`agent-orchestrator.yaml` without applying the daemon-cache and session-restore
+steps this skill covers.
+
+**Loader entry points (optional):** `.cursor/skills/change-orchestrator-runtime/SKILL.md`,
+`.claude/skills/change-orchestrator-runtime/SKILL.md`.
