@@ -842,6 +842,76 @@ for that run. Label this path **manual** in operator notes; it is not `ao review
 
 See also `docs/migration_notes.md` (**Respawn-induced review disarray**, Issue #98).
 
+## Review stuck in `Pending` — capture before re-trigger
+
+A review run that starts but never reaches `clean` / `needs_triage` (the dashboard
+shows a `Pending` spinner that goes nowhere) has **more than one** possible cause, and
+they need different fixes:
+
+- the reviewer subprocess genuinely **hung** (e.g. Codex auth/websocket stall) — it will
+  self-kill at the 10-minute exec timeout with a `terminationReason`;
+- the reviewer **never launched** (queued/preparing, lost a start race);
+- the linked worker's git worktree **drifted off the PR branch** (worktree-collision
+  recovery, failed restore, detached on `main`), so AO invalidates the run — see
+  **Orphan review run** above and `markSuperseded` (worker `HEAD` ≠ run `targetSha`);
+- an AO daemon **restart / reconcile** rewrote the in-flight run (a `completedAt` /
+  `updatedAt` that is clock-aligned with `.000` milliseconds is the fingerprint).
+
+The live artifacts — reviewer subprocess, its tmux-less child, supervisor child logs —
+are destroyed by re-triggering or by `ao stop` / restart. **Capture this snapshot first,
+while the run is still `Pending`, then re-trigger.** Do not `ao stop`, restart AO, or
+start a new review before steps 1–4.
+
+1. **Run state** — record `status`, `reviewerSessionId`, `targetSha`, `startedAt`:
+
+   ```powershell
+   ao review list orchestrator-pack --json
+   ```
+
+   `queued` / `preparing` ⇒ reviewer not yet executing; `running` ⇒ subprocess launched.
+
+2. **Worker worktree head** — from `ao status --json --reports full`, take the linked
+   worker's `workspacePath`, then:
+
+   ```powershell
+   git -C <workspacePath> rev-parse HEAD
+   git -C <workspacePath> branch --show-current
+   git -C <workspacePath> status -sb
+   ```
+
+   If `HEAD` is **not** the PR head SHA (or it is detached / on `main`), this is the
+   worktree-drift class: AO will mark the run `outdated`. Stabilize the worker first
+   (see **Orphan review run after worker respawn** and **Step 2b/2c** worktree hygiene);
+   re-running review before the worktree is back on the PR branch reviews the wrong tree.
+
+3. **Reviewer subprocess + workspace** — the reviewer is a child process (`execFile` of
+   the review command, 10-minute timeout), **not** a tmux pane:
+
+   ```powershell
+   ls -la ~/.agent-orchestrator/projects/orchestrator-pack/code-reviews/workspaces/<reviewerSessionId>
+   ps -ef | grep -i "<reviewerSessionId>\|codex\|invoke-pack-review" | grep -v grep
+   ```
+
+   A workspace dir whose mtime stopped advancing minutes ago with a live reviewer process
+   ⇒ **hung** reviewer (wait for the 10-min timeout to read `terminationReason`). No
+   reviewer process while the run is still `queued` / `preparing` ⇒ **never launched**.
+
+4. **Supervisor + daemon logs (before any restart)** — child logs truncate on supervisor
+   restart, so copy them out first:
+
+   ```powershell
+   cp -r ~/.local/state/orchestrator-pack-wake-supervisor/*.log /tmp/review-hang-$(date +%s)/
+   ```
+
+   Also note the last `ao start` / daemon restart time (`ao events list --json`): a run
+   whose `completedAt`/`updatedAt` is clock-aligned `.000` near a restart points at the
+   daemon-reconcile path, not a reviewer hang.
+
+Only after the snapshot: re-trigger via the **Orphan review run → CLI-first recovery**
+steps (covered-head re-check, fresh `ao review run` on the live session). The captured
+data is what distinguishes a reviewer hang from worktree-drift from a daemon reconcile —
+without it the next occurrence is again unattributable.
+
 ## After manual PR merge
 
 When a worker PR is merged on GitHub (human merge per repo policy), AO 0.9.x
