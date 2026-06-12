@@ -6,6 +6,7 @@ export declare const DELIVERY_PATH_UNKNOWN: 'unknown';
 
 export declare const DISPATCH_OUTCOME_DISPATCHED: 'dispatched';
 export declare const DISPATCH_OUTCOME_SEND_FAILED: 'send_failed';
+export declare const DISPATCH_OUTCOME_IN_FLIGHT: 'dispatch_in_flight';
 export declare const DISPATCH_OUTCOME_UNKNOWN: 'dispatch_unknown';
 
 export declare const DRAFT_STATE_DRAFT_PRESENT: 'draft_present';

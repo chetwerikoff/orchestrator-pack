@@ -22,6 +22,7 @@ import {
   DELIVERY_PATH_SELF_SUBMITTED,
   DISPATCH_OUTCOME_DISPATCHED,
   DISPATCH_OUTCOME_SEND_FAILED,
+  DISPATCH_OUTCOME_IN_FLIGHT,
   DISPATCH_OUTCOME_UNKNOWN,
   DRAFT_STATE_DRAFT_PRESENT,
   DRAFT_STATE_AUTO_SUBMITTED,
@@ -312,6 +313,28 @@ export function evaluateSubmitDecision({
     return { action: 'noop', reason: 'missing_delivery_metadata', deliveryId };
   }
 
+  const terminalState = String(record.terminalState ?? '').trim();
+  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+    return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
+  }
+
+  const submitAttempts = Number(record.submitAttempts ?? 0);
+  const firstObservedAtMs = Number(record.firstObservedAtMs ?? observationAnchorMs);
+  const budgetDeadline = firstObservedAtMs + deliveryBudgetMs;
+
+  if (dispatchOutcome === DISPATCH_OUTCOME_IN_FLIGHT) {
+    if (nowMs >= budgetDeadline) {
+      return {
+        action: 'escalate',
+        reason: 'dispatch_unknown',
+        deliveryId,
+        sessionId,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} remained in-flight past the finite dispatch budget; treating outcome as ambiguous. Source must resend if needed.`,
+      };
+    }
+    return { action: 'noop', reason: 'dispatch_in_flight', deliveryId, sessionId };
+  }
+
   if (dispatchOutcome === DISPATCH_OUTCOME_SEND_FAILED) {
     return {
       action: 'escalate',
@@ -347,15 +370,6 @@ export function evaluateSubmitDecision({
   if (isSessionFloodActive(floodActiveSessions ?? {}, sessionId)) {
     return { action: 'defer', reason: 'flood_active', deliveryId, sessionId, defer: true };
   }
-
-  const terminalState = String(record.terminalState ?? '').trim();
-  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
-    return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
-  }
-
-  const submitAttempts = Number(record.submitAttempts ?? 0);
-  const firstObservedAtMs = Number(record.firstObservedAtMs ?? observationAnchorMs);
-  const budgetDeadline = firstObservedAtMs + deliveryBudgetMs;
 
   if (isDeliveryConsumed(session, delivery, observationAnchorMs)) {
     return {

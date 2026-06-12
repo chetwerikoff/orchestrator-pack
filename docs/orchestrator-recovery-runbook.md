@@ -995,7 +995,7 @@ alive, workers idle but review run in `waiting_update`.
 Plain orchestrator-to-worker sends must route through
 `pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>` with the worker
 message on stdin. The wrapper writes only metadata to the dispatch journal before invoking
-`ao send`, then records `dispatched`, `send_failed`, or `dispatch_unknown` afterward. Raw
+`ao send`, initially marks the record `dispatch_in_flight`, then records `dispatched`, `send_failed`, or `dispatch_unknown` afterward. Raw
 payloads must never appear in argv, temp files, logs, transcripts, or the journal.
 
 If a worker message is stuck unsubmitted:
@@ -1011,7 +1011,7 @@ If a worker message is stuck unsubmitted:
    fix live `agent-orchestrator.yaml`, restart AO from the operator terminal, and rerun
    the command.
 2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
-   temp default). A `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
+   temp default). A `dispatch_in_flight` delivery is still being resolved until its finite budget expires; a `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
    must not receive blind Enter; have the source resend if needed.
 3. Run the submit arbiter dry-run:
    `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`.

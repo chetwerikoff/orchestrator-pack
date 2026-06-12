@@ -881,6 +881,31 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
     expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
   });
 
+  it('dispatch_in_flight is not escalated as unknown until the finite budget expires', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:in-flight';
+    const fresh = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatch_in_flight', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(fresh.actions)).toHaveLength(0);
+    expect(fresh.actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate')).toBe(false);
+
+    const expired = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatch_in_flight', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601400001,
+    });
+    expect(submitActions(expired.actions)).toHaveLength(0);
+    expect(expired.actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
+  });
+
   it('corrupt journal recovery metadata escalates fail-closed', () => {
     const { actions } = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' }],
@@ -985,7 +1010,7 @@ exit 0
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
     expect(result.status).toBe(47);
     expect(result.stdout).toContain('dispatch outcome update failed');
-    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatch_unknown"');
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatch_in_flight"');
   });
 
   it('drains redirected ao stdout and stderr while waiting', () => {

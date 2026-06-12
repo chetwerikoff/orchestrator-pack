@@ -29,6 +29,7 @@ export const DELIVERY_PATH_UNKNOWN = 'unknown';
 
 export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched';
 export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed';
+export const DISPATCH_OUTCOME_IN_FLIGHT = 'dispatch_in_flight';
 export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown';
 
 export const DRAFT_STATE_DRAFT_PRESENT = 'draft_present';

@@ -94,7 +94,7 @@ function New-WorkerMessageDispatchJournalRecord {
         [string]$SourceKey = '',
         [string]$DeliveryPath,
         [object]$MessageShape,
-        [string]$DispatchOutcome = 'dispatch_unknown',
+        [string]$DispatchOutcome = 'dispatch_in_flight',
         [string]$DraftState = 'unknown',
         [switch]$RestoreRetry,
         [switch]$AdoptionProbe,

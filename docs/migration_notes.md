@@ -1126,7 +1126,7 @@ Extends source-agnostic worker-message submit so plain orchestrator `ao send` de
 can be observed through a metadata-only transactional outbox before the send side effect.
 The new wrapper is `scripts/journaled-worker-send.ps1`; it reads the worker payload from
 stdin/pipe only, records shape metadata (`delivery_id`, char length, line count, dispatch
-outcome, authoritative draft state), and never stores or logs the raw message.
+outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome), authoritative draft state), and never stores or logs the raw message.
 
 **Operator adoption** — after merge:
 

@@ -197,7 +197,7 @@ if (-not (Test-AoSendStdinContract -AoPath $AoPath)) {
 }
 
 $draftState = 'unknown'
-$dispatchOutcome = 'dispatch_unknown'
+$dispatchOutcome = 'dispatch_in_flight'
 $register = Register-WorkerMessageDispatch `
     -SessionId $SessionId `
     -Message $payload `
