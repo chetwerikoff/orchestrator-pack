@@ -204,6 +204,7 @@ export function extractJournalDeliveries(journal) {
       corruptObservation: true,
       corruptionReason: String(recovery.reason ?? 'corrupt_dispatch_journal'),
     });
+    return deliveries;
   }
   for (const [deliveryId, record] of Object.entries(journal ?? {})) {
     if (!record || typeof record !== 'object') {

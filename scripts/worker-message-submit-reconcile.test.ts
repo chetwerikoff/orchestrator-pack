@@ -830,6 +830,25 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
     expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('unparseable_no_backup');
   });
 
+  it('untrusted journal recovery metadata suppresses normal delivery records fail-closed', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:should-not-submit';
+    const { actions, deliveryCount } = planWorkerMessageSubmitActions({
+      sessions: [
+        { sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' },
+        baseSession,
+      ],
+      dispatchJournal: {
+        _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown>,
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(deliveryCount).toBe(1);
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('unparseable_no_backup');
+  });
+
   it('invalid bounded-escalation overrides fail closed before tracking', () => {
     const { actions, deliveryCount } = planWorkerMessageSubmitActions({
       sessions: [baseSession],
