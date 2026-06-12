@@ -1156,10 +1156,22 @@ describe('worker-message-send adoption preflight', () => {
     const journalText = readFileSync(journal, 'utf8');
     expect(journalText).toContain('\"adoptionProbe\":true');
     const branchHash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
-    expect(journalText).toContain(branchHash('plain-ao-send:pending-draft'));
-    expect(journalText).toContain(branchHash('plain-ao-send:self-submitted'));
+    const pendingBranchHash = branchHash('plain-ao-send:pending-draft');
+    const selfSubmittedBranchHash = branchHash('plain-ao-send:self-submitted');
+    expect(journalText).toContain(pendingBranchHash);
+    expect(journalText).toContain(selfSubmittedBranchHash);
+    const parsedJournal = JSON.parse(journalText) as Record<string, Record<string, unknown>>;
+    const probeRecords = Object.values(parsedJournal);
+    const pendingProbe = probeRecords.find((record) => record.sourceKey === pendingBranchHash);
+    const selfSubmittedProbe = probeRecords.find((record) => record.sourceKey === selfSubmittedBranchHash);
+    expect(pendingProbe?.deliveryPath).toBe('pending-draft');
+    expect((pendingProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.charLength).toBeGreaterThan(200);
+    expect((pendingProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.lineCount).toBeGreaterThan(1);
+    expect(selfSubmittedProbe?.deliveryPath).toBe('self-submitted');
+    expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.charLength).toBeLessThanOrEqual(200);
+    expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.lineCount).toBe(1);
     const deliveries = mergeDeliveryRecords({
-      dispatchJournal: JSON.parse(journalText) as Record<string, Record<string, unknown>>,
+      dispatchJournal: parsedJournal,
       aoEvents: [],
       reviewRuns: [],
       reactionMessages: {},

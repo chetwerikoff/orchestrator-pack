@@ -36,6 +36,21 @@ function ConvertTo-SafeHashText {
     return ConvertTo-WorkerMessageSafeIdComponent -Value $Value
 }
 
+function New-AdoptionProbePayload {
+    param(
+        [string]$Branch,
+        [string]$EpochHash,
+        [string]$ConfigHash
+    )
+
+    if ($Branch -match ':self-submitted$') {
+        return 'AO_WORKER_MESSAGE_ADOPTION_PROBE_SELF_SUBMITTED'
+    }
+
+    $filler = 'x' * 240
+    return "AO_WORKER_MESSAGE_ADOPTION_PROBE_PENDING_DRAFT`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`n$filler"
+}
+
 $effectiveJournalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
 $statePath = Get-AdoptionPreflightStatePath -Path $StateFile
 if ($DryRun) {
@@ -67,7 +82,7 @@ if ($WriteProbeEntries) {
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH', $epochHash, 'Process')
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH', $configHash, 'Process')
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_DISPATCH_JOURNAL', $effectiveJournalPath, 'Process')
-            $probePayload = "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$branch`naoEpochHash=$epochHash`nconfigPathHash=$configHash`n"
+            $probePayload = New-AdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash
             $probeOutput = $probePayload | & $AoPath send synthetic-adoption-probe --stdin --no-wait 2>&1
             $probeExit = $LASTEXITCODE
             if ($null -eq $probeExit) { $probeExit = 0 }
