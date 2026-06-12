@@ -978,6 +978,25 @@ describe('worker-message-send adoption preflight', () => {
     expect(result.stdout).toContain('effective routing adopted');
   });
 
+  it('can generate current epoch/config probe entries before validating a fresh journal', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-generate-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-fresh', '-ConfigPath', '/cfg/fresh.yaml', '-WriteProbeEntries'], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('effective routing adopted');
+    const journalText = readFileSync(journal, 'utf8');
+    expect(journalText).toContain('\"adoptionProbe\":true');
+    const deliveries = mergeDeliveryRecords({
+      dispatchJournal: JSON.parse(journalText) as Record<string, Record<string, unknown>>,
+      aoEvents: [],
+      reviewRuns: [],
+      reactionMessages: {},
+      nowMs: 1717601010000,
+    });
+    expect(deliveries).toHaveLength(0);
+  });
+
   it('requires adoption probe hash to match supplied AO epoch and config path', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-epoch-'));
     const journal = path.join(dir, 'journal.json');

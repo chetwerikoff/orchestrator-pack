@@ -210,6 +210,9 @@ export function extractJournalDeliveries(journal) {
     if (!record || typeof record !== 'object') {
       continue;
     }
+    if (record.adoptionProbe) {
+      continue;
+    }
     const sessionId = String(record.sessionId ?? '').trim();
     const deliveredAtMs = Number(record.deliveredAtMs ?? 0);
     const deliveryPath = String(record.deliveryPath ?? '').trim();

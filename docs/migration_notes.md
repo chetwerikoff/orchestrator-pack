@@ -1137,24 +1137,19 @@ outcome, authoritative draft state), and never stores or logs the raw message.
    routing exclusion so the wrapper's internal `ao send` is not wrapped again.
 2. Restart AO from the operator terminal (`ao stop` / `ao start`) so the live process loads
    the rule. Managed worker sessions must not run those commands.
-3. Generate side-effect-isolated adoption probes through the **adopted routing rule** for
-   every required routing branch before running preflight. The probe invocation must reach
-   the wrapper with `-AdoptionProbe`, the same `-AoEpoch <running-epoch>` and
-   `-ConfigPath <loaded-config-path>` values used below, and branch source keys such as
-   `plain-ao-send:pending-draft` and `plain-ao-send:self-submitted`. These probes are
-   synthetic/outbox-only: no real worker terminal input, no active-delivery record, and no
-   attempt budget. If the probes are run by calling the wrapper directly instead of through
-   the live routing rule, they test only the wrapper and must not be treated as adoption
-   proof.
-4. Run the adoption preflight for the running AO epoch/config path:
-   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path>`.
-   It passes only when side-effect-isolated probe entries are observed in the outbox for
-   every required routing branch with matching epoch/config hashes; a missing probe,
-   present-but-ineffective rule, or stale-epoch rule escalates `wrapper_not_adopted`.
-5. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
+3. Generate the side-effect-isolated adoption probes and validate them for the running AO
+   epoch/config path with the preflight's `-WriteProbeEntries` mode:
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries`.
+   The generated probes use branch source keys such as `plain-ao-send:pending-draft` and
+   `plain-ao-send:self-submitted`; they are synthetic/outbox-only: no real worker terminal
+   input, no active-delivery record, and no attempt budget. The command passes only when
+   those probe entries are observed in the outbox for every required routing branch with
+   matching epoch/config hashes; a missing probe, present-but-ineffective rule, or
+   stale-epoch rule escalates `wrapper_not_adopted`.
+4. Keep `worker-message-submit-reconcile` under the existing supervised side-process host.
    Optional env vars: `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`,
    `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_ADOPTION_STATE`.
-6. Manual live smoke (not CI): send one synthetic non-secret multi-line message through the
+5. Manual live smoke (not CI): send one synthetic non-secret multi-line message through the
    wrapper to a live Codex worker and record only sanitized metadata evidence (delivery id,
    outcome, draft state, timestamps). Do not record the message body, terminal transcript,
    session URL, or worker output.

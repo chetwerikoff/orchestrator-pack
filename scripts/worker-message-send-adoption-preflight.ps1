@@ -14,6 +14,7 @@ param(
     [string]$StateFile = '',
     [string]$AoEpoch = '',
     [string]$ConfigPath = '',
+    [switch]$WriteProbeEntries,
     [string[]]$RequiredBranches = @('plain-ao-send:pending-draft','plain-ao-send:self-submitted'),
     [switch]$DryRun
 )
@@ -40,6 +41,29 @@ if ($DryRun) {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) 'worker-message-send-adoption-dryrun'
     if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
     $statePath = Join-Path $root 'adoption-state.json'
+}
+
+
+if ($WriteProbeEntries) {
+    foreach ($branch in $RequiredBranches) {
+        $probeResult = Register-WorkerMessageDispatch `
+            -SessionId 'synthetic-adoption-probe' `
+            -Message 'adoption probe' `
+            -Source 'adoption-probe' `
+            -SourceKey $branch `
+            -JournalPath $effectiveJournalPath `
+            -DeliveryPath 'self-submitted' `
+            -DispatchOutcome 'dispatched' `
+            -DraftState 'auto_submitted' `
+            -HashIdentity `
+            -AdoptionProbe `
+            -AoEpoch $AoEpoch `
+            -ConfigPath $ConfigPath
+        if (-not $probeResult.recorded) {
+            Write-Host "[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted probe_write_failed branch=$branch reason=$($probeResult.reason)"
+            exit 46
+        }
+    }
 }
 
 $journal = Get-WorkerMessageDispatchJournal -Path $effectiveJournalPath
