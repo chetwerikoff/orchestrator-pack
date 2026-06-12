@@ -335,52 +335,52 @@ Whenever you add a new draft or first sync a draft to GitHub:
 2. Ensure a registry row **exists for this draft** mapping draft path → GitHub Issue
    number (or explicit none yet). **Do not edit the tracked
    [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) by hand** — the
-   publish/sync step (delegated to Cursor per
+   publish/sync step (delegated to deepseek via opencode per
    [`publish-issue-draft`](../publish-issue-draft/SKILL.md)) adds or updates **only this
    draft's row** in the working tree and stages it selectively at publish. Supply the row
-   text in the Cursor delegation prompt when needed.
+   text in the opencode delegation prompt when needed.
 
 Do not add open/closed/shipped columns to the registry — live state stays in
 GitHub (`gh issue view`).
 
-## Publish (default: direct via AO_PUBLISH_FALLBACK; Cursor optional)
+## Publish (default: delegate to deepseek via OpenCode; direct as fallback)
 
-> **Self-delegation guard — am I Cursor?** The `cursor-agent` delegation in this
-> section is **only** for a non-Cursor architect (Claude Code) handing the GitHub
-> work to Cursor. **If you are yourself the Cursor CLI, do NOT call
-> `cursor-agent`** — that spawns a redundant nested Cursor. Instead run the issue
-> create / PR / merge mechanics yourself, directly, using the manual `gh`/git
-> commands in the fallback below as your **primary** path. A Cursor session never
-> delegates issue-creation or merge work to another Cursor.
+> **Self-delegation guard — am I already inside OpenCode?** The `opencode run`
+> delegation in this section is **only** for an architect surface (Claude Code,
+> Cursor CLI) handing the GitHub work to a fresh deepseek session. **If you are
+> yourself running inside an OpenCode session** (e.g. the `opk-orchestrator`
+> worktree or any AO-managed session — check `echo $AO_SESSION_ID`), do NOT call
+> `opencode run` — that spawns a nested OpenCode. Instead run the issue create /
+> PR / merge mechanics yourself, directly, using the manual `gh`/git commands in
+> the fallback below as your **primary** path.
 >
 > Direct `gh issue create` / `gh pr create` / `gh pr merge` is blocked by the RTK
-> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already in
-> Cursor, so the fallback is the correct path, not a workaround; do not stop at
-> the block. If a PR head is behind base, run `gh pr update-branch <N>` first.
+> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already the
+> executing agent, so the fallback is the correct path. If a PR head is behind
+> base, run `gh pr update-branch <N>` first.
 
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
-questions recorded), **run `gh issue create` and open the publish PR yourself**,
-directly, prefixing **`AO_PUBLISH_FALLBACK=1`** on the hook-blocked
-`gh issue create` / `gh pr create` / `gh pr merge` commands. This is the default:
-cheaper and deterministic — no second agent, and fewer architect tokens than
-composing a delegation prompt; the publish is a fixed command with nothing to
-reason about, so there is nothing to offload. Delegating to the Cursor CLI worker
-(mechanism below) is an **optional** alternative — use it only if you specifically
-want to offload to Cursor.
+questions recorded), **delegate publish to deepseek via `opencode run`** using
+the temp-file mechanism below. This is the default: deepseek handles the fixed
+`gh issue create` / `gh pr create` / `gh pr merge` sequence autonomously, freeing
+the architect from token-expensive mechanical steps. The direct
+`AO_PUBLISH_FALLBACK=1` path (manual `gh`/git commands in the fallback section)
+is the **fallback** — use it only when `opencode run` is unavailable or leaves
+the publish half-done.
 
-**Mechanism — direct `cursor-agent`, not `ao spawn`.** `ao spawn` revives a
-worker against an issue that *already exists*, in a fresh checkout; it can
-neither create the issue nor see your uncommitted local draft. Invoke
-`cursor-agent` directly in the architect working tree (workspace defaults to the
-current directory; do **not** pass `-w`/`--worktree`) so it reads
-`docs/issues_drafts/NN-<slug>.md` exactly as it sits on disk.
+**Mechanism — `opencode run`, not `ao spawn`.** `ao spawn` revives a worker
+against an issue that *already exists*, in a fresh checkout; it can neither
+create the issue nor see your uncommitted local draft. Run `opencode run`
+directly in the architect working tree (pass `--dir .` so it starts in the
+current project directory) so it reads `docs/issues_drafts/NN-<slug>.md`
+exactly as it sits on disk.
 
 **Deliver the prompt via a temp file — never inline.** The publish hook
 string-matches `gh issue create` / `gh pr create` / `gh pr merge` **anywhere in
-the Bash command**, including inside a `cursor-agent` delegation prompt — an
-inline heredoc carrying those literals self-triggers the guard and the call is
-blocked. Write the prompt to a temp file first, then pass it via `cat`, so the
-executed Bash command contains none of those literals:
+the Bash command**, including inside a delegation prompt — an inline heredoc
+carrying those literals self-triggers the guard and the call is blocked. Write
+the prompt to a temp file first, then pass it via `cat`, so the executed Bash
+command contains none of those literals:
 
 ```bash
 PROMPT_FILE="$(mktemp)"
@@ -395,8 +395,8 @@ passed Codex review — do NOT edit its task content. Steps:
    - gh issue create --repo chetwerikoff/orchestrator-pack --title "<H1>" --body-file <tmp>
 2. Write the returned number into the draft's `GitHub Issue: #N` line (it is
    `TBD` now). Add this draft's registry row to docs/issue_queue_index.md (draft
-   path -> #N; no open/closed/shipped columns) — Cursor owns the tracked index;
-   stage only this row's hunk at publish (see publish-issue-draft Index ownership).
+   path -> #N; no open/closed/shipped columns) — stage only this row's hunk at
+   publish (see publish-issue-draft Index ownership).
 3. PUBLISH-TO-MAIN — run only when the prompt below sets PUBLISH=yes. Otherwise
    STOP after step 2 (sync-only: the Issue is the queue, the draft stays local).
    When PUBLISH=yes, follow .claude/skills/publish-issue-draft/SKILL.md Mode C
@@ -410,28 +410,27 @@ passed Codex review — do NOT edit its task content. Steps:
 Report the Issue URL/number and, when PUBLISH=yes, the PR URL and merge commit.
 PUBLISH=<no|yes>
 EOF
-cursor-agent -p --force "$(cat "$PROMPT_FILE")"
+opencode run --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
-**Verify state after the run — `cursor-agent` can exit 0 mid-failure.** A
-`resource_exhausted` / connection drop can leave `cursor-agent` reporting exit 0
+**Verify state after the run — `opencode run` can exit 0 mid-failure.** A
+connection drop or context exhaustion can leave `opencode run` reporting exit 0
 while the publish is half-done (e.g. issue created, PR not opened, or index row
 left uncommitted). Do **not** trust the exit code alone: confirm with
 `gh issue view <N>`, `gh pr list --search <slug>`, and `git status` before
 reporting success, and complete any missing step via the fallback below.
 
-**Default is merge.** Set `PUBLISH=yes` so Cursor runs the full cycle
+**Default is merge.** Set `PUBLISH=yes` so deepseek runs the full cycle
 (PR → CI → `gh pr merge` → `git pull`) — this is the default for the create-task
-flow. Switch to `PUBLISH=no` (sync-only: Cursor stops after step 2, the draft
+flow. Switch to `PUBLISH=no` (sync-only: deepseek stops after step 2, the draft
 stays local) **only when the user opts out of the merge** («не мержи», «только
 драфт», «без PR», "don't merge", "sync only"). This selects
 [`publish-issue-draft`](../publish-issue-draft/SKILL.md) Mode C; that skill's own
 sync-only default applies only when it is invoked standalone, outside this flow.
 
-**Fallback — architect publishes directly.** If `cursor-agent` is not on `PATH`,
-the run errors, or it leaves the issue/PR half-done, complete the publish
-yourself with the manual commands below (this is today's behavior) and tell the
-user the Cursor path was unavailable.
+**Fallback — architect publishes directly.** If `opencode run` is unavailable,
+errors, or leaves the issue/PR half-done, complete the publish yourself with the
+manual commands below and tell the user the OpenCode path was unavailable.
 
 ### Sync to GitHub Issue (fallback / manual)
 
@@ -509,8 +508,8 @@ in the test-harness code.
 - Kill a running draft review to rush `gh issue create` — wait for `NO_FINDINGS` or cap.
 - Sync to GitHub before Codex review completes (unless 5-iteration cap with open questions recorded).
 - Use `ao spawn` to publish a brand-new draft — it needs an existing issue and a
-  fresh checkout, so it cannot create the issue or see the local draft. Use a
-  direct `cursor-agent -p --force` call in the working tree (default path), or
-  publish manually (fallback).
-- Pass `PUBLISH=yes` to Cursor when the user did not ask to merge — default is
+  fresh checkout, so it cannot create the issue or see the local draft. Use
+  `opencode run --dangerously-skip-permissions --dir .` with a temp-file prompt
+  (default path), or publish manually (fallback).
+- Pass `PUBLISH=yes` to deepseek when the user did not ask to merge — default is
   sync-only; the full PR→merge cycle runs only on explicit request.
