@@ -122,7 +122,8 @@ foreach ($key in @($journal.Keys)) {
     $epochOk = (-not $AoEpoch) -or ($record.ContainsKey('aoEpochHash') -and [string]$record['aoEpochHash'] -eq (ConvertTo-SafeHashText $AoEpoch))
     $configOk = (-not $ConfigPath) -or ($record.ContainsKey('configPathHash') -and [string]$record['configPathHash'] -eq (ConvertTo-SafeHashText $ConfigPath))
     $runOk = (-not $WriteProbeEntries) -or ($record.ContainsKey('adoptionProbeRunIdHash') -and [string]$record['adoptionProbeRunIdHash'] -eq $probeRunIdHash)
-    if (-not ($epochOk -and $configOk -and $runOk)) { continue }
+    $outcomeOk = $record.ContainsKey('dispatchOutcome') -and [string]$record['dispatchOutcome'] -eq 'dispatched'
+    if (-not ($epochOk -and $configOk -and $runOk -and $outcomeOk)) { continue }
     $branch = [string]$record['sourceKey']
     if ($branch) { $seen[$branch] = $true }
 }

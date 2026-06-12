@@ -1141,6 +1141,19 @@ describe('worker-message-send adoption preflight', () => {
     expect(result.stdout).toContain('wrapper_not_adopted');
   });
 
+  it('requires adoption probe records to have dispatched outcomes', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-outcome-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
+      probe2: { deliveryId: 'probe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, dispatchOutcome: 'send_failed', draftState: 'unknown', messageShape: { charLength: 20, lineCount: 1 } },
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+  });
+
   it('passes only when every required routing branch is outbox-observed', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-ok-'));
     const journal = path.join(dir, 'journal.json');
