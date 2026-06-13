@@ -280,7 +280,7 @@ export function resolveBusyDispatchCapability({ delivery, session, config }) {
   if (typeof delivery?.busyDispatchAllowed === 'boolean') {
     return {
       allowed: Boolean(delivery.busyDispatchAllowed),
-      backendKey: trimString(delivery?.backendKey ?? session?.backendKey),
+      backendKey: trimString(session?.backendKey ?? delivery?.backendKey),
       reason: delivery.busyDispatchAllowed ? 'fixture_override' : 'fixture_disabled',
       marker: null,
     };
@@ -292,21 +292,21 @@ export function resolveBusyDispatchCapability({ delivery, session, config }) {
       ? cfg.busyDispatch.environment
       : {};
   const backendKey = trimString(
-    delivery?.backendKey ?? session?.backendKey ?? environment.backendKey,
+    session?.backendKey ?? delivery?.backendKey ?? environment.backendKey,
   );
   const dispatchSignature = trimString(
-    delivery?.dispatchSignature ??
-      session?.dispatchSignature ??
+    session?.dispatchSignature ??
+      delivery?.dispatchSignature ??
       environment.dispatchSignature,
   );
   const runtimeFingerprint = trimString(
-    delivery?.runtimeFingerprint ??
-      session?.runtimeFingerprint ??
+    session?.runtimeFingerprint ??
+      delivery?.runtimeFingerprint ??
       environment.runtimeFingerprint,
   );
   const tmuxFingerprint = trimString(
-    delivery?.tmuxFingerprint ??
-      session?.tmuxFingerprint ??
+    session?.tmuxFingerprint ??
+      delivery?.tmuxFingerprint ??
       environment.tmuxFingerprint,
   );
 
@@ -1109,14 +1109,22 @@ export function getFailedDeliveryStatus(input) {
     const recordPr = Number(record.prNumber ?? 0);
     const recordRunId = trimString(record.reviewRunId);
     const recordHeadSha = trimString(record.headSha);
-    const scopedMatch =
-      (scopeReviewRunId && recordRunId && scopeReviewRunId === recordRunId) ||
-      (scopePrNumber > 0 && recordPr === scopePrNumber && (!scopeHeadSha || !recordHeadSha || scopeHeadSha === recordHeadSha));
+    const scopeChecks = [];
+    if (scopeReviewRunId) {
+      scopeChecks.push(Boolean(recordRunId) && scopeReviewRunId === recordRunId);
+    }
+    if (scopePrNumber > 0) {
+      scopeChecks.push(recordPr === scopePrNumber);
+    }
+    if (scopeHeadSha) {
+      scopeChecks.push(Boolean(recordHeadSha) && scopeHeadSha === recordHeadSha);
+    }
+    const scopedMatch = scopeChecks.length > 0 && scopeChecks.every(Boolean);
     if (!hasScope || scopedMatch) {
       unresolved.push(record);
       continue;
     }
-    if (hasScope && !recordPr && !recordRunId) {
+    if (hasScope && !recordPr && !recordRunId && !recordHeadSha) {
       failClosed = true;
     }
   }

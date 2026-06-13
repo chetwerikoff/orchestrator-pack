@@ -914,6 +914,36 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(resolved.unresolved.some((r) => r.deliveryId === 'failed-1')).toBe(false);
   });
 
+  it('scopes unresolved failed deliveries by headSha even without prNumber or reviewRunId', () => {
+    const tracking = {
+      deliveries: {},
+      failedDeliveries: {
+        'failed-head-match': {
+          deliveryId: 'failed-head-match',
+          sessionId: 'opk-head',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+          headSha: 'sha-match',
+        },
+        'failed-head-other': {
+          deliveryId: 'failed-head-other',
+          sessionId: 'opk-head',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+          headSha: 'sha-other',
+        },
+      },
+      audit: [],
+    } satisfies SubmitTrackingState;
+
+    const failedStatus = getFailedDeliveryStatus({ tracking, headSha: 'sha-match' });
+    expect(failedStatus.ok).toBe(false);
+    expect(failedStatus.failClosed).toBe(false);
+    expect(failedStatus.unresolved.map((r) => r.deliveryId)).toEqual([
+      'failed-head-match',
+    ]);
+  });
+
   it('validates busy-dispatch smoke markers and resolves backend capability by exact environment match', () => {
     expect(validateBusyDispatchMarker({ ...busyMarker })).toEqual({ ok: true });
     expect(validateBusyDispatchMarker({ backendKey: 'codex' })).toEqual({ ok: false, reason: 'busy_dispatch_marker_invalid', field: 'dispatchSignature' });
@@ -932,6 +962,26 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     });
     expect(stale.allowed).toBe(false);
     expect(stale.reason).toBe('busy_dispatch_marker_missing_or_stale');
+  });
+
+  it('matches busy-dispatch smoke markers against the live session before recorded delivery fingerprints', () => {
+    const capability = resolveBusyDispatchCapability({
+      delivery: {
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
+      },
+      session: {
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@2.0.0',
+        tmuxFingerprint: 'tmux@3.4:alternate',
+      },
+      config: { busyDispatch: { markers: [busyMarker] } },
+    });
+    expect(capability.allowed).toBe(false);
+    expect(capability.reason).toBe('busy_dispatch_marker_missing_or_stale');
   });
 
   it('reports settled observability only after the drain-settle window', () => {
