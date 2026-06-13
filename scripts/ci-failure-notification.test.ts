@@ -148,6 +148,22 @@ describe('CI failure notification predicate (Issue #283)', () => {
     expect(scanFixtureSafety(fixture('canonical-ci-red.json'))).toEqual({ ok: true, findings: [] });
   });
 
+  it('binds raw AO reaction events with kind and data.reactionKey before sending', () => {
+    const rawAoEvent = {
+      id: 'evt-redacted-ci-failed-raw',
+      kind: 'reaction.action_succeeded',
+      data: {
+        reactionKey: 'ci-failed',
+        episode,
+      },
+    };
+    const result = decision({ reactionEvents: [rawAoEvent] });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
+    expect(result.diagnostics.reaction_bind_status).toBe('matched');
+    expect(result.bound_reaction_event_id).toBe('evt-redacted-ci-failed-raw');
+  });
+
   it('does not let transient fetch failure manufacture a new episode or flip a recorded token decision', () => {
     const token = { episode, status: 'claimed' };
     const result = decision({ ciSource: { error: 'Failed to fetch CI checks' }, intentTokens: [token] });

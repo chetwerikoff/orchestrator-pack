@@ -73,15 +73,15 @@ function field(obj, names) {
 }
 
 export function eventEpisode(event) {
-  const episode = field(event, ['episode', 'metadata.episode', 'details.episode', 'payload.episode']);
+  const episode = field(event, ['episode', 'metadata.episode', 'details.episode', 'payload.episode', 'data.episode']);
   if (episode && typeof episode === 'object') return episode;
   return {
-    repo: field(event, ['repo', 'repository', 'metadata.repo', 'details.repo', 'payload.repo']),
-    prNumber: field(event, ['prNumber', 'pr', 'pullRequest.number', 'metadata.prNumber', 'details.prNumber', 'payload.prNumber']),
-    headSha: field(event, ['headSha', 'sha', 'metadata.headSha', 'details.headSha', 'payload.headSha']),
-    redPeriod: field(event, ['redPeriod', 'ciRunId', 'checkSuiteId', 'metadata.redPeriod', 'details.redPeriod', 'payload.redPeriod']),
-    targetId: field(event, ['targetId', 'sessionId', 'workerSessionId', 'metadata.targetId', 'details.targetId', 'payload.targetId']),
-    targetGeneration: field(event, ['targetGeneration', 'sessionGeneration', 'metadata.targetGeneration', 'details.targetGeneration', 'payload.targetGeneration']),
+    repo: field(event, ['repo', 'repository', 'metadata.repo', 'details.repo', 'payload.repo', 'data.repo', 'data.repository']),
+    prNumber: field(event, ['prNumber', 'pr', 'pullRequest.number', 'metadata.prNumber', 'details.prNumber', 'payload.prNumber', 'data.prNumber', 'data.pr', 'data.pullRequest.number']),
+    headSha: field(event, ['headSha', 'sha', 'metadata.headSha', 'details.headSha', 'payload.headSha', 'data.headSha', 'data.sha']),
+    redPeriod: field(event, ['redPeriod', 'ciRunId', 'checkSuiteId', 'metadata.redPeriod', 'details.redPeriod', 'payload.redPeriod', 'data.redPeriod', 'data.ciRunId', 'data.checkSuiteId']),
+    targetId: field(event, ['targetId', 'sessionId', 'workerSessionId', 'metadata.targetId', 'details.targetId', 'payload.targetId', 'data.targetId', 'data.sessionId', 'data.workerSessionId']),
+    targetGeneration: field(event, ['targetGeneration', 'sessionGeneration', 'metadata.targetGeneration', 'details.targetGeneration', 'payload.targetGeneration', 'data.targetGeneration', 'data.sessionGeneration']),
   };
 }
 
@@ -97,8 +97,8 @@ export function bindReactionEvent(episode, events = []) {
   let sawCandidate = false;
   let sawUnbindable = false;
   for (const event of events ?? []) {
-    const type = String(field(event, ['type', 'event', 'name']) ?? '');
-    const reactionKey = String(field(event, ['reactionKey', 'reaction.key', 'metadata.reactionKey', 'details.reactionKey', 'payload.reactionKey']) ?? '');
+    const type = String(field(event, ['type', 'kind', 'event', 'name']) ?? '');
+    const reactionKey = String(field(event, ['reactionKey', 'reaction.key', 'metadata.reactionKey', 'details.reactionKey', 'payload.reactionKey', 'data.reactionKey', 'data.reaction.key']) ?? '');
     if (type !== 'reaction.action_succeeded' || reactionKey !== 'ci-failed') continue;
     sawCandidate = true;
     const ep = eventEpisode(event);
