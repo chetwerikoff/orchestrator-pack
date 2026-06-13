@@ -35,11 +35,13 @@ Procedure:
 1. **Availability check first.** `command -v coworker`. If it is missing,
    unavailable, or rate-limited, fall back to reading in-session and **say so**
    in the final report. Otherwise the research below MUST go through coworker.
-2. **Bounded, thorough read via coworker.** Ask `coworker ask --profile code`
-   to read and summarise the source's entry points — README, top-level
-   structure, the primary architecture/overview doc, license, and
-   maintenance/activity signals. Request a *detailed* extraction, not a
-   one-paragraph blurb: capabilities, design choices, dependencies,
+2. **Bounded, thorough read via coworker.** Ask with the current CLI shape:
+   `coworker ask --profile code [--allow-code] --paths <file-or-excerpt> ... --question "..."`.
+   Corpus files MUST go through `--paths`; do not append them as positional args
+   after `--question`. Have coworker read and summarise the source's entry points
+   — README, top-level structure, the primary architecture/overview doc,
+   license, and maintenance/activity signals. Request a *detailed* extraction,
+   not a one-paragraph blurb: capabilities, design choices, dependencies,
    stated trade-offs, and anything that overlaps our existing pack contracts.
    Source code requires the `--allow-code` gate — pass it only when the question
    genuinely needs code, and only after scrubbing secrets.

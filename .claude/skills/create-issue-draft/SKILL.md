@@ -41,8 +41,9 @@ When it applies, answer all of, and reflect the conclusions in **Goal** /
    holds. Name them, not generic ones.
 2. **World / industry best practices** — how this *class* of problem is solved
    in the field; what the established approach is and why. (Delegate the bulk
-   read/research to `coworker ask --profile code`, or `WebSearch`, per the
-   coworker policy; keep the judgment here.)
+   read/research to `coworker ask --profile code --paths <files...> --question "..."`,
+   or `WebSearch`, per the coworker policy; keep the judgment here. Source-code
+   corpus still requires `--allow-code`.)
 3. **Services / components architecture sketch** — how the pieces fit together
    (responsibilities, data flow, boundaries). Diagrams as ASCII.
 4. **≥ 3 implementation options, each with an explicit trade-off** — not three

@@ -213,9 +213,17 @@ draft review done, GitHub issue synced, registry updated), follow
 to decide how the local draft is persisted. **Default is sync-only:** the GitHub
 Issue is the queue; the draft file stays local and is NOT committed or PR'd.
 
+This is a **cross-entrypoint skill** despite living under `.claude/`: Claude,
+Codex, Cursor, and Hermes sessions that read this `AGENTS.md` must use the same
+canonical file above. Do not re-derive a Codex- or Hermes-specific publish flow.
+When that skill delegates publication/update mechanics to OpenCode/deepseek,
+Codex and Hermes should do the same unless the skill's own fallback conditions
+apply.
+
 **Also invoke (commit/PR/merge path)** when the user says: «опубликуй драфт»,
-«закоммить драфт», «pr для драфта», «publish draft», «смержи драфт» (spec land,
-not implementation) — then branch, commit, PR, merge to `main`, and reopen the
+«закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй»,
+«publish draft», «publish/update this draft», «смержи драфт» (spec land, not
+implementation) — then branch, commit, PR, merge to `main`, and reopen the
 implementation issue if auto-closed.
 
 **Skip:** user opts out of PR/merge; unrelated work on the branch.
