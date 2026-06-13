@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   appendAudit,
   assertTerminalAction,
@@ -182,9 +182,21 @@ describe('CI failure notification predicate (Issue #283)', () => {
     const dir = tempStore();
     try {
       const result = decision({ reactionEvents: [fixture('reaction-action-succeeded.json')] });
-      const written = appendAudit({ storeDir: dir, audit: result.audit }) as any;
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1812844800000);
+      let written: any;
+      let sameMillisecond: any;
+      try {
+        written = appendAudit({ storeDir: dir, audit: result.audit }) as any;
+        sameMillisecond = appendAudit({ storeDir: dir, audit: result.audit }) as any;
+      } finally {
+        now.mockRestore();
+      }
       expect(written.ok).toBe(true);
       expect(existsSync(written.path)).toBe(true);
+      expect(sameMillisecond.ok).toBe(true);
+      expect(existsSync(sameMillisecond.path)).toBe(true);
+      expect(sameMillisecond.path).not.toBe(written.path);
+      expect(path.basename(sameMillisecond.path)).toContain('-1.json');
       const artifact = buildAdoptionArtifact({
         ruleText: 'CI FAILURE DISCIPLINE redacted block',
         repoIdentity: 'chetwerikoff/orchestrator-pack',

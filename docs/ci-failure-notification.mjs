@@ -288,9 +288,22 @@ export function markObservableSendFailure({ storeDir, episode, mode = 'release' 
 export function appendAudit({ storeDir, audit }) {
   ensureStore(storeDir);
   const action = assertTerminalAction(audit.terminal_action);
-  const file = path.join(storeDir, 'audit', `${audit.episode_key_digest}-${Date.now()}-${action}.json`);
-  writeFileSync(file, `${JSON.stringify(audit)}\n`, 'utf8');
-  return { ok: true, path: file };
+  const base = path.join(storeDir, 'audit', `${audit.episode_key_digest}-${Date.now()}-${action}`);
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const file = `${base}${attempt === 0 ? '' : `-${attempt}`}.json`;
+    let fd;
+    try {
+      fd = openSync(file, 'wx');
+      writeFileSync(fd, `${JSON.stringify(audit)}\n`, 'utf8');
+      return { ok: true, path: file };
+    } catch (error) {
+      if (error?.code === 'EEXIST') continue;
+      throw error;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+  throw new Error('unable to allocate unique audit record path');
 }
 
 export function compactRecords({ records = [], closures = [], nowMs = Date.now(), minRetentionMs = DEFAULT_MIN_RETENTION_MS }) {
