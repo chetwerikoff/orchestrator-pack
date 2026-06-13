@@ -236,4 +236,42 @@ describe('review-run-recovery', () => {
     const sidecar = JSON.parse(raw);
     expect(sidecar.runFingerprint).toBe(fingerprintRun(run));
   });
+
+  it('does not freeze default recovery windows into captured sidecars', () => {
+    const store = tempStore();
+    writeRun(store);
+    const result = captureReviewerLiveness({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-a',
+      pid: 99999999,
+      startTimeTicks: '456',
+      bootIdHash: currentBootHash(),
+    });
+    expect(result.ok).toBe(true);
+    const raw = readFileSync(join(store, 'reviewer-liveness', 'review-run-a.json'), 'utf8');
+    expect(JSON.parse(raw).windows).toBeUndefined();
+
+    const tick = runRecoveryTick({
+      storeDir: store,
+      nowMs: Date.parse('2026-06-13T00:00:01Z'),
+      config: { crashGraceMs: 1, maxReviewDurationMs: 10, ambiguousStaleMs: 20 },
+    });
+    expect(tick.actions).toContainEqual(expect.objectContaining({ terminalized: true, terminalReason: RECOVERY_REASON_PROVABLY_DEAD }));
+  });
+
+  it('preserves explicit capture window overrides when supplied', () => {
+    const store = tempStore();
+    writeRun(store);
+    const result = captureReviewerLiveness({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-a',
+      pid: 123,
+      startTimeTicks: '456',
+      bootIdHash: 'boot-hash',
+      windows: { crashGraceMs: 5000 },
+    });
+    expect(result.ok).toBe(true);
+    const sidecar = JSON.parse(readFileSync(join(store, 'reviewer-liveness', 'review-run-a.json'), 'utf8'));
+    expect(sidecar.windows).toEqual({ crashGraceMs: 5000 });
+  });
 });

@@ -578,14 +578,20 @@ export function captureReviewerLiveness({ projectId = 'orchestrator-pack', store
   if (!entry) return { ok: false, reason: 'run_not_found' };
   const run = entry.run;
   const runId = safeRunId(run);
-  const config = resolveRecoveryConfig(windows);
+  const suppliedWindows = asRecord(windows) ?? {};
+  const capturedWindows = {};
+  for (const key of ['crashGraceMs', 'maxReviewDurationMs', 'ambiguousStaleMs']) {
+    if (Object.hasOwn(suppliedWindows, key)) {
+      const parsed = Number(suppliedWindows[key]);
+      if (Number.isFinite(parsed) && parsed > 0) capturedWindows[key] = Math.floor(parsed);
+    }
+  }
   const sidecar = {
     schemaVersion: REVIEW_RECOVERY_SCHEMA_VERSION,
     runId,
     runFingerprint: fingerprintRun(run),
     reviewerSessionId: String(reviewerSessionId),
     capturedAt: new Date().toISOString(),
-    windows: config,
     identity: {
       kind: 'linux_proc_pid_starttime_boot',
       process: {
@@ -595,6 +601,9 @@ export function captureReviewerLiveness({ projectId = 'orchestrator-pack', store
       },
     },
   };
+  if (Object.keys(capturedWindows).length > 0) {
+    sidecar.windows = capturedWindows;
+  }
   writeJsonAtomic(identitySidecarPath(resolvedStoreDir, runId), sidecar);
   return { ok: true, runId, path: identitySidecarPath(resolvedStoreDir, runId) };
 }
