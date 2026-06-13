@@ -1061,6 +1061,29 @@ exit 0
     expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
   });
 
+  it('adds unique hashed source keys for default plain ao-send deliveries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-unique-source-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload one', encoding: 'utf8' });
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload two', encoding: 'utf8' });
+
+    expect(first.status).toBe(0);
+    expect(second.status).toBe(0);
+    const records = Object.values(JSON.parse(readFileSync(journal, 'utf8')) as Record<string, Record<string, unknown>>);
+    expect(records).toHaveLength(2);
+    const sourceKeys = records.map((record) => String(record.sourceKey));
+    expect(sourceKeys.every((key) => /^sha256-[0-9a-f]{24}$/.test(key))).toBe(true);
+    expect(new Set(sourceKeys).size).toBe(2);
+  });
+
   it('passes multiline payload through stdin and stores metadata only', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stdin-'));
     const fakeAo = path.join(dir, 'ao');

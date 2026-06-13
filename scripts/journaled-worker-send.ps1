@@ -196,6 +196,10 @@ if ($env:AO_WORKER_MESSAGE_ADOPTION_PROBE -eq '1') {
     if (-not $AdoptionProbeRunIdHash -and $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH) { $AdoptionProbeRunIdHash = $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH }
 }
 
+if (-not $SourceKey.Trim() -and $Source -eq 'ao-send' -and -not $AdoptionProbe) {
+    $SourceKey = 'plain-send-' + [guid]::NewGuid().ToString('n')
+}
+
 $effectiveJournalPath = $JournalPath
 if ($DryRun) {
     $dryRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'journaled-worker-send-dryrun'
