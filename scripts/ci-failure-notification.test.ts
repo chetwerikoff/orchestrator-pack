@@ -165,7 +165,7 @@ describe('CI failure notification predicate (Issue #283)', () => {
     const result = decision({ reactionEvents: [{ id: 'bad', type: 'reaction.action_succeeded', reactionKey: 'ci-failed', episode: { repo: 'x' } }] });
     expect(['SEND', 'SUPPRESS']).toContain(result.audit.terminal_action);
     expect(result.audit.terminal_action).not.toBe('NO-MATCH');
-    expect(result.audit.diagnostic.reaction_bind_status).toBe('unbindable');
+    expect((result.audit.diagnostic as any).reaction_bind_status).toBe('unbindable');
     expect(result.audit.intent_token_state).toBe('absent');
   });
 
