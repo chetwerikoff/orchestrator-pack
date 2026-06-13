@@ -112,25 +112,51 @@ projects:
         Self-architect lint — not every optional third-party check unless the repo
         already treats it as merge-blocking.
 
-      CI FAILURE DISCIPLINE (turn-driven; Issue #109). A failing GitHub check does NOT
+      CI FAILURE DISCIPLINE (turn-driven; Issues #109/#283). A failing GitHub check does NOT
       by itself schedule an orchestrator turn. Pack rules apply on the next orchestrator
       turn only (worker ao report, webhook wake, operator activity). If nothing creates
-      a turn, reactions.report-stale (~30 minutes) and reactions.ci-failed remain
-      upstream backstops — not replaced by pack prose.
+      a turn, reactions.report-stale (~30 minutes) and the unconditional reactions.ci-failed
+      instant backstop remain upstream — not replaced by pack prose.
 
       On EVERY orchestrator turn, BEFORE the autonomous review-loop reads below, for each
-      open worker PR whose current head has red required CI per the definition above
-      (gh pr checks, enrichment, or ao status — pick one consistent source):
-        If the worker is visibly active on CI fix this turn (same-turn fixing_ci or
-        addressing_reviews report, or a new commit on the PR branch since this red-CI
-        episode began), do NOT ao send — worker self-fix is primary.
-        Else if ao events list --json shows no prior ao send CI-failure ping for this
-        episode (same PR head SHA and failing required-check set), ao send the worker
-        with CI failure context: failing job names, scope-guard log hints, missing
-        Closes #N, declaration snapshot paths. Remind: ao report fixing_ci, fix required
-        CI, never ao report ready_for_review while required CI is red.
-        Do NOT send a second ping for the same episode before the worker reports
-        fixing_ci, pushes a new commit, or required CI turns green.
+      open worker PR whose current head has red required CI per the definition above:
+        1. Build one consistent CI snapshot from the same canonical source used for
+           the reaction basis (AO SCM tracker status when available; otherwise the
+           documented required-check fallback). The CI failure episode key is the full
+           tuple {repo, PR number, head SHA, aggregate red-period discriminator,
+           active notification target}. The failing required-check set is message
+           context only, never part of the episode identity.
+        2. Resolve the active worker notification target and its generation, then invoke
+           the tracked wrapper from the repository root:
+             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode decide
+           Feed JSON containing the episode key, red-CI context, minimized
+           ao events list --json reaction.action_succeeded events with
+           reactionKey=ci-failed, worker reports, and exact-key intent-token state.
+           The wrapper timeout/error contract is safe SUPPRESS with
+           diagnostic.error_kind=helper_error; repeated helper errors are operator-visible.
+        3. Obey the returned terminal_action exactly. The only legal values are SEND or
+           SUPPRESS. Reaction no-match / unbindable, stale fixing_ci, and helper details
+           are diagnostics in the audit line, not third actions.
+        4. SUPPRESS when the predicate binds a reaction.action_succeeded event with
+           reactionKey=ci-failed to the full episode identity (including active target),
+           when an explicit fixing_ci report binds to the same full episode, or when an
+           exact episode-keyed orchestrator intent token already owns the ping.
+           A reaction/intent for an earlier head, earlier red-period, or superseded
+           session MUST NOT suppress the active session's ping.
+        5. If the verdict is SEND, revalidate that the target generation is still current.
+           If it rotated, re-decide for the new active target. Then atomically create the
+           write-ahead intent token through the same wrapper/token store; only the winning
+           claimant sends. A loser observes the token and suppresses. After a definite
+           ao send failure, release the token for bounded retry or mark failed-owned with
+           operator-visible escalation; an ambiguous post-crash token suppresses (chosen
+           at-most-once failure mode).
+        6. Emit the redacted episode-keyed audit line returned by the helper for every
+           SEND/SUPPRESS decision, including reaction bind status, self-fix bind status,
+           reason, bound reaction event id (if any), and intent-token state.
+
+      The dominant ordering closed here is reaction-first: the orchestrator defers to the
+      observable ci-failed reaction send. The reverse ordering remains a documented
+      residual because AO's built-in ci-failed reaction cannot consult repo-side state.
 
       Operator target: within ~3 minutes after the next orchestrator turn that observes
       red CI — NOT within ~3 minutes of CI failure wall-clock. Op-6 class: catching turn

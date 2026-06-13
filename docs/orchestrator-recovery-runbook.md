@@ -106,11 +106,29 @@ ao events list --json
 ao status --reports full
 ```
 
-Look for an early orchestrator `ao send` with CI-fix context **before** only
-`report-stale` (~30 minutes since last report) or a late `ci-failed` reaction. In the
-2026-05-31 op-6 episode, the catching turn was the worker `ready_for_review` report while
-CI was still red; pack rules expect an orchestrator ping on that turn, not ~30 minutes
-later.
+Look for an early orchestrator CI-failure decision audit and, when the daemon reaction
+already fired first, **no duplicate orchestrator ping**. The Issue #283 guard suppresses
+on a bindable `reaction.action_succeeded` event with `reactionKey=ci-failed` for the full
+episode key (repo, PR, head SHA, aggregate red-period, active worker target). If that event
+is absent and the worker is idle with no exact intent token, the orchestrator should claim
+one write-ahead token and send exactly one ping on the no-crash path. In the 2026-05-31
+op-6 episode, the catching turn was the worker `ready_for_review` report while CI was still
+red; pack rules expect either a reaction-first SUPPRESS audit or one orchestrator ping on
+that turn, not a later duplicate plus `report-stale`.
+
+Dry-run the live predicate with minimized/redacted event JSON before manual recovery:
+
+```powershell
+@{ episode = @{ repo='chetwerikoff/orchestrator-pack'; prNumber=<pr>; headSha='<sha>';
+     redPeriod='<aggregate-run-id>'; targetId='<active-session>'; targetGeneration='<active-generation>' };
+   reactionEvents = @(); workerReports = @(); intentTokens = @() } |
+  ConvertTo-Json -Depth 8 |
+  pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode decide
+```
+
+`terminal_action` is always `SEND` or `SUPPRESS`; no-match / unbindable reaction states are
+diagnostics. Repeated wrapper/helper errors are operator-visible and should be fixed before
+assuming CI pings are intentionally suppressed.
 
 3. **Manual unblock** — ping the worker (do not assume a separate architect session woke
    it):

@@ -219,3 +219,25 @@ Disallowed:
 - local patches in `packages/core`;
 - hidden changes under `vendor/agent-orchestrator`;
 - mandatory migration of the old `.ai-loop/` layout.
+
+### CI-failure notification dedup predicate (Issue #283)
+
+The turn-driven orchestrator CI-failure ping is gated by a repo-side deterministic helper,
+`docs/ci-failure-notification.mjs`, invoked through the tracked PowerShell wrapper
+`scripts/ci-failure-notification.ps1` under the supported operator runtime (pwsh 7+ / WSL2).
+The predicate's terminal action is a closed enum: `SEND` or `SUPPRESS`. Reaction bindability,
+self-fix bindability, helper errors, and token state are diagnostics recorded in the audit,
+never third actions.
+
+The episode identity is `{repo, PR number, head SHA, aggregate red-period discriminator,
+active notification target}`. Suppression is exact-key only: a `reaction.action_succeeded`
+/ `reactionKey=ci-failed` event, `fixing_ci` report, or write-ahead intent token for a
+superseded session, earlier SHA, earlier red period, or sibling PR cannot suppress the active
+session's only ping. The helper uses an atomic create-if-absent intent token before any
+orchestrator send; an ambiguous post-crash token resolves to at-most-once suppression, while
+an observable `ao send` failure must release the token for bounded retry or mark it
+failed-owned with visible operator escalation.
+
+This closes the dominant reaction-first duplicate path. It deliberately does not close the
+reverse ordering where the orchestrator sends before AO's unconditional built-in `ci-failed`
+reaction, because the daemon reaction cannot consult repo-side state.

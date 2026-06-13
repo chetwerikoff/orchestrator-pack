@@ -1194,3 +1194,49 @@ Optional window overrides are `AO_REVIEW_RECOVERY_CRASH_GRACE_MS`,
 `AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS`. The ambiguous stale threshold must exceed
 the enforced review timeout; otherwise the recovery check fails closed and emits
 a de-duplicated escalation audit rather than terminalizing runs.
+
+## CI-failure notification cross-path dedup (Issue #283)
+
+Issue #283 replaces the old prose-only CI FAILURE DISCIPLINE dedup guard with the tracked
+predicate `scripts/ci-failure-notification.ps1` / `docs/ci-failure-notification.mjs`.
+The orchestrator suppresses its turn-driven CI-failure ping when a bindable
+`reaction.action_succeeded` event with `reactionKey=ci-failed` already sent to the active
+worker target for the full episode key `{repo, PR, head SHA, aggregate red-period,
+active target}`, when the worker has an explicit `fixing_ci` report for that same full
+episode, or when an exact episode-keyed write-ahead intent token already owns the ping.
+
+Operator adoption after merge (blocking phase 2 for issue closure):
+
+1. Pull the merged repo and copy the updated **CI FAILURE DISCIPLINE** block from
+   `agent-orchestrator.yaml.example` into the live gitignored `agent-orchestrator.yaml`.
+   Do not add new top-level YAML schema keys; this is an `orchestratorRules` text change
+   plus a repo-side helper invocation.
+2. Apply via the `change-orchestrator-runtime` procedure from the operator terminal
+   (`ao stop` / `ao start`; managed worker sessions must not run these commands).
+3. Capture a redacted active-daemon equivalence artifact before closing the issue. The
+   artifact must not dump the whole live config. It must include: CI FAILURE DISCIPLINE
+   block fingerprint or redacted block, logical repo identity / repo-root fingerprint
+   (not an absolute path), git SHA, wrapper identity, helper content hash, and one active
+   daemon dry-run verdict produced by that exact helper. Suggested local command shape:
+
+   ```powershell
+   $rule = '<paste/redact only live CI FAILURE DISCIPLINE block>'
+   $helper = Get-Content -LiteralPath docs/ci-failure-notification.mjs -Raw
+   @{ ruleText=$rule; repoIdentity='chetwerikoff/orchestrator-pack'; gitSha=(git rev-parse HEAD);
+      wrapperPath='scripts/ci-failure-notification.ps1'; helperContent=$helper;
+      dryRunVerdict=@{ terminal_action='SUPPRESS' } } |
+     ConvertTo-Json -Depth 8 |
+     pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode adoption-artifact
+   ```
+
+4. Exercise a dry-run red-CI episode in both directions: reaction-first fixture resolves to
+   `SUPPRESS`; absent reaction + idle worker + no token resolves to `SEND`, and a second
+   claim for the same episode resolves to `SUPPRESS`.
+5. Verify the at-most-once lost-ping residual is bounded in the live environment: create a
+   dry-run token for an episode with no reaction event and no send, then confirm either
+   `report-stale` or a named operator backstop surfaces the idle/uninformed worker. If not,
+   record the residual as **not fully bounded** in the issue before closure.
+
+Residuals intentionally remain: reverse ordering (orchestrator sends first, then the
+unconditional daemon `ci-failed` reaction fires) is not closed unless the operator disables
+or gates the built-in reaction, or AO core learns to consult shared state.
