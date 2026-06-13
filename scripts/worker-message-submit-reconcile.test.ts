@@ -984,6 +984,18 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(allowed.reason).toBe('busy_dispatch_marker_match');
   });
 
+  it('does not let delivery busyDispatchAllowed bypass smoke markers', () => {
+    const capability = resolveBusyDispatchCapability({
+      delivery: {
+        busyDispatchAllowed: true,
+      },
+      session: {},
+      config: { busyDispatch: { markers: [] } },
+    });
+    expect(capability.allowed).toBe(false);
+    expect(capability.reason).toBe('busy_dispatch_environment_unknown');
+  });
+
   it('matches busy-dispatch smoke markers against the live session before recorded delivery fingerprints', () => {
     const capability = resolveBusyDispatchCapability({
       delivery: {

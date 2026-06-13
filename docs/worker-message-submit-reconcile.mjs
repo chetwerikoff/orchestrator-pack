@@ -277,15 +277,6 @@ export function shouldClearStaleSubmitClaim(record, nowMs, config = {}) {
  * @param {object} input
  */
 export function resolveBusyDispatchCapability({ delivery, session, config }) {
-  if (typeof delivery?.busyDispatchAllowed === 'boolean') {
-    return {
-      allowed: Boolean(delivery.busyDispatchAllowed),
-      backendKey: trimString(session?.backendKey ?? delivery?.backendKey),
-      reason: delivery.busyDispatchAllowed ? 'fixture_override' : 'fixture_disabled',
-      marker: null,
-    };
-  }
-
   const cfg = resolveSubmitReconcileConfig(config);
   const environment =
     cfg.busyDispatch.environment && typeof cfg.busyDispatch.environment === 'object'
