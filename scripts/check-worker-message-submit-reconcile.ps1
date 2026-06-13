@@ -68,6 +68,13 @@ if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
     exit 1
 }
 
+if ($ps1 -notmatch 'Get-SubmitBusyDispatchConfig' -or
+    $ps1 -notmatch 'busy-dispatch-smoke-markers\.json' -or
+    $ps1 -notmatch 'Get-SubmitBusyDispatchConfig -MarkerPath \$BusyDispatchSmokeMarkerPath') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must load busy-dispatch smoke markers into live tick config'
+    exit 1
+}
+
 $dispatchPs1 = Join-Path $Root 'scripts/lib/Record-WorkerMessageDispatch.ps1'
 if (-not (Test-Path -LiteralPath $dispatchPs1 -PathType Leaf)) {
     Write-Host 'Missing scripts/lib/Record-WorkerMessageDispatch.ps1'
