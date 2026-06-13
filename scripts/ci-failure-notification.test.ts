@@ -168,7 +168,7 @@ describe('CI failure notification predicate (Issue #283)', () => {
     expect(result.audit.terminal_action).not.toBe('NO-MATCH');
     expect((result.audit.diagnostic as any).reaction_bind_status).toBe('unbindable');
     expect(result.audit.intent_token_state).toBe('absent');
-    const emittedAt = Date.parse(result.audit.emitted_at_utc);
+    const emittedAt = Date.parse(String(result.audit.emitted_at_utc));
     expect(emittedAt).toBeGreaterThanOrEqual(startedAt);
     expect(emittedAt).toBeLessThanOrEqual(Date.now() + 1000);
   });
