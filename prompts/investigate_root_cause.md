@@ -55,6 +55,34 @@ Collect only what answers the scoped question:
 Stop gathering when additional search is unlikely to change the root-cause
 conclusion.
 
+### Fact / hypothesis labeling (every memo)
+
+Every claim in the final memo must be labeled as one of:
+
+- **Fact / Факт** — directly observed in a citable artifact from the bounded
+  gather step (issue/PR number, log path, command output, file path, review-run
+  JSON, etc.).
+- **Hypothesis / Гипотеза** — inferred or still unconfirmed; state what evidence
+  would confirm it and what evidence would refute it.
+
+Do **not** write a hypothesis in the grammar of a fact. If several causes remain
+possible, present them as **ranked hypotheses** (most likely first) with evidence
+**for** and **against** each one, not as one silently asserted cause.
+
+### Cause not established (first-class outcome)
+
+If the bounded evidence does **not** establish a root cause, say so plainly:
+
+- in **§1 Простыми словами / In plain terms**;
+- in **§2 Причины / Causes**; and
+- in the actionable next steps that would settle the question.
+
+Use the wording "root cause not established" / «причина не установлена» (or a
+plain equivalent). Then list the ranked surviving hypotheses and record the
+specific missing evidence that would confirm or refute them as concrete §5 / §6
+next-step items. Do **not** manufacture a confident 5-Whys chain when the
+evidence is insufficient.
+
 ### Recurrence diagnostic (recurrence-diagnostic — first step when the bug is "already fixed")
 
 When the user reports a **recurring** bug or says a prior fix "should have"
@@ -208,12 +236,18 @@ applies condition below holds.
 drafts, and trade-offs) must appear as a numbered step in **§5** (now) or **§6**
 (prevention/stability). There is **no** separate “best further steps” section.
 
+**Fact / hypothesis labels are mandatory in the report.** Each substantive claim
+in §§1–6 must carry a visible label: **Fact / Факт** with an artifact reference,
+or **Hypothesis / Гипотеза** with confirm/refute evidence. If the cause is not
+established, §1 and §2 must say so plainly and §2 must carry ranked hypotheses
+instead of a fabricated cause chain.
+
 ### Section rules
 
 | # | Heading (RU) | Heading (EN) | Content |
 |---|----------------|--------------|---------|
-| 1 | **Простыми словами** | **In plain terms** | 2–4 short paragraphs: what broke or misbehaved, what actually caused it (no jargon, or jargon explained in parentheses), and what it means for the user right now. No file paths unless the user needs to open one. |
-| 2 | **Причины** | **Causes** | Evidence-backed root cause(s) for **another agent** or a follow-up task: facts, artifact refs (`gh` #, PR, log path), 5 Whys chain when the ask was about a failure. Structured bullets; precise enough to implement from. |
+| 1 | **Простыми словами** | **In plain terms** | 2–4 short paragraphs: what broke or misbehaved, what actually caused it (no jargon, or jargon explained in parentheses), and what it means for the user right now. Label claims as **Fact / Факт** or **Hypothesis / Гипотеза**. If evidence does not establish a cause, say "root cause not established" / «причина не установлена» plainly here. No file paths unless the user needs to open one. |
+| 2 | **Причины** | **Causes** | Evidence-backed root cause(s) for **another agent** or a follow-up task: **Fact / Факт** bullets with artifact refs (`gh` #, PR, log path), 5 Whys chain when evidence supports it, and **Hypothesis / Гипотеза** bullets with confirm/refute evidence when not confirmed. If multiple causes are possible, list ranked hypotheses with evidence for/against each. If the root cause is not established, state that and do **not** fabricate a 5-Whys chain; carry the missing evidence into §5/§6 next steps. Structured bullets; precise enough to implement from. |
 | 3 | **Что уже сделано** | **Already done** | Mitigations in the repo; label each: worked / partial / failed or wrong. |
 | 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `main`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
 | 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, `ao spawn`, operator). |
@@ -337,6 +371,11 @@ Revise the memo for valid findings; stop after cycle 3 and list open questions.
 ## Don't
 
 - Invent causes without evidence from the bounded gather step.
+- Present a **Hypothesis / Гипотеза** as a **Fact / Факт**, or omit the
+  confirm/refute evidence for an unconfirmed claim.
+- Manufacture a root cause or confident 5-Whys chain when the bounded evidence is
+  insufficient; write "root cause not established" / «причина не установлена»
+  and list ranked surviving hypotheses plus missing evidence instead.
 - List work as planned or shipped from draft-file existence or draft filename
   prefix alone — use the registry, `gh issue view`, merged PR search, and
   spot-checks on `main` first.

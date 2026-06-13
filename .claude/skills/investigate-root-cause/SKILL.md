@@ -8,6 +8,8 @@ Read and execute [`prompts/investigate_root_cause.md`](../../../prompts/investig
 Issue #221 / #237 loaders (canonical text lives in that file):
 
 - **recurrence-diagnostic** — first step when a bug is "already fixed"; `pass + reproduce` ⇒ strong evidence of spec/fixture defect (not exclusive).
+- **fact/hypothesis labels** — every memo claim is **Fact / Факт** with an artifact ref or **Hypothesis / Гипотеза** with confirm/refute evidence; rank multiple possible causes as hypotheses, never assert guesses as facts.
+- **cause not established** — if evidence does not establish root cause, say so plainly in §1/§2, list ranked surviving hypotheses, and turn missing evidence into §5/§6 next steps; do not fabricate a 5-Whys chain.
 - **5-Whys stop condition** — reject "returned/logged X" and imprecise defer records as **terminal root cause**; continue to field-level facts.
 - **parked root** — defer suspected root causes only via the structured `parked-root-cause` block in draft authoring (see `create-issue-draft`).
 - **design-analysis block** — conditional on build-class durable fixes in §6: five elements (critical mechanics, industry practices, architecture sketch, ≥3 cost-rule options, full-class scenario enumeration when element-5-eligible); mandatory element 5 on recurrence when block applies; skips operator/config/one-line fixes; long matrices to OS temp; recommends scenario-matrix handoff to `create-issue-draft` (enforcement is companion, not bound here).
