@@ -17,9 +17,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $helper = Join-Path $repoRoot 'docs/ci-failure-notification.mjs'
-if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw "Missing helper: $helper" }
 $stdin = [Console]::In.ReadToEnd()
 try {
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw "Missing helper: $helper" }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'node'
     $psi.WorkingDirectory = $repoRoot

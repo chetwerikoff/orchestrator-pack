@@ -215,7 +215,7 @@ export function decideCiFailureNotification(input) {
   };
 }
 
-export function buildAuditLine({ episode, terminal_action, reason, diagnostics, boundReactionEventId = null, intentTokenState = 'absent', intentTokenId = null }) {
+export function buildAuditLine({ episode, terminal_action, reason, diagnostics, boundReactionEventId = null, intentTokenState = 'absent', intentTokenId = null, nowUtc = new Date().toISOString() }) {
   assertTerminalAction(terminal_action);
   const normalized = normalizeEpisodeKey(episode);
   return {
@@ -228,7 +228,7 @@ export function buildAuditLine({ episode, terminal_action, reason, diagnostics, 
     bound_reaction_event_id: boundReactionEventId,
     intent_token_state: intentTokenState,
     intent_token_id: intentTokenId,
-    emitted_at_utc: new Date(0).toISOString(),
+    emitted_at_utc: nowUtc,
   };
 }
 

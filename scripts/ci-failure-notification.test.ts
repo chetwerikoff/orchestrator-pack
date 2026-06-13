@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -162,11 +162,15 @@ describe('CI failure notification predicate (Issue #283)', () => {
   });
 
   it('emits an audit line with closed terminal_action enum and separate diagnostics for every decision', () => {
+    const startedAt = Date.now();
     const result = decision({ reactionEvents: [{ id: 'bad', type: 'reaction.action_succeeded', reactionKey: 'ci-failed', episode: { repo: 'x' } }] });
     expect(['SEND', 'SUPPRESS']).toContain(result.audit.terminal_action);
     expect(result.audit.terminal_action).not.toBe('NO-MATCH');
     expect((result.audit.diagnostic as any).reaction_bind_status).toBe('unbindable');
     expect(result.audit.intent_token_state).toBe('absent');
+    const emittedAt = Date.parse(result.audit.emitted_at_utc);
+    expect(emittedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(emittedAt).toBeLessThanOrEqual(Date.now() + 1000);
   });
 
   it('rejects terminal values outside SEND | SUPPRESS', () => {
@@ -229,6 +233,25 @@ describe('tracked PowerShell wrapper and token store', () => {
     const result = runWrapper('decide', { episode, reactionEvents: [fixture('reaction-action-succeeded.json')] });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
+  });
+
+  it('safe-suppresses instead of crashing when the tracked helper is missing', () => {
+    const dir = tempStore();
+    try {
+      const scriptsDir = path.join(dir, 'scripts');
+      mkdirSync(scriptsDir, { recursive: true });
+      const isolatedWrapper = path.join(scriptsDir, 'ci-failure-notification.ps1');
+      copyFileSync(wrapperPath, isolatedWrapper);
+      const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedWrapper, '-Mode', 'decide'], {
+        cwd: dir,
+        input: JSON.stringify({ episode }),
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout.trim())).toMatchObject({ terminal_action: 'SUPPRESS', reason: 'wrapper_error', diagnostic: { error_kind: 'helper_error' } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('atomically claims exactly one intent token across concurrent wrapper calls', () => {
