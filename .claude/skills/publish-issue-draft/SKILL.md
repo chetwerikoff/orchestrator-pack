@@ -27,6 +27,13 @@ Codex review is **unchanged**: draft-quality review happens in
 `create-issue-draft` (before sync); for any PR opened here, an optional manual
 Codex pass runs per [`direct-fix-checklist`](../direct-fix-checklist/SKILL.md).
 
+**Entrypoint compatibility:** this is the canonical publish/update workflow for
+Claude, Codex, Cursor, and Hermes. The path lives under `.claude/` for historical
+reasons; non-Claude agents that are routed here by `AGENTS.md` must still read
+and execute this file in full. Do not invent Codex- or Hermes-specific publish
+mechanics. In Modes B/C, they use the same OpenCode/deepseek delegation below
+unless the fallback conditions in this skill apply.
+
 **Prerequisite:** [`create-issue-draft`](../create-issue-draft/SKILL.md) completed:
 
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).

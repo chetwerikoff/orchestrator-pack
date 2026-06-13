@@ -120,6 +120,12 @@ per-task override). Every `coworker write` MUST pass `--profile write` unless th
 task issue explicitly names a different profile. Do not rely on operator or upstream
 CLI defaults.
 
+**Ask invocation shape.** Pass corpus files through `--paths`; do **not** append
+files as positional arguments after `--question` (current `coworker ask` rejects
+them as `unrecognized arguments`). Canonical repo-read form:
+`coworker ask --profile code [--allow-code] --paths <file1> <file2> ... --question "<question>"`.
+Use `--allow-code` only under the upstream file gate below.
+
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
 or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
@@ -218,10 +224,12 @@ Keep on the reasoning model (independent of corpus size):
 **Worked example.** Root-cause work must read ~900 lines across `prompts/agent_rules.md`,
 a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
 **Correct:**
-scrub the log fence-clean, then `coworker ask --profile code` extracts/summarises the
-minimal needed excerpt; you reason over the cheap-model summary and write the
-root-cause conclusion yourself. **Wrong:** label the whole task “root-cause” and inline
-all 900 lines — the reasoning exception does not cover the reading.
+scrub the log fence-clean, then
+`coworker ask --profile code --paths prompts/agent_rules.md <config> <scrubbed-log> --question "extract the evidence relevant to ..."`
+extracts/summarises the minimal needed excerpt; you reason over the cheap-model
+summary and write the root-cause conclusion yourself. **Wrong:** append the file
+list after `--question` without `--paths`, or label the whole task “root-cause”
+and inline all 900 lines — the reasoning exception does not cover the reading.
 
 ### Ordering
 
