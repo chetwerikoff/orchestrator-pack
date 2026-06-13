@@ -86,6 +86,31 @@ function maxTimestamp(...values) {
   }, 0);
 }
 
+function resolveBusyDispatchEnvironment(config) {
+  const configured =
+    config?.busyDispatch?.environment && typeof config.busyDispatch.environment === 'object'
+      ? config.busyDispatch.environment
+      : null;
+  if (configured) {
+    return configured;
+  }
+
+  const validMarkers = toArray(config?.busyDispatch?.markers).filter(
+    (marker) => validateBusyDispatchMarker(marker).ok,
+  );
+  if (validMarkers.length !== 1) {
+    return {};
+  }
+
+  const marker = validMarkers[0];
+  return {
+    backendKey: trimString(marker.backendKey),
+    dispatchSignature: trimString(marker.dispatchSignature),
+    runtimeFingerprint: trimString(marker.runtimeFingerprint),
+    tmuxFingerprint: trimString(marker.tmuxFingerprint),
+  };
+}
+
 /**
  * @param {object} [config]
  */
@@ -123,10 +148,7 @@ export function resolveSubmitReconcileConfig(config = {}) {
     ),
     busyDispatch: {
       markers: toArray(config?.busyDispatch?.markers),
-      environment:
-        config?.busyDispatch?.environment && typeof config.busyDispatch.environment === 'object'
-          ? config.busyDispatch.environment
-          : {},
+      environment: resolveBusyDispatchEnvironment(config),
     },
   };
 }

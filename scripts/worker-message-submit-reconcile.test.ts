@@ -31,6 +31,7 @@ import {
   getFailedDeliveryStatus,
   planWorkerMessageSubmitActions,
   resolveBusyDispatchCapability,
+  resolveSubmitReconcileConfig,
   validateBusyDispatchMarker,
 } from '../docs/worker-message-submit-reconcile.mjs';
 import type {
@@ -982,6 +983,28 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     });
     expect(allowed.allowed).toBe(true);
     expect(allowed.reason).toBe('busy_dispatch_marker_match');
+  });
+
+  it('derives live busy-dispatch fingerprints from a single valid smoke marker when environment is absent', () => {
+    const resolved = resolveSubmitReconcileConfig({
+      busyDispatch: {
+        markers: [busyMarker],
+      },
+    });
+    expect(resolved.busyDispatch.environment).toEqual({
+      backendKey: 'codex',
+      dispatchSignature: 'tmux-enter-v1',
+      runtimeFingerprint: 'codex-cli@1.0.0',
+      tmuxFingerprint: 'tmux@3.4:default',
+    });
+
+    const capability = resolveBusyDispatchCapability({
+      delivery: {},
+      session: {},
+      config: { busyDispatch: { markers: [busyMarker] } },
+    });
+    expect(capability.allowed).toBe(true);
+    expect(capability.reason).toBe('busy_dispatch_marker_match');
   });
 
   it('does not let delivery busyDispatchAllowed bypass smoke markers', () => {
