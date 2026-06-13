@@ -326,7 +326,7 @@ export function scanFixtureSafety(value) {
   const findings = [];
   const patterns = [
     { kind: 'secret', re: /(ghp_|github_pat_|xox[baprs]-|AKIA[0-9A-Z]{16}|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY)/ },
-    { kind: 'auth_material', re: /(authorization|cookie)\s*[:=]/i },
+    { kind: 'auth_material', re: /(?:^|[\s{,])[\"']?(authorization|cookie)[\"']?\s*[:=]/i },
     { kind: 'absolute_operator_path', re: /([A-Za-z]:\\Users\\[^\s"']+|\/home\/[A-Za-z0-9._-]+\/|\/Users\/[A-Za-z0-9._-]+\/)/ },
   ];
   for (const p of patterns) if (p.re.test(text)) findings.push(p.kind);

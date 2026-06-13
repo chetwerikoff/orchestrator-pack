@@ -148,6 +148,8 @@ describe('CI failure notification predicate (Issue #283)', () => {
     expect(bindReactionEvent(episode, [event]).status).toBe('matched');
     expect(scanFixtureSafety(event)).toEqual({ ok: true, findings: [] });
     expect(scanFixtureSafety(fixture('canonical-ci-red.json'))).toEqual({ ok: true, findings: [] });
+    expect(scanFixtureSafety({ authorization: 'Bearer redacted' })).toEqual({ ok: false, findings: ['auth_material'] });
+    expect(scanFixtureSafety({ cookie: 'session=redacted' })).toEqual({ ok: false, findings: ['auth_material'] });
   });
 
   it('binds raw AO reaction events with kind and data.reactionKey before sending', () => {
