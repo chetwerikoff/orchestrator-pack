@@ -154,7 +154,11 @@ Steps:
    row to docs/issue_queue_index.md (selective staging only — see Index ownership above).
 7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
 EOF
-opencode run --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
+# Fast isolated runtime: a dedicated opencode data dir avoids SQLite write-lock
+# contention with the orchestrator's shared DB (a raw `opencode run` otherwise
+# stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
+# 180s timeout + startup-hang retry. See opencode-publish.sh.
+bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
 **Verify state after the run — `opencode run` can exit 0 mid-failure.** A

@@ -135,7 +135,11 @@ Steps:
 3. If asked for pull: git checkout main && git pull origin main
 4. Report the merge commit SHA or any error from gh stderr.
 EOF
-opencode run --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
+# Fast isolated runtime: a dedicated opencode data dir avoids SQLite write-lock
+# contention with the orchestrator's shared DB (a raw `opencode run` otherwise
+# stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
+# 180s timeout + startup-hang retry. See .claude/skills/publish-issue-draft/opencode-publish.sh.
+bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
 **Self-delegation guard:** if you are already inside an OpenCode session
