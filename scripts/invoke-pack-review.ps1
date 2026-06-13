@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Resolve-PackReviewer.ps1')
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 
 Clear-StalePackReviewerProcessScope
 $reviewer = Get-PackReviewerFromSelector
@@ -24,6 +25,13 @@ if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
+$liveness = Register-ReviewRunLivenessIdentity -RepoRoot $resolvedRoot
+if ($liveness.ok) {
+    [Console]::Error.WriteLine("review liveness identity captured for run $($liveness.runId)")
+}
+else {
+    [Console]::Error.WriteLine("review liveness identity ambiguous: $($liveness.reason)")
+}
 $forwardArgs = [System.Collections.Generic.List[string]]::new()
 foreach ($arg in $cli.ForwardArgs) {
     $forwardArgs.Add($arg) | Out-Null
