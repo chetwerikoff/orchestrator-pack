@@ -62,7 +62,7 @@ function Write-SubmitReconcileLog {
     Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
 
-$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; audit = @(); lastTickMs = $null }
+$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
 function Get-SubmitReconcileState {
     param([string]$Path)

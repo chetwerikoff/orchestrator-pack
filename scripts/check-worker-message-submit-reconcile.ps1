@@ -11,8 +11,9 @@ $observeMjs = Join-Path $Root 'docs/worker-message-dispatch-observe.mjs'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
 $migration = Join-Path $Root 'docs/migration_notes.md'
+$busyMarkerPath = Join-Path $Root 'docs/worker-message-submit-busy-dispatch-smoke-markers.json'
 
-foreach ($path in @($scriptPath, $mjsPath, $observeMjs, $registryPath)) {
+foreach ($path in @($scriptPath, $mjsPath, $observeMjs, $registryPath, $busyMarkerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Write-Host "Missing required file: $path"
         exit 1
@@ -33,6 +34,20 @@ if ($mjs -notmatch 'DEFAULT_SUBMIT_RECONCILE_INTERVAL_MS = 30 \* 1000') {
 
 if ($mjs -notmatch 'OPERATOR_ESCALATION_PREFIX') {
     Write-Host 'worker-message-submit-reconcile.mjs must define operator escalation prefix'
+    exit 1
+}
+
+$busyMarkerJson = Get-Content -LiteralPath $busyMarkerPath -Raw | ConvertFrom-Json
+if ($null -eq $busyMarkerJson.markers) {
+    Write-Host 'worker-message-submit busy-dispatch smoke marker file must expose a markers array'
+    exit 1
+}
+if ($mjs -notmatch 'validateBusyDispatchMarker' -or $mjs -notmatch 'resolveBusyDispatchCapability') {
+    Write-Host 'worker-message-submit-reconcile.mjs must validate and gate busy dispatch on smoke markers'
+    exit 1
+}
+if ($mjs -notmatch 'DEFAULT_DELIVERY_BACKSTOP_MS' -or $mjs -notmatch 'DEFAULT_POST_DISPATCH_LEASE_MS') {
+    Write-Host 'worker-message-submit-reconcile.mjs must define delivery/backstop lease defaults for issue #293'
     exit 1
 }
 

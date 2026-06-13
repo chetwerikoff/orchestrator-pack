@@ -27,7 +27,11 @@ import {
   evaluateSubmitDecision,
   isActiveSubmitClaim,
   OPERATOR_ESCALATION_PREFIX,
+  evaluateDispatchObservability,
+  getFailedDeliveryStatus,
   planWorkerMessageSubmitActions,
+  resolveBusyDispatchCapability,
+  validateBusyDispatchMarker,
 } from '../docs/worker-message-submit-reconcile.mjs';
 import type {
   SubmitTrackingState,
@@ -622,83 +626,332 @@ describe('multiple pending deliveries (AC10)', () => {
   });
 });
 
-describe('escalation on stuck branches (AC9)', () => {
-  it('escalates waiting_input delivery after submit budget is exhausted', () => {
-    const { actions } = planFixture('waiting-input-budget-escalate.json');
-    expect(submitActions(actions)).toHaveLength(0);
-    const escalation = actions.find(
-      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
-    );
-    expect(escalation?.reason).toBe('submit_attempts_exhausted');
-    expect(
-      actions.some(
-        (a: WorkerMessageSubmitAction) =>
-          a.type === 'noop' && a.reason === 'next_prompt_possible',
-      ),
-    ).toBe(false);
-  });
+describe('issue #293 busy dispatch, retry, and backstops', () => {
+  const busyMarker = {
+    backendKey: 'codex',
+    dispatchSignature: 'tmux-enter-v1',
+    runtimeFingerprint: 'codex-cli@1.0.0',
+    tmuxFingerprint: 'tmux@3.4:default',
+    smokedAt: '2026-06-13T12:00:00.000Z',
+    runId: 'opk-61',
+    busy_enter_enqueued_observed: true,
+    consumed_after_flush_observed: true,
+    no_manual_enter: true,
+  } as const;
 
-  it('retries waiting_input delivery after budget expires with attempts remaining', () => {
-    const { actions } = planFixture('waiting-input-budget-retry.json');
-    expect(submitActions(actions)).toHaveLength(1);
-    expect(submitActions(actions)[0]?.attempt).toBe(2);
-    expect(
-      actions.some(
-        (a: WorkerMessageSubmitAction) =>
-          a.type === 'noop' && a.reason === 'next_prompt_possible',
-      ),
-    ).toBe(false);
-  });
-
-  it('defers waiting_input delivery while budget is still open', () => {
-    const decision = evaluateSubmitDecision({
+  it('dispatches while busy only on a smoke-enabled backend', () => {
+    const baseInput = {
       delivery: {
-        deliveryId: 'opk-wait-defer:1000:pack-send:defer',
-        sessionId: 'opk-wait-defer',
+        deliveryId: 'busy-1',
+        sessionId: 'opk-busy',
         deliveredAtMs: 1000,
         deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
       },
       session: {
-        sessionId: 'opk-wait-defer',
+        sessionId: 'opk-busy',
         role: 'worker',
         runtime: 'alive',
-        activity: 'waiting_input',
+        status: 'working',
+        activity: 'active',
+      },
+      tracking: { deliveries: {} },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 2000,
+    } as const;
+
+    const enabled = evaluateSubmitDecision({
+      ...baseInput,
+      delivery: {
+        ...baseInput.delivery,
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
+      },
+      config: {
+        busyDispatch: {
+          markers: [busyMarker],
+          environment: {
+            backendKey: 'codex',
+            dispatchSignature: 'tmux-enter-v1',
+            runtimeFingerprint: 'codex-cli@1.0.0',
+            tmuxFingerprint: 'tmux@3.4:default',
+          },
+        },
+      },
+    });
+    expect(enabled.action).toBe('submit');
+    expect(enabled.reason).toBe('pending_draft_busy_dispatch');
+
+    const disabled = evaluateSubmitDecision({
+      ...baseInput,
+      delivery: {
+        ...baseInput.delivery,
+        backendKey: 'cursor-cli',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'cursor-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
+      },
+      config: {
+        busyDispatch: {
+          markers: [busyMarker],
+          environment: {
+            backendKey: 'cursor-cli',
+            dispatchSignature: 'tmux-enter-v1',
+            runtimeFingerprint: 'cursor-cli@1.0.0',
+            tmuxFingerprint: 'tmux@3.4:default',
+          },
+        },
+      },
+    });
+    expect(disabled.action).toBe('noop');
+    expect(disabled.reason).toBe('streaming');
+  });
+
+  it('does not re-dispatch until the prior busy dispatch becomes settled-observable', () => {
+    const base = {
+      delivery: {
+        deliveryId: 'busy-retry-1',
+        sessionId: 'opk-busy-retry',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
       },
       tracking: {
         deliveries: {
-          'opk-wait-defer:1000:pack-send:defer': {
+          'busy-retry-1': {
+            deliveryId: 'busy-retry-1',
             firstObservedAtMs: 1000,
+            draftIdentity: 'busy-retry-1',
             submitAttempts: 1,
+            firstDispatchAtMs: 1500,
+            lastSubmitAtMs: 1500,
+            claimed: true,
+            claimKey: 'busy-retry-1:1',
           },
         },
       },
       aoEvents: [],
       floodActiveSessions: {},
-      nowMs: 5000,
-      config: { deliveryBudgetMs: 60000, maxSubmitAttempts: 3 },
+      config: {
+        busyDispatch: {
+          markers: [busyMarker],
+          environment: {
+            backendKey: 'codex',
+            dispatchSignature: 'tmux-enter-v1',
+            runtimeFingerprint: 'codex-cli@1.0.0',
+            tmuxFingerprint: 'tmux@3.4:default',
+          },
+        },
+      },
+    } as const;
+
+    const stillBusy = evaluateSubmitDecision({
+      ...base,
+      session: { sessionId: 'opk-busy-retry', role: 'worker', runtime: 'alive', status: 'working', activity: 'active' },
+      nowMs: 2500,
     });
-    expect(decision.action).toBe('noop');
-    expect(decision.reason).toBe('next_prompt_possible');
+    expect(stillBusy.action).toBe('noop');
+    expect(stillBusy.reason).toBe('claim_held');
+
+    const idleNotDrained = evaluateSubmitDecision({
+      ...base,
+      delivery: { ...base.delivery, drainSettled: false },
+      session: { sessionId: 'opk-busy-retry', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 2000 },
+      nowMs: 2500,
+    });
+    expect(idleNotDrained.action).toBe('noop');
+    expect(['observable_not_settled', 'claim_held']).toContain(idleNotDrained.reason);
+
+    const settledAndStillPresent = evaluateSubmitDecision({
+      ...base,
+      session: { sessionId: 'opk-busy-retry', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 1000 },
+      nowMs: 20000,
+    });
+    expect(settledAndStillPresent.action).toBe('submit');
+    expect(settledAndStillPresent.reason).toBe('pending_draft_retry_after_observable_non_consumption');
+    expect(settledAndStillPresent.attempt).toBe(2);
   });
 
-  it('escalates when submit attempts exhausted', () => {
-    const { actions } = planFixture('submit-budget-escalate.json');
-    expect(submitActions(actions)).toHaveLength(0);
-    const escalation = actions.find(
-      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
-    );
-    expect(escalation?.reason).toBe('submit_attempts_exhausted');
-    expect(String(escalation?.diagnosis)).toContain(OPERATOR_ESCALATION_PREFIX);
+  it('fails closed when observability is indeterminate and escalates on the post-dispatch lease', () => {
+    const pending = evaluateSubmitDecision({
+      delivery: {
+        deliveryId: 'obs-1',
+        sessionId: 'opk-obs',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
+        observability: 'indeterminate',
+      },
+      session: { sessionId: 'opk-obs', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 2000 },
+      tracking: { deliveries: { 'obs-1': { deliveryId: 'obs-1', firstObservedAtMs: 1000, submitAttempts: 1, firstDispatchAtMs: 1500, lastSubmitAtMs: 1500 } } },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 3000,
+      config: { postDispatchLeaseMs: 10000 },
+    });
+    expect(pending.action).toBe('noop');
+    expect(pending.reason).toBe('observability_indeterminate');
+
+    const expired = evaluateSubmitDecision({
+      delivery: {
+        deliveryId: 'obs-1',
+        sessionId: 'opk-obs',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
+        observability: 'indeterminate',
+      },
+      session: { sessionId: 'opk-obs', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 2000 },
+      tracking: { deliveries: { 'obs-1': { deliveryId: 'obs-1', firstObservedAtMs: 1000, submitAttempts: 1, firstDispatchAtMs: 1500, lastSubmitAtMs: 1500 } } },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 20000,
+      config: { postDispatchLeaseMs: 10000 },
+    });
+    expect(expired.action).toBe('escalate');
+    expect(expired.reason).toBe('post_dispatch_lease_exhausted');
   });
 
-  it('escalates when observation stayed ambiguous', () => {
-    const { actions } = planFixture('ambiguous-budget-escalate.json');
-    expect(submitActions(actions)).toHaveLength(0);
-    const escalation = actions.find(
-      (a: WorkerMessageSubmitAction) => a.type === 'escalate',
-    );
-    expect(escalation?.reason).toBe('ambiguous_budget_exhausted');
-    expect(String(escalation?.diagnosis)).toContain(OPERATOR_ESCALATION_PREFIX);
+  it('fails closed on foreign or unprovable draft identity before first dispatch', () => {
+    const foreign = evaluateSubmitDecision({
+      delivery: {
+        deliveryId: 'foreign-1',
+        sessionId: 'opk-foreign',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
+        draftIdentityStatus: 'shape_identical_foreign',
+        busyDispatchAllowed: true,
+      },
+      session: { sessionId: 'opk-foreign', role: 'worker', runtime: 'alive', status: 'working', activity: 'active' },
+      tracking: { deliveries: {} },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 2000,
+    });
+    expect(foreign.action).toBe('escalate');
+    expect(foreign.reason).toBe('shape_identical_foreign');
+
+    const unprovable = evaluateSubmitDecision({
+      delivery: {
+        deliveryId: 'foreign-2',
+        sessionId: 'opk-foreign',
+        deliveredAtMs: 1000,
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        draftState: 'draft_present',
+        draftIdentityUnprovable: true,
+        busyDispatchAllowed: true,
+      },
+      session: { sessionId: 'opk-foreign', role: 'worker', runtime: 'alive', status: 'working', activity: 'active' },
+      tracking: { deliveries: {} },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 2000,
+    });
+    expect(unprovable.action).toBe('noop');
+    expect(unprovable.reason).toBe('draft_identity_unprovable');
+  });
+
+  it('records durable failed-delivery state and resolves it on late consumption', () => {
+    const seededTracking = {
+      deliveries: {
+        'failed-1': {
+          deliveryId: 'failed-1',
+          sessionId: 'opk-failed',
+          firstObservedAtMs: 1000,
+          terminalState: 'escalated',
+          escalatedAtMs: 20000,
+          escalationReason: 'still_live_but_unconsumed',
+          failedDelivery: {
+            deliveryId: 'failed-1',
+            sessionId: 'opk-failed',
+            reason: 'still_live_but_unconsumed',
+            unresolvedState: 'unresolved',
+          },
+        },
+      },
+      failedDeliveries: {
+        'failed-1': {
+          deliveryId: 'failed-1',
+          sessionId: 'opk-failed',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+        },
+      },
+      audit: [],
+    } satisfies SubmitTrackingState;
+
+    const failedStatus = getFailedDeliveryStatus({ tracking: seededTracking, prNumber: 0 });
+    expect(failedStatus.unresolved.some((r) => r.deliveryId === 'failed-1')).toBe(true);
+
+    const second = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-failed', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 1000, reports: [{ report_state: 'working', reportedAt: new Date(21000).toISOString(), note: 'consumed later' }] }],
+      dispatchJournal: {
+        'failed-1': {
+          deliveryId: 'failed-1',
+          sessionId: 'opk-failed',
+          deliveredAtMs: 1000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: seededTracking,
+      nowMs: 22000,
+      config: { postDispatchLeaseMs: 5000 },
+    });
+    expect(second.actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.reason === 'late_consumed_after_terminal')).toBe(true);
+    const resolved = getFailedDeliveryStatus({ tracking: second.tracking, prNumber: 0 });
+    expect(resolved.unresolved.some((r) => r.deliveryId === 'failed-1')).toBe(false);
+  });
+
+  it('validates busy-dispatch smoke markers and resolves backend capability by exact environment match', () => {
+    expect(validateBusyDispatchMarker({ ...busyMarker })).toEqual({ ok: true });
+    expect(validateBusyDispatchMarker({ backendKey: 'codex' })).toEqual({ ok: false, reason: 'busy_dispatch_marker_invalid', field: 'dispatchSignature' });
+
+    const allowed = resolveBusyDispatchCapability({
+      delivery: {},
+      session: { backendKey: 'codex', dispatchSignature: 'tmux-enter-v1', runtimeFingerprint: 'codex-cli@1.0.0', tmuxFingerprint: 'tmux@3.4:default' },
+      config: { busyDispatch: { markers: [busyMarker] } },
+    });
+    expect(allowed.allowed).toBe(true);
+
+    const stale = resolveBusyDispatchCapability({
+      delivery: {},
+      session: { backendKey: 'codex', dispatchSignature: 'tmux-enter-v2', runtimeFingerprint: 'codex-cli@1.0.0', tmuxFingerprint: 'tmux@3.4:default' },
+      config: { busyDispatch: { markers: [busyMarker] } },
+    });
+    expect(stale.allowed).toBe(false);
+    expect(stale.reason).toBe('busy_dispatch_marker_missing_or_stale');
+  });
+
+  it('reports settled observability only after the drain-settle window', () => {
+    const pending = evaluateDispatchObservability({
+      session: { activity: 'idle', activityChangedAtMs: 10000, drainSettled: true },
+      record: { lastSubmitAtMs: 9000 },
+      nowMs: 15000,
+      config: { observabilitySettleMs: 10000 },
+    });
+    expect(pending.observable).toBe(true);
+    expect(pending.settled).toBe(false);
+
+    const settled = evaluateDispatchObservability({
+      session: { activity: 'idle', activityChangedAtMs: 10000, drainSettled: true },
+      record: { lastSubmitAtMs: 9000 },
+      nowMs: 25001,
+      config: { observabilitySettleMs: 10000 },
+    });
+    expect(settled.observable).toBe(true);
+    expect(settled.settled).toBe(true);
   });
 });
 
@@ -997,6 +1250,7 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
       },
       tracking: { deliveries: {}, audit: [] },
       nowMs: 1717601400001,
+      config: { deliveryBackstopMs: 1000 },
     });
     expect(submitActions(expired.actions)).toHaveLength(0);
     expect(expired.actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
