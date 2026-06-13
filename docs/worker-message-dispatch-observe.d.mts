@@ -39,6 +39,21 @@ export interface DeliveryRecord {
   ambiguousSessionInflight?: boolean;
   corruptObservation?: boolean;
   corruptionReason?: string;
+  backendKey?: string;
+  dispatchSignature?: string;
+  runtimeFingerprint?: string;
+  tmuxFingerprint?: string;
+  busyDispatchAllowed?: boolean;
+  draftIdentity?: string;
+  draftIdentityStatus?: string;
+  draftIdentityUnprovable?: boolean;
+  draftFreshness?: string;
+  drainSettled?: boolean;
+  observability?: string;
+  reviewRunId?: string;
+  prNumber?: number;
+  headSha?: string;
+  deliverySequence?: number;
 }
 
 export declare function classifyDeliveryPath(shape: {
