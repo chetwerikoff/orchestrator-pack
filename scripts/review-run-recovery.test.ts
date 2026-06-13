@@ -274,4 +274,24 @@ describe('review-run-recovery', () => {
     const sidecar = JSON.parse(readFileSync(join(store, 'reviewer-liveness', 'review-run-a.json'), 'utf8'));
     expect(sidecar.windows).toEqual({ crashGraceMs: 5000 });
   });
+
+  it('does not classify captured sidecars without window overrides as legacy', () => {
+    const store = tempStore();
+    writeRun(store);
+    const result = captureReviewerLiveness({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-a',
+      pid: 123,
+      startTimeTicks: '456',
+      bootIdHash: 'different-boot',
+    });
+    expect(result.ok).toBe(true);
+    const tick = runRecoveryTick({
+      storeDir: store,
+      nowMs: Date.parse('2026-06-13T00:00:30Z'),
+      config: { crashGraceMs: 1, maxReviewDurationMs: 10, ambiguousStaleMs: 20 },
+    });
+    expect(tick.actions).toContainEqual(expect.objectContaining({ terminalized: true, terminalReason: RECOVERY_REASON_AMBIGUOUS_STALE }));
+    expect(readRun(store).terminationReason).toBe(RECOVERY_REASON_AMBIGUOUS_STALE);
+  });
 });

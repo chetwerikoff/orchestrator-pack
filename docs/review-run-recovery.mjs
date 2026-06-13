@@ -236,8 +236,8 @@ function sidecarBoundForRun(sidecar, run) {
   );
 }
 
-function getEffectiveWindows(run, sidecar, config, state, nowMs, useSidecarWindows = false) {
-  const sidecarWindows = useSidecarWindows ? asRecord(sidecar?.windows) : null;
+function getEffectiveWindows(run, sidecar, config, state, nowMs, hasBoundSidecar = false) {
+  const sidecarWindows = hasBoundSidecar ? asRecord(sidecar?.windows) : null;
   if (sidecarWindows) {
     return {
       crashGraceMs: parsePositiveMs(sidecarWindows.crashGraceMs, config.crashGraceMs),
@@ -261,10 +261,10 @@ function getEffectiveWindows(run, sidecar, config, state, nowMs, useSidecarWindo
     runId: safeRunId(run),
     runFingerprint: fingerprintRun(run),
     firstObservedMs: nowMs,
-    legacy: true,
+    legacy: !hasBoundSidecar,
     windows: { ...config },
   };
-  return { ...config, source: 'legacy_first_observation' };
+  return { ...config, source: hasBoundSidecar ? 'first_observation' : 'legacy_first_observation' };
 }
 
 function runStartedMs(run, state, preferFirstObservation = false) {
