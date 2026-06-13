@@ -659,7 +659,7 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
       aoEvents: [],
       floodActiveSessions: {},
       nowMs: 2000,
-    } as const;
+    };
 
     const enabled = evaluateSubmitDecision({
       ...baseInput,
@@ -750,7 +750,7 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
           },
         },
       },
-    } as const;
+    };
 
     const stillBusy = evaluateSubmitDecision({
       ...base,
