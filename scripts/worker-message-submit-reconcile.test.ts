@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -16,6 +19,7 @@ import {
   mergeDeliveryRecords,
   selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
+  DISPATCH_SOURCE_AO_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
 import {
   applySubmitOutcomes,
@@ -257,10 +261,10 @@ describe('negative AO states (AC4/AC8)', () => {
     ).toBe(true);
   });
 
-  it('short self-submitted path is no-op', () => {
+  it('short self-submitted path is tracked without Enter', () => {
     const { actions } = planFixture('short-self-submitted.json');
     expect(submitActions(actions)).toHaveLength(0);
-    expect(actions).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'tracking_auto_submitted')).toBe(true);
   });
 
   it('future self-submitting AO delivery path is safe no-op (constructed)', () => {
@@ -283,7 +287,7 @@ describe('negative AO states (AC4/AC8)', () => {
       nowMs: 5000,
     });
     expect(decision.action).toBe('noop');
-    expect(decision.reason).toBe('already_submitted_path');
+    expect(decision.reason).toBe('tracking_auto_submitted');
   });
 });
 
@@ -419,6 +423,146 @@ describe('surviving delivery selection (review)', () => {
       ),
     ).toBe(true);
   });
+  it('does not let a later failed pending send overwrite an earlier dispatched draft', () => {
+    for (const dispatchOutcome of ['send_failed']) {
+      const deliveries = [
+        {
+          deliveryId: `opk-failed-overwrite:1000:ao-send:first:${dispatchOutcome}`,
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 1000,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+        },
+        {
+          deliveryId: `opk-failed-overwrite:2000:ao-send:failed:${dispatchOutcome}`,
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 2000,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome,
+        },
+      ];
+      expect(selectSurvivingDelivery(deliveries, 'opk-failed-overwrite')?.deliveryId).toBe(
+        `opk-failed-overwrite:1000:ao-send:first:${dispatchOutcome}`,
+      );
+      expect(findOverwrittenDeliveries(deliveries, 'opk-failed-overwrite')).toHaveLength(0);
+    }
+  });
+
+  it('submits earlier dispatched draft and escalates a later failed pending send', () => {
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-failed-overwrite', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {
+        'opk-failed-overwrite:1000:ao-send:first': {
+          deliveryId: 'opk-failed-overwrite:1000:ao-send:first',
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 1000,
+          source: 'ao-send',
+          sourceKey: 'first',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 300, lineCount: 2 },
+        },
+        'opk-failed-overwrite:2000:ao-send:failed': {
+          deliveryId: 'opk-failed-overwrite:2000:ao-send:failed',
+          sessionId: 'opk-failed-overwrite',
+          deliveredAtMs: 2000,
+          source: 'ao-send',
+          sourceKey: 'failed',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'send_failed',
+          draftState: 'unknown',
+          messageShape: { charLength: 280, lineCount: 2 },
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 3000,
+    });
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe('opk-failed-overwrite:1000:ao-send:first');
+    expect(actions.some((a) => a.type === 'escalate' && a.reason === 'send_failed' && a.deliveryId === 'opk-failed-overwrite:2000:ao-send:failed')).toBe(true);
+  });
+
+  it('does not submit a newer dispatched draft while an older same-session dispatch is still in flight', () => {
+    const olderId = 'opk-older-inflight:1000:ao-send:first';
+    const newerId = 'opk-older-inflight:2000:ao-send:newer';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-older-inflight', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {
+        [olderId]: {
+          deliveryId: olderId,
+          sessionId: 'opk-older-inflight',
+          deliveredAtMs: 1000,
+          source: 'ao-send',
+          sourceKey: 'first',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatch_in_flight',
+          draftState: 'unknown',
+          messageShape: { charLength: 300, lineCount: 2 },
+        },
+        [newerId]: {
+          deliveryId: newerId,
+          sessionId: 'opk-older-inflight',
+          deliveredAtMs: 2000,
+          source: 'ao-send',
+          sourceKey: 'newer',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 280, lineCount: 2 },
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 3000,
+    });
+
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'submit' && a.deliveryId === newerId)).toBe(false);
+  });
+
+  it('does not submit an older draft while a newer pending dispatch is ambiguous', () => {
+    for (const dispatchOutcome of ['dispatch_in_flight', 'dispatch_unknown']) {
+      const olderId = `opk-ambiguous-overwrite:1000:ao-send:first:${dispatchOutcome}`;
+      const newerId = `opk-ambiguous-overwrite:2000:ao-send:newer:${dispatchOutcome}`;
+      const { actions } = planWorkerMessageSubmitActions({
+        sessions: [{ sessionId: 'opk-ambiguous-overwrite', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+        dispatchJournal: {
+          [olderId]: {
+            deliveryId: olderId,
+            sessionId: 'opk-ambiguous-overwrite',
+            deliveredAtMs: 1000,
+            source: 'ao-send',
+            sourceKey: 'first',
+            deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+            dispatchOutcome: 'dispatched',
+            draftState: 'draft_present',
+            messageShape: { charLength: 300, lineCount: 2 },
+          },
+          [newerId]: {
+            deliveryId: newerId,
+            sessionId: 'opk-ambiguous-overwrite',
+            deliveredAtMs: 2000,
+            source: 'ao-send',
+            sourceKey: 'newer',
+            deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+            dispatchOutcome,
+            draftState: 'unknown',
+            messageShape: { charLength: 280, lineCount: 2 },
+          },
+        },
+        aoEvents: [],
+        reviewRuns: [],
+        tracking: { deliveries: {}, audit: [] },
+        nowMs: 3000,
+      });
+      expect(submitActions(actions)).toHaveLength(0);
+      expect(actions.some((a) => a.type === 'submit' && a.deliveryId === olderId)).toBe(false);
+    }
+  });
 });
 
 describe('multiple pending deliveries (AC10)', () => {
@@ -438,7 +582,7 @@ describe('multiple pending deliveries (AC10)', () => {
     );
   });
 
-  it('does not escalate overwritten delivery already consumed via worker report', () => {
+  it('fails closed for overwritten delivery with ambiguous generic worker report', () => {
     const { actions } = planFixture('consumed-overwritten-no-escalate.json');
     expect(
       actions.some(
@@ -447,14 +591,14 @@ describe('multiple pending deliveries (AC10)', () => {
           a.reason === 'lost_delivery_overwritten' &&
           a.deliveryId === 'opk-consumed-overwrite:1717600900000:pack-send:first',
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       actions.some(
         (a: WorkerMessageSubmitAction) =>
           a.type === 'mark_consumed' &&
           a.deliveryId === 'opk-consumed-overwrite:1717600900000:pack-send:first',
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(submitActions(actions)).toHaveLength(1);
     expect(submitActions(actions)[0]?.deliveryId).toBe(
       'opk-consumed-overwrite:1717600950000:pack-send:second',
@@ -701,5 +845,522 @@ describe('mergeDeliveryRecords from AO events', () => {
     });
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+  });
+});
+
+
+describe('issue #281 journaled worker-send delivery accounting', () => {
+  const baseSession = {
+    sessionId: 'opk-plain-send',
+    name: 'opk-plain-send',
+    role: 'worker',
+    status: 'working',
+    runtime: 'alive',
+    activity: 'idle',
+    reports: [],
+  };
+
+  it('plans Enter for a journaled dispatched pending-draft plain ao send', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:sha256-branch';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-plain-send',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          sourceKey: 'sha256-branch',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(id);
+  });
+
+  it('send_failed is terminal escalation and never Enter', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:failed';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-plain-send',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'send_failed',
+          draftState: 'unknown',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('send_failed');
+  });
+
+  it('unknown authoritative draft state is not Enter-eligible and escalates after budget', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:unknown-draft';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-plain-send',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'unknown',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      config: { deliveryBudgetMs: 1000 },
+      nowMs: 1717601005000,
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('draft_state_unknown');
+  });
+
+  it('ambiguous multiple in-flight deliveries are not falsely consumed by a generic report', () => {
+    const id1 = 'opk-plain-send:1717601000000:ao-send:first';
+    const id2 = 'opk-plain-send:1717601010000:ao-send:second';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: 'generic progress' }] }],
+      dispatchJournal: {
+        [id1]: { deliveryId: id1, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+        [id2]: { deliveryId: id2, sessionId: 'opk-plain-send', deliveredAtMs: 1717601010000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601025000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+  });
+
+  it('does not make a dispatched draft ambiguous because a later send failed before reaching the pane', () => {
+    const id1 = 'opk-plain-send:1717601000000:ao-send:first';
+    const id2 = 'opk-plain-send:1717601010000:ao-send:failed';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: 'generic progress' }] }],
+      dispatchJournal: {
+        [id1]: { deliveryId: id1, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+        [id2]: { deliveryId: id2, sessionId: 'opk-plain-send', deliveredAtMs: 1717601010000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'send_failed', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601025000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.deliveryId === id1)).toBe(true);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.reason === 'send_failed' && a.deliveryId === id2)).toBe(true);
+    expect(submitActions(actions)).toHaveLength(0);
+  });
+
+  it('dispatch_unknown escalates instead of looping or replaying payload', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:unknown';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatch_unknown', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
+  });
+
+  it('dispatch_in_flight is not escalated as unknown until the finite budget expires', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:in-flight';
+    const fresh = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatch_in_flight', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(fresh.actions)).toHaveLength(0);
+    expect(fresh.actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate')).toBe(false);
+
+    const expired = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatch_in_flight', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601400001,
+    });
+    expect(submitActions(expired.actions)).toHaveLength(0);
+    expect(expired.actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('dispatch_unknown');
+  });
+
+  it('corrupt journal recovery metadata escalates fail-closed once', () => {
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' }],
+      dispatchJournal: { _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown> },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    const escalations = actions.filter((a: WorkerMessageSubmitAction) => a.type === 'escalate');
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.reason).toBe('unparseable_no_backup');
+  });
+
+  it('does not re-escalate corrupt journal recovery after terminal tracking state', () => {
+    const deliveryId = 'corrupt-dispatch-journal:/tmp/corrupt';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' }],
+      dispatchJournal: { _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown> },
+      tracking: { deliveries: { [deliveryId]: { deliveryId, terminalState: 'escalated', escalatedAtMs: 1717601000000 } }, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate')).toBe(false);
+  });
+
+  it('untrusted journal recovery metadata suppresses normal delivery records fail-closed', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:should-not-submit';
+    const { actions, deliveryCount } = planWorkerMessageSubmitActions({
+      sessions: [
+        { sessionId: 'operator', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle' },
+        baseSession,
+      ],
+      dispatchJournal: {
+        _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' } as unknown as Record<string, unknown>,
+        [id]: { deliveryId: id, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
+      },
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601010000,
+    });
+    expect(deliveryCount).toBe(1);
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('unparseable_no_backup');
+  });
+
+  it('invalid bounded-escalation overrides fail closed before tracking', () => {
+    const { actions, deliveryCount } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {},
+      tracking: { deliveries: {}, audit: [] },
+      config: { maxSubmitAttempts: 0 },
+      nowMs: 1717601010000,
+    });
+    expect(deliveryCount).toBe(0);
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate')?.reason).toBe('config_invalid');
+  });
+});
+
+
+describe('journaled-worker-send wrapper transport', () => {
+  it('uses Windows PowerShell 5.1-compatible ProcessStartInfo APIs', () => {
+    const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
+    expect(text).not.toContain('.ArgumentList');
+    expect(text).not.toContain('.Environment[');
+    expect(text).toContain('.EnvironmentVariables[');
+  });
+
+  it('fails closed when ao send stdin contract is absent', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-stdin-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send <session> [message...]"; exit 0; fi\nexit 99\n');
+    chmodSync(fakeAo, 0o755);
+    const secret = 'opk_secret_TOKEN_SHOULD_NOT_LEAK';
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal], { input: secret, encoding: 'utf8' });
+    expect(result.status).toBe(42);
+    expect(result.stdout).not.toContain(secret);
+    expect(result.stderr).not.toContain(secret);
+    expect(existsSync(journal)).toBe(false);
+  });
+
+  it('sets reentrancy sentinel while probing ao send stdin help', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-help-sentinel-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 88; fi
+  echo "Usage: ao send --stdin <session>"
+  exit 0
+fi
+if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 89; fi
+cat >/dev/null
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
+  });
+
+  it('fails closed before sending when dispatch journal is untrusted', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-untrusted-journal-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    const sentMarker = path.join(dir, 'sent.txt');
+    writeFileSync(journal, '{not-json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+printf sent > '${sentMarker}'
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+
+    expect(result.status).toBe(43);
+    expect(result.stdout).toContain('journal_untrusted');
+    expect(existsSync(sentMarker)).toBe(false);
+    expect(readFileSync(journal, 'utf8')).toContain('"fenceTrusted":false');
+  });
+
+  it('adds unique hashed source keys for default plain ao-send deliveries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-unique-source-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload one', encoding: 'utf8' });
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload two', encoding: 'utf8' });
+
+    expect(first.status).toBe(0);
+    expect(second.status).toBe(0);
+    const records = Object.values(JSON.parse(readFileSync(journal, 'utf8')) as Record<string, Record<string, unknown>>);
+    expect(records).toHaveLength(2);
+    const sourceKeys = records.map((record) => String(record.sourceKey));
+    expect(sourceKeys.every((key) => /^sha256-[0-9a-f]{24}$/.test(key))).toBe(true);
+    expect(new Set(sourceKeys).size).toBe(2);
+  });
+
+  it('passes multiline payload through stdin and stores metadata only', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stdin-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    const stdinCapture = path.join(dir, 'stdin.txt');
+    const argvCapture = path.join(dir, 'argv.txt');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+printf '%s\n' "$@" > "${argvCapture}"
+cat > "${stdinCapture}"
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const payload = `first line with spaces /tmp/path with spaces\n${'x'.repeat(230)}\nopk_secret_TOKEN_SHOULD_NOT_LEAK`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-SourceKey', 'branch with spaces'], { input: payload, encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinCapture, 'utf8')).toBe(payload);
+    expect(readFileSync(argvCapture, 'utf8')).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
+    const journalText = readFileSync(journal, 'utf8');
+    expect(journalText).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
+    expect(journalText).not.toContain('branch with spaces');
+    expect(journalText).toContain('"dispatchOutcome":"dispatched"');
+    expect(journalText).toContain('"lineCount":3');
+  });
+
+  it('fails closed when post-send outcome update cannot be recorded', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-update-fail-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+printf '{"startedAt":"2999-01-01T00:00:00Z"}' > "${journal}.lock"
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+    expect(result.status).toBe(47);
+    expect(result.stdout).toContain('dispatch outcome update failed');
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatch_in_flight"');
+  });
+
+  it('drains redirected ao stdout and stderr while waiting', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-drain-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+python3 - <<'PY2'
+import sys
+sys.stdout.write('o' * 1048576)
+sys.stdout.flush()
+sys.stderr.write('e' * 1048576)
+sys.stderr.flush()
+PY2
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8', timeout: 15000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.length).toBeLessThan(1000);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
+  });
+});
+
+
+describe('worker-message-send adoption preflight', () => {
+  it('fails present-but-incomplete routing branch coverage', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-missing-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+  });
+
+  it('requires adoption probe records to have dispatched outcomes', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-outcome-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
+      probe2: { deliveryId: 'probe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, dispatchOutcome: 'send_failed', draftState: 'unknown', messageShape: { charLength: 20, lineCount: 1 } },
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+  });
+
+  it('passes only when every required routing branch is outbox-observed', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-ok-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+      probe2: { deliveryId: 'probe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('effective routing adopted');
+  });
+
+  it('can generate current epoch/config probe entries through the wrapper before validating a fresh journal', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-generate-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const wrapperPath = path.resolve('scripts/journaled-worker-send.ps1').replace(/'/g, `'\''`);
+    writeFileSync(fakeAo, [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" != "send" ]]; then exit 64; fi',
+      'payload=$(cat)',
+      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      '',
+    ].join('\n'));
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-fresh', '-ConfigPath', '/cfg/fresh.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('effective routing adopted');
+    const journalText = readFileSync(journal, 'utf8');
+    expect(journalText).toContain('\"adoptionProbe\":true');
+    const branchHash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    const pendingBranchHash = branchHash('plain-ao-send:pending-draft');
+    const selfSubmittedBranchHash = branchHash('plain-ao-send:self-submitted');
+    expect(journalText).toContain(pendingBranchHash);
+    expect(journalText).toContain(selfSubmittedBranchHash);
+    const parsedJournal = JSON.parse(journalText) as Record<string, Record<string, unknown>>;
+    const probeRecords = Object.values(parsedJournal);
+    const pendingProbe = probeRecords.find((record) => record.sourceKey === pendingBranchHash);
+    const selfSubmittedProbe = probeRecords.find((record) => record.sourceKey === selfSubmittedBranchHash);
+    expect(pendingProbe?.deliveryPath).toBe('pending-draft');
+    expect((pendingProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.charLength).toBeGreaterThan(200);
+    expect((pendingProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.lineCount).toBeGreaterThan(1);
+    expect(selfSubmittedProbe?.deliveryPath).toBe('self-submitted');
+    expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.charLength).toBeLessThanOrEqual(200);
+    expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.lineCount).toBe(1);
+    const deliveries = mergeDeliveryRecords({
+      dispatchJournal: parsedJournal,
+      aoEvents: [],
+      reviewRuns: [],
+      reactionMessages: {},
+      nowMs: 1717601010000,
+    });
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it('requires WriteProbeEntries validation to observe probes from the current run', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-current-run-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({
+      staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: hash('plain-ao-send:pending-draft'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
+      staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: hash('plain-ao-send:self-submitted'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 20, lineCount: 1 } },
+    }));
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then cat >/dev/null; exit 0; fi\nexit 64\n');
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
+
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+  });
+
+  it('keeps dry-run generated probes out of the live dispatch journal', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-dryrun-'));
+    const prodJournal = path.join(dir, 'prod-journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const wrapperPath = path.resolve('scripts/journaled-worker-send.ps1').replace(/'/g, `'\''`);
+    writeFileSync(prodJournal, JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
+    writeFileSync(fakeAo, [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" != "send" ]]; then exit 64; fi',
+      'payload=$(cat)',
+      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      '',
+    ].join('\n'));
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-StateFile', state, '-AoEpoch', 'epoch-dry', '-ConfigPath', '/cfg/dry.yaml', '-AoPath', fakeAo, '-WriteProbeEntries', '-DryRun'], {
+      encoding: 'utf8',
+      env: { ...process.env, AO_WORKER_MESSAGE_DISPATCH_JOURNAL: prodJournal, TMPDIR: dir },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('effective routing adopted');
+    expect(readFileSync(prodJournal, 'utf8')).toBe(JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
+  });
+
+  it('requires adoption probe hash to match supplied AO epoch and config path', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-epoch-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({
+      staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+      staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const stale = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml'], { encoding: 'utf8' });
+    expect(stale.status).toBe(46);
+
+    writeFileSync(journal, JSON.stringify({
+      probe1: { deliveryId: 'probe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: 'plain-ao-send:pending-draft', adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+      probe2: { deliveryId: 'probe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: 'plain-ao-send:self-submitted', adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 0, lineCount: 0 } },
+    }));
+    const current = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml'], { encoding: 'utf8' });
+    expect(current.status).toBe(0);
   });
 });

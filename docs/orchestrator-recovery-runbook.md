@@ -989,3 +989,38 @@ alive, workers idle but review run in `waiting_update`.
 - `docs/migration_notes.md` — autonomous review loop and wake listener adoption
 - `docs/orchestrator-wake-runbook.md` — event-driven wakes (#39)
 - `agent-orchestrator.yaml.example` — `orchestratorRules` (Issue #28)
+
+### Plain `ao send` journaled delivery (Issue #281)
+
+Plain orchestrator-to-worker sends must route through
+`pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>` with the worker
+message on stdin. The wrapper writes only metadata to the dispatch journal before invoking
+`ao send`, initially marks the record `dispatch_in_flight`, then records `dispatched`, `send_failed`, or `dispatch_unknown` afterward. Raw
+payloads must never appear in argv, temp files, logs, transcripts, or the journal.
+
+If a worker message is stuck unsubmitted:
+
+1. Check adoption first: generate and validate the side-effect-isolated adoption probes
+   for the current epoch/config by running
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries` from the
+   operator checkout. Probe generation invokes a synthetic `ao send` carrying adoption-probe markers for required branches such as `plain-ao-send:pending-draft` and
+   `plain-ao-send:self-submitted`; the live routing rule must call the journaled wrapper,
+   and the preflight does not directly edit the journal to fake those records. The resulting synthetic outbox-only probes are then validated for
+   matching epoch/config hashes. `wrapper_not_adopted` means the live AO routing rule is
+   missing, ineffective, stale, or the probe entries could not be generated/validated;
+   fix live `agent-orchestrator.yaml`, restart AO from the operator terminal, and rerun
+   the command.
+2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
+   temp default). A `dispatch_in_flight` delivery is still being resolved until its finite budget expires; a `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
+   must not receive blind Enter; have the source resend if needed.
+3. Run the submit arbiter dry-run:
+   `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`.
+   Pending-draft deliveries are Enter-eligible only when the journal outcome is
+   `dispatched` and the authoritative draft state is `draft_present`.
+4. For live smoke evidence, use only synthetic non-secret payloads and record sanitized
+   metadata (delivery id, shape, outcome, draft state). Do not capture pane text or worker
+   output.
+
+If local `ao send --help` does not advertise stdin/pipe ingestion, this pack intentionally
+fails closed. Do not bypass with argv payloads or raw-payload temp files; that would expose
+credentials in process surfaces or persistent files.

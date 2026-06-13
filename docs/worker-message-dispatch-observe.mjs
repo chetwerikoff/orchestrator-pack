@@ -25,6 +25,16 @@ export const AO_PASTE_CHAR_THRESHOLD = 200;
 
 export const DELIVERY_PATH_PENDING_DRAFT = 'pending-draft';
 export const DELIVERY_PATH_SELF_SUBMITTED = 'self-submitted';
+export const DELIVERY_PATH_UNKNOWN = 'unknown';
+
+export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched';
+export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed';
+export const DISPATCH_OUTCOME_IN_FLIGHT = 'dispatch_in_flight';
+export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown';
+
+export const DRAFT_STATE_DRAFT_PRESENT = 'draft_present';
+export const DRAFT_STATE_AUTO_SUBMITTED = 'auto_submitted';
+export const DRAFT_STATE_UNKNOWN = 'unknown';
 
 export const DISPATCH_SOURCE_REACTION = 'reaction';
 export const DISPATCH_SOURCE_PACK_SEND = 'pack-send';
@@ -182,8 +192,26 @@ export function extractReactionDeliveries(events, reactionMessages = {}) {
 export function extractJournalDeliveries(journal) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
+  const recovery = journal?._recovery;
+  if (recovery && recovery.fenceTrusted === false) {
+    deliveries.push({
+      deliveryId: `corrupt-dispatch-journal:${String(recovery.quarantined ?? 'unknown')}`,
+      sessionId: 'operator',
+      deliveredAtMs: Number(Date.now()),
+      source: 'dispatch-journal',
+      deliveryPath: DELIVERY_PATH_UNKNOWN,
+      dispatchOutcome: DISPATCH_OUTCOME_UNKNOWN,
+      draftState: DRAFT_STATE_UNKNOWN,
+      corruptObservation: true,
+      corruptionReason: String(recovery.reason ?? 'corrupt_dispatch_journal'),
+    });
+    return deliveries;
+  }
   for (const [deliveryId, record] of Object.entries(journal ?? {})) {
     if (!record || typeof record !== 'object') {
+      continue;
+    }
+    if (record.adoptionProbe) {
       continue;
     }
     const sessionId = String(record.sessionId ?? '').trim();
@@ -200,6 +228,8 @@ export function extractJournalDeliveries(journal) {
       sourceKey: String(record.sourceKey ?? ''),
       deliveryPath: deliveryPath || DELIVERY_PATH_PENDING_DRAFT,
       messageShape: record.messageShape ?? {},
+      dispatchOutcome: String(record.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED),
+      draftState: String(record.draftState ?? (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED ? DRAFT_STATE_AUTO_SUBMITTED : DRAFT_STATE_DRAFT_PRESENT)),
       restoreRetry: Boolean(record.restoreRetry),
     });
   }
@@ -330,6 +360,14 @@ export function getSessionActivity(session) {
  * @param {number} deliveredAtMs
  */
 export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
+  if (delivery?.ambiguousSessionInflight) {
+    const id = String(delivery?.deliveryId ?? '');
+    const reports = toArray(session?.reports);
+    return reports.some((report) => {
+      const ts = getReportTimestampMs(report);
+      return ts && ts > deliveredAtMs && id && String(report?.note ?? '').includes(id);
+    });
+  }
   const reports = toArray(session?.reports);
   for (const report of reports) {
     const ts = getReportTimestampMs(report);
@@ -390,16 +428,34 @@ function getSessionDeliveriesNewestFirst(deliveries, sessionId) {
  * @param {Array<Record<string, unknown>>} deliveries
  * @param {string} sessionId
  */
+function isDispatchedDelivery(delivery) {
+  return String(delivery?.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED) === DISPATCH_OUTCOME_DISPATCHED;
+}
+
 export function selectSurvivingDelivery(deliveries, sessionId) {
   const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
-  if (forSession.length === 0) {
+  const latestPendingDraft = forSession.find(
+    (d) => String(d.deliveryPath) === DELIVERY_PATH_PENDING_DRAFT,
+  );
+  const latestPendingOutcome = String(
+    latestPendingDraft?.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED,
+  );
+  if (
+    latestPendingOutcome === DISPATCH_OUTCOME_IN_FLIGHT ||
+    latestPendingOutcome === DISPATCH_OUTCOME_UNKNOWN
+  ) {
     return null;
   }
-  const latest = forSession[0];
-  if (String(latest.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+
+  const effectiveForSession = forSession.filter(isDispatchedDelivery);
+  if (effectiveForSession.length === 0) {
     return null;
   }
-  return latest;
+  const latestEffective = effectiveForSession[0];
+  if (String(latestEffective.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
+    return null;
+  }
+  return latestEffective;
 }
 
 /**
@@ -407,16 +463,16 @@ export function selectSurvivingDelivery(deliveries, sessionId) {
  * @param {string} sessionId
  */
 export function findOverwrittenDeliveries(deliveries, sessionId) {
-  const forSession = getSessionDeliveriesNewestFirst(deliveries, sessionId);
-  if (forSession.length <= 1) {
+  const effectiveForSession = getSessionDeliveriesNewestFirst(deliveries, sessionId).filter(isDispatchedDelivery);
+  if (effectiveForSession.length <= 1) {
     return [];
   }
-  const latestId = String(forSession[0]?.deliveryId ?? '');
-  return forSession.filter((d) => {
+  const latestEffectiveId = String(effectiveForSession[0]?.deliveryId ?? '');
+  return effectiveForSession.filter((d) => {
     if (String(d.deliveryPath) !== DELIVERY_PATH_PENDING_DRAFT) {
       return false;
     }
-    return String(d.deliveryId) !== latestId;
+    return String(d.deliveryId) !== latestEffectiveId;
   });
 }
 

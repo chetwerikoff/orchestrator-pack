@@ -13,6 +13,7 @@ $PackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $DispatchCli = Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs'
 
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 
 function Get-WorkerMessageDispatchJournalPath {
     if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
@@ -32,20 +33,7 @@ function Get-WorkerMessageDispatchJournal {
     param([string]$Path = '')
 
     $journalPath = if ($Path) { $Path } else { Get-WorkerMessageDispatchJournalPath }
-    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
-        return @{}
-    }
-    try {
-        $raw = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
-        $map = @{}
-        foreach ($prop in $raw.PSObject.Properties) {
-            $map[$prop.Name] = $prop.Value
-        }
-        return $map
-    }
-    catch {
-        return @{}
-    }
+    return Get-MechanicalJsonStateFile -Path $journalPath -DefaultState @{} -ActionTracking
 }
 
 function Set-WorkerMessageDispatchJournal {
@@ -59,7 +47,7 @@ function Set-WorkerMessageDispatchJournal {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    $Journal | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $journalPath -Encoding utf8
+    Set-MechanicalJsonStateFile -Path $journalPath -State $Journal -DefaultState @{} -JsonDepth 20
 }
 
 function Invoke-DispatchShapeCli {
@@ -78,6 +66,62 @@ function Invoke-DispatchShapeCli {
     }
     $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
     return $text | ConvertFrom-Json
+}
+
+
+function ConvertTo-WorkerMessageSafeIdComponent {
+    param([string]$Value)
+
+    $text = [string]$Value
+    if (-not $text.Trim()) { return '' }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash($bytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    return 'sha256-' + (($hash | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 24)
+}
+
+function New-WorkerMessageDispatchJournalRecord {
+    param(
+        [string]$DeliveryId,
+        [string]$SessionId,
+        [long]$DeliveredAtMs,
+        [string]$Source,
+        [string]$SourceKey = '',
+        [string]$DeliveryPath,
+        [object]$MessageShape,
+        [string]$DispatchOutcome = 'dispatch_in_flight',
+        [string]$DraftState = 'unknown',
+        [switch]$RestoreRetry,
+        [switch]$AdoptionProbe,
+        [string]$AoEpochHash = '',
+        [string]$ConfigPathHash = '',
+        [string]$AdoptionProbeRunIdHash = ''
+    )
+
+    return @{
+        deliveryId      = $DeliveryId
+        sessionId       = $SessionId
+        deliveredAtMs   = $DeliveredAtMs
+        source          = $Source
+        sourceKey       = $SourceKey
+        deliveryPath    = $DeliveryPath
+        messageShape    = @{
+            charLength = [int]$MessageShape.charLength
+            lineCount  = [int]$MessageShape.lineCount
+        }
+        dispatchOutcome = $DispatchOutcome
+        draftState      = $DraftState
+        restoreRetry    = [bool]$RestoreRetry
+        adoptionProbe   = [bool]$AdoptionProbe
+        aoEpochHash     = $AoEpochHash
+        configPathHash  = $ConfigPathHash
+        adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
+    }
 }
 
 function New-WorkerMessageDeliveryId {
@@ -112,7 +156,16 @@ function Register-WorkerMessageDispatch {
         [string]$JournalPath = '',
         [string]$DeliveryPath = '',
         [switch]$RestoreRetry,
-        [long]$DeliveredAtMs = 0
+        [long]$DeliveredAtMs = 0,
+        [string]$DispatchOutcome = 'dispatched',
+        [string]$DraftState = '',
+        [switch]$HashIdentity,
+        [switch]$AdoptionProbe,
+        [string]$AoEpoch = '',
+        [string]$ConfigPath = '',
+        [string]$AoEpochHash = '',
+        [string]$ConfigPathHash = '',
+        [string]$AdoptionProbeRunIdHash = ''
     )
 
     $deliveredMs = if ($DeliveredAtMs -gt 0) { $DeliveredAtMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
@@ -126,10 +179,14 @@ function Register-WorkerMessageDispatch {
     else {
         [string]$shape.deliveryPath
     }
-    $deliveryId = New-WorkerMessageDeliveryId -SessionId $SessionId -DeliveredAtMs $deliveredMs -Source $Source -SourceKey $SourceKey
+    $safeSourceKey = if ($HashIdentity) { ConvertTo-WorkerMessageSafeIdComponent -Value $SourceKey } else { $SourceKey }
+    $deliveryId = New-WorkerMessageDeliveryId -SessionId $SessionId -DeliveredAtMs $deliveredMs -Source $Source -SourceKey $safeSourceKey
     if (-not $deliveryId) {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
     }
+
+    $aoEpochHash = if ($AoEpochHash) { $AoEpochHash } elseif ($AoEpoch) { ConvertTo-WorkerMessageSafeIdComponent -Value $AoEpoch } else { '' }
+    $configPathHash = if ($ConfigPathHash) { $ConfigPathHash } elseif ($ConfigPath) { ConvertTo-WorkerMessageSafeIdComponent -Value $ConfigPath } else { '' }
 
     $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
     $recorded = $false
@@ -141,18 +198,28 @@ function Register-WorkerMessageDispatch {
             kind = 'worker-message-dispatch-journal'
         } -Action {
             $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+            if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
+                $recordHolder.reason = 'journal_untrusted'
+                return
+            }
             $journal[$deliveryId] = @{
                 deliveryId    = $deliveryId
                 sessionId     = $SessionId
                 deliveredAtMs = $deliveredMs
                 source        = $Source
-                sourceKey     = $SourceKey
+                sourceKey     = $safeSourceKey
                 deliveryPath  = $resolvedDeliveryPath
                 messageShape  = @{
                     charLength = [int]$shape.charLength
                     lineCount  = [int]$shape.lineCount
                 }
+                dispatchOutcome = $DispatchOutcome
+                draftState    = if ($DraftState) { $DraftState } elseif ($resolvedDeliveryPath -eq 'self-submitted') { 'auto_submitted' } else { 'draft_present' }
                 restoreRetry  = [bool]$RestoreRetry
+                adoptionProbe = [bool]$AdoptionProbe
+                aoEpochHash = $aoEpochHash
+                configPathHash = $configPathHash
+                adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
             }
             Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
             $recordHolder.recorded = $true
@@ -163,7 +230,7 @@ function Register-WorkerMessageDispatch {
             break
         }
 
-        $lastFailureReason = if (-not $fenced.ok) { 'journal_busy' } else { 'journal_write_failed' }
+        $lastFailureReason = if ($recordHolder.reason) { [string]$recordHolder.reason } elseif (-not $fenced.ok) { 'journal_busy' } else { 'journal_write_failed' }
         if ($attempt -lt $maxJournalAttempts) {
             Start-Sleep -Milliseconds 200
         }
@@ -177,6 +244,7 @@ function Register-WorkerMessageDispatch {
         recorded     = $true
         deliveryId   = $deliveryId
         deliveryPath = $resolvedDeliveryPath
+        dispatchOutcome = $DispatchOutcome
     }
 }
 
@@ -232,4 +300,31 @@ function Resolve-DispatchJournalSendOutcomeAfterDelivered {
         journalRecorded      = $false
         journalFailureReason = $dispatchReason
     }
+}
+
+
+function Update-WorkerMessageDispatchOutcome {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DeliveryId,
+        [Parameter(Mandatory = $true)]
+        [string]$DispatchOutcome,
+        [string]$DraftState = '',
+        [string]$JournalPath = ''
+    )
+
+    $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $JournalPath
+    $updateHolder = @{ updated = $false }
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{ kind = 'worker-message-dispatch-journal-outcome' } -Action {
+        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+        if (-not $journal.ContainsKey($DeliveryId)) { return }
+        $record = ConvertTo-MechanicalJsonMap -Value $journal[$DeliveryId]
+        $record['dispatchOutcome'] = $DispatchOutcome
+        if ($DraftState) { $record['draftState'] = $DraftState }
+        $journal[$DeliveryId] = $record
+        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+        $updateHolder.updated = $true
+    }
+    $updated = [bool]$updateHolder.updated
+    return @{ updated = $updated; ok = [bool]$fenced.ok; reason = if ($fenced.ok) { if ($updated) { 'updated' } else { 'not_found' } } else { 'journal_busy' } }
 }
