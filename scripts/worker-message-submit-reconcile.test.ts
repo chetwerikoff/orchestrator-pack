@@ -945,6 +945,87 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     ]);
   });
 
+  it('propagates journaled delivery observation fields into runtime decisions', () => {
+    const foreign = planWorkerMessageSubmitActions({
+      sessions: [{
+        sessionId: 'opk-foreign',
+        role: 'worker',
+        runtime: 'alive',
+        status: 'working',
+        activity: 'active',
+      }],
+      dispatchJournal: {
+        'foreign-1': {
+          deliveryId: 'foreign-1',
+          sessionId: 'opk-foreign',
+          deliveredAtMs: 1000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          draftState: 'draft_present',
+          draftIdentityStatus: 'shape_identical_foreign',
+          dispatchOutcome: 'dispatched',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, failedDeliveries: {}, audit: [] },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 2000,
+    });
+    expect(
+      foreign.actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'escalate' && a.deliveryId === 'foreign-1' && a.reason === 'shape_identical_foreign',
+      ),
+    ).toBe(true);
+
+    const observability = planWorkerMessageSubmitActions({
+      sessions: [{
+        sessionId: 'opk-obs',
+        role: 'worker',
+        runtime: 'alive',
+        status: 'working',
+        activity: 'idle',
+        activityChangedAtMs: 2000,
+      }],
+      dispatchJournal: {
+        'obs-1': {
+          deliveryId: 'obs-1',
+          sessionId: 'opk-obs',
+          deliveredAtMs: 1000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          draftState: 'draft_present',
+          observability: 'indeterminate',
+          dispatchOutcome: 'dispatched',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          'obs-1': {
+            deliveryId: 'obs-1',
+            firstObservedAtMs: 1000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1500,
+            lastSubmitAtMs: 1500,
+          },
+        },
+        failedDeliveries: {},
+        audit: [],
+      },
+      aoEvents: [],
+      floodActiveSessions: {},
+      nowMs: 3000,
+    });
+    expect(
+      observability.actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'noop' && a.deliveryId === 'obs-1' && a.reason === 'observability_indeterminate',
+      ),
+    ).toBe(true);
+  });
+
   it('validates busy-dispatch smoke markers and resolves backend capability by exact environment match', () => {
     expect(validateBusyDispatchMarker({ ...busyMarker })).toEqual({ ok: true });
     expect(validateBusyDispatchMarker({ backendKey: 'codex' })).toEqual({ ok: false, reason: 'busy_dispatch_marker_invalid', field: 'dispatchSignature' });
