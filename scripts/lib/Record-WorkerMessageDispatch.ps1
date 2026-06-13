@@ -198,6 +198,10 @@ function Register-WorkerMessageDispatch {
             kind = 'worker-message-dispatch-journal'
         } -Action {
             $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+            if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
+                $recordHolder.reason = 'journal_untrusted'
+                return
+            }
             $journal[$deliveryId] = @{
                 deliveryId    = $deliveryId
                 sessionId     = $SessionId
@@ -226,7 +230,7 @@ function Register-WorkerMessageDispatch {
             break
         }
 
-        $lastFailureReason = if (-not $fenced.ok) { 'journal_busy' } else { 'journal_write_failed' }
+        $lastFailureReason = if ($recordHolder.reason) { [string]$recordHolder.reason } elseif (-not $fenced.ok) { 'journal_busy' } else { 'journal_write_failed' }
         if ($attempt -lt $maxJournalAttempts) {
             Start-Sleep -Milliseconds 200
         }

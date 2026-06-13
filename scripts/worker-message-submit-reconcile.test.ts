@@ -1061,6 +1061,28 @@ exit 0
     expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"dispatched"');
   });
 
+  it('fails closed before sending when dispatch journal is untrusted', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-untrusted-journal-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    const sentMarker = path.join(dir, 'sent.txt');
+    writeFileSync(journal, '{not-json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+cat >/dev/null
+printf sent > '${sentMarker}'
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: 'payload', encoding: 'utf8' });
+
+    expect(result.status).toBe(43);
+    expect(result.stdout).toContain('journal_untrusted');
+    expect(existsSync(sentMarker)).toBe(false);
+    expect(readFileSync(journal, 'utf8')).toContain('"fenceTrusted":false');
+  });
+
   it('adds unique hashed source keys for default plain ao-send deliveries', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-unique-source-'));
     const fakeAo = path.join(dir, 'ao');
