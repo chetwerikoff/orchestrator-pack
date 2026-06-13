@@ -26,11 +26,8 @@ if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
 $liveness = Register-ReviewRunLivenessIdentity -RepoRoot $resolvedRoot
-if ($liveness.ok) {
-    [Console]::Error.WriteLine("review liveness identity captured for run $($liveness.runId)")
-}
-else {
-    [Console]::Error.WriteLine("review liveness identity ambiguous: $($liveness.reason)")
+if (-not $liveness.ok -and $env:AO_REVIEW_LIVENESS_DEBUG) {
+    [Console]::Error.WriteLine("review liveness identity not captured: $($liveness.reason)")
 }
 $forwardArgs = [System.Collections.Generic.List[string]]::new()
 foreach ($arg in $cli.ForwardArgs) {
