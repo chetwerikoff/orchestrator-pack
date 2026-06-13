@@ -651,6 +651,23 @@ export function planWorkerMessageSubmitActions(input) {
     }
 
     const deliveryId = String(surviving.deliveryId);
+    const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {
+      const candidateId = String(candidate.deliveryId ?? '');
+      if (!candidateId || candidateId === deliveryId) return false;
+      if (String(candidate.dispatchOutcome ?? '') !== DISPATCH_OUTCOME_IN_FLIGHT) return false;
+      const candidateRecord = nextDeliveries[candidateId] ?? {};
+      const terminalState = String(candidateRecord.terminalState ?? '').trim();
+      return terminalState !== SUBMIT_STATE_ESCALATED && terminalState !== SUBMIT_STATE_SUBMITTED;
+    });
+    if (activeCompetingInFlight) {
+      audit.push({
+        deliveryId,
+        action: 'noop',
+        reason: 'competing_dispatch_in_flight',
+      });
+      continue;
+    }
+
     const prior = nextDeliveries[deliveryId] ?? {};
     if (!prior.firstObservedAtMs) {
       nextDeliveries[deliveryId] = {

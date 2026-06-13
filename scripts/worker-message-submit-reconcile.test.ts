@@ -485,6 +485,45 @@ describe('surviving delivery selection (review)', () => {
     expect(actions.some((a) => a.type === 'escalate' && a.reason === 'send_failed' && a.deliveryId === 'opk-failed-overwrite:2000:ao-send:failed')).toBe(true);
   });
 
+  it('does not submit a newer dispatched draft while an older same-session dispatch is still in flight', () => {
+    const olderId = 'opk-older-inflight:1000:ao-send:first';
+    const newerId = 'opk-older-inflight:2000:ao-send:newer';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-older-inflight', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {
+        [olderId]: {
+          deliveryId: olderId,
+          sessionId: 'opk-older-inflight',
+          deliveredAtMs: 1000,
+          source: 'ao-send',
+          sourceKey: 'first',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatch_in_flight',
+          draftState: 'unknown',
+          messageShape: { charLength: 300, lineCount: 2 },
+        },
+        [newerId]: {
+          deliveryId: newerId,
+          sessionId: 'opk-older-inflight',
+          deliveredAtMs: 2000,
+          source: 'ao-send',
+          sourceKey: 'newer',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 280, lineCount: 2 },
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 3000,
+    });
+
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'submit' && a.deliveryId === newerId)).toBe(false);
+  });
+
   it('does not submit an older draft while a newer pending dispatch is ambiguous', () => {
     for (const dispatchOutcome of ['dispatch_in_flight', 'dispatch_unknown']) {
       const olderId = `opk-ambiguous-overwrite:1000:ao-send:first:${dispatchOutcome}`;
