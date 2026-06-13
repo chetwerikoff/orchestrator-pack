@@ -113,9 +113,11 @@ describe('CI failure notification predicate (Issue #283)', () => {
 
   it('suppresses explicit fixing_ci only when it binds to the full episode identity', () => {
     expect(decision({ workerReports: [{ state: 'fixing_ci', episode }] }).terminal_action).toBe('SUPPRESS');
+    expect(decision({ workerReports: [{ reportState: 'fixing_ci', episode }] }).terminal_action).toBe('SUPPRESS');
+    expect(decision({ workerReports: [{ report_state: 'fixing_ci', data: { episode } }] }).terminal_action).toBe('SUPPRESS');
     expect(decision({ workerReports: [{ state: 'fixing_ci', episode: nextRedSameSha }] }).terminal_action).toBe('SEND');
     expect(decision({ workerReports: [{ state: 'fixing_ci', episode: supersededTarget }] }).terminal_action).toBe('SEND');
-    expect(decision({ workerReports: [{ state: 'addressing_reviews', episode }] }).terminal_action).toBe('SEND');
+    expect(decision({ workerReports: [{ reportState: 'addressing_reviews', episode }] }).terminal_action).toBe('SEND');
   });
 
   it('treats a new head SHA as a fresh episode with no inherited suppressors', () => {

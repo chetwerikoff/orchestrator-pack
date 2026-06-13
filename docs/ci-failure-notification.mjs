@@ -118,7 +118,7 @@ export function bindReactionEvent(episode, events = []) {
 export function bindSelfFixReport(episode, reports = []) {
   let sawCandidate = false;
   for (const report of reports ?? []) {
-    const state = String(field(report, ['state', 'status', 'report']) ?? '');
+    const state = String(field(report, ['state', 'status', 'report', 'reportState', 'report_state']) ?? '').toLowerCase();
     if (state !== 'fixing_ci') continue;
     sawCandidate = true;
     const ep = field(report, ['episode', 'metadata.episode', 'details.episode']) ?? eventEpisode(report);
