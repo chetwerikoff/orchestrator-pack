@@ -1334,10 +1334,15 @@ export function planWorkerMessageSubmitActions(input) {
     }
 
     const deliveryId = trimString(surviving.deliveryId);
-    if (surviving.corruptObservation) {
+    const survivingTerminalState = trimString(nextDeliveries[deliveryId]?.terminalState);
+    if (
+      surviving.corruptObservation &&
+      (survivingTerminalState === SUBMIT_STATE_ESCALATED ||
+        survivingTerminalState === SUBMIT_STATE_SUBMITTED)
+    ) {
       continue;
     }
-    if (trimString(nextDeliveries[deliveryId]?.terminalState) === SUBMIT_STATE_SUBMITTED) {
+    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED) {
       continue;
     }
     const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {

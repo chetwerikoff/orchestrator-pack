@@ -101,10 +101,15 @@ function Get-SubmitBusyDispatchConfig {
         throw "Busy-dispatch smoke marker file must expose a markers array: $MarkerPath"
     }
 
+    $busyDispatch = @{
+        markers = @($markerConfig.markers)
+    }
+    if ($markerConfig.environment -and $markerConfig.environment -is [psobject]) {
+        $busyDispatch.environment = $markerConfig.environment
+    }
+
     return @{
-        busyDispatch = @{
-            markers = @($markerConfig.markers)
-        }
+        busyDispatch = $busyDispatch
     }
 }
 

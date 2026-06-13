@@ -15,6 +15,7 @@
     "docs/migration_notes.md",
     "docs/orchestrator-recovery-runbook.md",
     "docs/worker-message-dispatch-observe.d.mts",
+    "docs/worker-message-dispatch-observe.mjs",
     "docs/worker-message-submit-busy-dispatch-smoke-markers.json",
     "docs/worker-message-submit-reconcile.d.mts",
     "docs/worker-message-submit-reconcile.mjs",

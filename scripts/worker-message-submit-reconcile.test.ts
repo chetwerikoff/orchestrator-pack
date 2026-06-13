@@ -964,6 +964,26 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(stale.reason).toBe('busy_dispatch_marker_missing_or_stale');
   });
 
+  it('can resolve busy-dispatch capability from configured live environment fingerprints', () => {
+    const allowed = resolveBusyDispatchCapability({
+      delivery: {},
+      session: {},
+      config: {
+        busyDispatch: {
+          markers: [busyMarker],
+          environment: {
+            backendKey: 'codex',
+            dispatchSignature: 'tmux-enter-v1',
+            runtimeFingerprint: 'codex-cli@1.0.0',
+            tmuxFingerprint: 'tmux@3.4:default',
+          },
+        },
+      },
+    });
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.reason).toBe('busy_dispatch_marker_match');
+  });
+
   it('matches busy-dispatch smoke markers against the live session before recorded delivery fingerprints', () => {
     const capability = resolveBusyDispatchCapability({
       delivery: {

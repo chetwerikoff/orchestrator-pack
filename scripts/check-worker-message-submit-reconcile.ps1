@@ -70,8 +70,9 @@ if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
 
 if ($ps1 -notmatch 'Get-SubmitBusyDispatchConfig' -or
     $ps1 -notmatch 'busy-dispatch-smoke-markers\.json' -or
-    $ps1 -notmatch 'Get-SubmitBusyDispatchConfig -MarkerPath \$BusyDispatchSmokeMarkerPath') {
-    Write-Host 'worker-message-submit-reconcile.ps1 must load busy-dispatch smoke markers into live tick config'
+    $ps1 -notmatch 'Get-SubmitBusyDispatchConfig -MarkerPath \$BusyDispatchSmokeMarkerPath' -or
+    $ps1 -notmatch '\$busyDispatch\.environment = \$markerConfig\.environment') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must load busy-dispatch smoke markers and environment into live tick config'
     exit 1
 }
 
