@@ -1,0 +1,9 @@
+{
+  "source": "ao-scm-tracker",
+  "aggregateStatus": "red",
+  "aggregateRunId": "suite-100-attempt-1",
+  "requiredChecks": [
+    { "name": "Run pack contract tests", "conclusion": "failure", "attempt": 1 },
+    { "name": "PR scope guard", "conclusion": "success", "attempt": 1 }
+  ]
+}

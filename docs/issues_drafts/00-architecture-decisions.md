@@ -753,3 +753,34 @@ library choices. Companion mechanical guard for golden-sample field shapes: draf
 - Edits to AO core, `vendor/agent-orchestrator/`, or
   `agent-orchestrator.yaml`.
 - Test framework selection (decided in #11).
+
+## U. CI-failure notification dedup on observable reaction send (Issue #283)
+
+Decision taken 2026-06-13: the pack's turn-driven CI FAILURE DISCIPLINE no longer dedups on
+an imagined successful `ao send` event. It invokes a deterministic repo-side predicate
+(`scripts/ci-failure-notification.ps1` -> `docs/ci-failure-notification.mjs`) whose terminal
+action is exactly `SEND` or `SUPPRESS`.
+
+1. **Observable suppression basis.** A built-in `ci-failed` reaction suppresses the
+   orchestrator ping only when a `reaction.action_succeeded` event with
+   `reactionKey=ci-failed` binds to the full episode identity `{repo, PR, head SHA,
+   aggregate red-period, active target}`. No-match and unbindable reaction states are audit
+   diagnostics, not live actions.
+2. **Exact-key episode identity.** The active target and aggregate red-period discriminator
+   are first-class key components. Same-SHA red→green→red is a new episode; per-check attempt
+   churn while aggregate CI stays red is not. Sibling PRs and superseded sessions cannot
+   cross-suppress.
+3. **Write-ahead at-most-once token.** When the orchestrator is the sole notifier, it must
+   atomically claim an exact episode-keyed intent token before sending. Existing token means
+   suppress, including ambiguous post-crash state. Observable send failure is not ambiguous:
+   release for bounded retry or mark failed-owned and escalate.
+4. **Live wrapper contract and adoption.** The supported runtime is pwsh 7+ / WSL2. The live
+   daemon must invoke the tracked wrapper from the repo root with a timeout and then obey the
+   binary verdict. Operator adoption is two-phase: tracked surfaces merge first; live
+   gitignored config is then updated/restarted and proven with a redacted active-daemon
+   artifact that pins rule fingerprint, repo identity, git SHA, wrapper identity, helper hash,
+   and a dry-run verdict.
+5. **Residuals.** Reverse-order duplicate (orchestrator first, then unconditional daemon
+   reaction) remains out of scope. The rare at-most-once lost-ping case is acceptable only if
+   `report-stale` or a named backstop is verified to surface the idle/uninformed worker;
+   otherwise the residual is recorded as not fully bounded.

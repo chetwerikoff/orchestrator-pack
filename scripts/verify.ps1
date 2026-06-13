@@ -472,6 +472,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== CI-failure notification dedup (Issue #283) =='
+$ciFailureNotifyCheck = Join-Path $Root 'scripts/check-ci-failure-notification.ps1'
+if (Test-Path -LiteralPath $ciFailureNotifyCheck -PathType Leaf) {
+    & $ciFailureNotifyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-ci-failure-notification.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-ci-failure-notification.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'CI-failure notification dedup checks failed (Issue #283)'
+    }
+}
+else {
+    Write-Check 'scripts/check-ci-failure-notification.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing CI-failure notification dedup check script (Issue #283)'
+}
+
+Write-Host ''
 Write-Host '== first-send review delivery reconcile (Issue #202) =='
 $reviewSendCheck = Join-Path $Root 'scripts/check-review-send-reconcile.ps1'
 if (Test-Path -LiteralPath $reviewSendCheck -PathType Leaf) {

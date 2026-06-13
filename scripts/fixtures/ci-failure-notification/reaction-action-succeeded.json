@@ -1,0 +1,13 @@
+{
+  "id": "evt-redacted-ci-failed-1",
+  "type": "reaction.action_succeeded",
+  "reactionKey": "ci-failed",
+  "episode": {
+    "repo": "chetwerikoff/orchestrator-pack",
+    "prNumber": 283,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "redPeriod": "suite-100-attempt-1",
+    "targetId": "session-active-redacted",
+    "targetGeneration": "generation-active-redacted"
+  }
+}
