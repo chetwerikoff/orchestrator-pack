@@ -1,0 +1,44 @@
+{
+  "issue_number": 287,
+  "iteration_id": "opk-54",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-13T03:51:04.757Z",
+  "baseline": {
+    "commit_sha": "c6de6e126f6cac2f8d8117836f62376dd75756cb",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f82a0fe72006b759683a4d5e29d03a122bf4f2e55dbd89fcfe4b8b18fd894e61"
+  },
+  "declared_paths": [
+    "docs/review-run-recovery.mjs",
+    "docs/review-run-recovery.d.mts",
+    "docs/migration_notes.md",
+    "docs/orchestrator-autoloop-go-live.md",
+    "scripts/check-review-run-recovery.ps1",
+    "scripts/check-side-process-state-coverage.ps1",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Review-RunLiveness.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/review-run-recovery.ps1",
+    "scripts/review-run-recovery.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f82a0fe72006b759683a4d5e29d03a122bf4f2e55dbd89fcfe4b8b18fd894e61",
+      "new_active_scope_hash": "sha256:f82a0fe72006b759683a4d5e29d03a122bf4f2e55dbd89fcfe4b8b18fd894e61",
+      "changed": {
+        "added": [
+          "docs/review-run-recovery.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "Add TypeScript declaration for recovery module",
+      "actor": "opk-54",
+      "timestamp": "2026-06-13T03:51:30.000Z",
+      "applied": true
+    }
+  ]
+}

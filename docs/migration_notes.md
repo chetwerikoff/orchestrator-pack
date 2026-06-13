@@ -1158,3 +1158,39 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
 
 Current AO versions that do not advertise stdin/pipe ingestion for `ao send` remain a hard
 gate: the wrapper exits fail-closed and refuses argv or raw temp-file payload fallback.
+
+## Review run recovery side-process (Issue #287)
+
+Crash-safe review recovery is now a registered supervisor child named
+`review-run-recovery`. It captures reviewer process liveness sidecars from
+`scripts/invoke-pack-review.ps1` and runs `scripts/review-run-recovery.ps1` every
+60 seconds from the side-process registry. When a non-terminal review run's
+reviewer is provably gone after the crash grace, the run is atomically marked
+`failed` with `terminationReason: reviewer_liveness_provably_dead`; when liveness
+is unverifiable past the stale threshold, the reason is
+`reviewer_liveness_ambiguous_stale` (or `reviewer_liveness_legacy_ambiguous_stale`
+for pre-feature runs first observed by recovery). The recovery tick never emits
+`ao review run`, `ao review send`, `ao spawn`, or worker lifecycle commands.
+
+Operator adoption after merge:
+
+1. Merge the updated `scripts/orchestrator-side-process-registry.json` into the
+   checkout used by the live supervisor. The registry must contain exactly one
+   required child with `id: "review-run-recovery"`.
+2. From the operator terminal only, restart AO so the registry is reloaded:
+   `ao stop` then `ao start`.
+3. Confirm the child is registered in source with:
+   `pwsh -NoProfile -File scripts/check-review-run-recovery.ps1`.
+   Expected output: `review-run-recovery registration/config OK`.
+4. Confirm it is live after `ao start` by checking the side-process supervisor
+   output/status for a line or JSON row containing
+   `review-run-recovery` with a healthy `working` (or equivalent live) verdict.
+   An install with no `review-run-recovery` child, or more than one production
+   recovery path, is invalid and must be fixed before relying on automatic
+   recovery.
+
+Optional window overrides are `AO_REVIEW_RECOVERY_CRASH_GRACE_MS`,
+`AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS`, and
+`AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS`. The ambiguous stale threshold must exceed
+the enforced review timeout; otherwise the recovery check fails closed and emits
+a de-duplicated escalation audit rather than terminalizing runs.

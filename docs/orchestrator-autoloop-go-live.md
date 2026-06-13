@@ -201,3 +201,32 @@ worker: pr_created / ready_for_review (+ CI green)
 - [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68) — this checklist in-repo
 - [#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163) — `review-trigger-reconcile.ps1` (state-derived review trigger)
 - [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) — heartbeat backstop (`orchestrator-wake-heartbeat.ps1`)
+
+## Review run recovery child (Issue #287)
+
+The side-process registry includes `review-run-recovery`, which runs
+`scripts/review-run-recovery.ps1` and writes only local AO review-run state under
+the project `code-reviews` runtime tree. It is side-effect fenced by
+`review-run-recovery-side-effect.lock` and must be supervised exactly once. It
+never starts a replacement review directly; after it terminalizes a dead or stale
+ambiguous run as non-clean `failed`, the existing periodic review-trigger
+reconciler observes that the head is no longer covered by the failed run and owns
+any replacement start through the normal review-start claim.
+
+Post-merge operator checklist:
+
+```powershell
+# Validate source registration/config.
+pwsh -NoProfile -File scripts/check-review-run-recovery.ps1
+# Expected: review-run-recovery registration/config OK
+
+# Operator terminal only: restart AO so the supervisor reloads the registry.
+ao stop
+ao start
+
+# Confirm the supervisor/status output includes exactly one live child:
+#   review-run-recovery ... working
+```
+
+If the child is missing, duplicated, or not live after restart, do not rely on
+crash-safe review recovery; fix the supervisor registry/adoption first.

@@ -8,7 +8,8 @@
     "ci-green-wake-reconcile",
     "review-send-reconcile",
     "review-finding-delivery-confirm",
-    "worker-message-submit-reconcile"
+    "worker-message-submit-reconcile",
+    "review-run-recovery"
   ],
   "children": [
     {
@@ -20,7 +21,10 @@
       "passProjectId": true,
       "cadenceSeconds": 300,
       "stallGraceMultiplier": 4,
-      "extraArgs": ["-SideEffectStateDir", "{stateRoot}"]
+      "extraArgs": [
+        "-SideEffectStateDir",
+        "{stateRoot}"
+      ]
     },
     {
       "id": "heartbeat",
@@ -50,7 +54,10 @@
       "passProjectId": true,
       "cadenceSeconds": 5,
       "stallGraceMultiplier": 4,
-      "extraArgs": ["-StateDir", "{stateRoot}"]
+      "extraArgs": [
+        "-StateDir",
+        "{stateRoot}"
+      ]
     },
     {
       "id": "ci-green-wake-reconcile",
@@ -90,6 +97,16 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 30,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-run-recovery",
+      "script": "review-run-recovery.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "review-run-recovery-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 60,
       "stallGraceMultiplier": 4
     }
   ]

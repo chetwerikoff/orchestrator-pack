@@ -949,6 +949,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Review run recovery registration (Issue #287) =='
+$reviewRunRecoveryCheck = Join-Path $Root 'scripts/check-review-run-recovery.ps1'
+if (Test-Path -LiteralPath $reviewRunRecoveryCheck -PathType Leaf) {
+    & $reviewRunRecoveryCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-run-recovery.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-run-recovery.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Review run recovery registration/config check failed (Issue #287)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-run-recovery.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review run recovery check script (Issue #287)'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

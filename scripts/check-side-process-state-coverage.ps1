@@ -51,9 +51,10 @@ foreach ($fixture in $requiredFixtures) {
 
 $registryIds = @($registry.requiredChildIds)
 $manifestChildren = @($manifest.children)
+$exemptChildIds = @($manifest.jsExempt | ForEach-Object { [string]$_.childId } | Where-Object { $_ })
 foreach ($req in $registryIds) {
     $healthOnly = @('listener', 'heartbeat')
-    if ($healthOnly -contains $req) {
+    if ($healthOnly -contains $req -or $exemptChildIds -contains $req) {
         continue
     }
     $match = $manifestChildren | Where-Object { $_.id -eq $req } | Select-Object -First 1

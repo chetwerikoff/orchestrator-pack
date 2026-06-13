@@ -4,6 +4,12 @@
       "path": "/tmp/orchestrator-wake-dedup.json",
       "owner": "docs/orchestrator-wake-filter.mjs",
       "reason": "JS-owned dedup state is outside the PowerShell hashtable reflection class"
+    },
+    {
+      "childId": "review-run-recovery",
+      "path": "{project}/code-reviews/review-run-recovery-state.json",
+      "owner": "docs/review-run-recovery.mjs",
+      "reason": "JS-owned AO runtime recovery state uses atomic file replace outside the PowerShell mechanical state helper"
     }
   ],
   "children": [
