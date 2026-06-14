@@ -945,6 +945,49 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     ]);
   });
 
+  it('does not hide unresolved failed deliveries that match one supplied scope and lack another', () => {
+    const tracking = {
+      deliveries: {},
+      failedDeliveries: {
+        'failed-run-no-head': {
+          deliveryId: 'failed-run-no-head',
+          sessionId: 'opk-partial',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+          reviewRunId: 'review-run-match',
+        },
+        'failed-pr-no-head': {
+          deliveryId: 'failed-pr-no-head',
+          sessionId: 'opk-partial',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+          prNumber: 297,
+        },
+        'failed-other-pr': {
+          deliveryId: 'failed-other-pr',
+          sessionId: 'opk-partial',
+          reason: 'still_live_but_unconsumed',
+          unresolvedState: 'unresolved',
+          prNumber: 298,
+        },
+      },
+      audit: [],
+    } satisfies SubmitTrackingState;
+
+    const failedStatus = getFailedDeliveryStatus({
+      tracking,
+      prNumber: 297,
+      reviewRunId: 'review-run-match',
+      headSha: 'sha-current',
+    });
+    expect(failedStatus.ok).toBe(false);
+    expect(failedStatus.failClosed).toBe(false);
+    expect(failedStatus.unresolved.map((r) => r.deliveryId).sort()).toEqual([
+      'failed-pr-no-head',
+      'failed-run-no-head',
+    ]);
+  });
+
   it('propagates journaled delivery observation fields into runtime decisions', () => {
     const foreign = planWorkerMessageSubmitActions({
       sessions: [{

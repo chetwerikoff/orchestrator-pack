@@ -1138,19 +1138,33 @@ export function getFailedDeliveryStatus(input) {
     const recordPr = Number(record.prNumber ?? 0);
     const recordRunId = trimString(record.reviewRunId);
     const recordHeadSha = trimString(record.headSha);
-    const scopeChecks = [];
-    if (scopeReviewRunId) {
-      scopeChecks.push(Boolean(recordRunId) && scopeReviewRunId === recordRunId);
+    let scopedMatch = false;
+    let scopedConflict = false;
+    if (scopeReviewRunId && recordRunId) {
+      if (scopeReviewRunId === recordRunId) {
+        scopedMatch = true;
+      } else {
+        scopedConflict = true;
+      }
     }
-    if (scopePrNumber > 0) {
-      scopeChecks.push(recordPr === scopePrNumber);
+    if (scopePrNumber > 0 && recordPr > 0) {
+      if (recordPr === scopePrNumber) {
+        scopedMatch = true;
+      } else {
+        scopedConflict = true;
+      }
     }
-    if (scopeHeadSha) {
-      scopeChecks.push(Boolean(recordHeadSha) && scopeHeadSha === recordHeadSha);
+    if (scopeHeadSha && recordHeadSha) {
+      if (scopeHeadSha === recordHeadSha) {
+        scopedMatch = true;
+      } else {
+        scopedConflict = true;
+      }
     }
-    const scopedMatch = scopeChecks.length > 0 && scopeChecks.every(Boolean);
     if (!hasScope || scopedMatch) {
-      unresolved.push(record);
+      if (!scopedConflict) {
+        unresolved.push(record);
+      }
       continue;
     }
     if (hasScope && !recordPr && !recordRunId && !recordHeadSha) {
