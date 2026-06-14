@@ -127,6 +127,30 @@ function resolveBusyDispatchEnvironment(config) {
   };
 }
 
+function resolveBusyDispatchEnvironmentSource(config) {
+  const configured =
+    config?.busyDispatch?.environment && typeof config.busyDispatch.environment === 'object'
+      ? config.busyDispatch.environment
+      : null;
+  if (configured) {
+    return 'explicit';
+  }
+  const validMarkers = toArray(config?.busyDispatch?.markers).filter(
+    (marker) => validateBusyDispatchMarker(marker).ok,
+  );
+  return validMarkers.length > 0 ? 'marker' : 'none';
+}
+
+function hasTrustedBusyDispatchEnvironment(config) {
+  const source = trimString(config?.busyDispatch?.environmentSource);
+  if (source) {
+    return source === 'explicit';
+  }
+  return Boolean(
+    config?.busyDispatch?.environment && typeof config.busyDispatch.environment === 'object',
+  );
+}
+
 /**
  * @param {object} [config]
  */
@@ -165,6 +189,7 @@ export function resolveSubmitReconcileConfig(config = {}) {
     busyDispatch: {
       markers: toArray(config?.busyDispatch?.markers),
       environment: resolveBusyDispatchEnvironment(config),
+      environmentSource: resolveBusyDispatchEnvironmentSource(config),
     },
   };
 }
@@ -316,7 +341,7 @@ export function shouldClearStaleSubmitClaim(record, nowMs, config = {}) {
  */
 export function resolveBusyDispatchCapability({ delivery, session, config }) {
   const cfg = resolveSubmitReconcileConfig(config);
-  const environment =
+  const environment = hasTrustedBusyDispatchEnvironment(config) &&
     cfg.busyDispatch.environment && typeof cfg.busyDispatch.environment === 'object'
       ? cfg.busyDispatch.environment
       : {};

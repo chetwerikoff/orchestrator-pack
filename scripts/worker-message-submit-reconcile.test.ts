@@ -1109,7 +1109,7 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(allowed.reason).toBe('busy_dispatch_marker_match');
   });
 
-  it('derives live busy-dispatch fingerprints from a single valid smoke marker when environment is absent', () => {
+  it('derives marker fingerprints for diagnostics without trusting them as observed environment', () => {
     const resolved = resolveSubmitReconcileConfig({
       busyDispatch: {
         markers: [busyMarker],
@@ -1121,14 +1121,23 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
       runtimeFingerprint: 'codex-cli@1.0.0',
       tmuxFingerprint: 'tmux@3.4:default',
     });
+    expect(resolved.busyDispatch.environmentSource).toBe('marker');
 
     const capability = resolveBusyDispatchCapability({
       delivery: {},
       session: {},
       config: { busyDispatch: { markers: [busyMarker] } },
     });
-    expect(capability.allowed).toBe(true);
-    expect(capability.reason).toBe('busy_dispatch_marker_match');
+    expect(capability.allowed).toBe(false);
+    expect(capability.reason).toBe('busy_dispatch_environment_unknown');
+
+    const resolvedCapability = resolveBusyDispatchCapability({
+      delivery: {},
+      session: {},
+      config: resolved,
+    });
+    expect(resolvedCapability.allowed).toBe(false);
+    expect(resolvedCapability.reason).toBe('busy_dispatch_environment_unknown');
   });
 
   it('preserves live busy-dispatch capability when multiple valid smoke markers exist', () => {
@@ -1151,10 +1160,16 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
       runtimeFingerprint: 'codex-cli@1.0.0',
       tmuxFingerprint: 'tmux@3.4:default',
     });
+    expect(resolved.busyDispatch.environmentSource).toBe('marker');
 
     const capability = resolveBusyDispatchCapability({
       delivery: {},
-      session: {},
+      session: {
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
+      },
       config: { busyDispatch: { markers: [olderMarker, busyMarker] } },
     });
     expect(capability.allowed).toBe(true);
