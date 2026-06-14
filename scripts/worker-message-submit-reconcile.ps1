@@ -30,6 +30,7 @@ $Script:ReconcileLogPrefix = 'worker-message-submit-reconcile'
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
 $SubmitFilterCli = Join-Path $PackRoot 'docs/worker-message-submit-reconcile.mjs'
+$BusyDispatchSmokeMarkerPath = Join-Path $PackRoot 'docs/worker-message-submit-busy-dispatch-smoke-markers.json'
 $Script:DefaultIntervalSeconds = 30
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
@@ -62,7 +63,7 @@ function Write-SubmitReconcileLog {
     Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
 
-$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; audit = @(); lastTickMs = $null }
+$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
 function Get-SubmitReconcileState {
     param([string]$Path)
@@ -86,6 +87,30 @@ function Get-FixtureSubmitPayload {
         throw "Fixture not found: $Path"
     }
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
+function Get-SubmitBusyDispatchConfig {
+    param([string]$MarkerPath)
+
+    if (-not (Test-Path -LiteralPath $MarkerPath -PathType Leaf)) {
+        throw "Busy-dispatch smoke marker file not found: $MarkerPath"
+    }
+
+    $markerConfig = Get-Content -LiteralPath $MarkerPath -Raw | ConvertFrom-Json
+    if ($null -eq $markerConfig.markers) {
+        throw "Busy-dispatch smoke marker file must expose a markers array: $MarkerPath"
+    }
+
+    $busyDispatch = @{
+        markers = @($markerConfig.markers)
+    }
+    if ($markerConfig.environment -and $markerConfig.environment -is [psobject]) {
+        $busyDispatch.environment = $markerConfig.environment
+    }
+
+    return @{
+        busyDispatch = $busyDispatch
+    }
 }
 
 function Invoke-SubmitReconcileTick {
@@ -136,7 +161,7 @@ function Invoke-SubmitReconcileTick {
         $tracking = Get-SubmitReconcileState -Path $StatePath
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
-        $tickConfig = @{}
+        $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
         $reactionMessages = @{
             'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'

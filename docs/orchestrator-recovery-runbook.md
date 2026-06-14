@@ -611,11 +611,27 @@ or `ao send`. If the linked session is dead/orphan, the loop **escalates immedia
 
 ### Submit stuck paste draft (Issues #216 / #232)
 
-Draft submit is owned by **`scripts/worker-message-submit-reconcile.ps1`** (Issue #232):
-a source-agnostic arbiter that presses tmux **Enter only** for AO-delivered pending-draft
-messages (multi-line or >200 chars), regardless of sender. It observes AO events, the pack
-dispatch journal, and review-run state — never pane text. Issue #216 submit is folded into
-this process; delivery-confirm (#171) no longer presses Enter.
+Draft submit is owned by **`scripts/worker-message-submit-reconcile.ps1`** (Issue #232,
+extended by #293): a source-agnostic arbiter that presses tmux **Enter only** for
+AO-delivered pending-draft messages (multi-line or >200 chars), regardless of sender. It
+observes AO events, the pack dispatch journal, and review-run state — never pane text.
+Issue #216 submit is folded into this process; delivery-confirm (#171) no longer presses
+Enter.
+
+Issue #293 changes the submit contract:
+
+- **Busy worker dispatch is allowed only behind a valid smoke marker.** On a smoke-enabled
+  backend, the first Enter is sent even while the worker is actively streaming; the Enter is
+  treated as a queueable submit, not an interrupt. On backends without a matching marker in
+  `docs/worker-message-submit-busy-dispatch-smoke-markers.json`, busy dispatch stays fail-closed
+  and the arbiter waits for an idle observable point.
+- **Retry is consumption-driven.** The arbiter no longer gives up because a pre-dispatch clock
+  expired while the worker was busy. It waits for a settled observable point, verifies whether
+  the same draft is still present, and only then retries one Enter.
+- **Bounds remain finite and operator-visible.** Every tracked delivery has a delivery-anchored
+  backstop; after the first Enter, a post-dispatch lease bounds the busy-forever / no-signal
+  path. Failed terminals persist as durable failed-delivery records and reconcile to
+  `consumed` if late consumption is later observed.
 
 | Setting | Default | Env var |
 |---------|---------|---------|
@@ -626,7 +642,17 @@ this process; delivery-confirm (#171) no longer presses Enter.
 Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
 
 Escalation lines are prefixed `[worker-message-submit-reconcile] ESCALATION:` with
-operator-visible diagnosis when submit budget is exhausted or observation stayed ambiguous.
+operator-visible diagnosis when the delivery-anchored backstop, the post-dispatch lease, or the
+attempt cap is exhausted, or when the draft becomes stale / unprovable.
+
+**Manual live smoke for busy dispatch enablement (operator, not CI):** route one synthetic
+non-secret multi-line delivery to a worker that is already busy, verify the **programmatic**
+`tmux send-keys ... Enter` path shows the enqueue cue without interrupting, and then verify the
+queued submit is flushed and consumed with **no manual Enter**. Record only sanitized metadata in
+`docs/worker-message-submit-busy-dispatch-smoke-markers.json`: backend key, dispatch signature,
+runtime/tmux fingerprints, `busy_enter_enqueued_observed=true`,
+`consumed_after_flush_observed=true`, `no_manual_enter=true`, smoke time, and sanitized run id.
+Do **not** store terminal transcript, session URL, or payload text.
 
 ### Escalation message and operator remedy
 

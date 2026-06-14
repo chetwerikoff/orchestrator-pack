@@ -279,8 +279,8 @@ describe('worker message submit (isSessionAlive)', () => {
       floodActiveSessions: {},
       nowMs: 2_000,
     });
-    expect(decision.action).toBe('noop');
-    expect(decision.reason).toBe('session_not_alive');
+    expect(decision.action).toBe('escalate');
+    expect(decision.reason).toBe('worker_dead_or_gone');
   });
 });
 

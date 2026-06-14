@@ -11,8 +11,9 @@ $observeMjs = Join-Path $Root 'docs/worker-message-dispatch-observe.mjs'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
 $migration = Join-Path $Root 'docs/migration_notes.md'
+$busyMarkerPath = Join-Path $Root 'docs/worker-message-submit-busy-dispatch-smoke-markers.json'
 
-foreach ($path in @($scriptPath, $mjsPath, $observeMjs, $registryPath)) {
+foreach ($path in @($scriptPath, $mjsPath, $observeMjs, $registryPath, $busyMarkerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Write-Host "Missing required file: $path"
         exit 1
@@ -36,6 +37,20 @@ if ($mjs -notmatch 'OPERATOR_ESCALATION_PREFIX') {
     exit 1
 }
 
+$busyMarkerJson = Get-Content -LiteralPath $busyMarkerPath -Raw | ConvertFrom-Json
+if ($null -eq $busyMarkerJson.markers) {
+    Write-Host 'worker-message-submit busy-dispatch smoke marker file must expose a markers array'
+    exit 1
+}
+if ($mjs -notmatch 'validateBusyDispatchMarker' -or $mjs -notmatch 'resolveBusyDispatchCapability') {
+    Write-Host 'worker-message-submit-reconcile.mjs must validate and gate busy dispatch on smoke markers'
+    exit 1
+}
+if ($mjs -notmatch 'DEFAULT_DELIVERY_BACKSTOP_MS' -or $mjs -notmatch 'DEFAULT_POST_DISPATCH_LEASE_MS') {
+    Write-Host 'worker-message-submit-reconcile.mjs must define delivery/backstop lease defaults for issue #293'
+    exit 1
+}
+
 $observe = Get-Content -LiteralPath $observeMjs -Raw
 if ($observe -notmatch 'AO_PASTE_CHAR_THRESHOLD = 200') {
     Write-Host 'worker-message-dispatch-observe.mjs must anchor paste threshold at 200 chars'
@@ -50,6 +65,14 @@ if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
 
 if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
     Write-Host 'worker-message-submit-reconcile.ps1 must fence Enter with worker-message-submit-side-effect.lock'
+    exit 1
+}
+
+if ($ps1 -notmatch 'Get-SubmitBusyDispatchConfig' -or
+    $ps1 -notmatch 'busy-dispatch-smoke-markers\.json' -or
+    $ps1 -notmatch 'Get-SubmitBusyDispatchConfig -MarkerPath \$BusyDispatchSmokeMarkerPath' -or
+    $ps1 -notmatch '\$busyDispatch\.environment = \$markerConfig\.environment') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must load busy-dispatch smoke markers and environment into live tick config'
     exit 1
 }
 

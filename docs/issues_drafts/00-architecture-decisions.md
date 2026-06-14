@@ -355,11 +355,21 @@ file `15-orchestrator-recovery-runbook.md`, not here.
    state/events (no pane scraping), flood is quiet, and submit budget remains — then
    fail-closed to #171 escalation. **Permits:** one bounded Enter per `(runId, head SHA)`.
    **Forbids:** composing/editing finding text, `ao send`, spawn/`--claim-pr`/kill, pane
-   scraping for content verification, or submit while #173 flood is active. **Upstream
-   retirement:** **ComposioHQ/agent-orchestrator#2105** (sibling of #2094) — core should
-   retry/verify submit for multi-line pastes (as `send.js → sendViaTmux` already does)
-   and `sendWithConfirmation` must not treat a visible draft as delivery. Pack bridge
-   retires when that ships. (Issue #216.)
+   scraping for content verification, or submit while #173 flood is active.
+
+5. **Busy-worker Enter is queue-safe only behind auditable smoke evidence (Issue #293).**
+   Decision taken 2026-06-13 after opk-61 / PR #289 showed a busy Codex worker accepted a
+   programmatic-equivalent Enter as a queued submit instead of an interrupt. Therefore the
+   arbiter no longer treats `isSessionStreaming` as a universal submit block: on a backend with a
+   matching smoke marker, the first Enter is dispatched even while busy, retry is driven by
+   settled consumption observation rather than by a pre-dispatch wall-clock budget, and at most
+   one dispatch remains outstanding per delivery. Backends without a valid marker stay on the
+   idle-only path plus the delivery-anchored backstop. Failed terminals are durable tombstones
+   with machine-readable failed-delivery status, and late observed consumption reconciles that
+   failure to `consumed` without a second Enter. **Upstream retirement:**
+   **ComposioHQ/agent-orchestrator#2105** (sibling of #2094) should eventually retry/verify
+   submit for multi-line pastes (as `send.js → sendViaTmux` already does) and must not treat a
+   visible draft as delivery; the pack bridge retires when that lands. (Issue #293.)
 
 ## I. Worker prompt-delivery launch failure on Windows
 

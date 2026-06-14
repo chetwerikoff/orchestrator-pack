@@ -953,6 +953,11 @@ Enter for any AO-delivered pending-draft worker message (multi-line or >200 char
 regardless of sender. Folds in Issue #216 submit; delivery-confirm (#171) no longer
 submits. Observes AO events, pack dispatch journal, and review-run state — never pane text.
 
+Issue #293 extends that arbiter in place: smoke-enabled backends may dispatch the first Enter
+while the worker is busy/streaming; retries are gated by settled consumption observability and
+draft freshness rather than by a pre-dispatch wall-clock budget; and failed terminals persist as
+durable failed-delivery records with late-consume reconciliation.
+
 **New supervised child** under `orchestrator-wake-supervisor.ps1` (#205).
 
 To adopt after merge:
@@ -963,9 +968,12 @@ To adopt after merge:
 3. Optional env: `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` (default **30**),
    `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_DISPATCH_JOURNAL`.
 4. Verify: `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
+5. Busy dispatch remains **default-off** until the operator records a valid smoke marker in
+   `docs/worker-message-submit-busy-dispatch-smoke-markers.json`. A missing / stale / mismatched
+   marker keeps busy dispatch disabled without affecting idle delivery.
 
-Audit signal: submit reconcile state file `audit` array and log lines
-`[worker-message-submit-reconcile]` with submit/no-op/escalation reasons.
+Audit signal: submit reconcile state file `audit` array, durable `failedDeliveries`, and log
+lines `[worker-message-submit-reconcile]` with submit/no-op/escalation reasons.
 
 See `docs/orchestrator-recovery-runbook.md` (Submit stuck paste draft).
 
@@ -1153,8 +1161,11 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
    `AO_WORKER_MESSAGE_SUBMIT_STATE`, `AO_WORKER_MESSAGE_ADOPTION_STATE`.
 5. Manual live smoke (not CI): send one synthetic non-secret multi-line message through the
    wrapper to a live Codex worker and record only sanitized metadata evidence (delivery id,
-   outcome, draft state, timestamps). Do not record the message body, terminal transcript,
-   session URL, or worker output.
+   outcome, draft state, timestamps). For busy-dispatch enablement (#293), capture the marker
+   fields in `docs/worker-message-submit-busy-dispatch-smoke-markers.json` only after the
+   **programmatic** Enter path both enqueues while busy and is later consumed after flush with
+   `no_manual_enter=true`. Do not record the message body, terminal transcript, session URL, or
+   worker output.
 
 Current AO versions that do not advertise stdin/pipe ingestion for `ao send` remain a hard
 gate: the wrapper exits fail-closed and refuses argv or raw temp-file payload fallback.

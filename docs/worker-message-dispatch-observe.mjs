@@ -231,6 +231,37 @@ export function extractJournalDeliveries(journal) {
       dispatchOutcome: String(record.dispatchOutcome ?? DISPATCH_OUTCOME_DISPATCHED),
       draftState: String(record.draftState ?? (deliveryPath === DELIVERY_PATH_SELF_SUBMITTED ? DRAFT_STATE_AUTO_SUBMITTED : DRAFT_STATE_DRAFT_PRESENT)),
       restoreRetry: Boolean(record.restoreRetry),
+      ...(record.corruptObservation ? { corruptObservation: true } : {}),
+      ...(record.corruptionReason ? { corruptionReason: String(record.corruptionReason) } : {}),
+      ...(record.backendKey ? { backendKey: String(record.backendKey).trim() } : {}),
+      ...(record.dispatchSignature
+        ? { dispatchSignature: String(record.dispatchSignature).trim() }
+        : {}),
+      ...(record.runtimeFingerprint
+        ? { runtimeFingerprint: String(record.runtimeFingerprint).trim() }
+        : {}),
+      ...(record.tmuxFingerprint
+        ? { tmuxFingerprint: String(record.tmuxFingerprint).trim() }
+        : {}),
+      ...(typeof record.busyDispatchAllowed === 'boolean'
+        ? { busyDispatchAllowed: Boolean(record.busyDispatchAllowed) }
+        : {}),
+      ...(record.draftIdentity ? { draftIdentity: String(record.draftIdentity).trim() } : {}),
+      ...(record.draftIdentityStatus
+        ? { draftIdentityStatus: String(record.draftIdentityStatus).trim() }
+        : {}),
+      ...(record.draftIdentityUnprovable ? { draftIdentityUnprovable: true } : {}),
+      ...(record.draftFreshness ? { draftFreshness: String(record.draftFreshness).trim() } : {}),
+      ...(typeof record.drainSettled === 'boolean'
+        ? { drainSettled: Boolean(record.drainSettled) }
+        : {}),
+      ...(record.observability ? { observability: String(record.observability).trim() } : {}),
+      ...(record.reviewRunId ? { reviewRunId: String(record.reviewRunId).trim() } : {}),
+      ...(Number(record.prNumber ?? 0) > 0 ? { prNumber: Number(record.prNumber) } : {}),
+      ...(record.headSha ? { headSha: String(record.headSha).trim() } : {}),
+      ...(Number(record.deliverySequence ?? 0) > 0
+        ? { deliverySequence: Number(record.deliverySequence) }
+        : {}),
     });
   }
   return deliveries;
