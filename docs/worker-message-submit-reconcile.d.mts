@@ -151,6 +151,7 @@ export declare function resolveSubmitReconcileConfig(config?: {
   busyDispatch?: {
     markers?: BusyDispatchMarker[];
     environment?: Record<string, unknown>;
+    environmentSource?: string;
   };
 }): {
   intervalMs: number;
@@ -162,6 +163,7 @@ export declare function resolveSubmitReconcileConfig(config?: {
   busyDispatch: {
     markers: BusyDispatchMarker[];
     environment: Record<string, unknown>;
+    environmentSource: string;
   };
 };
 
