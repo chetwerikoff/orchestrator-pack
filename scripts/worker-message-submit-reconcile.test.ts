@@ -1088,6 +1088,36 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(capability.reason).toBe('busy_dispatch_marker_match');
   });
 
+  it('preserves live busy-dispatch capability when multiple valid smoke markers exist', () => {
+    const olderMarker = {
+      ...busyMarker,
+      backendKey: 'older',
+      dispatchSignature: 'tmux-enter-v0',
+      runtimeFingerprint: 'codex-cli@0.9.0',
+      tmuxFingerprint: 'tmux@3.3:default',
+      smokedAt: '2026-06-12T12:00:00.000Z',
+    };
+    const resolved = resolveSubmitReconcileConfig({
+      busyDispatch: {
+        markers: [olderMarker, busyMarker],
+      },
+    });
+    expect(resolved.busyDispatch.environment).toEqual({
+      backendKey: 'codex',
+      dispatchSignature: 'tmux-enter-v1',
+      runtimeFingerprint: 'codex-cli@1.0.0',
+      tmuxFingerprint: 'tmux@3.4:default',
+    });
+
+    const capability = resolveBusyDispatchCapability({
+      delivery: {},
+      session: {},
+      config: { busyDispatch: { markers: [olderMarker, busyMarker] } },
+    });
+    expect(capability.allowed).toBe(true);
+    expect(capability.reason).toBe('busy_dispatch_marker_match');
+  });
+
   it('does not let delivery busyDispatchAllowed bypass smoke markers', () => {
     const capability = resolveBusyDispatchCapability({
       delivery: {

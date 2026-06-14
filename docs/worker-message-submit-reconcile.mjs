@@ -98,11 +98,27 @@ function resolveBusyDispatchEnvironment(config) {
   const validMarkers = toArray(config?.busyDispatch?.markers).filter(
     (marker) => validateBusyDispatchMarker(marker).ok,
   );
-  if (validMarkers.length !== 1) {
+  if (validMarkers.length === 0) {
     return {};
   }
 
-  const marker = validMarkers[0];
+  const marker = validMarkers.reduce((latest, candidate) => {
+    if (!latest) {
+      return candidate;
+    }
+    const latestAt = parseFlexibleTimestampMs(latest.smokedAt);
+    const candidateAt = parseFlexibleTimestampMs(candidate.smokedAt);
+    if (candidateAt > latestAt) {
+      return candidate;
+    }
+    if (candidateAt === latestAt) {
+      return candidate;
+    }
+    return latest;
+  }, null);
+  if (!marker) {
+    return {};
+  }
   return {
     backendKey: trimString(marker.backendKey),
     dispatchSignature: trimString(marker.dispatchSignature),
