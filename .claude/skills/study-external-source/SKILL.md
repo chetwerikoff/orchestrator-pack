@@ -30,27 +30,54 @@ fetch-and-summarise legwork to the cheap model. See the **Coworker CLI
 delegation** policy in [`prompts/agent_rules.md`](../../../prompts/agent_rules.md)
 (single source of truth) for the profile and code-gate rules.
 
+**Critical: `coworker` has no network.** `coworker ask` reads only local files
+passed through `--paths` — it cannot clone a repo, follow a URL, or fetch a
+page. So the work splits in two, and the split is mandatory:
+
+- **Fetch = mechanical I/O, you do it — without comprehending.** Pull the raw
+  bytes to local disk and move on; do not read, skim, or summarise what lands.
+  - **Do NOT use `WebFetch`** to study the source — `WebFetch` returns
+    model-*processed*, already-summarised content, which **is** the reading you
+    must delegate. Use it (or `curl`/`gh api`) only as a dumb pipe that writes
+    raw bytes to a file.
+  - GitHub repo → `git clone --depth 1 <url> "${TMPDIR:-/tmp}/extsrc-<slug>"`.
+  - Single page / blog / raw doc → `curl -sL <url> -o "${TMPDIR:-/tmp}/extsrc-<slug>.html"`
+    (or `.md`/`.txt`). PDFs: download, then extract text to a `.txt` before
+    handing off (coworker corpus is text).
+- **Read = comprehension, coworker does it.** Point `coworker ask` at the files
+  you just fetched. **Do not `Read` the fetched files yourself** to "check"
+  them first — that is the comprehension you are delegating. Verification comes
+  later and is a *narrow spot-check*, not a second full read (step 5).
+
 Procedure:
 
 1. **Availability check first.** `command -v coworker`. If it is missing,
    unavailable, or rate-limited, fall back to reading in-session and **say so**
    in the final report. Otherwise the research below MUST go through coworker.
-2. **Bounded, thorough read via coworker.** Ask with the current CLI shape:
-   `coworker ask --profile code [--allow-code] --paths <file-or-excerpt> ... --question "..."`.
-   Corpus files MUST go through `--paths`; do not append them as positional args
-   after `--question`. Have coworker read and summarise the source's entry points
-   — README, top-level structure, the primary architecture/overview doc,
-   license, and maintenance/activity signals. Request a *detailed* extraction,
-   not a one-paragraph blurb: capabilities, design choices, dependencies,
-   stated trade-offs, and anything that overlaps our existing pack contracts.
-   Source code requires the `--allow-code` gate — pass it only when the question
-   genuinely needs code, and only after scrubbing secrets.
-3. **Iterate as needed.** Fan out more `coworker ask` calls for the specific
+2. **Fetch raw to disk (no reading).** Mechanically download the source into a
+   temp dir per the fetch rules above. Note the local paths; do not open them.
+3. **Bounded, thorough read via coworker.** Ask with the current CLI shape:
+   `coworker ask --profile code [--allow-code] --paths <fetched-file> ... --question "..."`.
+   Corpus files MUST go through `--paths` (the local files from step 2); do not
+   append them as positional args after `--question`. Have coworker read and
+   summarise the source's entry points — README, top-level structure, the
+   primary architecture/overview doc, license, and maintenance/activity signals.
+   Request a *detailed* extraction, not a one-paragraph blurb: capabilities,
+   design choices, dependencies, stated trade-offs, and anything that overlaps
+   our existing pack contracts. Cloned repos are mostly source code, which
+   requires the `--allow-code` gate (`.md`/`.txt` docs do not) — pass it only
+   when the question genuinely needs the code, and only after scrubbing secrets.
+4. **Iterate as needed.** Fan out more `coworker ask` calls for the specific
    sub-areas the adoption question hinges on. Do not pull the whole tree; chase
    only what the decision needs.
-4. **You synthesise.** coworker returns raw reading; the comparison, the fit
-   analysis, and every Apply/Adapt/Skip call stay with you. Verify coworker's
-   summary against the source before you rely on it.
+5. **You synthesise.** coworker returns raw reading; the comparison, the fit
+   analysis, and every Apply/Adapt/Skip call stay with you. **Verify by narrow
+   spot-check, not by re-reading** — re-reading the corpus yourself would be the
+   double read this skill exists to avoid. Confirm only the few facts each
+   Apply/Adapt/Skip decision hinges on (license, "does it patch core?", a named
+   dependency): `grep` the fetched files or open the handful of lines coworker
+   cited. If a spot-check contradicts coworker, send a tighter `coworker ask` —
+   do not switch to reading the whole source in-session.
 
 State in the final report whether the research went through coworker or fell
 back in-session, and why.
@@ -215,6 +242,8 @@ in-session.
 ## Don't
 
 - Read the external source yourself when coworker is available — delegate it.
+- Use `WebFetch` (or `Read` on fetched files) to study the source — that is
+  comprehension, which coworker must do. Fetch raw bytes to disk only.
 - Cargo-cult adopt because a repo is popular or starred.
 - Invent pain points to avoid an all-Skip outcome.
 - Send Codex only the adoptions — it must attack the rejections too.
