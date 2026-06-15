@@ -99,6 +99,31 @@ scope:
 - If upstream behavior appears missing, write a contract or wrapper first and
   escalate the need for a proper plugin/API only after confirming the gap.
 
+## Build the minimum (no unrequested abstraction)
+
+Build the **smallest** implementation that satisfies the issue's stated acceptance
+criteria. Prefer deletion or reuse of existing code over adding new code. Avoid
+**unrequested abstraction** — do not introduce indirection, a layer, a config knob,
+or a generalization that no acceptance criterion or carve-out below justifies.
+
+**Not a hard second-caller rule.** "Minimum" is **not** "no abstraction until a
+second concrete caller exists." An abstraction, boundary, adapter, generator, or
+single-source layer is legitimate — not over-engineering — when justified by **any**
+of:
+
+- an issue **acceptance criterion**;
+- a **public** or **host boundary** (a contract other entrypoints consume);
+- **cross-platform** compatibility (e.g. Windows + Linux/WSL2);
+- **generated-drift** prevention (canonical source + generated pointers, drift guard);
+- **testability** of a **risky seam**;
+- **upgrade-safety** (thin pack-side seam keeping AO-core/vendor edits out).
+
+**Rigor is not optional.** Do not skimp, in the name of minimalism, on: input validation at trust boundaries; error handling that prevents **data loss**; **security**; or any **required test** the issue or Codex review demands. Less code never overrides correctness or the review/CI gate.
+
+**Scope.** This clause governs the AO **worker surface** only — rules injected via
+`agentRulesFile` from this file (`prompts/agent_rules.md`). It does not silently
+claim coverage of other agent surfaces (`AGENTS.md`, `.cursor/rules/`, etc.).
+
 ## Coworker CLI delegation
 
 Operating principle: **delegate I/O, keep reasoning**. Bulk reading and summarising
