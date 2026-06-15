@@ -504,10 +504,12 @@ the publish half-done.
 
 **Mechanism — `opencode run`, not `ao spawn`.** `ao spawn` revives a worker
 against an issue that *already exists*, in a fresh checkout; it can neither
-create the issue nor see your uncommitted local draft. Run `opencode run`
-directly in the architect working tree (pass `--dir .` so it starts in the
-current project directory) so it reads `docs/issues_drafts/NN-<slug>.md`
-exactly as it sits on disk.
+create the issue nor see your uncommitted local draft. Run `opencode run` through
+`.claude/skills/publish-issue-draft/opencode-publish.sh`: the helper creates a
+per-invocation scratch checkout, copies only the named draft and
+`docs/issue_queue_index.md` from the architect working tree, rewrites `--dir` to
+that checkout, and tears it down. The delegate reads the draft exactly as it sits
+on disk without sharing the architect's live working tree.
 
 **Deliver the prompt via a temp file — never inline.** The publish hook
 string-matches `gh issue create` / `gh pr create` / `gh pr merge` **anywhere in
@@ -519,7 +521,8 @@ command contains none of those literals:
 ```bash
 PROMPT_FILE="$(mktemp)"
 cat > "$PROMPT_FILE" <<'EOF'
-You are publishing an already-reviewed architect task spec for orchestrator-pack.
+You are publishing an already-reviewed architect task spec for orchestrator-pack
+from an isolated scratch checkout. Do NOT run git commands in any other checkout.
 The draft is docs/issues_drafts/NN-<slug>.md (substitute the real NN-<slug>). It
 passed Codex review — do NOT edit its task content. Steps:
 
@@ -538,8 +541,9 @@ passed Codex review — do NOT edit its task content. Steps:
    (selective staging — spec-only), open the spec-only PR (use that skill's body
    template — NO issue refs of any kind in the PR body: the no-ceremony scope
    guard fails on `Refs #N`, bare `#N`, or issue URLs), wait for CI green, merge
-   with the gh CLI (pr-merge subcommand: --merge --delete-branch), then
-   git checkout main && git pull origin main.
+   with the gh CLI (pr-merge subcommand: --merge --delete-branch). If you refresh
+   after merge, do it only in this isolated checkout (git checkout main && git pull
+   origin main); never touch the architect's live checkout.
 
 Report the Issue URL/number and, when PUBLISH=yes, the PR URL and merge commit.
 PUBLISH=<no|yes>
@@ -548,6 +552,7 @@ EOF
 # contention with the orchestrator's shared DB (a raw `opencode run` otherwise
 # stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
 # 180s timeout + startup-hang retry. See opencode-publish.sh.
+OPENCODE_PUBLISH_INCLUDE="docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md" \
 bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
@@ -647,7 +652,8 @@ in the test-harness code.
 - Sync to GitHub before Codex review completes (unless 5-iteration cap with open questions recorded).
 - Use `ao spawn` to publish a brand-new draft — it needs an existing issue and a
   fresh checkout, so it cannot create the issue or see the local draft. Use
-  `opencode run --dangerously-skip-permissions --dir .` with a temp-file prompt
-  (default path), or publish manually (fallback).
+  `opencode-publish.sh --dangerously-skip-permissions --dir .` with
+  `OPENCODE_PUBLISH_INCLUDE` and a temp-file prompt (default path), or publish
+  manually in a separate checkout (fallback).
 - Pass `PUBLISH=yes` to deepseek when the user did not ask to merge — default is
   sync-only; the full PR→merge cycle runs only on explicit request.

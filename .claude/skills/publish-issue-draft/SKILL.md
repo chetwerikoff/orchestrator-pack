@@ -107,8 +107,11 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 > first, then re-run the merge.
 
 > **Publication delegates to deepseek via OpenCode by default (every mode, single
-> or batch).** The architect hands the publish mechanics to `opencode run
-> --dangerously-skip-permissions --dir .` with a temp-file prompt (below). Direct
+> or batch).** The architect hands the publish mechanics to `opencode run` through
+> `.claude/skills/publish-issue-draft/opencode-publish.sh`, which creates a
+> per-invocation isolated scratch checkout, preloads only the intended draft path(s)
+> plus `docs/issue_queue_index.md` from the live tree, rewrites `--dir` to that
+> checkout, and tears it down. Direct
 > `gh pr create` / `gh pr merge` / `gh issue create` is blocked by the publish
 > hook for the architect — use `opencode run` as the delegate so deepseek runs
 > those commands. The **direct `AO_PUBLISH_FALLBACK=1`** path (manual
@@ -120,8 +123,10 @@ the full heavy flow. Run the Common steps end-to-end for the one draft.
 ```bash
 PROMPT_FILE="$(mktemp)"
 cat > "$PROMPT_FILE" <<'EOF'
-You are publishing already-reviewed architect docs for orchestrator-pack from the
-current working tree. Do NOT edit the drafts' content — they passed Codex review.
+You are publishing already-reviewed architect docs for orchestrator-pack from an
+isolated scratch checkout. The helper preloaded only the files listed below from
+the architect's live working tree. Do NOT edit the drafts' content — they passed
+Codex review. Do NOT run git commands in any other checkout.
 
 Files to publish (already on disk): <list every touched path: docs/issues_drafts/NN-*.md,
   docs/issues_drafts/00-architecture-decisions.md if changed>.
@@ -136,7 +141,8 @@ row's hunk — never wholesale-stage or reset the file. The architect does NOT p
 post-edit, or restore the index by hand.
 
 Steps:
-1. git fetch origin; branch from main: git checkout main && git pull origin main &&
+1. In this isolated checkout only: git fetch origin; update the local main base
+   (git checkout main && git pull origin main), then create the publish branch:
    git checkout -b architect/draft-<NN>-<slug>.
 2. Stage ONLY the listed draft files (and 00-architecture-decisions.md if applicable).
    For docs/issue_queue_index.md: add or update ONLY each published draft's registry row,
@@ -152,8 +158,9 @@ Steps:
 4. Open a spec-only PR with "<!-- pr-type: spec-only -->" in the body. These docs PRs route
    the no-ceremony / docs-only path: the scope guard FAILS on any issue reference, so the PR
    body MUST contain ZERO "Refs #N", bare "#N", or issue URLs — summarise the change instead.
-5. Wait for CI green (gh pr checks <pr> --watch). Then gh pr merge <pr> --merge --delete-branch;
-   git checkout main && git pull origin main.
+5. Wait for CI green (gh pr checks <pr> --watch). Then gh pr merge <pr> --merge --delete-branch.
+   If you refresh after merge, do it only in this isolated checkout (git checkout main &&
+   git pull origin main); never touch the architect's live checkout.
 6. For each "#N <- draft": re-sync the existing issue body (body = draft minus the H1 line,
    i.e. tail -n +3) with gh issue edit <N> --body-file <tmp>. For each "new <- draft":
    gh issue create with title = the draft H1 and body = draft minus H1, then write the
@@ -161,10 +168,12 @@ Steps:
    row to docs/issue_queue_index.md (selective staging only — see Index ownership above).
 7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
 EOF
-# Fast isolated runtime: a dedicated opencode data dir avoids SQLite write-lock
+# Fast isolated runtime: the helper creates a scratch checkout for all delegate
+# git mutations and a dedicated opencode data dir to avoid SQLite write-lock
 # contention with the orchestrator's shared DB (a raw `opencode run` otherwise
 # stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
 # 180s timeout + startup-hang retry. See opencode-publish.sh.
+OPENCODE_PUBLISH_INCLUDE="<same touched path list plus docs/issue_queue_index.md>" \
 bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
@@ -187,9 +196,10 @@ git status -sb
 git fetch origin
 ```
 
-Branch from current `main`: `git checkout main` → `git pull origin main` →
-`git checkout -b architect/draft-NN-<slug>` (or stay on a clean branch already
-cut for this draft). Record implementation issue number **N** from the draft header.
+Fallback/manual branch work must happen in a separate checkout (not the architect's
+live working tree): update that checkout's `main` from origin, then create
+`architect/draft-NN-<slug>` there (or stay on a clean branch already cut for this
+draft). Record implementation issue number **N** from the draft header.
 
 ### Files in the publish commit
 
@@ -301,8 +311,7 @@ usually **none** for docs-only drafts unless the draft changed `.example` or run
 ```powershell
 gh pr checks <pr> --repo chetwerikoff/orchestrator-pack
 gh pr merge <pr> --repo chetwerikoff/orchestrator-pack --merge --delete-branch
-git checkout main
-git pull origin main
+# Refresh only the separate fallback checkout if needed; do not pull the architect's live tree.
 ```
 
 ### Report
