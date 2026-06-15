@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when authoring a new task draft for `orchestrator-pack` — adding `docs/issues_drafts/NN-<slug>.md` and syncing it as a GitHub Issue. Covers the draft structure, the 5-mode framework triggers, decision logging, and the sync-to-GitHub procedure. Invoke before opening any new issue or rewriting an existing draft. Do not invoke for tiny docs typos or rename-only refactors.
+description: Use when authoring a new task draft for `orchestrator-pack` — adding `docs/issues_drafts/NN-<slug>.md` and syncing it as a GitHub Issue. Covers the mandatory prior-art reconnaissance gate (survey shipped + queued work before authoring), the task-decomposition gate (split large work into single-PR-sized drafts up front), the draft structure, the 5-mode framework triggers, decision logging, and the sync-to-GitHub procedure. Invoke before opening any new issue or rewriting an existing draft. Do not invoke for tiny docs typos or rename-only refactors.
 ---
 
 # create-issue-draft
@@ -17,6 +17,132 @@ set boundaries and acceptance criteria. **Over-specification is a bug.**
 - Splitting / merging issues during pre-implementation alignment.
 
 Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks.
+
+## Prior-art reconnaissance gate (run FIRST — before any design analysis)
+
+Before you analyse the problem or write a single draft line — for anything beyond
+a typo/rename — you MUST survey what the project has **already shipped** and
+**already queued** on this topic, and let the findings decide whether, and as
+*what*, the draft should exist at all. Skipping this is how draft #95 shipped a
+~1100-line "new runtime egress" design that was ~80% redundant with already-merged
+`#205/#232/#281/#283/#267`; the scope correction then happened as an expensive full
+rewrite instead of *before* authoring. The reconnaissance is the cheap insurance
+against re-implementing merged machinery.
+
+**Applies** to every new build or rewrite. **Skips** only for typo/rename/one-line
+mechanical fixes (same skip line as the design-analysis gate below).
+
+### Two surveys — delegate the bulk read, keep the verdict
+
+The combined corpus — 90+ drafts plus the architecture decision log, the queue
+index, and declaration snapshots — is far over the read-delegation triggers, so
+the bulk read is **mandatory** coworker work (`coworker ask --profile code`); the
+*conclusion* stays on the reasoning model. The corpus is markdown, so it sends
+**without** `--allow-code`; add `--allow-code` only for the narrow hop that
+confirms a claim against shipped *script* code.
+
+**1. Shipped work — what is already built, and which architectural decisions were
+made and why.** Sources:
+- Closed issues + merged PRs on the topic —
+  `gh issue list --repo chetwerikoff/orchestrator-pack --state closed --search "<topic terms>"`
+  and `gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "<topic terms>"`.
+- `docs/architecture.md` and `docs/issues_drafts/00-architecture-decisions.md` —
+  the decision log (the *why*, not only the *what*).
+- `docs/declarations/**` — which files each shipped issue actually authored (the
+  concrete surface already occupied).
+- The drafts whose issues are **merged** (resolve numbers via
+  [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md)).
+
+**2. Open queue — what is already planned or in-flight on the topic.** Sources:
+- Open issues —
+  `gh issue list --repo chetwerikoff/orchestrator-pack --state open --search "<topic terms>"`.
+- [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) — the draft→issue
+  discovery map.
+- `docs/issues_drafts/**` — local drafts, **including ones not yet synced** to GitHub.
+
+**Delegation command (one call covers both surveys' markdown corpus):**
+
+```bash
+coworker ask --profile code \
+  --paths docs/issues_drafts/ docs/architecture.md docs/issue_queue_index.md docs/declarations/ \
+  --question "For the topic '<one-line topic>': (1) which shipped/merged issues or drafts already build any part of this, and what architectural decision did each settle and why — quote the rationale where stated; (2) which OPEN issues or un-synced local drafts already cover any part of this. Return issue/draft ids with a one-line 'what it already does'."
+```
+
+Run the `gh` queries yourself (live open/closed/merged state is not in the
+markdown corpus). If `coworker` is unavailable or rate-limited, read in-session and
+say so in your final status (coworker-policy accountability clause).
+
+### Scope verdict (judgment — never delegated)
+
+From the survey, decide exactly one verdict and act on it:
+
+- **Already shipped** → do **not** author a fresh build draft. The durable move is
+  a reference / cleanup / catalog draft over the existing work, or no draft at all.
+  (This is the #95 case.)
+- **Already queued** → fold the idea into the existing open draft/issue; do not open
+  a parallel one.
+- **Extends / references existing** → author, but **Prerequisite** must cite every
+  merged issue it builds on (draft path + GitHub #), and **Goal** / **Binding
+  surface** must state explicitly what it **re-uses vs. adds**, so it cannot silently
+  re-implement shipped machinery.
+- **Genuinely new** → no material overlap found; author normally.
+
+### Record the recon in the draft
+
+The verdict and its evidence are not throwaway — capture them so the next reader
+(and Codex) can check the scope was earned:
+- **Prerequisite** lists the merged issues the draft builds on / references, each
+  with the one-line "already does" from the survey.
+- **Decisions (design analysis)** carries a short **Prior art** note: what already
+  exists, what each shipped decision settled and why, and why the chosen scope does
+  not duplicate it. (Draft #95's post-hoc "Scope correction" note is exactly this —
+  the gate just requires it **up front**, before authoring, not after a rewrite.)
+
+This gate **feeds** the design-analysis gate below: whenever the survey finds
+overlap, the ≥3-option analysis (element 4) MUST include "reference / extend the
+shipped work instead of rebuilding it" as one judged option.
+
+## Task decomposition gate (run before authoring — split large work into shippable units)
+
+Once the reconnaissance gate has told you what genuinely needs building, decide its
+**size** before you write the body. A draft is **one independently shippable,
+single-PR-sized build**: one coherent contract, landable and reviewable on its own,
+behind at most a short prerequisite chain. If the work is bigger than that,
+**decompose it into several drafts up front** — never author one mega-draft and hope
+the planner splits it.
+
+**Why this is a hard gate, not a style note.** The original draft #95 was ~1100
+lines. That overflows the **GitHub Issue body cap (≈65,536 characters)** — `gh issue
+create` rejects or truncates it, so the spec literally "не прошла лимиты." Even under
+the cap it is far more surface than **one worker can land in one PR** or **one Codex
+pass can review** — so the spec ships untested edges. An over-large draft is a
+**decomposition smell**, not a formatting problem.
+
+**Decompose when ANY holds:**
+- The work touches **multiple independently-shippable contracts** (e.g. a data
+  format **and** a generator **and** an audit **and** a runtime change) — each is a
+  draft.
+- The acceptance criteria fall into **clusters that could each merge and add value on
+  their own**.
+- The body is heading toward **hundreds of lines / the issue-body char cap**.
+- Sub-parts have **different prerequisites** or could be built by **different workers
+  in parallel**.
+
+**How to decompose:**
+1. Identify the **minimal first shippable slice** — the contract everything else
+   depends on. That is draft N.
+2. Peel each further independently-landable capability into its own draft (N+1,
+   N+2, …), each citing its predecessor in **Prerequisite** so the queue shows the
+   ordering.
+3. **Each child draft passes the full gate on its own** — prior-art recon, design
+   analysis, planner-freedom, behavior-kind, acceptance criteria.
+4. Record the split: the parent scope and which slice each child owns, so siblings
+   cross-reference rather than silently overlap.
+
+Keep each draft to the **smallest contract that is independently true and testable**.
+A spec that needs ~1000 lines to state its acceptance criteria is almost always
+several specs wearing one issue number — split it before authoring, not after a Codex
+finding or a sync failure.
 
 ## Pre-draft design-analysis gate (run before authoring)
 
@@ -51,7 +177,12 @@ When it applies, answer all of, and reflect the conclusions in **Goal** /
    (tests + Codex review as the safety net), then land on the **cheapest
    sufficient executor with acceptable risk** per the repo cost rule — never
    "which is best." Record the chosen option and why the two rejected ones lost
-   in the draft's decision trail (see **Decision logging**).
+   in the draft's decision trail (see **Decision logging**). **When the prior-art
+   reconnaissance gate found overlap, one option MUST be "reference / extend the
+   shipped work instead of rebuilding it"** — judged on the same axes. "Build it
+   fresh" is the cheapest sufficient executor only when the survey proved the
+   surface is genuinely empty; re-implementing merged machinery is high-risk
+   redundancy (the #95 failure), not a neutral default.
 5. **Full-class enumeration for decision / state-machine / event-ordering /
    retry / concurrency causes** — enumerate the decision's input dimensions ×
    values, name the sibling cells that share the root cause, and the expected
@@ -72,8 +203,10 @@ not pasted into the draft body (same convention as #237) so the spec stays lean.
 
 Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
 
-1. **Prerequisite** — issues that must merge first. Reference the **draft file
-   path** (stable) plus the GitHub number from
+1. **Prerequisite** — issues that must merge first, **plus the already-merged
+   issues this draft builds on or references** (from the prior-art reconnaissance
+   gate), each with the one-line "already does" so the planner sees what is reused
+   vs. added. Reference the **draft file path** (stable) plus the GitHub number from
    [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) when known, e.g.
    `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md` (GitHub #28).
    Never cite a bare draft prefix as if it were a GitHub Issue number.
