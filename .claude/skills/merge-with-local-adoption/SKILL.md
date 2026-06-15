@@ -127,18 +127,21 @@ it), then run:
 ```bash
 PROMPT_FILE="$(mktemp)"
 cat > "$PROMPT_FILE" <<'EOF'
-Merge PR #N in repo chetwerikoff/orchestrator-pack.
+Merge PR #N in repo chetwerikoff/orchestrator-pack from the isolated scratch
+checkout prepared by opencode-publish.sh. Do NOT run git commands in any other
+checkout.
 Steps:
 1. If the head is behind base, run: gh pr update-branch N --repo chetwerikoff/orchestrator-pack
 2. Run: gh pr merge N --repo chetwerikoff/orchestrator-pack --merge --delete-branch
    (use --squash or --rebase only when explicitly requested)
-3. If asked for pull: git checkout main && git pull origin main
+3. If asked for pull: refresh only this isolated checkout with git checkout main && git pull origin main; never touch the architect's live checkout
 4. Report the merge commit SHA or any error from gh stderr.
 EOF
 # Fast isolated runtime: a dedicated opencode data dir avoids SQLite write-lock
 # contention with the orchestrator's shared DB (a raw `opencode run` otherwise
 # stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
 # 180s timeout + startup-hang retry. See .claude/skills/publish-issue-draft/opencode-publish.sh.
+OPENCODE_PUBLISH_INCLUDE="" \
 bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
 ```
 
@@ -156,15 +159,10 @@ AO_PUBLISH_FALLBACK=1 gh pr merge <N> --repo chetwerikoff/orchestrator-pack --me
 **Verify state after the run** — confirm with `gh pr view <N> --json state,mergedAt`
 before reporting success.
 
-**«мерж и пул» / «merge and pull»** — include in the delegation prompt (step 3
-above) or run after fallback merge:
-
-```powershell
-git checkout main
-git pull origin main
-```
-
-If the user was on a feature branch that was deleted, `main` pull is enough.
+**«мерж и пул» / «merge and pull»** — include the pull only in the delegated
+scratch-checkout prompt (step 3 above). For fallback, refresh a separate checkout
+or explicitly confirm before changing the architect's current checkout; delegated
+merge must not switch or pull the live working tree.
 
 ## Step 6 — Post-merge reminder
 
