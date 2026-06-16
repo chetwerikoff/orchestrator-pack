@@ -201,15 +201,28 @@ rate-limited; or the corpus cannot be made fence-clean (secrets or personal/thir
 data cannot be scrubbed without losing the needed signal). Cost/size is **not** a
 fallback ground once a trigger holds.
 
-Ask triggers (any one is sufficient; count **all** corpus you would otherwise read on
-the reasoning model, including out-of-tree operational evidence, subject only to the
-provider-input fence):
+Ask triggers (any one is sufficient; count **delegable (out-of-index)** corpus you would
+otherwise read on the reasoning model, including out-of-tree operational evidence,
+subject only to the provider-input fence). **Index-covered in-tree source reads on
+Cursor do not count toward these floors** — see the carve-out below.
 
-- Combined corpus for one question is **more than 400 lines** across all paths in that
-  invocation (includes multi-file/bootstrap bulk reads that sum past this floor).
-- **3 or more files** under one question **only when** combined corpus is also **≥400
-  lines** (file count alone with a trivial line total does not fire).
+- Combined **delegable** corpus for one question is **more than 400 lines** across all
+  paths in that invocation (includes multi-file/bootstrap bulk reads that sum past this floor).
+- **3 or more delegable files** under one question **only when** combined delegable corpus
+  is also **≥400 lines** (file count alone with a trivial line total does not fire).
 - Diff or log material to summarize is **more than 200 lines**.
+
+**Cursor index-coverage carve-out (Issue #309).** When this agent reads **tracked
+first-party source-code** in its own worktree through Cursor's semantic code index,
+that read owes **no** coworker delegation — regardless of file size. Classification keys
+to **corpus source**, not to a runtime retrieval signal: the index already performed
+targeted chunk retrieval; there is no bulk I/O to offload. This carve-out does **not**
+apply to corpus the code index does not serve. The following stay on the existing
+read-delegation triggers unchanged: CI/job logs, diffs, content fetched from external
+URLs/docs, vendored or generated dumps, and **tracked non-code bulk** (markdown/JSON/data
+— coworker's cheap-text delegable corpus). The provider-input fence (#52) is unchanged:
+secret or private-data corpus is never sent to coworker and never a delegation
+obligation, indexed or not.
 
 ### Write delegation (`coworker write`)
 

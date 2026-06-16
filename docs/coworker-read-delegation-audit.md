@@ -14,10 +14,10 @@ Hook entry: [`scripts/invoke-read-delegation-audit-stop.ps1`](../scripts/invoke-
 |-----------|------|
 | **Both surfaces** | Runs on Claude `Stop` and Cursor `stop`; same flag verdict per equivalence class. |
 | **Work unit** | One inbound user message / AO task delivery → bounded by the next inbound request. Reads aggregate inside the unit (anti-chunking). |
-| **Triggers** | T1 file-read floor **>400 lines**; diff/log **>200 lines** (independent of T1). File-count fires only with **≥400 combined lines** (folded T2). |
+| **Triggers** | T1 **delegable** file-read floor **>400 lines**; diff/log **>200 lines** (independent of T1). File-count fires only with **≥400 combined delegable lines** (folded T2). Index-served in-tree source lines do not count toward T1/T2. |
 | **Tolerant signal** | Emits a compliance finding; never blocks. |
 | **Not flagged** (still in denominator) | Machine-observed `coworker ask --profile code`; edit of any file in unit; excepted reason in status. |
-| **Excluded from denominator** | Code-class (`--allow-code`) reads; actual review executions carrying a trusted per-work-unit marker from the tracked review wrapper. Ambient machine-global reviewer env such as `PACK_REVIEWER` / `REVIEW_COMMAND` never excludes an ordinary unit. |
+| **Excluded from denominator** | Code-class (`--allow-code`) reads; actual review executions carrying a trusted per-work-unit marker from the tracked review wrapper; **index-served** Cursor reads of tracked first-party source-code under committed allowed roots (Issue #309). Ambient machine-global reviewer env such as `PACK_REVIEWER` / `REVIEW_COMMAND` never excludes an ordinary unit. |
 | **Delegation proof** | Status text alone does **not** count — coworker invocation or coworker-log record tied to the work-unit key. |
 | **Fail-open + fail-loud** | Handler errors exit 0 (no wedge) and append `audit_error` health records; degraded windows never read as zero residual. |
 | **Concurrency** | Append-only JSONL metric artifact; stable `eventId` per work unit; duplicate stop events do not double-count. |
@@ -30,6 +30,7 @@ Per adoption window the summarize command reports:
 
 - `residualNonCompliance` = flagged work units ÷ delegable trigger-firing work units
 - `flaggedReadLines` — aggregate volume of flagged reads
+- `indexServedExcludedLines` — non-blocking side metric for excluded index-served volume
 - `denominatorCause` — closed-set cause for the window: `normal`, `no-trigger`, or `all-excluded`
 - `reviewHookCaptureBranch` — standing capability loaded from the versioned capture record: `world-a-no-review-hook`, `world-b-hook-present`, or runtime `unknown` when missing/stale/malformed
 - `auditErrors` / `missingWindows` — per-surface health (degraded when >0); all-excluded and unknown capability windows are also degraded/fail-loud

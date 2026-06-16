@@ -64,6 +64,8 @@ type FixtureExpect = {
   machineObservedDelegation?: boolean;
   reviewerPath?: boolean;
   codeClass?: boolean;
+  allIndexServed?: boolean;
+  indexServedExcludedLines?: number;
 };
 
 type FixturePayload = {
@@ -1101,6 +1103,103 @@ describe('concurrency and idempotency', () => {
     expect(parsed.filter((row) => row.duplicate).length).toBe(3);
     const summary = loadMetricWindowSummary(artifactPath);
     expect(summary.delegableTriggerUnits).toBe(1);
+  });
+});
+
+const indexServedFixtures = [
+  'index-served-excluded.json',
+  'out-of-index-log-flagged.json',
+  'out-of-index-diff-flagged.json',
+  'out-of-index-external-flagged.json',
+  'mixed-below-floor.json',
+  'mixed-above-floor.json',
+  'code-class-per-read-mixed.json',
+];
+
+describe('index-served carve-out (Issue #309)', () => {
+  for (const fixtureName of indexServedFixtures) {
+    it(`${fixtureName} matches index-served audit table`, () => {
+      const fixture = loadFixture(fixtureName);
+      const result = evaluateFixture(fixtureName);
+      const expectRow = fixture.expect ?? {};
+      const verdict = firstVerdict(result);
+      if (expectRow.triggerFired !== undefined) {
+        expect(verdict.triggerFired).toBe(expectRow.triggerFired);
+      }
+      if (expectRow.excludedFromDenominator !== undefined) {
+        expect(verdict.excludedFromDenominator).toBe(expectRow.excludedFromDenominator);
+      }
+      if (expectRow.flagged !== undefined) {
+        expect(verdict.flagged).toBe(expectRow.flagged);
+      }
+      if (expectRow.inDenominator !== undefined) {
+        expect(verdict.inDenominator).toBe(expectRow.inDenominator);
+      }
+      if (expectRow.allIndexServed !== undefined) {
+        expect(verdict.allIndexServed).toBe(expectRow.allIndexServed);
+      }
+      if (expectRow.indexServedExcludedLines !== undefined) {
+        expect(verdict.indexServedExcludedLines).toBe(expectRow.indexServedExcludedLines);
+      }
+      if (expectRow.codeClass !== undefined) {
+        expect(verdict.codeClass).toBe(expectRow.codeClass);
+      }
+    });
+  }
+
+  it('index-served exclusion record carries full predicate matrix', () => {
+    const result = evaluateFixture('index-served-excluded.json');
+    const verdict = firstVerdict(result);
+    const indexRow = verdict.readClassifications?.find(
+      (row) => row.classification === 'index-served',
+    );
+    expect(indexRow).toBeDefined();
+    const record = indexRow?.exclusionRecord ?? {};
+    expect(record.canonicalPath).toBe('plugins/ao-scope-guard/lib/check.ts');
+    expect(record.gitTracked).toBe(true);
+    expect(record.matchedAllowedRoot).toBe('plugins/**');
+    expect(record.sourceCodeClassifierMatch).toBe(true);
+    expect(record.capturedCommit).toBeTruthy();
+    expect(record.classifierManifestHash).toBeTruthy();
+    expect(record.denominatorImpact).toBe('excluded');
+    expect(record.excludedLineCount).toBe(900);
+  });
+
+  it('mixed session residual metric is non-zero and not 0/0', () => {
+    const fixture = loadFixture('mixed-session-residual.json');
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: fixture.workUnits,
+    }) as StopAuditResult;
+    expect(result.summary.delegableTriggerUnits).toBe(1);
+    expect(result.summary.residualNonCompliance).toBe(1);
+    expect(result.summary.indexServedExcludedLines).toBe(900);
+  });
+
+  it('Claude and Cursor parity on same out-of-index bulk read', () => {
+    const cursor = evaluateFixture('out-of-index-log-flagged.json', 'cursor');
+    const claude = evaluateFixture('out-of-index-log-flagged.json', 'claude');
+    expect(cursor.verdicts[0].flagged).toBe(claude.verdicts[0].flagged);
+    expect(cursor.verdicts[0].inDenominator).toBe(claude.verdicts[0].inDenominator);
+  });
+
+  it('preflight: reviewer-path fixtures remain green (#264 precondition)', () => {
+    const result = evaluateFixture('reviewer-path-excluded.json');
+    expect(result.verdicts[0].reviewerPath).toBe(true);
+    expect(result.verdicts[0].excludedFromDenominator).toBe(true);
+    expect(result.summary.denominatorCause).toBe('all-excluded');
+  });
+
+  it('blocking status on captured-head mismatch', () => {
+    const fixture = loadFixture('index-served-excluded.json');
+    const unit = { ...fixture.workUnits![0] };
+    unit.reads = unit.reads!.map((read) => ({
+      ...read,
+      capturedCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    }));
+    expect(() =>
+      evaluateStopAudit({ surface: 'cursor', workUnits: [unit] }),
+    ).toThrow(/captured-head-mismatch/);
   });
 });
 

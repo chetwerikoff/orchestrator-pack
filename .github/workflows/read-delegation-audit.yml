@@ -1,0 +1,38 @@
+name: read-delegation-audit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  audit-fixtures:
+    name: Read-delegation audit fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Run read-delegation audit fixture suite
+        run: npm test -- scripts/read-delegation-audit.test.ts
+
+      - name: Enforce read-delegation policy pointer consistency
+        shell: pwsh
+        run: ./scripts/check-read-delegation-policy-consistency.ps1
+
+      - name: Verify read-delegation audit CI gate (meta-check)
+        shell: pwsh
+        run: ./scripts/check-read-delegation-audit-ci-gate.ps1

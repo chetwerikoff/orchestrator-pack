@@ -18,6 +18,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import {
+  AUDIT_BLOCKING_STATUSES,
+  classifyUnitReads,
+  delegableReadsFromClassifications,
+  indexServedExcludedVolume,
+  loadClassifierManifest,
+  READ_CLASSIFICATIONS,
+} from './read-delegation-classifier.mjs';
 
 /** T1 single-question volume floor (canonical; drift-checked in tracked policy). */
 export const T1_VOLUME_FLOOR = 400;
@@ -30,7 +38,7 @@ export const T2_MIN_FILES = 3;
 
 export const SURFACES = ['cursor', 'claude'];
 
-export const AUDIT_SCHEMA_VERSION = 2;
+export const AUDIT_SCHEMA_VERSION = 3;
 export const REVIEW_HOOK_CAPTURE_BRANCHES = {
   WORLD_A_NO_REVIEW_HOOK: 'world-a-no-review-hook',
   WORLD_B_HOOK_PRESENT: 'world-b-hook-present',
@@ -146,22 +154,45 @@ export function normalizeReads(value) {
   }
   return value.map((entry) => {
     const row = isRecord(entry) ? entry : {};
-    const kind = row.kind === 'diff' || row.kind === 'log' ? row.kind : 'file';
+    const kind =
+      row.kind === 'diff' || row.kind === 'log' || row.kind === 'external' || row.kind === 'fetched'
+        ? row.kind
+        : 'file';
     return {
       path: typeof row.path === 'string' ? row.path : undefined,
       lines: Math.max(0, Number(row.lines) || 0),
       kind,
       isCodeClass: row.isCodeClass === true,
+      fenceSignal: row.fenceSignal === true,
+      capturedCommit: typeof row.capturedCommit === 'string' ? row.capturedCommit : undefined,
+      classifierManifestHash:
+        typeof row.classifierManifestHash === 'string' ? row.classifierManifestHash : undefined,
+      surface: typeof row.surface === 'string' ? row.surface : undefined,
+      readDiscriminator:
+        typeof row.readDiscriminator === 'string' ? row.readDiscriminator : undefined,
+      canonicalPath: typeof row.canonicalPath === 'string' ? row.canonicalPath : undefined,
     };
   });
 }
+
+const DELEGABLE_FILE_KINDS = new Set(['file', 'external', 'fetched']);
 
 /**
  * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
  */
 export function aggregateDelegableFileLines(reads) {
   return reads
-    .filter((read) => read.kind === 'file' && !read.isCodeClass)
+    .filter((read) => DELEGABLE_FILE_KINDS.has(read.kind) && !read.isCodeClass)
+    .reduce((sum, read) => sum + read.lines, 0);
+}
+
+/**
+ * Delegable out-of-index file lines (excludes index-served source reads).
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
+ */
+export function aggregateOutOfIndexFileLines(reads) {
+  return reads
+    .filter((read) => read.kind === 'file')
     .reduce((sum, read) => sum + read.lines, 0);
 }
 
@@ -179,7 +210,7 @@ export function aggregateDiffLogLines(reads) {
  */
 export function countDelegableFiles(reads) {
   const paths = reads
-    .filter((read) => read.kind === 'file' && !read.isCodeClass && read.path)
+    .filter((read) => DELEGABLE_FILE_KINDS.has(read.kind) && !read.isCodeClass && read.path)
     .map((read) => read.path);
   return new Set(paths).size;
 }
@@ -188,7 +219,9 @@ export function countDelegableFiles(reads) {
  * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
  */
 export function aggregateAllFileLines(reads) {
-  return reads.filter((read) => read.kind === 'file').reduce((sum, read) => sum + read.lines, 0);
+  return reads
+    .filter((read) => DELEGABLE_FILE_KINDS.has(read.kind))
+    .reduce((sum, read) => sum + read.lines, 0);
 }
 
 export function didAskTriggerFire(reads) {
@@ -259,11 +292,9 @@ export function reviewMarkerState(session) {
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
  */
 export function isCodeClassUnit(unit) {
-  if (unit.codeClassGated === true) {
-    return true;
-  }
   const reads = normalizeReads(unit.reads);
-  return reads.length > 0 && reads.every((read) => read.isCodeClass);
+  const codeClassReads = reads.filter((read) => read.isCodeClass === true);
+  return reads.length > 0 && codeClassReads.length === reads.length;
 }
 
 /**
@@ -322,33 +353,80 @@ export function hasEditInUnit(unit) {
  */
 export function auditWorkUnit(unit, session) {
   const reads = normalizeReads(unit.reads);
-  const trigger = didAskTriggerFire(reads);
   const reviewerPath = isReviewerPathSession(session);
   const reviewSignalState = reviewMarkerState(session);
-  const codeClass = isCodeClassUnit({ ...unit, reads });
-  const excludedFromDenominator = reviewerPath || codeClass;
-  const triggerFired = excludedFromDenominator ? trigger.rawFired : trigger.fired;
 
-  if (!triggerFired || excludedFromDenominator) {
-    return {
-      workUnitKey: unit.key,
-      inboundRequestId: unit.inboundRequestId,
-      surface: session.surface,
-      triggerFired,
+  if (reviewerPath) {
+    const trigger = didAskTriggerFire(reads);
+    return buildAuditVerdict(unit, session, {
+      reads,
+      trigger,
+      triggerFired: trigger.rawFired,
+      excludedFromDenominator: true,
+      inDenominator: false,
+      flagged: false,
+      reviewerPath,
+      reviewSignalState,
+      codeClass: false,
+      readClassifications: [],
+      indexServedExcludedLines: 0,
+    });
+  }
+
+  const classification = classifyUnitReads(unit, {
+    surface: session.surface,
+    checkoutCommit: session.checkoutCommit,
+    trackedPathsOverride: session.trackedPathsOverride,
+  });
+
+  if (classification.blocking) {
+    return buildAuditVerdict(unit, session, {
+      reads,
+      trigger: didAskTriggerFire(reads),
+      triggerFired: false,
+      excludedFromDenominator: false,
+      inDenominator: false,
+      flagged: false,
+      reviewerPath: false,
+      reviewSignalState,
+      codeClass: false,
+      readClassifications: classification.results,
+      indexServedExcludedLines: indexServedExcludedVolume(classification.results),
+      blockingFailure: classification.blocking,
+    });
+  }
+
+  const delegableReads = delegableReadsFromClassifications(classification.results);
+  const trigger = didAskTriggerFire(delegableReads);
+  const rawTrigger = didAskTriggerFire(reads);
+  const indexServedExcludedLines = indexServedExcludedVolume(classification.results);
+  const allReadsExcluded =
+    classification.results.length > 0 &&
+    classification.results.every((row) => row.excludedFromDenominator);
+  const codeClass =
+    classification.results.length > 0 &&
+    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.CODE_CLASS);
+  const allIndexServed =
+    classification.results.length > 0 &&
+    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.INDEX_SERVED);
+  const excludedFromDenominator =
+    allReadsExcluded && rawTrigger.rawFired && !trigger.fired;
+
+  if (!trigger.fired || excludedFromDenominator) {
+    return buildAuditVerdict(unit, session, {
+      reads,
+      trigger,
+      triggerFired: excludedFromDenominator ? rawTrigger.rawFired : trigger.fired,
       excludedFromDenominator,
       inDenominator: false,
       flagged: false,
-      trigger,
-      reviewerPath,
+      reviewerPath: false,
       reviewSignalState,
-      auditSchemaVersion: AUDIT_SCHEMA_VERSION,
-      hookWiringFingerprint: session.hookWiringFingerprint,
       codeClass,
-      selfAttestedDelegation: false,
-      machineObservedDelegation: false,
-      exceptedReason: false,
-      editExempt: false,
-    };
+      allIndexServed,
+      readClassifications: classification.results,
+      indexServedExcludedLines,
+    });
   }
 
   const machineObservedDelegation = hasMachineObservedDelegation(unit);
@@ -356,27 +434,56 @@ export function auditWorkUnit(unit, session) {
   const exceptedReason = hasExceptedReason(unit.statusText);
   const editExempt = hasEditInUnit(unit);
 
-  const flagged =
-    !machineObservedDelegation && !editExempt && !exceptedReason;
+  const flagged = !machineObservedDelegation && !editExempt && !exceptedReason;
 
-  return {
-    workUnitKey: unit.key,
-    inboundRequestId: unit.inboundRequestId,
-    surface: session.surface,
-    triggerFired,
+  return buildAuditVerdict(unit, session, {
+    reads,
+    trigger,
+    triggerFired: trigger.fired,
     excludedFromDenominator: false,
     inDenominator: true,
     flagged,
-    trigger,
-    reviewerPath,
+    reviewerPath: false,
     reviewSignalState,
-    auditSchemaVersion: AUDIT_SCHEMA_VERSION,
-    hookWiringFingerprint: session.hookWiringFingerprint,
     codeClass,
+    allIndexServed,
+    readClassifications: classification.results,
+    indexServedExcludedLines,
     selfAttestedDelegation,
     machineObservedDelegation,
     exceptedReason,
     editExempt,
+  });
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').SessionContext} session
+ * @param {Record<string, unknown>} fields
+ */
+function buildAuditVerdict(unit, session, fields) {
+  return {
+    workUnitKey: unit.key,
+    inboundRequestId: unit.inboundRequestId,
+    surface: session.surface,
+    triggerFired: fields.triggerFired,
+    excludedFromDenominator: fields.excludedFromDenominator,
+    inDenominator: fields.inDenominator,
+    flagged: fields.flagged,
+    trigger: fields.trigger,
+    reviewerPath: fields.reviewerPath,
+    reviewSignalState: fields.reviewSignalState,
+    auditSchemaVersion: AUDIT_SCHEMA_VERSION,
+    hookWiringFingerprint: session.hookWiringFingerprint,
+    codeClass: fields.codeClass,
+    allIndexServed: fields.allIndexServed === true,
+    readClassifications: fields.readClassifications ?? [],
+    indexServedExcludedLines: fields.indexServedExcludedLines ?? 0,
+    selfAttestedDelegation: fields.selfAttestedDelegation ?? false,
+    machineObservedDelegation: fields.machineObservedDelegation ?? false,
+    exceptedReason: fields.exceptedReason ?? false,
+    editExempt: fields.editExempt ?? false,
+    blockingFailure: fields.blockingFailure,
   };
 }
 
@@ -424,10 +531,16 @@ export function partitionEventsIntoWorkUnits(events) {
 
     const kind = String(event.kind ?? event.type ?? '');
     if (kind === 'read') {
+      const readKind =
+        event.readKind === 'diff' || event.readKind === 'log'
+          ? event.readKind
+          : event.readKind === 'external' || event.readKind === 'fetched'
+            ? event.readKind
+            : 'file';
       unit.reads.push({
         path: typeof event.path === 'string' ? event.path : undefined,
         lines: Math.max(0, Number(event.lines) || 0),
-        kind: event.readKind === 'diff' || event.readKind === 'log' ? event.readKind : 'file',
+        kind: readKind,
         isCodeClass: event.isCodeClass === true,
       });
     } else if (kind === 'edit') {
@@ -468,6 +581,10 @@ export function summarizeAuditVerdicts(verdicts) {
     (sum, verdict) => sum + (verdict.trigger?.fileLines ?? 0) + (verdict.trigger?.diffLogLines ?? 0),
     0,
   );
+  const indexServedExcludedLines = verdicts.reduce(
+    (sum, verdict) => sum + (verdict.indexServedExcludedLines ?? 0),
+    0,
+  );
 
   const denominatorCause = computeDenominatorCause(verdicts);
 
@@ -475,6 +592,7 @@ export function summarizeAuditVerdicts(verdicts) {
     delegableTriggerUnits: denominator.length,
     flaggedUnits: flagged.length,
     flaggedReadLines,
+    indexServedExcludedLines,
     residualNonCompliance:
       denominator.length === 0 ? 0 : flagged.length / denominator.length,
     denominatorCause,
@@ -1383,6 +1501,12 @@ export function evaluateStopAudit(payload, options = {}) {
   const units = resolveAuditWorkUnits(enriched);
 
   const verdicts = auditWorkUnits(units, session);
+  const blocking = verdicts.find((verdict) => verdict.blockingFailure);
+  if (blocking?.blockingFailure) {
+    throw new Error(
+      `read-delegation audit blocking status: ${blocking.blockingFailure.status}`,
+    );
+  }
   const baseSummary = summarizeAuditVerdicts(verdicts);
   const effectiveCapability = capabilityForVerdicts(loadReviewHookCapability(), verdicts);
   const summary = {

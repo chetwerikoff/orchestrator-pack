@@ -1,0 +1,34 @@
+{
+  "description": "Per-read code-class: gated source read excluded but ungated log in same unit still flags",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-code-log-mixed",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "plugins/code-gated.ts",
+          "lines": 900,
+          "kind": "file",
+          "isCodeClass": true,
+          "readDiscriminator": "0"
+        },
+        {
+          "path": "job.log",
+          "lines": 250,
+          "kind": "log",
+          "readDiscriminator": "1"
+        }
+      ],
+      "edits": [],
+      "statusText": "code-class read plus ungated log"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true,
+    "codeClass": false
+  }
+}

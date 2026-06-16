@@ -1,0 +1,38 @@
+{
+  "description": "Mixed unit above floor — delegable markdown bulk triggers while source is index-served",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-mixed-above",
+      "inboundRequestId": "req-1",
+      "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
+      "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
+      "reads": [
+        {
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 900,
+          "kind": "file",
+          "surface": "cursor",
+          "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
+          "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
+          "readDiscriminator": "0"
+        },
+        {
+          "path": "docs/bulk.md",
+          "lines": 450,
+          "kind": "file",
+          "readDiscriminator": "1"
+        }
+      ],
+      "edits": [],
+      "statusText": "mixed above delegable floor"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true,
+    "indexServedExcludedLines": 900
+  }
+}

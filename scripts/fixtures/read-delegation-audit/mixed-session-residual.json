@@ -1,0 +1,44 @@
+{
+  "description": "Mixed Cursor session residual metric is non-zero/non-0/0",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-index",
+      "inboundRequestId": "req-1",
+      "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
+      "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
+      "reads": [
+        {
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 900,
+          "kind": "file",
+          "surface": "cursor",
+          "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
+          "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
+          "readDiscriminator": "0"
+        }
+      ],
+      "edits": [],
+      "statusText": "index-only unit"
+    },
+    {
+      "key": "unit-flagged-md",
+      "inboundRequestId": "req-2",
+      "reads": [
+        {
+          "path": "docs/flagged-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "edits": [],
+      "statusText": "ordinary bulk markdown"
+    }
+  ],
+  "expectSummary": {
+    "delegableTriggerUnits": 1,
+    "flaggedUnits": 1,
+    "residualNonCompliance": 1,
+    "denominatorCause": "normal"
+  }
+}
