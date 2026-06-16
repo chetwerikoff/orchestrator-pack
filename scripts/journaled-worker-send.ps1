@@ -32,6 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -56,45 +57,6 @@ function Test-AoSendStdinContract {
     return ($help -match '(?im)(--stdin|stdin|standard input|pipe)')
 }
 
-
-function ConvertTo-JournaledProcessArgument {
-    param([string]$Value)
-
-    $text = [string]$Value
-    if ($text.Length -eq 0) { return '""' }
-    if ($text -notmatch '[\s"]') { return $text }
-
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.Append('"')
-    $backslashCount = 0
-    foreach ($ch in $text.ToCharArray()) {
-        if ($ch -eq '\') {
-            $backslashCount++
-            continue
-        }
-        if ($ch -eq '"') {
-            [void]$builder.Append('\' * (($backslashCount * 2) + 1))
-            [void]$builder.Append('"')
-            $backslashCount = 0
-            continue
-        }
-        if ($backslashCount -gt 0) {
-            [void]$builder.Append('\' * $backslashCount)
-            $backslashCount = 0
-        }
-        [void]$builder.Append($ch)
-    }
-    if ($backslashCount -gt 0) {
-        [void]$builder.Append('\' * ($backslashCount * 2))
-    }
-    [void]$builder.Append('"')
-    return $builder.ToString()
-}
-
-function Join-JournaledProcessArguments {
-    param([string[]]$Arguments)
-    return (($Arguments | ForEach-Object { ConvertTo-JournaledProcessArgument -Value $_ }) -join ' ')
-}
 
 function Update-JournaledWorkerSendOutcome {
     param(
@@ -136,7 +98,7 @@ function Invoke-AoSendViaStdin {
         $aoArgs += '--timeout'
         $aoArgs += [string]$TimeoutSeconds
     }
-    $psi.Arguments = Join-JournaledProcessArguments -Arguments $aoArgs
+    $psi.Arguments = Join-QuotedProcessArguments -Arguments $aoArgs
 
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
