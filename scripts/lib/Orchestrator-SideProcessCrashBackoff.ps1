@@ -66,13 +66,15 @@ function Test-OrchestratorWakeSupervisorChildRapidExit {
     param(
         [long]$ChildStartedMs,
         [long]$NowMs,
-        [int]$RapidExitThresholdMs
+        [int]$RapidExitThresholdMs,
+        [long]$ExitMs = 0
     )
 
     if ($ChildStartedMs -le 0) {
         return $true
     }
-    return (($NowMs - $ChildStartedMs) -lt $RapidExitThresholdMs)
+    $endMs = if ($ExitMs -gt $ChildStartedMs) { $ExitMs } else { $NowMs }
+    return (($endMs - $ChildStartedMs) -lt $RapidExitThresholdMs)
 }
 
 function Get-OrchestratorWakeSupervisorCrashBackoffSeconds {
@@ -154,8 +156,12 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     }
 
     $rapidThresholdMs = Get-OrchestratorWakeSupervisorCrashRapidExitThresholdMs
+    $exitMs = $nowMs
+    if ($crashFields.lastExitMs -gt $ChildStartedMs) {
+        $exitMs = $crashFields.lastExitMs
+    }
     $rapidExit = Test-OrchestratorWakeSupervisorChildRapidExit `
-        -ChildStartedMs $ChildStartedMs -NowMs $nowMs -RapidExitThresholdMs $rapidThresholdMs
+        -ChildStartedMs $ChildStartedMs -NowMs $nowMs -RapidExitThresholdMs $rapidThresholdMs -ExitMs $exitMs
     $updatedCrash = Update-OrchestratorWakeSupervisorChildCrashBackoffState `
         -Recovery $crashFields -RapidExit $rapidExit -NowMs $nowMs
 
