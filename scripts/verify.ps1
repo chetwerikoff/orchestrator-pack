@@ -1003,6 +1003,56 @@ else {
 }
 
 Write-Host ''
+Write-Host '== orchestrator claimed review-start gate (Issue #318) =='
+$orchestratorClaimedGateCheck = Join-Path $Root 'scripts/check-orchestrator-claimed-review-run.ps1'
+if (Test-Path -LiteralPath $orchestratorClaimedGateCheck -PathType Leaf) {
+    & $orchestratorClaimedGateCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-claimed-review-run.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-claimed-review-run.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator claimed review-start gate wiring failed (Issue #318)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-claimed-review-run.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator claimed review-start gate check (Issue #318)'
+}
+
+$autonomousCapabilityCheck = Join-Path $Root 'scripts/check-autonomous-review-start-capabilities.ps1'
+if (Test-Path -LiteralPath $autonomousCapabilityCheck -PathType Leaf) {
+    & $autonomousCapabilityCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-review-start-capabilities.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-review-start-capabilities.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous review-start capability inventory drift (Issue #318)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-review-start-capabilities.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous review-start capability check (Issue #318)'
+}
+
+$orchestratorGatePreflight = Join-Path $Root 'scripts/orchestrator-review-start-preflight.ps1'
+if (Test-Path -LiteralPath $orchestratorGatePreflight -PathType Leaf) {
+    & $orchestratorGatePreflight -FixtureMode
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/orchestrator-review-start-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/orchestrator-review-start-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator review-start gate preflight failed (Issue #318)'
+    }
+}
+else {
+    Write-Check 'scripts/orchestrator-review-start-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator review-start gate preflight (Issue #318)'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

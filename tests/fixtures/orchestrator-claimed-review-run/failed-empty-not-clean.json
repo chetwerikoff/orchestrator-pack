@@ -1,0 +1,19 @@
+{
+  "description": "Failed run with findingCount 0 is not treated as clean",
+  "prNumber": 318,
+  "headSha": "abc3180000000000000000000000000000000000",
+  "reviewRuns": [
+    {
+      "id": "failed-empty",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer exited 1",
+      "retryEligible": true,
+      "createdAt": "2026-06-16T00:00:00.000Z"
+    }
+  ],
+  "claimWindow": "free",
+  "expect": { "launch": true, "reason": "failed_retry_once" }
+}

@@ -1,0 +1,31 @@
+{
+  "version": "orchestrator-claimed-review-run/v1",
+  "atomicClaimCapability": "review-start-claim-atomic/v1",
+  "capabilities": [
+    {
+      "id": "invoke-orchestrator-claimed-review-run",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/invoke-orchestrator-claimed-review-run.ps1"
+    },
+    {
+      "id": "ao-review-run-raw",
+      "classification": "unavailable",
+      "surface": "shell",
+      "path": "ao review run"
+    },
+    {
+      "id": "ao-autonomous-guard",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao-autonomous-guard.ps1"
+    },
+    {
+      "id": "invoke-manual-review-run",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/invoke-manual-review-run.ps1",
+      "provenance": "manual-operator"
+    }
+  ]
+}
