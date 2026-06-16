@@ -222,6 +222,8 @@ describe('Review-StartClaim single-flight contract', () => {
       `;
       const result = JSON.parse(runPwsh(script));
       const rows = parsePwshRows(JSON.stringify(result.rows));
+      expect(result.activeCount).toBe(1);
+      expect(rows.filter((r: any) => r.acquired).length).toBeLessThanOrEqual(1);
       expect(rows.filter((r: any) => r.acquired)).toHaveLength(1);
       const losers = rows.filter((r: any) => !r.acquired);
       expect(losers).toHaveLength(2);
@@ -232,7 +234,6 @@ describe('Review-StartClaim single-flight contract', () => {
         ),
       ).toBe(true);
       expect(new Set(rows.map((r: any) => r.key))).toEqual(new Set([`pr-266-${fullSha}`]));
-      expect(result.activeCount).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

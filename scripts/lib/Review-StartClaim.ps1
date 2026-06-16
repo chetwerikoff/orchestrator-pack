@@ -581,16 +581,22 @@ function Get-ReviewStartClaimLostRaceResult {
         [string]$Key
     )
 
-    $existing = Read-ReviewStartClaimRecord -Path $Path
-    if ($existing.ok) {
-        return @{
-            acquired  = $false
-            reason    = 'claimed'
-            holder    = $existing.record.holder
-            claim     = $existing.record
-            path      = $Path
-            namespace = $Namespace
-            key       = $existing.record.key
+    $contended = Get-ReviewStartClaimContendedResult -Path $Path -Namespace $Namespace -Key $Key
+    if ($contended.holder) {
+        return $contended
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $existing = Read-ReviewStartClaimRecord -Path $Path
+        if ($existing.ok) {
+            return @{
+                acquired  = $false
+                reason    = 'claimed'
+                holder    = $existing.record.holder
+                claim     = $existing.record
+                path      = $Path
+                namespace = $Namespace
+                key       = $existing.record.key
+            }
         }
     }
     return @{
