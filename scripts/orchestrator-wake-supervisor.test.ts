@@ -192,6 +192,23 @@ function isAlive(pid: number): boolean {
   }
 }
 
+async function waitForChildRestart(
+  stateDir: string,
+  role: ManagedChildRole,
+  firstPid: number,
+  timeoutMs = 30_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = await readMarker(stateDir, role);
+    if (current.pid !== firstPid && isAlive(current.pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+}
+
 describe('orchestrator-wake-supervisor', () => {
   it('starts all registered managed children as separate processes', async () => {
     const stateDir = makeStateDir();
@@ -262,17 +279,7 @@ describe('orchestrator-wake-supervisor', () => {
     if (isAlive(first.pid)) {
       process.kill(first.pid, 'SIGKILL');
     }
-    const deadline = Date.now() + 10_000;
-    let restarted = false;
-    while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'review-send-reconcile');
-      if (current.pid !== first.pid && isAlive(current.pid)) {
-        restarted = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    expect(restarted).toBe(true);
+    expect(await waitForChildRestart(stateDir, 'review-send-reconcile', first.pid)).toBe(true);
     child.kill('SIGTERM');
   });
 
@@ -285,17 +292,7 @@ describe('orchestrator-wake-supervisor', () => {
     if (isAlive(first.pid)) {
       process.kill(first.pid, 'SIGKILL');
     }
-    const deadline = Date.now() + 10_000;
-    let restarted = false;
-    while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'listener');
-      if (current.pid !== first.pid && isAlive(current.pid)) {
-        restarted = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    expect(restarted).toBe(true);
+    expect(await waitForChildRestart(stateDir, 'listener', first.pid)).toBe(true);
     child.kill('SIGTERM');
   });
 

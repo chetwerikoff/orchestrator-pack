@@ -365,7 +365,7 @@ function Get-ReviewStartClaimContendedResult {
         [string]$Key
     )
 
-    for ($attempt = 0; $attempt -lt 200; $attempt++) {
+    for ($attempt = 0; $attempt -lt 400; $attempt++) {
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
             $existing = Read-ReviewStartClaimRecord -Path $Path
             if ($existing.ok) {
@@ -373,6 +373,12 @@ function Get-ReviewStartClaimContendedResult {
             }
         }
         Start-Sleep -Milliseconds 25
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $existing = Read-ReviewStartClaimRecord -Path $Path
+        if ($existing.ok) {
+            return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $Path; namespace = $Namespace; key = $existing.record.key }
+        }
     }
     return @{ acquired = $false; reason = 'claimed'; path = $Path; namespace = $Namespace; key = $Key }
 }

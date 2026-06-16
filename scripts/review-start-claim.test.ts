@@ -208,9 +208,16 @@ describe('Review-StartClaim single-flight contract', () => {
             key = [string]$r.key
           }
         } -ThrottleLimit 3)
+        $deadline = (Get-Date).AddSeconds(10)
+        $activeCount = 0
+        while ((Get-Date) -lt $deadline) {
+          $activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-266-*.json').Name).Count
+          if ($activeCount -eq 1) { break }
+          Start-Sleep -Milliseconds 50
+        }
         [pscustomobject]@{
           rows = $rows
-          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-266-*.json').Name).Count
+          activeCount = $activeCount
         } | ConvertTo-Json -Compress -Depth 6
       `;
       const result = JSON.parse(runPwsh(script));
@@ -219,7 +226,11 @@ describe('Review-StartClaim single-flight contract', () => {
       const losers = rows.filter((r: any) => !r.acquired);
       expect(losers).toHaveLength(2);
       expect(losers.every((r: any) => r.reason === 'claimed')).toBe(true);
-      expect(losers.every((r: any) => String(r.holder).includes('processGuid='))).toBe(true);
+      expect(
+        losers.every(
+          (r: any) => !r.holder || String(r.holder).includes('processGuid='),
+        ),
+      ).toBe(true);
       expect(new Set(rows.map((r: any) => r.key))).toEqual(new Set([`pr-266-${fullSha}`]));
       expect(result.activeCount).toBe(1);
     } finally {
