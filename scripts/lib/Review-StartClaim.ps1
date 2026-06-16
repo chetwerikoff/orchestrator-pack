@@ -13,6 +13,7 @@ $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
+$Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
 
 function Get-ReviewStartClaimProjectNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
@@ -360,6 +361,22 @@ function Get-ReviewStartClaimContendedResult {
     return @{ acquired = $false; reason = 'claimed'; path = $Path; namespace = $Namespace; key = $Key }
 }
 
+function Get-ReviewStartClaimRunCreatedAtUtc {
+    param([object]$Run)
+
+    foreach ($field in @('createdAt', 'createdAtUtc', 'startedAt')) {
+        $raw = [string]$Run.$field
+        if (-not $raw) { continue }
+        try {
+            return [datetimeoffset]::Parse($raw).UtcDateTime
+        }
+        catch {
+            continue
+        }
+    }
+    return [datetime]::MinValue
+}
+
 function Get-ReviewStartClaimVisibleRunId {
     param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
 
@@ -367,18 +384,40 @@ function Get-ReviewStartClaimVisibleRunId {
         return $null
     }
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
+    $bestInFlightId = $null
+    $bestInFlightCreated = [datetime]::MinValue
+    $bestTerminalId = $null
+    $bestTerminalCreated = [datetime]::MinValue
+    $index = 0
     foreach ($run in @($ReviewRuns)) {
+        $index++
         if ($null -eq $run) { continue }
         $runPr = 0
         if (-not [int]::TryParse([string]$run.prNumber, [ref]$runPr)) { continue }
         if ($runPr -ne $PrNumber) { continue }
         $target = ([string]$run.targetSha).Trim().ToLowerInvariant()
         if ($target -ne $normalized) { continue }
+        $status = ([string]$run.status).Trim().ToLowerInvariant()
+        if ($status -notin $Script:ReviewStartClaimCoveredRunStatuses) { continue }
         $runId = [string]$run.id
         if (-not $runId) { $runId = [string]$run.runId }
-        if ($runId) { return $runId }
+        if (-not $runId) { continue }
+        $created = Get-ReviewStartClaimRunCreatedAtUtc -Run $run
+        if ($created -eq [datetime]::MinValue) { $created = [datetime]::MinValue.AddSeconds($index) }
+        if ($status -in $Script:ReviewStartClaimInFlightRunStatuses) {
+            if ($null -eq $bestInFlightId -or $created -ge $bestInFlightCreated) {
+                $bestInFlightId = $runId
+                $bestInFlightCreated = $created
+            }
+            continue
+        }
+        if ($null -eq $bestTerminalId -or $created -ge $bestTerminalCreated) {
+            $bestTerminalId = $runId
+            $bestTerminalCreated = $created
+        }
     }
-    return $null
+    if ($bestInFlightId) { return $bestInFlightId }
+    return $bestTerminalId
 }
 
 function Test-ReviewStartClaimMatchesTerminalizedRun {

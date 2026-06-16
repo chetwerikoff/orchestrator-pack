@@ -404,6 +404,41 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.messages.join('\n')).toContain('below safe floor');
   });
 
+  it('binds claims to the in-flight covering run when older terminal runs are listed first', () => {
+    const dir = tempClaimDir();
+    const sha = fullSha;
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(sha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $runs = @(
+          @{ id = 'opk-rev-failed'; prNumber = 266; targetSha = $sha; status = 'failed'; createdAt = '2026-06-13T00:00:00.000Z' },
+          @{ id = 'opk-rev-clean'; prNumber = 266; targetSha = $sha; status = 'clean'; createdAt = '2026-06-13T00:01:00.000Z' },
+          @{ id = 'opk-rev-new'; prNumber = 266; targetSha = $sha; status = 'running'; createdAt = '2026-06-13T00:02:00.000Z' }
+        )
+        $visibleId = Get-ReviewStartClaimVisibleRunId -ReviewRuns $runs -PrNumber 266 -HeadSha $sha
+        $bind = Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $runs
+        $releaseOld = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha $sha -Namespace $ns -RunId 'opk-rev-failed' -RunCreatedAtUtc '2026-06-13T00:00:00.000Z'
+        $releaseNew = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha $sha -Namespace $ns -RunId 'opk-rev-new' -RunCreatedAtUtc '2026-06-13T00:02:00.000Z'
+        [pscustomobject]@{
+          visibleId = [string]$visibleId
+          boundRunId = [string]$bind.boundRunId
+          releaseOld = @{ ok=[bool]$releaseOld.ok; reason=[string]$releaseOld.reason }
+          releaseNew = @{ ok=[bool]$releaseNew.ok; reason=[string]$releaseNew.reason }
+        } | ConvertTo-Json -Compress -Depth 6
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.visibleId).toBe('opk-rev-new');
+      expect(result.boundRunId).toBe('opk-rev-new');
+      expect(result.releaseOld).toMatchObject({ ok: false, reason: 'superseded_claim' });
+      expect(result.releaseNew).toMatchObject({ ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('treats failed and cancelled runs as non-covering while covered statuses still count', () => {
     const output = runPwsh(`
       . ${psString(helperPath)}
