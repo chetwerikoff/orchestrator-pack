@@ -1,0 +1,32 @@
+#requires -Version 5.1
+[CmdletBinding()]
+param()
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$cli = Join-Path $root 'docs/reviewer-failure-evidence.mjs'
+$result = ('{"value":{"schemaVersion":1,"reviewerSessionId":"opk-rev-a","lastPhase":"wrapper_started"}}' | node $cli assert-secret-safe | ConvertFrom-Json)
+if (-not $result.ok) { throw "secret-safe self-check failed: $($result.errors -join '; ')" }
+
+$entrypointPath = Join-Path $PSScriptRoot 'invoke-pack-review.ps1'
+$evidenceLibPath = Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1'
+$entrypointText = Get-Content -LiteralPath $entrypointPath -Raw
+$evidenceLibText = Get-Content -LiteralPath $evidenceLibPath -Raw
+if ($entrypointText -notmatch 'Review-FailureEvidence\.ps1') {
+    throw 'invoke-pack-review.ps1 must load Review-FailureEvidence.ps1'
+}
+if ($entrypointText -notmatch 'Initialize-ReviewFailureEvidence') {
+    throw 'invoke-pack-review.ps1 must initialize failure evidence before wrapper start'
+}
+if ($evidenceLibText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
+    throw 'Review-FailureEvidence.ps1 must build wrapper argv via Get-PackReviewWrapperProcessStartInfo'
+}
+if ($evidenceLibText -notmatch 'Test-PackReviewProcessStartInfoSupportsArgumentList') {
+    throw 'Review-FailureEvidence.ps1 must support PowerShell 5.1 via quoted Arguments fallback'
+}
+if ($evidenceLibText -notmatch 'ReadToEndAsync') {
+    throw 'Review-FailureEvidence.ps1 must drain redirected streams concurrently (ReadToEndAsync)'
+}
+if ($evidenceLibText -match 'Start-Process\b') {
+    throw 'Review-FailureEvidence.ps1 must not launch wrappers via Start-Process -ArgumentList'
+}
+Write-Host 'reviewer-failure-evidence registration/config OK'

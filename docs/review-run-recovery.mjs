@@ -12,7 +12,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { printJson, readStdinJson } from './review-mechanical-cli.mjs';
+import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+import { enrichRecoveryEvidenceWithFailure } from './reviewer-failure-evidence.mjs';
 
 export const REVIEW_RECOVERY_SCHEMA_VERSION = 1;
 export const DEFAULT_CRASH_GRACE_MS = 2 * 60 * 1000;
@@ -336,7 +337,7 @@ export function classifyReviewerLiveness(sidecar, options = {}) {
   return { outcome: 'alive', reason: 'pid_starttime_boot_match' };
 }
 
-function buildEvidence(liveness, sidecar) {
+function buildLivenessEvidence(liveness, sidecar) {
   const proc = asRecord(sidecar?.identity?.process) ?? {};
   return {
     livenessOutcome: liveness.outcome,
@@ -350,7 +351,13 @@ function buildEvidence(liveness, sidecar) {
   };
 }
 
-export function evaluateRecoveryForRun({ run, sidecar, state, nowMs, config }) {
+function buildEvidence(liveness, sidecar, storeDir, run) {
+  const livenessEvidence = buildLivenessEvidence(liveness, sidecar);
+  if (!storeDir || !run) return livenessEvidence;
+  return enrichRecoveryEvidenceWithFailure(storeDir, run, livenessEvidence);
+}
+
+export function evaluateRecoveryForRun({ run, sidecar, state, nowMs, config, storeDir }) {
   const statusClass = classifyReviewStatus(run?.status);
   const runId = safeRunId(run);
   if (!runId) return { action: 'skip', reason: 'missing_run_id' };
@@ -369,7 +376,7 @@ export function evaluateRecoveryForRun({ run, sidecar, state, nowMs, config }) {
     : { outcome: 'ambiguous', reason: sidecar ? 'sidecar_mismatch_or_partial' : 'missing_identity' };
   const startedMs = runStartedMs(run, state, !hasBoundSidecar);
   const ageMs = Math.max(0, nowMs - startedMs);
-  const evidence = buildEvidence(liveness, sidecar);
+  const evidence = buildEvidence(liveness, sidecar, storeDir, run);
 
   if (liveness.outcome === 'alive') {
     return { action: 'skip', reason: 'reviewer_alive', windows, ageMs, evidence };
@@ -398,7 +405,8 @@ export function evaluateRecoveryForRun({ run, sidecar, state, nowMs, config }) {
 }
 
 function recoverySummary(reason, evidence) {
-  return `AO review recovery terminalized non-clean run: ${reason}; liveness=${evidence.livenessOutcome}/${evidence.livenessReason}`;
+  const failurePhase = evidence.failureEvidence?.lastPhase ?? evidence.failureEvidenceDiagnostic ?? 'none';
+  return `AO review recovery terminalized non-clean run: ${reason}; liveness=${evidence.livenessOutcome}/${evidence.livenessReason}; failureEvidence=${failurePhase}`;
 }
 
 export function terminalizeRunRecord({ path, expectedRun, expectedSidecar, terminalReason, evidence, now = new Date() }) {
@@ -468,13 +476,26 @@ function backfillMissingTransitionAudits(storeDir, state, runEntries, nowMs) {
     if (!RECOVERY_TERMINATION_REASONS.has(reason)) continue;
     const key = auditKey('transition', run, reason);
     if (audit.records.some((entry) => entry.key === key) || state.auditBackfills[key]) continue;
+    const existingEvidence = asRecord(run?.recovery?.evidence);
+    const evidence = existingEvidence
+      ? {
+          ...existingEvidence,
+          ...(existingEvidence.failureEvidence || existingEvidence.failureEvidenceDiagnostic
+            ? {}
+            : enrichRecoveryEvidenceWithFailure(storeDir, run, existingEvidence)),
+        }
+      : enrichRecoveryEvidenceWithFailure(
+          storeDir,
+          run,
+          buildLivenessEvidence({ outcome: 'unknown', reason: 'audit_backfill' }, null),
+        );
     appendAuditOnce(storeDir, {
       key,
       type: 'recovery_transition',
       runId: safeRunId(run),
       runFingerprint: fingerprintRun(run),
       terminalReason: reason,
-      evidence: asRecord(run?.recovery?.evidence) ?? { livenessOutcome: 'unknown', livenessReason: 'audit_backfill' },
+      evidence,
       observedAtMs: nowMs,
       backfilled: true,
     });
@@ -504,7 +525,7 @@ export function runRecoveryTick({ projectId = 'orchestrator-pack', storeDir, now
     const run = entry.run;
     const runId = safeRunId(run);
     const sidecar = runId ? asRecord(readJsonFile(identitySidecarPath(resolvedStoreDir, runId))) : null;
-    const decision = evaluateRecoveryForRun({ run, sidecar, state, nowMs, config });
+    const decision = evaluateRecoveryForRun({ run, sidecar, state, nowMs, config, storeDir: resolvedStoreDir });
     const base = { runId, status: run.status, decision: decision.action, reason: decision.reason ?? decision.terminalReason };
 
     if (decision.action === 'escalate') {
@@ -624,13 +645,4 @@ async function main() {
   throw new Error(`Unknown review-run-recovery subcommand: ${subcommand}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main()
-    .then((result) => {
-      printJson(result);
-    })
-    .catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
-}
+runAsyncStdinJsonCliMain('review-run-recovery.mjs', main);

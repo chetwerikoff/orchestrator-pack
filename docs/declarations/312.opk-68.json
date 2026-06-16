@@ -1,0 +1,53 @@
+{
+  "issue_number": 312,
+  "iteration_id": "opk-68",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-16T05:40:00.000Z",
+  "baseline": {
+    "commit_sha": "72ce2cae6b2ddd4ee39583cd8bb98a4faade96bc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c3ee5087869d8a9c7281cbe3a8083a30a615b324329500c8b974e5b81f8a8960"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/101-reviewer-failure-evidence-log.md",
+    "docs/migration_notes.md",
+    "docs/review-mechanical-cli.mjs",
+    "docs/review-run-recovery.mjs",
+    "docs/reviewer-failure-evidence.d.mts",
+    "docs/reviewer-failure-evidence.mjs",
+    "scripts/check-reviewer-failure-evidence.ps1",
+    "scripts/fixtures/review-failure-evidence/echo-args.ps1",
+    "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/journaled-worker-send.ps1",
+    "scripts/lib/QuotedProcessArguments.ps1",
+    "scripts/lib/Review-FailureEvidence.ps1",
+    "scripts/lib/review-recovery-test-fixtures.ts",
+    "scripts/review-failure-evidence.Tests.ps1",
+    "scripts/review-run-recovery.test.ts",
+    "scripts/reviewer-failure-evidence.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:31a7f9fafdc5a4501279b7fa84da91ef8b109778ede6382ea3f6b84654898774",
+      "new_active_scope_hash": "sha256:c3ee5087869d8a9c7281cbe3a8083a30a615b324329500c8b974e5b81f8a8960",
+      "changed": {
+        "added": [
+          "scripts/fixtures/review-failure-evidence/echo-args.ps1",
+          "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1",
+          "scripts/journaled-worker-send.ps1",
+          "scripts/lib/QuotedProcessArguments.ps1",
+          "scripts/review-failure-evidence.Tests.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Review fixes: argv/PS5.1 tests, deadlock fixture, shared process-argument quoting",
+      "actor": "opk-68",
+      "timestamp": "2026-06-16T08:00:00.000Z",
+      "applied": true
+    }
+  ]
+}

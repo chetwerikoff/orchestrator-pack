@@ -985,6 +985,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Reviewer failure evidence registration (Issue #312) =='
+$reviewerFailureEvidenceCheck = Join-Path $Root 'scripts/check-reviewer-failure-evidence.ps1'
+if (Test-Path -LiteralPath $reviewerFailureEvidenceCheck -PathType Leaf) {
+    & $reviewerFailureEvidenceCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-reviewer-failure-evidence.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-reviewer-failure-evidence.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Reviewer failure evidence registration/config check failed (Issue #312)'
+    }
+}
+else {
+    Write-Check 'scripts/check-reviewer-failure-evidence.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing reviewer failure evidence check script (Issue #312)'
+}
+
+Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'
 if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {

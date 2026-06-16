@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   RECOVERY_REASON_AMBIGUOUS_STALE,
@@ -16,35 +15,20 @@ import {
   terminalizeRunRecord,
   validateRecoveryConfig,
 } from '../docs/review-run-recovery.mjs';
-
-const roots: string[] = [];
+import {
+  drainTempRoots,
+  readRecoveryAudit,
+  readRecoveryRun,
+  tempRecoveryStore,
+  writeRecoveryRun,
+} from './lib/review-recovery-test-fixtures.js';
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), 'review-run-recovery-'));
-  roots.push(root);
-  mkdirSync(join(root, 'runs'), { recursive: true });
-  return root;
+  return tempRecoveryStore();
 }
 
 function writeRun(store: string, patch: Record<string, unknown> = {}) {
-  const run = {
-    id: `review-run-${patch.idSuffix ?? 'a'}`,
-    projectId: 'orchestrator-pack',
-    linkedSessionId: 'opk-worker',
-    reviewerSessionId: 'opk-rev-a',
-    status: 'running',
-    createdAt: '2026-06-13T00:00:00.000Z',
-    updatedAt: '2026-06-13T00:00:00.000Z',
-    startedAt: '2026-06-13T00:00:00.000Z',
-    targetSha: 'abc123',
-    prNumber: 287,
-    summary: 'fixture',
-    ...patch,
-  };
-  delete (run as Record<string, unknown>).idSuffix;
-  const path = join(store, 'runs', `${run.id}.json`);
-  writeFileSync(path, `${JSON.stringify(run, null, 2)}\n`);
-  return { run, path };
+  return writeRecoveryRun(store, patch);
 }
 
 function currentBootHash() {
@@ -80,16 +64,16 @@ function writeSidecar(store: string, run: Record<string, unknown>, patch: Record
   return sidecar;
 }
 
-function readRun(store: string, id = 'review-run-a') {
-  return JSON.parse(readFileSync(join(store, 'runs', `${id}.json`), 'utf8'));
+function readAudit(store: string) {
+  return readRecoveryAudit(store);
 }
 
-function readAudit(store: string) {
-  return JSON.parse(readFileSync(join(store, 'review-run-recovery-audit.json'), 'utf8'));
+function readRun(store: string, id = 'review-run-a') {
+  return readRecoveryRun(store, id);
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  drainTempRoots((root: string) => rmSync(root, { recursive: true, force: true }));
 });
 
 describe('review-run-recovery', () => {

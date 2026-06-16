@@ -1,0 +1,26 @@
+export const FAILURE_EVIDENCE_SCHEMA_VERSION: number;
+export const DEFAULT_OUTPUT_TAIL_LIMIT: number;
+export const DEFAULT_SUMMARY_TAIL_LIMIT: number;
+export const EVIDENCE_PHASES: Set<string>;
+
+export function getFailureEvidenceDir(storeDir: string): string;
+export function getFailureEvidenceSessionPath(storeDir: string, reviewerSessionId: string): string | null;
+export function getFailureEvidenceRunPointerPath(storeDir: string, runId: string): string | null;
+export function resolveOutputTailLimit(env?: Record<string, string | undefined>): number;
+export function resolveSummaryTailLimit(env?: Record<string, string | undefined>): number;
+export function tailBoundedText(text: unknown, limit?: number): string;
+export function scrubSecretLikeOutput(text: unknown): string;
+export function isFailureEvidenceArtifact(record: unknown): boolean;
+export const OUTPUT_WITHHELD_MARKER: string;
+export function createFailureEvidenceArtifact(input: Record<string, unknown>): Record<string, unknown>;
+export function readFailureEvidenceArtifact(storeDir: string, input?: Record<string, unknown>): Record<string, unknown>;
+export function recordFailureEvidencePhase(input: Record<string, unknown>): Record<string, unknown>;
+export function associateFailureEvidenceRun(input: Record<string, unknown>): Record<string, unknown>;
+export function recordFailureEvidenceOutput(input: Record<string, unknown>): Record<string, unknown>;
+export function resolveTerminationSignalFromExitCode(exitCode: unknown, platform?: string): { signal?: string; signalDetail?: string };
+export function recordFailureEvidenceTerminal(input: Record<string, unknown>): Record<string, unknown>;
+export function buildFailureEvidenceSummary(artifact: Record<string, unknown>, options?: Record<string, unknown>): Record<string, unknown>;
+export function assertFailureEvidenceSecretSafe(value: unknown, path?: string): { ok: boolean; errors: string[] };
+export function resolveFailureEvidenceForRun(storeDir: string, run: Record<string, unknown>): Record<string, unknown>;
+export function enrichRecoveryEvidenceWithFailure(storeDir: string, run: Record<string, unknown>, livenessEvidence: Record<string, unknown>): Record<string, unknown>;
+export function ensureFailureEvidenceForReviewerSession(input: Record<string, unknown>): Record<string, unknown>;
