@@ -8,5 +8,3 @@ function Resolve-ReadDelegationCheckRepoRoot {
     }
     return Split-Path -Parent $ScriptRoot
 }
-
-Export-ModuleMember -Function Resolve-ReadDelegationCheckRepoRoot

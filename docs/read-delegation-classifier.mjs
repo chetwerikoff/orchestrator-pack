@@ -7,7 +7,6 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { globMatches } from '../scripts/lib/glob-match.mjs';
 
 const repoRoot = resolve(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -40,6 +39,28 @@ let cachedManifestHash = null;
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Classifier-local path pattern matcher for committed manifest patterns only.
+ * @param {string} pattern
+ * @param {string} candidate
+ */
+function globMatches(pattern, candidate) {
+  const normalizedPattern = pattern.replace(/\\/g, '/');
+  const normalizedCandidate = candidate.replace(/\\/g, '/');
+  if (normalizedPattern.endsWith('/**')) {
+    const prefix = normalizedPattern.slice(0, -3);
+    return normalizedCandidate === prefix || normalizedCandidate.startsWith(`${prefix}/`);
+  }
+  if (normalizedPattern.startsWith('*.')) {
+    return normalizedCandidate.endsWith(normalizedPattern.slice(1));
+  }
+  if (normalizedPattern.includes('*')) {
+    const escaped = normalizedPattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
+    return new RegExp(`^${escaped}$`).test(normalizedCandidate);
+  }
+  return normalizedPattern === normalizedCandidate;
 }
 
 export function loadClassifierManifest(manifestPath = CLASSIFIER_MANIFEST_PATH) {
