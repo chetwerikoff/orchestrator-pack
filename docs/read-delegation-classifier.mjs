@@ -2,7 +2,7 @@
  * Corpus-source classifier for read-delegation audit (Issue #309).
  * Imported by docs/read-delegation-audit.mjs.
  */
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, normalize, relative, resolve } from 'node:path';
@@ -157,6 +157,15 @@ export function canonicalizeRepoPath(filePath, root = repoRoot) {
   }
 }
 
+const GIT_COMMIT_REF_PATTERN = /^(?:HEAD|[0-9a-fA-F]{7,40})$/;
+
+/**
+ * @param {string | undefined} commit
+ */
+export function isSafeGitCommitRef(commit) {
+  return typeof commit === 'string' && GIT_COMMIT_REF_PATTERN.test(commit.trim());
+}
+
 /**
  * @param {string} commit
  * @param {Set<string>} [override]
@@ -165,8 +174,12 @@ export function loadGitTrackedPaths(commit, override) {
   if (override) {
     return override;
   }
+  const ref = String(commit ?? '').trim();
+  if (!isSafeGitCommitRef(ref)) {
+    return new Set();
+  }
   try {
-    const output = execSync(`git ls-tree -r --name-only ${commit}`, {
+    const output = execFileSync('git', ['ls-tree', '-r', '--name-only', ref], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -184,7 +197,7 @@ export function loadGitTrackedPaths(commit, override) {
 
 export function currentGitHead() {
   try {
-    return execSync('git rev-parse HEAD', {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],

@@ -49,7 +49,11 @@ describe("negative self-test", () => {
 });
 '@
     $negativePath = Join-Path $RepoRoot 'scripts/read-delegation-audit-negative-selftest.ts'
-    Set-Content -LiteralPath $negativePath -Value $negativeFixture -Encoding utf8NoBOM
+    [System.IO.File]::WriteAllText(
+        $negativePath,
+        $negativeFixture,
+        [System.Text.UTF8Encoding]::new($false)
+    )
     try {
         & npx vitest run $negativePath 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
