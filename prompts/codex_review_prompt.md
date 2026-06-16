@@ -10,6 +10,26 @@ You are reviewing a pull request in an Agent Orchestrator managed repository.
 
 {{BASE_SCOPE_SECTION}}
 
+## Bulk diff read via coworker
+
+When the PR diff exceeds the read-delegation floor (>200 lines), delegate
+summarization to `coworker ask` — keep review judgments on this model.
+
+**Canonical command** (write diff to a file first; never pipe into coworker):
+
+```bash
+git diff <base-ref>...HEAD > /tmp/review.diff
+coworker ask --profile code --allow-code \
+  --paths /tmp/review.diff \
+  --question "Summarize this PR diff for a reviewer. List changed files and behavior changes. Do not make final review judgments."
+```
+
+**Invalid forms:** `--file`, `--stdin`, `git diff | coworker`, heredocs, positional
+files after `--question`, or a bare question without `--question`.
+
+If `coworker` is missing or unavailable, read in-session and say so in your review
+output.
+
 ## Scope context
 
 {{SCOPE_SECTION}}
