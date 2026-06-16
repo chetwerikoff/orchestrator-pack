@@ -10,7 +10,7 @@
 // Preflight/bootstrap states / exit codes:
 //   chrome_not_running(3)  login_required(4)  stream_timeout(5)  no_reply(6)
 //   quota_limit(8)  challenge(9)  wrong_project(10)  playwright_missing(2)
-//   driver_error(11)  cdp_profile_mismatch(13) — any other unexpected exception (still recorded)
+//   driver_error(11)  cdp_profile_mismatch(13)  config_missing(12)
 //
 // Usage:
 //   node driver.mjs --draft docs/issues_drafts/NN-slug.md
@@ -70,40 +70,13 @@ if (sourceUrl !== undefined && !/^https?:\/\/\S+$/i.test(sourceUrl)) {
   process.exit(64);
 }
 const cdp = get('--cdp', 'http://localhost:9222');
-let PROJECT_URL;
-let chromeUserDataDir;
-const hasCliProjectUrl = a.includes('--project-url');
-try {
-  const cfg = resolveDiscussWithGptConfig({ requireProjectUrl: !hasCliProjectUrl });
-  PROJECT_URL = get('--project-url', cfg.projectUrl);
-  chromeUserDataDir = cfg.chromeUserDataDir;
-} catch (e) {
-  console.log('CONFIG_ERROR ' + ((e && e.message) || e));
-  console.log('STATE=config_missing');
-  process.exit(12);
-}
-if (!PROJECT_URL) {
-  console.log('CONFIG_ERROR discuss-with-gpt: project URL not set. Set DISCUSS_WITH_GPT_PROJECT_URL or use --project-url.');
-  console.log('STATE=config_missing');
-  process.exit(12);
-}
-const timeout = parseInt(get('--timeout', '180000'), 10);
 
 const PASS_ID = randomUUID();
-const BEGIN_NONCE = randomUUID();   // (#3) echo proves the draft HEAD was received
-const END_NONCE = randomUUID();     // (#2) appears ONLY after the draft → echo proves the TAIL
-const LEDGER_NONCE = randomUUID();  // (#7) unpredictable ledger delimiter → untrusted content can't escape
-const tok = (s) => Math.round(s.length / 4);
-
 const slug = basename(draftPath).replace(/\.md$/, '');
 const dir = join(homedir(), '.local/state/discuss-with-gpt', slug);
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+let sha = '', promptText = '';
 
-let browser = null, page = null, sha = '', promptText = '';
-async function closeAll() {
-  try { if (page) await page.close(); } catch { /* ignore */ }
-  try { if (browser) await browser.close(); } catch { /* ignore */ }
-}
 // durable record on EVERY exit path — success or failure
 function recordFile(state, { reply = '', validation = '', url = '', note = '', parsed = '' } = {}) {
   const path = join(dir, `${stamp}-${PASS_ID.slice(0, 8)}-${state}.md`);
@@ -113,6 +86,40 @@ function recordFile(state, { reply = '', validation = '', url = '', note = '', p
     `sha256: ${sha}\nvalidation: ${validation}\nparsed: ${parsed}\nnote: ${note}\n` +
     `ts: ${stamp}\n\n## prompt\n\n${promptText || '(prompt not built)'}\n\n## reply\n\n${reply || '(none)'}\n`);
   return path;
+}
+
+function exitConfigMissing(note) {
+  const rec = recordFile('config_missing', { note });
+  console.log('CONFIG_ERROR ' + note);
+  console.log('STATE=config_missing');
+  console.log('ARTIFACT=' + rec);
+  process.exit(12);
+}
+
+let PROJECT_URL;
+let chromeUserDataDir;
+const hasCliProjectUrl = a.includes('--project-url');
+try {
+  const cfg = resolveDiscussWithGptConfig({ requireProjectUrl: !hasCliProjectUrl });
+  PROJECT_URL = get('--project-url', cfg.projectUrl);
+  chromeUserDataDir = cfg.chromeUserDataDir;
+} catch (e) {
+  exitConfigMissing((e && e.message) || e);
+}
+if (!PROJECT_URL) {
+  exitConfigMissing('discuss-with-gpt: project URL not set. Set DISCUSS_WITH_GPT_PROJECT_URL or use --project-url.');
+}
+const timeout = parseInt(get('--timeout', '180000'), 10);
+
+const BEGIN_NONCE = randomUUID();   // (#3) echo proves the draft HEAD was received
+const END_NONCE = randomUUID();     // (#2) appears ONLY after the draft → echo proves the TAIL
+const LEDGER_NONCE = randomUUID();  // (#7) unpredictable ledger delimiter → untrusted content can't escape
+const tok = (s) => Math.round(s.length / 4);
+
+let browser = null, page = null;
+async function closeAll() {
+  try { if (page) await page.close(); } catch { /* ignore */ }
+  try { if (browser) await browser.close(); } catch { /* ignore */ }
 }
 async function fail(state, code, fields = {}) {
   const url = page ? page.url() : '';
