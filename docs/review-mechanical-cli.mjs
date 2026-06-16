@@ -16,6 +16,26 @@ export function printJson(value) {
 }
 
 /**
+ * Run an async stdin/JSON CLI main when this module is the entry script.
+ * @param {string} scriptBasename
+ * @param {() => Promise<unknown>} mainFn
+ */
+export function runAsyncStdinJsonCliMain(scriptBasename, mainFn) {
+  const entry = process.argv[1] ?? '';
+  const isCli =
+    entry.endsWith(scriptBasename) || entry.endsWith(scriptBasename.replace(/\.mjs$/, '.js'));
+  if (!isCli) return;
+  mainFn()
+    .then((result) => {
+      printJson(result);
+    })
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    });
+}
+
+/**
  * @param {string} scriptBasename e.g. review-trigger-reconcile.mjs
  * @param {Record<string, () => unknown>} handlers
  */

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   FAILURE_EVIDENCE_SCHEMA_VERSION,
@@ -10,7 +9,6 @@ import {
   buildFailureEvidenceSummary,
   createFailureEvidenceArtifact,
   ensureFailureEvidenceForReviewerSession,
-  readFailureEvidenceArtifact,
   recordFailureEvidenceOutput,
   recordFailureEvidencePhase,
   recordFailureEvidenceTerminal,
@@ -23,43 +21,31 @@ import {
   fingerprintRun,
   runRecoveryTick,
 } from '../docs/review-run-recovery.mjs';
+import {
+  drainTempRoots,
+  readRecoveryAudit,
+  tempRecoveryStore,
+  writeRecoveryRun,
+} from './lib/review-recovery-test-fixtures.js';
 
-const roots: string[] = [];
+type EvidenceCreateResult = { ok: boolean; path?: string };
+type EvidenceSummary = { stdoutTail?: string; lastPhase?: string };
+type EvidenceResolveResult = { ok: boolean; diagnostic?: string; summary: EvidenceSummary; path?: string };
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), 'reviewer-failure-evidence-'));
-  roots.push(root);
-  mkdirSync(join(root, 'runs'), { recursive: true });
-  return root;
+  return tempRecoveryStore();
 }
 
 function writeRun(store: string, patch: Record<string, unknown> = {}) {
-  const run = {
-    id: `review-run-${patch.idSuffix ?? 'a'}`,
-    projectId: 'orchestrator-pack',
-    linkedSessionId: 'opk-worker',
-    reviewerSessionId: 'opk-rev-a',
-    status: 'running',
-    createdAt: '2026-06-13T00:00:00.000Z',
-    updatedAt: '2026-06-13T00:00:00.000Z',
-    startedAt: '2026-06-13T00:00:00.000Z',
-    targetSha: 'abc123',
-    prNumber: 312,
-    summary: 'fixture',
-    ...patch,
-  };
-  delete (run as Record<string, unknown>).idSuffix;
-  const path = join(store, 'runs', `${run.id}.json`);
-  writeFileSync(path, `${JSON.stringify(run, null, 2)}\n`);
-  return { run, path };
+  return writeRecoveryRun(store, { prNumber: 312, ...patch });
 }
 
 function readAudit(store: string) {
-  return JSON.parse(readFileSync(join(store, 'review-run-recovery-audit.json'), 'utf8'));
+  return readRecoveryAudit(store);
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  drainTempRoots((root: string) => rmSync(root, { recursive: true, force: true }));
 });
 
 describe('reviewer-failure-evidence', () => {
@@ -69,8 +55,9 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-a',
       wrapperKind: 'codex',
-    });
+    }) as EvidenceCreateResult;
     expect(created.ok).toBe(true);
+    expect(created.path).toBeTruthy();
     const raw = readFileSync(created.path!, 'utf8');
     expect(JSON.parse(raw).reviewerSessionId).toBe('opk-rev-a');
     expect(JSON.parse(raw).wrapperKind).toBe('codex');
@@ -83,9 +70,9 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-killed',
       wrapperKind: 'codex',
-    }) as { path: string };
-    recordFailureEvidencePhase({ path, phase: 'wrapper_started' });
-    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    }) as EvidenceCreateResult;
+    recordFailureEvidencePhase({ path: path!, phase: 'wrapper_started' });
+    const artifact = JSON.parse(readFileSync(path!, 'utf8'));
     expect(artifact.lastPhase).toBe('wrapper_started');
     expect(artifact.exitCode).toBeUndefined();
     expect(artifact.signal).toBeUndefined();
@@ -97,10 +84,10 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-fail',
       wrapperKind: 'codex',
-    }) as { path: string };
+    }) as EvidenceCreateResult;
     const stderr = 'review failed: missing dependency\n'.repeat(200);
-    recordFailureEvidenceTerminal({ path, exitCode: 17, stderr, outputTailLimit: 256 });
-    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    recordFailureEvidenceTerminal({ path: path!, exitCode: 17, stderr, outputTailLimit: 256 });
+    const artifact = JSON.parse(readFileSync(path!, 'utf8'));
     expect(artifact.exitCode).toBe(17);
     expect(artifact.stderrTail.length).toBeLessThanOrEqual(256);
     expect(artifact.stderrTail).toContain('missing dependency');
@@ -114,9 +101,9 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-signal',
       wrapperKind: 'codex',
-    }) as { path: string };
-    recordFailureEvidenceTerminal({ path, exitCode: 137 });
-    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    }) as EvidenceCreateResult;
+    recordFailureEvidenceTerminal({ path: path!, exitCode: 137 });
+    const artifact = JSON.parse(readFileSync(path!, 'utf8'));
     expect(artifact.signal).toBe('9');
     expect(artifact.exitCode).toBe(137);
   });
@@ -134,10 +121,11 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-large',
       wrapperKind: 'codex',
-    }) as { path: string };
-    recordFailureEvidenceOutput({ path, stdout: large, outputTailLimit: 512 });
-    const summary = buildFailureEvidenceSummary(JSON.parse(readFileSync(path, 'utf8')), { summaryTailLimit: 128 });
-    expect(JSON.parse(readFileSync(path, 'utf8')).stdoutTail.length).toBe(512);
+    }) as EvidenceCreateResult;
+    recordFailureEvidenceOutput({ path: path!, stdout: large, outputTailLimit: 512 });
+    const artifact = JSON.parse(readFileSync(path!, 'utf8'));
+    const summary = buildFailureEvidenceSummary(artifact, { summaryTailLimit: 128 }) as EvidenceSummary;
+    expect(artifact.stdoutTail.length).toBe(512);
     expect(summary.stdoutTail!.length).toBeLessThanOrEqual(128);
   });
 
@@ -148,7 +136,7 @@ describe('reviewer-failure-evidence', () => {
       storeDir: store,
       reviewerSessionId: 'opk-rev-bind',
       wrapperKind: 'claude',
-    });
+    }) as EvidenceCreateResult;
     expect(created.ok).toBe(true);
     associateFailureEvidenceRun({
       path: created.path,
@@ -156,7 +144,7 @@ describe('reviewer-failure-evidence', () => {
       runId: run.id,
       runFingerprint: fingerprintRun(run),
     });
-    const resolved = resolveFailureEvidenceForRun(store, run);
+    const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
     expect(resolved.ok).toBe(true);
     expect(resolved.summary.lastPhase).toBeUndefined();
     expect(resolved.path).toBeTruthy();
@@ -178,7 +166,7 @@ describe('reviewer-failure-evidence', () => {
   it('reports failure_evidence_missing when artifact cannot be found', () => {
     const store = tempStore();
     const { run } = writeRun(store);
-    const resolved = resolveFailureEvidenceForRun(store, run);
+    const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
     expect(resolved.ok).toBe(false);
     expect(resolved.diagnostic).toBe('failure_evidence_missing');
   });
@@ -202,6 +190,14 @@ describe('reviewer-failure-evidence recovery linkage', () => {
     writeFileSync(join(store, 'reviewer-liveness', `${run.id}.json`), `${JSON.stringify(sidecar, null, 2)}\n`);
   }
 
+  function patchSidecarBootHash(store: string, runId: string) {
+    const bootHash = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    const sidecarPath = join(store, 'reviewer-liveness', `${runId}.json`);
+    const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+    sidecar.identity.process.bootIdHash = createHash('sha256').update(bootHash).digest('hex').slice(0, 16);
+    writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+  }
+
   it('links bounded failure evidence summary into recovery audit for proc_entry_missing (opk-rev-318 class)', () => {
     const store = tempStore();
     const { run } = writeRun(store, { reviewerSessionId: 'opk-rev-318' });
@@ -212,16 +208,11 @@ describe('reviewer-failure-evidence recovery linkage', () => {
       wrapperKind: 'codex',
       runId: run.id,
       runFingerprint: fingerprintRun(run),
-    }) as { path: string };
-    recordFailureEvidencePhase({ path: created.path, phase: 'wrapper_started' });
-    recordFailureEvidencePhase({ path: created.path, phase: 'reviewer_output_observed' });
-    recordFailureEvidenceOutput({ path: created.path, stderr: 'partial reviewer output' });
-
-    const bootHash = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-    const sidecarPath = join(store, 'reviewer-liveness', `${run.id}.json`);
-    const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-    sidecar.identity.process.bootIdHash = createHash('sha256').update(bootHash).digest('hex').slice(0, 16);
-    writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+    }) as EvidenceCreateResult;
+    recordFailureEvidencePhase({ path: created.path!, phase: 'wrapper_started' });
+    recordFailureEvidencePhase({ path: created.path!, phase: 'reviewer_output_observed' });
+    recordFailureEvidenceOutput({ path: created.path!, stderr: 'partial reviewer output' });
+    patchSidecarBootHash(store, String(run.id));
 
     const result = runRecoveryTick({ storeDir: store, nowMs: Date.parse('2026-06-13T00:03:00Z') });
     expect(result.ok).toBe(true);
@@ -236,11 +227,7 @@ describe('reviewer-failure-evidence recovery linkage', () => {
     const store = tempStore();
     const { run } = writeRun(store);
     writeSidecar(store, run);
-    const bootHash = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-    const sidecarPath = join(store, 'reviewer-liveness', `${run.id}.json`);
-    const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-    sidecar.identity.process.bootIdHash = createHash('sha256').update(bootHash).digest('hex').slice(0, 16);
-    writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+    patchSidecarBootHash(store, String(run.id));
 
     runRecoveryTick({ storeDir: store, nowMs: Date.parse('2026-06-13T00:03:00Z') });
     const transition = readAudit(store).records.find((r: { type: string }) => r.type === 'recovery_transition');
@@ -258,11 +245,7 @@ describe('reviewer-failure-evidence recovery linkage', () => {
       runId: run.id,
       runFingerprint: fingerprintRun(run),
     });
-    const bootHash = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-    const sidecarPath = join(store, 'reviewer-liveness', `${run.id}.json`);
-    const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-    sidecar.identity.process.bootIdHash = createHash('sha256').update(bootHash).digest('hex').slice(0, 16);
-    writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+    patchSidecarBootHash(store, String(run.id));
 
     runRecoveryTick({ storeDir: store, nowMs: Date.parse('2026-06-13T00:03:00Z') });
     runRecoveryTick({ storeDir: store, nowMs: Date.parse('2026-06-13T00:04:00Z') });

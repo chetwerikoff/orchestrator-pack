@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { printJson, readStdinJson } from './review-mechanical-cli.mjs';
+import { readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import { fingerprintRun, findRunForReviewerSession } from './review-run-recovery.mjs';
 
 export const FAILURE_EVIDENCE_SCHEMA_VERSION = 1;
@@ -436,13 +436,4 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main()
-    .then((result) => {
-      printJson(result);
-    })
-    .catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
-}
+runAsyncStdinJsonCliMain('reviewer-failure-evidence.mjs', main);

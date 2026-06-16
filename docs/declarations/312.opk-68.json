@@ -1,0 +1,30 @@
+{
+  "issue_number": 312,
+  "iteration_id": "opk-68",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-16T05:40:00.000Z",
+  "baseline": {
+    "commit_sha": "72ce2cae6b2ddd4ee39583cd8bb98a4faade96bc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/101-reviewer-failure-evidence-log.md",
+    "docs/review-mechanical-cli.mjs",
+    "docs/migration_notes.md",
+    "docs/review-mechanical-cli.mjs",
+    "docs/review-run-recovery.mjs",
+    "docs/reviewer-failure-evidence.d.mts",
+    "docs/reviewer-failure-evidence.mjs",
+    "scripts/check-reviewer-failure-evidence.ps1",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Review-FailureEvidence.ps1",
+    "scripts/lib/review-recovery-test-fixtures.ts",
+    "scripts/review-run-recovery.test.ts",
+    "scripts/reviewer-failure-evidence.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

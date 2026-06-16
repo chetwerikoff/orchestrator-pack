@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { printJson, readStdinJson } from './review-mechanical-cli.mjs';
+import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import { enrichRecoveryEvidenceWithFailure } from './reviewer-failure-evidence.mjs';
 
 export const REVIEW_RECOVERY_SCHEMA_VERSION = 1;
@@ -645,13 +645,4 @@ async function main() {
   throw new Error(`Unknown review-run-recovery subcommand: ${subcommand}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main()
-    .then((result) => {
-      printJson(result);
-    })
-    .catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
-}
+runAsyncStdinJsonCliMain('review-run-recovery.mjs', main);
