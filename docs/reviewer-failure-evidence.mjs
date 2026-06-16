@@ -103,8 +103,9 @@ export function scrubSecretLikeOutput(text) {
   let value = String(text ?? '');
   value = value.replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]');
   value = value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  value = value.replace(/Cookie:\s*[^\r\n]*/gi, 'Cookie: [REDACTED]');
   value = value.replace(
-    /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
+    /((?:api[_-]?key|token|secret|password|authorization|private[_-]?key)\s*[:=]\s*)\S+/gi,
     '$1[REDACTED]',
   );
   value = value.replace(/\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
@@ -456,7 +457,10 @@ export function resolveFailureEvidenceForRun(storeDir, run) {
     ok: true,
     path: read.path,
     artifact: read.artifact,
-    summary: buildFailureEvidenceSummary(read.artifact, { artifactPath: read.path }),
+    summary: buildFailureEvidenceSummary(read.artifact, {
+      artifactPath: read.path,
+      summaryTailLimit: resolveSummaryTailLimit(),
+    }),
   };
 }
 

@@ -15,6 +15,7 @@ import {
   recordFailureEvidenceTerminal,
   resolveFailureEvidenceForRun,
   resolveOutputTailLimit,
+  resolveSummaryTailLimit,
   resolveTerminationSignalFromExitCode,
   scrubSecretLikeOutput,
   tailBoundedText,
@@ -96,6 +97,14 @@ describe('reviewer-failure-evidence', () => {
     expect(artifact.stderrTail).toContain('missing dependency');
   });
 
+  it('scrubs entire Cookie header values before persisting evidence tails', () => {
+    const scrubbed = scrubSecretLikeOutput('Cookie: sid=abc; refresh=def\nreview failed\n');
+    expect(scrubbed).not.toContain('sid=abc');
+    expect(scrubbed).not.toContain('refresh=def');
+    expect(scrubbed).toContain('Cookie: [REDACTED]');
+    expect(assertFailureEvidenceSecretSafe({ stderrTail: scrubbed }).ok).toBe(true);
+  });
+
   it('scrubs secret-like reviewer output before persisting evidence tails', () => {
     const store = tempStore();
     const { path } = createFailureEvidenceArtifact({
@@ -146,6 +155,34 @@ describe('reviewer-failure-evidence', () => {
     const summary = buildFailureEvidenceSummary(artifact, { summaryTailLimit: 128 }) as EvidenceSummary;
     expect(artifact.stdoutTail.length).toBe(512);
     expect(summary.stdoutTail!.length).toBeLessThanOrEqual(128);
+  });
+
+  it('honors AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT in resolveFailureEvidenceForRun', () => {
+    const previous = process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT;
+    process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT = '64';
+    try {
+      expect(resolveSummaryTailLimit()).toBe(64);
+      const store = tempStore();
+      const { run } = writeRun(store, { reviewerSessionId: 'opk-rev-summary-env' });
+      const created = createFailureEvidenceArtifact({
+        storeDir: store,
+        reviewerSessionId: 'opk-rev-summary-env',
+        wrapperKind: 'codex',
+      }) as EvidenceCreateResult;
+      recordFailureEvidenceOutput({ path: created.path!, stdout: 'z'.repeat(500), outputTailLimit: 256 });
+      associateFailureEvidenceRun({
+        path: created.path,
+        storeDir: store,
+        runId: run.id,
+        runFingerprint: fingerprintRun(run),
+      });
+      const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
+      expect(resolved.ok).toBe(true);
+      expect(resolved.summary.stdoutTail!.length).toBeLessThanOrEqual(64);
+    } finally {
+      if (previous === undefined) delete process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT;
+      else process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT = previous;
+    }
   });
 
   it('honors AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when outputTailLimit is omitted', () => {
