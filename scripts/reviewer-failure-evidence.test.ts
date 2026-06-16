@@ -9,6 +9,7 @@ import {
   buildFailureEvidenceSummary,
   createFailureEvidenceArtifact,
   ensureFailureEvidenceForReviewerSession,
+  isFailureEvidenceArtifact,
   recordFailureEvidenceOutput,
   recordFailureEvidencePhase,
   recordFailureEvidenceTerminal,
@@ -183,6 +184,63 @@ describe('reviewer-failure-evidence', () => {
   it('reports failure_evidence_missing when artifact cannot be found', () => {
     const store = tempStore();
     const { run } = writeRun(store);
+    const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
+    expect(resolved.ok).toBe(false);
+    expect(resolved.diagnostic).toBe('failure_evidence_missing');
+  });
+
+  it('resets stale session evidence when a new run starts in the same reviewer workspace', () => {
+    const store = tempStore();
+    const first = writeRun(store, {
+      idSuffix: 'first',
+      reviewerSessionId: 'opk-rev-repeat',
+      status: 'failed',
+      completedAt: '2026-06-13T00:01:00.000Z',
+    });
+    const firstPath = join(store, 'reviewer-failure-evidence', 'opk-rev-repeat.json');
+    mkdirSync(join(store, 'reviewer-failure-evidence'), { recursive: true });
+    writeFileSync(firstPath, `${JSON.stringify({
+      schemaVersion: 1,
+      reviewerSessionId: 'opk-rev-repeat',
+      runId: first.run.id,
+      phases: [{ phase: 'wrapper_exited', at: '2026-06-13T00:01:00.000Z' }],
+      lastPhase: 'wrapper_exited',
+      exitCode: 0,
+      completionStatus: 'normal',
+      stderrTail: 'old run stderr',
+    }, null, 2)}\n`);
+    writeRun(store, {
+      idSuffix: 'second',
+      reviewerSessionId: 'opk-rev-repeat',
+      createdAt: '2026-06-13T00:02:00.000Z',
+      startedAt: '2026-06-13T00:02:00.000Z',
+    });
+    const ensured = ensureFailureEvidenceForReviewerSession({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-repeat',
+      wrapperKind: 'codex',
+    });
+    expect(ensured.reset).toBe(true);
+    const artifact = JSON.parse(readFileSync(firstPath, 'utf8'));
+    expect(artifact.runId).toBe('review-run-second');
+    expect(artifact.exitCode).toBeUndefined();
+    expect(artifact.stderrTail).toBeUndefined();
+    expect(artifact.phases).toEqual([]);
+  });
+
+  it('does not treat by-run pointer JSON as the evidence artifact', () => {
+    const store = tempStore();
+    const { run } = writeRun(store, { idSuffix: 'pointer', reviewerSessionId: 'opk-rev-pointer' });
+    const pointerDir = join(store, 'reviewer-failure-evidence', 'by-run');
+    mkdirSync(pointerDir, { recursive: true });
+    const pointerPath = join(pointerDir, `${run.id}.json`);
+    writeFileSync(pointerPath, `${JSON.stringify({
+      schemaVersion: 1,
+      runId: run.id,
+      reviewerSessionId: 'opk-rev-pointer',
+      artifactPath: join(store, 'reviewer-failure-evidence', 'missing-session.json'),
+    }, null, 2)}\n`);
+    expect(isFailureEvidenceArtifact(JSON.parse(readFileSync(pointerPath, 'utf8')))).toBe(false);
     const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
     expect(resolved.ok).toBe(false);
     expect(resolved.diagnostic).toBe('failure_evidence_missing');

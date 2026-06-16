@@ -20,4 +20,7 @@ if ($entrypointText -notmatch 'Initialize-ReviewFailureEvidence') {
 if ($evidenceLibText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
     throw 'Review-FailureEvidence.ps1 must build wrapper argv via ProcessStartInfo.ArgumentList'
 }
+if ($evidenceLibText -match 'Start-Process\b') {
+    throw 'Review-FailureEvidence.ps1 must not launch wrappers via Start-Process -ArgumentList'
+}
 Write-Host 'reviewer-failure-evidence registration/config OK'

@@ -128,9 +128,9 @@ function assignBoundedOutputTail(artifact, field, withheldField, text, outputTai
   if (prepared.withheld) artifact[withheldField] = true;
 }
 
-function emptyArtifact({ reviewerSessionId, wrapperKind }) {
+function emptyArtifact({ reviewerSessionId, wrapperKind, runId, runFingerprint }) {
   const now = new Date().toISOString();
-  return {
+  const artifact = {
     schemaVersion: FAILURE_EVIDENCE_SCHEMA_VERSION,
     reviewerSessionId,
     createdAt: now,
@@ -139,6 +139,69 @@ function emptyArtifact({ reviewerSessionId, wrapperKind }) {
     phases: [],
     lastPhase: undefined,
   };
+  const boundRunId = safeRunId(runId);
+  if (boundRunId) {
+    artifact.runId = boundRunId;
+    if (runFingerprint) artifact.runFingerprint = String(runFingerprint);
+  }
+  return artifact;
+}
+
+function isFailureEvidenceRunPointer(record) {
+  return Boolean(
+    asRecord(record) &&
+      record.schemaVersion === FAILURE_EVIDENCE_SCHEMA_VERSION &&
+      safeRunId(record.runId) &&
+      typeof record.artifactPath === 'string' &&
+      safeReviewerSessionId(record.reviewerSessionId) &&
+      !Array.isArray(record.phases),
+  );
+}
+
+export function isFailureEvidenceArtifact(record) {
+  return Boolean(
+    asRecord(record) &&
+      record.schemaVersion === FAILURE_EVIDENCE_SCHEMA_VERSION &&
+      safeReviewerSessionId(record.reviewerSessionId) &&
+      Array.isArray(record.phases) &&
+      !record.artifactPath,
+  );
+}
+
+function artifactMatchesRun(artifact, run) {
+  if (!isFailureEvidenceArtifact(artifact) || !asRecord(run)) return false;
+  const runId = safeRunId(run.id ?? run.runId);
+  if (!runId || artifact.runId !== runId) return false;
+  if (artifact.runFingerprint && artifact.runFingerprint !== fingerprintRun(run)) return false;
+  return true;
+}
+
+function writeFailureEvidenceRunPointer(storeDir, runId, reviewerSessionId, artifactPath) {
+  const pointer = getFailureEvidenceRunPointerPath(storeDir, runId);
+  if (!pointer) return;
+  writeJsonAtomic(pointer, {
+    schemaVersion: FAILURE_EVIDENCE_SCHEMA_VERSION,
+    runId,
+    reviewerSessionId,
+    artifactPath,
+  });
+}
+
+function writeFreshFailureEvidenceArtifact({
+  path,
+  storeDir,
+  reviewerSessionId,
+  wrapperKind,
+  runId,
+  runFingerprint,
+}) {
+  const artifact = emptyArtifact({ reviewerSessionId, wrapperKind, runId, runFingerprint });
+  writeJsonAtomic(path, artifact);
+  const boundRunId = safeRunId(runId);
+  if (boundRunId) {
+    writeFailureEvidenceRunPointer(storeDir, boundRunId, reviewerSessionId, path);
+  }
+  return { ok: true, path, artifact };
 }
 
 export function createFailureEvidenceArtifact({
@@ -151,23 +214,14 @@ export function createFailureEvidenceArtifact({
   const session = safeReviewerSessionId(reviewerSessionId);
   if (!session) return { ok: false, reason: 'invalid_reviewer_session_id' };
   const path = getFailureEvidenceSessionPath(storeDir, session);
-  const artifact = emptyArtifact({ reviewerSessionId: session, wrapperKind });
-  const boundRunId = safeRunId(runId);
-  if (boundRunId) {
-    artifact.runId = boundRunId;
-    artifact.runFingerprint = runFingerprint ? String(runFingerprint) : undefined;
-    const pointer = getFailureEvidenceRunPointerPath(storeDir, boundRunId);
-    if (pointer) {
-      writeJsonAtomic(pointer, {
-        schemaVersion: FAILURE_EVIDENCE_SCHEMA_VERSION,
-        runId: boundRunId,
-        reviewerSessionId: session,
-        artifactPath: path,
-      });
-    }
-  }
-  writeJsonAtomic(path, artifact);
-  return { ok: true, path, artifact };
+  return writeFreshFailureEvidenceArtifact({
+    path,
+    storeDir,
+    reviewerSessionId: session,
+    wrapperKind,
+    runId,
+    runFingerprint,
+  });
 }
 
 function readArtifactFile(path) {
@@ -180,18 +234,15 @@ export function readFailureEvidenceArtifact(storeDir, { runId, reviewerSessionId
   if (boundRunId) {
     const pointerPath = getFailureEvidenceRunPointerPath(storeDir, boundRunId);
     const pointer = readArtifactFile(pointerPath);
-    if (pointer?.artifactPath) {
+    if (isFailureEvidenceRunPointer(pointer)) {
       const artifact = readArtifactFile(String(pointer.artifactPath));
-      if (artifact) return { ok: true, path: String(pointer.artifactPath), artifact };
-    }
-    const dir = join(getFailureEvidenceDir(storeDir), 'by-run');
-    if (existsSync(dir)) {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-        const candidate = readArtifactFile(join(dir, entry.name));
-        if (candidate?.runId === boundRunId) {
-          return { ok: true, path: join(dir, entry.name), artifact: candidate };
-        }
+      if (isFailureEvidenceArtifact(artifact)) {
+        return { ok: true, path: String(pointer.artifactPath), artifact };
+      }
+      const sessionPath = getFailureEvidenceSessionPath(storeDir, pointer.reviewerSessionId);
+      const sessionArtifact = readArtifactFile(sessionPath);
+      if (isFailureEvidenceArtifact(sessionArtifact) && sessionArtifact.runId === boundRunId) {
+        return { ok: true, path: sessionPath, artifact: sessionArtifact };
       }
     }
   }
@@ -199,7 +250,11 @@ export function readFailureEvidenceArtifact(storeDir, { runId, reviewerSessionId
   if (session) {
     const path = getFailureEvidenceSessionPath(storeDir, session);
     const artifact = readArtifactFile(path);
-    if (artifact) return { ok: true, path, artifact };
+    if (isFailureEvidenceArtifact(artifact)) {
+      if (!boundRunId || artifact.runId === boundRunId) {
+        return { ok: true, path, artifact };
+      }
+    }
   }
   if (boundRunId) {
     const evidenceDir = getFailureEvidenceDir(storeDir);
@@ -207,7 +262,7 @@ export function readFailureEvidenceArtifact(storeDir, { runId, reviewerSessionId
       for (const entry of readdirSync(evidenceDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
         const candidate = readArtifactFile(join(evidenceDir, entry.name));
-        if (candidate?.runId === boundRunId) {
+        if (isFailureEvidenceArtifact(candidate) && candidate.runId === boundRunId) {
           return { ok: true, path: join(evidenceDir, entry.name), artifact: candidate };
         }
       }
@@ -249,12 +304,12 @@ export function associateFailureEvidenceRun({ path, storeDir, runId, runFingerpr
   if (!result.ok) return result;
   const pointer = getFailureEvidenceRunPointerPath(storeDir, boundRunId);
   if (pointer) {
-    writeJsonAtomic(pointer, {
-      schemaVersion: FAILURE_EVIDENCE_SCHEMA_VERSION,
-      runId: boundRunId,
-      reviewerSessionId: result.artifact.reviewerSessionId,
-      artifactPath: path,
-    });
+    writeFailureEvidenceRunPointer(
+      storeDir,
+      boundRunId,
+      result.artifact.reviewerSessionId,
+      path,
+    );
   }
   return result;
 }
@@ -423,30 +478,35 @@ export function ensureFailureEvidenceForReviewerSession({
 }) {
   const session = safeReviewerSessionId(reviewerSessionId);
   if (!session) return { ok: false, reason: 'invalid_reviewer_session_id' };
-  const existingPath = getFailureEvidenceSessionPath(storeDir, session);
-  if (existsSync(existingPath)) {
-    const artifact = readArtifactFile(existingPath);
-    return { ok: true, path: existingPath, artifact, created: false };
-  }
   const entry = findRunForReviewerSession(storeDir, session);
   const run = entry?.run;
+  const currentRunId = run ? safeRunId(run.id ?? run.runId) : undefined;
+  const currentFingerprint = run ? fingerprintRun(run) : undefined;
+  const existingPath = getFailureEvidenceSessionPath(storeDir, session);
+  if (existsSync(existingPath)) {
+    const existing = readArtifactFile(existingPath);
+    if (existing && run && artifactMatchesRun(existing, run)) {
+      return { ok: true, path: existingPath, artifact: existing, created: false, reset: false };
+    }
+    const reset = writeFreshFailureEvidenceArtifact({
+      path: existingPath,
+      storeDir,
+      reviewerSessionId: session,
+      wrapperKind,
+      runId: currentRunId,
+      runFingerprint: currentFingerprint,
+    });
+    return { ...reset, created: false, reset: true };
+  }
   const created = createFailureEvidenceArtifact({
     storeDir,
     reviewerSessionId: session,
     wrapperKind,
-    runId: run ? safeRunId(run.id ?? run.runId) : undefined,
-    runFingerprint: run ? fingerprintRun(run) : undefined,
+    runId: currentRunId,
+    runFingerprint: currentFingerprint,
   });
   if (!created.ok) return created;
-  if (run && created.path) {
-    associateFailureEvidenceRun({
-      path: created.path,
-      storeDir,
-      runId: safeRunId(run.id ?? run.runId),
-      runFingerprint: fingerprintRun(run),
-    });
-  }
-  return { ...created, created: true };
+  return { ...created, created: true, reset: false };
 }
 
 async function main() {
