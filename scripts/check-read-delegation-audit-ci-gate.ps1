@@ -20,7 +20,10 @@ if (-not (Test-Path -LiteralPath $workflowPath)) {
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $failures = [System.Collections.Generic.List[string]]::new()
 
-if ($workflow -notmatch '(?m)^on:\s*$' -and $workflow -notmatch 'pull_request') {
+if ($workflow -notmatch '(?m)^on:\s*$') {
+    $failures.Add('workflow missing on: trigger block')
+}
+if ($workflow -notmatch 'pull_request') {
     $failures.Add('workflow missing pull_request trigger')
 }
 if ($workflow -match 'continue-on-error:\s*true') {
