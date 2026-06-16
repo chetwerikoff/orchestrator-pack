@@ -1,10 +1,10 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, execSync } from 'node:child_process';
 import fs, { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { AuditVerdict, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
+import type { AuditVerdict, ReadEntry, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
 import {
   appendMetricRecord,
   auditWorkUnit,
@@ -28,6 +28,7 @@ import {
   T1_VOLUME_FLOOR,
   toolUseToAuditEvents,
 } from '../docs/read-delegation-audit.mjs';
+import { classifierManifestHash } from '../docs/read-delegation-classifier.mjs';
 
 type StopAuditResult = {
   ok: boolean;
@@ -37,6 +38,7 @@ type StopAuditResult = {
     delegableTriggerUnits: number;
     flaggedUnits: number;
     flaggedReadLines: number;
+    indexServedExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
@@ -64,6 +66,8 @@ type FixtureExpect = {
   machineObservedDelegation?: boolean;
   reviewerPath?: boolean;
   codeClass?: boolean;
+  allIndexServed?: boolean;
+  indexServedExcludedLines?: number;
 };
 
 type FixturePayload = {
@@ -93,6 +97,50 @@ function loadFixture(name: string): FixturePayload {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
 }
 
+function currentFixtureCaptureCommit() {
+  return execSync('git rev-parse HEAD', {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+function enrichFixtureCaptureMetadata(
+  workUnits: Array<Record<string, unknown>> | undefined,
+): WorkUnit[] | undefined {
+  if (!workUnits) {
+    return undefined;
+  }
+  const commit = currentFixtureCaptureCommit();
+  const manifestHash = classifierManifestHash();
+  return workUnits.map((unit) => {
+    const useCapture = unit.useCaptureMetadata === true;
+    const reads = Array.isArray(unit.reads)
+      ? unit.reads.map((read, index) => {
+          const row = read as Record<string, unknown>;
+          const needsCapture = useCapture || row.useCaptureMetadata === true;
+          return {
+            ...(row as ReadEntry),
+            readDiscriminator: String(row.readDiscriminator ?? index),
+            surface: needsCapture ? String(row.surface ?? 'cursor') : (row.surface as string | undefined),
+            capturedCommit: needsCapture ? commit : (row.capturedCommit as string | undefined),
+            classifierManifestHash: needsCapture
+              ? manifestHash
+              : (row.classifierManifestHash as string | undefined),
+          };
+        })
+      : [];
+    return {
+      ...(unit as unknown as WorkUnit),
+      capturedCommit: useCapture ? commit : (unit.capturedCommit as string | undefined),
+      classifierManifestHash: useCapture
+        ? manifestHash
+        : (unit.classifierManifestHash as string | undefined),
+      reads,
+    };
+  });
+}
+
 function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResult {
   const fixture = loadFixture(name);
   const surface = surfaceOverride ?? fixture.surface ?? 'cursor';
@@ -102,7 +150,7 @@ function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResul
     reviewerPathSource: fixture.reviewerPathSource,
     reviewSignal: fixture.reviewSignal,
     env: fixture.env,
-    workUnits: fixture.workUnits,
+    workUnits: enrichFixtureCaptureMetadata(fixture.workUnits),
     events: fixture.events,
   }) as StopAuditResult;
 }
@@ -657,6 +705,39 @@ describe('Claude and shell transcript compatibility', () => {
     expect(countFileLinesFromDisk(readPath, 10, 20)).toBe(20);
   });
 
+  it('does not false-fire T1 when work unit reads supply string line counts', () => {
+    const result = auditWorkUnit(
+      {
+        key: 'unit-string-lines',
+        inboundRequestId: 'req-1',
+        reads: [
+          { path: 'docs/a.ts', lines: '150', kind: 'file' },
+          { path: 'docs/b.ts', lines: '150', kind: 'file' },
+        ] as unknown as ReadEntry[],
+      },
+      { surface: 'cursor' },
+    );
+    expect(result.triggerFired).toBe(false);
+    expect(result.flagged).toBe(false);
+    expect(result.inDenominator).toBe(false);
+  });
+
+  it('excludes codeClassGated units from the denominator without per-read isCodeClass', () => {
+    const result = auditWorkUnit(
+      {
+        key: 'unit-code-class-gated',
+        inboundRequestId: 'req-1',
+        codeClassGated: true,
+        reads: [{ path: 'vendor/pkg/foo.py', lines: 500, kind: 'file' }],
+      },
+      { surface: 'cursor' },
+    );
+    expect(result.codeClass).toBe(true);
+    expect(result.excludedFromDenominator).toBe(true);
+    expect(result.inDenominator).toBe(false);
+    expect(result.flagged).toBe(false);
+  });
+
   it('recognizes multiline coworker ask commands as machine-observed delegation', () => {
     const multilineCommands = [
       "coworker ask \\\n  --profile code --question 'summarize' docs/a.md",
@@ -849,6 +930,29 @@ describe('work unit resolution', () => {
     }) as StopAuditResult;
     expect(result.verdicts).toHaveLength(1);
     expect(result.verdicts[0].flagged).toBe(true);
+  });
+
+  it('preserves capture metadata when partitioning read events', () => {
+    const manifestHash = classifierManifestHash();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        events: [
+          {
+            kind: 'read',
+            inboundRequestId: 'req-1',
+            workUnitKey: 'unit-capture-events',
+            lines: 900,
+            readKind: 'file',
+            path: 'plugins/ao-scope-guard/lib/check.ts',
+            capturedCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            classifierManifestHash: manifestHash,
+            readDiscriminator: '0',
+            surface: 'cursor',
+          },
+        ],
+      }),
+    ).toThrow(/captured-head-mismatch/);
   });
 });
 
@@ -1101,6 +1205,227 @@ describe('concurrency and idempotency', () => {
     expect(parsed.filter((row) => row.duplicate).length).toBe(3);
     const summary = loadMetricWindowSummary(artifactPath);
     expect(summary.delegableTriggerUnits).toBe(1);
+  });
+});
+
+const indexServedFixtures = [
+  'index-served-excluded.json',
+  'out-of-index-log-flagged.json',
+  'out-of-index-diff-flagged.json',
+  'out-of-index-external-flagged.json',
+  'mixed-below-floor.json',
+  'mixed-above-floor.json',
+  'code-class-per-read-mixed.json',
+];
+
+describe('index-served carve-out (Issue #309)', () => {
+  for (const fixtureName of indexServedFixtures) {
+    it(`${fixtureName} matches index-served audit table`, () => {
+      const fixture = loadFixture(fixtureName);
+      const result = evaluateFixture(fixtureName);
+      const expectRow = fixture.expect ?? {};
+      const verdict = firstVerdict(result);
+      if (expectRow.triggerFired !== undefined) {
+        expect(verdict.triggerFired).toBe(expectRow.triggerFired);
+      }
+      if (expectRow.excludedFromDenominator !== undefined) {
+        expect(verdict.excludedFromDenominator).toBe(expectRow.excludedFromDenominator);
+      }
+      if (expectRow.flagged !== undefined) {
+        expect(verdict.flagged).toBe(expectRow.flagged);
+      }
+      if (expectRow.inDenominator !== undefined) {
+        expect(verdict.inDenominator).toBe(expectRow.inDenominator);
+      }
+      if (expectRow.allIndexServed !== undefined) {
+        expect(verdict.allIndexServed).toBe(expectRow.allIndexServed);
+      }
+      if (expectRow.indexServedExcludedLines !== undefined) {
+        expect(verdict.indexServedExcludedLines).toBe(expectRow.indexServedExcludedLines);
+      }
+      if (expectRow.codeClass !== undefined) {
+        expect(verdict.codeClass).toBe(expectRow.codeClass);
+      }
+    });
+  }
+
+  it('index-served exclusion record carries full predicate matrix', () => {
+    const result = evaluateFixture('index-served-excluded.json');
+    const verdict = firstVerdict(result);
+    const indexRow = verdict.readClassifications?.find(
+      (row) => row.classification === 'index-served',
+    );
+    expect(indexRow).toBeDefined();
+    const record = indexRow?.exclusionRecord ?? {};
+    expect(record.canonicalPath).toBe('plugins/ao-scope-guard/lib/check.ts');
+    expect(record.gitTracked).toBe(true);
+    expect(record.matchedAllowedRoot).toBe('plugins/**');
+    expect(record.sourceCodeClassifierMatch).toBe(true);
+    expect(record.capturedCommit).toBeTruthy();
+    expect(record.classifierManifestHash).toBeTruthy();
+    expect(record.denominatorImpact).toBe('excluded');
+    expect(record.excludedLineCount).toBe(900);
+  });
+
+  it('mixed session residual metric is non-zero and not 0/0', () => {
+    const fixture = loadFixture('mixed-session-residual.json');
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: enrichFixtureCaptureMetadata(fixture.workUnits),
+    }) as StopAuditResult;
+    expect(result.summary.delegableTriggerUnits).toBe(1);
+    expect(result.summary.residualNonCompliance).toBe(1);
+    expect(result.summary.indexServedExcludedLines).toBe(900);
+  });
+
+  it('Claude and Cursor parity on same out-of-index bulk read', () => {
+    const cursor = evaluateFixture('out-of-index-log-flagged.json', 'cursor');
+    const claude = evaluateFixture('out-of-index-log-flagged.json', 'claude');
+    expect(cursor.verdicts[0].flagged).toBe(claude.verdicts[0].flagged);
+    expect(cursor.verdicts[0].inDenominator).toBe(claude.verdicts[0].inDenominator);
+  });
+
+  it('preflight: reviewer-path fixtures remain green (#264 precondition)', () => {
+    const result = evaluateFixture('reviewer-path-excluded.json');
+    expect(result.verdicts[0].reviewerPath).toBe(true);
+    expect(result.verdicts[0].excludedFromDenominator).toBe(true);
+    expect(result.summary.denominatorCause).toBe('all-excluded');
+  });
+
+  it('blocking status on captured-head mismatch', () => {
+    const fixture = loadFixture('index-served-excluded.json');
+    const units = enrichFixtureCaptureMetadata(fixture.workUnits);
+    expect(units?.[0].reads?.[0]).toBeDefined();
+    units![0].reads![0].capturedCommit = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    expect(() =>
+      evaluateStopAudit({ surface: 'cursor', workUnits: units }),
+    ).toThrow(/captured-head-mismatch/);
+  });
+
+  it('blocking status on partial capture metadata', () => {
+    const commit = currentFixtureCaptureCommit();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        workUnits: [
+          {
+            key: 'unit-partial-capture',
+            inboundRequestId: 'req-1',
+            reads: [
+              {
+                path: 'plugins/ao-scope-guard/lib/check.ts',
+                lines: 900,
+                kind: 'file',
+                capturedCommit: commit,
+                readDiscriminator: '0',
+                surface: 'cursor',
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/missing-capture-field/);
+  });
+
+  it('accepts short capturedCommit SHAs equivalent to checkout HEAD', () => {
+    const shortCommit = execSync('git rev-parse --short HEAD', {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const manifestHash = classifierManifestHash();
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        {
+          key: 'unit-short-sha',
+          inboundRequestId: 'req-1',
+          reads: [
+            {
+              path: 'plugins/ao-scope-guard/lib/check.ts',
+              lines: 900,
+              kind: 'file',
+              capturedCommit: shortCommit,
+              classifierManifestHash: manifestHash,
+              readDiscriminator: '0',
+              surface: 'cursor',
+            },
+          ],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].allIndexServed).toBe(true);
+    expect(result.verdicts[0].indexServedExcludedLines).toBe(900);
+  });
+
+  it('blocking status on malformed captured read with missing lines', () => {
+    const commit = currentFixtureCaptureCommit();
+    const manifestHash = classifierManifestHash();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        workUnits: [
+          {
+            key: 'unit-missing-lines',
+            inboundRequestId: 'req-1',
+            reads: [
+              {
+                path: 'plugins/ao-scope-guard/lib/check.ts',
+                kind: 'file',
+                capturedCommit: commit,
+                classifierManifestHash: manifestHash,
+                readDiscriminator: '0',
+                surface: 'cursor',
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/missing-capture-field/);
+  });
+
+  it('keeps non-index source reads delegable despite isCodeClass transcript tags', () => {
+    const result = evaluateStopAudit({
+      surface: 'claude',
+      workUnits: [
+        {
+          key: 'unit-claude-source',
+          inboundRequestId: 'req-1',
+          reads: [{ path: 'plugins/code-gated.ts', lines: 900, kind: 'file', isCodeClass: true }],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].readClassifications?.[0]?.classification).toBe('out-of-index');
+    expect(result.verdicts[0].codeClass).toBe(false);
+    expect(result.verdicts[0].inDenominator).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(true);
+  });
+
+  it('classifies isCodeClass-tagged tracked source reads as index-served on the events path', () => {
+    const events = toolUseToAuditEvents(
+      'Read',
+      { path: 'plugins/ao-scope-guard/lib/check.ts', limit: 900 },
+      'req-index-transcript',
+      { toolOutput: Array.from({ length: 900 }, (_, index) => `line-${index + 1}`).join('\n') },
+    );
+    expect(events[0]?.path).toBe('plugins/ao-scope-guard/lib/check.ts');
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: partitionEventsIntoWorkUnits(
+        events.map((event) => ({
+          ...event,
+          workUnitKey: 'unit-index-transcript',
+        })),
+      ),
+    }) as StopAuditResult;
+    const verdict = result.verdicts[0];
+    expect(verdict.readClassifications?.some((row) => row.classification === 'index-served')).toBe(
+      true,
+    );
+    expect(verdict.allIndexServed).toBe(true);
+    expect(verdict.indexServedExcludedLines).toBe(900);
+    expect(verdict.excludedFromDenominator).toBe(true);
+    expect(verdict.codeClass).toBe(false);
   });
 });
 

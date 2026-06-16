@@ -1,10 +1,30 @@
-export type ReadKind = 'file' | 'diff' | 'log';
+export type ReadKind = 'file' | 'diff' | 'log' | 'external' | 'fetched';
 
 export type ReadEntry = {
   path?: string;
   lines: number;
   kind: ReadKind;
   isCodeClass?: boolean;
+  fenceSignal?: boolean;
+  capturedCommit?: string;
+  classifierManifestHash?: string;
+  surface?: string;
+  readDiscriminator?: string;
+  canonicalPath?: string;
+  unitKey?: string;
+};
+
+export type ReadClassificationResult = {
+  read: ReadEntry;
+  classification: string;
+  exclusionRecord?: Record<string, unknown>;
+  delegable: boolean;
+  excludedFromDenominator: boolean;
+};
+
+export type AuditBlockingFailure = {
+  status: string;
+  artifact?: Record<string, unknown>;
 };
 
 export type EditEntry = {
@@ -25,6 +45,8 @@ export type WorkUnit = {
   coworkerEvents?: CoworkerEvent[];
   statusText?: string;
   codeClassGated?: boolean;
+  capturedCommit?: string;
+  classifierManifestHash?: string;
 };
 
 export type ReviewSignal = {
@@ -46,6 +68,8 @@ export type SessionContext = {
   env?: Record<string, string | undefined>;
   reviewSignal?: ReviewSignal;
   hookWiringFingerprint?: HookWiringFingerprint;
+  checkoutCommit?: string;
+  trackedPathsOverride?: Set<string>;
 };
 
 export type TriggerDetail = {
@@ -72,6 +96,10 @@ export type AuditVerdict = {
   auditSchemaVersion?: number;
   hookWiringFingerprint?: HookWiringFingerprint;
   codeClass: boolean;
+  allIndexServed?: boolean;
+  readClassifications?: ReadClassificationResult[];
+  indexServedExcludedLines?: number;
+  blockingFailure?: AuditBlockingFailure;
   selfAttestedDelegation: boolean;
   machineObservedDelegation: boolean;
   exceptedReason: boolean;
@@ -82,8 +110,10 @@ export declare const T1_VOLUME_FLOOR: 400;
 export declare const DIFF_LOG_FLOOR: 200;
 export declare const T2_MIN_FILES: 3;
 export declare const SURFACES: readonly ['cursor', 'claude'];
-export declare const AUDIT_SCHEMA_VERSION: 2;
+export declare const AUDIT_SCHEMA_VERSION: 3;
 export declare const REVIEW_HOOK_CAPABILITY_RECORD_PATH: string;
+
+export type CapturedReadEntry = ReadEntry;
 
 export declare function normalizeReads(value: unknown): ReadEntry[];
 export declare function aggregateDelegableFileLines(reads: ReadEntry[]): number;
@@ -111,6 +141,7 @@ export declare function summarizeAuditVerdicts(verdicts: AuditVerdict[]): {
   delegableTriggerUnits: number;
   flaggedUnits: number;
   flaggedReadLines: number;
+  indexServedExcludedLines: number;
   residualNonCompliance: number;
   denominatorCause: string;
   denominatorEmptyCause?: string;

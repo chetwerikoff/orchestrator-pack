@@ -1,0 +1,25 @@
+{
+  "description": ">400 combined lines of fetched external corpus flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-external-flagged",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "plugins/looks-like-source.ts",
+          "lines": 450,
+          "kind": "external"
+        }
+      ],
+      "edits": [],
+      "statusText": "skipped delegation on external fetch"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
+  }
+}

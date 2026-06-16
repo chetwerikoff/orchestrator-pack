@@ -1,0 +1,65 @@
+{
+  "issue_number": 309,
+  "iteration_id": "opk-70",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-16T07:26:02.634Z",
+  "baseline": {
+    "commit_sha": "bbfd57cc8af00bf2b0623224504b6531b86b12a1",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:02f9f66315fcce53a484b1ab0746cc55e95532bec22a05fa6cc21f50f6c25444"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    ".cursor/rules/coworker-delegation.mdc",
+    ".cursor/rules/coworker-rtk-read-exploration.mdc",
+    ".cursor/rules/read-delegation-policy-manifest.json",
+    "docs/read-delegation-audit.mjs",
+    "docs/read-delegation-audit.d.mts",
+    "docs/read-delegation-classifier.mjs",
+    "docs/read-delegation-classifier.d.mts",
+    "docs/read-delegation-classifier-input.json",
+    "docs/coworker-read-delegation-audit.md",
+    "docs/read-delegation-review-hook-capability.json",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    ".github/workflows/read-delegation-audit.yml",
+    "scripts/read-delegation-audit.test.ts",
+    "scripts/check-read-delegation-policy-consistency.ps1",
+    "scripts/check-read-delegation-audit-ci-gate.ps1",
+    "scripts/lib/glob-match.mjs",
+    "scripts/lib/glob-match.d.mts",
+    "scripts/lib/Read-DelegationCheck-Common.ps1",
+    "scripts/fixtures/read-delegation-audit/index-served-excluded.json",
+    "scripts/fixtures/read-delegation-audit/out-of-index-log-flagged.json",
+    "scripts/fixtures/read-delegation-audit/out-of-index-diff-flagged.json",
+    "scripts/fixtures/read-delegation-audit/out-of-index-external-flagged.json",
+    "scripts/fixtures/read-delegation-audit/mixed-below-floor.json",
+    "scripts/fixtures/read-delegation-audit/mixed-above-floor.json",
+    "scripts/fixtures/read-delegation-audit/code-class-per-read-mixed.json",
+    "scripts/fixtures/read-delegation-audit/mixed-session-residual.json",
+    "scripts/fixtures/read-delegation-audit/code-class-excluded.json",
+    "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/read-delegation-audit/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:15ff8ba45a954275ace1c5c3f4c76ac7b5a05cbfc728c7ee3a759e53ab1aef6d",
+      "new_active_scope_hash": "sha256:02f9f66315fcce53a484b1ab0746cc55e95532bec22a05fa6cc21f50f6c25444",
+      "changed": {
+        "added": [
+          "docs/read-delegation-classifier.d.mts",
+          "scripts/lib/Read-DelegationCheck-Common.ps1",
+          "scripts/lib/glob-match.d.mts",
+          "scripts/lib/glob-match.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "add scripts/lib shared helpers",
+      "actor": "opk-70",
+      "timestamp": "2026-06-16T07:30:25.412Z",
+      "applied": true
+    }
+  ]
+}
