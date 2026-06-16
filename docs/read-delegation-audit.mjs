@@ -375,7 +375,7 @@ export function auditWorkUnit(unit, session) {
     });
   }
 
-  if (isCodeClassUnit({ ...unit, reads })) {
+  if (unit.codeClassGated === true) {
     const trigger = didAskTriggerFire(reads);
     return buildAuditVerdict(unit, session, {
       reads,

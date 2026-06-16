@@ -1301,6 +1301,33 @@ describe('index-served carve-out (Issue #309)', () => {
       evaluateStopAudit({ surface: 'cursor', workUnits: units }),
     ).toThrow(/captured-head-mismatch/);
   });
+
+  it('classifies isCodeClass-tagged tracked source reads as index-served on the events path', () => {
+    const events = toolUseToAuditEvents(
+      'Read',
+      { path: 'plugins/ao-scope-guard/lib/check.ts', limit: 900 },
+      'req-index-transcript',
+      { toolOutput: Array.from({ length: 900 }, (_, index) => `line-${index + 1}`).join('\n') },
+    );
+    expect(events[0]?.isCodeClass).toBe(true);
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: partitionEventsIntoWorkUnits(
+        events.map((event) => ({
+          ...event,
+          workUnitKey: 'unit-index-transcript',
+        })),
+      ),
+    }) as StopAuditResult;
+    const verdict = result.verdicts[0];
+    expect(verdict.readClassifications?.some((row) => row.classification === 'index-served')).toBe(
+      true,
+    );
+    expect(verdict.allIndexServed).toBe(true);
+    expect(verdict.indexServedExcludedLines).toBe(900);
+    expect(verdict.excludedFromDenominator).toBe(true);
+    expect(verdict.codeClass).toBe(false);
+  });
 });
 
 describe('invoke-read-delegation-audit-stop.ps1', () => {

@@ -327,21 +327,6 @@ export function classifyReadPhaseB(read, manifest, ctx) {
   const canonicalResult = canonicalizeRepoPath(read.path);
   const canonicalPath = canonicalResult.ok ? canonicalResult.path : read.path;
 
-  if (read.isCodeClass === true) {
-    return {
-      classification: READ_CLASSIFICATIONS.CODE_CLASS,
-      branch: 'code-class-gate',
-      canonicalPath,
-      gitTracked: ctx.trackedPaths.has(String(canonicalPath)),
-      record: buildIndexServedStyleRecord(read, manifest, ctx, {
-        classification: READ_CLASSIFICATIONS.CODE_CLASS,
-        branch: 'code-class-gate',
-        canonicalPath,
-        isCodeClass: true,
-      }),
-    };
-  }
-
   const kind = read.kind ?? 'file';
   if (OUT_OF_INDEX_KINDS.has(kind)) {
     return {
@@ -381,6 +366,21 @@ export function classifyReadPhaseB(read, manifest, ctx) {
     if (indexResult) {
       return indexResult;
     }
+  }
+
+  if (read.isCodeClass === true) {
+    return {
+      classification: READ_CLASSIFICATIONS.CODE_CLASS,
+      branch: 'code-class-gate',
+      canonicalPath,
+      gitTracked: ctx.trackedPaths.has(String(canonicalPath)),
+      record: buildIndexServedStyleRecord(read, manifest, ctx, {
+        classification: READ_CLASSIFICATIONS.CODE_CLASS,
+        branch: 'code-class-gate',
+        canonicalPath,
+        isCodeClass: true,
+      }),
+    };
   }
 
   return {
