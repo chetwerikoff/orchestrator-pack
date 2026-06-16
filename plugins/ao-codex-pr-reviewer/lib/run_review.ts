@@ -105,7 +105,7 @@ export function buildCodexExecReviewArgs(options: {
 
   const args = ['exec'];
   if (trusted) {
-    args.push('--sandbox', 'workspace-write', '-c', CODEX_WORKSPACE_WRITE_NETWORK_CONFIG);
+    args.push('--dangerously-bypass-approvals-and-sandbox');
   } else {
     args.push('--sandbox', 'read-only');
   }

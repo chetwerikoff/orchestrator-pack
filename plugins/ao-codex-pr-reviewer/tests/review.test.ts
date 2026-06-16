@@ -121,7 +121,7 @@ describe('review trust derivation (fail-closed)', () => {
 describe('buildCodexExecReviewArgs', () => {
   const trustedEnv = { PR_REPO_ROOT: '', CI: '', GITHUB_ACTIONS: '' };
 
-  it('uses coworker-capable workspace-write sandbox for trusted codex-local', () => {
+  it('bypasses sandbox for trusted codex-local', () => {
     const args = buildCodexExecReviewArgs({
       outputFile: '/tmp/out.txt',
       model: 'gpt-5.5',
@@ -133,17 +133,15 @@ describe('buildCodexExecReviewArgs', () => {
     const reviewIdx = args.indexOf('review');
     expect(args.slice(0, reviewIdx + 1)).toEqual([
       'exec',
-      '--sandbox',
-      'workspace-write',
-      '-c',
-      CODEX_WORKSPACE_WRITE_NETWORK_CONFIG,
+      '--dangerously-bypass-approvals-and-sandbox',
       'review',
     ]);
     expect(args).not.toContain('read-only');
+    expect(args).not.toContain('workspace-write');
+    expect(args).not.toContain(CODEX_WORKSPACE_WRITE_NETWORK_CONFIG);
     expect(args).not.toContain('--base');
     expect(args).toContain('--json');
     expect(args[args.length - 1]).toBe('-');
-    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
   it.each([
