@@ -44,10 +44,10 @@ Chrome holding a **logged-in** custom-GPT session. It never types credentials.
   on its own **dedicated minimal profile** (never the user's main profile).
 - Reachable: `curl -s http://localhost:9222/json/version` returns JSON. **This
   alone is not enough** — it proves a CDP endpoint is alive, not that it is the
-  right profile/account/project. `launch-chrome.sh` verifies the listener's
-  `--user-data-dir` matches your configured automation profile before reusing;
-  the driver's own preflight (project URL + composer present) is the real gate;
-  `curl` is just a fast pre-check.
+  right profile/account/project. `launch-chrome.sh` and `driver.mjs` both verify
+  the listener's `--user-data-dir` matches your configured automation profile
+  before attaching; the driver's own preflight (project URL + composer present)
+  is the real gate; `curl` is just a fast pre-check.
 
 ### Operator configuration (required)
 
@@ -61,7 +61,8 @@ path. Configure before the first run:
 | Chrome executable (optional) | `DISCUSS_WITH_GPT_CHROME_PATH` | `chromePath` |
 
 Copy `local.config.example.json` → `local.config.json` in this skill directory
-(gitignored) **or** export the env vars in your shell. Env wins over the file.
+(gitignored via this skill's `.gitignore`) **or** export the env vars in your
+shell. Env wins over the file.
 
 First-time setup: set config → run `launch-chrome.sh` → log into ChatGPT once in
 the automation profile → subsequent launches reuse the saved session.
@@ -84,7 +85,7 @@ The driver **writes a record file for every state** (success or failure) under
 | `completed_valid` | `VALIDATION=ok`: PASS_ID+SHA+end-nonce echoed and the packet parses — **including a clean `VERDICT=APPROVE` with no findings** (the loop's convergence state). Machine-gated = echoes + `VERDICT` + finding blocks (severity/title/evidence/why_it_matters/recommendation/confidence/status), plus `FINAL_RECOMMENDATION` **for finding-bearing/non-APPROVE passes** (a clean empty APPROVE does not require it). Prose sections (`SUMMARY`/`MISSING_VALIDATION`/…) are read by hand, **not** hard-gated. **`PARSED approve_empty=true`** means an empty-APPROVE convergence: do **not** trust it silently — confirm in the audit line it was a genuine review, not a lazy/degenerate pass (downgrade to `low_quality` if it reads lazy). |
 | `low_quality` (**manual**, not a driver `STATE=`) | a `completed_valid` run you downgrade by judgment — findings generic/non-specific |
 | `invalid` | `VALIDATION=echo-missing`/`hash-mismatch`/`truncated`/`malformed` (`truncated`=end-of-draft token not echoed → draft tail not received; `malformed`=no verdict, zero findings, echoed template, or a block missing any contract field) |
-| `chrome_not_running`/`login_required`/`quota_limit`/`challenge`/`wrong_project` | preflight blockers — fix and retry (`wrong_project`: page is not the expected GPT project) |
+| `chrome_not_running`/`login_required`/`quota_limit`/`challenge`/`wrong_project`/`cdp_profile_mismatch` | preflight blockers — fix and retry (`wrong_project`: page is not the expected GPT project; `cdp_profile_mismatch`: CDP port held by a different Chrome profile) |
 | `stream_timeout`/`no_reply` | generation never completed — retry once |
 | `driver_error` | any unexpected Playwright/UI exception — recorded with the stack trace; inspect the artifact, fix, retry (the fail-loud guarantee holds even here) |
 | `skipped` | browser path unavailable and user absent — pass not run |

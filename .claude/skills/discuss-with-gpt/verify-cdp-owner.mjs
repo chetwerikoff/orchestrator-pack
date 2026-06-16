@@ -9,17 +9,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const args = process.argv.slice(2);
-const mode = args[0];
-const get = (flag, def) => {
-  const i = args.indexOf(flag);
-  return i >= 0 ? args[i + 1] : def;
-};
-const cdp = get('--cdp', 'http://localhost:9222');
-const expectedProfile = get('--profile');
-
-function parsePort(cdpUrl) {
+export function parseCdpPort(cdpUrl) {
   const u = new URL(cdpUrl);
   if (u.port) return u.port;
   return u.protocol === 'https:' ? '443' : '80';
@@ -33,7 +25,7 @@ function toWslPath(p) {
   return s;
 }
 
-function normalizeProfilePath(p) {
+export function normalizeProfilePath(p) {
   if (!p) return '';
   const wsl = toWslPath(p);
   try {
@@ -97,8 +89,8 @@ function getLinuxCmdline(pid) {
   }
 }
 
-function findListenerPid(port) {
-  return findWindowsListenerPid(port) || findLinuxListenerPid(port);
+export function findCdpListenerPid(cdpUrl) {
+  return findWindowsListenerPid(parseCdpPort(cdpUrl)) || findLinuxListenerPid(parseCdpPort(cdpUrl));
 }
 
 function getCmdline(pid) {
@@ -109,7 +101,8 @@ function ownerStatePath(port) {
   return join(homedir(), '.local/state/discuss-with-gpt', `cdp-${port}-owner.json`);
 }
 
-function recordOwner(port, profile) {
+export function recordCdpOwner(cdpUrl, profile) {
+  const port = parseCdpPort(cdpUrl);
   const path = ownerStatePath(port);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(
@@ -122,56 +115,79 @@ function recordOwner(port, profile) {
   );
 }
 
-function verify() {
-  if (!expectedProfile) {
-    console.error('USAGE: verify-cdp-owner.mjs verify --profile <path> [--cdp url]');
-    process.exit(64);
+/**
+ * @returns {{ ok: true } | { ok: false, reason: 'not_listening'|'uninspectable'|'no_user_data_dir'|'profile_mismatch', message: string }}
+ */
+export function verifyCdpProfile({ cdp = 'http://localhost:9222', profile }) {
+  if (!profile) {
+    return { ok: false, reason: 'uninspectable', message: 'profile path required' };
   }
-  const port = parsePort(cdp);
-  const pid = findListenerPid(port);
+  const port = parseCdpPort(cdp);
+  const pid = findCdpListenerPid(cdp);
   if (!pid) {
-    console.error(
-      `discuss-with-gpt: CDP responds on :${port} but no listening process was found — refuse to reuse`,
-    );
-    process.exit(2);
+    return {
+      ok: false,
+      reason: 'not_listening',
+      message: `no process listening on CDP port :${port}`,
+    };
   }
   const cmdline = getCmdline(pid);
   if (!cmdline) {
-    console.error(
-      `discuss-with-gpt: cannot read command line for PID ${pid} on :${port} — refuse to reuse`,
-    );
-    process.exit(2);
+    return {
+      ok: false,
+      reason: 'uninspectable',
+      message: `cannot read command line for PID ${pid} on :${port}`,
+    };
   }
   const actualDir = extractUserDataDir(cmdline);
   if (!actualDir) {
-    console.error(
-      `discuss-with-gpt: process on :${port} (PID ${pid}) has no --user-data-dir — refuse to reuse`,
-    );
-    process.exit(2);
+    return {
+      ok: false,
+      reason: 'no_user_data_dir',
+      message: `process on :${port} (PID ${pid}) has no --user-data-dir`,
+    };
   }
-  const expected = normalizeProfilePath(expectedProfile);
+  const expected = normalizeProfilePath(profile);
   const actual = normalizeProfilePath(actualDir);
   if (expected !== actual) {
-    console.error(
-      `discuss-with-gpt: :${port} is owned by profile "${actualDir}", not configured "${expectedProfile}"`,
-    );
-    console.error(
-      '  Close the foreign Chrome on this port or fix DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR.',
-    );
-    process.exit(1);
+    return {
+      ok: false,
+      reason: 'profile_mismatch',
+      message:
+        `:${port} is owned by profile "${actualDir}", not configured "${profile}"` +
+        ' — close the foreign Chrome or fix DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR',
+    };
   }
-  recordOwner(port, expectedProfile);
+  recordCdpOwner(cdp, profile);
+  return { ok: true };
 }
 
-if (mode === 'verify') {
-  verify();
-} else if (mode === 'record') {
-  if (!expectedProfile) {
-    console.error('USAGE: verify-cdp-owner.mjs record --profile <path> [--cdp url]');
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  const args = process.argv.slice(2);
+  const mode = args[0];
+  const get = (flag, def) => {
+    const i = args.indexOf(flag);
+    return i >= 0 ? args[i + 1] : def;
+  };
+  const cdp = get('--cdp', 'http://localhost:9222');
+  const expectedProfile = get('--profile');
+
+  if (mode === 'verify') {
+    const result = verifyCdpProfile({ cdp, profile: expectedProfile });
+    if (!result.ok) {
+      console.error(`discuss-with-gpt: ${result.message} — refuse to reuse`);
+      const code = result.reason === 'profile_mismatch' ? 1 : 2;
+      process.exit(code);
+    }
+  } else if (mode === 'record') {
+    if (!expectedProfile) {
+      console.error('USAGE: verify-cdp-owner.mjs record --profile <path> [--cdp url]');
+      process.exit(64);
+    }
+    recordCdpOwner(cdp, expectedProfile);
+  } else {
+    console.error('USAGE: verify-cdp-owner.mjs verify|record --profile <path> [--cdp url]');
     process.exit(64);
   }
-  recordOwner(parsePort(cdp), expectedProfile);
-} else {
-  console.error('USAGE: verify-cdp-owner.mjs verify|record --profile <path> [--cdp url]');
-  process.exit(64);
 }
