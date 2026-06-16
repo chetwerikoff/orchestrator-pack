@@ -72,7 +72,7 @@ $text
 Write-Host "== architect codex review ($Kind) =="
 Write-Host "Artifact: $resolved"
 Write-Host 'Invoker: codex review (NOT codex exec / codex exec review)'
-Write-Host 'Sandbox: sandbox_mode=workspace-write + sandbox_workspace_write.network_access=true (coworker-capable)'
+Write-Host 'Sandbox: sandbox_mode=danger-full-access (no containment)'
 
 # Match ao-codex-pr-reviewer CODEX_SPAWN_ENV_STRIP — network-capable review must not inherit exfiltratable tokens.
 $codexEnvStrip = @(
@@ -92,8 +92,7 @@ foreach ($name in $codexEnvStrip) {
 
 try {
     $output = & codex review `
-        -c 'sandbox_mode=workspace-write' `
-        -c 'sandbox_workspace_write.network_access=true' `
+        -c 'sandbox_mode=danger-full-access' `
         $prompt 2>&1
 }
 finally {
