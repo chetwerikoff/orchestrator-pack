@@ -217,6 +217,50 @@ describe('Review-StartClaim single-flight contract', () => {
     }
   });
 
+  it('resolves wake listener claim namespace from AO_WAKE_LISTENER_PROJECT_ID when -ProjectId is empty', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'ao-base-'));
+    const customProject = 'team-custom-pack';
+    try {
+      const env = { ...process.env, AO_WAKE_LISTENER_PROJECT_ID: customProject };
+      delete env.AO_REVIEW_CLAIM_DIR;
+      const result = spawnSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          `
+        . ${psString(helperPath)}
+        $env:AO_BASE_DIR = ${psString(base)}
+        $wakeProjectIdParam = ''
+        $projectId = if ($wakeProjectIdParam) {
+          $wakeProjectIdParam.Trim()
+        } elseif ($env:AO_WAKE_LISTENER_PROJECT_ID) {
+          $env:AO_WAKE_LISTENER_PROJECT_ID.Trim()
+        } else {
+          'orchestrator-pack'
+        }
+        [pscustomobject]@{
+          projectId = $projectId
+          fromResolved = Resolve-ReviewStartClaimNamespace -ProjectId $projectId
+          fromEmptyParam = Resolve-ReviewStartClaimNamespace -ProjectId $wakeProjectIdParam
+        } | ConvertTo-Json -Compress
+      `,
+        ],
+        { cwd: repoRoot, encoding: 'utf8', env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const parsed = JSON.parse(result.stdout.trim());
+      expect(parsed.projectId).toBe(customProject);
+      expect(String(parsed.fromResolved)).toContain(customProject);
+      expect(String(parsed.fromEmptyParam)).toContain('orchestrator-pack');
+      expect(parsed.fromResolved).not.toBe(parsed.fromEmptyParam);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('recovers one stale crashed claimant under concurrent recoverers and keeps an audit record', () => {
     const dir = tempClaimDir();
     try {
