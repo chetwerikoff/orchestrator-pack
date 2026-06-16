@@ -1,0 +1,22 @@
+{
+  "issue_number": 205,
+  "iteration_id": "opk-79",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-13",
+  "created_at": "2026-06-16T15:18:14.390Z",
+  "baseline": {
+    "commit_sha": "36f208fad798bb2c2e7204c232e9c6f8e4bd93ea",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4afaa623a9ac96f39fd574ea0ff6026c6f2f6156b96dae284b2f69705ec1b81c"
+  },
+  "declared_paths": [
+    "scripts/review-run-recovery.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "docs/declarations/205.opk-79.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

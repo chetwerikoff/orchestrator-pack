@@ -10,7 +10,7 @@ param(
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
     [string]$MarkerDir = '',
-    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error')]
+    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error', 'instant-exit')]
     [string]$Mode = 'normal'
 )
 
@@ -67,6 +67,10 @@ if ($projectId) {
 }
 $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encoding utf8 -NoNewline
 Move-Item -LiteralPath $markerTemp -Destination $markerPath -Force
+
+if ($Mode -eq 'instant-exit') {
+    exit 1
+}
 
 Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'started'
 
