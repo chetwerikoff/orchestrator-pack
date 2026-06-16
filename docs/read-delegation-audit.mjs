@@ -942,7 +942,6 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
       path,
       lines: measureReadToolLines(input, options.toolOutput),
       readKind: 'file',
-      isCodeClass: isCodeClassPath(path),
     });
   }
 

@@ -426,21 +426,6 @@ export function classifyReadPhaseB(read, manifest, ctx) {
     }
   }
 
-  if (read.isCodeClass === true) {
-    return {
-      classification: READ_CLASSIFICATIONS.CODE_CLASS,
-      branch: 'code-class-gate',
-      canonicalPath,
-      gitTracked: ctx.trackedPaths.has(String(canonicalPath)),
-      record: buildIndexServedStyleRecord(read, manifest, ctx, {
-        classification: READ_CLASSIFICATIONS.CODE_CLASS,
-        branch: 'code-class-gate',
-        canonicalPath,
-        isCodeClass: true,
-      }),
-    };
-  }
-
   return {
     classification: READ_CLASSIFICATIONS.OUT_OF_INDEX,
     branch: 'ordinary-out-of-index',
@@ -685,7 +670,9 @@ export function classifyUnitReads(unit, session) {
  * @param {import('./read-delegation-audit.d.mts').ReadClassificationResult[]} classifications
  */
 export function delegableReadsFromClassifications(classifications) {
-  return classifications.filter((row) => row.delegable).map((row) => row.read);
+  return classifications
+    .filter((row) => row.delegable)
+    .map((row) => ({ ...row.read, isCodeClass: false }));
 }
 
 /**

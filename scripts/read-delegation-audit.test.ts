@@ -1384,6 +1384,23 @@ describe('index-served carve-out (Issue #309)', () => {
     ).toThrow(/missing-capture-field/);
   });
 
+  it('keeps non-index source reads delegable despite isCodeClass transcript tags', () => {
+    const result = evaluateStopAudit({
+      surface: 'claude',
+      workUnits: [
+        {
+          key: 'unit-claude-source',
+          inboundRequestId: 'req-1',
+          reads: [{ path: 'plugins/code-gated.ts', lines: 900, kind: 'file', isCodeClass: true }],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].readClassifications?.[0]?.classification).toBe('out-of-index');
+    expect(result.verdicts[0].codeClass).toBe(false);
+    expect(result.verdicts[0].inDenominator).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(true);
+  });
+
   it('classifies isCodeClass-tagged tracked source reads as index-served on the events path', () => {
     const events = toolUseToAuditEvents(
       'Read',
@@ -1391,7 +1408,7 @@ describe('index-served carve-out (Issue #309)', () => {
       'req-index-transcript',
       { toolOutput: Array.from({ length: 900 }, (_, index) => `line-${index + 1}`).join('\n') },
     );
-    expect(events[0]?.isCodeClass).toBe(true);
+    expect(events[0]?.path).toBe('plugins/ao-scope-guard/lib/check.ts');
     const result = evaluateStopAudit({
       surface: 'cursor',
       workUnits: partitionEventsIntoWorkUnits(
