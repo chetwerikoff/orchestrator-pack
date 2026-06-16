@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, execSync } from 'node:child_process';
 import fs, { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +28,7 @@ import {
   T1_VOLUME_FLOOR,
   toolUseToAuditEvents,
 } from '../docs/read-delegation-audit.mjs';
+import { classifierManifestHash } from '../docs/read-delegation-classifier.mjs';
 
 type StopAuditResult = {
   ok: boolean;
@@ -95,6 +96,45 @@ function loadFixture(name: string): FixturePayload {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
 }
 
+function currentFixtureCaptureCommit() {
+  return execSync('git rev-parse HEAD', {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+function enrichFixtureCaptureMetadata(workUnits: Array<Record<string, unknown>> | undefined) {
+  if (!workUnits) {
+    return workUnits;
+  }
+  const commit = currentFixtureCaptureCommit();
+  const manifestHash = classifierManifestHash();
+  return workUnits.map((unit) => ({
+    ...unit,
+    capturedCommit:
+      unit.capturedCommit !== undefined ? commit : unit.capturedCommit,
+    classifierManifestHash:
+      unit.classifierManifestHash !== undefined
+        ? manifestHash
+        : unit.classifierManifestHash,
+    reads: Array.isArray(unit.reads)
+      ? unit.reads.map((read) => {
+          const row = read as Record<string, unknown>;
+          return {
+            ...row,
+            capturedCommit:
+              row.capturedCommit !== undefined ? commit : row.capturedCommit,
+            classifierManifestHash:
+              row.classifierManifestHash !== undefined
+                ? manifestHash
+                : row.classifierManifestHash,
+          };
+        })
+      : unit.reads,
+  }));
+}
+
 function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResult {
   const fixture = loadFixture(name);
   const surface = surfaceOverride ?? fixture.surface ?? 'cursor';
@@ -104,7 +144,7 @@ function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResul
     reviewerPathSource: fixture.reviewerPathSource,
     reviewSignal: fixture.reviewSignal,
     env: fixture.env,
-    workUnits: fixture.workUnits,
+    workUnits: enrichFixtureCaptureMetadata(fixture.workUnits),
     events: fixture.events,
   }) as StopAuditResult;
 }
@@ -1169,7 +1209,7 @@ describe('index-served carve-out (Issue #309)', () => {
     const fixture = loadFixture('mixed-session-residual.json');
     const result = evaluateStopAudit({
       surface: 'cursor',
-      workUnits: fixture.workUnits,
+      workUnits: enrichFixtureCaptureMetadata(fixture.workUnits),
     }) as StopAuditResult;
     expect(result.summary.delegableTriggerUnits).toBe(1);
     expect(result.summary.residualNonCompliance).toBe(1);
