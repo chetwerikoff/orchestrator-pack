@@ -56,7 +56,7 @@ projects:
         permissions: permissionless
         env:
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
-          # Absolute path to the real AO binary — must not be the pack scripts/ao shim.
+          # Absolute path to the real AO binary — never bare `ao` (PATH would resolve to scripts/ao shim).
           AO_REAL_BINARY: /home/you/.local/bin/ao
           # Prepend pack scripts/ so orchestrator turns resolve `ao` to scripts/ao (Issue #318).
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin

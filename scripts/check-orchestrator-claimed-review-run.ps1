@@ -28,6 +28,19 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
+if ($rules -match '(?m)^\s*AO_REAL_BINARY:\s*ao\s*(?:#.*)?$') {
+    Write-Host 'agent-orchestrator.yaml.example must not set AO_REAL_BINARY to bare ao (shim recursion)'
+    exit 1
+}
+if ($rules -notmatch 'AO_REAL_BINARY:\s*(/|[A-Za-z]:[\\/])') {
+    Write-Host 'agent-orchestrator.yaml.example must document AO_REAL_BINARY as an absolute path'
+    exit 1
+}
+if ($rules -notmatch 'PATH:\s*/.*/orchestrator-pack/scripts:') {
+    Write-Host 'agent-orchestrator.yaml.example must prepend pack scripts/ to orchestrator PATH'
+    exit 1
+}
+
 $paths = @(
     'scripts/invoke-orchestrator-claimed-review-run.ps1',
     'scripts/ao-autonomous-guard.ps1',
