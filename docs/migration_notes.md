@@ -1206,6 +1206,35 @@ Optional window overrides are `AO_REVIEW_RECOVERY_CRASH_GRACE_MS`,
 the enforced review timeout; otherwise the recovery check fails closed and emits
 a de-duplicated escalation audit rather than terminalizing runs.
 
+## Reviewer failure evidence log (Issue #312)
+
+`scripts/invoke-pack-review.ps1` now creates an incremental, secret-safe
+**reviewer failure evidence** sidecar under
+`{code-reviews}/reviewer-failure-evidence/` before the review wrapper starts.
+The artifact records allowlisted execution phases, bounded stdout/stderr tails,
+and observed exit/signal details when the wrapper exits normally. When #287
+recovery terminalizes a dead run, the recovery audit and run record link the
+bounded evidence summary (or record `failure_evidence_missing` when no artifact
+exists). Evidence is observability only — it never changes review verdicts,
+coverage, or claim state.
+
+Operator adoption after merge:
+
+1. Merge the updated review entrypoint and recovery modules; no AO YAML change is
+   required for default behavior.
+2. From the operator terminal only, restart AO if you want running reviewer
+   sessions to pick up the new entrypoint immediately (`ao stop` then `ao start`).
+3. Confirm wiring with:
+   `pwsh -NoProfile -File scripts/check-reviewer-failure-evidence.ps1`.
+   Expected output: `reviewer-failure-evidence registration/config OK`.
+4. When diagnosing `reviewer_liveness_provably_dead` / `proc_entry_missing`
+   runs, inspect `review-run-recovery-audit.json` for `failureEvidence.lastPhase`
+   and the linked artifact path under `reviewer-failure-evidence/`.
+
+Optional tail limits: `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` (artifact,
+default 8192) and `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` (recovery
+summary, default 1024). Debug init failures with `AO_REVIEW_FAILURE_EVIDENCE_DEBUG=1`.
+
 ## CI-failure notification cross-path dedup (Issue #283)
 
 Issue #283 replaces the old prose-only CI FAILURE DISCIPLINE dedup guard with the tracked
