@@ -1327,6 +1327,63 @@ describe('index-served carve-out (Issue #309)', () => {
     ).toThrow(/missing-capture-field/);
   });
 
+  it('accepts short capturedCommit SHAs equivalent to checkout HEAD', () => {
+    const shortCommit = execSync('git rev-parse --short HEAD', {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const manifestHash = classifierManifestHash();
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: [
+        {
+          key: 'unit-short-sha',
+          inboundRequestId: 'req-1',
+          reads: [
+            {
+              path: 'plugins/ao-scope-guard/lib/check.ts',
+              lines: 900,
+              kind: 'file',
+              capturedCommit: shortCommit,
+              classifierManifestHash: manifestHash,
+              readDiscriminator: '0',
+              surface: 'cursor',
+            },
+          ],
+        },
+      ],
+    }) as StopAuditResult;
+    expect(result.verdicts[0].allIndexServed).toBe(true);
+    expect(result.verdicts[0].indexServedExcludedLines).toBe(900);
+  });
+
+  it('blocking status on malformed captured read with missing lines', () => {
+    const commit = currentFixtureCaptureCommit();
+    const manifestHash = classifierManifestHash();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        workUnits: [
+          {
+            key: 'unit-missing-lines',
+            inboundRequestId: 'req-1',
+            reads: [
+              {
+                path: 'plugins/ao-scope-guard/lib/check.ts',
+                kind: 'file',
+                capturedCommit: commit,
+                classifierManifestHash: manifestHash,
+                readDiscriminator: '0',
+                surface: 'cursor',
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/missing-capture-field/);
+  });
+
   it('classifies isCodeClass-tagged tracked source reads as index-served on the events path', () => {
     const events = toolUseToAuditEvents(
       'Read',

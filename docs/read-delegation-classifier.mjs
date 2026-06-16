@@ -208,6 +208,60 @@ export function currentGitHead() {
 }
 
 /**
+ * @param {string | undefined} left
+ * @param {string | undefined} right
+ */
+export function gitCommitRefsEquivalent(left, right) {
+  if (!left || !right) {
+    return left === right;
+  }
+  if (left === right) {
+    return true;
+  }
+  try {
+    const resolvedLeft = execFileSync('git', ['rev-parse', left], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const resolvedRight = execFileSync('git', ['rev-parse', right], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return resolvedLeft === resolvedRight;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {import('./read-delegation-audit.d.mts').ReadEntry}
+ */
+function normalizeClassifierRead(row) {
+  const kind =
+    row.kind === 'diff' || row.kind === 'log' || row.kind === 'external' || row.kind === 'fetched'
+      ? row.kind
+      : 'file';
+  return {
+    path: typeof row.path === 'string' ? row.path : undefined,
+    lines: Math.max(0, Number(row.lines) || 0),
+    kind,
+    isCodeClass: row.isCodeClass === true,
+    fenceSignal: row.fenceSignal === true,
+    capturedCommit: typeof row.capturedCommit === 'string' ? row.capturedCommit : undefined,
+    classifierManifestHash:
+      typeof row.classifierManifestHash === 'string' ? row.classifierManifestHash : undefined,
+    surface: typeof row.surface === 'string' ? row.surface : undefined,
+    readDiscriminator:
+      typeof row.readDiscriminator === 'string' ? row.readDiscriminator : undefined,
+    canonicalPath: typeof row.canonicalPath === 'string' ? row.canonicalPath : undefined,
+    unitKey: typeof row.unitKey === 'string' ? row.unitKey : undefined,
+  };
+}
+
+/**
  * @param {import('./read-delegation-audit.d.mts').CapturedReadEntry} read
  */
 export function buildPerReadIdentity(unitKey, read, readDiscriminator) {
@@ -295,7 +349,11 @@ export function classifyReadPhaseA(read, manifest, ctx) {
       };
     }
     const checkout = ctx.checkoutCommit ?? currentGitHead();
-    if (checkout && read.capturedCommit && read.capturedCommit !== checkout) {
+    if (
+      checkout &&
+      read.capturedCommit &&
+      !gitCommitRefsEquivalent(read.capturedCommit, checkout)
+    ) {
       return {
         blocking: true,
         status: AUDIT_BLOCKING_STATUSES.CAPTURED_HEAD_MISMATCH,
@@ -546,21 +604,22 @@ export function classifyUnitReads(unit, session) {
   const identityMap = new Map();
 
   reads.forEach((read, index) => {
-    const enriched = {
-      ...read,
+    const raw = isRecord(read) ? read : {};
+    const enrichedForValidation = {
+      ...raw,
       unitKey: unit.key,
-      readDiscriminator: read.readDiscriminator ?? String(index),
-      surface: read.surface ?? session.surface,
-      capturedCommit: read.capturedCommit ?? unit.capturedCommit,
-      classifierManifestHash: read.classifierManifestHash ?? unit.classifierManifestHash,
+      readDiscriminator: raw.readDiscriminator ?? String(index),
+      surface: raw.surface ?? session.surface,
+      capturedCommit: raw.capturedCommit ?? unit.capturedCommit,
+      classifierManifestHash: raw.classifierManifestHash ?? unit.classifierManifestHash,
     };
 
-    const phaseA = classifyReadPhaseA(enriched, manifest, {
+    const phaseA = classifyReadPhaseA(enrichedForValidation, manifest, {
       surface: session.surface,
       checkoutCommit: session.checkoutCommit,
       usesClassifierCapture:
-        enriched.capturedCommit !== undefined ||
-        enriched.classifierManifestHash !== undefined,
+        enrichedForValidation.capturedCommit !== undefined ||
+        enrichedForValidation.classifierManifestHash !== undefined,
     });
     if (phaseA.blocking) {
       blocking = {
@@ -569,6 +628,8 @@ export function classifyUnitReads(unit, session) {
       };
       return;
     }
+
+    const enriched = normalizeClassifierRead(enrichedForValidation);
 
     if (phaseA.classification === READ_CLASSIFICATIONS.FENCE) {
       results.push({

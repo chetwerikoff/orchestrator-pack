@@ -354,7 +354,8 @@ export function hasEditInUnit(unit) {
  * @param {import('./read-delegation-audit.d.mts').SessionContext} session
  */
 export function auditWorkUnit(unit, session) {
-  const reads = normalizeReads(unit.reads);
+  const rawReads = Array.isArray(unit.reads) ? unit.reads : [];
+  const reads = normalizeReads(rawReads);
   const reviewerPath = isReviewerPathSession(session);
   const reviewSignalState = reviewMarkerState(session);
 
@@ -392,7 +393,7 @@ export function auditWorkUnit(unit, session) {
     });
   }
 
-  const classification = classifyUnitReads({ ...unit, reads }, {
+  const classification = classifyUnitReads({ ...unit, reads: rawReads }, {
     surface: session.surface,
     checkoutCommit: session.checkoutCommit,
     trackedPathsOverride: session.trackedPathsOverride,
