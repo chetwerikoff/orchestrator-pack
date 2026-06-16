@@ -32,6 +32,11 @@ function psString(value: string) {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+function parsePwshRows(output: string) {
+  const parsed = JSON.parse(output);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
 describe('Review-StartClaim single-flight contract', () => {
   it('never leaves two active claim records for one key under overlapping acquisition', () => {
     const dir = tempClaimDir();
@@ -40,14 +45,10 @@ describe('Review-StartClaim single-flight contract', () => {
         $helper = ${psString(helperPath)}
         $ns = ${psString(dir)}
         $sha = ${psString(fullSha)}
-        $jobs = 1..6 | ForEach-Object {
-          Start-Job -ArgumentList $helper,$ns,$sha -ScriptBlock {
-            param($helper,$ns,$sha)
-            . $helper
-            Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
-          }
-        }
-        $null = $jobs | Receive-Job -Wait -AutoRemoveJob
+        $null = 1..6 | ForEach-Object -Parallel {
+          . $using:helper
+          Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $using:sha -Surface 'review-trigger-reconcile' -Namespace $using:ns -ReviewRuns @() | Out-Null
+        } -ThrottleLimit 6
         $activePath = Join-Path $ns "pr-307-$sha.json"
         [pscustomobject]@{
           activeExists = (Test-Path -LiteralPath $activePath)
@@ -195,30 +196,32 @@ describe('Review-StartClaim single-flight contract', () => {
         $ns = ${psString(dir)}
         $sha = ${psString(fullSha)}
         $surfaces = @('review-trigger-reeval','review-trigger-reconcile','review-wake-trigger')
-        $jobs = foreach ($surface in $surfaces) {
-          Start-Job -ArgumentList $helper,$ns,$surface,$sha -ScriptBlock {
-            param($helper,$ns,$surface,$sha)
-            . $helper
-            $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface $surface -Namespace $ns -ReviewRuns @()
-            [pscustomobject]@{
-              surface = $surface
-              acquired = [bool]$r.acquired
-              reason = [string]$r.reason
-              holder = if ($r.holder) { Format-ReviewStartClaimHolder -Holder $r.holder } else { '' }
-              key = [string]$r.key
-            } | ConvertTo-Json -Compress
+        $rows = @($surfaces | ForEach-Object -Parallel {
+          . $using:helper
+          $surface = $_
+          $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $using:sha -Surface $surface -Namespace $using:ns -ReviewRuns @()
+          [pscustomobject]@{
+            surface = $surface
+            acquired = [bool]$r.acquired
+            reason = [string]$r.reason
+            holder = if ($r.holder) { Format-ReviewStartClaimHolder -Holder $r.holder } else { '' }
+            key = [string]$r.key
           }
-        }
-        $rows = $jobs | Receive-Job -Wait -AutoRemoveJob | ForEach-Object { $_ | ConvertFrom-Json }
-        $rows | ConvertTo-Json -Compress
+        } -ThrottleLimit 3)
+        [pscustomobject]@{
+          rows = $rows
+          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-266-*.json').Name).Count
+        } | ConvertTo-Json -Compress -Depth 6
       `;
-      const rows = JSON.parse(runPwsh(script));
+      const result = JSON.parse(runPwsh(script));
+      const rows = parsePwshRows(JSON.stringify(result.rows));
       expect(rows.filter((r: any) => r.acquired)).toHaveLength(1);
       const losers = rows.filter((r: any) => !r.acquired);
       expect(losers).toHaveLength(2);
       expect(losers.every((r: any) => r.reason === 'claimed')).toBe(true);
       expect(losers.every((r: any) => String(r.holder).includes('processGuid='))).toBe(true);
       expect(new Set(rows.map((r: any) => r.key))).toEqual(new Set([`pr-266-${fullSha}`]));
+      expect(result.activeCount).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
