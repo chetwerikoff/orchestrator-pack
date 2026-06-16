@@ -10,10 +10,8 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$SessionId,
-    [Parameter(Mandatory = $true)]
-    [int]$PrNumber,
+    [string]$SessionId = '',
+    [int]$PrNumber = 0,
     [string]$EventHeadSha = '',
     [string]$ProjectId = 'orchestrator-pack',
     [string]$RepoRoot = '',
@@ -23,6 +21,10 @@ param(
     [switch]$DryRun,
     [switch]$Probe
 )
+
+if (-not $Probe -and (-not $SessionId -or $PrNumber -le 0)) {
+    throw 'SessionId and PrNumber are required unless -Probe is set.'
+}
 
 $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot

@@ -24,6 +24,7 @@ const fixturesDir = path.join(repoRoot, 'tests/fixtures/orchestrator-claimed-rev
 const invokePath = path.join(repoRoot, 'scripts/invoke-orchestrator-claimed-review-run.ps1');
 const helperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
+const aoShimPath = path.join(repoRoot, 'scripts/ao');
 const fullSha = 'abc3180000000000000000000000000000000000';
 
 type TurnGateFixture = {
@@ -283,10 +284,33 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(String(parsed.reason)).toMatch(/head_covered|covered/);
   });
 
+  it('probe mode runs without SessionId or PrNumber', () => {
+    const output = runPwsh(`
+      & ${psString(invokePath)} -Probe -DryRun 2>$null
+    `);
+    const parsed = JSON.parse(output.trim());
+    expect(parsed.started).toBe(false);
+    expect(String(parsed.reason)).toMatch(/head_covered|covered/);
+  });
+
   it('autonomous guard denies raw ao review run when surface marker is set', () => {
     const result = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'review', 'run', 'opk-1'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', AO_REAL_BINARY: 'false' },
+      },
+    );
+    expect(result.status).toBe(93);
+    expect(result.stderr).toMatch(/autonomous review-starts paused/i);
+  });
+
+  it('scripts/ao shim denies raw review run on autonomous surface', () => {
+    const result = spawnSync(
+      aoShimPath,
+      ['review', 'run', 'opk-1'],
       {
         cwd: repoRoot,
         encoding: 'utf8',

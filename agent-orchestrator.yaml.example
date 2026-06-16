@@ -56,9 +56,10 @@ projects:
         permissions: permissionless
         env:
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
-          AO_REAL_BINARY: ao
-        # Prepend scripts/ to PATH (or symlink scripts/ao-autonomous-guard.ps1 as ao) so
-        # autonomous turns cannot reach raw `ao review run` — see Issue #318 gate section.
+          # Absolute path to the real AO binary — must not be the pack scripts/ao shim.
+          AO_REAL_BINARY: /home/you/.local/bin/ao
+          # Prepend pack scripts/ so orchestrator turns resolve `ao` to scripts/ao (Issue #318).
+          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
       agentConfig:
@@ -350,9 +351,10 @@ projects:
         pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
           -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
       Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
-      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1 and prepend scripts/ao-autonomous-guard.ps1
-      ahead of ao on PATH so raw `ao review run` is denied; only the claimed entry point
-      may launch review runs. Gate capability marker: orchestrator-claimed-review-run/v1.
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, AO_REAL_BINARY to the absolute real ao path,
+      and prepend pack scripts/ to PATH so `ao` resolves to scripts/ao (denies raw review run);
+      only the claimed entry point may launch review runs. Gate capability marker:
+      orchestrator-claimed-review-run/v1.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
       scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
       ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel

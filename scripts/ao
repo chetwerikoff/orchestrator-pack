@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Pack ao shim for autonomous orchestrator sessions (Issue #318).
+# Prepend this scripts/ directory to PATH for orchestrator agentConfig only.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GUARD="$SCRIPT_DIR/ao-autonomous-guard.ps1"
+
+if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]]; then
+  exec pwsh -NoProfile -ExecutionPolicy Bypass -File "$GUARD" "$@"
+fi
+
+resolve_real_ao() {
+  if [[ -n "${AO_REAL_BINARY:-}" && "${AO_REAL_BINARY}" != "ao" ]]; then
+    if [[ -x "${AO_REAL_BINARY}" ]]; then
+      printf '%s\n' "${AO_REAL_BINARY}"
+      return 0
+    fi
+    if command -v "${AO_REAL_BINARY}" >/dev/null 2>&1; then
+      command -v "${AO_REAL_BINARY}"
+      return 0
+    fi
+  fi
+
+  local self dir candidate resolved
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  IFS=':' read -ra path_dirs <<< "${PATH:-}"
+  for dir in "${path_dirs[@]}"; do
+    [[ -z "${dir}" || "${dir}" == "${SCRIPT_DIR}" ]] && continue
+    candidate="${dir%/}/ao"
+    [[ -x "${candidate}" ]] || continue
+    resolved="$(readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
+    if [[ "${resolved}" != "${self}" && "${resolved}" != *ao-autonomous-guard* ]]; then
+      printf '%s\n' "${resolved}"
+      return 0
+    fi
+  done
+
+  for fallback in "${HOME}/.local/bin/ao" "${HOME}/.npm-global/bin/ao" "${HOME}/.ao/bin/ao"; do
+    if [[ -x "${fallback}" ]]; then
+      printf '%s\n' "${fallback}"
+      return 0
+    fi
+  done
+
+  printf 'ao\n'
+}
+
+exec "$(resolve_real_ao)" "$@"

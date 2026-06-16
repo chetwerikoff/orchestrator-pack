@@ -21,6 +21,12 @@
       "path": "scripts/ao-autonomous-guard.ps1"
     },
     {
+      "id": "ao-shim",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao"
+    },
+    {
       "id": "invoke-manual-review-run",
       "classification": "gated",
       "surface": "shell",

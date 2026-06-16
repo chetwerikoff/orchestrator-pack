@@ -98,12 +98,15 @@ Autonomous orchestrator turns must start reviews only through
 `scripts/invoke-orchestrator-claimed-review-run.ps1`, which acquires the same `(PR, head)` claim
 as the three script starters (#267/#308) and applies the covered-head predicate (#189)
 mechanically. Raw `ao review run` from the autonomous surface is denied at the process boundary
-via `scripts/ao-autonomous-guard.ps1` when `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`.
+via `scripts/ao` (PATH shim → `scripts/ao-autonomous-guard.ps1`) when
+`AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`. Set `AO_REAL_BINARY` to the absolute real ao path
+and prepend `scripts/` to orchestrator `agentConfig.env.PATH` (not worker PATH).
 
 Operator adoption after merge:
 
 1. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
-   `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` and PATH/guard wiring).
+   `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE`,
+   absolute `AO_REAL_BINARY`, and orchestrator-only `PATH` prepend of pack `scripts/`).
 2. `ao stop` then `ao start` from the operator terminal (not from a managed session).
 3. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
 4. Run side-effect-safe live probe:

@@ -1,0 +1,43 @@
+{
+  "issue_number": 318,
+  "iteration_id": "opk-78",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-76",
+  "created_at": "2026-06-16T14:45:00.000Z",
+  "baseline": {
+    "commit_sha": "240e1aa64905ee34395fdc4bf3968fd41de6da5e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:45f9396e69179f2d94db7dd8d9e5f3600347dedcbb65543761b87d2fc58ff0d2"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/autonomous-review-start-capabilities.json",
+    "docs/declarations/318.opk-75.json",
+    "docs/declarations/318.opk-76.json",
+    "docs/declarations/318.opk-78.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-claimed-review-run.d.mts",
+    "docs/orchestrator-claimed-review-run.mjs",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/ao",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/check-autonomous-review-start-capabilities.ps1",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/check-review-start-claim-guard.ps1",
+    "scripts/invoke-manual-review-run.ps1",
+    "scripts/invoke-orchestrator-claimed-review-run.ps1",
+    "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
+    "scripts/lib/Get-PackReviewCommand.ps1",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1",
+    "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/orchestrator-review-start-preflight.ps1",
+    "scripts/review-start-claim.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [
+    "tests/fixtures/orchestrator-claimed-review-run/**"
+  ],
+  "amendments": []
+}

@@ -49,7 +49,7 @@ $knownIds = @{}
 foreach ($row in $repoInventory) { $knownIds[[string]$row.id] = $true }
 foreach ($file in @($files)) {
     $rel = [System.IO.Path]::GetRelativePath($RepoRoot, $file.FullName).Replace('\', '/')
-    if ($rel -match 'invoke-orchestrator-claimed-review-run|invoke-manual-review-run|ao-autonomous-guard|Invoke-OrchestratorClaimedReviewRun') {
+    if ($rel -match 'invoke-orchestrator-claimed-review-run|invoke-manual-review-run|ao-autonomous-guard|scripts/ao$|Invoke-OrchestratorClaimedReviewRun') {
         continue
     }
     $text = Get-Content -LiteralPath $file.FullName -Raw

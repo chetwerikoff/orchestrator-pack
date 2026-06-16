@@ -18,8 +18,9 @@ $rules = Get-Content -LiteralPath $yaml -Raw
 $requiredPhrases = @(
     'invoke-orchestrator-claimed-review-run.ps1',
     'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE',
+    'AO_REAL_BINARY',
     'orchestrator-claimed-review-run/v1',
-    'ao-autonomous-guard.ps1'
+    'scripts/ao'
 )
 $missing = @($requiredPhrases | Where-Object { $rules -notmatch [regex]::Escape($_) })
 if ($missing.Count -gt 0) {
@@ -30,6 +31,7 @@ if ($missing.Count -gt 0) {
 $paths = @(
     'scripts/invoke-orchestrator-claimed-review-run.ps1',
     'scripts/ao-autonomous-guard.ps1',
+    'scripts/ao',
     'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
     'docs/orchestrator-claimed-review-run.mjs',
     'docs/autonomous-review-start-capabilities.json'
