@@ -713,7 +713,7 @@ describe('Claude and shell transcript compatibility', () => {
         reads: [
           { path: 'docs/a.ts', lines: '150', kind: 'file' },
           { path: 'docs/b.ts', lines: '150', kind: 'file' },
-        ],
+        ] as unknown as ReadEntry[],
       },
       { surface: 'cursor' },
     );
