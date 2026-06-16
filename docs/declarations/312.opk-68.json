@@ -11,20 +11,37 @@
   },
   "declared_paths": [
     "docs/issues_drafts/101-reviewer-failure-evidence-log.md",
-    "docs/review-mechanical-cli.mjs",
     "docs/migration_notes.md",
     "docs/review-mechanical-cli.mjs",
     "docs/review-run-recovery.mjs",
     "docs/reviewer-failure-evidence.d.mts",
     "docs/reviewer-failure-evidence.mjs",
     "scripts/check-reviewer-failure-evidence.ps1",
+    "scripts/fixtures/review-failure-evidence/echo-args.ps1",
     "scripts/invoke-pack-review.ps1",
     "scripts/lib/Review-FailureEvidence.ps1",
     "scripts/lib/review-recovery-test-fixtures.ts",
+    "scripts/review-failure-evidence.Tests.ps1",
     "scripts/review-run-recovery.test.ts",
     "scripts/reviewer-failure-evidence.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:pending",
+      "new_active_scope_hash": "sha256:pending",
+      "changed": {
+        "added": [
+          "scripts/fixtures/review-failure-evidence/echo-args.ps1",
+          "scripts/review-failure-evidence.Tests.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Review fixes: output scrubbing and argv preservation tests",
+      "actor": "opk-68",
+      "timestamp": "2026-06-16T06:00:00.000Z",
+      "applied": true
+    }
+  ]
 }

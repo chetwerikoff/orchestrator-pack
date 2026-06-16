@@ -14,6 +14,7 @@ import {
   recordFailureEvidenceTerminal,
   resolveFailureEvidenceForRun,
   resolveTerminationSignalFromExitCode,
+  scrubSecretLikeOutput,
   tailBoundedText,
 } from '../docs/reviewer-failure-evidence.mjs';
 import {
@@ -91,6 +92,22 @@ describe('reviewer-failure-evidence', () => {
     expect(artifact.exitCode).toBe(17);
     expect(artifact.stderrTail.length).toBeLessThanOrEqual(256);
     expect(artifact.stderrTail).toContain('missing dependency');
+  });
+
+  it('scrubs secret-like reviewer output before persisting evidence tails', () => {
+    const store = tempStore();
+    const { path } = createFailureEvidenceArtifact({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-secret',
+      wrapperKind: 'codex',
+    }) as EvidenceCreateResult;
+    const stderr = 'Authorization: Bearer sk-live-abc123def456\nreview failed\n';
+    recordFailureEvidenceOutput({ path: path!, stderr });
+    const raw = readFileSync(path!, 'utf8');
+    expect(raw).not.toContain('sk-live-abc123def456');
+    const artifact = JSON.parse(raw);
+    expect(artifact.stderrTail).toContain('[REDACTED]');
+    expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
   });
 
   it('records signal detail for signal-style exit codes on linux', () => {

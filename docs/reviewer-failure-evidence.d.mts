@@ -9,6 +9,8 @@ export function getFailureEvidenceRunPointerPath(storeDir: string, runId: string
 export function resolveOutputTailLimit(env?: Record<string, string | undefined>): number;
 export function resolveSummaryTailLimit(env?: Record<string, string | undefined>): number;
 export function tailBoundedText(text: unknown, limit?: number): string;
+export function scrubSecretLikeOutput(text: unknown): string;
+export const OUTPUT_WITHHELD_MARKER: string;
 export function createFailureEvidenceArtifact(input: Record<string, unknown>): Record<string, unknown>;
 export function readFailureEvidenceArtifact(storeDir: string, input?: Record<string, unknown>): Record<string, unknown>;
 export function recordFailureEvidencePhase(input: Record<string, unknown>): Record<string, unknown>;

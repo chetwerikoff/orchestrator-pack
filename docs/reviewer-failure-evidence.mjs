@@ -27,6 +27,8 @@ export const EVIDENCE_PHASES = new Set([
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SECRET_PATTERN = /(?:token|secret|password|api[_-]?key|authorization|cookie|private[_-]?key|bearer\s)/i;
+const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
+export const OUTPUT_WITHHELD_MARKER = '[output_withheld]';
 const FORBIDDEN_FIELD_NAMES = new Set([
   'env',
   'environment',
@@ -95,6 +97,35 @@ export function tailBoundedText(text, limit = DEFAULT_OUTPUT_TAIL_LIMIT) {
   const value = String(text ?? '');
   if (value.length <= limit) return value;
   return value.slice(-limit);
+}
+
+export function scrubSecretLikeOutput(text) {
+  let value = String(text ?? '');
+  value = value.replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]');
+  value = value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  value = value.replace(
+    /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
+    '$1[REDACTED]',
+  );
+  value = value.replace(/\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
+  return value;
+}
+
+function prepareBoundedOutputTail(text, outputTailLimit) {
+  if (text == null) return { tail: undefined, withheld: false };
+  const scrubbed = scrubSecretLikeOutput(text);
+  const tail = tailBoundedText(scrubbed, outputTailLimit);
+  if (REMAINING_CREDENTIAL_PATTERN.test(tail)) {
+    return { tail: OUTPUT_WITHHELD_MARKER, withheld: true };
+  }
+  return { tail, withheld: false };
+}
+
+function assignBoundedOutputTail(artifact, field, withheldField, text, outputTailLimit) {
+  const prepared = prepareBoundedOutputTail(text, outputTailLimit);
+  if (prepared.tail === undefined) return;
+  artifact[field] = prepared.tail;
+  if (prepared.withheld) artifact[withheldField] = true;
 }
 
 function emptyArtifact({ reviewerSessionId, wrapperKind }) {
@@ -230,8 +261,8 @@ export function associateFailureEvidenceRun({ path, storeDir, runId, runFingerpr
 
 export function recordFailureEvidenceOutput({ path, stdout, stderr, outputTailLimit = DEFAULT_OUTPUT_TAIL_LIMIT }) {
   return mutateArtifact(path, (artifact) => {
-    if (stdout != null) artifact.stdoutTail = tailBoundedText(stdout, outputTailLimit);
-    if (stderr != null) artifact.stderrTail = tailBoundedText(stderr, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, outputTailLimit);
     return artifact;
   });
 }
@@ -274,8 +305,8 @@ export function recordFailureEvidenceTerminal({
       if (resolved.signalDetail) artifact.signalDetail = resolved.signalDetail;
     }
     if (signalDetail != null) artifact.signalDetail = String(signalDetail);
-    if (stdout != null) artifact.stdoutTail = tailBoundedText(stdout, outputTailLimit);
-    if (stderr != null) artifact.stderrTail = tailBoundedText(stderr, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, outputTailLimit);
     if (completionStatus) artifact.completionStatus = String(completionStatus);
     return artifact;
   });
@@ -294,8 +325,12 @@ export function buildFailureEvidenceSummary(artifact, options = {}) {
     signal: artifact.signal,
     signalDetail: artifact.signalDetail,
     completionStatus: artifact.completionStatus,
-    stdoutTail: artifact.stdoutTail ? tailBoundedText(artifact.stdoutTail, summaryTailLimit) : undefined,
-    stderrTail: artifact.stderrTail ? tailBoundedText(artifact.stderrTail, summaryTailLimit) : undefined,
+    stdoutTail: artifact.stdoutTail
+      ? tailBoundedText(scrubSecretLikeOutput(artifact.stdoutTail), summaryTailLimit)
+      : undefined,
+    stderrTail: artifact.stderrTail
+      ? tailBoundedText(scrubSecretLikeOutput(artifact.stderrTail), summaryTailLimit)
+      : undefined,
     phaseCount: Array.isArray(artifact.phases) ? artifact.phases.length : 0,
     artifactPath: options.artifactPath,
   };
@@ -305,12 +340,19 @@ export function buildFailureEvidenceSummary(artifact, options = {}) {
   return summary;
 }
 
+function stringLooksSecretUnsafe(text) {
+  const value = String(text ?? '');
+  if (REMAINING_CREDENTIAL_PATTERN.test(value)) return true;
+  if (/(?:token|secret|password|api[_-]?key|cookie)\s*[:=]\s*(?!\[REDACTED\])\S+/i.test(value)) return true;
+  return false;
+}
+
 export function assertFailureEvidenceSecretSafe(value, path = 'root') {
   const errors = [];
   function walk(node, currentPath) {
     if (node == null) return;
     if (typeof node === 'string') {
-      if (SECRET_PATTERN.test(node)) errors.push(`${currentPath}: suspicious secret-like content`);
+      if (stringLooksSecretUnsafe(node)) errors.push(`${currentPath}: suspicious secret-like content`);
       return;
     }
     if (Array.isArray(node)) {
@@ -431,6 +473,8 @@ async function main() {
       return buildFailureEvidenceSummary(payload?.artifact, payload?.options ?? {});
     case 'assert-secret-safe':
       return assertFailureEvidenceSecretSafe(payload?.value ?? payload);
+    case 'scrub-output':
+      return { scrubbed: scrubSecretLikeOutput(payload?.text ?? '') };
     default:
       throw new Error(`Unknown reviewer-failure-evidence subcommand: ${subcommand}`);
   }

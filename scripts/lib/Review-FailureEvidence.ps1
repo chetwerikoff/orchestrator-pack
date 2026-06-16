@@ -103,6 +103,26 @@ function Resolve-ReviewWrapperTerminationSignal {
     return @{ signal = 'signal_unavailable'; signalDetail = 'windows_exit_code_only' }
 }
 
+function Get-PackReviewWrapperProcessStartInfo {
+    param(
+        [string]$PwshPath,
+        [string]$WrapperPath,
+        [string[]]$WrapperArgs
+    )
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($PwshPath)
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    [void]$psi.ArgumentList.Add('-NoProfile')
+    [void]$psi.ArgumentList.Add('-File')
+    [void]$psi.ArgumentList.Add($WrapperPath)
+    foreach ($arg in $WrapperArgs) {
+        [void]$psi.ArgumentList.Add([string]$arg)
+    }
+    return $psi
+}
+
 function Invoke-PackReviewWrapperWithFailureEvidence {
     param(
         [string]$WrapperPath,
@@ -112,25 +132,22 @@ function Invoke-PackReviewWrapperWithFailureEvidence {
 
     Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'wrapper_started' | Out-Null
 
-    $stdoutFile = [System.IO.Path]::GetTempFileName()
-    $stderrFile = [System.IO.Path]::GetTempFileName()
+    $process = $null
     try {
-        $argList = @('-NoProfile', '-File', $WrapperPath) + $WrapperArgs
         $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
-        $process = Start-Process -FilePath $pwsh -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -Wait
-        $stdout = ''
-        $stderr = ''
-        if (Test-Path -LiteralPath $stdoutFile -PathType Leaf) {
-            $stdout = [System.IO.File]::ReadAllText($stdoutFile)
+        $psi = Get-PackReviewWrapperProcessStartInfo -PwshPath $pwsh -WrapperPath $WrapperPath -WrapperArgs $WrapperArgs
+        $process = [System.Diagnostics.Process]::Start($psi)
+        if (-not $process) {
+            throw 'Failed to start pack review wrapper process'
         }
-        if (Test-Path -LiteralPath $stderrFile -PathType Leaf) {
-            $stderr = [System.IO.File]::ReadAllText($stderrFile)
-        }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
 
         Update-ReviewFailureEvidenceOutput -Handle $EvidenceHandle -Stdout $stdout -Stderr $stderr | Out-Null
         Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'reviewer_output_observed' | Out-Null
 
-        $exitCode = [int]$process.ExitCode
         $termination = Resolve-ReviewWrapperTerminationSignal -ExitCode $exitCode
         $completionStatus = if ($exitCode -eq 0) { 'normal' } else { 'abnormal' }
         Complete-ReviewFailureEvidence -Handle $EvidenceHandle -ExitCode $exitCode -Signal $termination.signal -SignalDetail $termination.signalDetail -Stdout $stdout -Stderr $stderr -CompletionStatus $completionStatus | Out-Null
@@ -139,9 +156,12 @@ function Invoke-PackReviewWrapperWithFailureEvidence {
         if ($stdout) { [Console]::Out.Write($stdout) }
         if ($stderr) { [Console]::Error.Write($stderr) }
 
-        return $exitCode
+        return [int]$exitCode
     }
     finally {
-        Remove-Item -LiteralPath $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
+        if ($process -and -not $process.HasExited) {
+            try { $process.Kill() } catch { }
+        }
+        if ($process) { $process.Dispose() }
     }
 }

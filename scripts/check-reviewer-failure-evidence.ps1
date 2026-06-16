@@ -15,4 +15,7 @@ if ($entrypointText -notmatch 'Review-FailureEvidence\.ps1') {
 if ($entrypointText -notmatch 'Initialize-ReviewFailureEvidence') {
     throw 'invoke-pack-review.ps1 must initialize failure evidence before wrapper start'
 }
+if ($entrypointText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
+    throw 'Review-FailureEvidence.ps1 must build wrapper argv via ProcessStartInfo.ArgumentList'
+}
 Write-Host 'reviewer-failure-evidence registration/config OK'
