@@ -16,5 +16,18 @@
     "agent-orchestrator.yaml.example"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:655112b0a02512162372bbd2007e11897c972866ce7ba088381c2e5d058b10db",
+      "new_active_scope_hash": "sha256:655112b0a02512162372bbd2007e11897c972866ce7ba088381c2e5d058b10db",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "ci fixes and declaration refresh",
+      "actor": "opk-75",
+      "timestamp": "2026-06-16T13:59:57.399Z",
+      "applied": true
+    }
+  ]
 }
