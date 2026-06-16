@@ -1,0 +1,27 @@
+{
+  "issue_number": 308,
+  "iteration_id": "opk-69",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-16T07:35:00.000Z",
+  "baseline": {
+    "commit_sha": "95bf6d5661ebce05be9b0773d80483e396757a1e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1a0e23a602bd636e94f544c9f6dfba44f92dccaf404cf1cec41ba24cb903eef4"
+  },
+  "declared_paths": [
+    "docs/declarations/308.opk-69.json",
+    "docs/migration_notes.md",
+    "docs/review-run-recovery.mjs",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/review-run-recovery.ps1",
+    "scripts/review-start-claim.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
