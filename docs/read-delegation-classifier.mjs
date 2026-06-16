@@ -551,13 +551,16 @@ export function classifyUnitReads(unit, session) {
       unitKey: unit.key,
       readDiscriminator: read.readDiscriminator ?? String(index),
       surface: read.surface ?? session.surface,
+      capturedCommit: read.capturedCommit ?? unit.capturedCommit,
+      classifierManifestHash: read.classifierManifestHash ?? unit.classifierManifestHash,
     };
 
     const phaseA = classifyReadPhaseA(enriched, manifest, {
       surface: session.surface,
       checkoutCommit: session.checkoutCommit,
       usesClassifierCapture:
-        read.capturedCommit !== undefined && read.classifierManifestHash !== undefined,
+        enriched.capturedCommit !== undefined ||
+        enriched.classifierManifestHash !== undefined,
     });
     if (phaseA.blocking) {
       blocking = {

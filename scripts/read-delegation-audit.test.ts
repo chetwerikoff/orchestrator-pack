@@ -1302,6 +1302,31 @@ describe('index-served carve-out (Issue #309)', () => {
     ).toThrow(/captured-head-mismatch/);
   });
 
+  it('blocking status on partial capture metadata', () => {
+    const commit = currentFixtureCaptureCommit();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        workUnits: [
+          {
+            key: 'unit-partial-capture',
+            inboundRequestId: 'req-1',
+            reads: [
+              {
+                path: 'plugins/ao-scope-guard/lib/check.ts',
+                lines: 900,
+                kind: 'file',
+                capturedCommit: commit,
+                readDiscriminator: '0',
+                surface: 'cursor',
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/missing-capture-field/);
+  });
+
   it('classifies isCodeClass-tagged tracked source reads as index-served on the events path', () => {
     const events = toolUseToAuditEvents(
       'Read',
