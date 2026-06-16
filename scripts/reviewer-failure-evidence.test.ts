@@ -228,6 +228,48 @@ describe('reviewer-failure-evidence', () => {
     expect(artifact.phases).toEqual([]);
   });
 
+  it('does not return evidence from a stale by-run pointer after session reuse', () => {
+    const store = tempStore();
+    const first = writeRun(store, {
+      idSuffix: 'old-pointer',
+      reviewerSessionId: 'opk-rev-stale-pointer',
+      status: 'failed',
+      completedAt: '2026-06-13T00:01:00.000Z',
+    });
+    const sessionPath = join(store, 'reviewer-failure-evidence', 'opk-rev-stale-pointer.json');
+    const pointerDir = join(store, 'reviewer-failure-evidence', 'by-run');
+    mkdirSync(pointerDir, { recursive: true });
+    writeFileSync(join(pointerDir, `${first.run.id}.json`), `${JSON.stringify({
+      schemaVersion: 1,
+      runId: first.run.id,
+      reviewerSessionId: 'opk-rev-stale-pointer',
+      artifactPath: sessionPath,
+    }, null, 2)}\n`);
+    writeFileSync(sessionPath, `${JSON.stringify({
+      schemaVersion: 1,
+      reviewerSessionId: 'opk-rev-stale-pointer',
+      runId: first.run.id,
+      phases: [{ phase: 'wrapper_exited', at: '2026-06-13T00:01:00.000Z' }],
+      lastPhase: 'wrapper_exited',
+      stderrTail: 'first run evidence',
+    }, null, 2)}\n`);
+
+    writeRun(store, {
+      idSuffix: 'new-pointer',
+      reviewerSessionId: 'opk-rev-stale-pointer',
+      createdAt: '2026-06-13T00:02:00.000Z',
+    });
+    ensureFailureEvidenceForReviewerSession({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-stale-pointer',
+      wrapperKind: 'codex',
+    });
+
+    const resolved = resolveFailureEvidenceForRun(store, first.run) as EvidenceResolveResult;
+    expect(resolved.ok).toBe(false);
+    expect(resolved.diagnostic).toBe('failure_evidence_missing');
+  });
+
   it('does not treat by-run pointer JSON as the evidence artifact', () => {
     const store = tempStore();
     const { run } = writeRun(store, { idSuffix: 'pointer', reviewerSessionId: 'opk-rev-pointer' });

@@ -236,7 +236,7 @@ export function readFailureEvidenceArtifact(storeDir, { runId, reviewerSessionId
     const pointer = readArtifactFile(pointerPath);
     if (isFailureEvidenceRunPointer(pointer)) {
       const artifact = readArtifactFile(String(pointer.artifactPath));
-      if (isFailureEvidenceArtifact(artifact)) {
+      if (isFailureEvidenceArtifact(artifact) && artifact.runId === boundRunId) {
         return { ok: true, path: String(pointer.artifactPath), artifact };
       }
       const sessionPath = getFailureEvidenceSessionPath(storeDir, pointer.reviewerSessionId);
