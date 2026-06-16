@@ -319,7 +319,7 @@ function Test-ReviewStartClaimRetryEligible {
 function Enter-ReviewStartClaimMutexWithRetry {
     param(
         [string]$LockDir,
-        [int]$MaxAttempts = 40,
+        [int]$MaxAttempts = 120,
         [int]$SleepMs = 25
     )
 
@@ -339,7 +339,7 @@ function Get-ReviewStartClaimContendedResult {
         [string]$Key
     )
 
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
         $existing = Read-ReviewStartClaimRecord -Path $Path
         if ($existing.ok) {
             return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $Path; namespace = $Namespace; key = $existing.record.key }
