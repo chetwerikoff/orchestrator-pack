@@ -303,18 +303,34 @@ function Test-ReviewStartClaimRecordSameGeneration {
     )
 }
 
+function Test-ReviewStartClaimRunMatchesKey {
+    param(
+        [object]$Run,
+        [int]$PrNumber,
+        [string]$NormalizedHeadSha
+    )
+
+    if ($null -eq $Run) { return $false }
+    $runPr = 0
+    if (-not [int]::TryParse([string]$Run.prNumber, [ref]$runPr)) { return $false }
+    if ($runPr -ne $PrNumber) { return $false }
+    $target = ([string]$Run.targetSha).Trim().ToLowerInvariant()
+    return ($target -eq $NormalizedHeadSha)
+}
+
+function Test-ReviewStartClaimRunIsCovering {
+    param([object]$Run)
+
+    $status = ([string]$Run.status).Trim().ToLowerInvariant()
+    return ($status -in $Script:ReviewStartClaimCoveredRunStatuses)
+}
+
 function Test-ReviewStartClaimRunVisible {
     param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
     foreach ($run in @($ReviewRuns)) {
-        if ($null -eq $run) { continue }
-        $runPr = 0
-        if (-not [int]::TryParse([string]$run.prNumber, [ref]$runPr)) { continue }
-        if ($runPr -ne $PrNumber) { continue }
-        $target = ([string]$run.targetSha).Trim().ToLowerInvariant()
-        if ($target -ne $normalized) { continue }
-        $status = ([string]$run.status).Trim().ToLowerInvariant()
-        if ($status -in $Script:ReviewStartClaimCoveredRunStatuses) {
+        if (-not (Test-ReviewStartClaimRunMatchesKey -Run $run -PrNumber $PrNumber -NormalizedHeadSha $normalized)) { continue }
+        if (Test-ReviewStartClaimRunIsCovering -Run $run) {
             return $true
         }
     }
@@ -391,17 +407,12 @@ function Get-ReviewStartClaimVisibleRunId {
     $index = 0
     foreach ($run in @($ReviewRuns)) {
         $index++
-        if ($null -eq $run) { continue }
-        $runPr = 0
-        if (-not [int]::TryParse([string]$run.prNumber, [ref]$runPr)) { continue }
-        if ($runPr -ne $PrNumber) { continue }
-        $target = ([string]$run.targetSha).Trim().ToLowerInvariant()
-        if ($target -ne $normalized) { continue }
-        $status = ([string]$run.status).Trim().ToLowerInvariant()
-        if ($status -notin $Script:ReviewStartClaimCoveredRunStatuses) { continue }
+        if (-not (Test-ReviewStartClaimRunMatchesKey -Run $run -PrNumber $PrNumber -NormalizedHeadSha $normalized)) { continue }
+        if (-not (Test-ReviewStartClaimRunIsCovering -Run $run)) { continue }
         $runId = [string]$run.id
         if (-not $runId) { $runId = [string]$run.runId }
         if (-not $runId) { continue }
+        $status = ([string]$run.status).Trim().ToLowerInvariant()
         $created = Get-ReviewStartClaimRunCreatedAtUtc -Run $run
         if ($created -eq [datetime]::MinValue) { $created = [datetime]::MinValue.AddSeconds($index) }
         if ($status -in $Script:ReviewStartClaimInFlightRunStatuses) {

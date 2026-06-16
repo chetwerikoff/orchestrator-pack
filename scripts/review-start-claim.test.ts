@@ -404,6 +404,19 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.messages.join('\n')).toContain('below safe floor');
   });
 
+  it('selects the queued covering run id when a failed terminal run is listed first', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $runs = @(
+        @{ id = 'opk-rev-failed'; prNumber = 266; targetSha = $sha; status = 'failed' },
+        @{ id = 'opk-rev-queued'; prNumber = 266; targetSha = $sha; status = 'queued' }
+      )
+      [string](Get-ReviewStartClaimVisibleRunId -ReviewRuns $runs -PrNumber 266 -HeadSha $sha)
+    `);
+    expect(output.trim()).toBe('opk-rev-queued');
+  });
+
   it('binds claims to the in-flight covering run when older terminal runs are listed first', () => {
     const dir = tempClaimDir();
     const sha = fullSha;
