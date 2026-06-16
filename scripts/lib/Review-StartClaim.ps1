@@ -232,8 +232,17 @@ function Test-ReviewStartClaimMutexAbandoned {
         return $true
     }
 
-    $ageSeconds = ((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $LockDir).LastWriteTimeUtc).TotalSeconds
-    return ($ageSeconds -ge (Get-ReviewStartClaimMutexStaleSeconds))
+    if (-not (Test-Path -LiteralPath $LockDir -PathType Container)) {
+        return $false
+    }
+    try {
+        $item = Get-Item -LiteralPath $LockDir -ErrorAction Stop
+        $ageSeconds = ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds
+        return ($ageSeconds -ge (Get-ReviewStartClaimMutexStaleSeconds))
+    }
+    catch {
+        return $false
+    }
 }
 
 function Recover-ReviewStartClaimMutex {
@@ -498,6 +507,47 @@ function New-ReviewStartClaimActiveRecord {
     }
 }
 
+function Test-ReviewStartClaimHolderOwnsPath {
+    param(
+        [string]$Path,
+        [object]$Holder
+    )
+
+    $read = Read-ReviewStartClaimRecord -Path $Path
+    if (-not $read.ok) { return $false }
+    return ([string]$read.record.holder.processGuid -eq [string]$Holder.processGuid)
+}
+
+function Get-ReviewStartClaimLostRaceResult {
+    param(
+        [string]$Path,
+        [string]$Namespace,
+        [string]$Key
+    )
+
+    $existing = Read-ReviewStartClaimRecord -Path $Path
+    if ($existing.ok) {
+        return @{
+            acquired  = $false
+            reason    = 'claimed'
+            holder    = $existing.record.holder
+            claim     = $existing.record
+            path      = $Path
+            namespace = $Namespace
+            key       = $existing.record.key
+        }
+    }
+    return @{
+        acquired    = $false
+        reason      = 'ambiguous_claim'
+        escalation  = $true
+        detail      = 'lost_race_without_active_record'
+        path        = $Path
+        namespace   = $Namespace
+        key         = $Key
+    }
+}
+
 function Write-ReviewStartClaimAtomic {
     param([string]$Path, [object]$Record)
     $dir = Split-Path -Parent $Path
@@ -550,6 +600,9 @@ function Resolve-ReviewStartClaimAgainstExisting {
         acquiredAtUtc = $Existing.record.acquiredAtUtc
     }
     Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
+    if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
+        return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
+    }
     return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $Path; namespace = $Namespace; key = $newRecord.key; recoveredRecord = $Existing.record }
 }
 
@@ -591,6 +644,9 @@ function Acquire-ReviewStartClaim {
 
             $record = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason
             Write-ReviewStartClaimAtomic -Path $path -Record $record
+            if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
+                return Get-ReviewStartClaimLostRaceResult -Path $path -Namespace $resolved -Key $key
+            }
             return @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key }
         }
         catch [System.IO.IOException] {
