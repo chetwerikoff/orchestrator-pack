@@ -221,7 +221,7 @@ describe('Review-StartClaim single-flight contract', () => {
     const base = mkdtempSync(path.join(tmpdir(), 'ao-base-'));
     const customProject = 'team-custom-pack';
     try {
-      const env = { ...process.env, AO_WAKE_LISTENER_PROJECT_ID: customProject };
+      const env: NodeJS.ProcessEnv = { ...process.env, AO_WAKE_LISTENER_PROJECT_ID: customProject };
       delete env.AO_REVIEW_CLAIM_DIR;
       const result = spawnSync(
         'pwsh',
