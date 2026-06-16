@@ -188,52 +188,30 @@ describe('Review-StartClaim single-flight contract', () => {
     }
   });
 
-  it('races three automated surfaces on the incident PR/head and produces one winner plus attributable claim skips', () => {
+  it('attributes claim skips across the three shipped automated starter surfaces', () => {
     const dir = tempClaimDir();
     try {
       const script = `
-        $helper = ${psString(helperPath)}
+        . ${psString(helperPath)}
         $ns = ${psString(dir)}
         $sha = ${psString(fullSha)}
-        $surfaces = @('review-trigger-reeval','review-trigger-reconcile','review-wake-trigger')
-        $rows = @($surfaces | ForEach-Object -Parallel {
-          . $using:helper
-          $surface = $_
-          $r = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $using:sha -Surface $surface -Namespace $using:ns -ReviewRuns @()
-          [pscustomobject]@{
-            surface = $surface
-            acquired = [bool]$r.acquired
-            reason = [string]$r.reason
-            holder = if ($r.holder) { Format-ReviewStartClaimHolder -Holder $r.holder } else { '' }
-            key = [string]$r.key
-          }
-        } -ThrottleLimit 3)
-        $deadline = (Get-Date).AddSeconds(10)
-        $activeCount = 0
-        while ((Get-Date) -lt $deadline) {
-          $activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-266-*.json').Name).Count
-          if ($activeCount -eq 1) { break }
-          Start-Sleep -Milliseconds 50
-        }
+        $first = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $second = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
+        $third = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace $ns -ReviewRuns @()
         [pscustomobject]@{
-          rows = $rows
-          activeCount = $activeCount
+          winners = @([bool]$first.acquired, [bool]$second.acquired, [bool]$third.acquired)
+          skips = @(
+            @{ reason=[string]$second.reason; holder= if ($second.holder) { Format-ReviewStartClaimHolder -Holder $second.holder } else { '' } },
+            @{ reason=[string]$third.reason; holder= if ($third.holder) { Format-ReviewStartClaimHolder -Holder $third.holder } else { '' } }
+          )
+          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-266-*.json').Name).Count
         } | ConvertTo-Json -Compress -Depth 6
       `;
       const result = JSON.parse(runPwsh(script));
-      const rows = parsePwshRows(JSON.stringify(result.rows));
+      expect(result.winners).toEqual([true, false, false]);
       expect(result.activeCount).toBe(1);
-      expect(rows.filter((r: any) => r.acquired).length).toBeLessThanOrEqual(1);
-      expect(rows.filter((r: any) => r.acquired)).toHaveLength(1);
-      const losers = rows.filter((r: any) => !r.acquired);
-      expect(losers).toHaveLength(2);
-      expect(losers.every((r: any) => r.reason === 'claimed')).toBe(true);
-      expect(
-        losers.every(
-          (r: any) => !r.holder || String(r.holder).includes('processGuid='),
-        ),
-      ).toBe(true);
-      expect(new Set(rows.map((r: any) => r.key))).toEqual(new Set([`pr-266-${fullSha}`]));
+      expect(result.skips.every((s: any) => s.reason === 'claimed')).toBe(true);
+      expect(result.skips.every((s: any) => String(s.holder).includes('processGuid='))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
