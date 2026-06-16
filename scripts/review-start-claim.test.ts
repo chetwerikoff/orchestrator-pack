@@ -133,11 +133,12 @@ describe('Review-StartClaim single-flight contract', () => {
         . ${psString(helperPath)}
         $ns = ${psString(dir)}
         $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha ${psString(sha)} -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
-        $release = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha ${psString(sha)} -Namespace $ns -RunId 'opk-rev-314'
+        Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns @(@{ id='opk-rev-314'; prNumber=266; targetSha=${psString(sha)}; status='running' }) | Out-Null
+        $release = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha ${psString(sha)} -Namespace $ns -RunId 'opk-rev-314' -RunCreatedAtUtc '2026-06-13T00:00:00.000Z'
         $retry = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha ${psString(sha)} -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
         [pscustomobject]@{
           held = [bool]$claim.acquired
-          release = @{ ok=[bool]$release.ok; outcome='released_after_run_terminalized' }
+          release = @{ ok=[bool]$release.ok; reason=[string]$release.reason }
           retry = @{ acquired=[bool]$retry.acquired }
           activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha ${psString(sha)})
           terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*released_after_run_terminalized*.json').Name)
@@ -148,6 +149,39 @@ describe('Review-StartClaim single-flight contract', () => {
       expect(result.release.ok).toBe(true);
       expect(result.retry.acquired).toBe(true);
       expect(result.terminal).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not release a newer reacquired claim when an older run is terminalized', () => {
+    const dir = tempClaimDir();
+    const sha = fullSha;
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(sha)}
+        $old = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        Bind-ReviewStartClaimToVisibleRun -ClaimResult $old -ReviewRuns @(@{ id='opk-rev-old'; prNumber=266; targetSha=$sha; status='running' }) | Out-Null
+        $record = Read-ReviewStartClaimRecord -Path $old.path
+        $record.record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
+        ($record.record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $old.path -Encoding UTF8
+        $env:AO_REVIEW_CLAIM_STALE_MINUTES = '2'
+        $fresh = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
+        $release = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha $sha -Namespace $ns -RunId 'opk-rev-old' -RunCreatedAtUtc '2026-06-13T00:00:00.000Z'
+        [pscustomobject]@{
+          freshAcquired = [bool]$fresh.acquired
+          release = @{ ok=[bool]$release.ok; reason=[string]$release.reason }
+          activeHolder = Format-ReviewStartClaimHolder -Holder $fresh.claim.holder
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
+        } | ConvertTo-Json -Compress -Depth 6
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.freshAcquired).toBe(true);
+      expect(result.release.ok).toBe(false);
+      expect(result.release.reason).toBe('superseded_claim');
+      expect(result.activeExists).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

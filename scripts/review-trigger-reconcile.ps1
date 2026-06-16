@@ -362,6 +362,7 @@ function Invoke-PlannedReviewRun {
     }
 
     $postRuns = @(Get-AoReviewRuns -Project $Project)
+    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
     $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
     if (-not $complete.ok) {
         Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"

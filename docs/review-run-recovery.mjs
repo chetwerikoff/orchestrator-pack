@@ -533,6 +533,7 @@ export function runRecoveryTick({ projectId = 'orchestrator-pack', storeDir, now
       reason: decision.reason ?? decision.terminalReason,
       prNumber: run.prNumber ?? run.pr_number ?? null,
       targetSha: run.targetSha ?? run.target_sha ?? null,
+      runCreatedAt: run.createdAt ?? run.created_at ?? null,
     };
 
     if (decision.action === 'escalate') {

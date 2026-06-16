@@ -405,6 +405,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     if (-not $DryRun) {
+        Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
         $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"

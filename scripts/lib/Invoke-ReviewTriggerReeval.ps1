@@ -177,6 +177,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
+    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
     $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
     if (-not $complete.ok) {
         & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"

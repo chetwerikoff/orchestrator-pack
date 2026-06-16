@@ -349,6 +349,84 @@ function Get-ReviewStartClaimContendedResult {
     return @{ acquired = $false; reason = 'claimed'; path = $Path; namespace = $Namespace; key = $Key }
 }
 
+function Get-ReviewStartClaimVisibleRunId {
+    param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha)
+
+    if (-not (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $HeadSha)) {
+        return $null
+    }
+    $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
+    foreach ($run in @($ReviewRuns)) {
+        if ($null -eq $run) { continue }
+        $runPr = 0
+        if (-not [int]::TryParse([string]$run.prNumber, [ref]$runPr)) { continue }
+        if ($runPr -ne $PrNumber) { continue }
+        $target = ([string]$run.targetSha).Trim().ToLowerInvariant()
+        if ($target -ne $normalized) { continue }
+        $runId = [string]$run.id
+        if (-not $runId) { $runId = [string]$run.runId }
+        if ($runId) { return $runId }
+    }
+    return $null
+}
+
+function Test-ReviewStartClaimMatchesTerminalizedRun {
+    param(
+        [object]$ClaimRecord,
+        [string]$RunId,
+        [string]$RunCreatedAtUtc = ''
+    )
+
+    $bound = [string]$ClaimRecord.boundRunId
+    if ($bound) {
+        return ($bound -eq $RunId)
+    }
+    if (-not $RunCreatedAtUtc) {
+        return $false
+    }
+    try {
+        $acquired = [datetimeoffset]::Parse([string]$ClaimRecord.acquiredAtUtc).UtcDateTime
+        $created = [datetimeoffset]::Parse($RunCreatedAtUtc).UtcDateTime
+        return ($acquired -le $created)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Bind-ReviewStartClaimToVisibleRun {
+    param(
+        [hashtable]$ClaimResult,
+        [array]$ReviewRuns = @()
+    )
+
+    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $runId = Get-ReviewStartClaimVisibleRunId -ReviewRuns $ReviewRuns -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha)
+    if (-not $runId) { return @{ ok = $false; reason = 'no_visible_run' } }
+
+    $lockDir = Get-ReviewStartClaimLockDir -Namespace $ClaimResult.namespace -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha)
+    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
+    try {
+        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
+        if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
+            return @{ ok = $false; reason = 'lost_ownership'; holder = $read.record.holder }
+        }
+        if ([string]$read.record.boundRunId -and [string]$read.record.boundRunId -ne $runId) {
+            return @{ ok = $false; reason = 'bound_to_other_run'; boundRunId = [string]$read.record.boundRunId }
+        }
+        $record = @{}
+        $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
+        $record.boundRunId = $runId
+        ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $ClaimResult.path -Encoding UTF8
+        $ClaimResult.claim.boundRunId = $runId
+        return @{ ok = $true; boundRunId = $runId }
+    }
+    finally {
+        Exit-ReviewStartClaimMutex -LockDir $lockDir
+    }
+}
+
 function Enter-ReviewStartClaimMutex {
     param([string]$LockDir)
     try {
@@ -602,10 +680,12 @@ function Release-ReviewStartClaimForTerminalizedRun {
         [string]$ProjectId = 'orchestrator-pack',
         [string]$Namespace = '',
         [string]$RunId = '',
+        [string]$RunCreatedAtUtc = '',
         [scriptblock]$LogWriter = $null
     )
 
     try {
+        if (-not $RunId) { return @{ ok = $false; reason = 'missing_run_id' } }
         $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
         $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
         Initialize-ReviewStartClaimNamespace -Namespace $resolved
@@ -618,6 +698,14 @@ function Release-ReviewStartClaimForTerminalizedRun {
             $read = Read-ReviewStartClaimRecord -Path $path
             if (-not $read.ok) { return @{ ok = $false; reason = 'no_active_claim'; detail = $read.reason } }
             if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
+            if (-not (Test-ReviewStartClaimMatchesTerminalizedRun -ClaimRecord $read.record -RunId $RunId -RunCreatedAtUtc $RunCreatedAtUtc)) {
+                return @{
+                    ok         = $false
+                    reason     = 'superseded_claim'
+                    boundRunId = [string]$read.record.boundRunId
+                    holder     = $read.record.holder
+                }
+            }
             $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $read.record -Outcome 'released_after_run_terminalized' -Extra @{
                 runId = $RunId
             }

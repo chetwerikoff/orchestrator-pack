@@ -74,8 +74,9 @@ try {
                     $headSha = [string]$action.targetSha
                     if ($null -ne $action.prNumber -and [int]::TryParse([string]$action.prNumber, [ref]$prNumber) -and $prNumber -gt 0 -and $headSha) {
                         $claimRelease = Release-ReviewStartClaimForTerminalizedRun -PrNumber $prNumber -HeadSha $headSha `
-                            -ProjectId $ProjectId -RunId ([string]$action.runId) -LogWriter { param($m) Write-RecoveryLog $m }
-                        if (-not $claimRelease.ok -and $claimRelease.reason -notin @('no_active_claim', 'not_active')) {
+                            -ProjectId $ProjectId -RunId ([string]$action.runId) -RunCreatedAtUtc ([string]$action.runCreatedAt) `
+                            -LogWriter { param($m) Write-RecoveryLog $m }
+                        if (-not $claimRelease.ok -and $claimRelease.reason -notin @('no_active_claim', 'not_active', 'superseded_claim')) {
                             Write-RecoveryLog "claim-release WARN PR #$prNumber head=$headSha: $($claimRelease.reason) $($claimRelease.detail)"
                         }
                     }
