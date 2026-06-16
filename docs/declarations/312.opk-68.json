@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "72ce2cae6b2ddd4ee39583cd8bb98a4faade96bc",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:pending"
+    "active_scope_hash": "sha256:078a0fbfdd4735df00e95e1502adbdafe113ea510f9c8854700c7e92a2ddd530"
   },
   "declared_paths": [
     "docs/issues_drafts/101-reviewer-failure-evidence-log.md",
@@ -20,6 +20,7 @@
     "scripts/fixtures/review-failure-evidence/echo-args.ps1",
     "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1",
     "scripts/invoke-pack-review.ps1",
+    "scripts/lib/QuotedProcessArguments.ps1",
     "scripts/lib/Review-FailureEvidence.ps1",
     "scripts/lib/review-recovery-test-fixtures.ts",
     "scripts/review-failure-evidence.Tests.ps1",
@@ -30,32 +31,20 @@
   "declared_globs": [],
   "amendments": [
     {
-      "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:pending",
+      "previous_active_scope_hash": "sha256:31a7f9fafdc5a4501279b7fa84da91ef8b109778ede6382ea3f6b84654898774",
+      "new_active_scope_hash": "sha256:078a0fbfdd4735df00e95e1502adbdafe113ea510f9c8854700c7e92a2ddd530",
       "changed": {
         "added": [
           "scripts/fixtures/review-failure-evidence/echo-args.ps1",
+          "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1",
+          "scripts/lib/QuotedProcessArguments.ps1",
           "scripts/review-failure-evidence.Tests.ps1"
         ],
         "removed": []
       },
-      "reason": "Review fixes: output scrubbing and argv preservation tests",
+      "reason": "Review fixes: argv/PS5.1 tests, deadlock fixture, shared process-argument quoting",
       "actor": "opk-68",
-      "timestamp": "2026-06-16T06:00:00.000Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:pending",
-      "changed": {
-        "added": [
-          "scripts/fixtures/review-failure-evidence/fill-stderr-then-stdout.ps1"
-        ],
-        "removed": []
-      },
-      "reason": "Review fixes: deadlock regression fixture for concurrent stream drain",
-      "actor": "opk-68",
-      "timestamp": "2026-06-16T07:00:00.000Z",
+      "timestamp": "2026-06-16T08:00:00.000Z",
       "applied": true
     }
   ]
