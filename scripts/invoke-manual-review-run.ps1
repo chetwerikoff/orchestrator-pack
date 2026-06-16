@@ -25,12 +25,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-ReviewStartAudit.ps1')
 
 if (-not $ReviewCommand) {
-    $config = if ($YamlPath) { $YamlPath } elseif (Test-Path -LiteralPath (Join-Path $PackRoot 'agent-orchestrator.yaml')) {
-        Join-Path $PackRoot 'agent-orchestrator.yaml'
-    }
-    else {
-        Join-Path $PackRoot 'agent-orchestrator.yaml.example'
-    }
+    $config = Resolve-PackOrchestratorYamlPath -CliYamlPath $YamlPath -PackRoot $PackRoot
     $ReviewCommand = Get-PackReviewCommandFromYaml -YamlPath $config
 }
 

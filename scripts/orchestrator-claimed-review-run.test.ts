@@ -1,9 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import {
   ATOMIC_REVIEW_START_CLAIM_CAPABILITY,
   ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION,
@@ -20,48 +20,37 @@ import {
   validateCapabilityInventory,
 } from '../docs/orchestrator-claimed-review-run.mjs';
 
-const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'tests/fixtures/orchestrator-claimed-review-run');
 const invokePath = path.join(repoRoot, 'scripts/invoke-orchestrator-claimed-review-run.ps1');
 const helperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
-const claimHelper = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const fullSha = 'abc3180000000000000000000000000000000000';
 
-function loadFixture(name: string) {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
+type TurnGateFixture = {
+  prNumber: number;
+  headSha?: string;
+  eventHeadSha?: string;
+  openPrs?: unknown[];
+  reviewRuns?: unknown[];
+  sessions?: unknown[];
+  ciChecks?: unknown[];
+  requiredCheckNames?: string[];
+  requiredCheckLookupFailed?: boolean;
+  sessionId?: string;
+  claimWindow?: 'free' | 'held_by_other' | 'prior_terminal';
+  provenanceAutonomous?: boolean;
+  expect: { launch?: boolean; reason?: string; verdict?: string };
+};
+
+function loadFixture(name: string): TurnGateFixture {
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as TurnGateFixture;
 }
 
-function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
-  const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: { ...process.env, ...extraEnv },
-  });
-  if (result.status !== 0) {
-    throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
-
-function psString(value: string) {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function evaluateFixtureTurnGate(fixture: Record<string, unknown>) {
-  return evaluateOrchestratorTurnGate({
-    prNumber: fixture.prNumber,
-    eventHeadSha: fixture.eventHeadSha,
-    openPrs: fixture.openPrs,
-    reviewRuns: fixture.reviewRuns,
-    sessions: fixture.sessions,
-    ciChecks: fixture.ciChecks,
-    requiredCheckNames: fixture.requiredCheckNames,
-    requiredCheckLookupFailed: fixture.requiredCheckLookupFailed ?? false,
-    sessionId: fixture.sessionId,
-    claimWindow: fixture.claimWindow ?? 'free',
-    provenanceAutonomous: fixture.provenanceAutonomous ?? true,
-  });
+function evaluateFixtureTurnGate(fixture: TurnGateFixture) {
+  const { expect: _expect, ...input } = fixture;
+  return evaluateOrchestratorTurnGate(
+    input as Parameters<typeof evaluateOrchestratorTurnGate>[0],
+  );
 }
 
 describe('orchestrator claimed review-run gate (#318)', () => {
@@ -86,7 +75,11 @@ describe('orchestrator claimed review-run gate (#318)', () => {
 
   it('mixed-row fixture ignores stale superseded-head clean row', () => {
     const fixture = loadFixture('mixed-row-stale-head.json');
-    const coverage = evaluateCurrentHeadCoverage(fixture.reviewRuns, fixture.prNumber, fixture.headSha);
+    const coverage = evaluateCurrentHeadCoverage(
+      fixture.reviewRuns as never,
+      fixture.prNumber,
+      fixture.headSha ?? fullSha,
+    );
     expect(coverage.verdict).toBe(fixture.expect.verdict);
   });
 
@@ -94,9 +87,9 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     const fixture = loadFixture('failed-empty-not-clean.json');
     const cell = evaluateScenarioMatrixCell({
       claimWindow: 'free',
-      reviewRuns: fixture.reviewRuns,
+      reviewRuns: fixture.reviewRuns as never,
       prNumber: fixture.prNumber,
-      headSha: fixture.headSha,
+      headSha: fixture.headSha ?? fullSha,
     });
     expect(cell.launch).toBe(true);
     expect(cell.reason).toBe('failed_retry_once');

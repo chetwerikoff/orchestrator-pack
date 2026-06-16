@@ -82,6 +82,25 @@ function Get-PackReviewCommandFromYaml {
     return $firstLine
 }
 
+function Resolve-PackOrchestratorYamlPath {
+    param(
+        [string]$CliYamlPath = '',
+        [string]$PackRoot = ''
+    )
+
+    if ($CliYamlPath) {
+        return $CliYamlPath
+    }
+    if (-not $PackRoot) {
+        $PackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+    $live = Join-Path $PackRoot 'agent-orchestrator.yaml'
+    if (Test-Path -LiteralPath $live -PathType Leaf) {
+        return $live
+    }
+    return (Join-Path $PackRoot 'agent-orchestrator.yaml.example')
+}
+
 function Test-WrapperScriptInTerminationReason {
     param(
         [string]$Basename,

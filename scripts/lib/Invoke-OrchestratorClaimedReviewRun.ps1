@@ -12,6 +12,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
 
 $Script:OrchestratorPreRecheckFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reconcile.mjs'
 
@@ -23,23 +24,11 @@ function Get-OrchestratorClaimedReviewSnapshot {
         [hashtable]$FixtureSnapshot
     )
 
-    if ($FixtureSnapshot) {
-        return $FixtureSnapshot
-    }
-
-    $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-    $reviewRuns = @(Get-AoReviewRuns -Project $Project)
-    $sessions = @(Get-AoStatusSessions)
-    $checksBundle = Get-ReconcileChecksByPr -OpenPrs @(@($openPrs | Where-Object { [int]$_.number -eq $PrNumber }))
-    $prKey = [string]$PrNumber
-    return @{
-        openPrs                       = @($openPrs)
-        reviewRuns                    = @($reviewRuns)
-        sessions                      = @($sessions)
-        ciChecksByPr                  = $checksBundle.ciChecksByPr
-        requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
-        requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
-    }
+    return Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
+        -FixtureSnapshot $FixtureSnapshot -ResolveChecksBundle {
+            param($OpenPrs, $TargetPr, $Root)
+            Get-ReconcileChecksByPr -OpenPrs @(@($OpenPrs | Where-Object { [int]$_.number -eq $TargetPr }))
+        }
 }
 
 function Invoke-OrchestratorClaimedReviewRunPreRecheck {
@@ -159,10 +148,7 @@ function Invoke-OrchestratorClaimedReviewRun {
         } -Snapshot $fresh
     }
     catch {
-        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
-            reason = 'pre_run_recheck_exception'
-            error  = [string]$_
-        } | Out-Null
+        Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -ErrorRecord $_
         throw
     }
 
