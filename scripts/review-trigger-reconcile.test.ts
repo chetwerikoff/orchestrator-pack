@@ -11,6 +11,7 @@ import {
   buildReviewRunArgv,
   evaluateReconcileInterval,
   findForbiddenLifecycleCommands,
+  findFailedOrCancelledRunForHead,
   isHeadCovered,
   isRunCoveringHead,
   collectSessionIdentifiers,
@@ -101,6 +102,33 @@ describe('isHeadCovered', () => {
         head,
       ),
     ).toBe(false);
+  });
+});
+
+describe('findFailedOrCancelledRunForHead', () => {
+  it('selects the latest failed/cancelled row for retry exhaustion', () => {
+    const fixture = loadFixture<{
+      runs: Array<{
+        id: string;
+        prNumber: number;
+        targetSha: string;
+        status: string;
+        retryEligible?: boolean;
+        retryCount?: number;
+        createdAt: string;
+      }>;
+      prNumber: number;
+      headSha: string;
+      expect: { retryEligible: boolean; runId: string };
+    }>('failed-retry-exhausted-latest.json');
+    const latest = findFailedOrCancelledRunForHead(
+      fixture.runs,
+      fixture.prNumber,
+      fixture.headSha,
+    );
+    expect(latest?.id).toBe(fixture.expect.runId);
+    const retryEligible = latest?.retryEligible ?? latest?.retryCount == null;
+    expect(retryEligible).toBe(fixture.expect.retryEligible);
   });
 });
 

@@ -1,0 +1,56 @@
+{
+  "description": "Latest exhausted failed row blocks further orchestrator-turn retries",
+  "prNumber": 318,
+  "sessionId": "opk-75",
+  "openPrs": [
+    {
+      "number": 318,
+      "headRefOid": "abc3180000000000000000000000000000000000",
+      "headCommittedAt": "2026-06-16T00:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [
+    {
+      "id": "failed-retry-eligible",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer exited 1",
+      "retryEligible": true,
+      "createdAt": "2026-06-16T00:00:00.000Z"
+    },
+    {
+      "id": "failed-retry-exhausted",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer exited 1",
+      "retryEligible": false,
+      "retryCount": 1,
+      "createdAt": "2026-06-16T01:00:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-75",
+      "sessionId": "opk-75",
+      "role": "worker",
+      "prNumber": 318,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-16T00:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" }
+  ],
+  "requiredCheckNames": ["Verify orchestrator-pack structure"],
+  "claimWindow": "free",
+  "expect": { "launch": false, "reason": "retry_bound_exhausted" }
+}

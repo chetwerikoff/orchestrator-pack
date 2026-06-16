@@ -19,7 +19,9 @@
     "docs/migration_notes.md",
     "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
+    "docs/review-head-ready.d.mts",
     "docs/review-head-ready.mjs",
+    "docs/review-trigger-reconcile.mjs",
     "scripts/_test-pwsh-helpers.ts",
     "scripts/ao",
     "scripts/ao-autonomous-guard.ps1",
@@ -37,11 +39,30 @@
     "scripts/orchestrator-review-start-preflight.ps1",
     "scripts/review-head-ready.test.ts",
     "scripts/review-start-claim.test.ts",
+    "scripts/review-trigger-reconcile.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [
     "tests/fixtures/orchestrator-claimed-review-run/**",
     "tests/fixtures/review-trigger-reconcile/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:45f9396e69179f2d94db7dd8d9e5f3600347dedcbb65543761b87d2fc58ff0d2",
+      "new_active_scope_hash": "sha256:pending",
+      "changed": {
+        "added": [
+          "docs/review-head-ready.d.mts",
+          "docs/review-trigger-reconcile.mjs",
+          "scripts/review-head-ready.test.ts",
+          "scripts/review-trigger-reconcile.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Review finding fixes: latest failed retry row + pre-run retry readiness gate",
+      "actor": "opk-80",
+      "timestamp": "2026-06-16T16:00:00.000Z",
+      "applied": true
+    }
+  ]
 }

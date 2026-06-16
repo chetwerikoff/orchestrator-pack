@@ -1,0 +1,27 @@
+{
+  "runs": [
+    {
+      "id": "failed-retry-eligible",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "retryEligible": true,
+      "createdAt": "2026-06-16T00:00:00.000Z"
+    },
+    {
+      "id": "failed-retry-exhausted",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "retryEligible": false,
+      "retryCount": 1,
+      "createdAt": "2026-06-16T01:00:00.000Z"
+    }
+  ],
+  "prNumber": 318,
+  "headSha": "abc3180000000000000000000000000000000000",
+  "expect": {
+    "retryEligible": false,
+    "runId": "failed-retry-exhausted"
+  }
+}

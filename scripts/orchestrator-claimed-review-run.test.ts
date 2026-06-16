@@ -103,6 +103,13 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(result.reason).toBe(fixture.expect.reason);
   });
 
+  it('latest exhausted failed row blocks orchestrator-turn retry launches', () => {
+    const fixture = loadFixture('failed-retry-exhausted-turn-gate.json');
+    const result = evaluateFixtureTurnGate(fixture);
+    expect(result.launch).toBe(fixture.expect.launch);
+    expect(result.reason).toBe(fixture.expect.reason);
+  });
+
   const matrixStatuses = [
     { status: 'none', runs: [], free: true, held: false, terminal: true },
     { status: 'running', runs: [{ status: 'running' }], free: false, held: false, terminal: false },
