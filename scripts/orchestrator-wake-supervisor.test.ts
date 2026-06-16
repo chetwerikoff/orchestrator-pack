@@ -641,6 +641,43 @@ describe('orchestrator-wake-supervisor', () => {
       runSupervisor(['-Action', 'Stop', '-StateDir', apostropheDir]);
     },
   );
+
+  it(
+    'throttles crash-loop restarts for a child that exits immediately',
+    async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-crash-backoff'],
+      {
+        AO_WAKE_SUPERVISOR_TEST_MODE_listener: 'instant-exit',
+        AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '2',
+        AO_WAKE_SUPERVISOR_CRASH_BASE_BACKOFF_SECONDS: '4',
+        AO_WAKE_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS: '5000',
+      },
+    );
+
+    const observedPids = new Set<number>();
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      try {
+        const marker = await readMarker(stateDir, 'listener', 500);
+        observedPids.add(marker.pid);
+      } catch {
+        // child may be between restarts
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    const supervisorLog = fs.readFileSync(path.join(stateDir, 'supervisor.log'), 'utf8');
+    expect(supervisorLog).toMatch(/crash backoff: listener/);
+    expect(observedPids.size).toBeLessThanOrEqual(4);
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    },
+    30_000,
+  );
 });
 
 describe('Issue #205 side-process registry', () => {
