@@ -931,6 +931,29 @@ describe('work unit resolution', () => {
     expect(result.verdicts).toHaveLength(1);
     expect(result.verdicts[0].flagged).toBe(true);
   });
+
+  it('preserves capture metadata when partitioning read events', () => {
+    const manifestHash = classifierManifestHash();
+    expect(() =>
+      evaluateStopAudit({
+        surface: 'cursor',
+        events: [
+          {
+            kind: 'read',
+            inboundRequestId: 'req-1',
+            workUnitKey: 'unit-capture-events',
+            lines: 900,
+            readKind: 'file',
+            path: 'plugins/ao-scope-guard/lib/check.ts',
+            capturedCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            classifierManifestHash: manifestHash,
+            readDiscriminator: '0',
+            surface: 'cursor',
+          },
+        ],
+      }),
+    ).toThrow(/captured-head-mismatch/);
+  });
 });
 
 describe('stop hook transcript population', () => {

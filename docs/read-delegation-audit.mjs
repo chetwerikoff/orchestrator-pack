@@ -547,6 +547,12 @@ export function partitionEventsIntoWorkUnits(events) {
     if (event.codeClassGated === true) {
       unit.codeClassGated = true;
     }
+    if (typeof event.capturedCommit === 'string') {
+      unit.capturedCommit = event.capturedCommit;
+    }
+    if (typeof event.classifierManifestHash === 'string') {
+      unit.classifierManifestHash = event.classifierManifestHash;
+    }
 
     const kind = String(event.kind ?? event.type ?? '');
     if (kind === 'read') {
@@ -556,12 +562,7 @@ export function partitionEventsIntoWorkUnits(events) {
           : event.readKind === 'external' || event.readKind === 'fetched'
             ? event.readKind
             : 'file';
-      unit.reads.push({
-        path: typeof event.path === 'string' ? event.path : undefined,
-        lines: Math.max(0, Number(event.lines) || 0),
-        kind: readKind,
-        isCodeClass: event.isCodeClass === true,
-      });
+      unit.reads.push(...normalizeReads([{ ...event, kind: readKind }]));
     } else if (kind === 'edit') {
       unit.edits.push({ path: typeof event.path === 'string' ? event.path : undefined });
     } else if (kind === 'shell') {
