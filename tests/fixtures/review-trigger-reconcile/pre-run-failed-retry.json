@@ -1,0 +1,49 @@
+{
+  "planned": {
+    "prNumber": 318,
+    "headSha": "abc3180000000000000000000000000000000000",
+    "sessionId": "opk-75"
+  },
+  "fresh": {
+    "openPrs": [
+      {
+        "number": 318,
+        "headRefOid": "abc3180000000000000000000000000000000000",
+        "headCommittedAt": "2026-06-16T00:00:00.000Z"
+      }
+    ],
+    "reviewRuns": [
+      {
+        "id": "failed-empty",
+        "prNumber": 318,
+        "targetSha": "abc3180000000000000000000000000000000000",
+        "status": "failed",
+        "findingCount": 0,
+        "terminationReason": "reviewer exited 1",
+        "retryEligible": true,
+        "createdAt": "2026-06-16T00:00:00.000Z"
+      }
+    ],
+    "sessions": [
+      {
+        "sessionId": "opk-75",
+        "name": "opk-75",
+        "prNumber": 318,
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "reportedAt": "2026-06-16T00:00:00.000Z"
+          }
+        ]
+      }
+    ],
+    "ciChecks": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" }
+    ],
+    "requiredCheckNames": ["Verify orchestrator-pack structure"]
+  },
+  "expect": {
+    "emitReviewRun": true,
+    "reason": "failed_retry_after_recheck"
+  }
+}

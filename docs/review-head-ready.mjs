@@ -812,8 +812,28 @@ export function preRunHeadReadyRecheck(planned, fresh) {
       ? findSessionById(toArray(fresh.sessions), plannedSessionId)
       : session;
 
+  const reviewRuns = toArray(fresh.reviewRuns);
+  if (
+    hasFailedOrCancelledOnHead(reviewRuns, prNumber, currentHead) &&
+    !isHeadCovered(reviewRuns, prNumber, currentHead)
+  ) {
+    const failed = findFailedOrCancelledRunForHead(reviewRuns, prNumber, currentHead);
+    const retryEligible = failed?.retryEligible ?? failed?.retryCount == null;
+    if (retryEligible !== false) {
+      return {
+        emitReviewRun: true,
+        reason: 'failed_retry_after_recheck',
+        decision: {
+          eligible: true,
+          reason: 'failed_retry_once',
+          route: 'retry',
+        },
+      };
+    }
+  }
+
   const decision = evaluateHeadReadyForReview({
-    reviewRuns: toArray(fresh.reviewRuns),
+    reviewRuns,
     prNumber,
     headSha: currentHead,
     session: sessionForRecheck ?? null,

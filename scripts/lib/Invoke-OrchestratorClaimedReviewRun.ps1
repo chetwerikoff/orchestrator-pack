@@ -180,7 +180,15 @@ function Invoke-OrchestratorClaimedReviewRun {
         try {
             & ao @runArgs
             if ($LASTEXITCODE -ne 0) {
-                throw "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+                $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+                $postFailureRuns = if ($FixtureSnapshot) {
+                    @($FixtureSnapshot.reviewRuns)
+                }
+                else {
+                    @(Get-AoReviewRuns -Project $Project)
+                }
+                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+                throw $failure
             }
         }
         finally {

@@ -96,6 +96,13 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(cell.reason).toBe('failed_retry_once');
   });
 
+  it('retry-eligible failed run launches through full turn gate recheck', () => {
+    const fixture = loadFixture('failed-retry-turn-gate.json');
+    const result = evaluateFixtureTurnGate(fixture);
+    expect(result.launch).toBe(fixture.expect.launch);
+    expect(result.reason).toBe(fixture.expect.reason);
+  });
+
   const matrixStatuses = [
     { status: 'none', runs: [], free: true, held: false, terminal: true },
     { status: 'running', runs: [{ status: 'running' }], free: false, held: false, terminal: false },
