@@ -1,0 +1,25 @@
+{
+  "description": ">200-line log stays out-of-index delegable and is flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-log-flagged",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "ci-output.log",
+          "lines": 250,
+          "kind": "log"
+        }
+      ],
+      "edits": [],
+      "statusText": "skipped delegation on CI log"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
+  }
+}

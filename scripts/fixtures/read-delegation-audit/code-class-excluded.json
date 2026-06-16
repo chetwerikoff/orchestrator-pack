@@ -10,8 +10,7 @@
         {
           "path": "plugins/code-gated.ts",
           "lines": 900,
-          "kind": "file",
-          "isCodeClass": true
+          "kind": "file"
         }
       ],
       "edits": [],

@@ -1,0 +1,32 @@
+{
+  "description": "Mixed unit below floor — large index-served source does not inflate delegable total",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-mixed-below",
+      "inboundRequestId": "req-1",
+      "useCaptureMetadata": true,
+      "reads": [
+        {
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 900,
+          "kind": "file"
+        },
+        {
+          "path": "docs/a.md",
+          "lines": 150,
+          "kind": "file"
+        }
+      ],
+      "edits": [],
+      "statusText": "mixed below delegable floor"
+    }
+  ],
+  "expect": {
+    "triggerFired": false,
+    "excludedFromDenominator": false,
+    "flagged": false,
+    "inDenominator": false,
+    "indexServedExcludedLines": 900
+  }
+}

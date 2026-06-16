@@ -1,0 +1,40 @@
+{
+  "description": "Mixed Cursor session residual metric is non-zero/non-0/0",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-index-session-residual",
+      "inboundRequestId": "req-index-residual",
+      "useCaptureMetadata": true,
+      "reads": [
+        {
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 900,
+          "kind": "file",
+          "readDiscriminator": "index-only"
+        }
+      ],
+      "edits": [],
+      "statusText": "index-only unit in mixed residual session"
+    },
+    {
+      "key": "unit-flagged-md",
+      "inboundRequestId": "req-2",
+      "reads": [
+        {
+          "path": "docs/flagged-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "edits": [],
+      "statusText": "ordinary bulk markdown"
+    }
+  ],
+  "expectSummary": {
+    "delegableTriggerUnits": 1,
+    "flaggedUnits": 1,
+    "residualNonCompliance": 1,
+    "denominatorCause": "normal"
+  }
+}

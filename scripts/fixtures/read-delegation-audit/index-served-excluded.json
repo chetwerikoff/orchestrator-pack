@@ -1,0 +1,29 @@
+{
+  "description": "Cursor unit reading only tracked in-tree source — index-served excluded, not flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-index-only",
+      "inboundRequestId": "req-1",
+      "useCaptureMetadata": true,
+      "reads": [
+        {
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 900,
+          "kind": "file"
+        }
+      ],
+      "edits": [],
+      "statusText": "in-tree source via index"
+    }
+  ],
+  "expect": {
+    "fixtureClass": "index-served-excluded",
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "allIndexServed": true,
+    "indexServedExcludedLines": 900
+  }
+}

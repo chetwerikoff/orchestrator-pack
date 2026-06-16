@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "denyPatterns": [
+    "vendor/**",
+    "packages/core/**",
+    ".ao/**",
+    "docs/declarations/**",
+    "scripts/fixtures/**"
+  ],
+  "allowedSourceRoots": [
+    "plugins/**",
+    "scripts/**",
+    "docs/*.mjs",
+    "docs/*.mts"
+  ],
+  "sourceCodeExtensions": [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".cs",
+    ".cpp",
+    ".c",
+    ".h",
+    ".swift",
+    ".kt",
+    ".rb",
+    ".php",
+    ".vue",
+    ".svelte"
+  ],
+  "extensionlessSourceFilenames": [
+    "Dockerfile",
+    "Makefile",
+    "GNUmakefile"
+  ],
+  "cursorIndexIgnorePatterns": [],
+  "cursorSurfaces": {
+    "cursor": [
+      "cursor",
+      "cursor-agent",
+      "cursor-cli",
+      "composer"
+    ]
+  },
+  "perReadIdentity": {
+    "formula": "unitKey:readDiscriminator:canonicalPath:kind"
+  },
+  "broadRootDenylist": [
+    "**",
+    "docs/**",
+    "scripts/fixtures/**"
+  ]
+}

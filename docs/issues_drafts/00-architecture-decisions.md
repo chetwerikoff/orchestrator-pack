@@ -668,6 +668,15 @@ Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only 
    prohibited", and the visible-outcome backstop — not by a hard gate. Accepted as the cheaper-sufficient
    trade-off; revisit if a leak of non-secret-but-sensitive data is observed.
 
+5. **Cursor index-coverage carve-out (Issue #309).** Amended 2026-06-16: Cursor workers reading
+   tracked first-party source-code through the semantic code index owe no coworker read-delegation;
+   out-of-index bulk (logs, diffs, external fetches, vendored/generated dumps, tracked non-code bulk)
+   keeps the #255 triggers unchanged. Classification is by corpus source at stop-time audit, not by a
+   runtime retrieval signal. Parity at the rule level is preserved: Claude/Codex have no index, so their
+   source reads remain delegable; Cursor differs only where the index genuinely covers in-tree source.
+   The #255 residual-non-compliance metric excludes `index-served` units like other non-delegable
+   classes; mixed sessions stay measurable (depends on #264 reviewer-path denominator repair).
+
 See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149) and
 `docs/issues_drafts/52-coworker-cli-delegation-policy.md` (GitHub #148).
 
