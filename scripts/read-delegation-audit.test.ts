@@ -705,6 +705,39 @@ describe('Claude and shell transcript compatibility', () => {
     expect(countFileLinesFromDisk(readPath, 10, 20)).toBe(20);
   });
 
+  it('does not false-fire T1 when work unit reads supply string line counts', () => {
+    const result = auditWorkUnit(
+      {
+        key: 'unit-string-lines',
+        inboundRequestId: 'req-1',
+        reads: [
+          { path: 'docs/a.ts', lines: '150', kind: 'file' },
+          { path: 'docs/b.ts', lines: '150', kind: 'file' },
+        ],
+      },
+      { surface: 'cursor' },
+    );
+    expect(result.triggerFired).toBe(false);
+    expect(result.flagged).toBe(false);
+    expect(result.inDenominator).toBe(false);
+  });
+
+  it('excludes codeClassGated units from the denominator without per-read isCodeClass', () => {
+    const result = auditWorkUnit(
+      {
+        key: 'unit-code-class-gated',
+        inboundRequestId: 'req-1',
+        codeClassGated: true,
+        reads: [{ path: 'vendor/pkg/foo.py', lines: 500, kind: 'file' }],
+      },
+      { surface: 'cursor' },
+    );
+    expect(result.codeClass).toBe(true);
+    expect(result.excludedFromDenominator).toBe(true);
+    expect(result.inDenominator).toBe(false);
+    expect(result.flagged).toBe(false);
+  });
+
   it('recognizes multiline coworker ask commands as machine-observed delegation', () => {
     const multilineCommands = [
       "coworker ask \\\n  --profile code --question 'summarize' docs/a.md",

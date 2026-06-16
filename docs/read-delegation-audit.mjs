@@ -292,9 +292,11 @@ export function reviewMarkerState(session) {
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
  */
 export function isCodeClassUnit(unit) {
+  if (unit.codeClassGated === true) {
+    return true;
+  }
   const reads = normalizeReads(unit.reads);
-  const codeClassReads = reads.filter((read) => read.isCodeClass === true);
-  return reads.length > 0 && codeClassReads.length === reads.length;
+  return reads.length > 0 && reads.every((read) => read.isCodeClass === true);
 }
 
 /**
@@ -373,7 +375,24 @@ export function auditWorkUnit(unit, session) {
     });
   }
 
-  const classification = classifyUnitReads(unit, {
+  if (isCodeClassUnit({ ...unit, reads })) {
+    const trigger = didAskTriggerFire(reads);
+    return buildAuditVerdict(unit, session, {
+      reads,
+      trigger,
+      triggerFired: trigger.rawFired,
+      excludedFromDenominator: true,
+      inDenominator: false,
+      flagged: false,
+      reviewerPath: false,
+      reviewSignalState,
+      codeClass: true,
+      readClassifications: [],
+      indexServedExcludedLines: 0,
+    });
+  }
+
+  const classification = classifyUnitReads({ ...unit, reads }, {
     surface: session.surface,
     checkoutCommit: session.checkoutCommit,
     trackedPathsOverride: session.trackedPathsOverride,

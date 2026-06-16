@@ -24,7 +24,7 @@
     "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
   },
   "codeHashes": {
-    "docs/read-delegation-audit.mjs": "65d0221c999fa6351e7ee0ae23020dcc6806957a5b42c90ca22e6fc4385f1380",
+    "docs/read-delegation-audit.mjs": "40c0f96074eecb05ffc1ce49ecb3edb2e0c8361337bf192e4bb6301e3440c9e9",
     "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
   }
 }
