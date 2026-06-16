@@ -1,0 +1,20 @@
+{
+  "issue_number": 318,
+  "iteration_id": "opk-75",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-16T13:35:26.511Z",
+  "baseline": {
+    "commit_sha": "84d10cfb022b6e92e8c626ccdc713a78da2e947a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:655112b0a02512162372bbd2007e11897c972866ce7ba088381c2e5d058b10db"
+  },
+  "declared_paths": [
+    "scripts",
+    "docs",
+    "tests",
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
