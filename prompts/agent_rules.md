@@ -151,6 +151,19 @@ them as `unrecognized arguments`). Canonical repo-read form:
 `coworker ask --profile code [--allow-code] --paths <file1> <file2> ... --question "<question>"`.
 Use `--allow-code` only under the upstream file gate below.
 
+**Invalid forms (do not use):** `--file`, `--stdin`, pipes (`git diff | coworker`),
+heredocs (`<<EOF`), or a bare question string without `--question`.
+
+**PR diff recipe (reviewers).** When a diff exceeds the read-delegation floor,
+write it to a file first, then delegate — never pipe into coworker:
+
+```bash
+git diff <base-ref>...HEAD > /tmp/review.diff
+coworker ask --profile code --allow-code \
+  --paths /tmp/review.diff \
+  --question "Summarize this PR diff for a reviewer. List changed files and behavior changes. Do not make final review judgments."
+```
+
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
 or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
