@@ -93,6 +93,17 @@ export function findCdpListenerPid(cdpUrl) {
   return findWindowsListenerPid(parseCdpPort(cdpUrl)) || findLinuxListenerPid(parseCdpPort(cdpUrl));
 }
 
+/** True when the CDP HTTP endpoint responds (listener up, owner may still be unknown). */
+export async function isCdpReachable(cdpUrl) {
+  try {
+    const base = String(cdpUrl).replace(/\/$/, '');
+    const res = await fetch(`${base}/json/version`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 function getCmdline(pid) {
   return getWindowsCmdline(pid) || getLinuxCmdline(pid);
 }

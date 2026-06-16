@@ -17,9 +17,9 @@
 //                   [--extra-file <path>] [--source-url <http(s) url>]
 //                   [--cdp http://localhost:9222] [--timeout 180000]
 //
-// Operator config (required): DISCUSS_WITH_GPT_PROJECT_URL and
-// DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR env vars, or local.config.json
-// (see local.config.example.json). Optional --project-url overrides env.
+// Operator config (required): DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR env var or
+// local.config.json (see local.config.example.json). Project URL from
+// DISCUSS_WITH_GPT_PROJECT_URL / local config, or --project-url on the CLI.
 // Before CDP connect, verifies the listener's --user-data-dir matches config.
 //
 // --source-url: when the draft is a study/adoption proposal about an external
@@ -32,7 +32,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { resolveDiscussWithGptConfig } from './config.mjs';
-import { findCdpListenerPid, verifyCdpProfile } from './verify-cdp-owner.mjs';
+import { isCdpReachable, verifyCdpProfile } from './verify-cdp-owner.mjs';
 
 const require = createRequire(import.meta.url);
 function loadChromium() {
@@ -72,8 +72,9 @@ if (sourceUrl !== undefined && !/^https?:\/\/\S+$/i.test(sourceUrl)) {
 const cdp = get('--cdp', 'http://localhost:9222');
 let PROJECT_URL;
 let chromeUserDataDir;
+const hasCliProjectUrl = a.includes('--project-url');
 try {
-  const cfg = resolveDiscussWithGptConfig();
+  const cfg = resolveDiscussWithGptConfig({ requireProjectUrl: !hasCliProjectUrl });
   PROJECT_URL = get('--project-url', cfg.projectUrl);
   chromeUserDataDir = cfg.chromeUserDataDir;
 } catch (e) {
@@ -200,11 +201,17 @@ ${draft}
 END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   promptText = prompt;
 
-  if (findCdpListenerPid(cdp)) {
-    const profileCheck = verifyCdpProfile({ cdp, profile: chromeUserDataDir });
-    if (!profileCheck.ok && profileCheck.reason !== 'not_listening') {
-      const rec = recordFile('cdp_profile_mismatch', { note: profileCheck.message });
-      console.log('CDP_PROFILE_MISMATCH ' + profileCheck.message);
+  const profileCheck = verifyCdpProfile({ cdp, profile: chromeUserDataDir });
+  if (!profileCheck.ok) {
+    const deferNotListening =
+      profileCheck.reason === 'not_listening' && !(await isCdpReachable(cdp));
+    if (!deferNotListening) {
+      const note =
+        profileCheck.reason === 'not_listening'
+          ? `CDP endpoint reachable at ${cdp} but listener owner cannot be verified — refuse to attach`
+          : profileCheck.message;
+      const rec = recordFile('cdp_profile_mismatch', { note });
+      console.log('CDP_PROFILE_MISMATCH ' + note);
       console.log('STATE=cdp_profile_mismatch');
       console.log('ARTIFACT=' + rec);
       process.exit(13);
