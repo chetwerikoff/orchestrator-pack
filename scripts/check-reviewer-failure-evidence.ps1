@@ -18,7 +18,13 @@ if ($entrypointText -notmatch 'Initialize-ReviewFailureEvidence') {
     throw 'invoke-pack-review.ps1 must initialize failure evidence before wrapper start'
 }
 if ($evidenceLibText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
-    throw 'Review-FailureEvidence.ps1 must build wrapper argv via ProcessStartInfo.ArgumentList'
+    throw 'Review-FailureEvidence.ps1 must build wrapper argv via Get-PackReviewWrapperProcessStartInfo'
+}
+if ($evidenceLibText -notmatch 'Test-PackReviewProcessStartInfoSupportsArgumentList') {
+    throw 'Review-FailureEvidence.ps1 must support PowerShell 5.1 via quoted Arguments fallback'
+}
+if ($evidenceLibText -notmatch 'ReadToEndAsync') {
+    throw 'Review-FailureEvidence.ps1 must drain redirected streams concurrently (ReadToEndAsync)'
 }
 if ($evidenceLibText -match 'Start-Process\b') {
     throw 'Review-FailureEvidence.ps1 must not launch wrappers via Start-Process -ArgumentList'

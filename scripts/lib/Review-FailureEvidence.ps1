@@ -103,6 +103,52 @@ function Resolve-ReviewWrapperTerminationSignal {
     return @{ signal = 'signal_unavailable'; signalDetail = 'windows_exit_code_only' }
 }
 
+function Test-PackReviewProcessStartInfoSupportsArgumentList {
+    return [bool]([System.Diagnostics.ProcessStartInfo].GetProperty(
+        'ArgumentList',
+        [System.Reflection.BindingFlags]'Public,Instance'
+    ))
+}
+
+function ConvertTo-PackReviewProcessArgument {
+    param([string]$Value)
+
+    $text = [string]$Value
+    if ($text.Length -eq 0) { return '""' }
+    if ($text -notmatch '[\s"]') { return $text }
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $backslashCount = 0
+    foreach ($ch in $text.ToCharArray()) {
+        if ($ch -eq '\') {
+            $backslashCount++
+            continue
+        }
+        if ($ch -eq '"') {
+            [void]$builder.Append('\' * (($backslashCount * 2) + 1))
+            [void]$builder.Append('"')
+            $backslashCount = 0
+            continue
+        }
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append('\' * $backslashCount)
+            $backslashCount = 0
+        }
+        [void]$builder.Append($ch)
+    }
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append('\' * ($backslashCount * 2))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-PackReviewProcessArguments {
+    param([string[]]$Arguments)
+    return (($Arguments | ForEach-Object { ConvertTo-PackReviewProcessArgument -Value $_ }) -join ' ')
+}
+
 function Get-PackReviewWrapperProcessStartInfo {
     param(
         [string]$PwshPath,
@@ -114,13 +160,32 @@ function Get-PackReviewWrapperProcessStartInfo {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    [void]$psi.ArgumentList.Add('-NoProfile')
-    [void]$psi.ArgumentList.Add('-File')
-    [void]$psi.ArgumentList.Add($WrapperPath)
-    foreach ($arg in $WrapperArgs) {
-        [void]$psi.ArgumentList.Add([string]$arg)
+    $argv = @('-NoProfile', '-File', $WrapperPath) + @($WrapperArgs | ForEach-Object { [string]$_ })
+    if (Test-PackReviewProcessStartInfoSupportsArgumentList) {
+        foreach ($arg in $argv) {
+            [void]$psi.ArgumentList.Add($arg)
+        }
+    }
+    else {
+        $psi.Arguments = Join-PackReviewProcessArguments -Arguments $argv
     }
     return $psi
+}
+
+function Read-PackReviewProcessStreams {
+    param(
+        [System.Diagnostics.Process]$Process
+    )
+
+    $stdoutDrain = $Process.StandardOutput.ReadToEndAsync()
+    $stderrDrain = $Process.StandardError.ReadToEndAsync()
+    $Process.WaitForExit() | Out-Null
+    try { $stdoutDrain.Wait() | Out-Null } catch { }
+    try { $stderrDrain.Wait() | Out-Null } catch { }
+    return @{
+        Stdout = [string]$stdoutDrain.Result
+        Stderr = [string]$stderrDrain.Result
+    }
 }
 
 function Invoke-PackReviewWrapperWithFailureEvidence {
@@ -140,9 +205,9 @@ function Invoke-PackReviewWrapperWithFailureEvidence {
         if (-not $process) {
             throw 'Failed to start pack review wrapper process'
         }
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
+        $streams = Read-PackReviewProcessStreams -Process $process
+        $stdout = $streams.Stdout
+        $stderr = $streams.Stderr
         $exitCode = $process.ExitCode
 
         Update-ReviewFailureEvidenceOutput -Handle $EvidenceHandle -Stdout $stdout -Stderr $stderr | Out-Null
