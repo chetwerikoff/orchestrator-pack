@@ -1,0 +1,5 @@
+{
+  "projectUrl": "https://chatgpt.com/g/YOUR-PROJECT-SLUG/project",
+  "chromeUserDataDir": "/path/to/your/automation-chrome-profile",
+  "chromePath": "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+}
