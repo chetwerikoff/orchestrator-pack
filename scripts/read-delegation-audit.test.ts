@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { AuditVerdict, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
+import type { AuditVerdict, ReadEntry, ReadKind, WorkUnit } from '../docs/read-delegation-audit.d.mts';
 import {
   appendMetricRecord,
   auditWorkUnit,
@@ -38,6 +38,7 @@ type StopAuditResult = {
     delegableTriggerUnits: number;
     flaggedUnits: number;
     flaggedReadLines: number;
+    indexServedExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
@@ -104,35 +105,40 @@ function currentFixtureCaptureCommit() {
   }).trim();
 }
 
-function enrichFixtureCaptureMetadata(workUnits: Array<Record<string, unknown>> | undefined) {
+function enrichFixtureCaptureMetadata(
+  workUnits: Array<Record<string, unknown>> | undefined,
+): WorkUnit[] | undefined {
   if (!workUnits) {
-    return workUnits;
+    return undefined;
   }
   const commit = currentFixtureCaptureCommit();
   const manifestHash = classifierManifestHash();
-  return workUnits.map((unit) => ({
-    ...unit,
-    capturedCommit:
-      unit.capturedCommit !== undefined ? commit : unit.capturedCommit,
-    classifierManifestHash:
-      unit.classifierManifestHash !== undefined
-        ? manifestHash
-        : unit.classifierManifestHash,
-    reads: Array.isArray(unit.reads)
-      ? unit.reads.map((read) => {
+  return workUnits.map((unit) => {
+    const useCapture = unit.useCaptureMetadata === true;
+    const reads = Array.isArray(unit.reads)
+      ? unit.reads.map((read, index) => {
           const row = read as Record<string, unknown>;
+          const needsCapture = useCapture || row.useCaptureMetadata === true;
           return {
-            ...row,
-            capturedCommit:
-              row.capturedCommit !== undefined ? commit : row.capturedCommit,
-            classifierManifestHash:
-              row.classifierManifestHash !== undefined
-                ? manifestHash
-                : row.classifierManifestHash,
+            ...(row as ReadEntry),
+            readDiscriminator: String(row.readDiscriminator ?? index),
+            surface: needsCapture ? String(row.surface ?? 'cursor') : (row.surface as string | undefined),
+            capturedCommit: needsCapture ? commit : (row.capturedCommit as string | undefined),
+            classifierManifestHash: needsCapture
+              ? manifestHash
+              : (row.classifierManifestHash as string | undefined),
           };
         })
-      : unit.reads,
-  }));
+      : [];
+    return {
+      ...(unit as unknown as WorkUnit),
+      capturedCommit: useCapture ? commit : (unit.capturedCommit as string | undefined),
+      classifierManifestHash: useCapture
+        ? manifestHash
+        : (unit.classifierManifestHash as string | undefined),
+      reads,
+    };
+  });
 }
 
 function evaluateFixture(name: string, surfaceOverride?: string): StopAuditResult {
@@ -1232,13 +1238,11 @@ describe('index-served carve-out (Issue #309)', () => {
 
   it('blocking status on captured-head mismatch', () => {
     const fixture = loadFixture('index-served-excluded.json');
-    const unit = { ...fixture.workUnits![0] };
-    unit.reads = unit.reads!.map((read) => ({
-      ...read,
-      capturedCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-    }));
+    const units = enrichFixtureCaptureMetadata(fixture.workUnits);
+    expect(units?.[0].reads?.[0]).toBeDefined();
+    units![0].reads![0].capturedCommit = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
     expect(() =>
-      evaluateStopAudit({ surface: 'cursor', workUnits: [unit] }),
+      evaluateStopAudit({ surface: 'cursor', workUnits: units }),
     ).toThrow(/captured-head-mismatch/);
   });
 });

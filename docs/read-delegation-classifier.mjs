@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { globMatches } from '../scripts/lib/glob-match.mjs';
 
 const repoRoot = resolve(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -39,49 +40,6 @@ let cachedManifestHash = null;
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function escapeRegexLiteral(value) {
-  return value.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-}
-
-function globToRegex(glob) {
-  let pattern = '';
-  let index = 0;
-  while (index < glob.length) {
-    if (glob[index] === '*' && glob[index + 1] === '*') {
-      if (glob[index + 2] === '/') {
-        pattern += '(?:.*/)?';
-        index += 3;
-        continue;
-      }
-      pattern += '.*';
-      index += 2;
-      continue;
-    }
-    if (glob[index] === '*') {
-      pattern += '[^/]*';
-      index += 1;
-      continue;
-    }
-    if (glob[index] === '?') {
-      pattern += '[^/]';
-      index += 1;
-      continue;
-    }
-    pattern += escapeRegexLiteral(glob[index]);
-    index += 1;
-  }
-  return new RegExp(`^${pattern}$`);
-}
-
-/**
- * @param {string} pattern
- * @param {string} candidate
- */
-function globMatches(pattern, candidate) {
-  const normalized = candidate.replace(/\\/g, '/');
-  return globToRegex(pattern.replace(/\\/g, '/')).test(normalized);
 }
 
 export function loadClassifierManifest(manifestPath = CLASSIFIER_MANIFEST_PATH) {

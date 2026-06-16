@@ -7,10 +7,9 @@ param(
     [string]$RepoRoot
 )
 
+. (Join-Path $PSScriptRoot 'lib/Read-DelegationCheck-Common.ps1')
 $ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
-}
+$RepoRoot = Resolve-ReadDelegationCheckRepoRoot -RepoRoot $RepoRoot -ScriptRoot $PSScriptRoot
 
 $manifestPath = Join-Path $RepoRoot '.cursor/rules/read-delegation-policy-manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) {

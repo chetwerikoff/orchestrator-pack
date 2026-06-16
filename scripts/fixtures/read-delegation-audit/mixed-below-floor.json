@@ -5,23 +5,17 @@
     {
       "key": "unit-mixed-below",
       "inboundRequestId": "req-1",
-      "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
-      "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
+      "useCaptureMetadata": true,
       "reads": [
         {
           "path": "plugins/ao-scope-guard/lib/check.ts",
           "lines": 900,
-          "kind": "file",
-          "surface": "cursor",
-          "capturedCommit": "cdb1b36adf3095a86e62905a0d64d04e3546cebc",
-          "classifierManifestHash": "89668cbbf12b606fbae0ce091c498e85a0eca59838b82e35b5afec6d215dd3aa",
-          "readDiscriminator": "0"
+          "kind": "file"
         },
         {
           "path": "docs/a.md",
           "lines": 150,
-          "kind": "file",
-          "readDiscriminator": "1"
+          "kind": "file"
         }
       ],
       "edits": [],
