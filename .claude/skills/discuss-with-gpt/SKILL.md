@@ -44,8 +44,10 @@ Chrome holding a **logged-in** custom-GPT session. It never types credentials.
   on its own **dedicated minimal profile** (never the user's main profile).
 - Reachable: `curl -s http://localhost:9222/json/version` returns JSON. **This
   alone is not enough** — it proves a CDP endpoint is alive, not that it is the
-  right profile/account/project. The driver's own preflight (project URL +
-  composer present) is the real gate; `curl` is just a fast pre-check.
+  right profile/account/project. `launch-chrome.sh` verifies the listener's
+  `--user-data-dir` matches your configured automation profile before reusing;
+  the driver's own preflight (project URL + composer present) is the real gate;
+  `curl` is just a fast pre-check.
 
 ### Operator configuration (required)
 
