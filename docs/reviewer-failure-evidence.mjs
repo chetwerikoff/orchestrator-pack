@@ -314,10 +314,11 @@ export function associateFailureEvidenceRun({ path, storeDir, runId, runFingerpr
   return result;
 }
 
-export function recordFailureEvidenceOutput({ path, stdout, stderr, outputTailLimit = DEFAULT_OUTPUT_TAIL_LIMIT }) {
+export function recordFailureEvidenceOutput({ path, stdout, stderr, outputTailLimit }) {
+  const resolvedLimit = outputTailLimit ?? resolveOutputTailLimit();
   return mutateArtifact(path, (artifact) => {
-    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, outputTailLimit);
-    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, resolvedLimit);
+    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, resolvedLimit);
     return artifact;
   });
 }
@@ -345,9 +346,10 @@ export function recordFailureEvidenceTerminal({
   signalDetail,
   stdout,
   stderr,
-  outputTailLimit = DEFAULT_OUTPUT_TAIL_LIMIT,
+  outputTailLimit,
   completionStatus,
 }) {
+  const resolvedLimit = outputTailLimit ?? resolveOutputTailLimit();
   return mutateArtifact(path, (artifact) => {
     if (exitCode != null && Number.isFinite(Number(exitCode))) {
       artifact.exitCode = Number(exitCode);
@@ -360,8 +362,8 @@ export function recordFailureEvidenceTerminal({
       if (resolved.signalDetail) artifact.signalDetail = resolved.signalDetail;
     }
     if (signalDetail != null) artifact.signalDetail = String(signalDetail);
-    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, outputTailLimit);
-    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, outputTailLimit);
+    assignBoundedOutputTail(artifact, 'stdoutTail', 'stdoutTailWithheld', stdout, resolvedLimit);
+    assignBoundedOutputTail(artifact, 'stderrTail', 'stderrTailWithheld', stderr, resolvedLimit);
     if (completionStatus) artifact.completionStatus = String(completionStatus);
     return artifact;
   });

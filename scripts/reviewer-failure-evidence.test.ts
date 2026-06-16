@@ -14,6 +14,7 @@ import {
   recordFailureEvidencePhase,
   recordFailureEvidenceTerminal,
   resolveFailureEvidenceForRun,
+  resolveOutputTailLimit,
   resolveTerminationSignalFromExitCode,
   scrubSecretLikeOutput,
   tailBoundedText,
@@ -145,6 +146,26 @@ describe('reviewer-failure-evidence', () => {
     const summary = buildFailureEvidenceSummary(artifact, { summaryTailLimit: 128 }) as EvidenceSummary;
     expect(artifact.stdoutTail.length).toBe(512);
     expect(summary.stdoutTail!.length).toBeLessThanOrEqual(128);
+  });
+
+  it('honors AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT when outputTailLimit is omitted', () => {
+    const previous = process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT;
+    process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT = '128';
+    try {
+      expect(resolveOutputTailLimit()).toBe(128);
+      const store = tempStore();
+      const { path } = createFailureEvidenceArtifact({
+        storeDir: store,
+        reviewerSessionId: 'opk-rev-env-tail',
+        wrapperKind: 'codex',
+      }) as EvidenceCreateResult;
+      recordFailureEvidenceOutput({ path: path!, stdout: 'y'.repeat(500) });
+      const artifact = JSON.parse(readFileSync(path!, 'utf8'));
+      expect(artifact.stdoutTail.length).toBe(128);
+    } finally {
+      if (previous === undefined) delete process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT;
+      else process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT = previous;
+    }
   });
 
   it('associates run id without ambiguity after run becomes discoverable', () => {

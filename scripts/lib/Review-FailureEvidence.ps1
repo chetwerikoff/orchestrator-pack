@@ -2,11 +2,23 @@
 
 . (Join-Path $PSScriptRoot 'QuotedProcessArguments.ps1')
 
+function Get-ReviewFailureEvidenceOutputTailLimit {
+    $default = 8192
+    $raw = [Environment]::GetEnvironmentVariable('AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT')
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $default }
+    $parsed = 0
+    if (-not [int]::TryParse($raw, [ref]$parsed) -or $parsed -le 0) { return $default }
+    return $parsed
+}
+
 function Invoke-ReviewerFailureEvidenceCli {
     param(
         [Parameter(Mandatory = $true)][string]$Subcommand,
         [hashtable]$Payload = @{}
     )
+    if ($Subcommand -in @('record-output', 'record-terminal') -and -not $Payload.ContainsKey('outputTailLimit')) {
+        $Payload.outputTailLimit = Get-ReviewFailureEvidenceOutputTailLimit
+    }
     $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $cli = Join-Path $packRoot 'docs/reviewer-failure-evidence.mjs'
     $json = $Payload | ConvertTo-Json -Depth 20 -Compress
