@@ -141,6 +141,7 @@ export declare function summarizeAuditVerdicts(verdicts: AuditVerdict[]): {
   delegableTriggerUnits: number;
   flaggedUnits: number;
   flaggedReadLines: number;
+  indexServedExcludedLines: number;
   residualNonCompliance: number;
   denominatorCause: string;
   denominatorEmptyCause?: string;
