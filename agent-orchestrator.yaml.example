@@ -54,6 +54,12 @@ projects:
       agent: cursor
       agentConfig:
         permissions: permissionless
+        env:
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
+          # Absolute path to the real AO binary — never bare `ao` (PATH would resolve to scripts/ao shim).
+          AO_REAL_BINARY: /home/you/.local/bin/ao
+          # Prepend pack scripts/ so orchestrator turns resolve `ao` to scripts/ao (Issue #318).
+          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
       agentConfig:
@@ -339,10 +345,24 @@ projects:
 
       TRIGGER REVIEW WITHOUT HUMAN PROMPT (report-driven on orchestrator turns). Whenever
       a worker reports pr_created or ready_for_review on an open PR (visible in
-      ao status --reports full), apply HEAD READY FOR REVIEW (#195), REVIEW RUN IDEMPOTENCY,
-      PRE-RUN HEAD-READY RE-CHECK, and STALE REVIEWER WORKSPACE above, then run:
-        ao review run <worker-session-id> --execute with --command set to REVIEW_COMMAND
-      only when the head is ready for review. Do not wait for operator words review or loop.
+      ao status --reports full), apply HEAD READY FOR REVIEW (#195) and the mechanical
+      claimed review-start gate (Issue #318) — never bare ao review run from autonomous
+      orchestrator turns:
+        pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
+          -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
+      Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, AO_REAL_BINARY to the absolute real ao path,
+      and prepend pack scripts/ to PATH so `ao` resolves to scripts/ao (denies raw review run);
+      only the claimed entry point may launch review runs. Gate capability marker:
+      orchestrator-claimed-review-run/v1.
+      Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
+      scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
+      ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel
+      PR 999999 — must record covered-head denial, not merely head-resolution refusal).
+      Manual operator override (outside autonomous surface): scripts/invoke-manual-review-run.ps1
+      (emits advisory warning on covered/pending heads; does not acquire the autonomous gate).
+      Prose REVIEW RUN IDEMPOTENCY below remains guidance; Issue #318 gate is authoritative
+      for autonomous starts. Do not wait for operator words review or loop.
       Report-driven triggering is not the only path — the low-frequency reconcile process
       below converges from GitHub + review list state even when reports are missing or the
       orchestrator is stuck.

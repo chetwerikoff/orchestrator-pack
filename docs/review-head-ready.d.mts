@@ -122,6 +122,7 @@ export declare function evaluateHeadReadyForReview(input: {
   ownerResolution?: OwnerResolution | null;
   nowMs?: number;
   workerDeliveries?: Array<Record<string, unknown>>;
+  allowFailedRetry?: boolean;
 }): HeadReadyDecision;
 
 export interface PreRunHeadReadyRecheckResult {

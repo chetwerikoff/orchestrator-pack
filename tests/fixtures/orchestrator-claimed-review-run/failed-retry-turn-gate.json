@@ -1,0 +1,53 @@
+{
+  "description": "Retry-eligible failed run launches through full turn gate including pre-run recheck",
+  "prNumber": 318,
+  "sessionId": "opk-75",
+  "openPrs": [
+    {
+      "number": 318,
+      "headRefOid": "abc3180000000000000000000000000000000000",
+      "headCommittedAt": "2026-06-16T00:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [
+    {
+      "id": "failed-empty",
+      "prNumber": 318,
+      "targetSha": "abc3180000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer exited 1",
+      "retryEligible": true,
+      "createdAt": "2026-06-16T00:00:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-75",
+      "sessionId": "opk-75",
+      "role": "worker",
+      "prNumber": 318,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-16T00:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecks": [
+    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+    { "name": "PR scope guard", "state": "SUCCESS" },
+    { "name": "Run pack contract tests", "state": "SUCCESS" },
+    { "name": "Self-architect lint", "state": "SUCCESS" }
+  ],
+  "requiredCheckNames": [
+    "Verify orchestrator-pack structure",
+    "PR scope guard",
+    "Run pack contract tests",
+    "Self-architect lint"
+  ],
+  "claimWindow": "free",
+  "expect": { "launch": true, "reason": "failed_retry_after_recheck" }
+}

@@ -128,21 +128,36 @@ export function hasFailedOrCancelledOnHead(runs, prNumber, headSha) {
 
 /**
  * @param {ReviewRun[]} runs
+ */
+function sortRunsByRecency(runs) {
+  return [...toArray(runs)].sort((a, b) => {
+    const aMs = Date.parse(String(a?.createdAt ?? a?.startedAt ?? '')) || 0;
+    const bMs = Date.parse(String(b?.createdAt ?? b?.startedAt ?? '')) || 0;
+    if (bMs !== aMs) {
+      return bMs - aMs;
+    }
+    return String(b?.id ?? b?.runId ?? '').localeCompare(String(a?.id ?? a?.runId ?? ''));
+  });
+}
+
+/**
+ * Latest failed/cancelled row for the current-head key (matches coverage latest-row axis).
+ *
+ * @param {ReviewRun[]} runs
  * @param {number} prNumber
  * @param {string} headSha
  */
 export function findFailedOrCancelledRunForHead(runs, prNumber, headSha) {
   const head = normalizeSha(headSha);
-  return (
-    toArray(runs).find((run) => {
-      const status = String(run?.status ?? '').toLowerCase();
-      return (
-        Number(run?.prNumber) === prNumber &&
-        normalizeSha(run?.targetSha) === head &&
-        FAILED_OR_CANCELLED.has(status)
-      );
-    }) ?? null
-  );
+  const failedRows = toArray(runs).filter((run) => {
+    const status = String(run?.status ?? '').toLowerCase();
+    return (
+      Number(run?.prNumber) === prNumber &&
+      normalizeSha(run?.targetSha) === head &&
+      FAILED_OR_CANCELLED.has(status)
+    );
+  });
+  return sortRunsByRecency(failedRows)[0] ?? null;
 }
 
 /**

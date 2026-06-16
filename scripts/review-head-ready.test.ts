@@ -602,4 +602,38 @@ describe('preRunHeadReadyRecheck', () => {
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toBe(fixture.expect.reason);
   });
+
+  it('allows retry-eligible failed run through pre-run recheck', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: { prNumber: number; targetSha: string; status: string; retryEligible?: boolean }[];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+        requiredCheckNames: string[];
+      };
+      expect: { emitReviewRun: boolean; reason: string };
+    }>('pre-run-failed-retry.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toBe(fixture.expect.reason);
+  });
+
+  it('blocks retry-eligible failed run when required CI is red at pre-run recheck', () => {
+    const fixture = loadFixture<{
+      planned: { prNumber: number; headSha: string; sessionId: string };
+      fresh: {
+        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+        reviewRuns: { prNumber: number; targetSha: string; status: string; retryEligible?: boolean }[];
+        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+        ciChecks: typeof greenChecks;
+        requiredCheckNames: string[];
+      };
+      expect: { emitReviewRun: boolean; reason: string };
+    }>('pre-run-failed-retry-ci-red.json');
+    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
+    expect(result.reason).toBe(fixture.expect.reason);
+  });
 });

@@ -1,35 +1,18 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
-const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
 const reevalInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
 const wakeInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewWakeTrigger.ps1');
 const guardPath = path.join(repoRoot, 'scripts/check-review-start-claim-guard.ps1');
 const fullSha = 'fd2fdb6600000000000000000000000000000000';
 
-function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
-  const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: { ...process.env, ...extraEnv },
-  });
-  if (result.status !== 0) {
-    throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
-
 function tempClaimDir() {
   return mkdtempSync(path.join(tmpdir(), 'review-start-claim-'));
-}
-
-function psString(value: string) {
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function parsePwshRows(output: string) {

@@ -48,7 +48,7 @@ foreach ($file in @($files)) {
 }
 
 $reviewRunLiteral = [regex]'(?is)(\bao\s+review\s+run\b|@\(\s*[''"]review[''"]\s*,\s*[''"]run[''"]|@runArgs)'
-$claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|Review-StartClaim\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun)'
+$claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|Review-StartClaim\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun|Invoke-OrchestratorClaimedReviewRun|invoke-orchestrator-claimed-review-run\.ps1)'
 $violations = @($allowlistViolations)
 foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     $text = $textByRel[$rel]

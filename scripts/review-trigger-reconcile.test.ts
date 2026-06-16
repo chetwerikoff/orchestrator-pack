@@ -11,6 +11,7 @@ import {
   buildReviewRunArgv,
   evaluateReconcileInterval,
   findForbiddenLifecycleCommands,
+  findFailedOrCancelledRunForHead,
   isHeadCovered,
   isRunCoveringHead,
   collectSessionIdentifiers,
@@ -68,6 +69,26 @@ function loadFixture(name: string): FixturePayload {
   return JSON.parse(raw) as FixturePayload;
 }
 
+type FailedRetryExhaustedFixture = {
+  runs: Array<{
+    id: string;
+    prNumber: number;
+    targetSha: string;
+    status: string;
+    retryEligible?: boolean;
+    retryCount?: number;
+    createdAt: string;
+  }>;
+  prNumber: number;
+  headSha: string;
+  expect: { retryEligible: boolean; runId: string };
+};
+
+function loadFailedRetryExhaustedFixture(name: string): FailedRetryExhaustedFixture {
+  const raw = readFileSync(path.join(fixturesDir, name), 'utf8');
+  return JSON.parse(raw) as FailedRetryExhaustedFixture;
+}
+
 describe('isRunCoveringHead', () => {
   it.each([
     ['queued', true],
@@ -101,6 +122,20 @@ describe('isHeadCovered', () => {
         head,
       ),
     ).toBe(false);
+  });
+});
+
+describe('findFailedOrCancelledRunForHead', () => {
+  it('selects the latest failed/cancelled row for retry exhaustion', () => {
+    const fixture = loadFailedRetryExhaustedFixture('failed-retry-exhausted-latest.json');
+    const latest = findFailedOrCancelledRunForHead(
+      fixture.runs,
+      fixture.prNumber,
+      fixture.headSha,
+    );
+    expect(latest?.id).toBe(fixture.expect.runId);
+    const retryEligible = latest?.retryEligible ?? latest?.retryCount == null;
+    expect(retryEligible).toBe(fixture.expect.retryEligible);
   });
 });
 

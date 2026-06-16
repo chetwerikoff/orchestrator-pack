@@ -1,0 +1,14 @@
+{
+  "description": "Mixed-row: stale clean on superseded head does not block current head",
+  "prNumber": 318,
+  "headSha": "abc3180000000000000000000000000000000000",
+  "reviewRuns": [
+    {
+      "id": "old-clean",
+      "prNumber": 318,
+      "targetSha": "deadbeef00000000000000000000000000000000",
+      "status": "clean"
+    }
+  ],
+  "expect": { "verdict": "not_covered" }
+}

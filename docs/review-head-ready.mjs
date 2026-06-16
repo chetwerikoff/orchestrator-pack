@@ -566,9 +566,10 @@ export function evaluateHeadReadyForReview({
   ownerResolution = null,
   nowMs = Date.now(),
   workerDeliveries = [],
+  allowFailedRetry = false,
 }) {
   const reportBindingOptions = { headCommittedAtMs };
-  if (hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
+  if (!allowFailedRetry && hasFailedOrCancelledOnHead(reviewRuns, prNumber, headSha)) {
     return {
       eligible: false,
       reason: 'failed_or_cancelled_on_head',
@@ -812,8 +813,15 @@ export function preRunHeadReadyRecheck(planned, fresh) {
       ? findSessionById(toArray(fresh.sessions), plannedSessionId)
       : session;
 
+  const reviewRuns = toArray(fresh.reviewRuns);
+  const failedRun = findFailedOrCancelledRunForHead(reviewRuns, prNumber, currentHead);
+  const failedRetryEligible =
+    failedRun != null &&
+    !isHeadCovered(reviewRuns, prNumber, currentHead) &&
+    (failedRun.retryEligible ?? failedRun.retryCount == null) !== false;
+
   const decision = evaluateHeadReadyForReview({
-    reviewRuns: toArray(fresh.reviewRuns),
+    reviewRuns,
     prNumber,
     headSha: currentHead,
     session: sessionForRecheck ?? null,
@@ -826,11 +834,16 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     ownerResolution,
     nowMs,
     workerDeliveries,
+    allowFailedRetry: failedRetryEligible,
   });
 
   return {
     emitReviewRun: decision.eligible,
-    reason: decision.eligible ? 'head_ready_after_recheck' : `pre_run_recheck_${decision.reason}`,
+    reason: decision.eligible
+      ? failedRetryEligible
+        ? 'failed_retry_after_recheck'
+        : 'head_ready_after_recheck'
+      : `pre_run_recheck_${decision.reason}`,
     decision,
   };
 }
