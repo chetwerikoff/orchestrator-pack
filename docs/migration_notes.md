@@ -61,8 +61,8 @@ The pack therefore adds contracts around AO instead of replacing AO orchestratio
 All supervised automated review starters share one machine-local claim namespace for
 `(prNumber, full normalized head SHA)`: periodic reconcile, wake listener, and deferred-head
 reeval. The default namespace is `${AO_REVIEW_CLAIM_DIR}` when set, otherwise
-`${AO_SIDE_PROCESS_STATE_DIR}/review-start-claims`, otherwise the OS temp fallback used by
-legacy unsupervised dry runs. All children log the resolved namespace at startup.
+`${AO_BASE_DIR:-~/.agent-orchestrator}/projects/<projectId>/review-start-claims` (Issue #308).
+All children log the resolved namespace at startup.
 
 Operator adoption after merge:
 

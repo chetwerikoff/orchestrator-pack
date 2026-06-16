@@ -295,7 +295,7 @@ function Invoke-PlannedReviewRun {
 
     $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $Project) }
     $claim = Acquire-ReviewStartClaim -PrNumber $PrNumber -HeadSha $HeadSha -Surface 'review-trigger-reconcile' `
-        -ReviewRuns $claimRuns -StartReason $StartReason -LogWriter { param($m) Write-ReconcileLog $m }
+        -ReviewRuns $claimRuns -ProjectId $Project -StartReason $StartReason -LogWriter { param($m) Write-ReconcileLog $m }
     if (-not $claim.acquired) {
         if ($claim.escalation) {
             Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): $($claim.reason) $($claim.detail)"
@@ -362,6 +362,7 @@ function Invoke-PlannedReviewRun {
     }
 
     $postRuns = @(Get-AoReviewRuns -Project $Project)
+    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
     $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
     if (-not $complete.ok) {
         Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"
@@ -506,7 +507,7 @@ else {
     if (Test-Path -LiteralPath $live -PathType Leaf) { $live } else { Join-Path $PackRoot 'agent-orchestrator.yaml.example' }
 }
 
-$claimNamespace = Resolve-ReviewStartClaimNamespace
+$claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null
 Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 

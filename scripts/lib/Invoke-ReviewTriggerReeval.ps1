@@ -26,6 +26,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         [string]$ReviewCommand,
         [string]$RepoRoot = '',
         [string]$StateRoot = '',
+        [string]$ProjectId = 'orchestrator-pack',
         [hashtable]$FixtureSnapshot,
         [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
@@ -54,7 +55,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             @()
         }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
-            -Surface 'review-trigger-reeval' -ReviewRuns $claimRuns -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot) `
+            -Surface 'review-trigger-reeval' -ReviewRuns $claimRuns -ProjectId $ProjectId `
             -StartReason 'deferred_head_watch' -LogWriter $LogWriter
     }
     if (-not $claim.acquired) {
@@ -176,6 +177,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
+    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
     $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
     if (-not $complete.ok) {
         & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"

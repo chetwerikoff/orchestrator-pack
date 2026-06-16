@@ -109,7 +109,7 @@ $script:dedupWindowMs = [Math]::Max(1, $DedupWindowSeconds) * 1000
 $lastAcceptedAt = $null
 $quietCheckSeconds = 300
 $sideEffectLockPath = Get-ReviewWakeTriggerSideEffectLockPath -StateRoot $SideEffectStateDir
-$claimNamespace = Resolve-ReviewStartClaimNamespace -StateRoot $SideEffectStateDir
+$claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $projectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ListenerLog $m } | Out-Null
 $fixtureSnapshot = $null
 if ($FixturePath) {

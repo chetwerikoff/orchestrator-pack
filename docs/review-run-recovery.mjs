@@ -526,7 +526,15 @@ export function runRecoveryTick({ projectId = 'orchestrator-pack', storeDir, now
     const runId = safeRunId(run);
     const sidecar = runId ? asRecord(readJsonFile(identitySidecarPath(resolvedStoreDir, runId))) : null;
     const decision = evaluateRecoveryForRun({ run, sidecar, state, nowMs, config, storeDir: resolvedStoreDir });
-    const base = { runId, status: run.status, decision: decision.action, reason: decision.reason ?? decision.terminalReason };
+    const base = {
+      runId,
+      status: run.status,
+      decision: decision.action,
+      reason: decision.reason ?? decision.terminalReason,
+      prNumber: run.prNumber ?? run.pr_number ?? null,
+      targetSha: run.targetSha ?? run.target_sha ?? null,
+      runCreatedAt: run.createdAt ?? run.created_at ?? null,
+    };
 
     if (decision.action === 'escalate') {
       markEscalationOnce(resolvedStoreDir, state, run, decision.reason, decision.status, nowMs);
