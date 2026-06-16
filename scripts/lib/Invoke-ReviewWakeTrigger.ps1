@@ -246,7 +246,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     if (-not $DryRun) {
         $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $ProjectId) }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
-            -Surface 'review-wake-trigger' -ReviewRuns $claimRuns -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot) `
+            -Surface 'review-wake-trigger' -ReviewRuns $claimRuns -ProjectId $ProjectId `
             -StartReason 'completion_wake' -LogWriter $LogWriter
     }
     if (-not $claim.acquired) {

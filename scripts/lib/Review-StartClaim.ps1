@@ -14,19 +14,28 @@ $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
 
-function Resolve-ReviewStartClaimNamespace {
-    param([string]$StateRoot = '')
+function Get-ReviewStartClaimProjectNamespace {
+    param([string]$ProjectId = 'orchestrator-pack')
 
+    $project = ([string]$ProjectId).Trim()
+    if (-not $project) { $project = 'orchestrator-pack' }
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'review-start-claims')
+}
+
+function Resolve-ReviewStartClaimNamespace {
+    param(
+        [string]$ProjectId = 'orchestrator-pack',
+        [string]$Namespace = ''
+    )
+
+    if ($Namespace) {
+        return $Namespace
+    }
     if ($env:AO_REVIEW_CLAIM_DIR) {
         return $env:AO_REVIEW_CLAIM_DIR.Trim()
     }
-    if ($StateRoot) {
-        return (Join-Path $StateRoot 'review-start-claims')
-    }
-    if ($env:AO_SIDE_PROCESS_STATE_DIR) {
-        return (Join-Path $env:AO_SIDE_PROCESS_STATE_DIR.Trim() 'review-start-claims')
-    }
-    return (Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-start-claims')
+    return (Get-ReviewStartClaimProjectNamespace -ProjectId $ProjectId)
 }
 
 function Get-ReviewStartClaimStaleMinutes {
@@ -307,6 +316,39 @@ function Test-ReviewStartClaimRetryEligible {
     return -not (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $HeadSha)
 }
 
+function Enter-ReviewStartClaimMutexWithRetry {
+    param(
+        [string]$LockDir,
+        [int]$MaxAttempts = 40,
+        [int]$SleepMs = 25
+    )
+
+    for ($attempt = 0; $attempt -lt $MaxAttempts; $attempt++) {
+        if (Enter-ReviewStartClaimMutex -LockDir $LockDir) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $SleepMs
+    }
+    return $false
+}
+
+function Get-ReviewStartClaimContendedResult {
+    param(
+        [string]$Path,
+        [string]$Namespace,
+        [string]$Key
+    )
+
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $existing = Read-ReviewStartClaimRecord -Path $Path
+        if ($existing.ok) {
+            return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $Path; namespace = $Namespace; key = $existing.record.key }
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    return @{ acquired = $false; reason = 'claimed'; path = $Path; namespace = $Namespace; key = $Key }
+}
+
 function Enter-ReviewStartClaimMutex {
     param([string]$LockDir)
     try {
@@ -390,6 +432,47 @@ function Write-ReviewStartClaimAtomic {
     }
 }
 
+function Resolve-ReviewStartClaimAgainstExisting {
+    param(
+        [string]$Namespace,
+        [string]$Path,
+        [int]$PrNumber,
+        [string]$Normalized,
+        [string]$Surface,
+        [array]$ReviewRuns,
+        [double]$StaleMinutes,
+        [string]$StartReason,
+        [object]$Existing
+    )
+
+    if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $Normalized) {
+        if ([string]$Existing.record.state -eq 'active') {
+            $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $Namespace -ActivePath $Path -Record $Existing.record -Outcome 'run_started' -Extra @{
+                coverage  = 'covered_by_run'
+                coveredBy = 'claim_skip'
+            }
+            return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $terminalPath; namespace = $Namespace; key = $Existing.record.key }
+        }
+        return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
+    }
+
+    $age = ((Get-Date).ToUniversalTime() - $Existing.acquiredAtUtc).TotalMinutes
+    if ($age -lt $StaleMinutes) {
+        return @{ acquired = $false; reason = 'claimed'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
+    }
+
+    $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $Namespace -ActivePath $Path -Record $Existing.record -Outcome 'recovered_stale' -Extra @{
+        recoveredBy = New-ReviewStartClaimHolder -Surface $Surface
+    }
+    $newRecord = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $Normalized -Surface $Surface -Reason $StartReason -RecoveredFrom @{
+        path          = $terminalPath
+        holder        = $Existing.record.holder
+        acquiredAtUtc = $Existing.record.acquiredAtUtc
+    }
+    Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
+    return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $Path; namespace = $Namespace; key = $newRecord.key; recoveredRecord = $Existing.record }
+}
+
 function Acquire-ReviewStartClaim {
     param(
         [int]$PrNumber,
@@ -397,85 +480,53 @@ function Acquire-ReviewStartClaim {
         [string]$Surface,
         [array]$ReviewRuns = @(),
         [string]$Namespace = '',
-        [string]$StateRoot = '',
+        [string]$ProjectId = 'orchestrator-pack',
         [string]$StartReason = '',
         [scriptblock]$LogWriter = $null
     )
 
     try {
-        $resolved = if ($Namespace) { $Namespace } else { Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot }
+        $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
         Initialize-ReviewStartClaimNamespace -Namespace $resolved
         $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
         $path = Get-ReviewStartClaimPath -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized
         $lockDir = Get-ReviewStartClaimLockDir -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized
         $staleMinutes = Get-ReviewStartClaimStaleMinutes -LogWriter $LogWriter
+        $key = "pr-$PrNumber-$normalized"
 
-        $record = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason
+        if (-not (Enter-ReviewStartClaimMutexWithRetry -LockDir $lockDir)) {
+            return Get-ReviewStartClaimContendedResult -Path $path -Namespace $resolved -Key $key
+        }
+
         try {
+            $existing = Read-ReviewStartClaimRecord -Path $path
+            if ($existing.ok) {
+                return Resolve-ReviewStartClaimAgainstExisting -Namespace $resolved -Path $path -PrNumber $PrNumber `
+                    -Normalized $normalized -Surface $Surface -ReviewRuns $ReviewRuns -StaleMinutes $staleMinutes `
+                    -StartReason $StartReason -Existing $existing
+            }
+            if ($existing.reason -ne 'missing') {
+                return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
+            }
+
+            $record = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason
             Write-ReviewStartClaimAtomic -Path $path -Record $record
             return @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key }
         }
         catch [System.IO.IOException] {
             $existing = Read-ReviewStartClaimRecord -Path $path
             if (-not $existing.ok) {
-                return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
+                return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
             }
-            if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
-                if ([string]$existing.record.state -eq 'active') {
-                    $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $existing.record -Outcome 'run_started' -Extra @{
-                        coverage = 'covered_by_run'
-                        coveredBy = 'claim_skip'
-                    }
-                    return @{ acquired = $false; reason = 'covered_by_run'; holder = $existing.record.holder; claim = $existing.record; path = $terminalPath; namespace = $resolved; key = $existing.record.key }
-                }
-                return @{ acquired = $false; reason = 'covered_by_run'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
-            }
-            $age = ((Get-Date).ToUniversalTime() - $existing.acquiredAtUtc).TotalMinutes
-            if ($age -lt $staleMinutes) {
-                return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
-            }
-            if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) {
-                return @{ acquired = $false; reason = 'claimed'; holder = $existing.record.holder; claim = $existing.record; path = $path; namespace = $resolved; key = $existing.record.key }
-            }
-            try {
-                $again = Read-ReviewStartClaimRecord -Path $path
-                if (-not $again.ok) {
-                    return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $again.reason; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
-                }
-                if (-not (Test-ReviewStartClaimRecordSameGeneration -Expected $existing.record -Actual $again.record)) {
-                    return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
-                }
-                if (Test-ReviewStartClaimRunVisible -ReviewRuns $ReviewRuns -PrNumber $PrNumber -HeadSha $normalized) {
-                    if ([string]$again.record.state -eq 'active') {
-                        $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $again.record -Outcome 'run_started' -Extra @{
-                            coverage = 'covered_by_run'
-                            coveredBy = 'claim_skip'
-                        }
-                        return @{ acquired = $false; reason = 'covered_by_run'; holder = $again.record.holder; claim = $again.record; path = $terminalPath; namespace = $resolved; key = $again.record.key }
-                    }
-                    return @{ acquired = $false; reason = 'covered_by_run'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
-                }
-                $ageAgain = ((Get-Date).ToUniversalTime() - $again.acquiredAtUtc).TotalMinutes
-                if ($ageAgain -lt $staleMinutes) {
-                    return @{ acquired = $false; reason = 'claimed'; holder = $again.record.holder; claim = $again.record; path = $path; namespace = $resolved; key = $again.record.key }
-                }
-                $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $again.record -Outcome 'recovered_stale' -Extra @{
-                    recoveredBy = New-ReviewStartClaimHolder -Surface $Surface
-                }
-                $newRecord = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason -RecoveredFrom @{
-                    path = $terminalPath
-                    holder = $again.record.holder
-                    acquiredAtUtc = $again.record.acquiredAtUtc
-                }
-                Write-ReviewStartClaimAtomic -Path $path -Record $newRecord
-                return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $path; namespace = $resolved; key = $newRecord.key; recoveredRecord = $again.record }
-            }
-            finally {
-                Exit-ReviewStartClaimMutex -LockDir $lockDir
-            }
+            return Resolve-ReviewStartClaimAgainstExisting -Namespace $resolved -Path $path -PrNumber $PrNumber `
+                -Normalized $normalized -Surface $Surface -ReviewRuns $ReviewRuns -StaleMinutes $staleMinutes `
+                -StartReason $StartReason -Existing $existing
         }
         catch {
-            return @{ acquired = $false; reason = 'storage_failure'; escalation = $true; detail = [string]$_; path = $path; namespace = $resolved; key = "pr-$PrNumber-$normalized" }
+            return @{ acquired = $false; reason = 'storage_failure'; escalation = $true; detail = [string]$_; path = $path; namespace = $resolved; key = $key }
+        }
+        finally {
+            Exit-ReviewStartClaimMutex -LockDir $lockDir
         }
     }
     catch {
@@ -544,16 +595,56 @@ function Release-ReviewStartClaimAfterRecheckException {
     }
 }
 
+function Release-ReviewStartClaimForTerminalizedRun {
+    param(
+        [int]$PrNumber,
+        [string]$HeadSha,
+        [string]$ProjectId = 'orchestrator-pack',
+        [string]$Namespace = '',
+        [string]$RunId = '',
+        [scriptblock]$LogWriter = $null
+    )
+
+    try {
+        $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
+        $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
+        Initialize-ReviewStartClaimNamespace -Namespace $resolved
+        $path = Get-ReviewStartClaimPath -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized
+        $lockDir = Get-ReviewStartClaimLockDir -Namespace $resolved -PrNumber $PrNumber -HeadSha $normalized
+        if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) {
+            return @{ ok = $false; reason = 'busy' }
+        }
+        try {
+            $read = Read-ReviewStartClaimRecord -Path $path
+            if (-not $read.ok) { return @{ ok = $false; reason = 'no_active_claim'; detail = $read.reason } }
+            if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
+            $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $resolved -ActivePath $path -Record $read.record -Outcome 'released_after_run_terminalized' -Extra @{
+                runId = $RunId
+            }
+            if ($LogWriter) {
+                & $LogWriter "review-start-claim: released after terminalized run PR #$PrNumber head=$normalized run=$RunId audit=$terminalPath"
+            }
+            return @{ ok = $true; terminalPath = $terminalPath; key = $read.record.key }
+        }
+        finally {
+            Exit-ReviewStartClaimMutex -LockDir $lockDir
+        }
+    }
+    catch {
+        return @{ ok = $false; reason = 'storage_failure'; detail = [string]$_ }
+    }
+}
+
 function Resolve-ReviewStartClaimEscalation {
     param(
         [int]$PrNumber,
         [string]$HeadSha,
         [array]$ReviewRuns = @(),
         [string]$Namespace = '',
-        [string]$StateRoot = '',
+        [string]$ProjectId = 'orchestrator-pack',
         [scriptblock]$LogWriter = $null
     )
-    $resolved = if ($Namespace) { $Namespace } else { Resolve-ReviewStartClaimNamespace -StateRoot $StateRoot }
+    $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
     Initialize-ReviewStartClaimNamespace -Namespace $resolved
     $path = Get-ReviewStartClaimPath -Namespace $resolved -PrNumber $PrNumber -HeadSha $HeadSha
     $read = Read-ReviewStartClaimRecord -Path $path

@@ -33,6 +33,126 @@ function psString(value: string) {
 }
 
 describe('Review-StartClaim single-flight contract', () => {
+  it('never leaves two active claim records for one key under overlapping acquisition', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        $helper = ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $jobs = 1..6 | ForEach-Object {
+          Start-Job -ArgumentList $helper,$ns,$sha -ScriptBlock {
+            param($helper,$ns,$sha)
+            . $helper
+            Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+          }
+        }
+        $null = $jobs | Receive-Job -Wait -AutoRemoveJob
+        $activePath = Join-Path $ns "pr-307-$sha.json"
+        [pscustomobject]@{
+          activeExists = (Test-Path -LiteralPath $activePath)
+          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-307-*.json').Name).Count
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.activeExists).toBe(true);
+      expect(result.activeCount).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves one canonical store across differing cwd and side-process env', () => {
+    const base = tempClaimDir();
+    const sideA = mkdtempSync(path.join(tmpdir(), 'claim-side-a-'));
+    const sideB = mkdtempSync(path.join(tmpdir(), 'claim-side-b-'));
+    try {
+      const runAcquire = (side: string, surface: string) =>
+        JSON.parse(
+          runPwsh(`
+        . ${psString(helperPath)}
+        $env:AO_BASE_DIR = ${psString(base)}
+        $env:AO_SIDE_PROCESS_STATE_DIR = ${psString(side)}
+        Set-Location ${psString(side)}
+        $r = Acquire-ReviewStartClaim -PrNumber 307 -HeadSha ${psString(fullSha)} -Surface '${surface}' -ProjectId 'orchestrator-pack' -ReviewRuns @()
+        [pscustomobject]@{ acquired=[bool]$r.acquired; reason=[string]$r.reason; namespace=(Resolve-ReviewStartClaimNamespace -ProjectId 'orchestrator-pack') } | ConvertTo-Json -Compress
+      `),
+        );
+      const first = runAcquire(sideA, 'review-trigger-reconcile');
+      const second = runAcquire(sideB, 'review-wake-trigger');
+      const ns = first.namespace;
+      const activeCount = JSON.parse(
+        runPwsh(`
+        [pscustomobject]@{ activeCount = @((Get-ChildItem -LiteralPath ${psString(ns)} -File -Filter 'pr-307-*.json').Name).Count } | ConvertTo-Json -Compress
+      `),
+      ).activeCount;
+      expect(ns).toContain(path.join('projects', 'orchestrator-pack', 'review-start-claims'));
+      expect([first, second].filter((r) => r.acquired)).toHaveLength(1);
+      expect([first, second].filter((r) => !r.acquired)).toHaveLength(1);
+      expect(activeCount).toBe(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(sideA, { recursive: true, force: true });
+      rmSync(sideB, { recursive: true, force: true });
+    }
+  });
+
+  it('replays PR #307 incident timing with one reconcile winner', () => {
+    const dir = tempClaimDir();
+    const incidentSha = 'b4ed8d8000000000000000000000000000000000';
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(incidentSha)}
+        $first = Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        Start-Sleep -Milliseconds 2500
+        $second = Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          firstAcquired = [bool]$first.acquired
+          secondAcquired = [bool]$second.acquired
+          loserReason = [string]$second.reason
+          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-307-*.json').Name).Count
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.firstAcquired).toBe(true);
+      expect(result.secondAcquired).toBe(false);
+      expect(result.loserReason).toBe('claimed');
+      expect(result.activeCount).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('releases a held claim after the dead-run reaper terminalizes the run', () => {
+    const dir = tempClaimDir();
+    const sha = fullSha;
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha ${psString(sha)} -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $release = Release-ReviewStartClaimForTerminalizedRun -PrNumber 266 -HeadSha ${psString(sha)} -Namespace $ns -RunId 'opk-rev-314'
+        $retry = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha ${psString(sha)} -Surface 'review-trigger-reeval' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          held = [bool]$claim.acquired
+          release = @{ ok=[bool]$release.ok; outcome='released_after_run_terminalized' }
+          retry = @{ acquired=[bool]$retry.acquired }
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha ${psString(sha)})
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*released_after_run_terminalized*.json').Name)
+        } | ConvertTo-Json -Compress -Depth 6
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.held).toBe(true);
+      expect(result.release.ok).toBe(true);
+      expect(result.retry.acquired).toBe(true);
+      expect(result.terminal).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('races three automated surfaces on the incident PR/head and produces one winner plus attributable claim skips', () => {
     const dir = tempClaimDir();
     try {
@@ -357,6 +477,7 @@ describe('Review-StartClaim single-flight contract', () => {
       const script = `
         . ${psString(reevalInvokePath)}
         $ns = ${psString(dir)}
+        $env:AO_REVIEW_CLAIM_DIR = $ns
         $sha = ${psString(fullSha)}
         $calls = 0
         try {
@@ -377,8 +498,8 @@ describe('Review-StartClaim single-flight contract', () => {
           Invoke-ReviewTriggerReevalPlannedRun @params | Out-Null
         }
         catch { }
-        $path = Get-ReviewStartClaimPath -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -PrNumber 266 -HeadSha $sha
-        $terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns)) -Filter '*released_for_retry*.json').Name)
+        $path = Get-ReviewStartClaimPath -Namespace $env:AO_REVIEW_CLAIM_DIR -PrNumber 266 -HeadSha $sha
+        $terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $env:AO_REVIEW_CLAIM_DIR) -Filter '*released_for_retry*.json').Name)
         [pscustomobject]@{ activeExists=(Test-Path -LiteralPath $path); terminal=$terminal; calls=$calls } | ConvertTo-Json -Compress
       `;
       const result = JSON.parse(runPwsh(script));
@@ -396,8 +517,9 @@ describe('Review-StartClaim single-flight contract', () => {
       const script = `
         . ${psString(reevalInvokePath)}
         $ns = ${psString(dir)}
+        $env:AO_REVIEW_CLAIM_DIR = $ns
         $sha = ${psString(fullSha)}
-        Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -ReviewRuns @() | Out-Null
+        Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'review-wake-trigger' -Namespace $ns -ReviewRuns @() | Out-Null
         $params = @{
           Action = @{ prNumber=266; headSha=$sha; sessionId='opk-52' }
           ReviewCommand = 'echo review'
@@ -430,6 +552,7 @@ describe('Review-StartClaim single-flight contract', () => {
       const script = `
         . ${psString(wakeInvokePath)}
         $ns = ${psString(dir)}
+        $env:AO_REVIEW_CLAIM_DIR = $ns
         $script:calls = 0
         function Invoke-GhOpenPrList { param([string]$RepoRoot) @(@{ number = 204; headRefOid = '${wakeSha}'; headCommittedAt = '${fixture.openPrs[0].headCommittedAt}' }) }
         function Get-AoStatusSessions { @(${fixture.sessions.map((session: any) => `@{ name = '${session.name}'; role = '${session.role}'; prNumber = ${session.prNumber}; status = '${session.status}'; reports = @(${session.reports.map((report: any) => `@{ reportState = '${report.reportState}'; reportedAt = '${report.reportedAt}' }`).join(',')}) }`).join(',')}) }
@@ -451,7 +574,7 @@ describe('Review-StartClaim single-flight contract', () => {
           }
           return @(@{ prNumber = 204; targetSha = '${wakeSha}'; status = 'clean' })
         }
-        $preClaim = Acquire-ReviewStartClaim -PrNumber 204 -HeadSha '${wakeSha}' -Surface 'other-surface' -Namespace (Resolve-ReviewStartClaimNamespace -StateRoot $ns) -ReviewRuns @()
+        $preClaim = Acquire-ReviewStartClaim -PrNumber 204 -HeadSha '${wakeSha}' -Surface 'other-surface' -Namespace $env:AO_REVIEW_CLAIM_DIR -ReviewRuns @()
         $result = Invoke-ReviewWakeTriggerOnCompletionWake -FilterResult @{
           ok = $true
           wakeKind = 'merge.ready'

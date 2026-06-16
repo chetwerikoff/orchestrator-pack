@@ -129,6 +129,7 @@ function Invoke-ReviewTriggerReevalTick {
     param(
         [string]$StateRoot,
         [string]$ReviewCommand,
+        [string]$ProjectId = 'orchestrator-pack',
         [switch]$DryRunMode,
         [hashtable]$FixturePayload
     )
@@ -202,6 +203,7 @@ function Invoke-ReviewTriggerReevalTick {
                     ReviewCommand        = $ReviewCommand
                     RepoRoot             = $RepoRoot
                     StateRoot            = $StateRoot
+                    ProjectId            = $ProjectId
                     ResolveFreshSnapshot = {
                         param($planned)
                         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
@@ -271,7 +273,7 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
 }
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 
-$claimNamespace = Resolve-ReviewStartClaimNamespace -StateRoot $stateRoot
+$claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReviewTriggerReevalLog $m } | Out-Null
 Write-ReviewTriggerReevalLog "starting (project=$ProjectId, poll=${PollSeconds}s, stateRoot=$stateRoot, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 Write-ReviewTriggerReevalLog "pollClass=scoped_deferred_head_watch windowMs=300000 incidentDelayMs=77000"
@@ -282,7 +284,7 @@ if ($FixturePath) {
         $reviewCommand = $payload.reviewCommand
     }
     $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
-        -DryRunMode:$DryRun -FixturePayload $payload
+        -ProjectId $ProjectId -DryRunMode:$DryRun -FixturePayload $payload
     Write-ReviewTriggerReevalLog "fixture tick complete (started=$($result.started))"
     exit 0
 }
@@ -296,7 +298,7 @@ try {
         Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reeval' -Phase 'poll'
         try {
             $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
-                -DryRunMode:$DryRun
+                -ProjectId $ProjectId -DryRunMode:$DryRun
             Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$($result.watchCount))"
             Write-OrchestratorSideProcessTickSuccess -ChildId 'review-trigger-reeval'
         }
