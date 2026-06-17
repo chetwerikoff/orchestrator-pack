@@ -330,6 +330,24 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         );
         expect(allowChain.stdout).toMatch(/done-marker/);
 
+        const outFile = path.join(dir, 'status-out.txt');
+        const allowRedirect = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/git status >${outFile}; echo redirect-marker`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(allowRedirect.status).toBe(0);
+        expect(allowRedirect.stdout).toMatch(/redirect-marker/);
+        expect(existsSync(outFile)).toBe(true);
+        expect(readFileSync(outFile, 'utf8').length).toBeGreaterThan(0);
+
         const fallthrough = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; /usr/bin/git checkout -b absolute-bypass-branch`],
@@ -399,6 +417,38 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       });
       expect(denyRealBinary.status).toBe(93);
       expect(denyRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
+
+      const denySpoofedInternal = spawnSync(
+        'bash',
+        [invokePath, 'branch', '-m', 'internal-exec-bypass'],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            AO_AUTONOMOUS_GIT_INTERNAL_EXEC: '1',
+          },
+        },
+      );
+      expect(denySpoofedInternal.status).toBe(93);
+      expect(denySpoofedInternal.stderr).toMatch(/autonomous tree-mutating git denied/i);
+
+      const denySpoofedRealBinary = spawnSync(
+        path.join(repoRoot, 'scripts/git-real-binary'),
+        ['branch', '-m', 'real-binary-internal-bypass'],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            AO_AUTONOMOUS_GIT_INTERNAL_EXEC: '1',
+          },
+        },
+      );
+      expect(denySpoofedRealBinary.status).toBe(93);
+      expect(denySpoofedRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
     });
   });
 
