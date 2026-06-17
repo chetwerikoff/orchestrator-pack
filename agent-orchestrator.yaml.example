@@ -62,6 +62,7 @@ projects:
           # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
           # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
           # (pwsh, python3, dirname, readlink) resolve; BASH_ENV interposer blocks absolute host git.
+          # Do not set POSIXLY_CORRECT here — bash disables BASH_ENV when it is set.
           BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-bash-env.sh
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:

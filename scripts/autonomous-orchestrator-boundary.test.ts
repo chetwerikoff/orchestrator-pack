@@ -34,6 +34,17 @@ const aoShimPath = path.join(repoRoot, 'scripts/ao');
 const gitShimPath = path.join(repoRoot, 'scripts/git');
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 
+/** Bash skips BASH_ENV when POSIXLY_CORRECT is set; CI runners often inherit it via process.env. */
+function autonomousBashTurnEnv(extra: Record<string, string> = {}) {
+  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
+  return {
+    ...baseEnv,
+    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+    BASH_ENV: bashEnvPath,
+    ...extra,
+  };
+}
+
 function withTempGitRepo(run: (dir: string) => void) {
   const dir = mkdtempSync(path.join(tmpdir(), 'autonomous-boundary-'));
   try {
@@ -451,11 +462,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-              BASH_ENV: bashEnvPath,
-            },
+            env: autonomousBashTurnEnv(),
           },
         );
         expect(quotedAbsoluteBashEnv.status).toBe(93);
@@ -472,11 +479,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-              BASH_ENV: bashEnvPath,
-            },
+            env: autonomousBashTurnEnv(),
           },
         );
         expect(singleQuotedAbsoluteBashEnv.status).toBe(93);
@@ -527,11 +530,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const bashEnvInterposed = spawnSync('bash', ['-c', '/usr/bin/git status --short'], {
           cwd: dir,
           encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            BASH_ENV: bashEnvPath,
-          },
+          env: autonomousBashTurnEnv(),
         });
         expect(bashEnvInterposed.status).toBe(0);
         expect(bashEnvInterposed.stdout).toBe(directBashEnvShort.stdout);
@@ -563,11 +562,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const bashEnvChained = spawnSync('bash', ['-c', 'cd nested && /usr/bin/git status --short'], {
           cwd: dir,
           encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            BASH_ENV: bashEnvPath,
-          },
+          env: autonomousBashTurnEnv(),
         });
         expect(bashEnvChained.status).toBe(0);
         expect(bashEnvChained.stdout).toBe(directChained.stdout);
