@@ -68,8 +68,8 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   it('positive-outcome: denies direct branch -m and allows ao-review-run child worktree add', () => {
     withTempGitRepo((dir) => {
       const deny = spawnSync(
-        gitShimPath,
-        ['branch', '-m', 'blocked'],
+        'bash',
+        [gitShimPath, 'branch', '-m', 'blocked'],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -192,8 +192,8 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
   it('without marker, spawn and mutating git pass through shims', () => {
     const spawnProbe = spawnSync(
-      aoShimPath,
-      ['--version'],
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -203,7 +203,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(spawnProbe.status).not.toBe(93);
 
     withTempGitRepo((dir) => {
-      const status = spawnSync(gitShimPath, ['status', '--short'], {
+      const status = spawnSync('bash', [gitShimPath, 'status', '--short'], {
         cwd: dir,
         encoding: 'utf8',
         env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '' },
