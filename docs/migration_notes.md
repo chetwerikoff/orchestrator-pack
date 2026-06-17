@@ -113,8 +113,9 @@ Operator adoption after merge:
    (never point `git` at `/usr/bin/git` directly).
 2. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
    `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` and
-   orchestrator-only `PATH` prepend of pack `scripts/` (omit `/usr/bin` and `/bin`; set
-   `BASH_ENV` to `scripts/autonomous-bash-env.sh` for bash-turn absolute-git interposition)
+   orchestrator-only `PATH` prepend of pack `scripts/` before `/usr/bin` and `/bin` (system dirs
+   must trail scripts/ so shim shebangs resolve; set `BASH_ENV` to
+   `scripts/autonomous-bash-env.sh` for bash-turn absolute-git interposition)
 3. `ao stop` then `ao start` from the operator terminal (not from a managed session).
 4. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
 5. Run boundary inventory check:

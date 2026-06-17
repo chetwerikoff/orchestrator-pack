@@ -231,7 +231,12 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   it('documents bash interposer and git-real-binary wrapper wiring', () => {
     const yaml = readFileSync(path.join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
     expect(yaml).toMatch(/autonomous-bash-env\.sh/);
-    expect(yaml).not.toMatch(/PATH:.*\/usr\/bin/);
+    const pathLine = yaml.match(/^\s*PATH:\s*(.+)$/m)?.[1] ?? '';
+    const segments = pathLine.split(':').filter(Boolean);
+    const scriptsIdx = segments.findIndex((segment) => segment.endsWith('/scripts'));
+    const usrBinIdx = segments.indexOf('/usr/bin');
+    expect(scriptsIdx).toBeGreaterThanOrEqual(0);
+    expect(usrBinIdx).toBeGreaterThan(scriptsIdx);
     const example = JSON.parse(
       readFileSync(path.join(repoRoot, 'docs/autonomous-real-binaries.example.json'), 'utf8'),
     );
@@ -255,6 +260,23 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       expect(denyAbsolute.status).toBe(93);
       expect(denyAbsolute.stderr || denyAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
     }
+  });
+
+  it('keeps pack shims executable when system dirs trail scripts on PATH', () => {
+    withTempGitRepo((dir) => {
+      const minimalPath = `${path.join(repoRoot, 'scripts')}:/usr/bin:/bin`;
+      const status = spawnSync('bash', [gitShimPath, 'status', '--short'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+          PATH: minimalPath,
+        },
+      });
+      expect(status.status).toBe(0);
+      expect(`${status.stderr}${status.stdout}`).not.toMatch(/No such file or directory/i);
+    });
   });
 
   it('validates capability inventory artifact', () => {

@@ -60,9 +60,10 @@ projects:
           # to .ao/autonomous-real-binaries.json with pack scripts/git-real-binary + gitSystemBinary host path
           # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
           # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
-          # Omit /usr/bin and /bin from PATH; use BASH_ENV interposer to block absolute host git on bash turns.
+          # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
+          # (pwsh, python3, dirname, readlink) resolve; BASH_ENV interposer blocks absolute host git.
           BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-bash-env.sh
-          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin
+          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
       agentConfig:
