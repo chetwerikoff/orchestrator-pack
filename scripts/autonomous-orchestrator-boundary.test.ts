@@ -374,6 +374,44 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(interposedStatus.status).toBe(0);
         expect(interposedStatus.stdout).toBe(directStatus.stdout);
 
+        const directShort = spawnSync('bash', ['-c', 'GIT_OPTIONAL_LOCKS=0 git status --short'], {
+          cwd: dir,
+          encoding: 'utf8',
+        });
+        const interposedShort = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; GIT_OPTIONAL_LOCKS=0 git status --short`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(interposedShort.status).toBe(0);
+        expect(interposedShort.stdout).toBe(directShort.stdout);
+
+        const directMultiEnv = spawnSync('bash', ['-c', 'FOO=1 BAR=2 git status --short'], {
+          cwd: dir,
+          encoding: 'utf8',
+        });
+        const interposedMultiEnv = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; FOO=1 BAR=2 git status --short`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(interposedMultiEnv.status).toBe(0);
+        expect(interposedMultiEnv.stdout).toBe(directMultiEnv.stdout);
+
         const fallthrough = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; /usr/bin/git checkout -b absolute-bypass-branch`],

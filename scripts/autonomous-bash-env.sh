@@ -26,7 +26,7 @@ __ao_autonomous_rewrite_git_command() {
   fi
 
   if [[ "${cmd}" =~ ^(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)+)git(.*)$ ]]; then
-    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[2]}"
+    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
     return 0
   fi
 
