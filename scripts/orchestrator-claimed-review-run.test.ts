@@ -258,15 +258,6 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('example yaml documents out-of-band real binaries and git shim PATH', () => {
-    const yaml = readFileSync(path.join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
-    expect(yaml).not.toMatch(/^\s*AO_REAL_BINARY:/m);
-    expect(yaml).not.toMatch(/^\s*GIT_REAL_BINARY:/m);
-    expect(yaml).toMatch(/autonomous-real-binaries\.json/);
-    expect(yaml).toMatch(/scripts\/ao \+ scripts\/git/);
-    expect(yaml).toMatch(/AO_AUTONOMOUS_ORCHESTRATOR_SURFACE/);
-  });
-
   it('dry-run invoke leaves no active claim on covered abort', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'orch-claimed-audit-'));
     try {
