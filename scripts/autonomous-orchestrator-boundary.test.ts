@@ -63,6 +63,23 @@ function withTempGitRepo(run: (dir: string) => void) {
   }
 }
 
+/** Isolated AO_REAL_BINARY stub: records argv to probeFile, exits 0 — no live ao spawn. */
+function withAoSpawnProbeStub(run: (ctx: { aoStub: string; probeFile: string }) => void) {
+  const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-stub-'));
+  const aoStub = path.join(stubDir, 'ao-stub.sh');
+  const probeFile = path.join(stubDir, 'spawn-probe.txt');
+  try {
+    writeFileSync(
+      aoStub,
+      '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$@" > "${AO_SPAWN_PROBE_FILE:?}"\n',
+    );
+    chmodSync(aoStub, 0o755);
+    run({ aoStub, probeFile });
+  } finally {
+    rmSync(stubDir, { recursive: true, force: true });
+  }
+}
+
 function initCoordinatedIssue324Fixture() {
   const dir = mkdtempSync(path.join(tmpdir(), 'coord-path-324-'));
   spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
@@ -773,16 +790,25 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('without marker, spawn and mutating git pass through shims', () => {
-    const spawnProbe = spawnSync(
-      'pwsh',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '' },
-      },
-    );
-    expect(spawnProbe.status).not.toBe(93);
+    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+      const spawnProbe = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+            AO_REAL_BINARY: aoStub,
+            AO_SPAWN_PROBE_FILE: probeFile,
+          },
+        },
+      );
+      expect(spawnProbe.status).not.toBe(93);
+      expect(spawnProbe.status).toBe(0);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-1']);
+    });
 
     withTempGitRepo((dir) => {
       const status = spawnSync('bash', [gitShimPath, 'status', '--short'], {
