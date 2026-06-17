@@ -754,11 +754,16 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   ],
 };
 
+/** Companion paths that may infer issue linkage without PR/branch context (exclude protected-runtime-only files). */
+const BUILTIN_COORDINATED_ISSUE_INFERENCE_PATH_EDITS = {
+  324: ['agent-orchestrator.yaml.example'],
+};
+
 function inferLinkedIssuesFromCoordinatedPathEdits(changedFiles, protectedManifest) {
   const linked = new Set();
   const coordinated = {
-    ...BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS,
-    ...(protectedManifest?.coordinatedIssueDeclaredPathEdits ?? {}),
+    ...BUILTIN_COORDINATED_ISSUE_INFERENCE_PATH_EDITS,
+    ...(protectedManifest?.coordinatedIssueInferencePathEdits ?? {}),
   };
   const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
   for (const [issue, paths] of Object.entries(coordinated)) {

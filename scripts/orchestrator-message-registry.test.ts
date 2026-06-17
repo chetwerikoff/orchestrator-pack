@@ -441,6 +441,51 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('does not infer issue 324 from SideProcessSupervisor-only protected runtime edits', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-supervisor-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'supervisor-only'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      delete process.env.GITHUB_EVENT_PATH;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('Orchestrator-SideProcessSupervisor.ps1'))).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows SideProcessSupervisor edits when issue 324 is explicitly linked', () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'),
+    );
+    const denied = checkProtectedRuntimeDiff(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], manifest);
+    expect(denied.ok).toBe(false);
+    const allowed = checkProtectedRuntimeDiff(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], manifest, {
+      linkedIssueNumbers: [324],
+    });
+    expect(allowed.ok).toBe(true);
+  });
+
   it('cli check-protected-runtime honors baseRef as the fourth argument', () => {
     const { root, baseSha } = initRegistryGitFixture();
     try {
