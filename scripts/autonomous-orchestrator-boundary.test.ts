@@ -278,6 +278,23 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           },
         );
         expect(allowChain.stdout).toMatch(/done-marker/);
+
+        const fallthrough = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/git checkout -b absolute-bypass-branch`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(fallthrough.stderr || fallthrough.stdout).toMatch(/autonomous tree-mutating git denied/i);
+        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+          before.stdout.trim(),
+        );
       });
     }
   });
