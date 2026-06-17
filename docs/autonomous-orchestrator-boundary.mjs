@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
-  isClaimedReviewRunParentCommandLine,
+  isAoReviewRunGitWorktreeSetupCommandLine,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
 } from './orchestrator-claimed-review-run.mjs';
@@ -14,6 +14,11 @@ import {
 export const AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION =
   'autonomous-orchestrator-boundary/v1';
 export const TURN_VISIBLE_REAL_BINARY_ENV_VARS = ['AO_REAL_BINARY', 'GIT_REAL_BINARY'];
+const PREFLIGHT_GIT_PARENTS = [
+  'reviewer-workspace-preflight.ps1',
+  'orchestrator-worktree-preflight.ps1',
+];
+const CLAIMED_REVIEW_RUN_INVOKER = 'Invoke-OrchestratorClaimedReviewRun.ps1';
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   'status',
@@ -199,7 +204,7 @@ export function evaluateAutonomousGitBoundary(input) {
   }
   if (
     input.sanctionedProvenance
-    || hasSanctionedGitParentChain(input.parentChain)
+    || hasSanctionedGitParentChain(input.parentChain, argv)
   ) {
     return { allowed: true, reason: 'sanctioned_git_child' };
   }
@@ -327,27 +332,63 @@ export function evaluateAbsoluteSystemGitInvocationBoundary(input) {
 }
 
 /**
+ * @param {string[]} argv
+ */
+export function isGitArgvAoOwnedWorktreeAdd(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index >= list.length) {
+    return false;
+  }
+  if (list[index].toLowerCase() !== 'worktree') {
+    return false;
+  }
+  if (index + 1 >= list.length) {
+    return false;
+  }
+  return list[index + 1].toLowerCase() === 'add';
+}
+
+/**
  * @param {string[] | undefined} parentChain
- * @param {boolean} [claimedBypass]
  * @param {number} [maxDepth]
  */
-export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, maxDepth) {
+export function classifySanctionedGitProvenance(parentChain, maxDepth) {
   const inventory = loadAutonomousReviewStartCapabilities();
-  const scripts = inventory.sanctionedGitParents ?? [];
   const depthLimit = Number.isFinite(maxDepth)
     ? Math.max(0, maxDepth)
     : Number(inventory.sanctionedGitParentMaxDepth ?? 2);
   const chain = Array.isArray(parentChain) ? parentChain.map((line) => String(line)) : [];
-  const scoped = chain.slice(0, depthLimit);
-  for (const line of scoped) {
-    if (isSanctionedGitParentCommandLine(line, scripts)) {
-      return true;
+  for (const line of chain.slice(0, depthLimit)) {
+    if (isSanctionedGitParentCommandLine(line, PREFLIGHT_GIT_PARENTS)) {
+      return 'preflight';
     }
   }
   for (const line of chain) {
-    if (isClaimedReviewRunParentCommandLine(line)) {
-      return true;
+    if (isSanctionedGitParentCommandLine(line, [CLAIMED_REVIEW_RUN_INVOKER])) {
+      return 'claimed_review_run';
     }
+    if (isAoReviewRunGitWorktreeSetupCommandLine(line)) {
+      return 'review_run_worktree_command';
+    }
+  }
+  return 'none';
+}
+
+/**
+ * @param {string[] | undefined} parentChain
+ * @param {string[]} [argv]
+ * @param {boolean} [claimedBypass]
+ * @param {number} [maxDepth]
+ */
+export function hasSanctionedGitParentChain(parentChain, argv = [], claimedBypass = false, maxDepth) {
+  void claimedBypass;
+  const provenance = classifySanctionedGitProvenance(parentChain, maxDepth);
+  if (provenance === 'preflight') {
+    return true;
+  }
+  if (provenance === 'claimed_review_run' || provenance === 'review_run_worktree_command') {
+    return isGitArgvAoOwnedWorktreeAdd(argv);
   }
   return false;
 }

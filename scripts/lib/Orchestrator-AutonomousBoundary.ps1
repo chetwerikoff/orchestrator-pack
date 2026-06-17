@@ -8,10 +8,14 @@
 $Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
 $Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
-$Script:SanctionedGitParentPatterns = @(
+$Script:SanctionedGitPreflightPatterns = @(
     'reviewer-workspace-preflight.ps1',
-    'orchestrator-worktree-preflight.ps1',
-    'Invoke-OrchestratorClaimedReviewRun.ps1'
+    'orchestrator-worktree-preflight.ps1'
+)
+$Script:ClaimedReviewRunInvokerPattern = 'Invoke-OrchestratorClaimedReviewRun.ps1'
+$Script:SanctionedGitParentPatterns = @(
+    $Script:SanctionedGitPreflightPatterns
+    $Script:ClaimedReviewRunInvokerPattern
 )
 $Script:SanctionedGitParentMaxDepth = 2
 
@@ -370,7 +374,7 @@ function Split-ProcessCommandLineTokens {
 
     $tokens = New-Object System.Collections.Generic.List[string]
     if (-not $CommandLine) {
-        return @($tokens)
+        return @()
     }
 
     $current = New-Object System.Text.StringBuilder
@@ -398,11 +402,14 @@ function Split-ProcessCommandLineTokens {
     if ($current.Length -gt 0) {
         $tokens.Add($current.ToString())
     }
-    return @($tokens)
+    return ,@($tokens.ToArray())
 }
 
 function Test-ProcessCommandLineIsSanctionedGitParent {
-    param([string]$CommandLine)
+    param(
+        [string]$CommandLine,
+        [string[]]$SanctionedPatterns = $Script:SanctionedGitParentPatterns
+    )
 
     if (-not $CommandLine) { return $false }
     $tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
@@ -411,7 +418,7 @@ function Test-ProcessCommandLineIsSanctionedGitParent {
     for ($index = 0; $index -lt $tokens.Count; $index++) {
         if ($tokens[$index] -ieq '-File' -and ($index + 1) -lt $tokens.Count) {
             $scriptLeaf = Split-Path -Leaf ($tokens[$index + 1].Trim('"').Trim("'"))
-            foreach ($pattern in $Script:SanctionedGitParentPatterns) {
+            foreach ($pattern in $SanctionedPatterns) {
                 if ($scriptLeaf -ieq $pattern) {
                     return $true
                 }
@@ -420,12 +427,24 @@ function Test-ProcessCommandLineIsSanctionedGitParent {
     }
 
     $firstLeaf = Split-Path -Leaf ($tokens[0].Trim('"').Trim("'"))
-    foreach ($pattern in $Script:SanctionedGitParentPatterns) {
+    foreach ($pattern in $SanctionedPatterns) {
         if ($firstLeaf -ieq $pattern) {
             return $true
         }
     }
     return $false
+}
+
+function Test-ProcessCommandLineIsSanctionedPreflightParent {
+    param([string]$CommandLine)
+
+    return Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $CommandLine -SanctionedPatterns $Script:SanctionedGitPreflightPatterns
+}
+
+function Test-ProcessCommandLineIsInvokeOrchestratorClaimedReviewRun {
+    param([string]$CommandLine)
+
+    return Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $CommandLine -SanctionedPatterns @($Script:ClaimedReviewRunInvokerPattern)
 }
 
 function Test-ProcessCommandLineContainsUnquotedShellCompoundOperator {
@@ -456,7 +475,7 @@ function Test-ProcessCommandLineContainsUnquotedShellCompoundOperator {
     return $false
 }
 
-function Test-ProcessCommandLineIsAoReviewRun {
+function Test-ProcessCommandLineIsAoReviewRunGitWorktreeSetup {
     param([string]$CommandLine)
 
     if (-not $CommandLine) { return $false }
@@ -467,25 +486,39 @@ function Test-ProcessCommandLineIsAoReviewRun {
     if (-not $aoReviewRun.Success) {
         return $false
     }
-    $gitPrimary = [regex]::Match($CommandLine, '(?i)\bgit\s+(?:-[a-zA-Z]|branch|checkout|switch|worktree|reset|commit|merge|rebase|pull|tag|stash|push|fetch)\b')
-    if (-not $gitPrimary.Success) {
-        return $true
+    $gitWorktree = [regex]::Match($CommandLine, '(?i)\bgit\s+worktree\s+add\b')
+    if (-not $gitWorktree.Success) {
+        return $false
     }
-    if ($gitPrimary.Index -lt $aoReviewRun.Index) {
+    if ($gitWorktree.Index -lt $aoReviewRun.Index) {
         return $false
     }
     $reviewRunEnd = $aoReviewRun.Index + $aoReviewRun.Length
-    $between = $CommandLine.Substring($reviewRunEnd, $gitPrimary.Index - $reviewRunEnd)
+    $between = $CommandLine.Substring($reviewRunEnd, $gitWorktree.Index - $reviewRunEnd)
     if (Test-ProcessCommandLineContainsUnquotedShellCompoundOperator -Segment $between) {
         return $false
     }
     return $true
 }
 
-function Test-AutonomousGitSanctionedProvenance {
-    param(
-        [string[]]$FixtureParentChain = @()
-    )
+function Test-GitArgvIsAoOwnedWorktreeAdd {
+    param([string[]]$Argv)
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
+    if ($index -ge $Argv.Count) {
+        return $false
+    }
+    if ([string]$Argv[$index] -notmatch '^(?i)worktree$') {
+        return $false
+    }
+    if (($index + 1) -ge $Argv.Count) {
+        return $false
+    }
+    return [string]$Argv[$index + 1] -match '^(?i)add$'
+}
+
+function Get-AutonomousGitSanctionedProvenanceClass {
+    param([string[]]$FixtureParentChain = @())
 
     $chain = if ($FixtureParentChain.Count -gt 0) {
         @($FixtureParentChain)
@@ -496,18 +529,39 @@ function Test-AutonomousGitSanctionedProvenance {
 
     $depthLimit = [Math]::Min($chain.Count, $Script:SanctionedGitParentMaxDepth)
     for ($i = 0; $i -lt $depthLimit; $i++) {
-        if (Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $chain[$i]) {
-            return $true
+        if (Test-ProcessCommandLineIsSanctionedPreflightParent -CommandLine $chain[$i]) {
+            return 'preflight'
         }
     }
 
     foreach ($cmd in $chain) {
-        if (Test-ProcessCommandLineIsAoReviewRun -CommandLine $cmd) {
-            return $true
+        if (Test-ProcessCommandLineIsInvokeOrchestratorClaimedReviewRun -CommandLine $cmd) {
+            return 'claimed_review_run'
+        }
+        if (Test-ProcessCommandLineIsAoReviewRunGitWorktreeSetup -CommandLine $cmd) {
+            return 'review_run_worktree_command'
         }
     }
 
-    return $false
+    return 'none'
+}
+
+function Test-AutonomousGitSanctionedProvenance {
+    param(
+        [string[]]$FixtureParentChain = @(),
+        [string[]]$Argv = @()
+    )
+
+    switch (Get-AutonomousGitSanctionedProvenanceClass -FixtureParentChain $FixtureParentChain) {
+        'preflight' { return $true }
+        'claimed_review_run' {
+            return Test-GitArgvIsAoOwnedWorktreeAdd -Argv $Argv
+        }
+        'review_run_worktree_command' {
+            return Test-GitArgvIsAoOwnedWorktreeAdd -Argv $Argv
+        }
+        default { return $false }
+    }
 }
 
 function Get-GitArgvSubcommandIndex {
@@ -619,7 +673,7 @@ function Test-AutonomousGitDenied {
         return @{ denied = $false; reason = 'read_only_git' }
     }
 
-    if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain) {
+    if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain -Argv $Argv) {
         return @{ denied = $false; reason = 'sanctioned_git_child' }
     }
 

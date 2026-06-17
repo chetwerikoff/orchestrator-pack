@@ -80,6 +80,7 @@ export declare function evaluateOrchestratorTurnGate(input: {
 }): TurnGateResult;
 export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
 export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;
+export declare function isAoReviewRunGitWorktreeSetupCommandLine(commandLine: string): boolean;
 export declare function isRawReviewRunInvocation(commandLine: string): boolean;
 export declare function evaluateAutonomousReviewRunBoundary(input: {
   commandLine?: string;

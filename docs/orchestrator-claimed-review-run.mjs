@@ -387,6 +387,32 @@ export function isClaimedReviewRunParentCommandLine(commandLine) {
 }
 
 /**
+ * AO-owned worktree setup encoded in review-run --command (not reviewer-side git).
+ * @param {string} commandLine
+ */
+export function isAoReviewRunGitWorktreeSetupCommandLine(commandLine) {
+  const text = String(commandLine ?? '');
+  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+    ?? /\breview\s+run\b.*--execute\b/i.exec(text);
+  if (!aoReviewRun) {
+    return false;
+  }
+  const gitWorktree = /\bgit\s+worktree\s+add\b/i.exec(text);
+  if (!gitWorktree) {
+    return false;
+  }
+  if (gitWorktree.index < aoReviewRun.index) {
+    return false;
+  }
+  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const between = text.slice(reviewRunEnd, gitWorktree.index);
+  if (containsUnquotedShellCompoundOperator(between)) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * @param {string} commandLine
  */
 export function isRawReviewRunInvocation(commandLine) {

@@ -153,7 +153,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
         $env:PATH = ${psString(path.join(repoRoot, 'scripts'))} + ':' + $env:PATH
         . ${psString(boundaryLibPath)}
-        $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','${dir.replace(/\\/g, '/')}/wt','main') -FixtureParentChain @('ao review run opk-1 --execute --command echo')
+        $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','${dir.replace(/\\/g, '/')}/wt','main') -FixtureParentChain @('pwsh -NoProfile -File scripts/Invoke-OrchestratorClaimedReviewRun.ps1')
         [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
       `);
       const parsed = JSON.parse(allow);
@@ -188,8 +188,18 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       }).allowed,
     ).toBe(false);
     expect(
-      hasSanctionedGitParentChain(['ao review run opk-1 --execute --command echo']),
-    ).toBe(true);
+      hasSanctionedGitParentChain(['ao review run opk-1 --execute --command echo'], ['worktree', 'add', 'wt', 'main']),
+    ).toBe(false);
+    expect(
+      evaluateAutonomousGitBoundary({
+        argv: ['checkout', 'main'],
+        autonomousSurface: true,
+        parentChain: [
+          'ao review run opk-1 --execute --command codex review',
+          'codex exec review --json',
+        ],
+      }).allowed,
+    ).toBe(false);
   });
 
   it('allows sanctioned preflight parent for mutating git', () => {
@@ -204,19 +214,19 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(
       hasSanctionedGitParentChain([
         'pwsh -c "git checkout main # reviewer-workspace-preflight.ps1"',
-      ]),
+      ], ['checkout', 'main']),
     ).toBe(false);
     expect(
       hasSanctionedGitParentChain([
         'bash -c "echo reviewer-workspace-preflight.ps1; git checkout main"',
-      ]),
+      ], ['checkout', 'main']),
     ).toBe(false);
     expect(
       hasSanctionedGitParentChain([
         'pwsh -File scripts/run-pack-review.ps1',
         'codex exec review --json',
         'pwsh -c "git branch -m blocked"',
-      ]),
+      ], ['branch', '-m', 'blocked']),
     ).toBe(false);
     expect(
       evaluateAutonomousGitBoundary({
@@ -347,6 +357,22 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(allowRedirect.stdout).toMatch(/redirect-marker/);
         expect(existsSync(outFile)).toBe(true);
         expect(readFileSync(outFile, 'utf8').length).toBeGreaterThan(0);
+
+        const directStatus = spawnSync('git', ['status'], { cwd: dir, encoding: 'utf8' });
+        const interposedStatus = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/git status`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(interposedStatus.status).toBe(0);
+        expect(interposedStatus.stdout).toBe(directStatus.stdout);
 
         const fallthrough = spawnSync(
           'bash',

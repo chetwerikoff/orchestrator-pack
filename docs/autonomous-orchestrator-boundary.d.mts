@@ -45,8 +45,14 @@ export declare function evaluateAutonomousGitBoundary(input: {
   claimedBypass?: boolean;
   parentChain?: string[];
 }): GitBoundaryVerdict;
+export declare function isGitArgvAoOwnedWorktreeAdd(argv: string[]): boolean;
+export declare function classifySanctionedGitProvenance(
+  parentChain?: string[],
+  maxDepth?: number,
+): 'preflight' | 'claimed_review_run' | 'review_run_worktree_command' | 'none';
 export declare function hasSanctionedGitParentChain(
   parentChain?: string[],
+  argv?: string[],
   claimedBypass?: boolean,
   maxDepth?: number,
 ): boolean;

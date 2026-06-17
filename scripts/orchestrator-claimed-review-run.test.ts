@@ -18,6 +18,7 @@ import {
   evaluateScenarioMatrixCell,
   findForbiddenAutonomousReviewRunInvocations,
   isClaimedReviewRunParentCommandLine,
+  isAoReviewRunGitWorktreeSetupCommandLine,
   isRawReviewRunInvocation,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
@@ -177,6 +178,12 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(
       isClaimedReviewRunParentCommandLine('ao review run opk-1 --execute --command "git worktree add wt main"'),
     ).toBe(true);
+    expect(
+      isAoReviewRunGitWorktreeSetupCommandLine('ao review run opk-1 --execute --command "git worktree add wt main"'),
+    ).toBe(true);
+    expect(
+      isAoReviewRunGitWorktreeSetupCommandLine('ao review run opk-1 --execute --command echo'),
+    ).toBe(false);
     expect(
       isClaimedReviewRunParentCommandLine('ao review run opk-1 --execute --command echo; git branch -m bypass'),
     ).toBe(false);
