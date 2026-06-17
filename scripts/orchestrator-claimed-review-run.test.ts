@@ -9,6 +9,7 @@ import {
   ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION,
   ORCHESTRATOR_TURN_SURFACE,
   buildRedactedAuditRecord,
+  containsRawReviewRunInvocation,
   coalesceDenialAudit,
   evaluateAutonomousReviewRunBoundary,
   evaluateCurrentHeadCoverage,
@@ -16,6 +17,7 @@ import {
   evaluateOrchestratorTurnGate,
   evaluateScenarioMatrixCell,
   findForbiddenAutonomousReviewRunInvocations,
+  isClaimedReviewRunParentCommandLine,
   isRawReviewRunInvocation,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
@@ -170,10 +172,17 @@ describe('orchestrator claimed review-run gate (#318)', () => {
         autonomousSurface: false,
       }).allowed,
     ).toBe(true);
-    expect(isRawReviewRunInvocation('pwsh -c "git branch -m blocked # ao review run"')).toBe(false);
+    expect(isRawReviewRunInvocation('pwsh -c "git branch -m blocked # ao review run"')).toBe(true);
+    expect(isClaimedReviewRunParentCommandLine('pwsh -c "git branch -m blocked # ao review run"')).toBe(false);
     expect(
-      isRawReviewRunInvocation('ao review run opk-1 --execute --command "git worktree add wt main"'),
+      isClaimedReviewRunParentCommandLine('ao review run opk-1 --execute --command "git worktree add wt main"'),
     ).toBe(true);
+    expect(
+      evaluateAutonomousReviewRunBoundary({
+        commandLine: 'git checkout main && ao review run opk-1 --execute --command echo',
+        autonomousSurface: true,
+      }).allowed,
+    ).toBe(false);
   });
 
   it('preflight fails closed on stale gate marker or missing atomic claim capability', () => {

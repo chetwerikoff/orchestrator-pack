@@ -15,6 +15,7 @@ import {
   gitSubcommandFromArgv,
   hasSanctionedGitParentChain,
   isMutatingGitArgv,
+  isSpawnAoArgv,
   loadAutonomousOrchestratorBoundaryInventory,
   validateBoundaryCapabilityInventory,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
@@ -56,6 +57,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: true }).allowed).toBe(false);
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: false }).allowed).toBe(true);
     }
+    expect(isSpawnAoArgv(['spawn', 'opk-1'])).toBe(true);
+    expect(isSpawnAoArgv(['spawn', '--claim-pr', '322'])).toBe(true);
+    expect(isSpawnAoArgv(['task', 'comment', '324', 'spawn denied'])).toBe(false);
   });
 
   it('classifies mutating vs read-only git argv', () => {

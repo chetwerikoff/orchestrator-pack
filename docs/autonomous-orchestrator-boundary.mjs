@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
-  isRawReviewRunInvocation,
+  isClaimedReviewRunParentCommandLine,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
 } from './orchestrator-claimed-review-run.mjs';
@@ -146,6 +146,20 @@ export function isMutatingGitArgv(argv) {
 }
 
 /**
+ * @param {string[]} argv
+ */
+export function isSpawnAoArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (const token of list) {
+    if (token.startsWith('-')) {
+      continue;
+    }
+    return token.toLowerCase() === 'spawn';
+  }
+  return false;
+}
+
+/**
  * @param {string} commandLine
  */
 export function isRawSpawnInvocation(commandLine) {
@@ -214,7 +228,7 @@ export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, 
   }
   if (claimedBypass) {
     for (const line of chain) {
-      if (isRawReviewRunInvocation(line)) {
+      if (isClaimedReviewRunParentCommandLine(line)) {
         return true;
       }
     }

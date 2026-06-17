@@ -325,7 +325,17 @@ export function evaluateOrchestratorTurnGate(input) {
 /**
  * @param {string} commandLine
  */
-export function isRawReviewRunInvocation(commandLine) {
+export function containsRawReviewRunInvocation(commandLine) {
+  const text = String(commandLine ?? '');
+  return /\bao(?:\.cmd)?\s+review\s+run\b/i.test(text)
+    || /\breview\s+run\b.*--execute\b/i.test(text);
+}
+
+/**
+ * Claimed-review git parent provenance: review-run must precede mutating git on the line.
+ * @param {string} commandLine
+ */
+export function isClaimedReviewRunParentCommandLine(commandLine) {
   const text = String(commandLine ?? '');
   const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
     ?? /\breview\s+run\b.*--execute\b/i.exec(text);
@@ -337,6 +347,13 @@ export function isRawReviewRunInvocation(commandLine) {
     return true;
   }
   return aoReviewRun.index < gitPrimary.index;
+}
+
+/**
+ * @param {string} commandLine
+ */
+export function isRawReviewRunInvocation(commandLine) {
+  return containsRawReviewRunInvocation(commandLine);
 }
 
 /**

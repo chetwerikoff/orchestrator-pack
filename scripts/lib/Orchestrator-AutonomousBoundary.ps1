@@ -201,6 +201,21 @@ function Resolve-RealGitExecutable {
     return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
 }
 
+function Get-AoArgvSubcommand {
+    param([string[]]$Argv)
+
+    if (-not $Argv -or $Argv.Count -eq 0) {
+        return ''
+    }
+    foreach ($token in $Argv) {
+        if ([string]$token -match '^-') {
+            continue
+        }
+        return [string]$token
+    }
+    return ''
+}
+
 function Test-AutonomousSpawnDenied {
     param([string[]]$Argv)
 
@@ -208,8 +223,8 @@ function Test-AutonomousSpawnDenied {
         return @{ denied = $false; reason = 'manual_surface' }
     }
 
-    $joined = ($Argv -join ' ').Trim()
-    if ($joined -match '(?i)\bspawn\b') {
+    $sub = Get-AoArgvSubcommand -Argv $Argv
+    if ($sub -match '^(?i)spawn$') {
         return @{ denied = $true; reason = 'autonomous_spawn_denied' }
     }
     return @{ denied = $false; reason = 'not_spawn' }

@@ -32,6 +32,7 @@ export declare function gitArgvDefinesAlias(argv: string[]): boolean;
 export declare function gitArgvSubcommandIndex(argv: string[], startIndex?: number): number;
 export declare function gitSubcommandFromArgv(argv: string[]): string;
 export declare function isMutatingGitArgv(argv: string[]): boolean;
+export declare function isSpawnAoArgv(argv: string[]): boolean;
 export declare function isRawSpawnInvocation(commandLine: string): boolean;
 export declare function evaluateAutonomousSpawnBoundary(input: {
   commandLine?: string;
