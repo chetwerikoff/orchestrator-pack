@@ -84,12 +84,18 @@ export declare function bootstrapLegacyNudgedCycle(
   prNumber: number,
   ownerSessionId: string,
 ): Record<string, unknown>;
+export interface WorkerSettledIdleResult {
+  settled: boolean;
+  activelyWorking: boolean;
+  debouncePending: boolean;
+  headStableMs?: number | null;
+}
 export declare function isWorkerSettledIdle(
   session: Record<string, unknown>,
   headSha: string,
   nowMs: number,
   options?: Record<string, unknown>,
-): boolean;
+): WorkerSettledIdleResult;
 export declare function commitOwnerCyclePatch(
   state: Record<string, unknown>,
   repoId: string,
