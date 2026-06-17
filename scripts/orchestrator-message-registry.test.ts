@@ -562,6 +562,55 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('links issue numbers from declaration snapshots present only in git HEAD', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-git-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['agent-orchestrator.yaml.example']);
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['agent-orchestrator.yaml.example'],
+      });
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const yamlPath = path.join(root, 'agent-orchestrator.yaml.example');
+      fs.writeFileSync(yamlPath, `${fs.readFileSync(yamlPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'agent-orchestrator.yaml.example'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'yaml-only'], { cwd: root, env: gitFixtureEnv });
+      fs.unlinkSync(path.join(root, 'docs/declarations/324.opk-2.json'));
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const changed = listChangedFiles(root, baseSha);
+        expect(changed).toEqual(['agent-orchestrator.yaml.example']);
+        expect(
+          resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, changed, {
+            gitRef: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+          }),
+        ).toEqual([324]);
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('allows coordinated protected-runtime edits when declaration snapshot is committed but not in diff', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-split-'));
     try {

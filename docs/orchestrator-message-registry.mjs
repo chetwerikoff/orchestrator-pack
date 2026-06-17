@@ -769,29 +769,87 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
  * Linked issues evidenced by committed declaration snapshots on disk when the gated
  * diff edits coordinated protected-runtime paths those snapshots declare.
  */
-export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles = []) {
+function listGitTreeDeclarationSnapshots(repoRoot, gitRef = 'HEAD') {
+  try {
+    const out = execFileSync('git', ['ls-tree', '-r', '--name-only', gitRef, 'docs/declarations'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    return parseGitDiffNameOnlyOutput(out);
+  }
+  catch {
+    return [];
+  }
+}
+
+function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
+  const diskPath = path.join(repoRoot, relPath);
+  if (existsSync(diskPath)) {
+    try {
+      return JSON.parse(readFileSync(diskPath, 'utf8'));
+    }
+    catch {
+      // fall through to git
+    }
+  }
+  try {
+    const out = execFileSync('git', ['show', `${gitRef}:${String(relPath).replace(/\\/g, '/')}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    return JSON.parse(out);
+  }
+  catch {
+    return null;
+  }
+}
+
+export function resolveRepoHeadRef(repoRoot) {
+  const pr = readGithubActionsPullRequestShas();
+  if (pr?.headSha && gitRefExists(repoRoot, pr.headSha)) return pr.headSha;
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  }
+  catch {
+    return 'HEAD';
+  }
+}
+
+export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
+  repoRoot,
+  changedFiles = [],
+  options = {},
+) {
   const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
   if (changed.size === 0) return [];
 
+  const gitRef = options.gitRef ?? resolveRepoHeadRef(repoRoot);
+  const snapshotPaths = new Set([
+    ...listGitTreeDeclarationSnapshots(repoRoot, gitRef),
+  ]);
   const declarationsDir = path.join(repoRoot, 'docs/declarations');
-  if (!existsSync(declarationsDir)) return [];
+  if (existsSync(declarationsDir)) {
+    for (const entry of readdirSync(declarationsDir)) {
+      if (/^(\d{1,6})\.[^/]+\.json$/.test(entry)) {
+        snapshotPaths.add(`docs/declarations/${entry}`);
+      }
+    }
+  }
 
   const linked = new Set();
-  for (const entry of readdirSync(declarationsDir)) {
-    const nameMatch = /^(\d{1,6})\.[^/]+\.json$/.exec(entry);
+  for (const relPath of snapshotPaths) {
+    const nameMatch = /^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.exec(relPath);
     if (!nameMatch) continue;
     const issueFromName = Number(nameMatch[1]);
     const coordinated = BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS[issueFromName];
     if (!coordinated) continue;
 
-    let snapshot;
-    try {
-      snapshot = JSON.parse(readFileSync(path.join(declarationsDir, entry), 'utf8'));
-    }
-    catch {
-      continue;
-    }
-    if (Number(snapshot.issue_number) !== issueFromName) continue;
+    const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef);
+    if (!snapshot || Number(snapshot.issue_number) !== issueFromName) continue;
 
     const declared = new Set(
       (snapshot.declared_paths ?? []).map((declaredPath) => String(declaredPath).replace(/\\/g, '/')),
@@ -804,12 +862,13 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, c
   return [...linked];
 }
 
-export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = []) {
+export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = [], options = {}) {
+  const gitRef = options.gitRef ?? resolveRepoHeadRef(repoRoot);
   return [
     ...new Set([
       ...resolveLinkedIssueNumbers(repoRoot),
       ...resolveLinkedIssuesFromDeclarationSnapshots(changedFiles),
-      ...resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles),
+      ...resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles, { gitRef }),
     ]),
   ];
 }
@@ -973,7 +1032,10 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
-  const linkedIssueNumbers = resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles);
+  const headRef = resolveRepoHeadRef(repoRoot);
+  const linkedIssueNumbers = resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles, {
+    gitRef: headRef,
+  });
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, {
     baseManifestExists,
     linkedIssueNumbers,
