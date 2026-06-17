@@ -53,6 +53,8 @@ export declare function detectRawSendsInSource(relPath: string, source: string, 
 export declare function auditRegistration(repoRoot: string, options?: Record<string, unknown>): AuditRegistrationResult;
 export declare function generateMessageMap(catalog: Record<string, unknown>, overlapResult: OverlapResult): string;
 export declare function checkProtectedRuntimeDiff(changedFiles: string[], protectedManifest: Record<string, unknown>, toolPaths?: string[]): ProtectedRuntimeDiffResult;
+export declare function listChangedFiles(repoRoot: string, baseRef?: string): string[];
+export declare function checkProtectedRuntimeForRepo(repoRoot: string, baseRef?: string): ProtectedRuntimeDiffResult;
 export declare function normalizeAuditOutput(result: AuditRegistrationResult): string;
 export declare function enumerateBaselineClassIds(): string[];
 export declare function recipientKeysOverlap(a: string, b: string, taxonomy: Record<string, unknown>): boolean;

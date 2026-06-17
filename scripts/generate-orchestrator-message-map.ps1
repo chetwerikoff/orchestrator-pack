@@ -23,7 +23,7 @@ if ($IsWindows -and -not $env:WSL_DISTRO_NAME) {
     throw 'unsupported host: native Windows execution is refused (use Linux/WSL + pwsh 7+)'
 }
 
-$generated = & node $registryCli generate-map $RepoRoot
+$generated = (& node $registryCli generate-map $RepoRoot 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0) {
     throw "map generation failed with exit $LASTEXITCODE"
 }

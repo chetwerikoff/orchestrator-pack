@@ -6,6 +6,7 @@
  * Static-parse / manifest only — never execute-import runtime scripts.
  */
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -572,6 +573,25 @@ export function generateMessageMap(catalog, overlapResult) {
   return `${lines.join('\n')}\n`;
 }
 
+export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
+  try {
+    const out = execFileSync('git', ['diff', '--name-only', `${baseRef}...HEAD`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    return out.split('\n').map((line) => line.trim().replace(/\\/g, '/')).filter(Boolean);
+  }
+  catch {
+    return [];
+  }
+}
+
+export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') {
+  const bundle = loadRegistryBundle(repoRoot);
+  const changedFiles = listChangedFiles(repoRoot, baseRef);
+  return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime);
+}
+
 export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, toolPaths = protectedManifest.toolPaths) {
   const violations = [];
   const protectedSet = new Set([
@@ -641,7 +661,17 @@ function cli() {
     console.log(JSON.stringify(updates, null, 2));
     process.exit(0);
   }
-  console.error('Usage: orchestrator-message-registry.mjs <audit|generate-map|hash-callsites> [repoRoot]');
+  if (subcommand === 'check-protected-runtime') {
+    const baseRef = process.argv[3] ?? 'origin/main';
+    const result = checkProtectedRuntimeForRepo(repoRoot, baseRef);
+    if (!result.ok) {
+      console.error(JSON.stringify(result, null, 2));
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ verdict: 'PASS', changedFileCount: listChangedFiles(repoRoot, baseRef).length }));
+    process.exit(0);
+  }
+  console.error('Usage: orchestrator-message-registry.mjs <audit|generate-map|hash-callsites|check-protected-runtime> [repoRoot] [baseRef]');
   process.exit(2);
 }
 

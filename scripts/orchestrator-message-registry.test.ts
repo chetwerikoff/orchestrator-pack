@@ -225,6 +225,26 @@ describe('orchestrator message registry (Issue #298)', () => {
     execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
   });
 
+  it('preserves newlines when regenerating the map via pwsh helper', () => {
+    const tmpMap = path.join(os.tmpdir(), `orch-map-${Date.now()}.md`);
+    try {
+      execFileSync('pwsh', ['-NoProfile', '-File', path.join(repoRoot, 'scripts/generate-orchestrator-message-map.ps1'), repoRoot, tmpMap], { stdio: 'pipe' });
+      const content = fs.readFileSync(tmpMap, 'utf8');
+      expect(content.split('\n').length).toBeGreaterThan(5);
+      expect(content).toContain('## Per-class summary');
+    } finally {
+      if (fs.existsSync(tmpMap)) fs.unlinkSync(tmpMap);
+    }
+  });
+
+  it('fails protected-runtime guard when a protected runtime file is in the diff', () => {
+    const result = checkProtectedRuntimeDiff(
+      ['scripts/ci-green-wake-reconcile.ps1'],
+      JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8')),
+    );
+    expect(result.ok).toBe(false);
+  });
+
   it('documents recipient alias overlap conservatively', () => {
     const taxonomy = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-taxonomy.json'), 'utf8'));
     expect(recipientKeysOverlap('head-owning-worker', 'specific-session', taxonomy)).toBe(true);

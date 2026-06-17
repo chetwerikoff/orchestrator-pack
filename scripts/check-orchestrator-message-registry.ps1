@@ -23,6 +23,11 @@ if ($failures.Count -eq 0) {
         $failures.Add('registration audit failed (see node output above)')
     }
 
+    & node $registryCli check-protected-runtime $Root origin/main 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        $failures.Add('protected runtime diff check failed (see node output above)')
+    }
+
     $generated = (& node $registryCli generate-map $Root 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
         $failures.Add('map generation failed')
