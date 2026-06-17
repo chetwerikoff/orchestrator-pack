@@ -11,12 +11,13 @@ __ao_autonomous_pack_git() {
 
 __ao_autonomous_rewrite_git_command() {
   local cmd="${1-}" pack_git="${2-}" quoted_pack_git prefix=""
+  local abs_git_re=$'(^|[;&|[:space:]]|["\'])(["\']?)(/usr/bin/git|/usr/local/bin/git|/bin/git)(["\']?)(.*)$'
 
   printf -v quoted_pack_git '%q' "${pack_git}"
 
-  if [[ "${cmd}" =~ (^|[;&|[:space:]])([\"']?)(/usr/bin/git|/usr/local/bin/git|/bin/git)([\"']?)(.*)$ ]]; then
+  if [[ "${cmd}" =~ ${abs_git_re} ]]; then
     prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
-    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[5]}"
+    printf '%s%s%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${quoted_pack_git}" "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}"
     return 0
   fi
 

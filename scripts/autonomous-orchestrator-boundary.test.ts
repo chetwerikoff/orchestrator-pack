@@ -445,6 +445,48 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           before.stdout.trim(),
         );
 
+        const quotedAbsoluteBashEnv = spawnSync(
+          'bash',
+          ['-c', '"/usr/bin/git" branch -m bash-env-quoted-bypass'],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+              BASH_ENV: bashEnvPath,
+            },
+          },
+        );
+        expect(quotedAbsoluteBashEnv.status).toBe(93);
+        expect(quotedAbsoluteBashEnv.stderr || quotedAbsoluteBashEnv.stdout).toMatch(
+          /autonomous tree-mutating git denied/i,
+        );
+        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+          before.stdout.trim(),
+        );
+
+        const singleQuotedAbsoluteBashEnv = spawnSync(
+          'bash',
+          ['-c', "'/usr/bin/git' branch -m bash-env-sq-quoted-bypass"],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+              BASH_ENV: bashEnvPath,
+            },
+          },
+        );
+        expect(singleQuotedAbsoluteBashEnv.status).toBe(93);
+        expect(singleQuotedAbsoluteBashEnv.stderr || singleQuotedAbsoluteBashEnv.stdout).toMatch(
+          /autonomous tree-mutating git denied/i,
+        );
+        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+          before.stdout.trim(),
+        );
+
         const prefixedAbsolute = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; env AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1 /usr/bin/git checkout -b env-prefixed-bypass`],
