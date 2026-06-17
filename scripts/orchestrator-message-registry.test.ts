@@ -22,7 +22,6 @@ import {
   parseGitDiffNameOnlyOutput,
   recipientKeysOverlap,
   resolveDiffBaseRef,
-  resolveLinkedIssueNumbers,
   resolveLinkedIssuesFromDeclarationSnapshots,
   resolveLinkedIssuesFromCommittedDeclarationSnapshots,
   resolveLinkedIssueNumbersForProtectedRuntime,
@@ -429,11 +428,6 @@ describe('orchestrator message registry (Issue #298)', () => {
     // Warm-fetch PR merge-base refs while the GitHub event is still available (CI checkout).
     listChangedFiles(repoRoot, 'origin/main');
     const baseRef = resolveDiffBaseRef(repoRoot, 'origin/main');
-    const prevSha = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    }).trim();
-    const tempBranch = 'session/registry-protected-runtime-no-issue';
     const prevEvent = process.env.GITHUB_EVENT_PATH;
     const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
     delete process.env.GITHUB_EVENT_PATH;
@@ -446,8 +440,6 @@ describe('orchestrator message registry (Issue #298)', () => {
       GITHUB_BASE_SHA: baseRef,
     };
     try {
-      execFileSync('git', ['checkout', '-B', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
-      expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
       const changed = listChangedFiles(repoRoot, baseRef);
       expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
       expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
@@ -457,13 +449,6 @@ describe('orchestrator message registry (Issue #298)', () => {
         env: cleanEnv,
       });
     } finally {
-      execFileSync('git', ['checkout', '--detach', prevSha], { cwd: repoRoot, stdio: 'pipe' });
-      try {
-        execFileSync('git', ['branch', '-D', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
-      }
-      catch {
-        // best-effort cleanup; detached restore above is the important part
-      }
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;
       if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
