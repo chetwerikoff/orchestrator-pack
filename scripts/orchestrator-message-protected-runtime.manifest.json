@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "manifestIntegrityHash": "sha256:issue-298-protected-runtime-v1",
+  "prerequisiteIssues": [205, 232, 267, 281, 283],
+  "runtimeSendHelpers": [
+    "scripts/orchestrator-wake-common.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/lib/Submit-WorkerInputDraft.ps1",
+    "scripts/journaled-worker-send.ps1"
+  ],
+  "supervisedEntrypoints": [
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-heartbeat.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/review-run-recovery.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1"
+  ],
+  "ownerImplementationBindings": [
+    "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "docs/ci-failure-notification.mjs",
+    "scripts/lib/Review-StartClaim.ps1"
+  ],
+  "prerequisiteDeclaredPaths": [
+    "scripts/review-run-recovery.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/journaled-worker-send.ps1",
+    "docs/ci-failure-notification.mjs",
+    "scripts/ci-failure-notification.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "agent-orchestrator.yaml.example"
+  ],
+  "toolPaths": [
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/orchestrator-message-taxonomy.json",
+    "scripts/orchestrator-message-owner-mechanisms.manifest.json",
+    "scripts/orchestrator-message-send-helpers.manifest.json",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/orchestrator-message-protected-runtime.manifest.json",
+    "scripts/orchestrator-message-allowlist.json",
+    "scripts/check-orchestrator-message-registry.ps1",
+    "scripts/generate-orchestrator-message-map.ps1",
+    "scripts/orchestrator-message-registry.test.ts",
+    "docs/orchestrator-message-registry.d.mts",
+    "docs/orchestrator-message-registry.d.ts",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/orchestrator-message-map.md",
+    "docs/orchestrator-message-catalog-howto.md"
+  ]
+}
