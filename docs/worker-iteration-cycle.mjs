@@ -275,7 +275,7 @@ function hasReadyForReviewForHeadLocal(session, headSha, options = {}) {
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  * @param {string} headSha
  * @param {number} nowMs
- * @param {{ headCommittedAtMs?: number, workerDeliveries?: Array<Record<string, unknown>> }} [options]
+ * @param {{ headCommittedAtMs?: number, workerDeliveries?: Array<Record<string, unknown>>, pendingDeliveryFirstSeenAtMs?: number }} [options]
  */
 function isWorkerActivelyWorkingLocal(session, headSha, nowMs, options = {}) {
   if (!session) {
@@ -305,6 +305,13 @@ function isWorkerActivelyWorkingLocal(session, headSha, nowMs, options = {}) {
         continue;
       }
       if (!isDeliveryConsumed(session, surviving, Number(surviving.deliveredAtMs ?? 0))) {
+        const firstSeenAtMs = Number(options.pendingDeliveryFirstSeenAtMs ?? 0);
+        if (
+          firstSeenAtMs > 0 &&
+          nowMs - firstSeenAtMs >= STALE_PENDING_DELIVERY_BOUND_MS
+        ) {
+          continue;
+        }
         return true;
       }
     }
@@ -1202,6 +1209,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
   const settle = isWorkerSettledIdle(session, headSha, nowMs, {
     headCommittedAtMs,
     workerDeliveries,
+    pendingDeliveryFirstSeenAtMs: Number(cycle?.debounce?.pendingDeliveryFirstSeenAtMs ?? 0),
   });
 
   const pendingDelivery = evaluateStalePendingDelivery(

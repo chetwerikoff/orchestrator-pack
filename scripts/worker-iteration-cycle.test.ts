@@ -276,6 +276,7 @@ describe('pending delivery staleness', () => {
     cycle?: { debounce?: { pendingDeliveryFirstSeenAtMs?: number } } | null;
     pendingDelivery?: { pending?: boolean; stale?: boolean };
     nudgeGate?: { blockers?: string[] };
+    settle?: { activelyWorking?: boolean; settled?: boolean };
   };
 
   it('records first-seen time and becomes stale after STALE_PENDING_DELIVERY_BOUND_MS', () => {
@@ -318,6 +319,8 @@ describe('pending delivery staleness', () => {
     }) as CycleEvalResult;
     expect(second.pendingDelivery?.stale).toBe(true);
     expect(second.nudgeGate?.blockers ?? []).not.toContain('pending_unconsumed_delivery');
+    expect(second.nudgeGate?.blockers ?? []).not.toContain('worker_actively_working');
+    expect(second.settle?.activelyWorking).toBe(false);
   });
 });
 
