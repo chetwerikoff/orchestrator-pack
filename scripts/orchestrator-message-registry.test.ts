@@ -22,8 +22,10 @@ import {
   parseGitDiffNameOnlyOutput,
   recipientKeysOverlap,
   resolveDiffBaseRef,
+  resolveLinkedIssueNumbers,
   resolveLinkedIssuesFromDeclarationSnapshots,
   resolveLinkedIssuesFromCommittedDeclarationSnapshots,
+  resolveLinkedIssueNumbersForProtectedRuntime,
   validateCatalog,
   validateOverlapOverride,
   validateOwnerReference,
@@ -421,6 +423,42 @@ describe('orchestrator message registry (Issue #298)', () => {
 
   it('runs check-orchestrator-message-registry.ps1 clean on the real tree', () => {
     execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
+  });
+
+  it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
+    const prevBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+    const tempBranch = 'session/registry-protected-runtime-no-issue';
+    const prevEvent = process.env.GITHUB_EVENT_PATH;
+    const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    delete process.env.GITHUB_EVENT_PATH;
+    delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    const cleanEnv = {
+      ...process.env,
+      GITHUB_EVENT_PATH: undefined,
+      ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
+    };
+    try {
+      execFileSync('git', ['checkout', '-B', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
+      expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
+      const changed = listChangedFiles(repoRoot, 'origin/main');
+      expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
+      expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
+      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
+      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
+        stdio: 'pipe',
+        env: cleanEnv,
+      });
+    } finally {
+      execFileSync('git', ['checkout', prevBranch], { cwd: repoRoot, stdio: 'pipe' });
+      execFileSync('git', ['branch', '-D', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
+      if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = prevEvent;
+      if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+    }
   });
 
   it('preserves newlines when regenerating the map via pwsh helper', () => {
