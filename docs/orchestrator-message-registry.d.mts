@@ -66,6 +66,7 @@ export declare function parseGitDiffNameOnlyOutput(output: string): string[];
 export declare function listChangedFiles(repoRoot: string, baseRef?: string): string[];
 export declare function resolveLinkedIssueNumbers(repoRoot?: string): number[];
 export declare function resolveLinkedIssuesFromDeclarationSnapshots(changedFiles: string[]): number[];
+export declare function resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot: string, changedFiles?: string[]): number[];
 export declare function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot: string, changedFiles?: string[]): number[];
 export declare function checkProtectedRuntimeForRepo(repoRoot: string, baseRef?: string): ProtectedRuntimeDiffResult;
 export declare function normalizeAuditOutput(result: AuditRegistrationResult): string;

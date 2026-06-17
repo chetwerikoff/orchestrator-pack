@@ -23,6 +23,7 @@ import {
   recipientKeysOverlap,
   resolveDiffBaseRef,
   resolveLinkedIssuesFromDeclarationSnapshots,
+  resolveLinkedIssuesFromCommittedDeclarationSnapshots,
   validateCatalog,
   validateOverlapOverride,
   validateOwnerReference,
@@ -532,6 +533,78 @@ describe('orchestrator message registry (Issue #298)', () => {
       ]),
     ).toEqual([324]);
     expect(resolveLinkedIssuesFromDeclarationSnapshots(['agent-orchestrator.yaml.example'])).toEqual([]);
+  });
+
+  it('links issue numbers from committed declaration snapshots on disk', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-disk-'));
+    try {
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+          'agent-orchestrator.yaml.example',
+        ],
+      });
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([324]);
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['agent-orchestrator.yaml.example']),
+      ).toEqual([324]);
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['scripts/ci-green-wake-reconcile.ps1']),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows coordinated protected-runtime edits when declaration snapshot is committed but not in diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-split-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      execFileSync('git', ['add', 'docs/declarations/324.opk-2.json'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'add declaration'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'supervisor-only follow-up'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const changed = listChangedFiles(root, baseSha);
+        expect(changed).toEqual(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('allows coordinated protected-runtime edits when declaration snapshot is in diff', () => {

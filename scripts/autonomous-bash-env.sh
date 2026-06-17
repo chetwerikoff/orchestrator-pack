@@ -222,6 +222,48 @@ __ao_autonomous_rewrite_all_binaries_in_command() {
   printf '%s' "${cmd}"
 }
 
+__ao_autonomous_script_content_needs_interposer() {
+  local content="${1-}" line trimmed="" abs_git abs_ao
+  abs_git="$(__ao_autonomous_absolute_binary_pattern "git")"
+  abs_ao="$(__ao_autonomous_absolute_binary_pattern "ao")"
+  [[ "${content}" =~ ${abs_git} ]] && return 0
+  [[ "${content}" =~ ${abs_ao} ]] && return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${line}")"
+    __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "git" && return 0
+    __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "ao" && return 0
+  done <<< "${content}"
+  return 1
+}
+
+__ao_autonomous_maybe_reexec_preprocessed_script() {
+  [[ -n "${BASH_EXECUTION_STRING:-}" ]] && return 1
+  [[ "${__AO_AUTONOMOUS_SCRIPT_REEXECED:-}" == "1" ]] && return 1
+
+  local script_path="${0#./}"
+  [[ -f "${script_path}" ]] || return 1
+  [[ "${script_path}" == *"/autonomous-bash-env.sh" ]] && return 1
+
+  local pack_git pack_ao content rewritten tmp=""
+  pack_git="$(__ao_autonomous_pack_git)"
+  pack_ao="$(__ao_autonomous_pack_ao)"
+  content="$(<"${script_path}")"
+  if ! __ao_autonomous_script_content_needs_interposer "${content}"; then
+    return 1
+  fi
+
+  rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${content}" "${pack_git}" "${pack_ao}")"
+  if [[ "${rewritten}" == "${content}" ]]; then
+    return 1
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ao-autonomous-script.XXXXXX")"
+  printf '%s' "${rewritten}" > "${tmp}"
+  chmod +x "${tmp}" 2>/dev/null || true
+  __AO_AUTONOMOUS_SCRIPT_REEXECED=1
+  BASH_ENV= exec bash "${tmp}" "$@"
+}
+
 __ao_autonomous_interpose_execution_string() {
   [[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
 
@@ -239,6 +281,10 @@ __ao_autonomous_interpose_execution_string() {
     BASH_ENV= eval "${rewritten}"
     ec=$?
     exit "${ec}"
+  fi
+
+  if __ao_autonomous_maybe_reexec_preprocessed_script; then
+    exit $?
   fi
 
   __ao_autonomous_install_debug_interposer "${pack_git}" "${pack_ao}"
@@ -263,15 +309,28 @@ __ao_autonomous_debug_trap() {
   BASH_ENV= __AO_AUTONOMOUS_BASH_INTERPOSED=1 eval "${rewritten}"
   ec=$?
   __AO_AUTONOMOUS_DEBUG_ACTIVE=0
-  if [[ ${ec} -ne 0 ]]; then
-    exit "${ec}"
+  if [[ ${ec} -eq 93 ]]; then
+    exit 93
   fi
-  return 1
+  if [[ ${ec} -eq 0 ]]; then
+    return 1
+  fi
+  return "${ec}"
 }
 
 __ao_autonomous_install_debug_interposer() {
   local pack_git="${1-}" pack_ao="${2-}"
   [[ "${__AO_AUTONOMOUS_DEBUG_TRAP_INSTALLED:-}" == 1 ]] && return 0
+
+  local script_path="${0#./}"
+  if [[ -f "${script_path}" ]]; then
+    local content=""
+    content="$(<"${script_path}")"
+    if ! __ao_autonomous_script_content_needs_interposer "${content}"; then
+      return 0
+    fi
+  fi
+
   __AO_AUTONOMOUS_DEBUG_PACK_GIT="${pack_git}"
   __AO_AUTONOMOUS_DEBUG_PACK_AO="${pack_ao}"
   shopt -s extdebug

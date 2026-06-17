@@ -757,15 +757,6 @@ export function resolveLinkedIssuesFromDeclarationSnapshots(changedFiles) {
   return [...linked];
 }
 
-export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = []) {
-  return [
-    ...new Set([
-      ...resolveLinkedIssueNumbers(repoRoot),
-      ...resolveLinkedIssuesFromDeclarationSnapshots(changedFiles),
-    ]),
-  ];
-}
-
 /** Issue-linked declared-path edits allowed when an issue is explicitly linked (branch/PR/env). */
 const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   324: [
@@ -773,6 +764,55 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
   ],
 };
+
+/**
+ * Linked issues evidenced by committed declaration snapshots on disk when the gated
+ * diff edits coordinated protected-runtime paths those snapshots declare.
+ */
+export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles = []) {
+  const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
+  if (changed.size === 0) return [];
+
+  const declarationsDir = path.join(repoRoot, 'docs/declarations');
+  if (!existsSync(declarationsDir)) return [];
+
+  const linked = new Set();
+  for (const entry of readdirSync(declarationsDir)) {
+    const nameMatch = /^(\d{1,6})\.[^/]+\.json$/.exec(entry);
+    if (!nameMatch) continue;
+    const issueFromName = Number(nameMatch[1]);
+    const coordinated = BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS[issueFromName];
+    if (!coordinated) continue;
+
+    let snapshot;
+    try {
+      snapshot = JSON.parse(readFileSync(path.join(declarationsDir, entry), 'utf8'));
+    }
+    catch {
+      continue;
+    }
+    if (Number(snapshot.issue_number) !== issueFromName) continue;
+
+    const declared = new Set(
+      (snapshot.declared_paths ?? []).map((declaredPath) => String(declaredPath).replace(/\\/g, '/')),
+    );
+    const overlaps = coordinated.some(
+      (coordPath) => changed.has(coordPath) && declared.has(coordPath),
+    );
+    if (overlaps) linked.add(issueFromName);
+  }
+  return [...linked];
+}
+
+export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = []) {
+  return [
+    ...new Set([
+      ...resolveLinkedIssueNumbers(repoRoot),
+      ...resolveLinkedIssuesFromDeclarationSnapshots(changedFiles),
+      ...resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles),
+    ]),
+  ];
+}
 
 function buildCoordinatedDeclaredPathAllowSet(protectedManifest, linkedIssueNumbers) {
   const allowed = new Set();
