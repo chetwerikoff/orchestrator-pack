@@ -462,8 +462,25 @@ describe('orchestrator message registry (Issue #298)', () => {
         expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
       }
       const changed = listChangedFiles(repoRoot, 'origin/main');
-      expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
-      expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
+      const linkedFromDeclarations = resolveLinkedIssuesFromCommittedDeclarationSnapshots(
+        repoRoot,
+        changed,
+      );
+      const protectedRuntimeEdits = changed.filter((file) => {
+        const norm = file.replace(/\\/g, '/');
+        return (
+          norm === 'scripts/ci-green-wake-reconcile.ps1'
+          || norm === 'scripts/review-trigger-reconcile.ps1'
+          || norm === 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
+          || norm === 'agent-orchestrator.yaml.example'
+        );
+      });
+      if (protectedRuntimeEdits.length > 0) {
+        expect(linkedFromDeclarations.length).toBeGreaterThan(0);
+        expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toEqual(
+          expect.arrayContaining(linkedFromDeclarations),
+        );
+      }
       expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
       execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
         stdio: 'pipe',

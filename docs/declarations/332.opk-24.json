@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:d4677f874d0e57444470c37d444f4b78740a6edc7dc1262993dfc5b4caa086a1"
+    "active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -22,6 +22,7 @@
     "scripts/_test-worker-session-fixtures.ts",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/orchestrator-message-registry.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
     "scripts/review-trigger-reeval.test.ts",
