@@ -40,10 +40,24 @@ echo "launching automation Chrome (persistent profile $PROFILE)…"
 # --remote-allow-origins=* is REQUIRED on Chrome 111+: without it the CDP
 # websocket upgrades but Chrome silently drops Playwright's protocol messages,
 # so connectOverCDP() hangs until timeout (looks like "chrome_not_running").
-"$CHROME" --remote-debugging-port=9222 --remote-allow-origins=* \
-  --user-data-dir="$PROFILE" "$URL" \
-  </dev/null >/dev/null 2>&1 &
-disown || true
+#
+# On WSL the Windows chrome.exe MUST be launched so that *Windows* owns its
+# lifetime. A plain interop background job ("$CHROME" ... & disown) is torn
+# down when the launching shell / interop relay exits — the CDP port never
+# comes up and chrome.exe ends with 0 live processes (the "chrome_not_running"
+# symptom). Hand the launch to a Windows-owned, detached process instead.
+if [[ "$CHROME" == /mnt/* ]] && command -v powershell.exe >/dev/null 2>&1; then
+  CHROME_WIN="$(wslpath -w "$CHROME")"
+  powershell.exe -NoProfile -Command \
+    "Start-Process -FilePath '$CHROME_WIN' -ArgumentList '--remote-debugging-port=9222','--remote-allow-origins=*','--user-data-dir=$PROFILE','$URL'" \
+    >/dev/null 2>&1
+else
+  # Native (non-WSL) Chrome: background it directly.
+  "$CHROME" --remote-debugging-port=9222 --remote-allow-origins=* \
+    --user-data-dir="$PROFILE" "$URL" \
+    </dev/null >/dev/null 2>&1 &
+  disown || true
+fi
 
 if curl -s --retry 25 --retry-delay 1 --retry-all-errors "$CDP/json/version" >/dev/null 2>&1; then
   node "$SCRIPT_DIR/verify-cdp-owner.mjs" verify --profile "$PROFILE" --cdp "$CDP"
