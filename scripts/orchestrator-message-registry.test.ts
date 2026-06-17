@@ -262,10 +262,24 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('detects uncatalogued tmux draft-submit outside helper', () => {
-    const helpers = { helpers: [{ name: 'Invoke-WorkerInputDraftSubmit', file: 'scripts/lib/Submit-WorkerInputDraft.ps1', mechanisms: ['draft-submit'] }] };
+    const helpers = { helpers: [{ name: 'Invoke-WorkerInputDraftSubmit', file: 'scripts/lib/Submit-WorkerInputDraft.ps1', mechanisms: ['draft-submit'], relatedFunctions: ['Invoke-TmuxSubmitEnter'] }] };
     const source = 'tmux send-keys -t worker Enter';
     const findings = detectRawSendsInSource('scripts/bad-submit.ps1', source, helpers, []);
     expect(findings.some((f: { kind: string; mechanism?: string }) => f.kind === 'raw_send_outside_helper' && f.mechanism === 'tmux-submit')).toBe(true);
+  });
+
+  it('flags Invoke-WorkerInputDraftSubmit outside registered helper bodies', () => {
+    const helpers = { helpers: [{ name: 'Invoke-WorkerInputDraftSubmit', file: 'scripts/lib/Submit-WorkerInputDraft.ps1', mechanisms: ['draft-submit'], relatedFunctions: ['Invoke-TmuxSubmitEnter'] }] };
+    const source = 'Invoke-WorkerInputDraftSubmit -SessionId worker-1 -ExpectedSessionId worker-1';
+    const findings = detectRawSendsInSource('scripts/bad-caller.ps1', source, helpers, []);
+    expect(findings.some((f: { kind: string; mechanism?: string }) => f.kind === 'raw_send_outside_helper' && f.mechanism === 'draft-submit')).toBe(true);
+  });
+
+  it('rejects raw sends inside helpers that do not own the matched mechanism', () => {
+    const helpers = { helpers: [{ name: 'Invoke-WorkerInputDraftSubmit', file: 'scripts/lib/Submit-WorkerInputDraft.ps1', mechanisms: ['draft-submit'], relatedFunctions: ['Invoke-TmuxSubmitEnter'] }] };
+    const source = 'function Invoke-WorkerInputDraftSubmit {\n  & ao send worker-1 "hello"\n}';
+    const findings = detectRawSendsInSource('scripts/lib/Submit-WorkerInputDraft.ps1', source, helpers, []);
+    expect(findings.some((f: { kind: string; mechanism?: string }) => f.kind === 'raw_send_outside_helper' && f.mechanism === 'ao-send')).toBe(true);
   });
 
   it('generates deterministic bounded map output', () => {

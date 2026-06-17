@@ -50,7 +50,7 @@ export declare function loadRegistryBundle(repoRoot: string): Record<string, unk
 export declare function validateCatalog(bundle: Record<string, unknown>, repoRoot: string): CatalogValidationResult;
 export declare function validateOwnerReference(kind: string, owners: Record<string, unknown>, ref: string, entry: Record<string, unknown>, repoRoot?: string): string[];
 export declare function checkSemanticOverlaps(catalog: Record<string, unknown>, taxonomy: Record<string, unknown>, owners: Record<string, unknown>): OverlapResult;
-export declare function detectRawSendsInSource(relPath: string, source: string, helpers: Record<string, unknown>, allowlistEntries?: unknown[]): SendFinding[];
+export declare function detectRawSendsInSource(relPath: string, source: string, helpers: Record<string, unknown>, allowlistEntries?: unknown[], catalogEntries?: unknown[], supervisorRegistry?: Record<string, unknown>): SendFinding[];
 export declare function listHelperAuditFiles(helpers: Record<string, unknown>): string[];
 export declare function listDeclaredAuditRootFiles(auditRoots: Record<string, unknown>): string[];
 export declare function collectAuditRootFiles(repoRoot: string, auditRoots: Record<string, unknown>, helpers?: Record<string, unknown>): string[];

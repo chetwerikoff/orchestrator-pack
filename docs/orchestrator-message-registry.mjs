@@ -365,8 +365,52 @@ export function validateOverlapOverride(override) {
   return violations;
 }
 
-function helperOwnsFunction(helpers, relFile, functionName) {
-  return (helpers.helpers ?? []).some((h) => h.file === relFile && h.name === functionName);
+function patternMechanismIds(patternId) {
+  switch (patternId) {
+    case 'ao-send-direct':
+    case 'ao-send-splat':
+    case 'ao-path-send':
+      return ['ao-send', 'ao-review-send'];
+    case 'ao-review-send-args':
+      return ['ao-review-send'];
+    case 'tmux-submit':
+      return ['draft-submit'];
+    default:
+      return [patternId];
+  }
+}
+
+function helperOwnsMechanism(helper, mechanismId) {
+  return (helper.mechanisms ?? []).includes(mechanismId);
+}
+
+function helperOwnsAnyMechanism(helper, mechanismIds) {
+  return mechanismIds.some((mechanismId) => helperOwnsMechanism(helper, mechanismId));
+}
+
+function catalogAllowsDraftSubmitInvocation(relPath, catalogEntries, helpers, supervisorRegistry) {
+  const normPath = relPath.replace(/\\/g, '/');
+  const helperFile = helpers.helpers
+    ?.find((helper) => helper.name === 'Invoke-WorkerInputDraftSubmit')
+    ?.file
+    ?.replace(/\\/g, '/');
+  if (helperFile === normPath) return true;
+  const childScriptById = new Map(
+    (supervisorRegistry?.children ?? []).map((child) => [child.id, `scripts/${child.script}`.replace(/\\/g, '/')]),
+  );
+  for (const entry of catalogEntries ?? []) {
+    if (entry.mechanism !== 'draft-submit') continue;
+    const ownerScript = childScriptById.get(entry.owning_process);
+    if (ownerScript === normPath) return true;
+  }
+  return false;
+}
+
+function isHelperFunctionDefinition(source, index, helperName) {
+  const lineStart = source.lastIndexOf('\n', index) + 1;
+  const lineEnd = source.indexOf('\n', index);
+  const line = source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+  return new RegExp(`^\\s*function\\s+${helperName}\\b`, 'i').test(line);
 }
 
 function helperFunctionNames(helper) {
@@ -394,7 +438,7 @@ function findEnclosingHelper(relFile, helpers, source, index) {
   return matches;
 }
 
-export function detectRawSendsInSource(relPath, source, helpers, allowlistEntries = []) {
+export function detectRawSendsInSource(relPath, source, helpers, allowlistEntries = [], catalogEntries = [], supervisorRegistry = { children: [] }) {
   const findings = [];
   const allowByPath = new Map((allowlistEntries ?? []).map((e) => [e.path, e]));
 
@@ -421,11 +465,18 @@ export function detectRawSendsInSource(relPath, source, helpers, allowlistEntrie
     const regex = new RegExp(pattern.regex.source, pattern.regex.flags.includes('g') ? pattern.regex.flags : `${pattern.regex.flags}g`);
     while ((match = regex.exec(source)) !== null) {
       const matchText = match[0];
-      if (pattern.id === 'draft-submit' && /\bInvoke-WorkerInputDraftSubmit\b/.test(matchText)) {
-        continue;
+      if (pattern.id === 'draft-submit') {
+        if (isHelperFunctionDefinition(source, match.index, 'Invoke-WorkerInputDraftSubmit')) {
+          continue;
+        }
+        if (catalogAllowsDraftSubmitInvocation(relPath, catalogEntries, helpers, supervisorRegistry)) {
+          continue;
+        }
       }
       const enclosing = findEnclosingHelper(relPath, helpers, source, match.index);
-      if (enclosing.length === 0) {
+      const mechanismIds = patternMechanismIds(pattern.id);
+      const owned = enclosing.some((helper) => helperOwnsAnyMechanism(helper, mechanismIds));
+      if (!owned) {
         const line = source.slice(0, match.index).split('\n').length;
         findings.push({
           relPath,
@@ -543,7 +594,14 @@ export function auditRegistration(repoRoot, options = {}) {
   const sendFindings = [];
   for (const rel of rootFiles) {
     const source = readFileSync(path.join(repoRoot, rel), 'utf8');
-    sendFindings.push(...detectRawSendsInSource(rel, source, bundle.helpers, bundle.allowlist.entries));
+    sendFindings.push(...detectRawSendsInSource(
+      rel,
+      source,
+      bundle.helpers,
+      bundle.allowlist.entries,
+      bundle.catalog.entries,
+      bundle.supervisorRegistry,
+    ));
   }
 
   const rawOutside = sendFindings.filter((f) => f.kind === 'raw_send_outside_helper');
