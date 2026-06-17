@@ -8,6 +8,12 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 
+$spawnDeny = Test-AutonomousSpawnDenied -Argv $args
+if ($spawnDeny.denied) {
+    [Console]::Error.WriteLine("autonomous worker spawn denied by boundary gate: $($spawnDeny.reason). Workers are started by the operator or automated reconcilers, not orchestrator turns.")
+    exit 93
+}
+
 $deny = Test-AutonomousRawReviewRunDenied -Argv $args
 if ($deny.denied) {
     [Console]::Error.WriteLine("autonomous review-starts paused by gate preflight: $($deny.reason). Use scripts/invoke-orchestrator-claimed-review-run.ps1")

@@ -1,0 +1,437 @@
+#requires -Version 5.1
+<#
+  Process-boundary helpers for autonomous orchestrator spawn/git gate (Issue #324).
+#>
+
+$Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
+$Script:AutonomousBoundaryExitCode = 93
+$Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
+$Script:SanctionedGitParentPatterns = @(
+    'invoke-orchestrator-claimed-review-run.ps1',
+    'Invoke-OrchestratorClaimedReviewRun.ps1',
+    'invoke-pack-review.ps1',
+    'run-pack-review.ps1',
+    'run-pack-review-claude.ps1',
+    'reviewer-workspace-preflight.ps1',
+    'orchestrator-review-start-preflight.ps1'
+)
+
+function Get-PackRootFromBoundaryLib {
+    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+}
+
+function Get-AutonomousRealBinariesConfigPath {
+    param([string]$PackRoot = '')
+    if (-not $PackRoot) {
+        $PackRoot = Get-PackRootFromBoundaryLib
+    }
+    return Join-Path $PackRoot '.ao' $Script:AutonomousRealBinariesConfigName
+}
+
+function Get-AutonomousRealBinariesConfig {
+    param([string]$PackRoot = '')
+    $configPath = Get-AutonomousRealBinariesConfigPath -PackRoot $PackRoot
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return $null
+    }
+    try {
+        return (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-TurnVisibleRealBinaryBypassPresent {
+    foreach ($name in $Script:TurnVisibleRealBinaryEnvVars) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-IsPackGitShimPath {
+    param([string]$CandidatePath)
+
+    if (-not $CandidatePath) { return $false }
+    if ($CandidatePath -like '*git-autonomous-guard.ps1') { return $true }
+    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+    try {
+        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
+    }
+    catch {
+        return $false
+    }
+    return $resolved -eq (Join-Path $packScripts 'git')
+}
+
+function Test-IsPackAoShimPathForBoundary {
+    param([string]$CandidatePath)
+
+    if (-not $CandidatePath) { return $false }
+    if ($CandidatePath -like '*ao-autonomous-guard.ps1') { return $true }
+    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+    try {
+        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
+    }
+    catch {
+        return $false
+    }
+    return $resolved -eq (Join-Path $packScripts 'ao')
+}
+
+function Resolve-AutonomousRealBinaryPath {
+    param(
+        [ValidateSet('ao', 'git')]
+        [string]$BinaryName,
+        [string]$PackRoot = ''
+    )
+
+    if (-not $PackRoot) {
+        $PackRoot = Get-PackRootFromBoundaryLib
+    }
+    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path
+    $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot
+    if ($config) {
+        $configured = [string]$config.$BinaryName
+        if ($configured -and $configured -ne $BinaryName) {
+            if (Test-Path -LiteralPath $configured) {
+                $resolved = (Resolve-Path -LiteralPath $configured).Path
+                $isShim = if ($BinaryName -eq 'ao') {
+                    Test-IsPackAoShimPathForBoundary -CandidatePath $resolved
+                }
+                else {
+                    Test-IsPackGitShimPath -CandidatePath $resolved
+                }
+                if (-not $isShim) {
+                    return $resolved
+                }
+            }
+            $cmd = Get-Command $configured -ErrorAction SilentlyContinue
+            if ($cmd) {
+                $isShim = if ($BinaryName -eq 'ao') {
+                    Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source
+                }
+                else {
+                    Test-IsPackGitShimPath -CandidatePath $cmd.Source
+                }
+                if (-not $isShim) {
+                    return $cmd.Source
+                }
+            }
+        }
+    }
+
+    foreach ($dir in ($env:PATH -split [IO.Path]::PathSeparator)) {
+        if (-not $dir -or $dir -eq $packScripts) { continue }
+        $candidate = Join-Path $dir $BinaryName
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $isShim = if ($BinaryName -eq 'ao') {
+            Test-IsPackAoShimPathForBoundary -CandidatePath $candidate
+        }
+        else {
+            Test-IsPackGitShimPath -CandidatePath $candidate
+        }
+        if ($isShim) { continue }
+        return (Get-Item -LiteralPath $candidate).FullName
+    }
+
+    if ($BinaryName -eq 'ao') {
+        foreach ($fallback in @(
+                (Join-Path $HOME '.local/bin/ao'),
+                (Join-Path $HOME '.npm-global/bin/ao'),
+                (Join-Path $HOME '.ao/bin/ao')
+            )) {
+            if (Test-Path -LiteralPath $fallback) {
+                return (Resolve-Path -LiteralPath $fallback).Path
+            }
+        }
+    }
+
+    $cmd = Get-Command $BinaryName -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $isShim = if ($BinaryName -eq 'ao') {
+            Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source
+        }
+        else {
+            Test-IsPackGitShimPath -CandidatePath $cmd.Source
+        }
+        if (-not $isShim) {
+            return $cmd.Source
+        }
+    }
+    return $BinaryName
+}
+
+function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
+    return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
+}
+
+function Resolve-RealAoExecutable {
+    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
+        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
+    }
+
+    if ($env:AO_REAL_BINARY -and $env:AO_REAL_BINARY -ne 'ao') {
+        if (Test-Path -LiteralPath $env:AO_REAL_BINARY -ErrorAction SilentlyContinue) {
+            $resolved = (Resolve-Path -LiteralPath $env:AO_REAL_BINARY).Path
+            if (-not (Test-IsPackAoShimPathForBoundary -CandidatePath $resolved)) { return $resolved }
+        }
+        $configured = Get-Command $env:AO_REAL_BINARY -ErrorAction SilentlyContinue
+        if ($configured -and -not (Test-IsPackAoShimPathForBoundary -CandidatePath $configured.Source)) {
+            return $configured.Source
+        }
+    }
+
+    return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
+}
+
+function Resolve-RealGitExecutable {
+    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
+        return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
+    }
+
+    if ($env:GIT_REAL_BINARY -and $env:GIT_REAL_BINARY -ne 'git') {
+        if (Test-Path -LiteralPath $env:GIT_REAL_BINARY -ErrorAction SilentlyContinue) {
+            $resolved = (Resolve-Path -LiteralPath $env:GIT_REAL_BINARY).Path
+            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved)) { return $resolved }
+        }
+    }
+
+    return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
+}
+
+function Test-AutonomousSpawnDenied {
+    param([string[]]$Argv)
+
+    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
+        return @{ denied = $false; reason = 'manual_surface' }
+    }
+
+    $joined = ($Argv -join ' ').Trim()
+    if ($joined -match '(?i)\bspawn\b') {
+        return @{ denied = $true; reason = 'autonomous_spawn_denied' }
+    }
+    return @{ denied = $false; reason = 'not_spawn' }
+}
+
+function Get-ProcessCommandLineById {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) { return '' }
+
+    if ($IsLinux) {
+        $procPath = "/proc/$ProcessId/cmdline"
+        if (Test-Path -LiteralPath $procPath) {
+            $raw = [System.IO.File]::ReadAllBytes($procPath)
+            if ($raw.Length -eq 0) { return '' }
+            $parts = New-Object System.Collections.Generic.List[string]
+            $current = New-Object System.Text.StringBuilder
+            foreach ($byte in $raw) {
+                if ($byte -eq 0) {
+                    if ($current.Length -gt 0) {
+                        $parts.Add($current.ToString())
+                        $current.Clear() | Out-Null
+                    }
+                }
+                else {
+                    [void]$current.Append([char]$byte)
+                }
+            }
+            if ($current.Length -gt 0) {
+                $parts.Add($current.ToString())
+            }
+            return ($parts -join ' ')
+        }
+    }
+
+    if ($IsMacOS) {
+        $out = & ps -p $ProcessId -o command= 2>$null
+        return (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+    }
+
+    try {
+        $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        return [string]$cim.CommandLine
+    }
+    catch {
+        return ''
+    }
+}
+
+function Get-LinuxParentProcessId {
+    param([int]$ProcessId)
+
+    $statPath = "/proc/$ProcessId/stat"
+    if (-not (Test-Path -LiteralPath $statPath -PathType Leaf)) { return 0 }
+    $stat = Get-Content -LiteralPath $statPath -Raw
+    $end = $stat.LastIndexOf(')')
+    if ($end -lt 0) { return 0 }
+    $rest = $stat.Substring($end + 2).Trim() -split '\s+'
+    if ($rest.Count -lt 2) { return 0 }
+    return [int]$rest[1]
+}
+
+function Get-ParentProcessId {
+    param([int]$ProcessId)
+
+    if ($IsLinux) {
+        return Get-LinuxParentProcessId -ProcessId $ProcessId
+    }
+    if ($IsMacOS) {
+        $out = & ps -p $ProcessId -o ppid= 2>$null
+        return [int]($out.ToString().Trim())
+    }
+    try {
+        $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        return [int]$cim.ParentProcessId
+    }
+    catch {
+        return 0
+    }
+}
+
+function Get-ProcessParentChainCommandLines {
+    param(
+        [int]$MaxDepth = 12,
+        [int]$StartProcessId = $PID
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $current = $StartProcessId
+    for ($depth = 0; $depth -lt $MaxDepth; $depth++) {
+        $ppid = Get-ParentProcessId -ProcessId $current
+        if ($ppid -le 0 -or $ppid -eq $current) { break }
+        $cmd = Get-ProcessCommandLineById -ProcessId $ppid
+        if ($cmd) {
+            $lines.Add($cmd)
+        }
+        $current = $ppid
+        if ($current -le 1) { break }
+    }
+    return @($lines)
+}
+
+function Test-ProcessCommandLineIsSanctionedGitParent {
+    param([string]$CommandLine)
+
+    if (-not $CommandLine) { return $false }
+    foreach ($pattern in $Script:SanctionedGitParentPatterns) {
+        if ($CommandLine -like "*$pattern*") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-ProcessCommandLineIsAoReviewRun {
+    param([string]$CommandLine)
+
+    if (-not $CommandLine) { return $false }
+    return $CommandLine -match '(?i)\bao\b' -and $CommandLine -match '(?i)\breview\b' -and $CommandLine -match '(?i)\brun\b'
+}
+
+function Test-AutonomousGitSanctionedProvenance {
+    param(
+        [string[]]$FixtureParentChain = @()
+    )
+
+    $chain = if ($FixtureParentChain.Count -gt 0) {
+        @($FixtureParentChain)
+    }
+    else {
+        Get-ProcessParentChainCommandLines
+    }
+
+    foreach ($cmd in $chain) {
+        if (Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $cmd) {
+            return $true
+        }
+    }
+
+    if ([string]$env:AO_CLAIMED_REVIEW_RUN_BYPASS -eq '1') {
+        foreach ($cmd in $chain) {
+            if (Test-ProcessCommandLineIsAoReviewRun -CommandLine $cmd) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Test-GitArgvIsMutating {
+    param([string[]]$Argv)
+
+    if (-not $Argv -or $Argv.Count -eq 0) {
+        return $false
+    }
+
+    $index = 0
+    while ($index -lt $Argv.Count) {
+        $token = [string]$Argv[$index]
+        if ($token -in @('-C', '--git-dir', '--work-tree')) {
+            $index += 2
+            continue
+        }
+        if ($token -match '^-') {
+            $index++
+            continue
+        }
+        break
+    }
+    if ($index -ge $Argv.Count) {
+        return $false
+    }
+
+    $sub = [string]$Argv[$index]
+    switch -Regex ($sub) {
+        '^(?i)branch$' { return $true }
+        '^(?i)checkout$' { return $true }
+        '^(?i)switch$' { return $true }
+        '^(?i)worktree$' { return $true }
+        '^(?i)reset$' { return $true }
+        '^(?i)push$' { return $true }
+        '^(?i)fetch$' {
+            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
+            if ($tail -match '(?i)--dry-run') {
+                return $false
+            }
+            return $true
+        }
+        '^(?i)stash$' {
+            if ($index + 1 -ge $Argv.Count) {
+                return $true
+            }
+            $stashSub = [string]$Argv[$index + 1]
+            if ($stashSub -match '^(?i)(list|show)$') {
+                return $false
+            }
+            return $true
+        }
+        default { return $false }
+    }
+}
+
+function Test-AutonomousGitDenied {
+    param(
+        [string[]]$Argv,
+        [string[]]$FixtureParentChain = @()
+    )
+
+    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
+        return @{ denied = $false; reason = 'manual_surface' }
+    }
+
+    if (-not (Test-GitArgvIsMutating -Argv $Argv)) {
+        return @{ denied = $false; reason = 'read_only_git' }
+    }
+
+    if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain) {
+        return @{ denied = $false; reason = 'sanctioned_git_child' }
+    }
+
+    return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
+}

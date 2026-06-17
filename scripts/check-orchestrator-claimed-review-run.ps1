@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Wiring guard for orchestrator claimed review-start gate (Issue #318).
+  Wiring guard for orchestrator claimed review-start gate (Issue #318) and spawn/git boundary (#324).
 #>
 [CmdletBinding()]
 param(
@@ -18,9 +18,11 @@ $rules = Get-Content -LiteralPath $yaml -Raw
 $requiredPhrases = @(
     'invoke-orchestrator-claimed-review-run.ps1',
     'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE',
-    'AO_REAL_BINARY',
+    'autonomous-real-binaries.json',
     'orchestrator-claimed-review-run/v1',
-    'scripts/ao'
+    'autonomous-orchestrator-boundary/v1',
+    'scripts/ao',
+    'scripts/git'
 )
 $missing = @($requiredPhrases | Where-Object { $rules -notmatch [regex]::Escape($_) })
 if ($missing.Count -gt 0) {
@@ -28,12 +30,12 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-if ($rules -match '(?m)^\s*AO_REAL_BINARY:\s*ao\s*(?:#.*)?$') {
-    Write-Host 'agent-orchestrator.yaml.example must not set AO_REAL_BINARY to bare ao (shim recursion)'
+if ($rules -match '(?m)^\s*AO_REAL_BINARY:\s*') {
+    Write-Host 'agent-orchestrator.yaml.example must not set turn-visible AO_REAL_BINARY (use .ao/autonomous-real-binaries.json)'
     exit 1
 }
-if ($rules -notmatch 'AO_REAL_BINARY:\s*(/|[A-Za-z]:[\\/])') {
-    Write-Host 'agent-orchestrator.yaml.example must document AO_REAL_BINARY as an absolute path'
+if ($rules -match '(?m)^\s*GIT_REAL_BINARY:\s*') {
+    Write-Host 'agent-orchestrator.yaml.example must not set turn-visible GIT_REAL_BINARY (use .ao/autonomous-real-binaries.json)'
     exit 1
 }
 if ($rules -notmatch 'PATH:\s*/.*/orchestrator-pack/scripts:') {
@@ -44,10 +46,15 @@ if ($rules -notmatch 'PATH:\s*/.*/orchestrator-pack/scripts:') {
 $paths = @(
     'scripts/invoke-orchestrator-claimed-review-run.ps1',
     'scripts/ao-autonomous-guard.ps1',
+    'scripts/git-autonomous-guard.ps1',
     'scripts/ao',
+    'scripts/git',
     'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
+    'scripts/lib/Orchestrator-AutonomousBoundary.ps1',
     'docs/orchestrator-claimed-review-run.mjs',
-    'docs/autonomous-review-start-capabilities.json'
+    'docs/autonomous-orchestrator-boundary.mjs',
+    'docs/autonomous-review-start-capabilities.json',
+    'docs/autonomous-real-binaries.example.json'
 )
 foreach ($rel in $paths) {
     if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $rel))) {

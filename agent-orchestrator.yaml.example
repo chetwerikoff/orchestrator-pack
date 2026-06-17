@@ -56,9 +56,10 @@ projects:
         permissions: permissionless
         env:
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
-          # Absolute path to the real AO binary — never bare `ao` (PATH would resolve to scripts/ao shim).
-          AO_REAL_BINARY: /home/you/.local/bin/ao
-          # Prepend pack scripts/ so orchestrator turns resolve `ao` to scripts/ao (Issue #318).
+          # Out-of-band real-binary resolution (gitignored). Copy docs/autonomous-real-binaries.example.json
+          # to .ao/autonomous-real-binaries.json with absolute ao/git paths — never expose AO_REAL_BINARY
+          # or GIT_REAL_BINARY in orchestrator agentConfig (turn-visible bypass).
+          # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
@@ -351,10 +352,12 @@ projects:
         pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
           -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
       Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
-      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, AO_REAL_BINARY to the absolute real ao path,
-      and prepend pack scripts/ to PATH so `ao` resolves to scripts/ao (denies raw review run);
-      only the claimed entry point may launch review runs. Gate capability marker:
-      orchestrator-claimed-review-run/v1.
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, resolve real ao/git out-of-band via
+      .ao/autonomous-real-binaries.json (never turn-visible AO_REAL_BINARY/GIT_REAL_BINARY),
+      and prepend pack scripts/ to PATH so `ao` and `git` resolve to pack shims (deny spawn and
+      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
+      only the claimed entry point may launch review runs. Gate capability markers:
+      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
       scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
       ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel

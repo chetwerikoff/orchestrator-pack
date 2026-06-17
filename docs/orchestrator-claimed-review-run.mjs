@@ -409,6 +409,17 @@ export function evaluateGatePreflight(input) {
       markerState: 'ao-review-run-raw',
     };
   }
+  for (const requiredUnavailable of ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env']) {
+    const row = toArray(input.liveCapabilities).find((cap) => cap.id === requiredUnavailable);
+    if (!row || String(row.classification).toLowerCase() !== 'unavailable') {
+      return {
+        ok: false,
+        reason: `${requiredUnavailable}_not_unavailable`,
+        auditShape: 'preflight_refusal',
+        markerState: requiredUnavailable,
+      };
+    }
+  }
   return { ok: true, reason: 'gate_preflight_ok', auditShape: 'none' };
 }
 

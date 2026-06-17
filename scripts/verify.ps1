@@ -1036,6 +1036,22 @@ else {
     Add-Failure 'Missing autonomous review-start capability check (Issue #318)'
 }
 
+$autonomousBoundaryCheck = Join-Path $Root 'scripts/check-autonomous-orchestrator-boundary.ps1'
+if (Test-Path -LiteralPath $autonomousBoundaryCheck -PathType Leaf) {
+    & $autonomousBoundaryCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-orchestrator-boundary.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-orchestrator-boundary.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous orchestrator spawn/git boundary inventory drift (Issue #324)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-orchestrator-boundary.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous orchestrator spawn/git boundary check (Issue #324)'
+}
+
 $orchestratorGatePreflight = Join-Path $Root 'scripts/orchestrator-review-start-preflight.ps1'
 if (Test-Path -LiteralPath $orchestratorGatePreflight -PathType Leaf) {
     & $orchestratorGatePreflight -FixtureMode

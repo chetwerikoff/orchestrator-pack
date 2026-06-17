@@ -99,20 +99,30 @@ Autonomous orchestrator turns must start reviews only through
 as the three script starters (#267/#308) and applies the covered-head predicate (#189)
 mechanically. Raw `ao review run` from the autonomous surface is denied at the process boundary
 via `scripts/ao` (PATH shim → `scripts/ao-autonomous-guard.ps1`) when
-`AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`. Set `AO_REAL_BINARY` to the absolute real ao path
-and prepend `scripts/` to orchestrator `agentConfig.env.PATH` (not worker PATH).
+`AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`. Tree-mutating `git` is denied the same way via
+`scripts/git` → `scripts/git-autonomous-guard.ps1` (#324). Real `ao`/`git` paths resolve
+out-of-band from gitignored `.ao/autonomous-real-binaries.json` (see
+`docs/autonomous-real-binaries.example.json`) — do **not** set turn-visible
+`AO_REAL_BINARY` / `GIT_REAL_BINARY` in orchestrator `agentConfig`. Prepend `scripts/` to
+orchestrator `agentConfig.env.PATH` (not worker PATH).
 
 Operator adoption after merge:
 
-1. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
-   `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE`,
-   absolute `AO_REAL_BINARY`, and orchestrator-only `PATH` prepend of pack `scripts/`).
-2. `ao stop` then `ao start` from the operator terminal (not from a managed session).
-3. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
-4. Run side-effect-safe live probe:
+1. Copy `docs/autonomous-real-binaries.example.json` to `.ao/autonomous-real-binaries.json`
+   with absolute `ao` and `git` paths for this host.
+2. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
+   `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` and
+   orchestrator-only `PATH` prepend of pack `scripts/` — no `AO_REAL_BINARY`/`GIT_REAL_BINARY`).
+3. `ao stop` then `ao start` from the operator terminal (not from a managed session).
+4. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
+5. Run boundary inventory check:
+   `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1` — must pass.
+6. From an orchestrator turn, confirm `ao spawn` and `git checkout` are refused while
+   `git status` succeeds.
+7. Run side-effect-safe live probe:
    `pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun`
    — expect a covered-head denial audit (sentinel PR `999999`), not merely head-resolution refusal.
-5. Confirm a real autonomous turn on a covered head is denied (no duplicate run in `ao review list`).
+8. Confirm a real autonomous turn on a covered head is denied (no duplicate run in `ao review list`).
 
 Safe rollback: disable autonomous review-starts (leave preflight failing closed) or revert the
 whole feature — do not restore a permissive ungated autonomous `ao review run` path.
@@ -123,6 +133,23 @@ remains the accepted unobservable residual.
 
 Supervisor child logs are rotated to `*.previous-*` before child start; the previous generation
 remains readable after restart for incident reconstruction.
+
+## Autonomous orchestrator spawn/git boundary (Issue #324)
+
+Under `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`, the orchestrator turn cannot invoke `ao spawn`
+(including `--claim-pr`) or directly mutate git refs/worktrees (`branch`, `checkout`/`switch`,
+`worktree`, `reset`, tree-moving `stash`, `push`, `fetch` without `--dry-run`). Read-only git
+(`status`, `log`, `rev-parse`, …) remains available. Git invoked as a child of enumerated pack
+review/preflight paths — including `git worktree add` inside a claimed `ao review run` — remains
+allowed. `gh`-mediated checkout/ref mutation is not carved out (parent is `gh`, not a sanctioned
+pack path). Capability inventory: `docs/autonomous-review-start-capabilities.json`
+(`autonomous-orchestrator-boundary/v1`).
+
+Operator adoption: follow the Issue #318 section above (shared marker + PATH shim) plus steps 1,
+5, and 6 there for `.ao/autonomous-real-binaries.json` and live denial verification.
+
+Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
+`scripts/` on PATH but permissive real-binary env bypasses.
 
 ## Correct terminology
 
