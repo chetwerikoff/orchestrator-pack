@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "description": "Explicit audit roots validated against supervisor inventory, CI workflows, and command entrypoints.",
+  "supervisedProcessScripts": [
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-heartbeat.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/review-run-recovery.ps1"
+  ],
+  "supervisorEntrypoints": [
+    "scripts/orchestrator-wake-supervisor.ps1"
+  ],
+  "ciInvokedScripts": [
+    "scripts/ci-failure-notification.ps1"
+  ],
+  "commandEntrypoints": [
+    "scripts/ao",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/journaled-worker-send.ps1"
+  ],
+  "orchestratorRulesBindings": [
+    "agent-orchestrator.yaml.example"
+  ]
+}

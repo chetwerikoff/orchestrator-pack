@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "helpers": [
+    {
+      "name": "Send-OrchestratorWakeMessage",
+      "file": "scripts/orchestrator-wake-common.ps1",
+      "mechanisms": ["ao-send"]
+    },
+    {
+      "name": "Invoke-PlannedCiGreenWakeSend",
+      "file": "scripts/ci-green-wake-reconcile.ps1",
+      "mechanisms": ["ao-send"]
+    },
+    {
+      "name": "Invoke-PlannedFirstReviewSend",
+      "file": "scripts/review-send-reconcile.ps1",
+      "mechanisms": ["ao-review-send"]
+    },
+    {
+      "name": "Invoke-PlannedReviewSend",
+      "file": "scripts/review-finding-delivery-confirm.ps1",
+      "mechanisms": ["ao-review-send"]
+    },
+    {
+      "name": "Invoke-WorkerInputDraftSubmit",
+      "file": "scripts/lib/Submit-WorkerInputDraft.ps1",
+      "mechanisms": ["draft-submit"]
+    },
+    {
+      "name": "Invoke-AoSendViaStdin",
+      "file": "scripts/journaled-worker-send.ps1",
+      "mechanisms": ["ao-send"]
+    }
+  ]
+}

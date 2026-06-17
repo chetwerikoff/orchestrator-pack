@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "deliveryIdempotencyOwners": {
+    "issue-281": {
+      "issue": 281,
+      "label": "journaled outbox delivery_id",
+      "implementation": {
+        "file": "scripts/lib/Record-WorkerMessageDispatch.ps1",
+        "function": "Register-WorkerMessageDispatch",
+        "claimKeyFields": ["deliveryId", "sourceKey"]
+      }
+    },
+    "none": {
+      "issue": null,
+      "label": "no delivery idempotency owner"
+    }
+  },
+  "semanticDedupOwners": {
+    "issue-283": {
+      "issue": 283,
+      "label": "CI-failure episode-key dedup",
+      "implementation": {
+        "file": "docs/ci-failure-notification.mjs",
+        "function": "episodeKeyString",
+        "claimKeyFields": ["repo", "prNumber", "headSha", "redPeriod", "targetId", "targetGeneration"]
+      },
+      "defaultCoverage": {
+        "recipientKeys": ["head-owning-worker", "specific-session"],
+        "intentKeys": ["ci-failure-fix", "red-status"],
+        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-orchestrator-turn"]
+      }
+    },
+    "issue-267": {
+      "issue": 267,
+      "label": "review-start (PR, head) claim",
+      "implementation": {
+        "file": "scripts/lib/Review-StartClaim.ps1",
+        "function": "Acquire-ReviewStartClaim",
+        "claimKeyFields": ["prNumber", "targetSha"]
+      },
+      "defaultCoverage": {
+        "recipientKeys": ["orchestrator-session"],
+        "intentKeys": ["wake-nudge"],
+        "messageClassIds": []
+      }
+    },
+    "none": {
+      "issue": null,
+      "label": "no semantic dedup owner"
+    }
+  }
+}

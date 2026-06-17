@@ -985,6 +985,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Orchestrator message registry (Issue #298) =='
+$messageRegistryCheck = Join-Path $Root 'scripts/check-orchestrator-message-registry.ps1'
+if (Test-Path -LiteralPath $messageRegistryCheck -PathType Leaf) {
+    & $messageRegistryCheck -RepoRoot $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-message-registry.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-message-registry.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator message registry audit/map check failed (Issue #298)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-message-registry.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator message registry check script (Issue #298)'
+}
+
+Write-Host ''
 Write-Host '== Reviewer failure evidence registration (Issue #312) =='
 $reviewerFailureEvidenceCheck = Join-Path $Root 'scripts/check-reviewer-failure-evidence.ps1'
 if (Test-Path -LiteralPath $reviewerFailureEvidenceCheck -PathType Leaf) {
