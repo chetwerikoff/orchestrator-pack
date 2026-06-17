@@ -36,13 +36,34 @@ const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-Autonomous
 
 /** Bash skips BASH_ENV when POSIXLY_CORRECT is set; CI runners often inherit it via process.env. */
 function autonomousBashTurnEnv(extra: Record<string, string> = {}) {
-  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
-  return {
-    ...baseEnv,
+  const env = {
+    ...process.env,
     AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
     BASH_ENV: bashEnvPath,
     ...extra,
   };
+  delete env.POSIXLY_CORRECT;
+  return env;
+}
+
+function spawnAutonomousBashTurn(cwd: string, command: string) {
+  return spawnSync(
+    'env',
+    [
+      '-u',
+      'POSIXLY_CORRECT',
+      'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1',
+      `BASH_ENV=${bashEnvPath}`,
+      'bash',
+      '-c',
+      command,
+    ],
+    {
+      cwd,
+      encoding: 'utf8',
+      env: autonomousBashTurnEnv(),
+    },
+  );
 }
 
 function withTempGitRepo(run: (dir: string) => void) {
@@ -456,14 +477,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           before.stdout.trim(),
         );
 
-        const quotedAbsoluteBashEnv = spawnSync(
-          'bash',
-          ['-c', '"/usr/bin/git" branch -m bash-env-quoted-bypass'],
-          {
-            cwd: dir,
-            encoding: 'utf8',
-            env: autonomousBashTurnEnv(),
-          },
+        const quotedAbsoluteBashEnv = spawnAutonomousBashTurn(
+          dir,
+          '"/usr/bin/git" branch -m bash-env-quoted-bypass',
         );
         expect(quotedAbsoluteBashEnv.status).toBe(93);
         expect(quotedAbsoluteBashEnv.stderr || quotedAbsoluteBashEnv.stdout).toMatch(
@@ -473,14 +489,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           before.stdout.trim(),
         );
 
-        const singleQuotedAbsoluteBashEnv = spawnSync(
-          'bash',
-          ['-c', "'/usr/bin/git' branch -m bash-env-sq-quoted-bypass"],
-          {
-            cwd: dir,
-            encoding: 'utf8',
-            env: autonomousBashTurnEnv(),
-          },
+        const singleQuotedAbsoluteBashEnv = spawnAutonomousBashTurn(
+          dir,
+          "'/usr/bin/git' branch -m bash-env-sq-quoted-bypass",
         );
         expect(singleQuotedAbsoluteBashEnv.status).toBe(93);
         expect(singleQuotedAbsoluteBashEnv.stderr || singleQuotedAbsoluteBashEnv.stdout).toMatch(
@@ -527,11 +538,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           cwd: dir,
           encoding: 'utf8',
         });
-        const bashEnvInterposed = spawnSync('bash', ['-c', '/usr/bin/git status --short'], {
-          cwd: dir,
-          encoding: 'utf8',
-          env: autonomousBashTurnEnv(),
-        });
+        const bashEnvInterposed = spawnAutonomousBashTurn(dir, '/usr/bin/git status --short');
         expect(bashEnvInterposed.status).toBe(0);
         expect(bashEnvInterposed.stdout).toBe(directBashEnvShort.stdout);
         expect(bashEnvInterposed.stderr).not.toMatch(/debugger|bashdb|extdebug/i);
@@ -559,11 +566,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(interposedChained.status).toBe(0);
         expect(interposedChained.stdout).toBe(directChained.stdout);
 
-        const bashEnvChained = spawnSync('bash', ['-c', 'cd nested && /usr/bin/git status --short'], {
-          cwd: dir,
-          encoding: 'utf8',
-          env: autonomousBashTurnEnv(),
-        });
+        const bashEnvChained = spawnAutonomousBashTurn(dir, 'cd nested && /usr/bin/git status --short');
         expect(bashEnvChained.status).toBe(0);
         expect(bashEnvChained.stdout).toBe(directChained.stdout);
       });
