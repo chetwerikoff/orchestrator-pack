@@ -90,12 +90,8 @@
     }
   ],
   "sanctionedGitParents": [
-    "invoke-orchestrator-claimed-review-run.ps1",
-    "Invoke-OrchestratorClaimedReviewRun.ps1",
-    "invoke-pack-review.ps1",
-    "run-pack-review.ps1",
-    "run-pack-review-claude.ps1",
     "reviewer-workspace-preflight.ps1",
-    "orchestrator-review-start-preflight.ps1"
-  ]
+    "orchestrator-worktree-preflight.ps1"
+  ],
+  "sanctionedGitParentMaxDepth": 2
 }

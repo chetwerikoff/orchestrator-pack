@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -113,6 +113,13 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       hasSanctionedGitParentChain(['pwsh -File scripts/reviewer-workspace-preflight.ps1']),
     ).toBe(true);
     expect(
+      hasSanctionedGitParentChain([
+        'pwsh -File scripts/run-pack-review.ps1',
+        'codex exec review --json',
+        'pwsh -c "git branch -m blocked"',
+      ]),
+    ).toBe(false);
+    expect(
       evaluateAutonomousGitBoundary({
         argv: ['worktree', 'remove', '--force', 'orphan'],
         autonomousSurface: true,
@@ -151,12 +158,26 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         pathValue: '/pack/scripts:/usr/bin',
       }).bypassPresent,
     ).toBe(true);
-    expect(
-      evaluateTurnVisibleRealBinaryBypass({
-        env: {},
-        pathValue: '/usr/bin/git:/pack/scripts:/usr/bin',
-      }).bypassPresent,
-    ).toBe(true);
+    const misorderedPath = `/usr/bin:${path.join(repoRoot, 'scripts')}:/usr/bin`;
+    const misordered = evaluateTurnVisibleRealBinaryBypass({
+      env: {},
+      pathValue: misorderedPath,
+    });
+    if (existsSync('/usr/bin/git') || existsSync('/usr/bin/ao')) {
+      expect(misordered.bypassPresent).toBe(true);
+      expect(misordered.reason).toBe('real_binary_before_shim_on_path');
+    }
+    const emptyDir = mkdtempSync(path.join(tmpdir(), 'autonomous-path-empty-'));
+    try {
+      expect(
+        evaluateTurnVisibleRealBinaryBypass({
+          env: {},
+          pathValue: `${emptyDir}:${path.join(repoRoot, 'scripts')}:/usr/bin`,
+        }).bypassPresent,
+      ).toBe(false);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
     expect(
       evaluateTurnVisibleRealBinaryBypass({
         env: {},

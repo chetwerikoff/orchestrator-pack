@@ -2,6 +2,8 @@
  * Autonomous orchestrator spawn/git boundary (Issue #324).
  * Vitest: scripts/autonomous-orchestrator-boundary.test.ts
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
   loadAutonomousReviewStartCapabilities,
@@ -147,22 +149,46 @@ export function evaluateAutonomousGitBoundary(input) {
 /**
  * @param {string[] | undefined} parentChain
  * @param {boolean} [claimedBypass]
+ * @param {number} [maxDepth]
  */
-export function hasSanctionedGitParentChain(parentChain, claimedBypass = false) {
+export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, maxDepth) {
   const inventory = loadAutonomousReviewStartCapabilities();
   const patterns = inventory.sanctionedGitParents ?? [];
+  const depthLimit = Number.isFinite(maxDepth)
+    ? Math.max(0, maxDepth)
+    : Number(inventory.sanctionedGitParentMaxDepth ?? 2);
   const chain = Array.isArray(parentChain) ? parentChain.map((line) => String(line)) : [];
-  for (const line of chain) {
+  const scoped = chain.slice(0, depthLimit);
+  for (const line of scoped) {
     for (const pattern of patterns) {
       if (line.includes(pattern)) {
         return true;
       }
     }
-    if (/\bao\b/i.test(line) && /\breview\b/i.test(line) && /\brun\b/i.test(line) && claimedBypass) {
-      return true;
+  }
+  if (claimedBypass) {
+    for (const line of chain) {
+      if (/\bao\b/i.test(line) && /\breview\b/i.test(line) && /\brun\b/i.test(line)) {
+        return true;
+      }
     }
   }
   return false;
+}
+
+/**
+ * @param {string} segment
+ * @param {string} binaryName
+ */
+function pathSegmentContainsBinary(segment, binaryName) {
+  if (!segment) {
+    return false;
+  }
+  try {
+    return existsSync(join(segment, binaryName));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -182,8 +208,13 @@ export function evaluateTurnVisibleRealBinaryBypass(input) {
   const scriptsIdx = segments.findIndex((segment) => segment.endsWith('/scripts'));
   if (scriptsIdx > 0) {
     const before = segments.slice(0, scriptsIdx);
-    if (before.some((segment) => segment.endsWith('/ao') || segment.endsWith('/git'))) {
-      return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
+    for (const segment of before) {
+      if (segment.endsWith('/ao') || segment.endsWith('/git')) {
+        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
+      }
+      if (pathSegmentContainsBinary(segment, 'ao') || pathSegmentContainsBinary(segment, 'git')) {
+        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
+      }
     }
   }
   return { bypassPresent: false, reason: 'no_turn_visible_bypass' };

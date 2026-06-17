@@ -46,6 +46,7 @@ export declare function evaluateAutonomousGitBoundary(input: {
 export declare function hasSanctionedGitParentChain(
   parentChain?: string[],
   claimedBypass?: boolean,
+  maxDepth?: number,
 ): boolean;
 export declare function evaluateTurnVisibleRealBinaryBypass(input: {
   env?: Record<string, string | undefined>;
@@ -61,6 +62,7 @@ export declare function loadAutonomousOrchestratorBoundaryInventory(
   boundaryVersion?: string;
   capabilities: Array<{ id: string; classification: string; path?: string }>;
   sanctionedGitParents?: string[];
+  sanctionedGitParentMaxDepth?: number;
 };
 export declare function validateBoundaryCapabilityInventory(input: {
   repoInventory: Array<{ id: string; classification: string }>;

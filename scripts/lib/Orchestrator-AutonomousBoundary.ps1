@@ -9,14 +9,10 @@ $Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
 $Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
 $Script:SanctionedGitParentPatterns = @(
-    'invoke-orchestrator-claimed-review-run.ps1',
-    'Invoke-OrchestratorClaimedReviewRun.ps1',
-    'invoke-pack-review.ps1',
-    'run-pack-review.ps1',
-    'run-pack-review-claude.ps1',
     'reviewer-workspace-preflight.ps1',
-    'orchestrator-review-start-preflight.ps1'
+    'orchestrator-worktree-preflight.ps1'
 )
+$Script:SanctionedGitParentMaxDepth = 2
 
 function Get-PackRootFromBoundaryLib {
     return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
@@ -303,8 +299,9 @@ function Test-AutonomousGitSanctionedProvenance {
         Get-ProcessParentChainCommandLines
     }
 
-    foreach ($cmd in $chain) {
-        if (Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $cmd) {
+    $depthLimit = [Math]::Min($chain.Count, $Script:SanctionedGitParentMaxDepth)
+    for ($i = 0; $i -lt $depthLimit; $i++) {
+        if (Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $chain[$i]) {
             return $true
         }
     }
