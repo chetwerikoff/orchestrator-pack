@@ -112,6 +112,89 @@ __ao_autonomous_rewrite_binary_command() {
   return 1
 }
 
+__ao_autonomous_trim_whitespace() {
+  local value="${1-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
+__ao_autonomous_assignment_matches_absolute_binary() {
+  local trimmed="${1-}" leaf="${2-}" abs_binary=""
+  abs_binary="$(__ao_autonomous_absolute_binary_pattern "${leaf}")"
+  [[ "${trimmed}" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=\"(${abs_binary})\"$ ]] && return 0
+  [[ "${trimmed}" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=\'(${abs_binary})\'$ ]] && return 0
+  [[ "${trimmed}" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(${abs_binary})$ ]] && return 0
+  return 1
+}
+
+__ao_autonomous_var_assigned_absolute_binary() {
+  local cmd="${1-}" var="${2-}" leaf="${3-}" part trimmed=""
+  local IFS=';'
+  read -ra __ao_assign_parts <<< "${cmd}" || true
+  for part in "${__ao_assign_parts[@]}"; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${part}")"
+    [[ "${trimmed}" =~ ^(export[[:space:]]+)?${var}= ]] || continue
+    __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "${leaf}" && return 0
+  done
+  return 1
+}
+
+__ao_autonomous_rewrite_shell_expansion_command() {
+  local cmd="${1-}" pack_target="${2-}" leaf="${3-}" quoted_pack_target="" abs_binary=""
+  local var prefix="" part trimmed="" quoted_invocation_pattern="" bare_invocation_pattern=""
+
+  abs_binary="$(__ao_autonomous_absolute_binary_pattern "${leaf}")"
+  printf -v quoted_pack_target '%q' "${pack_target}"
+
+  local IFS=';'
+  read -ra __ao_assign_parts <<< "${cmd}" || true
+  for part in "${__ao_assign_parts[@]}"; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${part}")"
+    __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "${leaf}" || continue
+    [[ "${trimmed}" =~ ^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+    var="${BASH_REMATCH[2]}"
+    quoted_invocation_pattern="(^|[;|][[:space:]]*)\"\\$"
+    quoted_invocation_pattern+="${var}"
+    quoted_invocation_pattern+="\"(.*)$"
+    if [[ "${cmd}" =~ ${quoted_invocation_pattern} ]]; then
+      prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+      printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_target}" "${BASH_REMATCH[2]}"
+      return 0
+    fi
+    bare_invocation_pattern="(^|[;|][[:space:]]*)\\$"
+    bare_invocation_pattern+="${var}"
+    bare_invocation_pattern+="([[:space:];&|]|$)(.*)$"
+    if [[ "${cmd}" =~ ${bare_invocation_pattern} ]]; then
+      prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+      printf '%s%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_target}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+__ao_autonomous_rewrite_all_shell_expansions_in_command() {
+  local cmd="${1-}" pack_git="${2-}" pack_ao="${3-}" next=""
+
+  for leaf_target in "git:${pack_git}" "ao:${pack_ao}"; do
+    local leaf="${leaf_target%%:*}"
+    local target="${leaf_target#*:}"
+    while :; do
+      if ! next="$(__ao_autonomous_rewrite_shell_expansion_command "${cmd}" "${target}" "${leaf}")"; then
+        break
+      fi
+      if [[ "${next}" == "${cmd}" ]]; then
+        break
+      fi
+      cmd="${next}"
+    done
+  done
+
+  printf '%s' "${cmd}"
+}
+
 __ao_autonomous_rewrite_all_of_binary_in_command() {
   local cmd="${1-}" pack_target="${2-}" leaf="${3-}" next=""
 
@@ -134,6 +217,7 @@ __ao_autonomous_rewrite_all_binaries_in_command() {
 
   cmd="$(__ao_autonomous_rewrite_all_of_binary_in_command "${cmd}" "${pack_git}" "git")"
   cmd="$(__ao_autonomous_rewrite_all_of_binary_in_command "${cmd}" "${pack_ao}" "ao")"
+  cmd="$(__ao_autonomous_rewrite_all_shell_expansions_in_command "${cmd}" "${pack_git}" "${pack_ao}")"
   printf '%s' "${cmd}"
 }
 

@@ -580,6 +580,42 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     }
   });
 
+  it('denies git and ao paths hidden behind shell variable expansion', () => {
+    withTempGitRepo((dir) => {
+      const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
+      const denyGitVar = spawnSync(
+        'bash',
+        ['-c', `source ${bashEnvPath}; G=/usr/bin/git; "$G" branch -m var-expand-bypass`],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        },
+      );
+      expect(denyGitVar.status).toBe(93);
+      expect(denyGitVar.stderr || denyGitVar.stdout).toMatch(/autonomous tree-mutating git denied/i);
+      expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+        before.stdout.trim(),
+      );
+
+      const fakeAo = path.join(mkdtempSync(path.join(tmpdir(), 'autonomous-fake-ao-')), 'ao');
+      writeFileSync(fakeAo, '#!/usr/bin/env bash\nprintf \'spawn-ok\\n\'\n');
+      chmodSync(fakeAo, 0o755);
+      const denyAoVar = spawnSync(
+        'bash',
+        ['-c', `source ${bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        },
+      );
+      expect(denyAoVar.status).toBe(93);
+      expect(denyAoVar.stderr || denyAoVar.stdout).toMatch(/autonomous worker spawn denied/i);
+      expect(denyAoVar.stdout).not.toMatch(/spawn-ok/);
+    });
+  });
+
   it('routes direct system-git forwarder and real-binary invocations through the guard', () => {
     withTempGitRepo((dir) => {
       const invokePath = path.join(repoRoot, 'scripts/_invoke-system-git.sh');
