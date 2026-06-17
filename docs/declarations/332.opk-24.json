@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9107e4a4fbc455b2250896288735a3bcf647a7145c59bca5c63fd54613560411"
+    "active_scope_hash": "sha256:d4677f874d0e57444470c37d444f4b78740a6edc7dc1262993dfc5b4caa086a1"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -19,6 +19,7 @@
     "docs/review-trigger-reconcile.mjs",
     "docs/worker-iteration-cycle.d.mts",
     "docs/worker-iteration-cycle.mjs",
+    "scripts/_test-worker-session-fixtures.ts",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.test.ts",
     "scripts/review-trigger-reconcile.ps1",

@@ -18,27 +18,7 @@ import {
   resolveOrAdvanceOwnerCycle,
 } from '../docs/worker-iteration-cycle.mjs';
 import { planCiGreenWakeActions } from '../docs/ci-green-wake-reconcile.mjs';
-
-const greenChecks = [
-  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
-  { name: 'PR scope guard', state: 'SUCCESS' },
-  { name: 'Run pack contract tests', state: 'SUCCESS' },
-  { name: 'Self-architect lint', state: 'SUCCESS' },
-];
-
-function liveWorker(overrides: Record<string, unknown> = {}) {
-  return {
-    name: 'op-worker',
-    role: 'worker',
-    prNumber: 42,
-    ownedHeadSha: 'abc123',
-    status: 'fixing_ci',
-    activity: 'idle',
-    runtime: 'alive',
-    reports: [],
-    ...overrides,
-  };
-}
+import { liveWorker, packGreenCiChecks as greenChecks } from './_test-worker-session-fixtures.js';
 
 describe('named timer bounds', () => {
   it('nudge expiry is at least quiescence debounce', () => {

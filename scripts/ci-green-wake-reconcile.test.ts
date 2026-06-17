@@ -19,38 +19,15 @@ import {
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
 import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
+import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/ci-green-wake-reconcile',
 );
 
-const greenChecks = [
-  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
-  { name: 'PR scope guard', state: 'SUCCESS' },
-  { name: 'Run pack contract tests', state: 'SUCCESS' },
-  { name: 'Self-architect lint', state: 'SUCCESS' },
-];
-
-const redChecks = [
-  { name: 'Verify orchestrator-pack structure', state: 'FAILURE' },
-  { name: 'PR scope guard', state: 'SUCCESS' },
-  { name: 'Run pack contract tests', state: 'SUCCESS' },
-  { name: 'Self-architect lint', state: 'SUCCESS' },
-];
-
-function liveWorker(overrides: Record<string, unknown> = {}) {
-  return {
-    name: 'op-worker',
-    role: 'worker',
-    prNumber: 42,
-    ownedHeadSha: 'abc123',
-    status: 'fixing_ci',
-    activity: 'idle',
-    reports: [],
-    ...overrides,
-  };
-}
+const greenChecks = [...packGreenCiChecks];
+const redChecks = [...packRedCiChecks];
 
 function plan(input: PlanCiGreenWakeInput) {
   return planCiGreenWakeActions(input);
