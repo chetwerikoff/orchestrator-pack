@@ -342,6 +342,7 @@ describe('owner cycle advance', () => {
     cycle?: { cycleId?: string; headAdvanceCount?: number; reviewArmed?: boolean } | null;
     opened?: boolean;
     advanced?: boolean;
+    reviewGate?: { allow?: boolean; blockers?: string[] };
   };
 
   it('preserves reviewArmed cycle across repeated handoff ticks', () => {
@@ -478,7 +479,7 @@ describe('owner cycle advance', () => {
       reviewRuns: cleanReviewRuns,
       session: liveWorker({ ownedHeadSha: 'h2' }),
       nowMs: 2000,
-    }) as CycleEvalResult;
+    }) as OwnerCycleResult;
     expect(second.cycle?.reviewArmed).toBe(false);
     expect(second.cycle?.cycleId).not.toBe(first.cycle?.cycleId);
     expect(second.reviewGate?.allow).toBe(true);
