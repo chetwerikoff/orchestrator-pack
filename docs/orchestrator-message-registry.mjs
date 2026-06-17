@@ -770,38 +770,65 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
  * diff edits coordinated protected-runtime paths those snapshots declare.
  */
 function listGitTreeDeclarationSnapshots(repoRoot, gitRef = 'HEAD') {
-  try {
-    const out = execFileSync('git', ['ls-tree', '-r', '--name-only', gitRef, 'docs/declarations'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    return parseGitDiffNameOnlyOutput(out);
+  const paths = new Set();
+  for (const args of [
+    ['ls-tree', '-r', '--name-only', gitRef, '--', 'docs/declarations'],
+    ['ls-tree', '-r', '--name-only', gitRef, 'docs/declarations'],
+  ]) {
+    try {
+      const out = execFileSync('git', args, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      for (const relPath of parseGitDiffNameOnlyOutput(out)) {
+        paths.add(relPath);
+      }
+    }
+    catch {
+      // try next form
+    }
   }
-  catch {
-    return [];
+  if (paths.size === 0) {
+    try {
+      const out = execFileSync('git', ['ls-tree', '-r', '--name-only', gitRef], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      for (const relPath of parseGitDiffNameOnlyOutput(out)) {
+        if (/^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.test(relPath)) {
+          paths.add(relPath);
+        }
+      }
+    }
+    catch {
+      // ignore missing git ref
+    }
   }
+  return [...paths];
 }
 
 function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
-  const diskPath = path.join(repoRoot, relPath);
-  if (existsSync(diskPath)) {
-    try {
-      return JSON.parse(readFileSync(diskPath, 'utf8'));
-    }
-    catch {
-      // fall through to git
-    }
-  }
+  const normalized = String(relPath).replace(/\\/g, '/');
   try {
-    const out = execFileSync('git', ['show', `${gitRef}:${String(relPath).replace(/\\/g, '/')}`], {
+    const out = execFileSync('git', ['show', `${gitRef}:${normalized}`], {
       cwd: repoRoot,
       encoding: 'utf8',
     });
     return JSON.parse(out);
   }
   catch {
-    return null;
+    // fall through to working tree for uncommitted local declaration edits
   }
+  const diskPath = path.join(repoRoot, relPath);
+  if (existsSync(diskPath)) {
+    try {
+      return JSON.parse(readFileSync(diskPath, 'utf8'));
+    }
+    catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function resolveRepoHeadRef(repoRoot) {
@@ -864,6 +891,7 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
 
 export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = [], options = {}) {
   const gitRef = options.gitRef ?? resolveRepoHeadRef(repoRoot);
+  // Branch/PR/env linkage plus committed declaration snapshots — not resolveLinkedIssueNumbers alone.
   return [
     ...new Set([
       ...resolveLinkedIssueNumbers(repoRoot),

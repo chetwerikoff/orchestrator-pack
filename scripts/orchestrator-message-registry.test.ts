@@ -617,6 +617,35 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('prefers committed declaration snapshots from git HEAD over stale on-disk copies', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-stale-disk-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'committed declaration'], { cwd: root, env: gitFixtureEnv });
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/ci-green-wake-reconcile.ps1'],
+      });
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([324]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('links issue numbers from declaration snapshots present only in git HEAD', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-git-'));
     try {
