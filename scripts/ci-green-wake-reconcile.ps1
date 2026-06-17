@@ -220,20 +220,7 @@ function Get-FixtureCiGreenWakePayload {
     if ($fixture.reviewRuns) {
         $payload.reviewRuns = @($fixture.reviewRuns)
     }
-    if ($fixture.workerDeliveries) {
-        $payload.workerDeliveries = @($fixture.workerDeliveries)
-    }
-    if ($fixture.aoEvents) {
-        $payload.aoEvents = @($fixture.aoEvents)
-    }
-    if ($fixture.dispatchJournal) {
-        $dispatchJournal = @{}
-        foreach ($prop in $fixture.dispatchJournal.PSObject.Properties) {
-            $dispatchJournal[$prop.Name] = $prop.Value
-        }
-        $payload.dispatchJournal = $dispatchJournal
-    }
-    return $payload
+    return Merge-MechanicalFixtureDeliveryFields -Payload $payload -Fixture $fixture
 }
 
 function Invoke-PlannedCiGreenWakeSend {

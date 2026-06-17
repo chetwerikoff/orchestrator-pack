@@ -213,19 +213,7 @@ function Get-FixtureReconcilePayload {
     if ($fixture.nowMs) {
         $payload.nowMs = [long]$fixture.nowMs
     }
-    if ($fixture.workerDeliveries) {
-        $payload.workerDeliveries = @($fixture.workerDeliveries)
-    }
-    if ($fixture.aoEvents) {
-        $payload.aoEvents = @($fixture.aoEvents)
-    }
-    if ($fixture.dispatchJournal) {
-        $dispatchJournal = @{}
-        foreach ($prop in $fixture.dispatchJournal.PSObject.Properties) {
-            $dispatchJournal[$prop.Name] = $prop.Value
-        }
-        $payload.dispatchJournal = $dispatchJournal
-    }
+    $payload = Merge-MechanicalFixtureDeliveryFields -Payload $payload -Fixture $fixture
     $payload.reactionMessages = Get-ReconcileReactionMessages -Fixture $fixture
     return $payload
 }
