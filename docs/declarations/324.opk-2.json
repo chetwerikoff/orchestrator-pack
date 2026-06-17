@@ -7,16 +7,17 @@
   "baseline": {
     "commit_sha": "71037b81de217a83e4026365ca2a9a5df4bc9ff4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:66d8a5aa6190011f004995ebbeae08399fdd524bddbbf0264d72363a75b5513e"
+    "active_scope_hash": "sha256:b46d8de8df93f636c4ee40e958e9aae9ad404e38256901eb9cacbc6dbbe026f9"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
-    "docs/autonomous-orchestrator-boundary.mjs",
     "docs/autonomous-orchestrator-boundary.d.mts",
+    "docs/autonomous-orchestrator-boundary.mjs",
     "docs/autonomous-real-binaries.example.json",
     "docs/autonomous-review-start-capabilities.json",
     "docs/declarations/324.opk-2.json",
     "docs/migration_notes.md",
+    "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
     "scripts/ao",
     "scripts/ao-autonomous-guard.ps1",
