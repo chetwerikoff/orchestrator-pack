@@ -23,37 +23,33 @@ const MUTATING_GIT_SUBCOMMANDS = new Set([
   'stash',
 ]);
 
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--exec-path',
+  '--namespace',
+]);
+
 /**
- * @param {string[]} argv
+ * @param {string[]} list
+ * @param {number} [startIndex]
  */
-export function gitSubcommandFromArgv(argv) {
-  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
-  let index = 0;
+export function gitArgvSubcommandIndex(list, startIndex = 0) {
+  let index = startIndex;
   while (index < list.length) {
     const token = list[index];
-    if (token === '-C' || token === '--git-dir' || token === '--work-tree') {
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(token)) {
       index += 2;
       continue;
     }
-    if (token.startsWith('-')) {
+    if (token.startsWith('--') && token.includes('=')) {
       index += 1;
       continue;
     }
-    return token.toLowerCase();
-  }
-  return '';
-}
-
-/**
- * @param {string[]} argv
- */
-export function isMutatingGitArgv(argv) {
-  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
-  let index = 0;
-  while (index < list.length) {
-    const token = list[index];
-    if (token === '-C' || token === '--git-dir' || token === '--work-tree') {
-      index += 2;
+    if ((token.startsWith('-c') && token !== '-c') || (token.startsWith('-C') && token !== '-C')) {
+      index += 1;
       continue;
     }
     if (token.startsWith('-')) {
@@ -62,6 +58,27 @@ export function isMutatingGitArgv(argv) {
     }
     break;
   }
+  return index;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function gitSubcommandFromArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index >= list.length) {
+    return '';
+  }
+  return list[index].toLowerCase();
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isMutatingGitArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
   if (index >= list.length) {
     return false;
   }

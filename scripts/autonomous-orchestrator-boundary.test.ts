@@ -63,6 +63,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(isMutatingGitArgv(['fetch', '--dry-run'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin'])).toBe(true);
     expect(gitSubcommandFromArgv(['-C', '/tmp', 'log'])).toBe('log');
+    expect(isMutatingGitArgv(['-c', 'user.name=x', 'checkout', 'main'])).toBe(true);
+    expect(gitSubcommandFromArgv(['-c', 'user.name=x', 'status'])).toBe('status');
+    expect(isMutatingGitArgv(['-cuser.name=x', 'checkout', 'main'])).toBe(true);
   });
 
   it('positive-outcome: denies direct branch -m and allows ao-review-run child worktree add', () => {
@@ -237,5 +240,23 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     } finally {
       rmSync(packRoot, { recursive: true, force: true });
     }
+  });
+
+  it('resolves pack root from boundary lib without explicit PackRoot', () => {
+    const output = runPwsh(`
+      . ${psString(boundaryLibPath)}
+      $packRoot = Get-PackRootFromBoundaryLib
+      $scripts = Join-Path $packRoot 'scripts'
+      $resolved = Resolve-AutonomousRealBinaryPath -BinaryName 'git'
+      [pscustomobject]@{
+        packRootEndsScripts = [bool]($packRoot -notlike '*\\scripts' -and $packRoot -notlike '*/scripts')
+        scriptsDirExists = [bool](Test-Path -LiteralPath $scripts)
+        resolvedNotScriptsScripts = [bool]($resolved -notlike '*scripts/scripts*')
+      } | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(output);
+    expect(parsed.packRootEndsScripts).toBe(true);
+    expect(parsed.scriptsDirExists).toBe(true);
+    expect(parsed.resolvedNotScriptsScripts).toBe(true);
   });
 });

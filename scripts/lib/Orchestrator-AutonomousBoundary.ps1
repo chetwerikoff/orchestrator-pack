@@ -19,7 +19,7 @@ $Script:SanctionedGitParentPatterns = @(
 )
 
 function Get-PackRootFromBoundaryLib {
-    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
 }
 
 function Get-AutonomousRealBinariesConfigPath {
@@ -320,18 +320,26 @@ function Test-AutonomousGitSanctionedProvenance {
     return $false
 }
 
-function Test-GitArgvIsMutating {
+function Get-GitArgvSubcommandIndex {
     param([string[]]$Argv)
 
     if (-not $Argv -or $Argv.Count -eq 0) {
-        return $false
+        return 0
     }
 
     $index = 0
     while ($index -lt $Argv.Count) {
         $token = [string]$Argv[$index]
-        if ($token -in @('-C', '--git-dir', '--work-tree')) {
+        if ($token -in @('-C', '-c', '--git-dir', '--work-tree', '--exec-path', '--namespace')) {
             $index += 2
+            continue
+        }
+        if ($token -match '^--.+=.+$') {
+            $index++
+            continue
+        }
+        if ($token -match '^-c[^-].+$' -or $token -match '^-C.+$') {
+            $index++
             continue
         }
         if ($token -match '^-') {
@@ -340,6 +348,17 @@ function Test-GitArgvIsMutating {
         }
         break
     }
+    return $index
+}
+
+function Test-GitArgvIsMutating {
+    param([string[]]$Argv)
+
+    if (-not $Argv -or $Argv.Count -eq 0) {
+        return $false
+    }
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
     if ($index -ge $Argv.Count) {
         return $false
     }
