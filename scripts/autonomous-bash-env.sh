@@ -14,8 +14,8 @@ __ao_autonomous_rewrite_git_command() {
 
   printf -v quoted_pack_git '%q' "${pack_git}"
 
-  if [[ "${cmd}" =~ (^|[;&|[:space:]])(/usr/bin/git|/usr/local/bin/git|/bin/git)(.*)$ ]]; then
-    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
+  if [[ "${cmd}" =~ (^|[;&|[:space:]])([\"']?)(/usr/bin/git|/usr/local/bin/git|/bin/git)([\"']?)(.*)$ ]]; then
+    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[5]}"
     return 0
   fi
 
