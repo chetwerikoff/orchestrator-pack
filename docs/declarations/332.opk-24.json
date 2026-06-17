@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324"
+    "active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -15,6 +15,10 @@
     "docs/declarations/332.opk-24.json",
     "docs/migration_notes.md",
     "docs/orchestrator-message-registry.mjs",
+    "docs/review-head-ready.mjs",
+    "docs/review-ready-stuck-guard.d.mts",
+    "docs/review-ready-stuck-guard.mjs",
+    "docs/review-reconcile-primitives.mjs",
     "docs/review-trigger-reconcile.d.mts",
     "docs/review-trigger-reconcile.mjs",
     "docs/worker-iteration-cycle.d.mts",
@@ -30,5 +34,23 @@
     "scripts/worker-iteration-cycle.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
+      "new_active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e",
+      "changed": {
+        "added": [
+          "docs/review-head-ready.mjs",
+          "docs/review-ready-stuck-guard.d.mts",
+          "docs/review-ready-stuck-guard.mjs",
+          "docs/review-reconcile-primitives.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Review fix: break ci-green ESM cycle via primitives and shared CI classifier",
+      "actor": "opk-28",
+      "timestamp": "2026-06-17T17:46:18.992Z",
+      "applied": true
+    }
+  ]
 }
