@@ -754,6 +754,24 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   ],
 };
 
+function inferLinkedIssuesFromCoordinatedPathEdits(changedFiles, protectedManifest) {
+  const linked = new Set();
+  const coordinated = {
+    ...BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS,
+    ...(protectedManifest?.coordinatedIssueDeclaredPathEdits ?? {}),
+  };
+  const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
+  for (const [issue, paths] of Object.entries(coordinated)) {
+    for (const declaredPath of paths ?? []) {
+      if (changed.has(String(declaredPath).replace(/\\/g, '/'))) {
+        linked.add(Number(issue));
+        break;
+      }
+    }
+  }
+  return [...linked];
+}
+
 function buildCoordinatedDeclaredPathAllowSet(protectedManifest, linkedIssueNumbers) {
   const allowed = new Set();
   const linked = new Set((linkedIssueNumbers ?? []).map((issue) => Number(issue)));
@@ -913,7 +931,12 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
-  const linkedIssueNumbers = resolveLinkedIssueNumbers(repoRoot);
+  const linkedIssueNumbers = [
+    ...new Set([
+      ...resolveLinkedIssueNumbers(repoRoot),
+      ...inferLinkedIssuesFromCoordinatedPathEdits(changedFiles, bundle.protectedRuntime),
+    ]),
+  ];
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, {
     baseManifestExists,
     linkedIssueNumbers,

@@ -12,14 +12,17 @@ __ao_autonomous_pack_git() {
 __ao_autonomous_redirect_absolute_git() {
   local cmd="${BASH_COMMAND-}"
   [[ -n "${cmd}" ]] || return 0
-  [[ "${cmd}" =~ ^(/usr/bin/git|/bin/git|/usr/local/bin/git)([[:space:]]|$) ]] || return 0
 
-  local pack_git args ec
+  local pack_git args="" ec
   pack_git="$(__ao_autonomous_pack_git)"
-  if [[ "${cmd}" =~ ^(/usr/bin/git|/bin/git|/usr/local/bin/git)[[:space:]]+(.*)$ ]]; then
-    args="${BASH_REMATCH[2]}"
+  # Skip our own shim invocations and guard subprocesses.
+  [[ "${cmd}" == *"${pack_git}"* ]] && return 0
+  [[ "${cmd}" == *git-autonomous-guard.ps1* ]] && return 0
+
+  if [[ "${cmd}" =~ .*(/usr/bin/git|/bin/git|/usr/local/bin/git)([[:space:]]+(.*))?$ ]]; then
+    args="${BASH_REMATCH[3]}"
   else
-    args=""
+    return 0
   fi
 
   # shellcheck disable=SC2086

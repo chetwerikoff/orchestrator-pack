@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG="${PACK_ROOT}/.ao/autonomous-real-binaries.json"
 
+if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" && "${AO_AUTONOMOUS_GIT_INTERNAL_EXEC:-}" != "1" ]]; then
+  exec "${SCRIPT_DIR}/git" "$@"
+fi
+
 resolve_system_git() {
   local configured system_path
   if [[ -f "${CONFIG}" ]]; then

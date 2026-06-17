@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -23,7 +23,7 @@ import {
   loadAutonomousOrchestratorBoundaryInventory,
   validateBoundaryCapabilityInventory,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
-import { checkProtectedRuntimeDiff } from '../docs/orchestrator-message-registry.mjs';
+import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -245,6 +245,8 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(example.gitSystemBinary).toMatch(/^\/usr\/bin\/git$/);
     expect(existsSync(bashEnvPath)).toBe(true);
     expect(existsSync(gitRealBinaryPath)).toBe(true);
+    expect(statSync(gitRealBinaryPath).mode & 0o111).toBeGreaterThan(0);
+    expect(statSync(path.join(repoRoot, 'scripts/_invoke-system-git.sh')).mode & 0o111).toBeGreaterThan(0);
 
     if (existsSync('/usr/bin/git')) {
       withTempGitRepo((dir) => {
@@ -294,11 +296,47 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         );
         expect(fallthrough.status).toBe(93);
         expect(fallthrough.stderr || fallthrough.stdout).toMatch(/autonomous tree-mutating git denied/i);
+
+        const prefixedAbsolute = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; env AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1 /usr/bin/git checkout -b env-prefixed-bypass`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(prefixedAbsolute.status).toBe(93);
+        expect(prefixedAbsolute.stderr || prefixedAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
         expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
           before.stdout.trim(),
         );
       });
     }
+  });
+
+  it('routes direct system-git forwarder and real-binary invocations through the guard', () => {
+    withTempGitRepo((dir) => {
+      const invokePath = path.join(repoRoot, 'scripts/_invoke-system-git.sh');
+      const denyForwarder = spawnSync('bash', [invokePath, 'branch', '-m', 'forwarder-bypass'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+      });
+      expect(denyForwarder.status).toBe(93);
+      expect(denyForwarder.stderr).toMatch(/autonomous tree-mutating git denied/i);
+
+      const denyRealBinary = spawnSync(path.join(repoRoot, 'scripts/git-real-binary'), ['branch', '-m', 'real-binary-bypass'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+      });
+      expect(denyRealBinary.status).toBe(93);
+      expect(denyRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
+    });
   });
 
   it('keeps pack shims executable when system dirs trail scripts on PATH', () => {
@@ -482,5 +520,21 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       linkedIssueNumbers: [324],
     });
     expect(allowed.ok).toBe(true);
+  });
+
+  it('infers issue-324 coordination from coordinated path edits without PR event context', () => {
+    const prior = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    const priorEvent = process.env.GITHUB_EVENT_PATH;
+    delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    delete process.env.GITHUB_EVENT_PATH;
+    try {
+      const result = checkProtectedRuntimeForRepo(repoRoot, 'origin/main');
+      expect(result.ok).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prior;
+      if (priorEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = priorEvent;
+    }
   });
 });
