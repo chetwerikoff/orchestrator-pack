@@ -157,7 +157,7 @@ export function validateOwnerReference(kind, owners, ref, entry) {
     violations.push(`owner ${ref} missing static implementation binding`);
     return violations;
   }
-  if (kind === 'semantic' && entry?.semanticDedupOwner === ref) {
+  if (kind === 'semantic' && entry?.semantic_dedup_owner === ref) {
     const scope = entry.semanticDedupCoverage ?? resolved.defaultCoverage;
     if (!scope?.recipientKeys?.length || !scope?.intentKeys?.length) {
       violations.push(`semantic owner ${ref} missing coverage scope for ${entry.message_class_id}`);
@@ -592,8 +592,9 @@ export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
     });
     return out.split('\n').map((line) => line.trim().replace(/\\/g, '/')).filter(Boolean);
   }
-  catch {
-    return [];
+  catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`failed to list changed files for ${baseRef}...HEAD: ${reason}`);
   }
 }
 
@@ -612,7 +613,14 @@ export function fileExistsOnGitRef(repoRoot, gitRef, relPath) {
 
 export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') {
   const bundle = loadRegistryBundle(repoRoot);
-  const changedFiles = listChangedFiles(repoRoot, baseRef);
+  let changedFiles;
+  try {
+    changedFiles = listChangedFiles(repoRoot, baseRef);
+  }
+  catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, violations: [message] };
+  }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, baseRef, manifestRel);
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, { baseManifestExists });
@@ -698,7 +706,16 @@ function cli() {
       console.error(JSON.stringify(result, null, 2));
       process.exit(1);
     }
-    console.log(JSON.stringify({ verdict: 'PASS', changedFileCount: listChangedFiles(repoRoot, baseRef).length }));
+    let changedFileCount = 0;
+    try {
+      changedFileCount = listChangedFiles(repoRoot, baseRef).length;
+    }
+    catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(JSON.stringify({ ok: false, violations: [message] }, null, 2));
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ verdict: 'PASS', changedFileCount }));
     process.exit(0);
   }
   console.error('Usage: orchestrator-message-registry.mjs <audit|generate-map|hash-callsites|check-protected-runtime> [repoRoot] [baseRef]');

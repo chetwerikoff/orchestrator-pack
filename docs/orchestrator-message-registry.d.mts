@@ -48,6 +48,7 @@ export declare function assertSupportedHost(platform?: string, env?: NodeJS.Proc
 export declare function hashNormalizedBody(text: unknown): string;
 export declare function loadRegistryBundle(repoRoot: string): Record<string, unknown>;
 export declare function validateCatalog(bundle: Record<string, unknown>, repoRoot: string): CatalogValidationResult;
+export declare function validateOwnerReference(kind: string, owners: Record<string, unknown>, ref: string, entry: Record<string, unknown>): string[];
 export declare function checkSemanticOverlaps(catalog: Record<string, unknown>, taxonomy: Record<string, unknown>, owners: Record<string, unknown>): OverlapResult;
 export declare function detectRawSendsInSource(relPath: string, source: string, helpers: Record<string, unknown>, allowlistEntries?: unknown[]): SendFinding[];
 export declare function listDeclaredAuditRootFiles(auditRoots: Record<string, unknown>): string[];

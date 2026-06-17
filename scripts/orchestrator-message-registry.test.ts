@@ -8,6 +8,7 @@ import {
   assertSupportedHost,
   auditRegistration,
   checkProtectedRuntimeDiff,
+  checkProtectedRuntimeForRepo,
   checkSemanticOverlaps,
   detectRawSendsInSource,
   enumerateBaselineClassIds,
@@ -19,6 +20,7 @@ import {
   recipientKeysOverlap,
   validateCatalog,
   validateOverlapOverride,
+  validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -194,6 +196,16 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(validateOverlapOverride({ id: 'x' })).not.toEqual([]);
   });
 
+  it('validates semantic owner coverage using semantic_dedup_owner field name', () => {
+    const owners = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-owner-mechanisms.manifest.json'), 'utf8'));
+    const entry = {
+      message_class_id: 'orphan-class-not-in-default-coverage',
+      semantic_dedup_owner: 'issue-283',
+    };
+    const violations = validateOwnerReference('semantic', owners, entry.semantic_dedup_owner, entry);
+    expect(violations.some((v: string) => v.includes('scope does not cover orphan-class-not-in-default-coverage'))).toBe(true);
+  });
+
   it('fails closed on Invoke-Expression send wrappers', () => {
     const helpers = { helpers: [] };
     const source = 'Invoke-Expression "& ao send worker hi"';
@@ -308,8 +320,14 @@ describe('orchestrator message registry (Issue #298)', () => {
       execFileSync('node', [registryCli, 'check-protected-runtime', repoRoot, 'origin/main'], { encoding: 'utf8' }),
     );
     expect(explicit.verdict).toBe('PASS');
-    expect(listChangedFiles(repoRoot, repoRoot)).toEqual([]);
+    expect(() => listChangedFiles(repoRoot, repoRoot)).toThrow(/failed to list changed files/);
     expect(explicit.changedFileCount).toBeGreaterThan(0);
+  });
+
+  it('fails protected-runtime check when git diff base ref cannot be resolved', () => {
+    const result = checkProtectedRuntimeForRepo(repoRoot, repoRoot);
+    expect(result.ok).toBe(false);
+    expect(result.violations[0]).toMatch(/failed to list changed files/);
   });
 
   it('documents recipient alias overlap conservatively', () => {
