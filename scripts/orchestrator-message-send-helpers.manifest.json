@@ -24,7 +24,8 @@
     {
       "name": "Invoke-WorkerInputDraftSubmit",
       "file": "scripts/lib/Submit-WorkerInputDraft.ps1",
-      "mechanisms": ["draft-submit"]
+      "mechanisms": ["draft-submit"],
+      "relatedFunctions": ["Invoke-TmuxSubmitEnter"]
     },
     {
       "name": "Invoke-AoSendViaStdin",

@@ -10,6 +10,7 @@ import {
   checkProtectedRuntimeDiff,
   checkProtectedRuntimeForRepo,
   checkSemanticOverlaps,
+  collectAuditRootFiles,
   detectRawSendsInSource,
   enumerateBaselineClassIds,
   generateMessageMap,
@@ -204,8 +205,53 @@ describe('orchestrator message registry (Issue #298)', () => {
       message_class_id: 'orphan-class-not-in-default-coverage',
       semantic_dedup_owner: 'issue-283',
     };
-    const violations = validateOwnerReference('semantic', owners, entry.semantic_dedup_owner, entry);
+    const violations = validateOwnerReference('semantic', owners, entry.semantic_dedup_owner, entry, repoRoot);
     expect(violations.some((v: string) => v.includes('scope does not cover orphan-class-not-in-default-coverage'))).toBe(true);
+  });
+
+  it('resolves semantic owner claim fields against repoRoot', () => {
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: { entries: Array<Record<string, unknown>> };
+      owners: Record<string, unknown>;
+    };
+    const entry = bundle.catalog.entries.find((e) => e.semantic_dedup_owner === 'issue-283');
+    expect(entry).toBeTruthy();
+    expect(validateOwnerReference('semantic', bundle.owners, 'issue-283', entry!, repoRoot)).toEqual([]);
+    const missing = validateOwnerReference('semantic', bundle.owners, 'issue-283', entry!, '/tmp/missing-repo-root');
+    expect(missing.some((v: string) => v.includes('implementation file missing'))).toBe(true);
+  });
+
+  it('includes registered helper files in raw-send audit scan roots', () => {
+    const bundle = loadRegistryBundle(repoRoot) as {
+      auditRoots: Record<string, unknown>;
+      helpers: Record<string, unknown>;
+    };
+    const roots = collectAuditRootFiles(repoRoot, bundle.auditRoots, bundle.helpers);
+    expect(roots).toContain('scripts/orchestrator-wake-common.ps1');
+    expect(roots).toContain('scripts/lib/Submit-WorkerInputDraft.ps1');
+  });
+
+  it('audits registered helper files for raw sends outside helper bodies', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
+    try {
+      seedMinimalRegistryTree(tmp);
+      writeJson(tmp, 'scripts/orchestrator-message-audit-roots.manifest.json', {
+        schemaVersion: 1,
+        supervisedProcessScripts: [],
+        supervisorEntrypoints: [],
+        ciInvokedScripts: [],
+        commandEntrypoints: [],
+        orchestratorRulesBindings: [],
+      });
+      const wakeCommon = fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-wake-common.ps1'), 'utf8');
+      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'scripts/orchestrator-wake-common.ps1'), `${wakeCommon}\n& ao send worker-1 "rogue"\n`);
+      const result = auditRegistration(tmp);
+      expect(result.verdict).toBe('FAIL');
+      expect(result.violations.some((v: string) => v.includes('scripts/orchestrator-wake-common.ps1'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('fails closed on Invoke-Expression send wrappers', () => {

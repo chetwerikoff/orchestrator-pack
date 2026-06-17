@@ -141,7 +141,7 @@ function ownerRef(kind, owners, ref) {
   return table?.[ref] ?? null;
 }
 
-export function validateOwnerReference(kind, owners, ref, entry) {
+export function validateOwnerReference(kind, owners, ref, entry, repoRoot = '') {
   const violations = [];
   const resolved = ownerRef(kind, owners, ref);
   if (!resolved) {
@@ -157,6 +157,8 @@ export function validateOwnerReference(kind, owners, ref, entry) {
     violations.push(`owner ${ref} missing static implementation binding`);
     return violations;
   }
+  const appliesToEntry = (kind === 'semantic' && entry?.semantic_dedup_owner === ref)
+    || (kind === 'delivery' && entry?.delivery_idempotency_owner === ref);
   if (kind === 'semantic' && entry?.semantic_dedup_owner === ref) {
     const scope = entry.semanticDedupCoverage ?? resolved.defaultCoverage;
     if (!scope?.recipientKeys?.length || !scope?.intentKeys?.length) {
@@ -164,11 +166,16 @@ export function validateOwnerReference(kind, owners, ref, entry) {
     } else if (!scope.messageClassIds?.includes(entry.message_class_id)) {
       violations.push(`semantic owner ${ref} scope does not cover ${entry.message_class_id}`);
     }
-    const fieldText = readFileIfExists(impl.file);
-    if (fieldText) {
+  }
+  if (appliesToEntry) {
+    const fieldText = readFileIfExists(impl.file, repoRoot);
+    if (!fieldText) {
+      violations.push(`owner ${ref} implementation file missing: ${impl.file}`);
+    }
+    else {
       for (const fieldName of impl.claimKeyFields) {
         if (!fieldText.includes(fieldName)) {
-          violations.push(`semantic owner ${ref} claims field ${fieldName} not present in ${impl.file}`);
+          violations.push(`owner ${ref} claims field ${fieldName} not present in ${impl.file}`);
         }
       }
     }
@@ -209,8 +216,8 @@ export function validateCatalogEntry(entry, bundle, repoRoot) {
   if (!childIds.includes(entry.owning_process) && !allowedOwners.has(entry.owning_process)) {
     violations.push(`${entry.message_class_id}: owning_process ${entry.owning_process} not in supervisor inventory`);
   }
-  violations.push(...validateOwnerReference('delivery', bundle.owners, entry.delivery_idempotency_owner, entry));
-  violations.push(...validateOwnerReference('semantic', bundle.owners, entry.semantic_dedup_owner, entry));
+  violations.push(...validateOwnerReference('delivery', bundle.owners, entry.delivery_idempotency_owner, entry, repoRoot));
+  violations.push(...validateOwnerReference('semantic', bundle.owners, entry.semantic_dedup_owner, entry, repoRoot));
 
   const cs = entry.callsite;
   if (cs?.file && cs?.function) {
@@ -362,19 +369,26 @@ function helperOwnsFunction(helpers, relFile, functionName) {
   return (helpers.helpers ?? []).some((h) => h.file === relFile && h.name === functionName);
 }
 
+function helperFunctionNames(helper) {
+  return [helper.name, ...(helper.relatedFunctions ?? [])].filter(Boolean);
+}
+
 function findEnclosingHelper(relFile, helpers, source, index) {
   const matches = [];
   for (const helper of helpers.helpers ?? []) {
     if (helper.file !== relFile) continue;
-    const body = extractFunctionBody(source, helper.name);
-    if (!body) continue;
-    const fnPattern = new RegExp(`function\\s+${helper.name}\\b`, 'i');
-    const fnMatch = fnPattern.exec(source);
-    if (!fnMatch) continue;
-    const start = fnMatch.index;
-    const end = start + body.length + fnMatch[0].length;
-    if (index >= start && index <= end) {
-      matches.push(helper);
+    for (const functionName of helperFunctionNames(helper)) {
+      const body = extractFunctionBody(source, functionName);
+      if (!body) continue;
+      const fnPattern = new RegExp(`function\\s+${functionName}\\b`, 'i');
+      const fnMatch = fnPattern.exec(source);
+      if (!fnMatch) continue;
+      const start = fnMatch.index;
+      const end = start + body.length + fnMatch[0].length;
+      if (index >= start && index <= end) {
+        matches.push(helper);
+        break;
+      }
     }
   }
   return matches;
@@ -426,6 +440,14 @@ export function detectRawSendsInSource(relPath, source, helpers, allowlistEntrie
   return findings;
 }
 
+export function listHelperAuditFiles(helpers) {
+  const files = new Set();
+  for (const helper of helpers?.helpers ?? []) {
+    if (helper?.file) files.add(String(helper.file).replace(/\\/g, '/'));
+  }
+  return [...files].sort();
+}
+
 export function listDeclaredAuditRootFiles(auditRoots) {
   const declared = new Set();
   const add = (rel) => {
@@ -443,11 +465,15 @@ export function listDeclaredAuditRootFiles(auditRoots) {
   return [...declared].sort();
 }
 
-export function collectAuditRootFiles(repoRoot, auditRoots) {
-  return listDeclaredAuditRootFiles(auditRoots).filter((rel) => {
+export function collectAuditRootFiles(repoRoot, auditRoots, helpers = { helpers: [] }) {
+  const files = new Set([
+    ...listDeclaredAuditRootFiles(auditRoots),
+    ...listHelperAuditFiles(helpers),
+  ]);
+  return [...files].filter((rel) => {
     const full = path.join(repoRoot, rel);
     return existsSync(full) && statSync(full).isFile();
-  });
+  }).sort();
 }
 
 export function validateAuditRootCompleteness(bundle, repoRoot) {
@@ -466,6 +492,12 @@ export function validateAuditRootCompleteness(bundle, repoRoot) {
     const full = path.join(repoRoot, rel);
     if (!existsSync(full) || !statSync(full).isFile()) {
       violations.push(`audit root file missing: ${rel}`);
+    }
+  }
+  for (const rel of listHelperAuditFiles(bundle.helpers)) {
+    const full = path.join(repoRoot, rel);
+    if (!existsSync(full) || !statSync(full).isFile()) {
+      violations.push(`helper audit file missing: ${rel}`);
     }
   }
   return violations;
@@ -507,7 +539,7 @@ export function auditRegistration(repoRoot, options = {}) {
 
   violations.push(...validateAuditRootCompleteness(bundle, repoRoot));
 
-  const rootFiles = options.rootFiles ?? collectAuditRootFiles(repoRoot, bundle.auditRoots);
+  const rootFiles = options.rootFiles ?? collectAuditRootFiles(repoRoot, bundle.auditRoots, bundle.helpers);
   const sendFindings = [];
   for (const rel of rootFiles) {
     const source = readFileSync(path.join(repoRoot, rel), 'utf8');
