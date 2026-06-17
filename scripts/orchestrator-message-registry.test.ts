@@ -59,6 +59,30 @@ function seedMinimalRegistryTree(root: string) {
   }
 }
 
+const gitFixtureEnv = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 't',
+  GIT_AUTHOR_EMAIL: 't@example.com',
+  GIT_COMMITTER_NAME: 't',
+  GIT_COMMITTER_EMAIL: 't@example.com',
+};
+
+function initRegistryGitFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-git-'));
+  execFileSync('git', ['init'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+  seedMinimalRegistryTree(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+  const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(root, 'registry-fixture-change.txt'), 'head\n');
+  execFileSync('git', ['add', 'registry-fixture-change.txt'], { cwd: root });
+  execFileSync('git', ['commit', '-m', 'head'], { cwd: root, env: gitFixtureEnv });
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  return { root, baseSha, headSha };
+}
+
 describe('orchestrator message registry (Issue #298)', () => {
   it('passes registration audit on the real pack tree', () => {
     const result = auditRegistration(repoRoot);
@@ -377,46 +401,52 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('cli check-protected-runtime honors baseRef as the fourth argument', () => {
-    const registryCli = path.join(repoRoot, 'docs/orchestrator-message-registry.mjs');
-    const explicit = JSON.parse(
-      execFileSync('node', [registryCli, 'check-protected-runtime', repoRoot, 'origin/main'], { encoding: 'utf8' }),
-    );
-    expect(explicit.verdict).toBe('PASS');
-    expect(gitRefExists(repoRoot, 'origin/main')).toBe(true);
-    expect(explicit.changedFileCount).toBeGreaterThan(0);
+    const { root, baseSha } = initRegistryGitFixture();
+    try {
+      const registryCli = path.join(repoRoot, 'docs/orchestrator-message-registry.mjs');
+      const explicit = JSON.parse(
+        execFileSync('node', [registryCli, 'check-protected-runtime', root, baseSha], { encoding: 'utf8' }),
+      );
+      expect(explicit.verdict).toBe('PASS');
+      expect(gitRefExists(root, baseSha)).toBe(true);
+      expect(explicit.changedFileCount).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('prefers GITHUB_BASE_SHA when resolving diff base ref', () => {
-    const headParent = execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const { root, baseSha } = initRegistryGitFixture();
     const prev = process.env.GITHUB_BASE_SHA;
     const prevEvent = process.env.GITHUB_EVENT_PATH;
     delete process.env.GITHUB_EVENT_PATH;
-    process.env.GITHUB_BASE_SHA = headParent;
+    process.env.GITHUB_BASE_SHA = baseSha;
     try {
-      expect(resolveDiffBaseRef(repoRoot, 'origin/main')).toBe(headParent);
+      expect(resolveDiffBaseRef(root, 'origin/main')).toBe(baseSha);
     } finally {
       if (prev === undefined) delete process.env.GITHUB_BASE_SHA;
       else process.env.GITHUB_BASE_SHA = prev;
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it('lists changed files from pull_request base and head shas in Actions', () => {
-    const baseSha = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const { root, baseSha, headSha } = initRegistryGitFixture();
     const eventPath = path.join(os.tmpdir(), `github-event-${Date.now()}.json`);
     fs.writeFileSync(eventPath, JSON.stringify({ pull_request: { base: { sha: baseSha }, head: { sha: headSha } } }));
     const prev = process.env.GITHUB_EVENT_PATH;
     process.env.GITHUB_EVENT_PATH = eventPath;
     try {
-      const files = listChangedFiles(repoRoot, 'origin/main');
-      expect(files.length).toBeGreaterThan(0);
-      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
+      const files = listChangedFiles(root, 'origin/main');
+      expect(files).toEqual(['registry-fixture-change.txt']);
+      expect(checkProtectedRuntimeForRepo(root, 'origin/main').ok).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prev;
       fs.rmSync(eventPath, { force: true });
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
