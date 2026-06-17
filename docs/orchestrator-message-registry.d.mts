@@ -62,6 +62,7 @@ export declare function fileExistsOnGitRef(repoRoot: string, gitRef: string, rel
 export declare function readGithubActionsPullRequestShas(): { baseSha: string; headSha: string } | null;
 export declare function gitRefExists(repoRoot: string, ref: string): boolean;
 export declare function resolveDiffBaseRef(repoRoot: string, baseRef?: string): string;
+export declare function parseGitDiffNameOnlyOutput(output: string): string[];
 export declare function listChangedFiles(repoRoot: string, baseRef?: string): string[];
 export declare function checkProtectedRuntimeForRepo(repoRoot: string, baseRef?: string): ProtectedRuntimeDiffResult;
 export declare function normalizeAuditOutput(result: AuditRegistrationResult): string;
