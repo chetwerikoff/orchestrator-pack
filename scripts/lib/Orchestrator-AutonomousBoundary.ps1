@@ -348,11 +348,39 @@ function Get-GitArgvSubcommandIndex {
     return $index
 }
 
+function Test-GitArgvDefinesAlias {
+    param([string[]]$Argv)
+
+    if (-not $Argv -or $Argv.Count -eq 0) {
+        return $false
+    }
+
+    for ($index = 0; $index -lt $Argv.Count; $index++) {
+        $token = [string]$Argv[$index]
+        if ($token -eq '-c' -and ($index + 1) -lt $Argv.Count) {
+            $value = [string]$Argv[$index + 1]
+            if ($value -match '^(?i)alias\.') {
+                return $true
+            }
+            $index++
+            continue
+        }
+        if ($token -match '^-c[^-].+$' -and $token.Substring(2) -match '^(?i)alias\.') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-GitArgvIsMutating {
     param([string[]]$Argv)
 
     if (-not $Argv -or $Argv.Count -eq 0) {
         return $false
+    }
+
+    if (Test-GitArgvDefinesAlias -Argv $Argv) {
+        return $true
     }
 
     $index = Get-GitArgvSubcommandIndex -Argv $Argv
@@ -362,19 +390,6 @@ function Test-GitArgvIsMutating {
 
     $sub = [string]$Argv[$index]
     switch -Regex ($sub) {
-        '^(?i)branch$' { return $true }
-        '^(?i)checkout$' { return $true }
-        '^(?i)switch$' { return $true }
-        '^(?i)worktree$' { return $true }
-        '^(?i)reset$' { return $true }
-        '^(?i)push$' { return $true }
-        '^(?i)commit$' { return $true }
-        '^(?i)merge$' { return $true }
-        '^(?i)rebase$' { return $true }
-        '^(?i)pull$' { return $true }
-        '^(?i)tag$' { return $true }
-        '^(?i)cherry-pick$' { return $true }
-        '^(?i)revert$' { return $true }
         '^(?i)fetch$' {
             $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
             if ($tail -match '(?i)--dry-run') {
@@ -392,7 +407,8 @@ function Test-GitArgvIsMutating {
             }
             return $true
         }
-        default { return $false }
+        '^(?i)(status|log|rev-parse|diff|show)$' { return $false }
+        default { return $true }
     }
 }
 

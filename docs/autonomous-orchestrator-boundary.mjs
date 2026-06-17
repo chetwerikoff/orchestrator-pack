@@ -14,6 +14,14 @@ export const AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION =
   'autonomous-orchestrator-boundary/v1';
 export const TURN_VISIBLE_REAL_BINARY_ENV_VARS = ['AO_REAL_BINARY', 'GIT_REAL_BINARY'];
 
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  'status',
+  'log',
+  'rev-parse',
+  'diff',
+  'show',
+]);
+
 const MUTATING_GIT_SUBCOMMANDS = new Set([
   'branch',
   'checkout',
@@ -85,8 +93,32 @@ export function gitSubcommandFromArgv(argv) {
 /**
  * @param {string[]} argv
  */
+export function gitArgvDefinesAlias(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (let index = 0; index < list.length; index++) {
+    const token = list[index];
+    if (token === '-c' && index + 1 < list.length) {
+      if (/^alias\./i.test(list[index + 1])) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-c') && token !== '-c' && /^alias\./i.test(token.slice(2))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string[]} argv
+ */
 export function isMutatingGitArgv(argv) {
   const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  if (gitArgvDefinesAlias(list)) {
+    return true;
+  }
   const index = gitArgvSubcommandIndex(list);
   if (index >= list.length) {
     return false;
@@ -103,7 +135,13 @@ export function isMutatingGitArgv(argv) {
     const stashSub = list[index + 1].toLowerCase();
     return stashSub !== 'list' && stashSub !== 'show';
   }
-  return MUTATING_GIT_SUBCOMMANDS.has(sub);
+  if (READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
+    return false;
+  }
+  if (MUTATING_GIT_SUBCOMMANDS.has(sub)) {
+    return true;
+  }
+  return true;
 }
 
 /**

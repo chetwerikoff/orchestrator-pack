@@ -28,6 +28,7 @@ export interface CapabilityInventoryValidation {
   violations: string[];
 }
 
+export declare function gitArgvDefinesAlias(argv: string[]): boolean;
 export declare function gitArgvSubcommandIndex(argv: string[], startIndex?: number): number;
 export declare function gitSubcommandFromArgv(argv: string[]): string;
 export declare function isMutatingGitArgv(argv: string[]): boolean;

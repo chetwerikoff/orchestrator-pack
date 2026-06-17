@@ -11,6 +11,7 @@ import {
   evaluateAutonomousSpawnBoundary,
   evaluateBoundaryCapabilityPreflight,
   evaluateTurnVisibleRealBinaryBypass,
+  gitArgvDefinesAlias,
   gitSubcommandFromArgv,
   hasSanctionedGitParentChain,
   isMutatingGitArgv,
@@ -71,6 +72,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(isMutatingGitArgv(['-c', 'user.name=x', 'checkout', 'main'])).toBe(true);
     expect(gitSubcommandFromArgv(['-c', 'user.name=x', 'status'])).toBe('status');
     expect(isMutatingGitArgv(['-cuser.name=x', 'checkout', 'main'])).toBe(true);
+    expect(gitArgvDefinesAlias(['-c', 'alias.co=checkout', 'co', 'main'])).toBe(true);
+    expect(isMutatingGitArgv(['-c', 'alias.co=checkout', 'co', 'main'])).toBe(true);
+    expect(
+      evaluateAutonomousGitBoundary({
+        argv: ['-c', 'alias.co=checkout', 'co', 'main'],
+        autonomousSurface: true,
+      }).allowed,
+    ).toBe(false);
   });
 
   it('positive-outcome: denies direct branch -m and allows ao-review-run child worktree add', () => {
