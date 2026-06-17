@@ -13,11 +13,13 @@ import {
   detectRawSendsInSource,
   enumerateBaselineClassIds,
   generateMessageMap,
+  gitRefExists,
   hashNormalizedBody,
   listChangedFiles,
   loadRegistryBundle,
   normalizeAuditOutput,
   recipientKeysOverlap,
+  resolveDiffBaseRef,
   validateCatalog,
   validateOverlapOverride,
   validateOwnerReference,
@@ -320,14 +322,40 @@ describe('orchestrator message registry (Issue #298)', () => {
       execFileSync('node', [registryCli, 'check-protected-runtime', repoRoot, 'origin/main'], { encoding: 'utf8' }),
     );
     expect(explicit.verdict).toBe('PASS');
-    expect(() => listChangedFiles(repoRoot, repoRoot)).toThrow(/failed to list changed files/);
+    expect(gitRefExists(repoRoot, 'origin/main')).toBe(true);
     expect(explicit.changedFileCount).toBeGreaterThan(0);
   });
 
+  it('prefers GITHUB_BASE_SHA when resolving diff base ref', () => {
+    const headParent = execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const prev = process.env.GITHUB_BASE_SHA;
+    process.env.GITHUB_BASE_SHA = headParent;
+    try {
+      expect(resolveDiffBaseRef(repoRoot, 'origin/main')).toBe(headParent);
+    } finally {
+      if (prev === undefined) delete process.env.GITHUB_BASE_SHA;
+      else process.env.GITHUB_BASE_SHA = prev;
+    }
+  });
+
   it('fails protected-runtime check when git diff base ref cannot be resolved', () => {
-    const result = checkProtectedRuntimeForRepo(repoRoot, repoRoot);
-    expect(result.ok).toBe(false);
-    expect(result.violations[0]).toMatch(/failed to list changed files/);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-git-'));
+    try {
+      execFileSync('git', ['init'], { cwd: tmp });
+      execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], {
+        cwd: tmp,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 't',
+          GIT_AUTHOR_EMAIL: 't@example.com',
+          GIT_COMMITTER_NAME: 't',
+          GIT_COMMITTER_EMAIL: 't@example.com',
+        },
+      });
+      expect(() => resolveDiffBaseRef(tmp, 'origin/main')).toThrow(/failed to resolve diff base ref/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('documents recipient alias overlap conservatively', () => {

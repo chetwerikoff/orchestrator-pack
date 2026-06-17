@@ -58,6 +58,8 @@ export declare function auditRegistration(repoRoot: string, options?: Record<str
 export declare function generateMessageMap(catalog: Record<string, unknown>, overlapResult: OverlapResult): string;
 export declare function checkProtectedRuntimeDiff(changedFiles: string[], protectedManifest: Record<string, unknown>, options?: { toolPaths?: string[]; baseManifestExists?: boolean }): ProtectedRuntimeDiffResult;
 export declare function fileExistsOnGitRef(repoRoot: string, gitRef: string, relPath: string): boolean;
+export declare function gitRefExists(repoRoot: string, ref: string): boolean;
+export declare function resolveDiffBaseRef(repoRoot: string, baseRef?: string): string;
 export declare function listChangedFiles(repoRoot: string, baseRef?: string): string[];
 export declare function checkProtectedRuntimeForRepo(repoRoot: string, baseRef?: string): ProtectedRuntimeDiffResult;
 export declare function normalizeAuditOutput(result: AuditRegistrationResult): string;

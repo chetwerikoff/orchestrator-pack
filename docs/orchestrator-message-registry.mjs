@@ -584,9 +584,67 @@ export function generateMessageMap(catalog, overlapResult) {
   return `${lines.join('\n')}\n`;
 }
 
-export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
+function readGithubActionsBaseSha() {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath || !existsSync(eventPath)) return null;
   try {
-    const out = execFileSync('git', ['diff', '--name-only', `${baseRef}...HEAD`], {
+    const event = JSON.parse(readFileSync(eventPath, 'utf8'));
+    return event.pull_request?.base?.sha ?? null;
+  }
+  catch {
+    return null;
+  }
+}
+
+function hydrateGithubPullRequestBase(repoRoot) {
+  const baseSha = readGithubActionsBaseSha();
+  if (!baseSha || gitRefExists(repoRoot, baseSha)) return baseSha;
+  execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', baseSha], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+  });
+  return baseSha;
+}
+
+export function gitRefExists(repoRoot, ref) {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${String(ref).trim()}^{commit}`], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+    });
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
+export function resolveDiffBaseRef(repoRoot, baseRef = 'origin/main') {
+  hydrateGithubPullRequestBase(repoRoot);
+  const candidates = [
+    process.env.ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF,
+    process.env.GITHUB_BASE_SHA,
+    process.env.PR_BASE_SHA,
+    readGithubActionsBaseSha(),
+    baseRef,
+    'origin/main',
+    'main',
+  ]
+    .filter((candidate) => typeof candidate === 'string' && candidate.trim().length > 0)
+    .map((candidate) => candidate.trim());
+  const tried = [];
+  for (const candidate of candidates) {
+    if (tried.includes(candidate)) continue;
+    tried.push(candidate);
+    if (gitRefExists(repoRoot, candidate)) return candidate;
+  }
+  throw new Error(`failed to resolve diff base ref (tried: ${tried.join(', ')})`);
+}
+
+export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
+  const resolvedBase = resolveDiffBaseRef(repoRoot, baseRef);
+  try {
+    const out = execFileSync('git', ['diff', '--name-only', `${resolvedBase}...HEAD`], {
       cwd: repoRoot,
       encoding: 'utf8',
     });
@@ -594,7 +652,7 @@ export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
   }
   catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`failed to list changed files for ${baseRef}...HEAD: ${reason}`);
+    throw new Error(`failed to list changed files for ${resolvedBase}...HEAD: ${reason}`);
   }
 }
 
@@ -613,8 +671,10 @@ export function fileExistsOnGitRef(repoRoot, gitRef, relPath) {
 
 export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') {
   const bundle = loadRegistryBundle(repoRoot);
+  let resolvedBase;
   let changedFiles;
   try {
+    resolvedBase = resolveDiffBaseRef(repoRoot, baseRef);
     changedFiles = listChangedFiles(repoRoot, baseRef);
   }
   catch (err) {
@@ -622,7 +682,7 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
     return { ok: false, violations: [message] };
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
-  const baseManifestExists = fileExistsOnGitRef(repoRoot, baseRef, manifestRel);
+  const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, { baseManifestExists });
 }
 

@@ -23,8 +23,19 @@ if ($failures.Count -eq 0) {
         $failures.Add('registration audit failed (see node output above)')
     }
 
-    & node $registryCli check-protected-runtime $Root origin/main 2>&1 | Out-Null
+    $baseRef = if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
+        $env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim()
+    }
+    elseif ($env:GITHUB_BASE_SHA) {
+        $env:GITHUB_BASE_SHA.Trim()
+    }
+    else {
+        'origin/main'
+    }
+
+    $protectedRuntimeOut = & node $registryCli check-protected-runtime $Root $baseRef 2>&1
     if ($LASTEXITCODE -ne 0) {
+        if ($protectedRuntimeOut) { Write-Host $protectedRuntimeOut }
         $failures.Add('protected runtime diff check failed (see node output above)')
     }
 
