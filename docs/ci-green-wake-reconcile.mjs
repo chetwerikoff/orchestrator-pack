@@ -22,6 +22,7 @@ import {
   isRuntimeAlive,
   classifyRequiredCiLevel,
 } from './review-ready-stuck-guard.mjs';
+import { mergeWorkerDeliveriesFromPlanInput } from './review-head-ready.mjs';
 import {
   findSessionById,
   getSessionIdentifier,
@@ -225,6 +226,9 @@ export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [input.requiredCheckLookupFailedByPr]
  * @param {CiGreenWakeState} [input.tracking]
  * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Record<string, unknown>} [input.dispatchJournal]
+ * @param {Record<string, string>} [input.reactionMessages]
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
  * @param {number} [input.nowMs]
  * @param {string} [input.repoRoot]
@@ -237,6 +241,9 @@ export function planCiGreenWakeActions({
   requiredCheckLookupFailedByPr,
   tracking = {},
   workerDeliveries = [],
+  aoEvents,
+  dispatchJournal,
+  reactionMessages,
   reviewRuns = [],
   nowMs = Date.now(),
   repoRoot = '',
@@ -247,6 +254,14 @@ export function planCiGreenWakeActions({
   const headRecords = { ...(tracking.heads ?? {}) };
   const nudged = tracking.nudged ?? {};
   let cycleState = { ...(tracking.cycleState ?? {}) };
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries,
+    aoEvents,
+    dispatchJournal,
+    reviewRuns,
+    reactionMessages,
+    nowMs,
+  });
 
   const checksMap = normalizeCiChecksByPr(ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(requiredCheckNamesByPr);
@@ -313,7 +328,7 @@ export function planCiGreenWakeActions({
       ownerSessionId: sessionId,
       reviewRuns,
       session,
-      workerDeliveries,
+      workerDeliveries: mergedDeliveries,
       nowMs,
       headCommittedAtMs,
       handoffAccepted: !candidate.eligible && candidate.reasons.includes('post_handoff_or_ineligible_report'),

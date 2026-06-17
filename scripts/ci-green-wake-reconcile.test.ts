@@ -182,6 +182,48 @@ describe('planCiGreenWakeActions', () => {
     });
   });
 
+  it('defers nudge when dispatch journal records pending unconsumed delivery', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const deliveredAtMs = settledAtMs - 60_000;
+    const result = plan({
+      openPrs: [
+        {
+          number: 42,
+          headRefOid: 'abc123',
+          headCommittedAt: new Date(settledAtMs).toISOString(),
+        },
+      ],
+      sessions: [
+        liveWorker({
+          activity: 'idle',
+          status: 'working',
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+        }),
+      ],
+      ciChecksByPr: { 42: greenChecks },
+      tracking: { heads: { '42:abc123': { lastCiLevel: 'green', greenEpoch: 1 } } },
+      dispatchJournal: {
+        'op-worker:1000:pack-send:ci-green:tr-42': {
+          deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+          sessionId: 'op-worker',
+          deliveredAtMs,
+          source: 'pack-send',
+          sourceKey: 'ci-green:tr-42',
+          deliveryPath: 'pending-draft',
+        },
+      },
+      aoEvents: [],
+      nowMs,
+    });
+    expect(nudgeActions(result.actions)).toHaveLength(0);
+    const skip = result.actions.find((a) => a.type === 'skip');
+    expect(
+      skip?.reason === 'worker_actively_working' ||
+        String(skip?.reason ?? '').includes('pending_unconsumed_delivery'),
+    ).toBe(true);
+  });
+
   it('(b) skips second identical green observation after nudge recorded', () => {
     const transitionId = buildTransitionId(42, 'abc123', 1);
     const result = plan({

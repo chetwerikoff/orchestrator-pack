@@ -171,6 +171,19 @@ function Get-CiGreenWakeChecksByPr {
         -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as pending'
 }
 
+function Get-CiGreenWakeDeliveryPayload {
+    param(
+        [string]$Project
+    )
+
+    return @{
+        workerDeliveries = @()
+        aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
+        dispatchJournal    = Get-WorkerMessageDispatchJournal
+        reviewRuns         = @(Get-AoReviewRuns -Project $Project)
+    }
+}
+
 function Get-CiGreenWakePreSendSnapshot {
     param(
         [int]$PrNumber,
@@ -196,7 +209,7 @@ function Get-FixtureCiGreenWakePayload {
     param([string]$Path)
 
     $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    return @{
+    $payload = @{
         openPrs                         = @($fixture.openPrs)
         sessions                        = @($fixture.sessions)
         ciChecksByPr                    = $fixture.ciChecksByPr
@@ -204,6 +217,23 @@ function Get-FixtureCiGreenWakePayload {
         requiredCheckLookupFailedByPr   = $fixture.requiredCheckLookupFailedByPr
         tracking                        = $fixture.tracking
     }
+    if ($fixture.reviewRuns) {
+        $payload.reviewRuns = @($fixture.reviewRuns)
+    }
+    if ($fixture.workerDeliveries) {
+        $payload.workerDeliveries = @($fixture.workerDeliveries)
+    }
+    if ($fixture.aoEvents) {
+        $payload.aoEvents = @($fixture.aoEvents)
+    }
+    if ($fixture.dispatchJournal) {
+        $dispatchJournal = @{}
+        foreach ($prop in $fixture.dispatchJournal.PSObject.Properties) {
+            $dispatchJournal[$prop.Name] = $prop.Value
+        }
+        $payload.dispatchJournal = $dispatchJournal
+    }
+    return $payload
 }
 
 function Invoke-PlannedCiGreenWakeSend {
@@ -352,12 +382,19 @@ function Invoke-CiGreenWakeTick {
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $reviewRuns = @()
     $workerDeliveries = @()
+    $aoEvents = @()
+    $dispatchJournal = @{}
     if ($Fixture) {
         if ($payload.reviewRuns) { $reviewRuns = @($payload.reviewRuns) }
         if ($payload.workerDeliveries) { $workerDeliveries = @($payload.workerDeliveries) }
+        if ($payload.aoEvents) { $aoEvents = @($payload.aoEvents) }
+        if ($payload.dispatchJournal) { $dispatchJournal = $payload.dispatchJournal }
     }
     else {
-        $reviewRuns = @(Get-AoReviewRuns -Project $Project)
+        $deliveryPayload = Get-CiGreenWakeDeliveryPayload -Project $Project
+        $reviewRuns = @($deliveryPayload.reviewRuns)
+        $aoEvents = @($deliveryPayload.aoEvents)
+        $dispatchJournal = $deliveryPayload.dispatchJournal
     }
 
     $planPayload = @{
@@ -369,6 +406,8 @@ function Invoke-CiGreenWakeTick {
         tracking                        = $tracking
         reviewRuns                      = @($reviewRuns)
         workerDeliveries                = @($workerDeliveries)
+        aoEvents                        = @($aoEvents)
+        dispatchJournal                 = $dispatchJournal
         nowMs                           = $nowMs
         repoRoot                        = $RepoRoot
     }

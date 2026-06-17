@@ -61,6 +61,9 @@ export interface PlanCiGreenWakeInput {
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: CiGreenWakeState;
   workerDeliveries?: Array<Record<string, unknown>>;
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
   reviewRuns?: Array<Record<string, unknown>>;
   nowMs?: number;
   repoRoot?: string;
