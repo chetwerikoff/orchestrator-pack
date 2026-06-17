@@ -3,14 +3,13 @@
  * Shared by report-driven triggers, ROUND PROGRESSION, and review-trigger-reconcile.
  * Vitest: scripts/review-head-ready.test.ts
  */
-import { classifyRequiredCiLevel } from './ci-green-wake-reconcile.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
-  DEFAULT_GRACE_MS,
+  classifyRequiredCiLevel,
   findLatestReportForHead,
   getStoredReportHeadSha,
   PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
+import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   getSessionActivity,
   isDeliveryConsumed,
@@ -37,7 +36,7 @@ import {
 } from './review-trigger-reconcile.mjs';
 
 /** Sustained-quiescence debounce — tied to review-ready stuck grace (Issue #174 / #261). */
-export const QUIESCENCE_DEBOUNCE_MS = DEFAULT_GRACE_MS;
+export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
 
 /** Report states that imply the worker is still mid-hand-off (Issue #261 row 2). */
 export const ACTIVELY_WORKING_REPORT_STATES = new Set([

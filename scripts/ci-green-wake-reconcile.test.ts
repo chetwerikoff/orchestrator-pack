@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -535,5 +536,20 @@ describe('backstop preserved (AC6)', () => {
 describe('latency bound (AC1)', () => {
   it('defaults to 1-minute mechanical tick', () => {
     expect(DEFAULT_CI_GREEN_WAKE_INTERVAL_MS).toBe(60 * 1000);
+  });
+});
+
+describe('native plan CLI', () => {
+  it('initializes without circular import failure', () => {
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const result = spawnSync('node', ['docs/ci-green-wake-reconcile.mjs', 'plan'], {
+      cwd: repoRoot,
+      input: '{}',
+      encoding: 'utf8',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toMatch(/before initialization/);
+    expect(JSON.parse(result.stdout || '{}')).toEqual(expect.objectContaining({ actions: expect.any(Array) }));
   });
 });

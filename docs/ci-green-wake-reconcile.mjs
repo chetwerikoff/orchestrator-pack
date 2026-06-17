@@ -18,14 +18,9 @@ import {
   getReportState,
 } from './review-finding-delivery-confirm.mjs';
 import {
-  isWorkerActivelyWorking,
-} from './review-head-ready.mjs';
-import {
   findLatestReportForHead,
-  isCiCheckFailure,
-  isCiCheckPending,
-  isMergeContractCiGreen,
   isRuntimeAlive,
+  classifyRequiredCiLevel,
 } from './review-ready-stuck-guard.mjs';
 import {
   findSessionById,
@@ -39,6 +34,7 @@ import {
 } from './review-trigger-reconcile.mjs';
 
 export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.mjs';
+export { classifyRequiredCiLevel } from './review-ready-stuck-guard.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
 export const DEFAULT_CI_GREEN_WAKE_INTERVAL_MS = 60 * 1000;
 
@@ -61,58 +57,6 @@ export const CI_GREEN_WAKE_MESSAGE =
 /** @typedef {{ lastCiLevel?: CiLevel, greenEpoch?: number }} HeadCiRecord */
 /** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number, cycleState?: Record<string, unknown> }} CiGreenWakeState */
 /** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string, ownerCycle?: { repoId: string, cycle: Record<string, unknown> } } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
-
-/**
- * Required CI per prompts/agent_rules.md: branch-protection contexts when configured,
- * else pack merge-contract fallback via isMergeContractCiGreen default names.
- *
- * @param {CiCheck[]} checks
- * @param {{ requiredCheckNames?: string[] }} [options]
- */
-export function classifyRequiredCiLevel(checks, options = {}) {
-  if (options.requiredCheckLookupFailed) {
-    return /** @type {CiLevel} */ ('pending');
-  }
-
-  const list = toArray(checks);
-  if (list.length === 0) {
-    return /** @type {CiLevel} */ ('pending');
-  }
-
-  const branchRequired = toArray(options.requiredCheckNames)
-    .map((name) => String(name ?? '').trim())
-    .filter(Boolean);
-  const greenOpts =
-    branchRequired.length > 0 ? { requiredCheckNames: branchRequired } : {};
-
-  if (isMergeContractCiGreen(list, greenOpts)) {
-    return 'green';
-  }
-
-  const normalizedRequired = branchRequired.map((name) => name.toLowerCase());
-  const scope =
-    normalizedRequired.length > 0
-      ? list.filter((check) =>
-          normalizedRequired.includes(String(check?.name ?? '').toLowerCase()),
-        )
-      : list;
-
-  if (scope.length === 0 && normalizedRequired.length > 0) {
-    return 'pending';
-  }
-
-  for (const check of scope) {
-    if (isCiCheckPending(check)) {
-      return 'pending';
-    }
-  }
-  for (const check of scope) {
-    if (isCiCheckFailure(check)) {
-      return 'red';
-    }
-  }
-  return 'red';
-}
 
 /**
  * @param {number} prNumber
@@ -360,10 +304,6 @@ export function planCiGreenWakeActions({
     });
 
     const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(openPrs), prNumber);
-    const activelyWorking = isWorkerActivelyWorking(session, headSha, nowMs, {
-      headCommittedAtMs,
-      workerDeliveries,
-    });
 
     const cycleEval = evaluateWorkerIterationCycleForPr({
       cycleState,
@@ -391,7 +331,7 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    if (activelyWorking || cycleEval.nudgeGate.blockers.includes('worker_actively_working')) {
+    if (cycleEval.settle.activelyWorking || cycleEval.nudgeGate.blockers.includes('worker_actively_working')) {
       actions.push({
         type: 'skip',
         prNumber,

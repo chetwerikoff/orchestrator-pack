@@ -63,6 +63,12 @@ export declare function evaluateStalePendingDelivery(
   nowMs: number,
   firstSeenAtMs: number,
 ): { stale: boolean; pending: boolean };
+export declare function pruneStaleOwnerCyclesForPr(
+  state: Record<string, unknown>,
+  repoId: string,
+  prNumber: number,
+  ownerSessionId: string,
+): Record<string, unknown>;
 export declare function resolveOrAdvanceOwnerCycle(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateReadyForReviewSettleDebounce(
   input: Record<string, unknown>,

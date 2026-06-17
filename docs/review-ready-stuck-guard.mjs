@@ -171,6 +171,60 @@ export function isMergeContractCiGreen(checks, options = {}) {
   return normalizedRequired.every((name) => matched.has(name));
 }
 
+/** @typedef {'green' | 'red' | 'pending'} CiLevel */
+
+/**
+ * Required CI per prompts/agent_rules.md: branch-protection contexts when configured,
+ * else pack merge-contract fallback via isMergeContractCiGreen default names.
+ *
+ * @param {CiCheck[]} checks
+ * @param {{ requiredCheckNames?: string[], requiredCheckLookupFailed?: boolean }} [options]
+ */
+export function classifyRequiredCiLevel(checks, options = {}) {
+  if (options.requiredCheckLookupFailed) {
+    return /** @type {CiLevel} */ ('pending');
+  }
+
+  const list = toArray(checks);
+  if (list.length === 0) {
+    return /** @type {CiLevel} */ ('pending');
+  }
+
+  const branchRequired = toArray(options.requiredCheckNames)
+    .map((name) => String(name ?? '').trim())
+    .filter(Boolean);
+  const greenOpts =
+    branchRequired.length > 0 ? { requiredCheckNames: branchRequired } : {};
+
+  if (isMergeContractCiGreen(list, greenOpts)) {
+    return 'green';
+  }
+
+  const normalizedRequired = branchRequired.map((name) => name.toLowerCase());
+  const scope =
+    normalizedRequired.length > 0
+      ? list.filter((check) =>
+          normalizedRequired.includes(String(check?.name ?? '').toLowerCase()),
+        )
+      : list;
+
+  if (scope.length === 0 && normalizedRequired.length > 0) {
+    return 'pending';
+  }
+
+  for (const check of scope) {
+    if (isCiCheckPending(check)) {
+      return 'pending';
+    }
+  }
+  for (const check of scope) {
+    if (isCiCheckFailure(check)) {
+      return 'red';
+    }
+  }
+  return 'red';
+}
+
 /**
  * Latest worker report for a PR head, optionally filtered by reportState.
  *

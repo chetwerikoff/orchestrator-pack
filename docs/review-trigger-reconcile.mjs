@@ -10,6 +10,18 @@ import {
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
+  COVERED_TERMINAL_REVIEW_STATUSES,
+  collectSessionIdentifiers,
+  getSessionIdentifier,
+  IN_FLIGHT_REVIEW_STATUSES,
+  isHeadCovered,
+  isLiveWorkerSession,
+  isRunCoveringHead,
+  NON_LIVE_WORKER_SESSION_STATUSES,
+  normalizeSha,
+  toArray,
+} from './review-reconcile-primitives.mjs';
+import {
   buildNoStartDecisionRecord,
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
@@ -42,34 +54,18 @@ import {
 /** Default cadence: 10 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 
-export const IN_FLIGHT_REVIEW_STATUSES = new Set([
-  'queued',
-  'preparing',
-  'running',
-  'reviewing',
-]);
-
-export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
-  'clean',
-  'needs_triage',
-  'waiting_update',
-]);
-
-/**
- * Worker session statuses that must not receive ao review run (orphan / dead session).
- * Aligns with orchestrator-diagnose.ps1 terminal workers and recovery runbook orphan signals.
- */
-export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
-  'done',
-  'merged',
-  'terminated',
-  'killed',
-  'errored',
-  'exited',
-  'cleanup',
-  'closed',
-  'detecting',
-]);
+export {
+  COVERED_TERMINAL_REVIEW_STATUSES,
+  IN_FLIGHT_REVIEW_STATUSES,
+  NON_LIVE_WORKER_SESSION_STATUSES,
+  collectSessionIdentifiers,
+  getSessionIdentifier,
+  isHeadCovered,
+  isLiveWorkerSession,
+  isRunCoveringHead,
+  normalizeSha,
+  toArray,
+} from './review-reconcile-primitives.mjs';
 
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
@@ -78,54 +74,6 @@ export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANIC
 export const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON = 'ambiguous_implicit_head_owner';
 
 const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
-
-/** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
-export function toArray(value) {
-  if (value == null) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
-/**
- * @param {string | undefined | null} sha
- */
-export function normalizeSha(sha) {
-  return String(sha ?? '')
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * @param {ReviewRun} run
- */
-export function isRunCoveringHead(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === 'outdated') {
-    return false;
-  }
-  if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
-    return true;
-  }
-  if (COVERED_TERMINAL_REVIEW_STATUSES.has(status)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * @param {ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} headSha
- */
-export function isHeadCovered(runs, prNumber, headSha) {
-  const head = normalizeSha(headSha);
-  const forHead = runs.filter(
-    (run) => Number(run?.prNumber) === prNumber && normalizeSha(run?.targetSha) === head,
-  );
-  if (forHead.length === 0) {
-    return false;
-  }
-  return forHead.some((run) => isRunCoveringHead(run));
-}
 
 /**
  * @param {ReviewRun[]} runs
@@ -185,53 +133,6 @@ export function findCoveringRunForHead(runs, prNumber, headSha) {
         isRunCoveringHead(run),
     ) ?? null
   );
-}
-
-/**
- * @param {AoSession} session
- */
-export function isLiveWorkerSession(session) {
-  const status = String(session?.status ?? '').toLowerCase();
-  if (!status) {
-    return true;
-  }
-  return !NON_LIVE_WORKER_SESSION_STATUSES.has(status);
-}
-
-/**
- * @param {AoSession} session
- */
-export function getSessionIdentifier(session) {
-  const name = String(session?.name ?? '').trim();
-  if (name) {
-    return name;
-  }
-  const sessionId = String(session?.sessionId ?? '').trim();
-  if (sessionId) {
-    return sessionId;
-  }
-  const id = String(session?.id ?? '').trim();
-  if (id) {
-    return id;
-  }
-  return null;
-}
-
-/**
- * All non-empty session identifiers (name, sessionId, id) for delivery matching.
- *
- * @param {AoSession | null | undefined} session
- */
-export function collectSessionIdentifiers(session) {
-  /** @type {string[]} */
-  const ids = [];
-  for (const field of [session?.name, session?.sessionId, session?.id]) {
-    const value = String(field ?? '').trim();
-    if (value && !ids.includes(value)) {
-      ids.push(value);
-    }
-  }
-  return ids;
 }
 
 /**

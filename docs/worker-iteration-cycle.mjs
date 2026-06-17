@@ -29,7 +29,7 @@ import {
   isLiveWorkerSession,
   normalizeSha,
   toArray,
-} from './review-trigger-reconcile.mjs';
+} from './review-reconcile-primitives.mjs';
 
 /** Re-use #261 debounce duration without importing review-head-ready (breaks import cycle). */
 export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
@@ -494,6 +494,39 @@ export function evaluateStalePendingDelivery(session, sessionId, workerDeliverie
 }
 
 /**
+ * Remove owner-cycle rows for other owners on the same PR so stale transfer rows
+ * do not force the current owner's cycle to close/reopen every tick.
+ *
+ * @param {Record<string, unknown>} state
+ * @param {string} repoId
+ * @param {number} prNumber
+ * @param {string} ownerSessionId
+ */
+export function pruneStaleOwnerCyclesForPr(state, repoId, prNumber, ownerSessionId) {
+  const owner = String(ownerSessionId ?? '').trim();
+  if (!owner) {
+    return state;
+  }
+  const ownerCycles = { ...(state.ownerCycles ?? {}) };
+  let pruned = false;
+  for (const [key, record] of Object.entries(ownerCycles)) {
+    const row = /** @type {Record<string, unknown>} */ (record);
+    if (Number(row.prNumber) !== prNumber) {
+      continue;
+    }
+    const rowOwner = String(row.ownerSessionId ?? '');
+    if (rowOwner && rowOwner !== owner) {
+      delete ownerCycles[key];
+      pruned = true;
+    }
+  }
+  if (!pruned) {
+    return state;
+  }
+  return { ...state, repoId, ownerCycles };
+}
+
+/**
  * @param {object} input
  */
 export function resolveOrAdvanceOwnerCycle(input) {
@@ -506,7 +539,6 @@ export function resolveOrAdvanceOwnerCycle(input) {
     nowMs = Date.now(),
     terminalClose = false,
     handoffAccepted = false,
-    ownershipChanged = false,
   } = input;
   const head = normalizeSha(headSha);
   const owner = String(ownerSessionId ?? '').trim();
@@ -516,7 +548,6 @@ export function resolveOrAdvanceOwnerCycle(input) {
 
   const shouldClose =
     terminalClose ||
-    ownershipChanged ||
     (cycle && cycle.ownerSessionId && owner && cycle.ownerSessionId !== owner);
 
   if (shouldClose && cycle?.cycleId) {
@@ -1076,6 +1107,9 @@ export function evaluateWorkerIterationCycleForPr(input) {
         );
       }),
   );
+  if (ownershipChanged && ownerSessionId) {
+    state = pruneStaleOwnerCyclesForPr(state, repoId, prNumber, ownerSessionId);
+  }
 
   const { state: advancedState, cycle: resolvedCycle, opened, advanced } = resolveOrAdvanceOwnerCycle({
     state,
@@ -1085,7 +1119,6 @@ export function evaluateWorkerIterationCycleForPr(input) {
     headSha,
     nowMs,
     handoffAccepted,
-    ownershipChanged,
   });
   state = advancedState;
   let cycle = resolvedCycle;

@@ -19,6 +19,7 @@ import {
   evaluateSettleActionPrecedence,
   mergeSharedWorkerIterationCycleState,
   normalizeCanonicalRepoIdentity,
+  pruneStaleOwnerCyclesForPr,
   resolveOrAdvanceOwnerCycle,
 } from '../docs/worker-iteration-cycle.mjs';
 import { planCiGreenWakeActions, commitNudgeSentCycleState } from '../docs/ci-green-wake-reconcile.mjs';
@@ -392,5 +393,50 @@ describe('owner cycle advance', () => {
     expect(second.opened).toBe(false);
     expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
     expect(second.cycle?.headAdvanceCount).toBe(1);
+  });
+
+  it('prunes stale owner rows without reopening the current owner cycle', () => {
+    const repoId = 'repo';
+    const oldOwner = 'op-old';
+    const newOwner = 'op-new';
+    const oldKey = buildOwnerCycleKey(repoId, 42, oldOwner);
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: newOwner,
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitOwnerCyclePatch(first.state, repoId, 42, newOwner, {
+      ...(first.cycle ?? {}),
+      reviewArmed: true,
+      nudgeArmed: true,
+    });
+    const stateWithStale = {
+      ...armedState,
+      ownerCycles: {
+        ...(armedState.ownerCycles ?? {}),
+        [oldKey]: {
+          cycleId: 'stale-cycle',
+          ownerSessionId: oldOwner,
+          prNumber: 42,
+          reviewArmed: true,
+        },
+      },
+    };
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: stateWithStale,
+      prNumber: 42,
+      headSha: 'h1',
+      ownerSessionId: newOwner,
+      session: { name: newOwner, role: 'worker', status: 'working', activity: 'idle', runtime: 'alive' },
+      nowMs: 2000,
+      reviewRuns: [],
+    }) as OwnerCycleResult & { state: { ownerCycles?: Record<string, unknown> } };
+    expect(second.state.ownerCycles?.[oldKey]).toBeUndefined();
+    expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
+    expect(second.cycle?.reviewArmed).toBe(true);
+    expect(second.opened).toBe(false);
   });
 });
