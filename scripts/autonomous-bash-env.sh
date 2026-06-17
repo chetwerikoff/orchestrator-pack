@@ -30,7 +30,7 @@ __ao_autonomous_rewrite_binary_command() {
   local abs_binary boundary abs_match
 
   abs_binary="$(__ao_autonomous_absolute_binary_pattern "${leaf}")"
-  boundary='(^|[;&|[:space:]]|[\"'"'"'])'
+  boundary='(^|[;&|[:space:]()]|[\"'"'"'])'
 
   # Quoted absolute binary at command start (common BASH_ENV -c shape).
   if [[ "${cmd}" =~ ^\"(${abs_binary})\"(.*)$ ]]; then
@@ -85,11 +85,27 @@ __ao_autonomous_rewrite_binary_command() {
     return 0
   fi
 
-  # Unquoted absolute binary after a shell separator.
-  if [[ "${cmd}" =~ (^|[;&|[:space:]])(${abs_binary})(.*)$ ]]; then
+  # Unquoted absolute binary after a shell separator or subshell/command-substitution opener.
+  if [[ "${cmd}" =~ (^|[;&|[:space:]()])(${abs_binary})(.*)$ ]]; then
     printf -v quoted_pack_target '%q' "${pack_target}"
     prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
     printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_target}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  # Command substitution: $(/absolute/leaf …)
+  if [[ "${cmd}" =~ \$\((${abs_binary})(.*)\) ]]; then
+    printf -v quoted_pack_target '%q' "${pack_target}"
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s$(%s%s)' "${prefix}" "${quoted_pack_target}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  # Backtick command substitution: `/absolute/leaf …`
+  if [[ "${cmd}" =~ \`(${abs_binary})([^\`]*)[\`] ]]; then
+    printf -v quoted_pack_target '%q' "${pack_target}"
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s`%s%s`' "${prefix}" "${quoted_pack_target}" "${BASH_REMATCH[2]}"
     return 0
   fi
 

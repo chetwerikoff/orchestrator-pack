@@ -655,7 +655,7 @@ function Test-GitArgvIsMutating {
             }
             return $true
         }
-        '^(?i)(status|log|rev-parse|diff|show)$' { return $false }
+        '^(?i)(status|log|rev-parse|diff|show|ls-files|ls-tree|cat-file|merge-base|grep|check-ignore|check-attr|describe|for-each-ref|show-ref|name-rev|var|version|help|rev-list)$' { return $false }
         default { return $true }
     }
 }

@@ -169,6 +169,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   it('classifies mutating vs read-only git argv', () => {
     expect(isMutatingGitArgv(['branch', '-m', 'a', 'b'])).toBe(true);
     expect(isMutatingGitArgv(['status'])).toBe(false);
+    expect(isMutatingGitArgv(['ls-files'])).toBe(false);
+    expect(isMutatingGitArgv(['-C', '/tmp/repo', 'ls-files'])).toBe(false);
+    expect(isMutatingGitArgv(['merge-base', 'HEAD', 'main'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', '--dry-run'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin'])).toBe(true);
     expect(isMutatingGitArgv(['commit', '-m', 'blocked'])).toBe(true);
@@ -510,6 +513,21 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(interposedMultiEnv.status).toBe(0);
         expect(interposedMultiEnv.stdout).toBe(directMultiEnv.stdout);
 
+        const allowLsFiles = spawnSync(
+          'bash',
+          [gitShimPath, 'ls-files'],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+              PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+            },
+          },
+        );
+        expect(allowLsFiles.status).toBe(0);
+
         const fallthrough = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; /usr/bin/git checkout -b absolute-bypass-branch`],
@@ -678,6 +696,22 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       );
       expect(denyGitVar.status).toBe(93);
       expect(denyGitVar.stderr || denyGitVar.stdout).toMatch(/autonomous tree-mutating git denied/i);
+      expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+        before.stdout.trim(),
+      );
+
+      const denyGitCommandSubstitution = spawnSync(
+        'bash',
+        ['-c', `source ${bashEnvPath}; echo $(/usr/bin/git branch -m blocked-cmdsub)`],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        },
+      );
+      expect(denyGitCommandSubstitution.stderr || denyGitCommandSubstitution.stdout).toMatch(
+        /autonomous tree-mutating git denied/i,
+      );
       expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
         before.stdout.trim(),
       );

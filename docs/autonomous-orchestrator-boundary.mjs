@@ -26,6 +26,21 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   'rev-parse',
   'diff',
   'show',
+  'ls-files',
+  'ls-tree',
+  'cat-file',
+  'merge-base',
+  'grep',
+  'check-ignore',
+  'check-attr',
+  'describe',
+  'for-each-ref',
+  'show-ref',
+  'name-rev',
+  'var',
+  'version',
+  'help',
+  'rev-list',
 ]);
 
 const MUTATING_GIT_SUBCOMMANDS = new Set([
