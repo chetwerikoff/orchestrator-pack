@@ -592,13 +592,30 @@ export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
   }
 }
 
+export function fileExistsOnGitRef(repoRoot, gitRef, relPath) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${gitRef}:${String(relPath).replace(/\\/g, '/')}`], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+    });
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
 export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') {
   const bundle = loadRegistryBundle(repoRoot);
   const changedFiles = listChangedFiles(repoRoot, baseRef);
-  return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime);
+  const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
+  const baseManifestExists = fileExistsOnGitRef(repoRoot, baseRef, manifestRel);
+  return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, { baseManifestExists });
 }
 
-export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, toolPaths = protectedManifest.toolPaths) {
+export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, options = {}) {
+  const toolPaths = options.toolPaths ?? protectedManifest.toolPaths;
+  const baseManifestExists = options.baseManifestExists ?? true;
   const violations = [];
   const protectedSet = new Set([
     ...(protectedManifest.runtimeSendHelpers ?? []),
@@ -609,9 +626,11 @@ export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, toolP
   const toolSet = new Set(toolPaths ?? []);
   for (const file of changedFiles ?? []) {
     const norm = file.replace(/\\/g, '/');
-    if (norm.includes('orchestrator-message-protected-runtime.manifest.json')
-      && !norm.endsWith('orchestrator-message-registry.test.ts')) {
-      violations.push(`protected matrix manifest cannot be redefined in gated diff: ${norm}`);
+    if (norm.includes('orchestrator-message-protected-runtime.manifest.json')) {
+      if (baseManifestExists) {
+        violations.push(`protected matrix manifest cannot be redefined in gated diff: ${norm}`);
+      }
+      continue;
     }
     if (protectedSet.has(norm) && !toolSet.has(norm)) {
       violations.push(`protected runtime edit: ${norm}`);
@@ -649,8 +668,9 @@ export function computeCallsiteHashes(repoRoot, catalogPath) {
 }
 
 function cli() {
-  const [subcommand, repoRootArg] = process.argv.slice(2);
+  const [subcommand, repoRootArg, baseRefArg] = process.argv.slice(2);
   const repoRoot = repoRootArg ? path.resolve(repoRootArg) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const baseRef = baseRefArg ?? 'origin/main';
   if (subcommand === 'audit') {
     const result = auditRegistration(repoRoot);
     console.log(JSON.stringify(result, null, 2));
@@ -668,7 +688,6 @@ function cli() {
     process.exit(0);
   }
   if (subcommand === 'check-protected-runtime') {
-    const baseRef = process.argv[3] ?? 'origin/main';
     const result = checkProtectedRuntimeForRepo(repoRoot, baseRef);
     if (!result.ok) {
       console.error(JSON.stringify(result, null, 2));

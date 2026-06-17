@@ -13,6 +13,7 @@ import {
   enumerateBaselineClassIds,
   generateMessageMap,
   hashNormalizedBody,
+  listChangedFiles,
   loadRegistryBundle,
   normalizeAuditOutput,
   recipientKeysOverlap,
@@ -206,6 +207,16 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('allows introducing the protected matrix manifest when it is absent on the base ref', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'));
+    const result = checkProtectedRuntimeDiff(
+      ['scripts/orchestrator-message-protected-runtime.manifest.json'],
+      manifest,
+      { baseManifestExists: false },
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it('catches predicate body hash drift', () => {
     const bundle = loadRegistryBundle(repoRoot) as { catalog: { entries: Array<Record<string, unknown>> } };
     const broken = structuredClone(bundle.catalog) as { entries: Array<Record<string, unknown>> };
@@ -260,6 +271,16 @@ describe('orchestrator message registry (Issue #298)', () => {
       JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8')),
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('cli check-protected-runtime honors baseRef as the fourth argument', () => {
+    const registryCli = path.join(repoRoot, 'docs/orchestrator-message-registry.mjs');
+    const explicit = JSON.parse(
+      execFileSync('node', [registryCli, 'check-protected-runtime', repoRoot, 'origin/main'], { encoding: 'utf8' }),
+    );
+    expect(explicit.verdict).toBe('PASS');
+    expect(listChangedFiles(repoRoot, repoRoot)).toEqual([]);
+    expect(explicit.changedFileCount).toBeGreaterThan(0);
   });
 
   it('documents recipient alias overlap conservatively', () => {
