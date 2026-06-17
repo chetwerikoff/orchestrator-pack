@@ -9,6 +9,7 @@ $Script:OrchestratorClaimedReviewRunFilterCli = Join-Path (Split-Path -Parent (S
 $Script:AutonomousCapabilityInventory = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-review-start-capabilities.json'
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-AutonomousBoundary.ps1')
 
 function Test-OrchestratorAutonomousSurfaceActive {
     return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
@@ -98,54 +99,5 @@ function Test-OrchestratorReviewStartGatePreflight {
 
 function Test-IsPackAoShimPath {
   param([string]$CandidatePath)
-
-  if (-not $CandidatePath) { return $false }
-  if ($CandidatePath -like '*ao-autonomous-guard.ps1') { return $true }
-  $packScripts = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-  try {
-    $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
-  }
-  catch {
-    return $false
-  }
-  return $resolved -eq (Join-Path $packScripts 'ao')
-}
-
-function Resolve-RealAoExecutable {
-  $packScripts = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-
-  if ($env:AO_REAL_BINARY -and $env:AO_REAL_BINARY -ne 'ao') {
-    if (Test-Path -LiteralPath $env:AO_REAL_BINARY -ErrorAction SilentlyContinue) {
-      $resolved = (Resolve-Path -LiteralPath $env:AO_REAL_BINARY).Path
-      if (-not (Test-IsPackAoShimPath -CandidatePath $resolved)) { return $resolved }
-    }
-    $configured = Get-Command $env:AO_REAL_BINARY -ErrorAction SilentlyContinue
-    if ($configured -and -not (Test-IsPackAoShimPath -CandidatePath $configured.Source)) {
-      return $configured.Source
-    }
-  }
-
-  foreach ($dir in ($env:PATH -split [IO.Path]::PathSeparator)) {
-    if (-not $dir -or $dir -eq $packScripts) { continue }
-    $candidate = Join-Path $dir 'ao'
-    if (-not (Test-Path -LiteralPath $candidate)) { continue }
-    if (Test-IsPackAoShimPath -CandidatePath $candidate) { continue }
-    return (Get-Item -LiteralPath $candidate).FullName
-  }
-
-  foreach ($fallback in @(
-      (Join-Path $HOME '.local/bin/ao'),
-      (Join-Path $HOME '.npm-global/bin/ao'),
-      (Join-Path $HOME '.ao/bin/ao')
-    )) {
-    if (Test-Path -LiteralPath $fallback) {
-      return (Resolve-Path -LiteralPath $fallback).Path
-    }
-  }
-
-  $cmd = Get-Command ao -ErrorAction SilentlyContinue
-  if ($cmd -and -not (Test-IsPackAoShimPath -CandidatePath $cmd.Source)) {
-    return $cmd.Source
-  }
-  return 'ao'
+  return Test-IsPackAoShimPathForBoundary -CandidatePath $CandidatePath
 }

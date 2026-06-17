@@ -56,9 +56,14 @@ projects:
         permissions: permissionless
         env:
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
-          # Absolute path to the real AO binary — never bare `ao` (PATH would resolve to scripts/ao shim).
-          AO_REAL_BINARY: /home/you/.local/bin/ao
-          # Prepend pack scripts/ so orchestrator turns resolve `ao` to scripts/ao (Issue #318).
+          # Out-of-band real-binary resolution (gitignored). Copy docs/autonomous-real-binaries.example.json
+          # to .ao/autonomous-real-binaries.json with pack scripts/git-real-binary + gitSystemBinary host path
+          # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
+          # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
+          # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
+          # (pwsh, python3, dirname, readlink) resolve; BASH_ENV interposer blocks absolute host git.
+          # Do not set POSIXLY_CORRECT or SHELLOPTS=posix here — bash disables BASH_ENV when either is active.
+          BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-bash-env.sh
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
@@ -351,10 +356,12 @@ projects:
         pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
           -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
       Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
-      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, AO_REAL_BINARY to the absolute real ao path,
-      and prepend pack scripts/ to PATH so `ao` resolves to scripts/ao (denies raw review run);
-      only the claimed entry point may launch review runs. Gate capability marker:
-      orchestrator-claimed-review-run/v1.
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, resolve real ao/git out-of-band via
+      .ao/autonomous-real-binaries.json (never turn-visible AO_REAL_BINARY/GIT_REAL_BINARY),
+      and prepend pack scripts/ to PATH so `ao` and `git` resolve to pack shims (deny spawn and
+      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
+      only the claimed entry point may launch review runs. Gate capability markers:
+      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
       scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
       ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel

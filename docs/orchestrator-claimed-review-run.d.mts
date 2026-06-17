@@ -78,6 +78,9 @@ export declare function evaluateOrchestratorTurnGate(input: {
   claimWindow?: 'free' | 'held_by_other' | 'prior_terminal';
   provenanceAutonomous?: boolean;
 }): TurnGateResult;
+export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
+export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;
+export declare function isAoReviewRunGitWorktreeSetupCommandLine(commandLine: string): boolean;
 export declare function isRawReviewRunInvocation(commandLine: string): boolean;
 export declare function evaluateAutonomousReviewRunBoundary(input: {
   commandLine?: string;

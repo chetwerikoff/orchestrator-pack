@@ -21,11 +21,17 @@ import {
   normalizeAuditOutput,
   parseGitDiffNameOnlyOutput,
   recipientKeysOverlap,
+  readGithubActionsPullRequestShas,
   resolveDiffBaseRef,
+  resolveLinkedIssueNumbers,
+  resolveLinkedIssuesFromDeclarationSnapshots,
+  resolveLinkedIssuesFromCommittedDeclarationSnapshots,
+  resolveLinkedIssueNumbersForProtectedRuntime,
   validateCatalog,
   validateOverlapOverride,
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
+import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
@@ -35,29 +41,6 @@ function writeJson(root: string, rel: string, value: unknown) {
   const full = path.join(root, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function copyTree(srcRel: string, destRoot: string) {
-  const src = path.join(repoRoot, srcRel);
-  const dest = path.join(destRoot, srcRel);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
-}
-
-function seedMinimalRegistryTree(root: string) {
-  for (const rel of [
-    'scripts/orchestrator-message-taxonomy.json',
-    'scripts/orchestrator-message-owner-mechanisms.manifest.json',
-    'scripts/orchestrator-message-send-helpers.manifest.json',
-    'scripts/orchestrator-message-audit-roots.manifest.json',
-    'scripts/orchestrator-message-protected-runtime.manifest.json',
-    'scripts/orchestrator-message-allowlist.json',
-    'scripts/orchestrator-side-process-registry.json',
-    'scripts/orchestrator-message-catalog.json',
-    'docs/orchestrator-message-registry.mjs',
-  ]) {
-    copyTree(rel, root);
-  }
 }
 
 const gitFixtureEnv = {
@@ -443,6 +426,58 @@ describe('orchestrator message registry (Issue #298)', () => {
     execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
   });
 
+  it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
+    // Warm-fetch PR refs while the real GitHub event (if any) is still available.
+    listChangedFiles(repoRoot, 'origin/main');
+    const pr = readGithubActionsPullRequestShas();
+    const prevEvent = process.env.GITHUB_EVENT_PATH;
+    const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    let scrubbedEventPath: string | undefined;
+    if (pr) {
+      scrubbedEventPath = path.join(os.tmpdir(), `registry-no-issue-${Date.now()}.json`);
+      fs.writeFileSync(
+        scrubbedEventPath,
+        JSON.stringify({
+          pull_request: {
+            base: { sha: pr.baseSha },
+            head: { sha: pr.headSha, ref: 'session/registry-no-issue' },
+            title: 'registry protected-runtime regression',
+            body: '',
+          },
+        }),
+      );
+      process.env.GITHUB_EVENT_PATH = scrubbedEventPath;
+    }
+    else {
+      delete process.env.GITHUB_EVENT_PATH;
+    }
+    delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    const cleanEnv = {
+      ...process.env,
+      ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
+      ...(scrubbedEventPath ? { GITHUB_EVENT_PATH: scrubbedEventPath } : { GITHUB_EVENT_PATH: undefined }),
+    };
+    try {
+      if (scrubbedEventPath) {
+        expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
+      }
+      const changed = listChangedFiles(repoRoot, 'origin/main');
+      expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
+      expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
+      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
+      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
+        stdio: 'pipe',
+        env: cleanEnv,
+      });
+    } finally {
+      if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = prevEvent;
+      if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      if (scrubbedEventPath && fs.existsSync(scrubbedEventPath)) fs.unlinkSync(scrubbedEventPath);
+    }
+  });
+
   it('preserves newlines when regenerating the map via pwsh helper', () => {
     const tmpMap = path.join(os.tmpdir(), `orch-map-${Date.now()}.md`);
     try {
@@ -461,6 +496,337 @@ describe('orchestrator message registry (Issue #298)', () => {
       JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8')),
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('does not infer issue 324 from SideProcessSupervisor-only protected runtime edits', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-supervisor-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'supervisor-only'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      delete process.env.GITHUB_EVENT_PATH;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('Orchestrator-SideProcessSupervisor.ps1'))).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not infer issue 324 from yaml.example-only protected runtime edits', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-yaml-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['agent-orchestrator.yaml.example']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const yamlPath = path.join(root, 'agent-orchestrator.yaml.example');
+      fs.writeFileSync(yamlPath, `${fs.readFileSync(yamlPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'agent-orchestrator.yaml.example'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'yaml-only'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('agent-orchestrator.yaml.example'))).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows SideProcessSupervisor edits when issue 324 is explicitly linked', () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'),
+    );
+    const denied = checkProtectedRuntimeDiff(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], manifest);
+    expect(denied.ok).toBe(false);
+    const allowed = checkProtectedRuntimeDiff(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], manifest, {
+      linkedIssueNumbers: [324],
+    });
+    expect(allowed.ok).toBe(true);
+  });
+
+  it('links issue numbers from validated declaration snapshots in the gated diff', () => {
+    expect(
+      resolveLinkedIssuesFromDeclarationSnapshots(repoRoot, [
+        'docs/declarations/324.opk-2.json',
+        'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+      ]),
+    ).toEqual([324]);
+    expect(
+      resolveLinkedIssuesFromDeclarationSnapshots(repoRoot, ['agent-orchestrator.yaml.example']),
+    ).toEqual([]);
+  });
+
+  it('does not link issue numbers from malformed declaration snapshots in the gated diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-fake-'));
+    try {
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      fs.mkdirSync(path.join(root, 'docs/declarations'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'docs/declarations/324.fake.json'), '{}\n');
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      fs.writeFileSync(path.join(root, 'docs/declarations/324.fake.json'), 'not-json\n');
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      writeJson(root, 'docs/declarations/324.fake.json', {
+        issue_number: 324,
+        iteration_id: 'fake',
+        declared_paths: [],
+      });
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      writeJson(root, 'docs/declarations/324.fake.json', {
+        issue_number: 324,
+        iteration_id: 'fake',
+        declared_paths: ['scripts/ci-green-wake-reconcile.ps1'],
+      });
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('links issue numbers from committed declaration snapshots on disk', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-disk-'));
+    try {
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+          'agent-orchestrator.yaml.example',
+        ],
+      });
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([324]);
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['agent-orchestrator.yaml.example']),
+      ).toEqual([324]);
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['scripts/ci-green-wake-reconcile.ps1']),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers committed declaration snapshots from git HEAD over stale on-disk copies', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-stale-disk-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'committed declaration'], { cwd: root, env: gitFixtureEnv });
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/ci-green-wake-reconcile.ps1'],
+      });
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([324]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('links issue numbers from declaration snapshots present only in git HEAD', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-git-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['agent-orchestrator.yaml.example']);
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['agent-orchestrator.yaml.example'],
+      });
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const yamlPath = path.join(root, 'agent-orchestrator.yaml.example');
+      fs.writeFileSync(yamlPath, `${fs.readFileSync(yamlPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'agent-orchestrator.yaml.example'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'yaml-only'], { cwd: root, env: gitFixtureEnv });
+      fs.unlinkSync(path.join(root, 'docs/declarations/324.opk-2.json'));
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const changed = listChangedFiles(root, baseSha);
+        expect(changed).toEqual(['agent-orchestrator.yaml.example']);
+        expect(
+          resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, changed, {
+            gitRef: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+          }),
+        ).toEqual([324]);
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows coordinated protected-runtime edits when declaration snapshot is committed but not in diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-split-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      execFileSync('git', ['add', 'docs/declarations/324.opk-2.json'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'add declaration'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'supervisor-only follow-up'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const changed = listChangedFiles(root, baseSha);
+        expect(changed).toEqual(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows coordinated protected-runtime edits when declaration snapshot is in diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'declared coordinated edit'], { cwd: root, env: gitFixtureEnv });
+      const prevBase = process.env.GITHUB_BASE_SHA;
+      const prevEvent = process.env.GITHUB_EVENT_PATH;
+      const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      delete process.env.GITHUB_EVENT_PATH;
+      delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      process.env.GITHUB_BASE_SHA = baseSha;
+      try {
+        const result = checkProtectedRuntimeForRepo(root, baseSha);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (prevBase === undefined) delete process.env.GITHUB_BASE_SHA;
+        else process.env.GITHUB_BASE_SHA = prevBase;
+        if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+        else process.env.GITHUB_EVENT_PATH = prevEvent;
+        if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+        else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('cli check-protected-runtime honors baseRef as the fourth argument', () => {

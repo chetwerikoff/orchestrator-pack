@@ -325,9 +325,98 @@ export function evaluateOrchestratorTurnGate(input) {
 /**
  * @param {string} commandLine
  */
-export function isRawReviewRunInvocation(commandLine) {
+export function containsRawReviewRunInvocation(commandLine) {
   const text = String(commandLine ?? '');
-  return /\bao(?:\.cmd)?\s+review\s+run\b/i.test(text) || /\breview\s+run\b.*--execute\b/i.test(text);
+  return /\bao(?:\.cmd)?\s+review\s+run\b/i.test(text)
+    || /\breview\s+run\b.*--execute\b/i.test(text);
+}
+
+/**
+ * @param {string} segment
+ */
+function containsUnquotedShellCompoundOperator(segment) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index];
+    if (char === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (char === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (char === ';' || char === '|') {
+        return true;
+      }
+      if (char === '&' && segment[index + 1] === '&') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Claimed-review git parent provenance: review-run must precede mutating git on the line,
+ * and git must not appear as a separate compound-shell command after review-run.
+ * @param {string} commandLine
+ */
+export function isClaimedReviewRunParentCommandLine(commandLine) {
+  const text = String(commandLine ?? '');
+  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+    ?? /\breview\s+run\b.*--execute\b/i.exec(text);
+  if (!aoReviewRun) {
+    return false;
+  }
+  const gitPrimary = /\bgit\s+(?:-[a-zA-Z]|branch|checkout|switch|worktree|reset|commit|merge|rebase|pull|tag|stash|push|fetch)\b/i.exec(text);
+  if (!gitPrimary) {
+    return true;
+  }
+  if (gitPrimary.index < aoReviewRun.index) {
+    return false;
+  }
+  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const between = text.slice(reviewRunEnd, gitPrimary.index);
+  if (containsUnquotedShellCompoundOperator(between)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * AO-owned worktree setup encoded in review-run --command (not reviewer-side git).
+ * @param {string} commandLine
+ */
+export function isAoReviewRunGitWorktreeSetupCommandLine(commandLine) {
+  const text = String(commandLine ?? '');
+  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+    ?? /\breview\s+run\b.*--execute\b/i.exec(text);
+  if (!aoReviewRun) {
+    return false;
+  }
+  const gitWorktree = /\bgit\s+worktree\s+add\b/i.exec(text);
+  if (!gitWorktree) {
+    return false;
+  }
+  if (gitWorktree.index < aoReviewRun.index) {
+    return false;
+  }
+  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const between = text.slice(reviewRunEnd, gitWorktree.index);
+  if (containsUnquotedShellCompoundOperator(between)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @param {string} commandLine
+ */
+export function isRawReviewRunInvocation(commandLine) {
+  return containsRawReviewRunInvocation(commandLine);
 }
 
 /**
@@ -408,6 +497,17 @@ export function evaluateGatePreflight(input) {
       auditShape: 'preflight_refusal',
       markerState: 'ao-review-run-raw',
     };
+  }
+  for (const requiredUnavailable of ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env']) {
+    const row = toArray(input.liveCapabilities).find((cap) => cap.id === requiredUnavailable);
+    if (!row || String(row.classification).toLowerCase() !== 'unavailable') {
+      return {
+        ok: false,
+        reason: `${requiredUnavailable}_not_unavailable`,
+        auditShape: 'preflight_refusal',
+        markerState: requiredUnavailable,
+      };
+    }
   }
   return { ok: true, reason: 'gate_preflight_ok', auditShape: 'none' };
 }

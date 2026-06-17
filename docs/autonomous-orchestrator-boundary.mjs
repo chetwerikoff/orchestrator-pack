@@ -1,0 +1,501 @@
+/**
+ * Autonomous orchestrator spawn/git boundary (Issue #324).
+ * Vitest: scripts/autonomous-orchestrator-boundary.test.ts
+ */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import {
+  isAoReviewRunGitWorktreeSetupCommandLine,
+  loadAutonomousReviewStartCapabilities,
+  validateCapabilityInventory,
+} from './orchestrator-claimed-review-run.mjs';
+
+export const AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION =
+  'autonomous-orchestrator-boundary/v1';
+export const TURN_VISIBLE_REAL_BINARY_ENV_VARS = ['AO_REAL_BINARY', 'GIT_REAL_BINARY'];
+const PREFLIGHT_GIT_PARENTS = [
+  'reviewer-workspace-preflight.ps1',
+  'orchestrator-worktree-preflight.ps1',
+];
+const CLAIMED_REVIEW_RUN_INVOKER = 'Invoke-OrchestratorClaimedReviewRun.ps1';
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  'status',
+  'log',
+  'rev-parse',
+  'diff',
+  'show',
+  'ls-files',
+  'ls-tree',
+  'cat-file',
+  'merge-base',
+  'grep',
+  'check-ignore',
+  'check-attr',
+  'describe',
+  'for-each-ref',
+  'show-ref',
+  'name-rev',
+  'var',
+  'version',
+  'help',
+  'rev-list',
+]);
+
+const MUTATING_GIT_SUBCOMMANDS = new Set([
+  'branch',
+  'checkout',
+  'switch',
+  'worktree',
+  'reset',
+  'push',
+  'fetch',
+  'stash',
+  'commit',
+  'merge',
+  'rebase',
+  'pull',
+  'tag',
+  'cherry-pick',
+  'revert',
+]);
+
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--exec-path',
+  '--namespace',
+]);
+
+/**
+ * @param {string[]} list
+ * @param {number} [startIndex]
+ */
+export function gitArgvSubcommandIndex(list, startIndex = 0) {
+  let index = startIndex;
+  while (index < list.length) {
+    const token = list[index];
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(token)) {
+      index += 2;
+      continue;
+    }
+    if (token.startsWith('--') && token.includes('=')) {
+      index += 1;
+      continue;
+    }
+    if ((token.startsWith('-c') && token !== '-c') || (token.startsWith('-C') && token !== '-C')) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function gitSubcommandFromArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index >= list.length) {
+    return '';
+  }
+  return list[index].toLowerCase();
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function gitArgvDefinesAlias(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (let index = 0; index < list.length; index++) {
+    const token = list[index];
+    if (token === '-c' && index + 1 < list.length) {
+      if (/^alias\./i.test(list[index + 1])) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-c') && token !== '-c' && /^alias\./i.test(token.slice(2))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isMutatingGitArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  if (gitArgvDefinesAlias(list)) {
+    return true;
+  }
+  const index = gitArgvSubcommandIndex(list);
+  if (index >= list.length) {
+    return false;
+  }
+  const sub = list[index].toLowerCase();
+  if (sub === 'fetch') {
+    const tail = list.slice(index + 1).join(' ');
+    return !/--dry-run/i.test(tail);
+  }
+  if (sub === 'stash') {
+    if (index + 1 >= list.length) {
+      return true;
+    }
+    const stashSub = list[index + 1].toLowerCase();
+    return stashSub !== 'list' && stashSub !== 'show';
+  }
+  if (READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
+    return false;
+  }
+  if (MUTATING_GIT_SUBCOMMANDS.has(sub)) {
+    return true;
+  }
+  return true;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isSpawnAoArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (const token of list) {
+    if (token.startsWith('-')) {
+      continue;
+    }
+    return token.toLowerCase() === 'spawn';
+  }
+  return false;
+}
+
+/**
+ * @param {string} commandLine
+ */
+export function isRawSpawnInvocation(commandLine) {
+  return /\bao(?:\.cmd)?\s+spawn\b/i.test(String(commandLine ?? ''));
+}
+
+/**
+ * @param {object} input
+ * @param {boolean} [input.autonomousSurface]
+ */
+export function evaluateAutonomousSpawnBoundary(input) {
+  const commandLine = String(input.commandLine ?? '');
+  if (!isRawSpawnInvocation(commandLine)) {
+    return { allowed: true, reason: 'not_spawn' };
+  }
+  if (!input.autonomousSurface) {
+    return { allowed: true, reason: 'manual_surface' };
+  }
+  return { allowed: false, reason: 'autonomous_spawn_denied' };
+}
+
+/**
+ * @param {object} input
+ * @param {string[]} [input.argv]
+ * @param {boolean} [input.autonomousSurface]
+ * @param {boolean} [input.sanctionedProvenance]
+ * @param {boolean} [input.claimedBypass]
+ * @param {string[]} [input.parentChain]
+ */
+export function evaluateAutonomousGitBoundary(input) {
+  const argv = Array.isArray(input.argv) ? input.argv.map((part) => String(part)) : [];
+  if (!input.autonomousSurface) {
+    return { allowed: true, reason: 'manual_surface' };
+  }
+  if (!isMutatingGitArgv(argv)) {
+    return { allowed: true, reason: 'read_only_git' };
+  }
+  if (
+    input.sanctionedProvenance
+    || hasSanctionedGitParentChain(input.parentChain, argv)
+  ) {
+    return { allowed: true, reason: 'sanctioned_git_child' };
+  }
+  return { allowed: false, reason: 'autonomous_mutating_git_denied' };
+}
+
+/**
+ * @param {string} commandLine
+ */
+export function tokenizeProcessCommandLine(commandLine) {
+  const text = String(commandLine ?? '');
+  const tokens = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (char === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (/\s/.test(char) && !inSingle && !inDouble) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+/**
+ * @param {string} commandLine
+ * @param {string[]} [sanctionedScripts]
+ */
+export function isSanctionedGitParentCommandLine(commandLine, sanctionedScripts) {
+  const inventory = loadAutonomousReviewStartCapabilities();
+  const scripts = sanctionedScripts ?? inventory.sanctionedGitParents ?? [];
+  const tokens = tokenizeProcessCommandLine(commandLine);
+  if (tokens.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].toLowerCase() === '-file' && index + 1 < tokens.length) {
+      const leaf = tokens[index + 1].replace(/^['"]|['"]$/g, '').split(/[/\\]/).pop() ?? '';
+      if (scripts.includes(leaf)) {
+        return true;
+      }
+    }
+  }
+  const firstLeaf = tokens[0].replace(/^['"]|['"]$/g, '').split(/[/\\]/).pop() ?? '';
+  return scripts.includes(firstLeaf);
+}
+
+const SYSTEM_GIT_PREFIXES = ['/usr/bin/', '/bin/', '/usr/local/bin/'];
+
+/**
+ * @param {string} candidatePath
+ */
+export function isKnownSystemGitBinaryPath(candidatePath) {
+  const normalized = String(candidatePath ?? '').replace(/\\/g, '/');
+  const leaf = normalized.split('/').pop() ?? '';
+  if (leaf !== 'git') {
+    return false;
+  }
+  return SYSTEM_GIT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.configuredGitPath]
+ * @param {string} [input.packRoot]
+ */
+export function evaluateConfiguredGitBinaryBypass(input) {
+  const configured = String(input.configuredGitPath ?? '');
+  const packRoot = String(input.packRoot ?? '');
+  if (!configured) {
+    return { bypassPresent: false, reason: 'no_configured_git' };
+  }
+  if (isKnownSystemGitBinaryPath(configured)) {
+    return { bypassPresent: true, reason: 'configured_system_git_binary' };
+  }
+  const expectedSuffix = '/scripts/git-real-binary';
+  if (!configured.endsWith('git-real-binary') && !configured.endsWith(expectedSuffix)) {
+    return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
+  }
+  if (packRoot) {
+    const expected = `${packRoot.replace(/\\/g, '/')}/scripts/git-real-binary`;
+    if (configured.replace(/\\/g, '/') !== expected) {
+      return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
+    }
+  }
+  return { bypassPresent: false, reason: 'configured_git_wrapper_ok' };
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.commandLine]
+ */
+export function evaluateAbsoluteSystemGitInvocationBoundary(input) {
+  const commandLine = String(input.commandLine ?? '');
+  const match = /^(\/usr\/bin\/git|\/bin\/git|\/usr\/local\/bin\/git)\b(.*)$/i.exec(commandLine);
+  if (!match) {
+    return { allowed: true, reason: 'not_absolute_system_git' };
+  }
+  if (!input.autonomousSurface) {
+    return { allowed: true, reason: 'manual_surface' };
+  }
+  const argv = match[2].trim().split(/\s+/).filter(Boolean);
+  return evaluateAutonomousGitBoundary({
+    argv,
+    autonomousSurface: true,
+    parentChain: input.parentChain,
+    claimedBypass: input.claimedBypass,
+  });
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isGitArgvAoOwnedWorktreeAdd(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index >= list.length) {
+    return false;
+  }
+  if (list[index].toLowerCase() !== 'worktree') {
+    return false;
+  }
+  if (index + 1 >= list.length) {
+    return false;
+  }
+  return list[index + 1].toLowerCase() === 'add';
+}
+
+/**
+ * @param {string[] | undefined} parentChain
+ * @param {number} [maxDepth]
+ */
+export function classifySanctionedGitProvenance(parentChain, maxDepth) {
+  const inventory = loadAutonomousReviewStartCapabilities();
+  const depthLimit = Number.isFinite(maxDepth)
+    ? Math.max(0, maxDepth)
+    : Number(inventory.sanctionedGitParentMaxDepth ?? 2);
+  const chain = Array.isArray(parentChain) ? parentChain.map((line) => String(line)) : [];
+  for (const line of chain.slice(0, depthLimit)) {
+    if (isSanctionedGitParentCommandLine(line, PREFLIGHT_GIT_PARENTS)) {
+      return 'preflight';
+    }
+  }
+  for (const line of chain.slice(0, depthLimit)) {
+    if (isSanctionedGitParentCommandLine(line, [CLAIMED_REVIEW_RUN_INVOKER])) {
+      return 'claimed_review_run';
+    }
+    if (isAoReviewRunGitWorktreeSetupCommandLine(line)) {
+      return 'review_run_worktree_command';
+    }
+  }
+  return 'none';
+}
+
+/**
+ * @param {string[] | undefined} parentChain
+ * @param {string[]} [argv]
+ * @param {boolean} [claimedBypass]
+ * @param {number} [maxDepth]
+ */
+export function hasSanctionedGitParentChain(parentChain, argv = [], claimedBypass = false, maxDepth) {
+  void claimedBypass;
+  const provenance = classifySanctionedGitProvenance(parentChain, maxDepth);
+  if (provenance === 'preflight') {
+    return true;
+  }
+  if (provenance === 'claimed_review_run' || provenance === 'review_run_worktree_command') {
+    return isGitArgvAoOwnedWorktreeAdd(argv);
+  }
+  return false;
+}
+
+/**
+ * @param {string} segment
+ * @param {string} binaryName
+ */
+function pathSegmentContainsBinary(segment, binaryName) {
+  if (!segment) {
+    return false;
+  }
+  try {
+    return existsSync(join(segment, binaryName));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, string | undefined>} [input.env]
+ * @param {string} [input.pathValue]
+ */
+export function evaluateTurnVisibleRealBinaryBypass(input) {
+  const env = input.env ?? {};
+  for (const name of TURN_VISIBLE_REAL_BINARY_ENV_VARS) {
+    if (env[name]) {
+      return { bypassPresent: true, reason: 'turn_visible_real_binary_env', name };
+    }
+  }
+  const pathValue = String(input.pathValue ?? env.PATH ?? '');
+  const segments = pathValue.split(':').filter(Boolean);
+  const scriptsIdx = segments.findIndex((segment) => segment.endsWith('/scripts'));
+  if (scriptsIdx > 0) {
+    const before = segments.slice(0, scriptsIdx);
+    for (const segment of before) {
+      if (segment.endsWith('/ao') || segment.endsWith('/git')) {
+        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
+      }
+      if (pathSegmentContainsBinary(segment, 'ao') || pathSegmentContainsBinary(segment, 'git')) {
+        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
+      }
+    }
+  }
+  return { bypassPresent: false, reason: 'no_turn_visible_bypass' };
+}
+
+/**
+ * @param {object} input
+ * @param {Array<{ id: string, classification: string }>} [input.liveCapabilities]
+ */
+export function evaluateBoundaryCapabilityPreflight(input) {
+  const violations = [];
+  const rows = Array.isArray(input.liveCapabilities) ? input.liveCapabilities : [];
+  const byId = new Map(rows.map((row) => [String(row.id), String(row.classification)]));
+  for (const id of ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env']) {
+    const classification = byId.get(id);
+    if (classification !== 'unavailable') {
+      violations.push(`${id}_not_unavailable`);
+    }
+  }
+  for (const id of ['git-shim', 'git-autonomous-guard', 'autonomous-real-binaries-config']) {
+    const classification = byId.get(id);
+    if (classification !== 'gated') {
+      violations.push(`${id}_not_gated`);
+    }
+  }
+  return {
+    ok: violations.length === 0,
+    reason: violations.length === 0 ? 'boundary_preflight_ok' : violations.join(','),
+    boundaryVersion: AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION,
+  };
+}
+
+/**
+ * @param {string} [inventoryPath]
+ */
+export function loadAutonomousOrchestratorBoundaryInventory(inventoryPath) {
+  return loadAutonomousReviewStartCapabilities(inventoryPath);
+}
+
+/**
+ * @param {object} input
+ */
+export function validateBoundaryCapabilityInventory(input) {
+  return validateCapabilityInventory(input);
+}
+
+runStdinJsonCli('autonomous-orchestrator-boundary.mjs', {
+  evaluateSpawnBoundary: () => evaluateAutonomousSpawnBoundary(readStdinJson()),
+  evaluateGitBoundary: () => evaluateAutonomousGitBoundary(readStdinJson()),
+  evaluateTurnBypass: () => evaluateTurnVisibleRealBinaryBypass(readStdinJson()),
+  evaluatePreflight: () => evaluateBoundaryCapabilityPreflight(readStdinJson()),
+});
