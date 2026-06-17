@@ -692,6 +692,7 @@ export function readGithubActionsPullRequestShas() {
 function hydrateGithubPullRequestRefs(repoRoot) {
   const pr = readGithubActionsPullRequestShas();
   if (!pr) return null;
+  if (!hasOriginRemote(repoRoot)) return null;
   for (const sha of [pr.baseSha, pr.headSha]) {
     if (gitRefExists(repoRoot, sha)) continue;
     execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', sha], {
@@ -703,6 +704,19 @@ function hydrateGithubPullRequestRefs(repoRoot) {
     }
   }
   return pr;
+}
+
+function hasOriginRemote(repoRoot) {
+  try {
+    execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+    });
+    return true;
+  }
+  catch {
+    return false;
+  }
 }
 
 export function gitRefExists(repoRoot, ref) {

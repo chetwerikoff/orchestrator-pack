@@ -83,6 +83,15 @@ function initRegistryGitFixture() {
   return { root, baseSha, headSha };
 }
 
+function subprocessEnvWithoutGithubActions() {
+  const env = { ...process.env };
+  delete env.GITHUB_EVENT_PATH;
+  delete env.GITHUB_BASE_SHA;
+  delete env.PR_BASE_SHA;
+  delete env.ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF;
+  return env;
+}
+
 describe('orchestrator message registry (Issue #298)', () => {
   it('passes registration audit on the real pack tree', () => {
     const result = auditRegistration(repoRoot);
@@ -405,7 +414,10 @@ describe('orchestrator message registry (Issue #298)', () => {
     try {
       const registryCli = path.join(repoRoot, 'docs/orchestrator-message-registry.mjs');
       const explicit = JSON.parse(
-        execFileSync('node', [registryCli, 'check-protected-runtime', root, baseSha], { encoding: 'utf8' }),
+        execFileSync('node', [registryCli, 'check-protected-runtime', root, baseSha], {
+          encoding: 'utf8',
+          env: subprocessEnvWithoutGithubActions(),
+        }),
       );
       expect(explicit.verdict).toBe('PASS');
       expect(gitRefExists(root, baseSha)).toBe(true);
