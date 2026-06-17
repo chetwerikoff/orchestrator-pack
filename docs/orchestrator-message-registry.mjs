@@ -748,7 +748,10 @@ export function resolveLinkedIssueNumbers(repoRoot = process.cwd()) {
 
 /** Issue-linked declared-path edits allowed without redefining the protected matrix manifest. */
 const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
-  324: ['agent-orchestrator.yaml.example'],
+  324: [
+    'agent-orchestrator.yaml.example',
+    'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+  ],
 };
 
 function buildCoordinatedDeclaredPathAllowSet(protectedManifest, linkedIssueNumbers) {
