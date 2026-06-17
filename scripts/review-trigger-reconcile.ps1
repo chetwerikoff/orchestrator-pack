@@ -82,7 +82,7 @@ function Invoke-ReconcileFilterCli {
         -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
-$Script:ReconcileDefaultState = @{ lastTickMs = $null; degradedCi = @{} }
+$Script:ReconcileDefaultState = @{ lastTickMs = $null; degradedCi = @{}; cycleState = @{} }
 
 function Get-ReconcileState {
     param([string]$Path)
@@ -452,8 +452,21 @@ function Invoke-ReconcileTick {
     $planPayload = $payload.Clone()
     $planPayload.tracking = $TrackingState
     $planPayload.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $planPayload.cycleState = $TrackingState.cycleState
+    $planPayload.repoRoot = $RepoRoot
 
-    $plan = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
+    $planResult = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
+    $plan = @()
+    $cycleState = @{}
+    if ($planResult.actions) {
+        $plan = @($planResult.actions)
+        if ($planResult.cycleState) {
+            $cycleState = $planResult.cycleState
+        }
+    }
+    else {
+        $plan = @($planResult)
+    }
     $started = 0
     foreach ($action in @($plan)) {
         if ($action.type -eq 'skip') {
@@ -490,8 +503,9 @@ function Invoke-ReconcileTick {
     }
 
     return @{
-        started = $started
-        plan    = @($plan)
+        started    = $started
+        plan       = @($plan)
+        cycleState = $cycleState
     }
 }
 
@@ -546,7 +560,10 @@ try {
                 Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reconcile' -ErrorMessage "fences untrusted: $reason"
             }
             else {
-            $tickTracking = @{ degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi) }
+            $tickTracking = @{
+                degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi)
+                cycleState = $state.cycleState
+            }
             try {
                 $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml `
                     -DryRunMode:$DryRun -TrackingState $tickTracking
@@ -561,13 +578,18 @@ try {
             finally {
                 if (-not $DryRun) {
                     $degradedCi = $tickTracking.degradedCi
+                    $cycleState = $tickTracking.cycleState
                     if ($result -and $result.plan) {
                         $degradedCi = Merge-DegradedCiTracking -Existing $tickTracking.degradedCi `
                             -Actions $result.plan -NowMs $nowMs
                     }
+                    if ($result -and $result.cycleState) {
+                        $cycleState = $result.cycleState
+                    }
                     Set-ReconcileState -Path $statePath -State @{
                         lastTickMs = $nowMs
                         degradedCi = $degradedCi
+                        cycleState = $cycleState
                     }
                 }
                 else {

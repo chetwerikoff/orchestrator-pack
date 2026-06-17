@@ -14,10 +14,18 @@ import {
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
   formatDecisionRecordForLog,
+  hasReadyForReviewForHead,
   mergeWorkerDeliveriesFromPlanInput,
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
+import {
+  coalesceSuppressAudit,
+  commitOwnerCyclePatch,
+  evaluateWorkerIterationCycleForPr,
+  NUDGE_EXPIRY_MS,
+  CYCLE_SURFACE_READY_FOR_REVIEW,
+} from './worker-iteration-cycle.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number, terminationReason?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
@@ -733,6 +741,8 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {Array<Record<string, unknown>>} [input.aoEvents]
  * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
+ * @param {Record<string, unknown>} [input.cycleState]
+ * @param {string} [input.repoRoot]
  */
 export function planReconcileActions({
   openPrs,
@@ -747,6 +757,8 @@ export function planReconcileActions({
   aoEvents,
   dispatchJournal,
   reactionMessages,
+  cycleState,
+  repoRoot,
 }) {
   /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
@@ -754,6 +766,7 @@ export function planReconcileActions({
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
+  let nextCycleState = { ...(cycleState ?? {}) };
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries,
     aoEvents,
@@ -784,6 +797,23 @@ export function planReconcileActions({
     );
     const degradedCiAttempts = getDegradedCiAttempts(tracking, prNumber, headSha);
     const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
+    const reportBindingOptions = { headCommittedAtMs };
+    const handoffAccepted = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState: nextCycleState,
+      repoRoot,
+      prNumber,
+      headSha,
+      ownerSessionId: sessionId ?? '',
+      ownerResolutionFailClosed: Boolean(ownerResolution?.failClosed),
+      reviewRuns: runList,
+      session,
+      workerDeliveries: mergedDeliveries,
+      nowMs,
+      headCommittedAtMs,
+      handoffAccepted,
+    });
+    nextCycleState = cycleEval.state;
 
     const decision = evaluateHeadReadyForReview({
       reviewRuns: runList,
@@ -827,17 +857,149 @@ export function planReconcileActions({
         });
         continue;
       }
+
+      const isQuiescentFallback = decision.reason === 'quiescent_worker_handoff_fallback';
+      if (isQuiescentFallback) {
+        const nudgeOutstanding = Boolean(
+          cycleEval.cycle?.nudgeArmed &&
+            cycleEval.cycle?.nudgeExpiresAtMs &&
+            nowMs < Number(cycleEval.cycle.nudgeExpiresAtMs),
+        );
+        const awaitingFirstNudge = Boolean(
+          !cycleEval.cycle?.nudgeArmed && !cycleEval.cycle?.nudgeExpiredFallbackPending,
+        );
+        if (awaitingFirstNudge || nudgeOutstanding) {
+          actions.push({
+            type: 'skip',
+            prNumber,
+            headSha,
+            reason: awaitingFirstNudge ? 'nudge_precedence_over_fallback' : 'nudge_outstanding',
+            record: buildNoStartDecisionRecord({
+              ...decisionRecordBase,
+              reason: awaitingFirstNudge ? 'nudge_precedence_over_fallback' : 'nudge_outstanding',
+            }),
+          });
+          continue;
+        }
+        if (cycleEval.cycle?.fallbackArmed) {
+          actions.push({
+            type: 'skip',
+            prNumber,
+            headSha,
+            reason: 'already_reviewed_this_cycle',
+            record: buildNoStartDecisionRecord({
+              ...decisionRecordBase,
+              reason: 'already_reviewed_this_cycle',
+            }),
+          });
+          continue;
+        }
+      } else if (!cycleEval.reviewGate.allow) {
+        const blockers = cycleEval.reviewGate.blockers;
+        let cycle = cycleEval.cycle;
+        if (cycle) {
+          cycle = {
+            ...cycle,
+            suppressAudit: coalesceSuppressAudit(
+              cycle,
+              isQuiescentFallback ? 'quiescent_fallback' : 'ready_for_review',
+              headSha,
+              blockers,
+            ),
+          };
+          nextCycleState = commitOwnerCyclePatch(
+            nextCycleState,
+            cycleEval.repoId,
+            prNumber,
+            sessionId,
+            cycle,
+          );
+        }
+        actions.push({
+          type: 'skip',
+          prNumber,
+          headSha,
+          reason: cycleEval.reviewGate.deferReason,
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: cycleEval.reviewGate.deferReason,
+            failedComponents: blockers,
+          }),
+        });
+        continue;
+      }
+
+      if (
+        handoffAccepted &&
+        cycleEval.readyDebounce.waiting &&
+        !cycleEval.readyDebounce.settled
+      ) {
+        const debouncePatch = {
+          debounce: {
+            ...(cycleEval.cycle?.debounce ?? {}),
+            [CYCLE_SURFACE_READY_FOR_REVIEW]: {
+              startedAtMs: cycleEval.readyDebounce.startedAtMs ?? nowMs,
+              handoffHeadSha: cycleEval.readyDebounce.handoffHeadSha ?? normalizeSha(headSha),
+            },
+          },
+        };
+        nextCycleState = commitOwnerCyclePatch(
+          nextCycleState,
+          cycleEval.repoId,
+          prNumber,
+          sessionId,
+          { ...(cycleEval.cycle ?? {}), ...debouncePatch },
+        );
+        actions.push({
+          type: 'skip',
+          prNumber,
+          headSha,
+          reason: 'ready_for_review_debounce_pending',
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: 'ready_for_review_debounce_pending',
+          }),
+        });
+        continue;
+      }
+
       const startAction = {
         type: 'start_review',
         prNumber,
         headSha,
         sessionId,
       };
-      if (decision.reason === 'quiescent_worker_handoff_fallback') {
+      if (isQuiescentFallback) {
         startAction.startReason = decision.reason;
         if (decision.quiescenceBasis) {
           startAction.quiescenceBasis = decision.quiescenceBasis;
         }
+        nextCycleState = commitOwnerCyclePatch(
+          nextCycleState,
+          cycleEval.repoId,
+          prNumber,
+          sessionId,
+          {
+            ...(cycleEval.cycle ?? {}),
+            fallbackArmed: true,
+            reviewArmed: true,
+          },
+        );
+      } else {
+        nextCycleState = commitOwnerCyclePatch(
+          nextCycleState,
+          cycleEval.repoId,
+          prNumber,
+          sessionId,
+          {
+            ...(cycleEval.cycle ?? {}),
+            reviewArmed: true,
+            debounce: {
+              ...(cycleEval.cycle?.debounce ?? {}),
+              [CYCLE_SURFACE_READY_FOR_REVIEW]: undefined,
+            },
+          },
+        );
       }
       actions.push(startAction);
       continue;
@@ -894,7 +1056,20 @@ export function planReconcileActions({
     });
   }
 
-  return actions;
+  return { actions, cycleState: nextCycleState };
+}
+
+/**
+ * @param {{ actions?: unknown[], cycleState?: Record<string, unknown> } | unknown[]} result
+ */
+export function unwrapReconcilePlanResult(result) {
+  if (Array.isArray(result)) {
+    return { actions: result, cycleState: {} };
+  }
+  return {
+    actions: toArray(result?.actions),
+    cycleState: result?.cycleState ?? {},
+  };
 }
 
 /**

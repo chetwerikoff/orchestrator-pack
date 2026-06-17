@@ -80,7 +80,7 @@ function Invoke-CiGreenWakeFilterCli {
         -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 30
 }
 
-$Script:CiGreenWakeDefaultState = @{ heads = @{}; nudged = @{}; pendingJournal = @{}; lastTickMs = $null }
+$Script:CiGreenWakeDefaultState = @{ heads = @{}; nudged = @{}; pendingJournal = @{}; lastTickMs = $null; cycleState = @{} }
 
 function Get-CiGreenWakeState {
     param([string]$Path)
@@ -103,6 +103,7 @@ function Save-PartialCiGreenWakeTracking {
         [hashtable]$HeadRecords,
         [hashtable]$Nudged,
         [hashtable]$PendingJournal,
+        [object]$CycleState,
         [switch]$DryRunMode
     )
 
@@ -115,6 +116,7 @@ function Save-PartialCiGreenWakeTracking {
         heads          = $HeadRecords
         nudged         = $Nudged
         pendingJournal = $PendingJournal
+        cycleState     = $CycleState
         lastTickMs     = $existing.lastTickMs
     }
     Set-CiGreenWakeState -Path $Path -State $merged
@@ -343,7 +345,19 @@ function Invoke-CiGreenWakeTick {
         heads          = $tracking.heads
         nudged         = $nudged
         pendingJournal = $pendingJournal
+        cycleState     = $tracking.cycleState
         lastTickMs     = $tracking.lastTickMs
+    }
+
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $reviewRuns = @()
+    $workerDeliveries = @()
+    if ($Fixture) {
+        if ($payload.reviewRuns) { $reviewRuns = @($payload.reviewRuns) }
+        if ($payload.workerDeliveries) { $workerDeliveries = @($payload.workerDeliveries) }
+    }
+    else {
+        $reviewRuns = @(Get-AoReviewRuns -Project $Project)
     }
 
     $planPayload = @{
@@ -353,6 +367,10 @@ function Invoke-CiGreenWakeTick {
         requiredCheckNamesByPr          = $requiredCheckNamesByPr
         requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
         tracking                        = $tracking
+        reviewRuns                      = @($reviewRuns)
+        workerDeliveries                = @($workerDeliveries)
+        nowMs                           = $nowMs
+        repoRoot                        = $RepoRoot
     }
 
     $plan = Invoke-CiGreenWakeFilterCli -Subcommand 'plan' -Payload $planPayload
@@ -373,6 +391,10 @@ function Invoke-CiGreenWakeTick {
     $pendingJournal = Copy-MechanicalJsonMap -Map $tracking.pendingJournal
 
     $headRecords = Copy-MechanicalJsonMap -Map $plan.headRecords
+    $cycleState = $plan.cycleState
+    if (-not $cycleState) {
+        $cycleState = $tracking.cycleState
+    }
 
     $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
 
@@ -413,7 +435,7 @@ function Invoke-CiGreenWakeTick {
                     message   = [string]$action.message
                 }
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
-                    -Nudged $nudged -PendingJournal $pendingJournal -DryRunMode:$DryRunMode
+                    -Nudged $nudged -PendingJournal $pendingJournal -CycleState $cycleState -DryRunMode:$DryRunMode
             }
             continue
         }
@@ -426,7 +448,7 @@ function Invoke-CiGreenWakeTick {
                     sentAtMs  = $nowMs
                 }
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
-                    -Nudged $nudged -PendingJournal $pendingJournal -DryRunMode:$DryRunMode
+                    -Nudged $nudged -PendingJournal $pendingJournal -CycleState $cycleState -DryRunMode:$DryRunMode
             }
             $sent++
         }
@@ -436,6 +458,7 @@ function Invoke-CiGreenWakeTick {
         heads          = $headRecords
         nudged         = $nudged
         pendingJournal = $pendingJournal
+        cycleState     = $cycleState
         lastTickMs     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
 

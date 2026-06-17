@@ -9,7 +9,17 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
+import {
+  commitOwnerCyclePatch,
+  evaluateWorkerIterationCycleForPr,
+  NUDGE_EXPIRY_MS,
+} from './worker-iteration-cycle.mjs';
+import {
+  getReportState,
+} from './review-finding-delivery-confirm.mjs';
+import {
+  isWorkerActivelyWorking,
+} from './review-head-ready.mjs';
 import {
   findLatestReportForHead,
   isCiCheckFailure,
@@ -49,7 +59,7 @@ export const CI_GREEN_WAKE_MESSAGE =
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ lastCiLevel?: CiLevel, greenEpoch?: number }} HeadCiRecord */
-/** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number }} CiGreenWakeState */
+/** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number, cycleState?: Record<string, unknown> }} CiGreenWakeState */
 /** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
 
 /**
@@ -270,6 +280,10 @@ export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [input.requiredCheckLookupFailedByPr]
  * @param {CiGreenWakeState} [input.tracking]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
+ * @param {number} [input.nowMs]
+ * @param {string} [input.repoRoot]
  */
 export function planCiGreenWakeActions({
   openPrs,
@@ -278,12 +292,17 @@ export function planCiGreenWakeActions({
   requiredCheckNamesByPr,
   requiredCheckLookupFailedByPr,
   tracking = {},
+  workerDeliveries = [],
+  reviewRuns = [],
+  nowMs = Date.now(),
+  repoRoot = '',
 }) {
   /** @type {CiGreenWakeAction[]} */
   const actions = [];
   const sessionList = toArray(sessions);
   const headRecords = { ...(tracking.heads ?? {}) };
   const nudged = tracking.nudged ?? {};
+  let cycleState = { ...(tracking.cycleState ?? {}) };
 
   const checksMap = normalizeCiChecksByPr(ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(requiredCheckNamesByPr);
@@ -340,6 +359,28 @@ export function planCiGreenWakeActions({
       requiredCheckLookupFailed,
     });
 
+    const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(openPrs), prNumber);
+    const activelyWorking = isWorkerActivelyWorking(session, headSha, nowMs, {
+      headCommittedAtMs,
+      workerDeliveries,
+    });
+
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState,
+      repoRoot,
+      prNumber,
+      headSha,
+      ownerSessionId: sessionId,
+      reviewRuns,
+      session,
+      workerDeliveries,
+      nowMs,
+      headCommittedAtMs,
+      handoffAccepted: !candidate.eligible && candidate.reasons.includes('post_handoff_or_ineligible_report'),
+      legacyNudged: nudged,
+    });
+    cycleState = cycleEval.state;
+
     if (!candidate.eligible) {
       actions.push({
         type: 'skip',
@@ -350,7 +391,37 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    const transitionId = buildTransitionId(prNumber, headSha, derived.greenEpoch);
+    if (activelyWorking || cycleEval.nudgeGate.blockers.includes('worker_actively_working')) {
+      actions.push({
+        type: 'skip',
+        prNumber,
+        headSha,
+        reason: 'worker_actively_working',
+      });
+      continue;
+    }
+
+    if (!cycleEval.nudgeGate.allow) {
+      actions.push({
+        type: 'skip',
+        prNumber,
+        headSha,
+        reason: cycleEval.nudgeGate.deferReason,
+      });
+      continue;
+    }
+
+    if (cycleEval.settleAction.action !== 'nudge') {
+      actions.push({
+        type: 'skip',
+        prNumber,
+        headSha,
+        reason: cycleEval.settleAction.reason,
+      });
+      continue;
+    }
+
+    const transitionId = `${cycleEval.cycle?.cycleId ?? buildTransitionId(prNumber, headSha, derived.greenEpoch)}:nudge`;
     if (nudged[transitionId]) {
       actions.push({
         type: 'skip',
@@ -370,9 +441,16 @@ export function planCiGreenWakeActions({
       transitionId,
       message: CI_GREEN_WAKE_MESSAGE,
     });
+
+    cycleState = commitOwnerCyclePatch(cycleState, cycleEval.repoId, prNumber, sessionId, {
+      ...(cycleEval.cycle ?? {}),
+      nudgeArmed: true,
+      nudgeSentAtMs: nowMs,
+      nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+    });
   }
 
-  return { actions, headRecords };
+  return { actions, headRecords, cycleState };
 }
 
 /**

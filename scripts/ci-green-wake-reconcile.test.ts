@@ -46,7 +46,7 @@ function liveWorker(overrides: Record<string, unknown> = {}) {
     prNumber: 42,
     ownedHeadSha: 'abc123',
     status: 'fixing_ci',
-    activity: 'ready',
+    activity: 'idle',
     reports: [],
     ...overrides,
   };
@@ -217,10 +217,16 @@ describe('planCiGreenWakeActions', () => {
       },
     });
     expect(nudgeActions(result.actions)).toHaveLength(0);
-    expect(result.actions.some((a) => a.type === 'skip' && a.reason === 'already_nudged')).toBe(true);
+    expect(
+      result.actions.some(
+        (a) =>
+          a.type === 'skip' &&
+          (a.reason === 'already_nudged' || a.reason === 'already_nudged_this_cycle'),
+      ),
+    ).toBe(true);
   });
 
-  it('(c) treats renewed red→green on same head as new transition', () => {
+  it('(c) does not re-nudge on red→green flap within the same worker cycle (#332 C6b)', () => {
     const first = plan({
       openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
@@ -232,11 +238,22 @@ describe('planCiGreenWakeActions', () => {
       tracking: {
         heads: { '42:abc123': { lastCiLevel: 'red', greenEpoch: 1 } },
         nudged: { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1 } },
+        cycleState: {
+          repoId: 'orchestrator-pack',
+          ownerCycles: {
+            'orchestrator-pack:pr:42:owner:op-worker': {
+              cycleId: 'seed-cycle',
+              ownerSessionId: 'op-worker',
+              prNumber: 42,
+              nudgeArmed: true,
+              nudgeSentAtMs: 1,
+              nudgeExpiresAtMs: Date.now() + 60_000,
+            },
+          },
+        },
       },
     });
-    const nudges = nudgeActions(first.actions);
-    expect(nudges).toHaveLength(1);
-    expect(nudges[0]?.transitionId).toBe('42:abc123:2');
+    expect(nudgeActions(first.actions)).toHaveLength(0);
   });
 
   it('(e) does not nudge when ready_for_review accepted for head', () => {
@@ -480,7 +497,15 @@ describe('evaluateCiGreenWakeCandidate', () => {
 describe('fixture payloads', () => {
   it('loads pre-hand-off-green fixture', () => {
     const fixture = loadFixture('pre-handoff-green.json');
-    const result = plan(fixture);
+    const result = plan({
+      ...fixture,
+      nowMs: Date.parse('2026-06-05T14:00:00.000Z'),
+      sessions: fixture.sessions.map((session) => ({
+        ...session,
+        runtime: 'alive',
+        activity: 'idle',
+      })),
+    });
     expect(nudgeActions(result.actions).length).toBeGreaterThanOrEqual(1);
   });
 });

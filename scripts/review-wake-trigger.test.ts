@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isCompletionMergeIntentWake } from '../docs/orchestrator-wake-filter.mjs';
-import { planReconcileActions } from '../docs/review-trigger-reconcile.mjs';
+import { planReconcileActions, unwrapReconcilePlanResult } from '../docs/review-trigger-reconcile.mjs';
 import {
   WAKE_TO_RUN_DECISION_MAX_MS,
   amendMergeWakeMessage,
@@ -299,12 +299,12 @@ describe('residual race benign-ness', () => {
   it('Issue #207 (5): concurrent observers produce at most redundant run for correct head', () => {
     const fixture = loadFixture('green-wake-triggers.json');
     const wake = evaluateFixture(fixture);
-    const reconcile = planReconcileActions({
+    const reconcile = unwrapReconcilePlanResult(planReconcileActions({
       openPrs: fixture.openPrs!,
       reviewRuns: fixture.reviewRuns!,
       sessions: fixture.sessions!,
       ciChecksByPr: fixture.ciChecksByPr,
-    });
+    })).actions;
     expect(wake.triggerReviewRun).toBe(true);
     expect(reconcile.filter((a) => a.type === 'start_review')).toHaveLength(1);
     const wakeHead = wake.planned!.headSha;
