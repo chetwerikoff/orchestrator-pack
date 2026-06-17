@@ -746,6 +746,26 @@ export function resolveLinkedIssueNumbers(repoRoot = process.cwd()) {
   return [...linked];
 }
 
+/** Linked issues evidenced by committed declaration snapshots present in the gated diff. */
+export function resolveLinkedIssuesFromDeclarationSnapshots(changedFiles) {
+  const linked = new Set();
+  for (const file of changedFiles ?? []) {
+    const norm = String(file).replace(/\\/g, '/');
+    const match = /^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.exec(norm);
+    if (match) linked.add(Number(match[1]));
+  }
+  return [...linked];
+}
+
+export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles = []) {
+  return [
+    ...new Set([
+      ...resolveLinkedIssueNumbers(repoRoot),
+      ...resolveLinkedIssuesFromDeclarationSnapshots(changedFiles),
+    ]),
+  ];
+}
+
 /** Issue-linked declared-path edits allowed when an issue is explicitly linked (branch/PR/env). */
 const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   324: [
@@ -913,7 +933,7 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
-  const linkedIssueNumbers = resolveLinkedIssueNumbers(repoRoot);
+  const linkedIssueNumbers = resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFiles);
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, {
     baseManifestExists,
     linkedIssueNumbers,
