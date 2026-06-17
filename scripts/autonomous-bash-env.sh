@@ -10,23 +10,26 @@ __ao_autonomous_pack_git() {
 }
 
 __ao_autonomous_rewrite_git_command() {
-  local cmd="${1-}" pack_git="${2-}" quoted_pack_git
+  local cmd="${1-}" pack_git="${2-}" quoted_pack_git prefix=""
 
   printf -v quoted_pack_git '%q' "${pack_git}"
 
   if [[ "${cmd}" =~ (^|[;&|[:space:]])([\"']?)(/usr/bin/git|/usr/local/bin/git|/bin/git)([\"']?)(.*)$ ]]; then
-    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[5]}"
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[5]}"
     return 0
   fi
 
   if [[ "${cmd}" =~ (^|[;&|[:space:]])(/usr/bin/env|env)([[:space:]]+.*[[:space:]])git(.*)$ ]]; then
     # Drop PATH=/usr/bin:… env wrappers — they hide pwsh from scripts/git on the guard path.
-    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[4]}"
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[4]}"
     return 0
   fi
 
   if [[ "${cmd}" =~ ^(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)+)git(.*)$ ]]; then
-    printf '%s%s%s' "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
     return 0
   fi
 
