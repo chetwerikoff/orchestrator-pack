@@ -96,6 +96,31 @@ function initCoordinatedIssue324Fixture() {
   return { dir, baseSha };
 }
 
+function initCoordinatedIssue324FixtureWithDeclaration() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'coord-path-324-decl-'));
+  spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, encoding: 'utf8' });
+  seedMinimalRegistryTree(dir, ['agent-orchestrator.yaml.example']);
+  mkdirSync(path.join(dir, 'docs/declarations'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'docs/declarations/324.opk-2.json'),
+    `${JSON.stringify({
+      issue_number: 324,
+      iteration_id: 'opk-2',
+      declared_paths: ['agent-orchestrator.yaml.example'],
+    }, null, 2)}\n`,
+  );
+  spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'base with declaration'], { cwd: dir, encoding: 'utf8' });
+  const baseSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  const yamlPath = path.join(dir, 'agent-orchestrator.yaml.example');
+  writeFileSync(yamlPath, `${readFileSync(yamlPath, 'utf8')}\n# coordinated edit fixture\n`);
+  spawnSync('git', ['add', 'agent-orchestrator.yaml.example'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'coord'], { cwd: dir, encoding: 'utf8' });
+  return { dir, baseSha };
+}
+
 const githubActionsEnvKeys = [
   'ORCHESTRATOR_MESSAGE_LINKED_ISSUES',
   'GITHUB_EVENT_PATH',
@@ -973,6 +998,19 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       withoutGithubActionsEnv(() => {
         process.env.GITHUB_BASE_SHA = baseSha;
         process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = '324';
+        const result = checkProtectedRuntimeForRepo(dir, baseSha);
+        expect(result.ok).toBe(true);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows issue-324 yaml.example edits from committed declaration snapshot without env link', () => {
+    const { dir, baseSha } = initCoordinatedIssue324FixtureWithDeclaration();
+    try {
+      withoutGithubActionsEnv(() => {
+        process.env.GITHUB_BASE_SHA = baseSha;
         const result = checkProtectedRuntimeForRepo(dir, baseSha);
         expect(result.ok).toBe(true);
       });

@@ -858,6 +858,11 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
   const snapshotPaths = new Set([
     ...listGitTreeDeclarationSnapshots(repoRoot, gitRef),
   ]);
+  for (const file of changed) {
+    if (/^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.test(file)) {
+      snapshotPaths.add(file);
+    }
+  }
   const declarationsDir = path.join(repoRoot, 'docs/declarations');
   if (existsSync(declarationsDir)) {
     for (const entry of readdirSync(declarationsDir)) {
