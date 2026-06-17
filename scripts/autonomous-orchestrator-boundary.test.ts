@@ -36,14 +36,13 @@ const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-Autonomous
 
 /** Bash skips BASH_ENV when POSIXLY_CORRECT is set; CI runners often inherit it via process.env. */
 function autonomousBashTurnEnv(extra: Record<string, string> = {}) {
-  const env = {
-    ...process.env,
+  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
+  return {
+    ...baseEnv,
     AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
     BASH_ENV: bashEnvPath,
     ...extra,
   };
-  delete env.POSIXLY_CORRECT;
-  return env;
 }
 
 function spawnAutonomousBashTurn(cwd: string, command: string) {
