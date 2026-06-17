@@ -41,6 +41,7 @@
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
     "scripts/lib/Test-AutonomousCapabilityInventory.ps1",
     "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/orchestrator-message-registry.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [
