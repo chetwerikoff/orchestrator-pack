@@ -559,6 +559,18 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         );
         expect(interposedChained.status).toBe(0);
         expect(interposedChained.stdout).toBe(directChained.stdout);
+
+        const bashEnvChained = spawnSync('bash', ['-c', 'cd nested && /usr/bin/git status --short'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            BASH_ENV: bashEnvPath,
+          },
+        });
+        expect(bashEnvChained.status).toBe(0);
+        expect(bashEnvChained.stdout).toBe(directChained.stdout);
       });
     }
   });
