@@ -426,7 +426,7 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
-    const prevBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    const prevSha = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repoRoot,
       encoding: 'utf8',
     }).trim();
@@ -452,8 +452,13 @@ describe('orchestrator message registry (Issue #298)', () => {
         env: cleanEnv,
       });
     } finally {
-      execFileSync('git', ['checkout', prevBranch], { cwd: repoRoot, stdio: 'pipe' });
-      execFileSync('git', ['branch', '-D', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
+      execFileSync('git', ['checkout', '--detach', prevSha], { cwd: repoRoot, stdio: 'pipe' });
+      try {
+        execFileSync('git', ['branch', '-D', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
+      }
+      catch {
+        // best-effort cleanup; detached restore above is the important part
+      }
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;
       if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
