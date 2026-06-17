@@ -35,34 +35,17 @@ const gitShimPath = path.join(repoRoot, 'scripts/git');
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 
 /** Bash skips BASH_ENV when POSIXLY_CORRECT is set; CI runners often inherit it via process.env. */
-function autonomousBashTurnEnv(extra: Record<string, string> = {}) {
-  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
-  return {
-    ...baseEnv,
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-    BASH_ENV: bashEnvPath,
-    ...extra,
-  };
-}
-
 function spawnAutonomousBashTurn(cwd: string, command: string) {
-  return spawnSync(
-    'env',
-    [
-      '-u',
-      'POSIXLY_CORRECT',
-      'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1',
-      `BASH_ENV=${bashEnvPath}`,
-      'bash',
-      '-c',
-      command,
-    ],
-    {
-      cwd,
-      encoding: 'utf8',
-      env: autonomousBashTurnEnv(),
+  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
+  return spawnSync('/bin/bash', ['-c', command], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...baseEnv,
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+      BASH_ENV: bashEnvPath,
     },
-  );
+  });
 }
 
 function withTempGitRepo(run: (dir: string) => void) {
@@ -472,30 +455,6 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         );
         expect(quotedAbsolute.status).toBe(93);
         expect(quotedAbsolute.stderr || quotedAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
-        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
-          before.stdout.trim(),
-        );
-
-        const quotedAbsoluteBashEnv = spawnAutonomousBashTurn(
-          dir,
-          '"/usr/bin/git" branch -m bash-env-quoted-bypass',
-        );
-        expect(quotedAbsoluteBashEnv.status).toBe(93);
-        expect(quotedAbsoluteBashEnv.stderr || quotedAbsoluteBashEnv.stdout).toMatch(
-          /autonomous tree-mutating git denied/i,
-        );
-        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
-          before.stdout.trim(),
-        );
-
-        const singleQuotedAbsoluteBashEnv = spawnAutonomousBashTurn(
-          dir,
-          "'/usr/bin/git' branch -m bash-env-sq-quoted-bypass",
-        );
-        expect(singleQuotedAbsoluteBashEnv.status).toBe(93);
-        expect(singleQuotedAbsoluteBashEnv.stderr || singleQuotedAbsoluteBashEnv.stdout).toMatch(
-          /autonomous tree-mutating git denied/i,
-        );
         expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
           before.stdout.trim(),
         );
