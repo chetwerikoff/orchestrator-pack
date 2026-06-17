@@ -178,6 +178,9 @@ describe('orchestrator claimed review-run gate (#318)', () => {
       isClaimedReviewRunParentCommandLine('ao review run opk-1 --execute --command "git worktree add wt main"'),
     ).toBe(true);
     expect(
+      isClaimedReviewRunParentCommandLine('ao review run opk-1 --execute --command echo; git branch -m bypass'),
+    ).toBe(false);
+    expect(
       evaluateAutonomousReviewRunBoundary({
         commandLine: 'git checkout main && ao review run opk-1 --execute --command echo',
         autonomousSurface: true,

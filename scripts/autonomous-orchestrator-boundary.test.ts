@@ -151,7 +151,6 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const allow = runPwsh(`
         $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-        $env:AO_CLAIMED_REVIEW_RUN_BYPASS = '1'
         $env:PATH = ${psString(path.join(repoRoot, 'scripts'))} + ':' + $env:PATH
         . ${psString(boundaryLibPath)}
         $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','${dir.replace(/\\/g, '/')}/wt','main') -FixtureParentChain @('ao review run opk-1 --execute --command echo')
@@ -181,7 +180,15 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       }).allowed,
     ).toBe(false);
     expect(
-      hasSanctionedGitParentChain(['ao review run opk-1 --execute --command echo'], true),
+      evaluateAutonomousGitBoundary({
+        argv: ['branch', '-m', 'bypass'],
+        autonomousSurface: true,
+        claimedBypass: true,
+        parentChain: ['ao review run opk-1 --execute --command echo; git branch -m bypass'],
+      }).allowed,
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain(['ao review run opk-1 --execute --command echo']),
     ).toBe(true);
   });
 
@@ -355,6 +362,21 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
           before.stdout.trim(),
         );
+
+        const envPathGit = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/env PATH=/usr/bin:/bin git branch -m env-path-bypass`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(envPathGit.status).toBe(93);
+        expect(envPathGit.stderr || envPathGit.stdout).toMatch(/autonomous tree-mutating git denied/i);
       });
     }
   });
@@ -503,6 +525,39 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       });
       expect(status.status).toBe(0);
     });
+  });
+
+  it('ignores turn-visible GIT_SYSTEM_BINARY on autonomous surface', () => {
+    const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-pack-'));
+    const fakeGit = path.join(packRoot, 'fake-git.sh');
+    try {
+      writeFileSync(fakeGit, '#!/usr/bin/env bash\n/usr/bin/git "$@"\n');
+      chmodSync(fakeGit, 0o755);
+      const aoDir = path.join(packRoot, '.ao');
+      mkdirSync(aoDir, { recursive: true });
+      writeFileSync(
+        path.join(aoDir, 'autonomous-real-binaries.json'),
+        JSON.stringify({
+          ao: path.join(repoRoot, 'scripts/ao'),
+          git: path.join(repoRoot, 'scripts/git-real-binary'),
+          gitSystemBinary: '/usr/bin/git',
+        }),
+      );
+      const output = runPwsh(`
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:GIT_SYSTEM_BINARY = ${psString(fakeGit)}
+        . ${psString(boundaryLibPath)}
+        [pscustomobject]@{
+          resolved = [string](Resolve-SystemGitExecutable -PackRoot ${psString(packRoot)})
+          spoofed = [bool]((Resolve-SystemGitExecutable -PackRoot ${psString(packRoot)}) -eq ${psString(fakeGit)})
+        } | ConvertTo-Json -Compress
+      `);
+      const parsed = JSON.parse(output);
+      expect(parsed.spoofed).toBe(false);
+      expect(parsed.resolved).toMatch(/\/usr\/bin\/git$/);
+    } finally {
+      rmSync(packRoot, { recursive: true, force: true });
+    }
   });
 
   it('resolves real binaries from out-of-band config without turn-visible env', () => {

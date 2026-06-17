@@ -199,7 +199,7 @@ export function evaluateAutonomousGitBoundary(input) {
   }
   if (
     input.sanctionedProvenance
-    || hasSanctionedGitParentChain(input.parentChain, Boolean(input.claimedBypass))
+    || hasSanctionedGitParentChain(input.parentChain)
   ) {
     return { allowed: true, reason: 'sanctioned_git_child' };
   }
@@ -344,11 +344,9 @@ export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, 
       return true;
     }
   }
-  if (claimedBypass) {
-    for (const line of chain) {
-      if (isClaimedReviewRunParentCommandLine(line)) {
-        return true;
-      }
+  for (const line of chain) {
+    if (isClaimedReviewRunParentCommandLine(line)) {
+      return true;
     }
   }
   return false;

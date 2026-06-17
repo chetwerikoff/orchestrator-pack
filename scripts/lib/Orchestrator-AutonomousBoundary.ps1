@@ -10,7 +10,8 @@ $Script:AutonomousBoundaryExitCode = 93
 $Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
 $Script:SanctionedGitParentPatterns = @(
     'reviewer-workspace-preflight.ps1',
-    'orchestrator-worktree-preflight.ps1'
+    'orchestrator-worktree-preflight.ps1',
+    'Invoke-OrchestratorClaimedReviewRun.ps1'
 )
 $Script:SanctionedGitParentMaxDepth = 2
 
@@ -248,8 +249,10 @@ function Resolve-SystemGitExecutable {
         }
     }
 
-    if ($env:GIT_SYSTEM_BINARY -and (Test-Path -LiteralPath $env:GIT_SYSTEM_BINARY -ErrorAction SilentlyContinue)) {
-        return (Resolve-Path -LiteralPath $env:GIT_SYSTEM_BINARY).Path
+    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
+        if ($env:GIT_SYSTEM_BINARY -and (Test-Path -LiteralPath $env:GIT_SYSTEM_BINARY -ErrorAction SilentlyContinue)) {
+            return (Resolve-Path -LiteralPath $env:GIT_SYSTEM_BINARY).Path
+        }
     }
 
     foreach ($candidate in @('/usr/bin/git', '/bin/git', '/usr/local/bin/git')) {
@@ -425,6 +428,34 @@ function Test-ProcessCommandLineIsSanctionedGitParent {
     return $false
 }
 
+function Test-ProcessCommandLineContainsUnquotedShellCompoundOperator {
+    param([string]$Segment)
+
+    if (-not $Segment) { return $false }
+    $inSingle = $false
+    $inDouble = $false
+    for ($index = 0; $index -lt $Segment.Length; $index++) {
+        $char = $Segment[$index]
+        if ($char -eq "'" -and -not $inDouble) {
+            $inSingle = -not $inSingle
+            continue
+        }
+        if ($char -eq '"' -and -not $inSingle) {
+            $inDouble = -not $inDouble
+            continue
+        }
+        if (-not $inSingle -and -not $inDouble) {
+            if ($char -eq ';' -or $char -eq '|') {
+                return $true
+            }
+            if ($char -eq '&' -and ($index + 1) -lt $Segment.Length -and $Segment[$index + 1] -eq '&') {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
 function Test-ProcessCommandLineIsAoReviewRun {
     param([string]$CommandLine)
 
@@ -440,7 +471,15 @@ function Test-ProcessCommandLineIsAoReviewRun {
     if (-not $gitPrimary.Success) {
         return $true
     }
-    return $aoReviewRun.Index -lt $gitPrimary.Index
+    if ($gitPrimary.Index -lt $aoReviewRun.Index) {
+        return $false
+    }
+    $reviewRunEnd = $aoReviewRun.Index + $aoReviewRun.Length
+    $between = $CommandLine.Substring($reviewRunEnd, $gitPrimary.Index - $reviewRunEnd)
+    if (Test-ProcessCommandLineContainsUnquotedShellCompoundOperator -Segment $between) {
+        return $false
+    }
+    return $true
 }
 
 function Test-AutonomousGitSanctionedProvenance {
@@ -462,11 +501,9 @@ function Test-AutonomousGitSanctionedProvenance {
         }
     }
 
-    if ([string]$env:AO_CLAIMED_REVIEW_RUN_BYPASS -eq '1') {
-        foreach ($cmd in $chain) {
-            if (Test-ProcessCommandLineIsAoReviewRun -CommandLine $cmd) {
-                return $true
-            }
+    foreach ($cmd in $chain) {
+        if (Test-ProcessCommandLineIsAoReviewRun -CommandLine $cmd) {
+            return $true
         }
     }
 

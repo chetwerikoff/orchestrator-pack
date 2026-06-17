@@ -79,7 +79,7 @@
       "id": "turn-visible-real-binary-env",
       "classification": "unavailable",
       "surface": "env",
-      "path": "AO_REAL_BINARY|GIT_REAL_BINARY"
+      "path": "AO_REAL_BINARY|GIT_REAL_BINARY|GIT_SYSTEM_BINARY"
     },
     {
       "id": "invoke-manual-review-run",
@@ -91,7 +91,8 @@
   ],
   "sanctionedGitParents": [
     "reviewer-workspace-preflight.ps1",
-    "orchestrator-worktree-preflight.ps1"
+    "orchestrator-worktree-preflight.ps1",
+    "Invoke-OrchestratorClaimedReviewRun.ps1"
   ],
   "sanctionedGitParentMaxDepth": 2
 }

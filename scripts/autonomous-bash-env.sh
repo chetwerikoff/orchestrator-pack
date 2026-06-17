@@ -9,6 +9,27 @@ __ao_autonomous_pack_git() {
   printf '%s\n' "${script_dir}/git"
 }
 
+__ao_autonomous_extract_git_redirect_args() {
+  local cmd="${1-}"
+
+  if [[ "${cmd}" =~ .*(/usr/bin/git|/bin/git|/usr/local/bin/git)([[:space:]]+(.*))?$ ]]; then
+    printf '%s' "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  if [[ "${cmd}" =~ (^|[;&|[:space:]])(/usr/bin/env|env)([[:space:]]+.*[[:space:]])git([[:space:]]+.*)?$ ]]; then
+    printf '%s' "${BASH_REMATCH[4]}"
+    return 0
+  fi
+
+  if [[ "${cmd}" =~ ^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)+git([[:space:]]+.*)?$ ]]; then
+    printf '%s' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  return 1
+}
+
 __ao_autonomous_redirect_absolute_git() {
   local cmd="${BASH_COMMAND-}"
   [[ -n "${cmd}" ]] || return 0
@@ -19,9 +40,7 @@ __ao_autonomous_redirect_absolute_git() {
   [[ "${cmd}" == *"${pack_git}"* ]] && return 0
   [[ "${cmd}" == *git-autonomous-guard.ps1* ]] && return 0
 
-  if [[ "${cmd}" =~ .*(/usr/bin/git|/bin/git|/usr/local/bin/git)([[:space:]]+(.*))?$ ]]; then
-    args="${BASH_REMATCH[3]}"
-  else
+  if ! args="$(__ao_autonomous_extract_git_redirect_args "${cmd}")"; then
     return 0
   fi
 

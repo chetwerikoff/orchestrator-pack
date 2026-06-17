@@ -25,7 +25,7 @@ resolve_system_git() {
     fi
   fi
 
-  if [[ -n "${GIT_SYSTEM_BINARY:-}" && -x "${GIT_SYSTEM_BINARY}" ]]; then
+  if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" != "1" && -n "${GIT_SYSTEM_BINARY:-}" && -x "${GIT_SYSTEM_BINARY}" ]]; then
     printf '%s\n' "${GIT_SYSTEM_BINARY}"
     return 0
   fi

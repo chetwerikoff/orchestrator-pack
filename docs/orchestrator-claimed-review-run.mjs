@@ -332,7 +332,36 @@ export function containsRawReviewRunInvocation(commandLine) {
 }
 
 /**
- * Claimed-review git parent provenance: review-run must precede mutating git on the line.
+ * @param {string} segment
+ */
+function containsUnquotedShellCompoundOperator(segment) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index];
+    if (char === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (char === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble) {
+      if (char === ';' || char === '|') {
+        return true;
+      }
+      if (char === '&' && segment[index + 1] === '&') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Claimed-review git parent provenance: review-run must precede mutating git on the line,
+ * and git must not appear as a separate compound-shell command after review-run.
  * @param {string} commandLine
  */
 export function isClaimedReviewRunParentCommandLine(commandLine) {
@@ -346,7 +375,15 @@ export function isClaimedReviewRunParentCommandLine(commandLine) {
   if (!gitPrimary) {
     return true;
   }
-  return aoReviewRun.index < gitPrimary.index;
+  if (gitPrimary.index < aoReviewRun.index) {
+    return false;
+  }
+  const reviewRunEnd = aoReviewRun.index + aoReviewRun[0].length;
+  const between = text.slice(reviewRunEnd, gitPrimary.index);
+  if (containsUnquotedShellCompoundOperator(between)) {
+    return false;
+  }
+  return true;
 }
 
 /**
