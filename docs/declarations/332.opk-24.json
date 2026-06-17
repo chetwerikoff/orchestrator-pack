@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e"
+    "active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -26,6 +26,7 @@
     "scripts/_test-worker-session-fixtures.ts",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/lib/MechanicalReconcileNode.ps1",
     "scripts/orchestrator-message-registry.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
@@ -50,6 +51,20 @@
       "reason": "Review fix: break ci-green ESM cycle via primitives and shared CI classifier",
       "actor": "opk-28",
       "timestamp": "2026-06-17T17:46:18.992Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e",
+      "new_active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f",
+      "changed": {
+        "added": [
+          "scripts/lib/MechanicalReconcileNode.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Self-architect lint: shared fixture delivery-field merge helper",
+      "actor": "opk-28",
+      "timestamp": "2026-06-17T18:50:00.000Z",
       "applied": true
     }
   ]
