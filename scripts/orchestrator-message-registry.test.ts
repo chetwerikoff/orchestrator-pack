@@ -110,6 +110,35 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('fails audit when ao send is invoked directly without the call operator', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
+    try {
+      seedMinimalRegistryTree(tmp);
+      const badScript = "function Invoke-BadSender {\n  ao send worker-1 'hello'\n}";
+      writeJson(tmp, 'scripts/orchestrator-message-audit-roots.manifest.json', {
+        schemaVersion: 1,
+        supervisedProcessScripts: ['scripts/bad-sender.ps1'],
+        supervisorEntrypoints: [],
+        ciInvokedScripts: [],
+        commandEntrypoints: [],
+        orchestratorRulesBindings: [],
+      });
+      fs.writeFileSync(path.join(tmp, 'scripts/bad-sender.ps1'), badScript);
+      const result = auditRegistration(tmp);
+      expect(result.verdict).toBe('FAIL');
+      expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not flag ao send mentions inside strings or comments', () => {
+    const helpers = { helpers: [] };
+    const source = 'throw "ao send failed"\n# never ao send directly\nWrite-Log "dry-run: ao send user"';
+    const findings = detectRawSendsInSource('scripts/ok.ps1', source, helpers, []);
+    expect(findings.filter((f: { kind: string }) => f.kind === 'raw_send_outside_helper')).toHaveLength(0);
+  });
+
   it('flags cross-abstraction recipient overlap without semantic owner', () => {
     const catalog = {
       entries: [

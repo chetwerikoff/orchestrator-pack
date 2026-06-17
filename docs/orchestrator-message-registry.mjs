@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const RAW_SEND_PATTERNS = [
   { id: 'ao-send', regex: /(?<![\w-])&\s*ao\s+@?send\b/i },
+  { id: 'ao-send-direct', regex: /(?:^|[;|({\[])\s*ao\s+@?send\b/im, relPathSuffixes: ['.ps1', '/ao'] },
   { id: 'ao-send-splat', regex: /&\s*ao\s+@sendArgs\b/i },
   { id: 'ao-review-send', regex: /&\s*ao\s+@.*review.*send|&\s*ao\s+@\(.*'review'.*'send'/i },
   { id: 'ao-review-send-args', regex: /@\(\s*'review'\s*,\s*'send'/i },
@@ -398,6 +399,10 @@ export function detectRawSendsInSource(relPath, source, helpers, allowlistEntrie
   }
 
   for (const pattern of RAW_SEND_PATTERNS) {
+    const normPath = relPath.replace(/\\/g, '/');
+    if (pattern.relPathSuffixes && !pattern.relPathSuffixes.some((suffix) => normPath.endsWith(suffix))) {
+      continue;
+    }
     let match;
     const regex = new RegExp(pattern.regex.source, pattern.regex.flags.includes('g') ? pattern.regex.flags : `${pattern.regex.flags}g`);
     while ((match = regex.exec(source)) !== null) {
