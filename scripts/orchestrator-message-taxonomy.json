@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "recipientKeys": [
+    "orchestrator-session",
+    "head-owning-worker",
+    "specific-session"
+  ],
+  "intentKeys": [
+    "wake-nudge",
+    "heartbeat-nudge",
+    "ci-green-handoff",
+    "ci-failure-fix",
+    "review-findings-first",
+    "review-findings-redelivery",
+    "worker-input-submit"
+  ],
+  "recipientAliases": [
+    {
+      "parent": "head-owning-worker",
+      "child": "specific-session",
+      "reason": "session id resolves to the PR head-owning worker at runtime"
+    }
+  ],
+  "intentAliases": [
+    {
+      "parent": "ci-failure-fix",
+      "child": "red-status",
+      "reason": "near-synonym intent for CI failure worker nudge"
+    }
+  ]
+}
