@@ -746,36 +746,13 @@ export function resolveLinkedIssueNumbers(repoRoot = process.cwd()) {
   return [...linked];
 }
 
-/** Issue-linked declared-path edits allowed without redefining the protected matrix manifest. */
+/** Issue-linked declared-path edits allowed when an issue is explicitly linked (branch/PR/env). */
 const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   324: [
     'agent-orchestrator.yaml.example',
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
   ],
 };
-
-/** Companion paths that may infer issue linkage without PR/branch context (exclude protected-runtime-only files). */
-const BUILTIN_COORDINATED_ISSUE_INFERENCE_PATH_EDITS = {
-  324: ['agent-orchestrator.yaml.example'],
-};
-
-function inferLinkedIssuesFromCoordinatedPathEdits(changedFiles, protectedManifest) {
-  const linked = new Set();
-  const coordinated = {
-    ...BUILTIN_COORDINATED_ISSUE_INFERENCE_PATH_EDITS,
-    ...(protectedManifest?.coordinatedIssueInferencePathEdits ?? {}),
-  };
-  const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
-  for (const [issue, paths] of Object.entries(coordinated)) {
-    for (const declaredPath of paths ?? []) {
-      if (changed.has(String(declaredPath).replace(/\\/g, '/'))) {
-        linked.add(Number(issue));
-        break;
-      }
-    }
-  }
-  return [...linked];
-}
 
 function buildCoordinatedDeclaredPathAllowSet(protectedManifest, linkedIssueNumbers) {
   const allowed = new Set();
@@ -936,12 +913,7 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
-  const linkedIssueNumbers = [
-    ...new Set([
-      ...resolveLinkedIssueNumbers(repoRoot),
-      ...inferLinkedIssuesFromCoordinatedPathEdits(changedFiles, bundle.protectedRuntime),
-    ]),
-  ];
+  const linkedIssueNumbers = resolveLinkedIssueNumbers(repoRoot);
   return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, {
     baseManifestExists,
     linkedIssueNumbers,

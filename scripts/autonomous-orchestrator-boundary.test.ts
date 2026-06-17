@@ -800,11 +800,26 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(allowed.ok).toBe(true);
   });
 
-  it('infers issue-324 coordination from coordinated path edits without PR event context', () => {
+  it('does not self-authorize issue-324 from yaml.example edits without explicit link', () => {
     const { dir, baseSha } = initCoordinatedIssue324Fixture();
     try {
       withoutGithubActionsEnv(() => {
         process.env.GITHUB_BASE_SHA = baseSha;
+        const result = checkProtectedRuntimeForRepo(dir, baseSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('agent-orchestrator.yaml.example'))).toBe(true);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows issue-324 yaml.example edits when ORCHESTRATOR_MESSAGE_LINKED_ISSUES is set', () => {
+    const { dir, baseSha } = initCoordinatedIssue324Fixture();
+    try {
+      withoutGithubActionsEnv(() => {
+        process.env.GITHUB_BASE_SHA = baseSha;
+        process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = '324';
         const result = checkProtectedRuntimeForRepo(dir, baseSha);
         expect(result.ok).toBe(true);
       });
