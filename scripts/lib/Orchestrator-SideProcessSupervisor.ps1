@@ -9,7 +9,6 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessHealth.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessCrashBackoff.ps1')
-. (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $Script:OrchestratorSideProcessRegistryPath = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-side-process-registry.json'
@@ -417,6 +416,50 @@ function Wait-OrchestratorWakeSupervisorProcessExit {
             return
         }
         Start-Sleep -Milliseconds 100
+    }
+}
+
+function Get-OrchestratorWakeSupervisorProcessCommandLine {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) { return '' }
+
+    if ($IsLinux) {
+        $procPath = "/proc/$ProcessId/cmdline"
+        if (Test-Path -LiteralPath $procPath) {
+            $raw = [System.IO.File]::ReadAllBytes($procPath)
+            if ($raw.Length -eq 0) { return '' }
+            $parts = New-Object System.Collections.Generic.List[string]
+            $current = New-Object System.Text.StringBuilder
+            foreach ($byte in $raw) {
+                if ($byte -eq 0) {
+                    if ($current.Length -gt 0) {
+                        $parts.Add($current.ToString())
+                        $current.Clear() | Out-Null
+                    }
+                }
+                else {
+                    [void]$current.Append([char]$byte)
+                }
+            }
+            if ($current.Length -gt 0) {
+                $parts.Add($current.ToString())
+            }
+            return ($parts -join ' ')
+        }
+    }
+
+    if ($IsMacOS) {
+        $out = & ps -p $ProcessId -o command= 2>$null
+        return (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+    }
+
+    try {
+        $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+        return [string]$cim.CommandLine
+    }
+    catch {
+        return ''
     }
 }
 

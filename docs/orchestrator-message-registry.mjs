@@ -693,6 +693,80 @@ export function readGithubActionsPullRequestShas() {
   }
 }
 
+/**
+ * @param {string} [repoRoot]
+ */
+export function resolveLinkedIssueNumbers(repoRoot = process.cwd()) {
+  const linked = new Set();
+  const fromEnv = String(process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES ?? '')
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const part of fromEnv) {
+    const match = /^(?:#|issue-)?(\d+)$/i.exec(part);
+    if (match) linked.add(Number(match[1]));
+  }
+
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventPath && existsSync(eventPath)) {
+    try {
+      const event = JSON.parse(readFileSync(eventPath, 'utf8'));
+      const text = [
+        event.pull_request?.title,
+        event.pull_request?.body,
+        event.pull_request?.head?.ref,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      for (const match of text.matchAll(/(?:^|\s|#)(\d{1,6})(?=\s|$|[):,])/g)) {
+        linked.add(Number(match[1]));
+      }
+      for (const match of text.matchAll(/(?:refs?|see|closes?|fixes?|resolves?)\s+#(\d+)/gi)) {
+        linked.add(Number(match[1]));
+      }
+    }
+    catch {
+      // ignore malformed event payload
+    }
+  }
+
+  try {
+    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const branchMatch = /(?:^|\/)(\d{1,6})(?:-|$)/.exec(branch) ?? /#(\d{1,6})\b/.exec(branch);
+    if (branchMatch) linked.add(Number(branchMatch[1]));
+  }
+  catch {
+    // ignore detached HEAD / missing git
+  }
+
+  return [...linked];
+}
+
+/** Issue-linked declared-path edits allowed without redefining the protected matrix manifest. */
+const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
+  324: ['agent-orchestrator.yaml.example'],
+};
+
+function buildCoordinatedDeclaredPathAllowSet(protectedManifest, linkedIssueNumbers) {
+  const allowed = new Set();
+  const linked = new Set((linkedIssueNumbers ?? []).map((issue) => Number(issue)));
+  const coordinated = {
+    ...BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS,
+    ...(protectedManifest.coordinatedIssueDeclaredPathEdits ?? {}),
+  };
+  for (const [issue, paths] of Object.entries(coordinated)) {
+    if (!linked.has(Number(issue))) continue;
+    for (const path of paths ?? []) {
+      allowed.add(String(path).replace(/\\/g, '/'));
+    }
+  }
+  return allowed;
+}
+
 function hydrateGithubPullRequestRefs(repoRoot) {
   const pr = readGithubActionsPullRequestShas();
   if (!pr) return null;
@@ -836,12 +910,20 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   }
   const manifestRel = 'scripts/orchestrator-message-protected-runtime.manifest.json';
   const baseManifestExists = fileExistsOnGitRef(repoRoot, resolvedBase, manifestRel);
-  return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, { baseManifestExists });
+  const linkedIssueNumbers = resolveLinkedIssueNumbers(repoRoot);
+  return checkProtectedRuntimeDiff(changedFiles, bundle.protectedRuntime, {
+    baseManifestExists,
+    linkedIssueNumbers,
+  });
 }
 
 export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, options = {}) {
   const toolPaths = options.toolPaths ?? protectedManifest.toolPaths;
   const baseManifestExists = options.baseManifestExists ?? true;
+  const coordinatedAllow = buildCoordinatedDeclaredPathAllowSet(
+    protectedManifest,
+    options.linkedIssueNumbers ?? [],
+  );
   const violations = [];
   const protectedSet = new Set([
     ...(protectedManifest.runtimeSendHelpers ?? []),
@@ -859,6 +941,9 @@ export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, optio
       continue;
     }
     if (protectedSet.has(norm) && !toolSet.has(norm)) {
+      if (coordinatedAllow.has(norm)) {
+        continue;
+      }
       violations.push(`protected runtime edit: ${norm}`);
     }
   }

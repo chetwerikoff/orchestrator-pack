@@ -23,6 +23,7 @@ import {
   loadAutonomousOrchestratorBoundaryInventory,
   validateBoundaryCapabilityInventory,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
+import { checkProtectedRuntimeDiff } from '../docs/orchestrator-message-registry.mjs';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -468,5 +469,17 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(parsed.packRootEndsScripts).toBe(true);
     expect(parsed.scriptsDirExists).toBe(true);
     expect(parsed.resolvedNotScriptsScripts).toBe(true);
+  });
+
+  it('allows coordinated agent-orchestrator.yaml.example edits for issue 324', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'),
+    );
+    const denied = checkProtectedRuntimeDiff(['agent-orchestrator.yaml.example'], manifest);
+    expect(denied.ok).toBe(false);
+    const allowed = checkProtectedRuntimeDiff(['agent-orchestrator.yaml.example'], manifest, {
+      linkedIssueNumbers: [324],
+    });
+    expect(allowed.ok).toBe(true);
   });
 });
