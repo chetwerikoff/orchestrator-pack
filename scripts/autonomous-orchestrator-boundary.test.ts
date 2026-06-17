@@ -633,6 +633,48 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     });
   });
 
+  it('denies absolute git and ao invocations from bash script files under BASH_ENV', () => {
+    withTempGitRepo((dir) => {
+      const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
+      const gitScript = path.join(dir, 'mutate-git.sh');
+      writeFileSync(gitScript, '#!/usr/bin/env bash\n/usr/bin/git branch -m script-file-bypass\n');
+      chmodSync(gitScript, 0o755);
+      const denyGitScript = spawnSync('bash', [gitScript], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          BASH_ENV: bashEnvPath,
+        },
+      });
+      expect(denyGitScript.status).toBe(93);
+      expect(denyGitScript.stderr || denyGitScript.stdout).toMatch(/autonomous tree-mutating git denied/i);
+      expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+        before.stdout.trim(),
+      );
+
+      const fakeAo = path.join(mkdtempSync(path.join(tmpdir(), 'autonomous-fake-ao-script-')), 'ao');
+      writeFileSync(fakeAo, '#!/usr/bin/env bash\nprintf \'spawn-ok\\n\'\n');
+      chmodSync(fakeAo, 0o755);
+      const aoScript = path.join(dir, 'mutate-ao.sh');
+      writeFileSync(aoScript, `#!/usr/bin/env bash\n${fakeAo} spawn opk-1\n`);
+      chmodSync(aoScript, 0o755);
+      const denyAoScript = spawnSync('bash', [aoScript], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          BASH_ENV: bashEnvPath,
+        },
+      });
+      expect(denyAoScript.status).toBe(93);
+      expect(denyAoScript.stderr || denyAoScript.stdout).toMatch(/autonomous worker spawn denied/i);
+      expect(denyAoScript.stdout).not.toMatch(/spawn-ok/);
+    });
+  });
+
   it('routes direct system-git forwarder and real-binary invocations through the guard', () => {
     withTempGitRepo((dir) => {
       const invokePath = path.join(repoRoot, 'scripts/_invoke-system-git.sh');

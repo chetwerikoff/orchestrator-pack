@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Optional BASH_ENV interposer for autonomous orchestrator bash turns (Issue #324).
 # Redirects absolute host git/ao binaries through pack scripts/git and scripts/ao.
+[[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
 [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]] || return 0
 
 __ao_autonomous_pack_script_dir() {
@@ -223,20 +224,59 @@ __ao_autonomous_rewrite_all_binaries_in_command() {
 
 __ao_autonomous_interpose_execution_string() {
   [[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
-  [[ -n "${BASH_EXECUTION_STRING:-}" ]] || return 0
 
   local pack_git pack_ao rewritten="" ec
   pack_git="$(__ao_autonomous_pack_git)"
   pack_ao="$(__ao_autonomous_pack_ao)"
-  rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_EXECUTION_STRING}" "${pack_git}" "${pack_ao}")"
-  if [[ "${rewritten}" == "${BASH_EXECUTION_STRING}" ]]; then
+
+  if [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
+    rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_EXECUTION_STRING}" "${pack_git}" "${pack_ao}")"
+    if [[ "${rewritten}" == "${BASH_EXECUTION_STRING}" ]]; then
+      return 0
+    fi
+
+    __AO_AUTONOMOUS_BASH_INTERPOSED=1
+    BASH_ENV= eval "${rewritten}"
+    ec=$?
+    exit "${ec}"
+  fi
+
+  __ao_autonomous_install_debug_interposer "${pack_git}" "${pack_ao}"
+}
+
+__ao_autonomous_debug_trap() {
+  local pack_git="${__AO_AUTONOMOUS_DEBUG_PACK_GIT:-}"
+  local pack_ao="${__AO_AUTONOMOUS_DEBUG_PACK_AO:-}"
+  local rewritten="" ec=0
+
+  [[ "${BASH_COMMAND}" == __ao_autonomous_debug_trap ]] && return 0
+  [[ "${BASH_COMMAND}" == *__ao_autonomous_* ]] && return 0
+  [[ "${__AO_AUTONOMOUS_DEBUG_ACTIVE:-}" == 1 ]] && return 0
+  [[ -z "${pack_git}" || -z "${pack_ao}" ]] && return 0
+
+  rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_COMMAND}" "${pack_git}" "${pack_ao}")"
+  if [[ "${rewritten}" == "${BASH_COMMAND}" ]]; then
     return 0
   fi
 
-  __AO_AUTONOMOUS_BASH_INTERPOSED=1
-  eval "${rewritten}"
+  __AO_AUTONOMOUS_DEBUG_ACTIVE=1
+  BASH_ENV= __AO_AUTONOMOUS_BASH_INTERPOSED=1 eval "${rewritten}"
   ec=$?
-  exit "${ec}"
+  __AO_AUTONOMOUS_DEBUG_ACTIVE=0
+  if [[ ${ec} -ne 0 ]]; then
+    exit "${ec}"
+  fi
+  return 1
+}
+
+__ao_autonomous_install_debug_interposer() {
+  local pack_git="${1-}" pack_ao="${2-}"
+  [[ "${__AO_AUTONOMOUS_DEBUG_TRAP_INSTALLED:-}" == 1 ]] && return 0
+  __AO_AUTONOMOUS_DEBUG_PACK_GIT="${pack_git}"
+  __AO_AUTONOMOUS_DEBUG_PACK_AO="${pack_ao}"
+  shopt -s extdebug
+  trap '__ao_autonomous_debug_trap' DEBUG
+  __AO_AUTONOMOUS_DEBUG_TRAP_INSTALLED=1
 }
 
 __ao_autonomous_interpose_execution_string
