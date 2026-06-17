@@ -3,16 +3,12 @@
 .SYNOPSIS
   ao process-boundary guard for autonomous orchestrator sessions (Issue #318).
 #>
-[CmdletBinding()]
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$AoArgs
-)
-
+# No [CmdletBinding()] -- avoids PS 7.3+ ambiguity where -p matches both
+# -ProgressAction and -PipelineVariable as common parameters.
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 
-$deny = Test-AutonomousRawReviewRunDenied -Argv $AoArgs
+$deny = Test-AutonomousRawReviewRunDenied -Argv $args
 if ($deny.denied) {
     [Console]::Error.WriteLine("autonomous review-starts paused by gate preflight: $($deny.reason). Use scripts/invoke-orchestrator-claimed-review-run.ps1")
     exit 93
@@ -20,9 +16,9 @@ if ($deny.denied) {
 
 $realAo = Resolve-RealAoExecutable
 if ($realAo -eq 'ao') {
-    & ao @AoArgs
+    & ao @args
 }
 else {
-    & $realAo @AoArgs
+    & $realAo @args
 }
 exit $LASTEXITCODE
