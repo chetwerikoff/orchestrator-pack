@@ -270,6 +270,13 @@ describe('shared cycle state merge', () => {
 });
 
 describe('pending delivery staleness', () => {
+  type CycleEvalResult = {
+    state: Record<string, unknown>;
+    cycle?: { debounce?: { pendingDeliveryFirstSeenAtMs?: number } } | null;
+    pendingDelivery?: { pending?: boolean; stale?: boolean };
+    nudgeGate?: { blockers?: string[] };
+  };
+
   it('records first-seen time and becomes stale after STALE_PENDING_DELIVERY_BOUND_MS', () => {
     const session = liveWorker();
     const deliveries = [
@@ -292,7 +299,7 @@ describe('pending delivery staleness', () => {
       workerDeliveries: deliveries,
       nowMs: firstSeenMs,
       reviewRuns: [],
-    });
+    }) as CycleEvalResult;
     expect(first.cycle?.debounce?.pendingDeliveryFirstSeenAtMs).toBe(firstSeenMs);
     expect(first.pendingDelivery?.pending).toBe(true);
     expect(first.pendingDelivery?.stale).toBe(false);
@@ -307,7 +314,7 @@ describe('pending delivery staleness', () => {
       workerDeliveries: deliveries,
       nowMs: laterMs,
       reviewRuns: [],
-    });
+    }) as CycleEvalResult;
     expect(second.pendingDelivery?.stale).toBe(true);
     expect(second.nudgeGate?.blockers ?? []).not.toContain('pending_unconsumed_delivery');
   });

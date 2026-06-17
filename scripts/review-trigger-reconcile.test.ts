@@ -257,7 +257,9 @@ describe('planReconcileActions', () => {
       }),
     );
     expect(startReviewActions(allowed.actions)).toHaveLength(1);
-    expect(allowed.actions[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
+    expect(startReviewActions(allowed.actions)[0]?.startReason).toBe(
+      'quiescent_worker_handoff_fallback',
+    );
   });
 
   it('Issue #218 (AC1/AC2): SHA-less ready_for_review on PR #217 shape triggers review', () => {
