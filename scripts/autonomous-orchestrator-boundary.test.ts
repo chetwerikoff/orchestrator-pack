@@ -531,6 +531,60 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     }
   });
 
+  it('interposes custom absolute git and ao real-binary paths', () => {
+    const fakeBinRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-bin-'));
+    try {
+      const customGitDir = path.join(fakeBinRoot, 'opt', 'homebrew', 'bin');
+      const customAoDir = path.join(fakeBinRoot, 'home', 'you', '.local', 'bin');
+      mkdirSync(customGitDir, { recursive: true });
+      mkdirSync(customAoDir, { recursive: true });
+      const customGit = path.join(customGitDir, 'git');
+      const customAo = path.join(customAoDir, 'ao');
+      writeFileSync(customGit, '#!/usr/bin/env bash\nexec /usr/bin/git "$@"\n');
+      writeFileSync(customAo, '#!/usr/bin/env bash\nprintf \'spawn-ok\\n\'\n');
+      chmodSync(customGit, 0o755);
+      chmodSync(customAo, 0o755);
+
+      withTempGitRepo((dir) => {
+        const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
+        const denyCustomGit = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; ${customGit} branch -m custom-git-bypass`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+          },
+        );
+        expect(denyCustomGit.status).toBe(93);
+        expect(denyCustomGit.stderr || denyCustomGit.stdout).toMatch(/autonomous tree-mutating git denied/i);
+        expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
+          before.stdout.trim(),
+        );
+
+        const denyCustomAo = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; ${customAo} spawn opk-1`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+          },
+        );
+        expect(denyCustomAo.status).toBe(93);
+        expect(denyCustomAo.stderr || denyCustomAo.stdout).toMatch(/autonomous worker spawn denied/i);
+        expect(denyCustomAo.stdout).not.toMatch(/spawn-ok/);
+
+        const denyCustomAoBashEnv = spawnAutonomousBashTurn(dir, `${customAo} spawn opk-1`);
+        expect(denyCustomAoBashEnv.status).toBe(93);
+        expect(denyCustomAoBashEnv.stderr || denyCustomAoBashEnv.stdout).toMatch(/autonomous worker spawn denied/i);
+        expect(denyCustomAoBashEnv.stdout).not.toMatch(/spawn-ok/);
+      });
+    } finally {
+      rmSync(fakeBinRoot, { recursive: true, force: true });
+    }
+  });
+
   it('routes direct system-git forwarder and real-binary invocations through the guard', () => {
     withTempGitRepo((dir) => {
       const invokePath = path.join(repoRoot, 'scripts/_invoke-system-git.sh');
