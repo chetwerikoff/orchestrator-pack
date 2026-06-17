@@ -64,6 +64,35 @@ function Get-ReconcileStatePath {
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-reconcile-state.json'
 }
 
+function Get-CiGreenWakeSharedStatePath {
+    if ($env:AO_CI_GREEN_WAKE_RECONCILE_STATE) { return $env:AO_CI_GREEN_WAKE_RECONCILE_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-green-wake-state.json'
+}
+
+function Get-CiGreenWakeSharedCycleEvidence {
+    param([string]$Path = '')
+
+    $resolved = if ($Path) { $Path } else { Get-CiGreenWakeSharedStatePath }
+    $defaults = @{
+        heads          = @{}
+        nudged         = @{}
+        pendingJournal = @{}
+        cycleState     = @{}
+    }
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        return @{
+            sharedCycleState = @{}
+            legacyNudged     = @{}
+        }
+    }
+
+    $state = Get-MechanicalJsonStateFile -Path $resolved -DefaultState $defaults -ActionTracking
+    return @{
+        sharedCycleState = $state.cycleState
+        legacyNudged     = $state.nudged
+    }
+}
+
 function Write-ReconcileLog {
     param([string]$Message)
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -453,6 +482,8 @@ function Invoke-ReconcileTick {
     $planPayload.tracking = $TrackingState
     $planPayload.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $planPayload.cycleState = $TrackingState.cycleState
+    $planPayload.sharedCycleState = $TrackingState.sharedCycleState
+    $planPayload.legacyNudged = $TrackingState.legacyNudged
     $planPayload.repoRoot = $RepoRoot
 
     $planResult = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
@@ -573,9 +604,12 @@ try {
                 Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reconcile' -ErrorMessage "fences untrusted: $reason"
             }
             else {
+            $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence
             $tickTracking = @{
-                degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi)
-                cycleState = $state.cycleState
+                degradedCi         = (Copy-MechanicalJsonMap -Map $state.degradedCi)
+                cycleState         = $state.cycleState
+                sharedCycleState   = $sharedEvidence.sharedCycleState
+                legacyNudged       = $sharedEvidence.legacyNudged
             }
             try {
                 $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml `

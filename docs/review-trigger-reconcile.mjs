@@ -24,6 +24,7 @@ import {
   commitOwnerCyclePatch,
   commitReviewStartedCycleState,
   evaluateWorkerIterationCycleForPr,
+  mergeSharedWorkerIterationCycleState,
   NUDGE_EXPIRY_MS,
   CYCLE_SURFACE_READY_FOR_REVIEW,
 } from './worker-iteration-cycle.mjs';
@@ -743,6 +744,8 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
  * @param {Record<string, unknown>} [input.cycleState]
+ * @param {Record<string, unknown>} [input.sharedCycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [input.legacyNudged]
  * @param {string} [input.repoRoot]
  */
 export function planReconcileActions({
@@ -759,6 +762,8 @@ export function planReconcileActions({
   dispatchJournal,
   reactionMessages,
   cycleState,
+  sharedCycleState,
+  legacyNudged,
   repoRoot,
 }) {
   /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
@@ -767,7 +772,11 @@ export function planReconcileActions({
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
-  let nextCycleState = { ...(cycleState ?? {}) };
+  const sharedNudged = legacyNudged ?? tracking?.legacyNudged ?? null;
+  let nextCycleState = mergeSharedWorkerIterationCycleState(
+    { ...(cycleState ?? tracking?.cycleState ?? {}) },
+    sharedCycleState ?? tracking?.sharedCycleState ?? {},
+  );
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries,
     aoEvents,
@@ -813,6 +822,7 @@ export function planReconcileActions({
       nowMs,
       headCommittedAtMs,
       handoffAccepted,
+      legacyNudged: sharedNudged,
     });
     nextCycleState = cycleEval.state;
 

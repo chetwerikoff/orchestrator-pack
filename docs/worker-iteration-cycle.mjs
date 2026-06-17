@@ -811,6 +811,65 @@ export function patchOwnerCycle(cycle, patch) {
 }
 
 /**
+ * Merge owner-cycle rows from ci-green-wake into review-trigger local state.
+ * Ci-green is authoritative for nudge arms; review-trigger keeps review arms.
+ *
+ * @param {Record<string, unknown>} localRecord
+ * @param {Record<string, unknown>} sharedRecord
+ */
+function mergeOwnerCycleRecords(localRecord, sharedRecord) {
+  const local = defaultOwnerCycleRecord(localRecord);
+  const shared = defaultOwnerCycleRecord(sharedRecord);
+  const merged = { ...local, ...shared };
+  const localNudgeAt = Number(local.nudgeSentAtMs ?? 0);
+  const sharedNudgeAt = Number(shared.nudgeSentAtMs ?? 0);
+  if (shared.nudgeArmed && sharedNudgeAt >= localNudgeAt) {
+    merged.nudgeArmed = shared.nudgeArmed;
+    merged.nudgeSentAtMs = shared.nudgeSentAtMs;
+    merged.nudgeExpiresAtMs = shared.nudgeExpiresAtMs;
+    merged.nudgeExpiredFallbackPending = shared.nudgeExpiredFallbackPending;
+  } else if (local.nudgeArmed) {
+    merged.nudgeArmed = local.nudgeArmed;
+    merged.nudgeSentAtMs = local.nudgeSentAtMs;
+    merged.nudgeExpiresAtMs = local.nudgeExpiresAtMs;
+    merged.nudgeExpiredFallbackPending = local.nudgeExpiredFallbackPending;
+  }
+  if (local.reviewArmed || local.fallbackArmed) {
+    merged.reviewArmed = local.reviewArmed;
+    merged.fallbackArmed = local.fallbackArmed;
+  }
+  merged.debounce = { ...(shared.debounce ?? {}), ...(local.debounce ?? {}) };
+  merged.suppressAudit = { ...(local.suppressAudit ?? {}) };
+  merged.cycleId = local.cycleId || shared.cycleId;
+  merged.openedAtMs = local.openedAtMs || shared.openedAtMs;
+  merged.ownerSessionId = local.ownerSessionId || shared.ownerSessionId;
+  merged.prNumber = local.prNumber || shared.prNumber;
+  return merged;
+}
+
+/**
+ * @param {Record<string, unknown>} [localState]
+ * @param {Record<string, unknown>} [sharedState]
+ */
+export function mergeSharedWorkerIterationCycleState(localState = {}, sharedState = {}) {
+  const local = localState ?? {};
+  const shared = sharedState ?? {};
+  const ownerCycles = { ...(local.ownerCycles ?? {}) };
+  for (const [key, sharedRecord] of Object.entries(shared.ownerCycles ?? {})) {
+    const row = /** @type {Record<string, unknown>} */ (sharedRecord);
+    ownerCycles[key] = ownerCycles[key]
+      ? mergeOwnerCycleRecords(ownerCycles[key], row)
+      : defaultOwnerCycleRecord(row);
+  }
+  return {
+    ...local,
+    repoId: local.repoId ?? shared.repoId,
+    ownerCycles,
+    revisionLocks: { ...(shared.revisionLocks ?? {}), ...(local.revisionLocks ?? {}) },
+  };
+}
+
+/**
  * Bootstrap per-cycle nudge state from legacy per-head transition keys.
  *
  * @param {Record<string, unknown>} cycleState

@@ -74,6 +74,10 @@ export declare function patchOwnerCycle(
   cycle: Record<string, unknown>,
   patch: Record<string, unknown>,
 ): Record<string, unknown>;
+export declare function mergeSharedWorkerIterationCycleState(
+  localState?: Record<string, unknown>,
+  sharedState?: Record<string, unknown>,
+): Record<string, unknown>;
 export declare function bootstrapLegacyNudgedCycle(
   cycleState: Record<string, unknown>,
   legacyNudged: Record<string, { sessionId?: string; sentAtMs?: number }>,

@@ -215,6 +215,51 @@ describe('planReconcileActions', () => {
     ).toBe(true);
   });
 
+  it('shares ci-green nudge evidence before allowing quiescent fallback', () => {
+    const fixture = loadFixture('quiescent-pr260-opk-37.json');
+    const nowMs = Number(fixture.nowMs ?? Date.now());
+    const sessionId = 'opk-37';
+    const prNumber = 260;
+    const repoId = 'orchestrator-pack';
+    const ownerKey = `${repoId}:pr:${prNumber}:owner:${sessionId}`;
+
+    const blocked = unwrapReconcilePlanResult(
+      planReconcileActions({ ...fixture, cycleState: {} }),
+    );
+    expect(startReviewActions(blocked.actions)).toHaveLength(0);
+    expect(
+      skipActions(blocked.actions).some((a) => a.reason === 'nudge_precedence_over_fallback'),
+    ).toBe(true);
+
+    const allowed = unwrapReconcilePlanResult(
+      planReconcileActions({
+        ...fixture,
+        cycleState: {},
+        legacyNudged: {
+          [`${prNumber}:42bf1490dbe8829667d2835b937a33e7af9d82f1:1:nudge`]: {
+            sessionId,
+            sentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+          },
+        },
+        sharedCycleState: {
+          repoId,
+          ownerCycles: {
+            [ownerKey]: {
+              cycleId: 'cg-cycle',
+              ownerSessionId: sessionId,
+              prNumber,
+              nudgeArmed: true,
+              nudgeSentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+              nudgeExpiresAtMs: nowMs - 1000,
+            },
+          },
+        },
+      }),
+    );
+    expect(startReviewActions(allowed.actions)).toHaveLength(1);
+    expect(allowed.actions[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
+  });
+
   it('Issue #218 (AC1/AC2): SHA-less ready_for_review on PR #217 shape triggers review', () => {
     const fixture = loadFixture('ready-sha-less-pr217.json');
     const actions = planReconcile(fixture);

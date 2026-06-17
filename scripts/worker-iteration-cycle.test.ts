@@ -17,6 +17,7 @@ import {
   evaluateReviewCycleGate,
   evaluateWorkerIterationCycleForPr,
   evaluateSettleActionPrecedence,
+  mergeSharedWorkerIterationCycleState,
   normalizeCanonicalRepoIdentity,
   resolveOrAdvanceOwnerCycle,
 } from '../docs/worker-iteration-cycle.mjs';
@@ -240,6 +241,31 @@ describe('review cycle gate matrix cells', () => {
     });
     expect(gate.allow).toBe(false);
     expect(gate.primary).toBe('prior_revision_open');
+  });
+});
+
+describe('shared cycle state merge', () => {
+  it('imports ci-green nudge arms into review-trigger local state', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      { repoId, ownerCycles: {} },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'cg-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+          },
+        },
+      },
+    ) as { ownerCycles?: Record<string, { nudgeArmed?: boolean }> };
+    expect(merged.ownerCycles?.[ownerKey]?.nudgeArmed).toBe(true);
   });
 });
 
