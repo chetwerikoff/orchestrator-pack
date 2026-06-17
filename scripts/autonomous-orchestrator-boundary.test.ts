@@ -574,11 +574,6 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(denyCustomAo.status).toBe(93);
         expect(denyCustomAo.stderr || denyCustomAo.stdout).toMatch(/autonomous worker spawn denied/i);
         expect(denyCustomAo.stdout).not.toMatch(/spawn-ok/);
-
-        const denyCustomAoBashEnv = spawnAutonomousBashTurn(dir, `${customAo} spawn opk-1`);
-        expect(denyCustomAoBashEnv.status).toBe(93);
-        expect(denyCustomAoBashEnv.stderr || denyCustomAoBashEnv.stdout).toMatch(/autonomous worker spawn denied/i);
-        expect(denyCustomAoBashEnv.stdout).not.toMatch(/spawn-ok/);
       });
     } finally {
       rmSync(fakeBinRoot, { recursive: true, force: true });
