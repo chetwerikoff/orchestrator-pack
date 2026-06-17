@@ -19,6 +19,7 @@ import {
   listChangedFiles,
   loadRegistryBundle,
   normalizeAuditOutput,
+  parseGitDiffNameOnlyOutput,
   recipientKeysOverlap,
   resolveDiffBaseRef,
   validateCatalog,
@@ -442,6 +443,16 @@ describe('orchestrator message registry (Issue #298)', () => {
       else process.env.GITHUB_EVENT_PATH = prevEvent;
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('filters RTK git shim trailers from diff name-only output', () => {
+    expect(parseGitDiffNameOnlyOutput('registry-fixture-change.txt\n--- Changes ---\n')).toEqual([
+      'registry-fixture-change.txt',
+    ]);
+    expect(parseGitDiffNameOnlyOutput('docs/foo.mjs\nscripts/bar.ps1\n')).toEqual([
+      'docs/foo.mjs',
+      'scripts/bar.ps1',
+    ]);
   });
 
   it('lists changed files from pull_request base and head shas in Actions', () => {

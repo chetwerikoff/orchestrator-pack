@@ -755,6 +755,20 @@ export function resolveDiffBaseRef(repoRoot, baseRef = 'origin/main') {
   throw new Error(`failed to resolve diff base ref (tried: ${tried.join(', ')})`);
 }
 
+export function parseGitDiffNameOnlyOutput(output) {
+  return String(output ?? '')
+    .split('\n')
+    .map((line) => line.trim().replace(/\\/g, '/'))
+    .filter((line) => isRepoRelativePathLine(line));
+}
+
+function isRepoRelativePathLine(line) {
+  if (!line) return false;
+  if (line.startsWith('---')) return false;
+  if (/\s/.test(line)) return false;
+  return /^[\w./@+-]+$/.test(line);
+}
+
 export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
   const pr = hydrateGithubPullRequestRefs(repoRoot);
   if (pr) {
@@ -763,7 +777,7 @@ export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
         cwd: repoRoot,
         encoding: 'utf8',
       });
-      return out.split('\n').map((line) => line.trim().replace(/\\/g, '/')).filter(Boolean);
+      return parseGitDiffNameOnlyOutput(out);
     }
     catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -776,7 +790,7 @@ export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
       cwd: repoRoot,
       encoding: 'utf8',
     });
-    return out.split('\n').map((line) => line.trim().replace(/\\/g, '/')).filter(Boolean);
+    return parseGitDiffNameOnlyOutput(out);
   }
   catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
