@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
+  isRawReviewRunInvocation,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
 } from './orchestrator-claimed-review-run.mjs';
@@ -213,7 +214,7 @@ export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, 
   }
   if (claimedBypass) {
     for (const line of chain) {
-      if (/\bao\b/i.test(line) && /\breview\b/i.test(line) && /\brun\b/i.test(line)) {
+      if (isRawReviewRunInvocation(line)) {
         return true;
       }
     }

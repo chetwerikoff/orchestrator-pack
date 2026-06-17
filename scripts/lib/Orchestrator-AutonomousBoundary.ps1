@@ -284,7 +284,18 @@ function Test-ProcessCommandLineIsAoReviewRun {
     param([string]$CommandLine)
 
     if (-not $CommandLine) { return $false }
-    return $CommandLine -match '(?i)\bao\b' -and $CommandLine -match '(?i)\breview\b' -and $CommandLine -match '(?i)\brun\b'
+    $aoReviewRun = [regex]::Match($CommandLine, '(?i)\bao(?:\.cmd)?\s+review\s+run\b')
+    if (-not $aoReviewRun.Success) {
+        $aoReviewRun = [regex]::Match($CommandLine, '(?i)\breview\s+run\b.*--execute\b')
+    }
+    if (-not $aoReviewRun.Success) {
+        return $false
+    }
+    $gitPrimary = [regex]::Match($CommandLine, '(?i)\bgit\s+(?:-[a-zA-Z]|branch|checkout|switch|worktree|reset|commit|merge|rebase|pull|tag|stash|push|fetch)\b')
+    if (-not $gitPrimary.Success) {
+        return $true
+    }
+    return $aoReviewRun.Index -lt $gitPrimary.Index
 }
 
 function Test-AutonomousGitSanctionedProvenance {

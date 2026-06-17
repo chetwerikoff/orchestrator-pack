@@ -327,7 +327,16 @@ export function evaluateOrchestratorTurnGate(input) {
  */
 export function isRawReviewRunInvocation(commandLine) {
   const text = String(commandLine ?? '');
-  return /\bao(?:\.cmd)?\s+review\s+run\b/i.test(text) || /\breview\s+run\b.*--execute\b/i.test(text);
+  const aoReviewRun = /\bao(?:\.cmd)?\s+review\s+run\b/i.exec(text)
+    ?? /\breview\s+run\b.*--execute\b/i.exec(text);
+  if (!aoReviewRun) {
+    return false;
+  }
+  const gitPrimary = /\bgit\s+(?:-[a-zA-Z]|branch|checkout|switch|worktree|reset|commit|merge|rebase|pull|tag|stash|push|fetch)\b/i.exec(text);
+  if (!gitPrimary) {
+    return true;
+  }
+  return aoReviewRun.index < gitPrimary.index;
 }
 
 /**

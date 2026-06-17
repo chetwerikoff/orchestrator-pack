@@ -16,6 +16,7 @@ import {
   evaluateOrchestratorTurnGate,
   evaluateScenarioMatrixCell,
   findForbiddenAutonomousReviewRunInvocations,
+  isRawReviewRunInvocation,
   loadAutonomousReviewStartCapabilities,
   validateCapabilityInventory,
 } from '../docs/orchestrator-claimed-review-run.mjs';
@@ -168,6 +169,10 @@ describe('orchestrator claimed review-run gate (#318)', () => {
         commandLine: 'ao review run opk-1 --execute --command echo',
         autonomousSurface: false,
       }).allowed,
+    ).toBe(true);
+    expect(isRawReviewRunInvocation('pwsh -c "git branch -m blocked # ao review run"')).toBe(false);
+    expect(
+      isRawReviewRunInvocation('ao review run opk-1 --execute --command "git worktree add wt main"'),
     ).toBe(true);
   });
 

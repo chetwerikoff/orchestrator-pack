@@ -120,6 +120,17 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       parentChain: ['pwsh -NoProfile -Command git checkout main'],
     });
     expect(verdict.allowed).toBe(false);
+    expect(
+      evaluateAutonomousGitBoundary({
+        argv: ['branch', '-m', 'blocked'],
+        autonomousSurface: true,
+        claimedBypass: true,
+        parentChain: ['pwsh -c "git branch -m blocked # ao review run"'],
+      }).allowed,
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain(['ao review run opk-1 --execute --command echo'], true),
+    ).toBe(true);
   });
 
   it('allows sanctioned preflight parent for mutating git', () => {
