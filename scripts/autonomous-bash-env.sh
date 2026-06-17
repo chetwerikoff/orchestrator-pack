@@ -77,7 +77,14 @@ __ao_autonomous_rewrite_binary_command() {
     return 0
   fi
 
-  # Unquoted absolute binary.
+  # Unquoted absolute binary at command start (BASH_ENV -c shape).
+  if [[ "${cmd}" =~ ^(${abs_binary})(.*)$ ]]; then
+    printf -v quoted_pack_target '%q' "${pack_target}"
+    printf '%s%s' "${quoted_pack_target}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  # Unquoted absolute binary after a shell separator.
   if [[ "${cmd}" =~ (^|[;&|[:space:]])(${abs_binary})(.*)$ ]]; then
     printf -v quoted_pack_target '%q' "${pack_target}"
     prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
