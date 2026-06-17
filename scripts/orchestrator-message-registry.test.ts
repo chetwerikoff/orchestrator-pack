@@ -62,9 +62,11 @@ describe('orchestrator message registry (Issue #298)', () => {
 
   it('enumerates baseline classes independently of catalog authorship', () => {
     const baseline = enumerateBaselineClassIds();
-    const bundle = loadRegistryBundle(repoRoot);
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: { entries: Array<{ message_class_id: string }> };
+    };
     for (const id of baseline) {
-      expect(bundle.catalog.entries.some((e: { message_class_id: string }) => e.message_class_id === id)).toBe(true);
+      expect(bundle.catalog.entries.some((e) => e.message_class_id === id)).toBe(true);
     }
   });
 
@@ -84,7 +86,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       fs.writeFileSync(path.join(tmp, 'scripts/bad-sender.ps1'), badScript);
       const result = auditRegistration(tmp);
       expect(result.verdict).toBe('FAIL');
-      expect(result.violations.some((v) => v.includes('raw send outside helper'))).toBe(true);
+      expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -149,18 +151,22 @@ describe('orchestrator message registry (Issue #298)', () => {
     const helpers = { helpers: [] };
     const source = 'Invoke-Expression "& ao send worker hi"';
     const findings = detectRawSendsInSource('scripts/evil.ps1', source, helpers, []);
-    expect(findings.some((f) => f.kind === 'unanalyzable')).toBe(true);
+    expect(findings.some((f: { kind: string }) => f.kind === 'unanalyzable')).toBe(true);
   });
 
   it('detects uncatalogued tmux draft-submit outside helper', () => {
     const helpers = { helpers: [{ name: 'Invoke-WorkerInputDraftSubmit', file: 'scripts/lib/Submit-WorkerInputDraft.ps1', mechanisms: ['draft-submit'] }] };
     const source = 'tmux send-keys -t worker Enter';
     const findings = detectRawSendsInSource('scripts/bad-submit.ps1', source, helpers, []);
-    expect(findings.some((f) => f.kind === 'raw_send_outside_helper' && f.mechanism === 'tmux-submit')).toBe(true);
+    expect(findings.some((f: { kind: string; mechanism?: string }) => f.kind === 'raw_send_outside_helper' && f.mechanism === 'tmux-submit')).toBe(true);
   });
 
   it('generates deterministic bounded map output', () => {
-    const bundle = loadRegistryBundle(repoRoot);
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: Record<string, unknown>;
+      taxonomy: Record<string, unknown>;
+      owners: Record<string, unknown>;
+    };
     const overlap = checkSemanticOverlaps(bundle.catalog, bundle.taxonomy, bundle.owners);
     const first = generateMessageMap(bundle.catalog, overlap);
     const second = generateMessageMap(bundle.catalog, overlap);
@@ -184,18 +190,18 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('catches predicate body hash drift', () => {
-    const bundle = loadRegistryBundle(repoRoot);
-    const broken = structuredClone(bundle.catalog);
-    broken.entries[0].callsite.predicateBodyHash = 'deadbeefdeadbeef';
+    const bundle = loadRegistryBundle(repoRoot) as { catalog: { entries: Array<Record<string, unknown>> } };
+    const broken = structuredClone(bundle.catalog) as { entries: Array<Record<string, unknown>> };
+    (broken.entries[0] as { callsite: { predicateBodyHash: string } }).callsite.predicateBodyHash = 'deadbeefdeadbeef';
     const violations = validateCatalog({ ...bundle, catalog: broken }, repoRoot);
     expect(violations.ok).toBe(false);
     expect(violations.violations.some((v: string) => v.includes('predicate body hash drift'))).toBe(true);
   });
 
   it('catches divergent message_class_id reuse at the same callsite', () => {
-    const bundle = loadRegistryBundle(repoRoot);
-    const broken = structuredClone(bundle.catalog);
-    const dup = structuredClone(broken.entries[0]);
+    const bundle = loadRegistryBundle(repoRoot) as { catalog: { entries: Array<Record<string, unknown>> } };
+    const broken = structuredClone(bundle.catalog) as { entries: Array<Record<string, unknown>> };
+    const dup = structuredClone(broken.entries[0]) as Record<string, unknown>;
     dup.message_class_id = 'duplicate-id';
     broken.entries.push(dup);
     const violations = validateCatalog({ ...bundle, catalog: broken }, repoRoot);
@@ -216,7 +222,7 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('runs check-orchestrator-message-registry.ps1 clean on the real tree', () => {
-    execFileSync('pwsh', ['-NoProfile', '-File', checkScript, '-RepoRoot', repoRoot], { stdio: 'pipe' });
+    execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
   });
 
   it('documents recipient alias overlap conservatively', () => {

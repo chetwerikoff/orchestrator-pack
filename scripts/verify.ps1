@@ -988,7 +988,7 @@ Write-Host ''
 Write-Host '== Orchestrator message registry (Issue #298) =='
 $messageRegistryCheck = Join-Path $Root 'scripts/check-orchestrator-message-registry.ps1'
 if (Test-Path -LiteralPath $messageRegistryCheck -PathType Leaf) {
-    & $messageRegistryCheck -RepoRoot $Root
+    & $messageRegistryCheck $Root
     if ($LASTEXITCODE -eq 0) {
         Write-Check 'scripts/check-orchestrator-message-registry.ps1' 'PASS' 'completed'
     }

@@ -1,22 +1,10 @@
 #requires -Version 7.0
-<#
-.SYNOPSIS
-  CI guard for orchestrator message registry audit, overlap check, and map drift (Issue #298).
-#>
-[CmdletBinding()]
-param(
-    [string]$RepoRoot = ''
-)
-
 $ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
-}
-$RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$Root = if ($args.Count -gt 0 -and $args[0]) { (Resolve-Path -LiteralPath $args[0]).Path } else { Split-Path -Parent $PSScriptRoot }
 
-$registryCli = Join-Path $RepoRoot 'docs/orchestrator-message-registry.mjs'
-$mapPath = Join-Path $RepoRoot 'docs/orchestrator-message-map.md'
-$failures = New-Object System.Collections.Generic.List[string]
+$registryCli = Join-Path $Root 'docs/orchestrator-message-registry.mjs'
+$mapPath = Join-Path $Root 'docs/orchestrator-message-map.md'
+$failures = [System.Collections.Generic.List[string]]::new()
 
 if ($IsWindows -and -not $env:WSL_DISTRO_NAME) {
     $failures.Add('unsupported host: native Windows execution is refused (use Linux/WSL + pwsh 7+)')
@@ -30,23 +18,20 @@ if (-not (Test-Path -LiteralPath $registryCli -PathType Leaf)) {
 }
 
 if ($failures.Count -eq 0) {
-    $auditJson = & node $registryCli audit $RepoRoot 2>&1 | Out-String
+    & node $registryCli audit $Root
     if ($LASTEXITCODE -ne 0) {
-        $failures.Add("registration audit failed: $auditJson")
+        $failures.Add('registration audit failed (see node output above)')
     }
 
-    $generated = & node $registryCli generate-map $RepoRoot 2>&1 | Out-String
+    $generated = (& node $registryCli generate-map $Root 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
-        $failures.Add("map generation failed: $generated")
+        $failures.Add('map generation failed')
     }
     elseif (-not (Test-Path -LiteralPath $mapPath -PathType Leaf)) {
         $failures.Add("missing committed map: $mapPath")
     }
-    else {
-        $committed = Get-Content -LiteralPath $mapPath -Raw
-        if ($committed -ne $generated) {
-            $failures.Add('committed orchestrator message map differs from regenerated output')
-        }
+    elseif ((Get-Content -LiteralPath $mapPath -Raw) -ne $generated) {
+        $failures.Add('committed orchestrator message map differs from regenerated output')
     }
 }
 
