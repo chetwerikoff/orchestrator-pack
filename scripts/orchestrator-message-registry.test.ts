@@ -149,6 +149,50 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('fails audit when ao review send is invoked directly without splat args', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
+    try {
+      seedMinimalRegistryTree(tmp);
+      const badScript = "function Invoke-BadReviewSender {\n  & ao review send run-abc\n}";
+      writeJson(tmp, 'scripts/orchestrator-message-audit-roots.manifest.json', {
+        schemaVersion: 1,
+        supervisedProcessScripts: ['scripts/bad-review-sender.ps1'],
+        supervisorEntrypoints: [],
+        ciInvokedScripts: [],
+        commandEntrypoints: [],
+        orchestratorRulesBindings: [],
+      });
+      fs.writeFileSync(path.join(tmp, 'scripts/bad-review-sender.ps1'), badScript);
+      const result = auditRegistration(tmp);
+      expect(result.verdict).toBe('FAIL');
+      expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('fails audit when ao review send is invoked directly without the call operator', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
+    try {
+      seedMinimalRegistryTree(tmp);
+      const badScript = "function Invoke-BadReviewSender {\n  ao review send run-abc\n}";
+      writeJson(tmp, 'scripts/orchestrator-message-audit-roots.manifest.json', {
+        schemaVersion: 1,
+        supervisedProcessScripts: ['scripts/bad-review-sender.ps1'],
+        supervisorEntrypoints: [],
+        ciInvokedScripts: [],
+        commandEntrypoints: [],
+        orchestratorRulesBindings: [],
+      });
+      fs.writeFileSync(path.join(tmp, 'scripts/bad-review-sender.ps1'), badScript);
+      const result = auditRegistration(tmp);
+      expect(result.verdict).toBe('FAIL');
+      expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('fails audit when ao send is invoked directly without the call operator', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
     try {
@@ -352,6 +396,15 @@ describe('orchestrator message registry (Issue #298)', () => {
       { baseManifestExists: false },
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('rejects catalog entries that omit predicateBodyHash', () => {
+    const bundle = loadRegistryBundle(repoRoot) as { catalog: { entries: Array<Record<string, unknown>> } };
+    const broken = structuredClone(bundle.catalog) as { entries: Array<Record<string, unknown>> };
+    delete (broken.entries[0] as { callsite: { predicateBodyHash?: string } }).callsite.predicateBodyHash;
+    const violations = validateCatalog({ ...bundle, catalog: broken }, repoRoot);
+    expect(violations.ok).toBe(false);
+    expect(violations.violations.some((v: string) => v.includes('missing callsite.predicateBodyHash'))).toBe(true);
   });
 
   it('catches predicate body hash drift', () => {

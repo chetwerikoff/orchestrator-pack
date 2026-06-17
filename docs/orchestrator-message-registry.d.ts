@@ -1,1 +1,1 @@
-export * from './orchestrator-message-registry.d.mts';
+export * from './orchestrator-message-registry.mjs';

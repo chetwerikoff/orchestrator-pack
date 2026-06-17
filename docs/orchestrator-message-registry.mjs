@@ -15,7 +15,8 @@ const RAW_SEND_PATTERNS = [
   { id: 'ao-send', regex: /(?<![\w-])&\s*ao\s+@?send\b/i },
   { id: 'ao-send-direct', regex: /(?:^|[;|({\[])\s*ao\s+@?send\b/im, relPathSuffixes: ['.ps1', '/ao'] },
   { id: 'ao-send-splat', regex: /&\s*ao\s+@sendArgs\b/i },
-  { id: 'ao-review-send', regex: /&\s*ao\s+@.*review.*send|&\s*ao\s+@\(.*'review'.*'send'/i },
+  { id: 'ao-review-send', regex: /(?<![\w-])&\s*ao\s+review\s+send\b|&\s*ao\s+@.*review.*send|&\s*ao\s+@\(.*'review'.*'send'/i },
+  { id: 'ao-review-send-direct', regex: /(?:^|[;|({\[])\s*ao\s+review\s+send\b/im, relPathSuffixes: ['.ps1', '/ao'] },
   { id: 'ao-review-send-args', regex: /@\(\s*'review'\s*,\s*'send'/i },
   { id: 'draft-submit', regex: /Invoke-WorkerInputDraftSubmit\b/ },
   { id: 'tmux-submit', regex: /tmux\s+send-keys\b.*Enter/i },
@@ -232,7 +233,9 @@ export function validateCatalogEntry(entry, bundle, repoRoot) {
           : extractFunctionBody(source, cs.function);
       if (!body) {
         violations.push(`${entry.message_class_id}: callsite function/anchor not found ${cs.file}::${cs.function}`);
-      } else if (cs.predicateBodyHash) {
+      } else if (!cs.predicateBodyHash) {
+        violations.push(`${entry.message_class_id}: missing callsite.predicateBodyHash`);
+      } else {
         const live = hashNormalizedBody(body);
         if (live !== cs.predicateBodyHash) {
           violations.push(`${entry.message_class_id}: predicate body hash drift (expected ${cs.predicateBodyHash}, got ${live})`);
@@ -371,6 +374,7 @@ function patternMechanismIds(patternId) {
     case 'ao-send-splat':
     case 'ao-path-send':
       return ['ao-send', 'ao-review-send'];
+    case 'ao-review-send-direct':
     case 'ao-review-send-args':
       return ['ao-review-send'];
     case 'tmux-submit':
