@@ -34,9 +34,9 @@ const aoShimPath = path.join(repoRoot, 'scripts/ao');
 const gitShimPath = path.join(repoRoot, 'scripts/git');
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 
-/** Bash skips BASH_ENV when POSIXLY_CORRECT is set; CI runners often inherit it via process.env. */
+/** Bash skips BASH_ENV when POSIXLY_CORRECT or posix shell options are active. */
 function spawnAutonomousBashTurn(cwd: string, command: string) {
-  const { POSIXLY_CORRECT: _ignored, ...baseEnv } = process.env;
+  const { POSIXLY_CORRECT: _ignoredPc, SHELLOPTS: _ignoredSo, ...baseEnv } = process.env;
   return spawnSync('/bin/bash', ['-c', command], {
     cwd,
     encoding: 'utf8',
