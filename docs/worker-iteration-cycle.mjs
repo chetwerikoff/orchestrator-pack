@@ -494,6 +494,60 @@ export function evaluateStalePendingDelivery(session, sessionId, workerDeliverie
 }
 
 /**
+ * Whether an armed owner cycle reached a terminal close event (#332) so the next
+ * worker iteration can arm review/nudge again. Closes after a terminal-and-drained
+ * review/fallback (no open revision) or when the worker hands off on a new uncovered
+ * head after the prior reviewed head was covered.
+ *
+ * @param {object} input
+ */
+export function shouldTerminalCloseOwnerCycle(input) {
+  const {
+    cycle,
+    openRevision,
+    reviewRuns,
+    prNumber,
+    headSha,
+    handoffAccepted = false,
+  } = input;
+
+  if (!cycle?.cycleId) {
+    return false;
+  }
+  if (openRevision?.open) {
+    return false;
+  }
+  if (!cycle.reviewArmed && !cycle.fallbackArmed) {
+    return false;
+  }
+
+  const head = normalizeSha(headSha);
+  if (head && isHeadCovered(reviewRuns, prNumber, head)) {
+    return true;
+  }
+
+  const firstHead = normalizeSha(cycle.firstHeadSha);
+  const headAdvancedPastFirst =
+    Boolean(head && firstHead && head !== firstHead) || Number(cycle.headAdvanceCount ?? 0) > 0;
+
+  if (
+    handoffAccepted &&
+    head &&
+    !isHeadCovered(reviewRuns, prNumber, head) &&
+    firstHead &&
+    isHeadCovered(reviewRuns, prNumber, firstHead)
+  ) {
+    return true;
+  }
+
+  if (headAdvancedPastFirst && firstHead && isHeadCovered(reviewRuns, prNumber, firstHead)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Remove owner-cycle rows for other owners on the same PR so stale transfer rows
  * do not force the current owner's cycle to close/reopen every tick.
  *
@@ -1111,6 +1165,18 @@ export function evaluateWorkerIterationCycleForPr(input) {
     state = pruneStaleOwnerCyclesForPr(state, repoId, prNumber, ownerSessionId);
   }
 
+  const priorCycle = ownerSessionId
+    ? defaultOwnerCycleRecord(getOwnerCycleRecord(state, repoId, prNumber, ownerSessionId))
+    : null;
+  const terminalClose = shouldTerminalCloseOwnerCycle({
+    cycle: priorCycle?.cycleId ? priorCycle : null,
+    openRevision,
+    reviewRuns,
+    prNumber,
+    headSha,
+    handoffAccepted,
+  });
+
   const { state: advancedState, cycle: resolvedCycle, opened, advanced } = resolveOrAdvanceOwnerCycle({
     state,
     repoId,
@@ -1118,6 +1184,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
     ownerSessionId,
     headSha,
     nowMs,
+    terminalClose,
     handoffAccepted,
   });
   state = advancedState;

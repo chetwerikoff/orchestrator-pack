@@ -439,4 +439,49 @@ describe('owner cycle advance', () => {
     expect(second.cycle?.reviewArmed).toBe(true);
     expect(second.opened).toBe(false);
   });
+
+  it('reopens the owner cycle after a clean review so a follow-up revision can review', () => {
+    const repoId = 'repo';
+    const owner = 'op-worker';
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: owner,
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitReviewStartedCycleState(first.state, {
+      repoId,
+      prNumber: 42,
+      ownerSessionId: owner,
+      cycle: first.cycle ?? {},
+      isQuiescentFallback: false,
+    });
+    const cleanReviewRuns = [
+      {
+        id: 'run-clean',
+        prNumber: 42,
+        targetSha: 'h1',
+        status: 'clean',
+        findingCount: 0,
+        sentFindingCount: 0,
+      },
+    ];
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: armedState,
+      repoRoot: repoId,
+      prNumber: 42,
+      headSha: 'h2',
+      ownerSessionId: owner,
+      handoffAccepted: true,
+      reviewRuns: cleanReviewRuns,
+      session: liveWorker({ ownedHeadSha: 'h2' }),
+      nowMs: 2000,
+    }) as CycleEvalResult;
+    expect(second.cycle?.reviewArmed).toBe(false);
+    expect(second.cycle?.cycleId).not.toBe(first.cycle?.cycleId);
+    expect(second.reviewGate?.allow).toBe(true);
+    expect(second.reviewGate?.blockers ?? []).not.toContain('already_reviewed_this_cycle');
+  });
 });
