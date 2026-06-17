@@ -516,7 +516,6 @@ export function resolveOrAdvanceOwnerCycle(input) {
 
   const shouldClose =
     terminalClose ||
-    handoffAccepted ||
     ownershipChanged ||
     (cycle && cycle.ownerSessionId && owner && cycle.ownerSessionId !== owner);
 

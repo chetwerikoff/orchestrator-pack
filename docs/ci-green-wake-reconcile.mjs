@@ -60,7 +60,7 @@ export const CI_GREEN_WAKE_MESSAGE =
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ lastCiLevel?: CiLevel, greenEpoch?: number }} HeadCiRecord */
 /** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number, cycleState?: Record<string, unknown> }} CiGreenWakeState */
-/** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
+/** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string, ownerCycle?: { repoId: string, cycle: Record<string, unknown> } } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
 
 /**
  * Required CI per prompts/agent_rules.md: branch-protection contexts when configured,
@@ -440,13 +440,10 @@ export function planCiGreenWakeActions({
       sessionId,
       transitionId,
       message: CI_GREEN_WAKE_MESSAGE,
-    });
-
-    cycleState = commitOwnerCyclePatch(cycleState, cycleEval.repoId, prNumber, sessionId, {
-      ...(cycleEval.cycle ?? {}),
-      nudgeArmed: true,
-      nudgeSentAtMs: nowMs,
-      nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+      ownerCycle: {
+        repoId: cycleEval.repoId,
+        cycle: cycleEval.cycle ?? {},
+      },
     });
   }
 
@@ -577,6 +574,27 @@ export function recordSuccessfulNudge(tracking, transitionId, sessionId, sentAtM
 }
 
 /**
+ * Persist per-cycle nudge arming only after a successful send — not during planning.
+ *
+ * @param {Record<string, unknown>} cycleState
+ * @param {object} input
+ * @param {string} input.repoId
+ * @param {number} input.prNumber
+ * @param {string} input.ownerSessionId
+ * @param {Record<string, unknown>} [input.cycle]
+ * @param {number} input.sentAtMs
+ */
+export function commitNudgeSentCycleState(cycleState, input) {
+  const sentAtMs = Number(input.sentAtMs ?? Date.now());
+  return commitOwnerCyclePatch(cycleState, input.repoId, input.prNumber, input.ownerSessionId, {
+    ...(input.cycle ?? {}),
+    nudgeArmed: true,
+    nudgeSentAtMs: sentAtMs,
+    nudgeExpiresAtMs: sentAtMs + NUDGE_EXPIRY_MS,
+  });
+}
+
+/**
  * @param {CiGreenWakeState} tracking
  * @param {Record<string, HeadCiRecord>} headRecords
  * @param {number} lastTickMs
@@ -678,5 +696,17 @@ runStdinJsonCli('ci-green-wake-reconcile.mjs', {
   'merge-required-names': () => {
     const payload = readStdinJson();
     return mergeBranchRequiredCheckNames(payload.contexts, payload.checks);
+  },
+  'commit-nudge-sent': () => {
+    const payload = readStdinJson();
+    return {
+      cycleState: commitNudgeSentCycleState(payload.cycleState ?? {}, {
+        repoId: payload.repoId,
+        prNumber: Number(payload.prNumber),
+        ownerSessionId: String(payload.ownerSessionId ?? ''),
+        cycle: payload.cycle,
+        sentAtMs: Number(payload.sentAtMs) || Date.now(),
+      }),
+    };
   },
 });

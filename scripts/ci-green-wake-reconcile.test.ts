@@ -15,10 +15,12 @@ import {
   resolveHeadOwningWorkerSessionId,
   preSendRecheck,
   recordSuccessfulNudge,
+  commitNudgeSentCycleState,
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
 import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
+import { QUIESCENCE_DEBOUNCE_MS } from '../docs/worker-iteration-cycle.mjs';
 import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
 const fixturesDir = path.join(
@@ -337,6 +339,37 @@ describe('planCiGreenWakeActions', () => {
       tracking: {},
     });
     expect(nudgeActions(result.actions)).toHaveLength(1);
+  });
+
+  it('does not mark nudgeArmed in cycleState during planning', () => {
+    const settledAt = Date.parse('2026-06-01T00:00:00.000Z');
+    const result = plan({
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: settledAt }],
+      sessions: [
+        liveWorker({
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+        }),
+      ],
+      ciChecksByPr: { 42: greenChecks },
+      tracking: {},
+      nowMs: settledAt + QUIESCENCE_DEBOUNCE_MS + 1000,
+    });
+    const nudge = nudgeActions(result.actions)[0];
+    expect(nudge?.ownerCycle).toBeDefined();
+    const ownerCycles = (result.cycleState?.ownerCycles ?? {}) as Record<
+      string,
+      { nudgeArmed?: boolean }
+    >;
+    expect(Object.values(ownerCycles).every((cycle) => !cycle?.nudgeArmed)).toBe(true);
+    const committed = commitNudgeSentCycleState(result.cycleState ?? {}, {
+      repoId: nudge.ownerCycle!.repoId,
+      prNumber: 42,
+      ownerSessionId: nudge.sessionId,
+      cycle: nudge.ownerCycle!.cycle,
+      sentAtMs: settledAt + QUIESCENCE_DEBOUNCE_MS + 1000,
+    });
+    const armedCycles = (committed.ownerCycles ?? {}) as Record<string, { nudgeArmed?: boolean }>;
+    expect(Object.values(armedCycles).some((cycle) => cycle?.nudgeArmed)).toBe(true);
   });
 });
 

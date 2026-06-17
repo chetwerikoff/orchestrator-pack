@@ -39,6 +39,7 @@ export type CiGreenWakeAction =
       sessionId: string;
       transitionId: string;
       message: string;
+      ownerCycle?: { repoId: string; cycle: Record<string, unknown> };
     }
   | {
       type: 'skip';
@@ -148,6 +149,17 @@ export declare function recordSuccessfulNudge(
   sessionId: string,
   sentAtMs: number,
 ): CiGreenWakeState;
+
+export declare function commitNudgeSentCycleState(
+  cycleState: Record<string, unknown>,
+  input: {
+    repoId: string;
+    prNumber: number;
+    ownerSessionId: string;
+    cycle?: Record<string, unknown>;
+    sentAtMs: number;
+  },
+): Record<string, unknown>;
 
 export declare function mergeTrackingAfterTick(
   tracking: CiGreenWakeState,

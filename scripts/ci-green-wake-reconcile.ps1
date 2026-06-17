@@ -447,6 +447,19 @@ function Invoke-CiGreenWakeTick {
                     sessionId = [string]$action.sessionId
                     sentAtMs  = $nowMs
                 }
+                if ($action.ownerCycle) {
+                    $commit = Invoke-CiGreenWakeFilterCli -Subcommand 'commit-nudge-sent' -Payload @{
+                        cycleState     = $cycleState
+                        repoId         = [string]$action.ownerCycle.repoId
+                        prNumber       = [int]$action.prNumber
+                        ownerSessionId = [string]$action.sessionId
+                        cycle          = $action.ownerCycle.cycle
+                        sentAtMs       = $nowMs
+                    }
+                    if ($commit.cycleState) {
+                        $cycleState = $commit.cycleState
+                    }
+                }
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
                     -Nudged $nudged -PendingJournal $pendingJournal -CycleState $cycleState -DryRunMode:$DryRunMode
             }

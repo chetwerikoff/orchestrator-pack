@@ -10,6 +10,7 @@ import {
   buildPrScopedKey,
   buildSurfaceStateKey,
   choosePrimaryBlocker,
+  commitOwnerCyclePatch,
   evaluateNudgeCycleGate,
   evaluateOpenReviewRevision,
   evaluateReviewCycleGate,
@@ -17,7 +18,7 @@ import {
   normalizeCanonicalRepoIdentity,
   resolveOrAdvanceOwnerCycle,
 } from '../docs/worker-iteration-cycle.mjs';
-import { planCiGreenWakeActions } from '../docs/ci-green-wake-reconcile.mjs';
+import { planCiGreenWakeActions, commitNudgeSentCycleState } from '../docs/ci-green-wake-reconcile.mjs';
 import { liveWorker, packGreenCiChecks as greenChecks } from './_test-worker-session-fixtures.js';
 
 describe('named timer bounds', () => {
@@ -122,7 +123,18 @@ describe('per-cycle head burst', () => {
         reviewRuns: [],
         nowMs: baseNow,
       });
-      cycleState = result.cycleState ?? {};
+      const nudge = result.actions.find((a) => a.type === 'nudge');
+      if (nudge?.type === 'nudge' && nudge.ownerCycle) {
+        cycleState = commitNudgeSentCycleState(result.cycleState ?? cycleState, {
+          repoId: nudge.ownerCycle.repoId,
+          prNumber: nudge.prNumber,
+          ownerSessionId: nudge.sessionId,
+          cycle: nudge.ownerCycle.cycle,
+          sentAtMs: baseNow,
+        });
+      } else {
+        cycleState = result.cycleState ?? cycleState;
+      }
       nudgeCount += result.actions.filter((a) => a.type === 'nudge').length;
     }
 
@@ -232,10 +244,37 @@ describe('review cycle gate matrix cells', () => {
 describe('owner cycle advance', () => {
   type OwnerCycleResult = {
     state: Record<string, unknown>;
-    cycle?: { cycleId?: string; headAdvanceCount?: number } | null;
+    cycle?: { cycleId?: string; headAdvanceCount?: number; reviewArmed?: boolean } | null;
     opened?: boolean;
     advanced?: boolean;
   };
+
+  it('preserves reviewArmed cycle across repeated handoff ticks', () => {
+    const repoId = 'repo';
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitOwnerCyclePatch(first.state, repoId, 42, 'op-worker', {
+      ...(first.cycle ?? {}),
+      reviewArmed: true,
+    });
+    const second = resolveOrAdvanceOwnerCycle({
+      state: armedState,
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h1',
+      nowMs: 2000,
+      handoffAccepted: true,
+    }) as OwnerCycleResult;
+    expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
+    expect(second.cycle?.reviewArmed).toBe(true);
+  });
 
   it('advances head without opening a new cycle', () => {
     const repoId = 'repo';
