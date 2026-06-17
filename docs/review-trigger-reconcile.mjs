@@ -22,6 +22,7 @@ import {
 import {
   coalesceSuppressAudit,
   commitOwnerCyclePatch,
+  commitReviewStartedCycleState,
   evaluateWorkerIterationCycleForPr,
   NUDGE_EXPIRY_MS,
   CYCLE_SURFACE_READY_FOR_REVIEW,
@@ -968,38 +969,17 @@ export function planReconcileActions({
         prNumber,
         headSha,
         sessionId,
+        ownerCycle: {
+          repoId: cycleEval.repoId,
+          cycle: cycleEval.cycle ?? {},
+          isQuiescentFallback,
+        },
       };
       if (isQuiescentFallback) {
         startAction.startReason = decision.reason;
         if (decision.quiescenceBasis) {
           startAction.quiescenceBasis = decision.quiescenceBasis;
         }
-        nextCycleState = commitOwnerCyclePatch(
-          nextCycleState,
-          cycleEval.repoId,
-          prNumber,
-          sessionId,
-          {
-            ...(cycleEval.cycle ?? {}),
-            fallbackArmed: true,
-            reviewArmed: true,
-          },
-        );
-      } else {
-        nextCycleState = commitOwnerCyclePatch(
-          nextCycleState,
-          cycleEval.repoId,
-          prNumber,
-          sessionId,
-          {
-            ...(cycleEval.cycle ?? {}),
-            reviewArmed: true,
-            debounce: {
-              ...(cycleEval.cycle?.debounce ?? {}),
-              [CYCLE_SURFACE_READY_FOR_REVIEW]: undefined,
-            },
-          },
-        );
       }
       actions.push(startAction);
       continue;
@@ -1130,5 +1110,17 @@ runStdinJsonCli('review-trigger-reconcile.mjs', {
   preRunRecheck: () => {
     const payload = readStdinJson();
     return preRunHeadReadyRecheck(payload.planned, payload.fresh);
+  },
+  'commit-review-started': () => {
+    const payload = readStdinJson();
+    return {
+      cycleState: commitReviewStartedCycleState(payload.cycleState ?? {}, {
+        repoId: payload.repoId,
+        prNumber: Number(payload.prNumber),
+        ownerSessionId: String(payload.ownerSessionId ?? ''),
+        cycle: payload.cycle,
+        isQuiescentFallback: Boolean(payload.isQuiescentFallback),
+      }),
+    };
   },
 });

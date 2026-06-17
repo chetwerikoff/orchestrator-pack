@@ -27,7 +27,7 @@ import {
   type PlanReconcileInput,
   type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
-import { NUDGE_EXPIRY_MS } from '../docs/worker-iteration-cycle.mjs';
+import { NUDGE_EXPIRY_MS, commitReviewStartedCycleState } from '../docs/worker-iteration-cycle.mjs';
 
 const greenChecks = [
   { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
@@ -193,6 +193,28 @@ function withExpiredNudgeCycle(fixture: FixturePayload): FixturePayload {
 }
 
 describe('planReconcileActions', () => {
+  it('does not mark reviewArmed in cycleState during planning', () => {
+    const fixture = withExpiredNudgeCycle(loadFixture('quiescent-pr260-opk-37.json'));
+    const result = unwrapReconcilePlanResult(planReconcileActions(fixture));
+    const start = startReviewActions(result.actions)[0];
+    expect(start?.ownerCycle).toBeDefined();
+    const ownerCycles = (result.cycleState?.ownerCycles ?? {}) as Record<
+      string,
+      { reviewArmed?: boolean; fallbackArmed?: boolean }
+    >;
+    expect(Object.values(ownerCycles).every((cycle) => !cycle?.reviewArmed)).toBe(true);
+    const committed = commitReviewStartedCycleState(result.cycleState ?? {}, {
+      repoId: start.ownerCycle!.repoId,
+      prNumber: start.prNumber,
+      ownerSessionId: start.sessionId,
+      cycle: start.ownerCycle!.cycle,
+      isQuiescentFallback: Boolean(start.ownerCycle!.isQuiescentFallback),
+    }) as { ownerCycles?: Record<string, { reviewArmed?: boolean }> };
+    expect(
+      Object.values(committed.ownerCycles ?? {}).some((cycle) => cycle?.reviewArmed),
+    ).toBe(true);
+  });
+
   it('Issue #218 (AC1/AC2): SHA-less ready_for_review on PR #217 shape triggers review', () => {
     const fixture = loadFixture('ready-sha-less-pr217.json');
     const actions = planReconcile(fixture);

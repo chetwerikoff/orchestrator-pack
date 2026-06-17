@@ -498,6 +498,19 @@ function Invoke-ReconcileTick {
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
             -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -StartReason $action.startReason
         if ($startResult.started) {
+            if (-not $DryRunMode -and $action.ownerCycle) {
+                $commit = Invoke-ReconcileFilterCli -Subcommand 'commit-review-started' -Payload @{
+                    cycleState         = $cycleState
+                    repoId             = [string]$action.ownerCycle.repoId
+                    prNumber           = [int]$action.prNumber
+                    ownerSessionId     = [string]$action.sessionId
+                    cycle              = $action.ownerCycle.cycle
+                    isQuiescentFallback = [bool]$action.ownerCycle.isQuiescentFallback
+                }
+                if ($commit.cycleState) {
+                    $cycleState = $commit.cycleState
+                }
+            }
             $started++
         }
     }

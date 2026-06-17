@@ -11,9 +11,11 @@ import {
   buildSurfaceStateKey,
   choosePrimaryBlocker,
   commitOwnerCyclePatch,
+  commitReviewStartedCycleState,
   evaluateNudgeCycleGate,
   evaluateOpenReviewRevision,
   evaluateReviewCycleGate,
+  evaluateWorkerIterationCycleForPr,
   evaluateSettleActionPrecedence,
   normalizeCanonicalRepoIdentity,
   resolveOrAdvanceOwnerCycle,
@@ -238,6 +240,65 @@ describe('review cycle gate matrix cells', () => {
     });
     expect(gate.allow).toBe(false);
     expect(gate.primary).toBe('prior_revision_open');
+  });
+});
+
+describe('pending delivery staleness', () => {
+  it('records first-seen time and becomes stale after STALE_PENDING_DELIVERY_BOUND_MS', () => {
+    const session = liveWorker();
+    const deliveries = [
+      {
+        deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+        sessionId: 'op-worker',
+        deliveredAtMs: 1000,
+        source: 'pack-send',
+        sourceKey: 'ci-green:tr-42',
+        deliveryPath: 'pending-draft',
+      },
+    ];
+    const firstSeenMs = 1000;
+    const first = evaluateWorkerIterationCycleForPr({
+      cycleState: {},
+      prNumber: 42,
+      headSha: 'abc123',
+      ownerSessionId: 'op-worker',
+      session,
+      workerDeliveries: deliveries,
+      nowMs: firstSeenMs,
+      reviewRuns: [],
+    });
+    expect(first.cycle?.debounce?.pendingDeliveryFirstSeenAtMs).toBe(firstSeenMs);
+    expect(first.pendingDelivery?.pending).toBe(true);
+    expect(first.pendingDelivery?.stale).toBe(false);
+
+    const laterMs = firstSeenMs + STALE_PENDING_DELIVERY_BOUND_MS + 1;
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: first.state,
+      prNumber: 42,
+      headSha: 'abc123',
+      ownerSessionId: 'op-worker',
+      session,
+      workerDeliveries: deliveries,
+      nowMs: laterMs,
+      reviewRuns: [],
+    });
+    expect(second.pendingDelivery?.stale).toBe(true);
+    expect(second.nudgeGate?.blockers ?? []).not.toContain('pending_unconsumed_delivery');
+  });
+});
+
+describe('review started cycle commit', () => {
+  it('arms review only via commitReviewStartedCycleState', () => {
+    const armed = commitReviewStartedCycleState({}, {
+      repoId: 'repo',
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      cycle: { cycleId: 'c1' },
+      isQuiescentFallback: true,
+    }) as { ownerCycles?: Record<string, { reviewArmed?: boolean; fallbackArmed?: boolean }> };
+    const cycle = armed.ownerCycles?.['repo:pr:42:owner:op-worker'];
+    expect(cycle?.reviewArmed).toBe(true);
+    expect(cycle?.fallbackArmed).toBe(true);
   });
 });
 

@@ -903,6 +903,38 @@ export function commitOwnerCyclePatch(state, repoId, prNumber, ownerSessionId, p
 }
 
 /**
+ * Persist review arming only after a review run actually starts — not during planning.
+ *
+ * @param {Record<string, unknown>} cycleState
+ * @param {object} input
+ * @param {string} input.repoId
+ * @param {number} input.prNumber
+ * @param {string} input.ownerSessionId
+ * @param {Record<string, unknown>} [input.cycle]
+ * @param {boolean} [input.isQuiescentFallback]
+ */
+export function commitReviewStartedCycleState(cycleState, input) {
+  const patch = {
+    ...(input.cycle ?? {}),
+    reviewArmed: true,
+    debounce: {
+      ...(input.cycle?.debounce ?? {}),
+      [CYCLE_SURFACE_READY_FOR_REVIEW]: undefined,
+    },
+  };
+  if (input.isQuiescentFallback) {
+    patch.fallbackArmed = true;
+  }
+  return commitOwnerCyclePatch(
+    cycleState,
+    input.repoId,
+    input.prNumber,
+    input.ownerSessionId,
+    patch,
+  );
+}
+
+/**
  * @param {Record<string, unknown>} state
  * @param {string} repoId
  * @param {number} prNumber
@@ -986,7 +1018,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
       }),
   );
 
-  const { state: advancedState, cycle, opened, advanced } = resolveOrAdvanceOwnerCycle({
+  const { state: advancedState, cycle: resolvedCycle, opened, advanced } = resolveOrAdvanceOwnerCycle({
     state,
     repoId,
     prNumber,
@@ -997,6 +1029,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
     ownershipChanged,
   });
   state = advancedState;
+  let cycle = resolvedCycle;
 
   const readyDebounce = evaluateReadyForReviewSettleDebounce({
     cycle,
@@ -1013,6 +1046,31 @@ export function evaluateWorkerIterationCycleForPr(input) {
   });
 
   const pendingDelivery = evaluateStalePendingDelivery(
+    session,
+    ownerSessionId,
+    workerDeliveries,
+    nowMs,
+    Number(cycle?.debounce?.pendingDeliveryFirstSeenAtMs ?? 0),
+  );
+
+  if (cycle && ownerSessionId) {
+    const priorFirstSeen = Number(cycle.debounce?.pendingDeliveryFirstSeenAtMs ?? 0);
+    if (pendingDelivery.pending && !(priorFirstSeen > 0)) {
+      const nextDebounce = {
+        ...(cycle.debounce ?? {}),
+        pendingDeliveryFirstSeenAtMs: nowMs,
+      };
+      cycle = patchOwnerCycle(cycle, { debounce: nextDebounce });
+      state = commitOwnerCyclePatch(state, repoId, prNumber, ownerSessionId, cycle);
+    } else if (!pendingDelivery.pending && priorFirstSeen > 0) {
+      const nextDebounce = { ...(cycle.debounce ?? {}) };
+      delete nextDebounce.pendingDeliveryFirstSeenAtMs;
+      cycle = patchOwnerCycle(cycle, { debounce: nextDebounce });
+      state = commitOwnerCyclePatch(state, repoId, prNumber, ownerSessionId, cycle);
+    }
+  }
+
+  const pendingDeliveryForGate = evaluateStalePendingDelivery(
     session,
     ownerSessionId,
     workerDeliveries,
@@ -1038,8 +1096,8 @@ export function evaluateWorkerIterationCycleForPr(input) {
     debouncePending: settle.debouncePending,
     handedOff: handoffAccepted,
     ownerResolutionFailClosed,
-    pendingDelivery: pendingDelivery.pending,
-    stalePendingDelivery: pendingDelivery.stale,
+    pendingDelivery: pendingDeliveryForGate.pending,
+    stalePendingDelivery: pendingDeliveryForGate.stale,
     nowMs,
   });
 
@@ -1058,7 +1116,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
     openRevision,
     readyDebounce,
     settle,
-    pendingDelivery,
+    pendingDelivery: pendingDeliveryForGate,
     reviewGate,
     nudgeGate,
     settleAction,

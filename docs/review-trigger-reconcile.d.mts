@@ -97,6 +97,11 @@ export interface StartReviewAction {
   sessionId: string;
   startReason?: string;
   quiescenceBasis?: Record<string, unknown>;
+  ownerCycle?: {
+    repoId: string;
+    cycle: Record<string, unknown>;
+    isQuiescentFallback?: boolean;
+  };
 }
 
 export interface NoStartDecisionRecord {

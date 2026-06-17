@@ -93,6 +93,16 @@ export declare function commitOwnerCyclePatch(
   ownerSessionId: string,
   patch: Record<string, unknown>,
 ): Record<string, unknown>;
+export declare function commitReviewStartedCycleState(
+  cycleState: Record<string, unknown>,
+  input: {
+    repoId: string;
+    prNumber: number;
+    ownerSessionId: string;
+    cycle?: Record<string, unknown>;
+    isQuiescentFallback?: boolean;
+  },
+): Record<string, unknown>;
 export declare function commitRevisionLock(
   state: Record<string, unknown>,
   repoId: string,
