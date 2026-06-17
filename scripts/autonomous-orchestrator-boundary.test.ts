@@ -219,6 +219,48 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     });
   });
 
+  it('does not treat distant claimed-review-run ancestors as sanctioned git provenance', () => {
+    const claimedParent = 'pwsh -NoProfile -File scripts/Invoke-OrchestratorClaimedReviewRun.ps1';
+    const reviewRunWorktreeParent =
+      'ao review run opk-1 --execute --command "git worktree add wt main"';
+    const distantChain = [
+      'pwsh -c "git branch -m blocked"',
+      'intermediate shell',
+      claimedParent,
+    ];
+
+    expect(
+      hasSanctionedGitParentChain(distantChain, ['branch', '-m', 'blocked']),
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain(distantChain, ['worktree', 'add', 'wt', 'main']),
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain(
+        ['shell', 'wrapper', reviewRunWorktreeParent],
+        ['worktree', 'add', 'wt', 'main'],
+      ),
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain([claimedParent], ['worktree', 'add', 'wt', 'main']),
+    ).toBe(true);
+
+    const deny = runPwsh(`
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      . ${psString(boundaryLibPath)}
+      $chain = @(
+        'pwsh -c "git branch -m blocked"',
+        'intermediate shell',
+        ${psString(claimedParent)}
+      )
+      $verdict = Test-AutonomousGitDenied -Argv @('branch','-m','blocked') -FixtureParentChain $chain
+      [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(deny);
+    expect(parsed.denied).toBe(true);
+    expect(parsed.reason).toBe('autonomous_mutating_git_denied');
+  });
+
   it('denies ambiguous provenance even with spoofed bypass env on direct git', () => {
     const verdict = evaluateAutonomousGitBoundary({
       argv: ['checkout', 'main'],

@@ -364,7 +364,7 @@ export function classifySanctionedGitProvenance(parentChain, maxDepth) {
       return 'preflight';
     }
   }
-  for (const line of chain) {
+  for (const line of chain.slice(0, depthLimit)) {
     if (isSanctionedGitParentCommandLine(line, [CLAIMED_REVIEW_RUN_INVOKER])) {
       return 'claimed_review_run';
     }

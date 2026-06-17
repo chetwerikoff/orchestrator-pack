@@ -520,11 +520,11 @@ function Test-GitArgvIsAoOwnedWorktreeAdd {
 function Get-AutonomousGitSanctionedProvenanceClass {
     param([string[]]$FixtureParentChain = @())
 
-    $chain = if ($FixtureParentChain.Count -gt 0) {
-        @($FixtureParentChain)
+    if ($FixtureParentChain.Count -gt 0) {
+        $chain = [string[]]$FixtureParentChain
     }
     else {
-        Get-ProcessParentChainCommandLines
+        $chain = Get-ProcessParentChainCommandLines
     }
 
     $depthLimit = [Math]::Min($chain.Count, $Script:SanctionedGitParentMaxDepth)
@@ -534,7 +534,8 @@ function Get-AutonomousGitSanctionedProvenanceClass {
         }
     }
 
-    foreach ($cmd in $chain) {
+    for ($i = 0; $i -lt $depthLimit; $i++) {
+        $cmd = $chain[$i]
         if (Test-ProcessCommandLineIsInvokeOrchestratorClaimedReviewRun -CommandLine $cmd) {
             return 'claimed_review_run'
         }
