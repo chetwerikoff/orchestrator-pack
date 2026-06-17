@@ -57,7 +57,7 @@ export declare function collectAuditRootFiles(repoRoot: string, auditRoots: Reco
 export declare function validateAuditRootCompleteness(bundle: Record<string, unknown>, repoRoot: string): string[];
 export declare function auditRegistration(repoRoot: string, options?: Record<string, unknown>): AuditRegistrationResult;
 export declare function generateMessageMap(catalog: Record<string, unknown>, overlapResult: OverlapResult): string;
-export declare function checkProtectedRuntimeDiff(changedFiles: string[], protectedManifest: Record<string, unknown>, options?: { toolPaths?: string[]; baseManifestExists?: boolean }): ProtectedRuntimeDiffResult;
+export declare function checkProtectedRuntimeDiff(changedFiles: string[], protectedManifest: Record<string, unknown>, options?: { toolPaths?: string[]; baseManifestExists?: boolean; linkedIssueNumbers?: number[] }): ProtectedRuntimeDiffResult;
 export declare function fileExistsOnGitRef(repoRoot: string, gitRef: string, relPath: string): boolean;
 export declare function readGithubActionsPullRequestShas(): { baseSha: string; headSha: string } | null;
 export declare function gitRefExists(repoRoot: string, ref: string): boolean;

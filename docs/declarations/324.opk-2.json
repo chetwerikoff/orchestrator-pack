@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "71037b81de217a83e4026365ca2a9a5df4bc9ff4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:dc4e2fdd5a45b29f7244a868fb557b8b1fc751c96c13a0de89ae908f6ca54d9d"
+    "active_scope_hash": "sha256:dc25097b03882c0e04926bd836a669bda68af8cc7bad9b1c8c9b97a24cf02699"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -19,6 +19,7 @@
     "docs/migration_notes.md",
     "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
+    "docs/orchestrator-message-registry.d.mts",
     "docs/orchestrator-message-registry.mjs",
     "scripts/_invoke-system-git.sh",
     "scripts/ao",

@@ -251,7 +251,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
         const denyAbsolute = spawnSync(
           'bash',
-          ['-c', `source ${bashEnvPath}; /usr/bin/git branch -m blocked-abs; echo done-marker`],
+          ['-c', `source ${bashEnvPath}; /usr/bin/git branch -m blocked-abs`],
           {
             cwd: dir,
             encoding: 'utf8',
@@ -262,7 +262,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           },
         );
         const after = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
-        expect(denyAbsolute.stdout).toMatch(/done-marker/);
+        expect(denyAbsolute.status).toBe(93);
         expect(denyAbsolute.stderr || denyAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
         expect(after.stdout.trim()).toBe(before.stdout.trim());
 
@@ -292,6 +292,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
             },
           },
         );
+        expect(fallthrough.status).toBe(93);
         expect(fallthrough.stderr || fallthrough.stdout).toMatch(/autonomous tree-mutating git denied/i);
         expect(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim()).toBe(
           before.stdout.trim(),

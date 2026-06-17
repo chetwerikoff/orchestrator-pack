@@ -27,11 +27,11 @@ __ao_autonomous_redirect_absolute_git() {
   ec=$?
   if (( ec != 0 )); then
     __AO_AUTONOMOUS_ABSOLUTE_GIT_EC="${ec}"
-  else
-    unset -v __AO_AUTONOMOUS_ABSOLUTE_GIT_EC 2>/dev/null || true
+    # Propagate shim denial to callers; allowed read-only paths use return 1 below.
+    exit "${ec}"
   fi
-  # Always use the extdebug skip path. Returning the shim exit code here can let
-  # the original /usr/bin/git command run after a denial (boundary bypass).
+  unset -v __AO_AUTONOMOUS_ABSOLUTE_GIT_EC 2>/dev/null || true
+  # Skip the original absolute git invocation without terminating the shell.
   return 1
 }
 
