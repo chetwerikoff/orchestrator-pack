@@ -31,7 +31,7 @@
       "id": "git-mutating-direct",
       "classification": "unavailable",
       "surface": "shell",
-      "path": "git branch|checkout|switch|worktree|reset|stash|push|fetch"
+      "path": "git branch|checkout|switch|worktree|reset|stash|push|fetch|commit|merge|rebase|pull|tag|cherry-pick|revert"
     },
     {
       "id": "git-read-only",

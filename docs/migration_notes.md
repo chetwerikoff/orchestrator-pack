@@ -138,7 +138,8 @@ remains readable after restart for incident reconstruction.
 
 Under `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`, the orchestrator turn cannot invoke `ao spawn`
 (including `--claim-pr`) or directly mutate git refs/worktrees (`branch`, `checkout`/`switch`,
-`worktree`, `reset`, tree-moving `stash`, `push`, `fetch` without `--dry-run`). Read-only git
+`worktree`, `reset`, tree-moving `stash`, `push`, `fetch` without `--dry-run`, `commit`, `merge`,
+`rebase`, `pull`, `tag`, `cherry-pick`, `revert`). Read-only git
 (`status`, `log`, `rev-parse`, …) remains available. Git invoked as a child of enumerated pack
 review/preflight paths — including `git worktree add` inside a claimed `ao review run` — remains
 allowed. `gh`-mediated checkout/ref mutation is not carved out (parent is `gh`, not a sanctioned

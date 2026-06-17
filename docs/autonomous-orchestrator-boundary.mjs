@@ -23,6 +23,13 @@ const MUTATING_GIT_SUBCOMMANDS = new Set([
   'push',
   'fetch',
   'stash',
+  'commit',
+  'merge',
+  'rebase',
+  'pull',
+  'tag',
+  'cherry-pick',
+  'revert',
 ]);
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([

@@ -368,6 +368,13 @@ function Test-GitArgvIsMutating {
         '^(?i)worktree$' { return $true }
         '^(?i)reset$' { return $true }
         '^(?i)push$' { return $true }
+        '^(?i)commit$' { return $true }
+        '^(?i)merge$' { return $true }
+        '^(?i)rebase$' { return $true }
+        '^(?i)pull$' { return $true }
+        '^(?i)tag$' { return $true }
+        '^(?i)cherry-pick$' { return $true }
+        '^(?i)revert$' { return $true }
         '^(?i)fetch$' {
             $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
             if ($tail -match '(?i)--dry-run') {

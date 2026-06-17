@@ -62,6 +62,11 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(isMutatingGitArgv(['status'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', '--dry-run'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin'])).toBe(true);
+    expect(isMutatingGitArgv(['commit', '-m', 'blocked'])).toBe(true);
+    expect(isMutatingGitArgv(['merge', 'main'])).toBe(true);
+    expect(isMutatingGitArgv(['rebase', 'main'])).toBe(true);
+    expect(isMutatingGitArgv(['pull'])).toBe(true);
+    expect(isMutatingGitArgv(['tag', 'v1'])).toBe(true);
     expect(gitSubcommandFromArgv(['-C', '/tmp', 'log'])).toBe('log');
     expect(isMutatingGitArgv(['-c', 'user.name=x', 'checkout', 'main'])).toBe(true);
     expect(gitSubcommandFromArgv(['-c', 'user.name=x', 'status'])).toBe('status');
