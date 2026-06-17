@@ -435,6 +435,42 @@ describe('planReconcileActions', () => {
       expect(starts[0]?.startReason).toBe('quiescent_worker_handoff_fallback');
     });
 
+    it('defers quiescent fallback while prior review revision is open', () => {
+      const oldHead = '42bf1490dbe8829667d2835b937a33e7af9d82f1';
+      const newHead = 'deadbeef00000000000000000000000000000001';
+      const base = withExpiredNudgeCycle(loadFixture('quiescent-pr260-opk-37.json'));
+      const fixture: FixturePayload = {
+        ...base,
+        openPrs: [
+          {
+            number: 260,
+            headRefOid: newHead,
+            headCommittedAt: '2026-06-10T12:40:00.000Z',
+          },
+        ],
+        sessions: (base.sessions ?? []).map((session) => ({
+          ...session,
+          ownedHeadSha: newHead,
+        })),
+        reviewRuns: [
+          {
+            id: 'opk-rev-open',
+            prNumber: 260,
+            targetSha: oldHead,
+            status: 'needs_triage',
+            findingCount: 1,
+            openFindingCount: 1,
+            sentFindingCount: 1,
+            sentAt: '2026-06-10T12:00:00.000Z',
+          },
+        ],
+      };
+      const actions = planReconcile(fixture);
+      expect(startReviewActions(actions)).toHaveLength(0);
+      const skip = skipActions(actions).find((a) => a.prNumber === 260);
+      expect(skip?.reason).toMatch(/^prior_revision_open:/);
+    });
+
     it('AC8: not-live owner fails closed with no_live_review_target', () => {
       const fixture = loadFixture('quiescent-not-live-owner.json');
       const skip = skipActions(planReconcile(fixture))[0];

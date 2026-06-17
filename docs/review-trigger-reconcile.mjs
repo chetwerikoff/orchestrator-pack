@@ -905,7 +905,9 @@ export function planReconcileActions({
           });
           continue;
         }
-      } else if (!cycleEval.reviewGate.allow) {
+      }
+
+      if (!cycleEval.reviewGate.allow) {
         const blockers = cycleEval.reviewGate.blockers;
         let cycle = cycleEval.cycle;
         if (cycle) {
