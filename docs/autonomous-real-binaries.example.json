@@ -1,4 +1,5 @@
 {
   "ao": "/home/you/.local/bin/ao",
-  "git": "/usr/bin/git"
+  "git": "/home/you/projects/orchestrator-pack/scripts/git-real-binary",
+  "gitSystemBinary": "/usr/bin/git"
 }

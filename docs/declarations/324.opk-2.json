@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "71037b81de217a83e4026365ca2a9a5df4bc9ff4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b46d8de8df93f636c4ee40e958e9aae9ad404e38256901eb9cacbc6dbbe026f9"
+    "active_scope_hash": "sha256:c82b10dffd5eb9770b17d5b5a0296792899e13343c18b2037a5e6774ccd5d774"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -19,8 +19,10 @@
     "docs/migration_notes.md",
     "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
+    "scripts/_invoke-system-git.sh",
     "scripts/ao",
     "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-bash-env.sh",
     "scripts/autonomous-orchestrator-boundary.test.ts",
     "scripts/check-autonomous-capabilities.ps1",
     "scripts/check-autonomous-orchestrator-boundary.ps1",
@@ -28,6 +30,7 @@
     "scripts/check-orchestrator-claimed-review-run.ps1",
     "scripts/git",
     "scripts/git-autonomous-guard.ps1",
+    "scripts/git-real-binary",
     "scripts/lib/Get-AutonomousCapabilityInventoryContext.ps1",
     "scripts/lib/Get-ProcessCommandLine.ps1",
     "scripts/lib/Orchestrator-AutonomousBoundary.ps1",

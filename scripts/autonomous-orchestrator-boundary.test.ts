@@ -7,14 +7,18 @@ import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import {
   AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION,
   TURN_VISIBLE_REAL_BINARY_ENV_VARS,
+  evaluateAbsoluteSystemGitInvocationBoundary,
   evaluateAutonomousGitBoundary,
   evaluateAutonomousSpawnBoundary,
   evaluateBoundaryCapabilityPreflight,
+  evaluateConfiguredGitBinaryBypass,
   evaluateTurnVisibleRealBinaryBypass,
   gitArgvDefinesAlias,
   gitSubcommandFromArgv,
   hasSanctionedGitParentChain,
+  isKnownSystemGitBinaryPath,
   isMutatingGitArgv,
+  isSanctionedGitParentCommandLine,
   isSpawnAoArgv,
   loadAutonomousOrchestratorBoundaryInventory,
   validateBoundaryCapabilityInventory,
@@ -22,6 +26,8 @@ import {
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
+const gitRealBinaryPath = path.join(repoRoot, 'scripts/git-real-binary');
+const bashEnvPath = path.join(repoRoot, 'scripts/autonomous-bash-env.sh');
 const aoShimPath = path.join(repoRoot, 'scripts/ao');
 const gitShimPath = path.join(repoRoot, 'scripts/git');
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
@@ -139,8 +145,23 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
   it('allows sanctioned preflight parent for mutating git', () => {
     expect(
-      hasSanctionedGitParentChain(['pwsh -File scripts/reviewer-workspace-preflight.ps1']),
+      isSanctionedGitParentCommandLine('pwsh -File scripts/reviewer-workspace-preflight.ps1'),
     ).toBe(true);
+    expect(
+      isSanctionedGitParentCommandLine(
+        'pwsh -NoProfile -ExecutionPolicy Bypass -File /pack/scripts/reviewer-workspace-preflight.ps1 -RepoRoot /tmp',
+      ),
+    ).toBe(true);
+    expect(
+      hasSanctionedGitParentChain([
+        'pwsh -c "git checkout main # reviewer-workspace-preflight.ps1"',
+      ]),
+    ).toBe(false);
+    expect(
+      hasSanctionedGitParentChain([
+        'bash -c "echo reviewer-workspace-preflight.ps1; git checkout main"',
+      ]),
+    ).toBe(false);
     expect(
       hasSanctionedGitParentChain([
         'pwsh -File scripts/run-pack-review.ps1',
@@ -155,6 +176,85 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         parentChain: ['pwsh -File scripts/reviewer-workspace-preflight.ps1'],
       }).allowed,
     ).toBe(true);
+  });
+
+  it('blocks configured system git binary and absolute git-real-binary bypasses', () => {
+    expect(isKnownSystemGitBinaryPath('/usr/bin/git')).toBe(true);
+    expect(
+      evaluateConfiguredGitBinaryBypass({
+        configuredGitPath: '/usr/bin/git',
+        packRoot: repoRoot,
+      }).bypassPresent,
+    ).toBe(true);
+    expect(
+      evaluateConfiguredGitBinaryBypass({
+        configuredGitPath: gitRealBinaryPath,
+        packRoot: repoRoot,
+      }).bypassPresent,
+    ).toBe(false);
+
+    withTempGitRepo((dir) => {
+      const denyShim = spawnSync('bash', [gitShimPath, 'branch', '-m', 'blocked'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+        },
+      });
+      expect(denyShim.status).toBe(93);
+
+      const denyRealBinary = spawnSync('bash', [gitRealBinaryPath, 'branch', '-m', 'blocked'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+      });
+      expect(denyRealBinary.status).toBe(93);
+      expect(denyRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
+    });
+
+    expect(
+      evaluateAbsoluteSystemGitInvocationBoundary({
+        commandLine: '/usr/bin/git checkout main',
+        autonomousSurface: true,
+      }).allowed,
+    ).toBe(false);
+    expect(
+      evaluateAbsoluteSystemGitInvocationBoundary({
+        commandLine: '/usr/bin/git status',
+        autonomousSurface: true,
+      }).allowed,
+    ).toBe(true);
+  });
+
+  it('documents bash interposer and git-real-binary wrapper wiring', () => {
+    const yaml = readFileSync(path.join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
+    expect(yaml).toMatch(/autonomous-bash-env\.sh/);
+    expect(yaml).not.toMatch(/PATH:.*\/usr\/bin/);
+    const example = JSON.parse(
+      readFileSync(path.join(repoRoot, 'docs/autonomous-real-binaries.example.json'), 'utf8'),
+    );
+    expect(example.git).toMatch(/git-real-binary$/);
+    expect(example.gitSystemBinary).toMatch(/^\/usr\/bin\/git$/);
+    expect(existsSync(bashEnvPath)).toBe(true);
+    expect(existsSync(gitRealBinaryPath)).toBe(true);
+
+    if (existsSync('/usr/bin/git')) {
+      const denyAbsolute = spawnSync(
+        'bash',
+        ['-c', `source ${bashEnvPath}; /usr/bin/git branch -m blocked-abs`],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          },
+        },
+      );
+      expect(denyAbsolute.status).toBe(93);
+      expect(denyAbsolute.stderr || denyAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
+    }
   });
 
   it('validates capability inventory artifact', () => {
@@ -269,13 +369,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-pack-'));
     try {
       const fakeAo = path.join(packRoot, 'fake-ao');
+      const gitWrapper = path.join(repoRoot, 'scripts/git-real-binary');
       writeFileSync(fakeAo, '#!/usr/bin/env bash\necho fake-ao-ok\n');
       chmodSync(fakeAo, 0o755);
       const aoDir = path.join(packRoot, '.ao');
       mkdirSync(aoDir, { recursive: true });
       writeFileSync(
         path.join(aoDir, 'autonomous-real-binaries.json'),
-        JSON.stringify({ ao: fakeAo, git: '/usr/bin/git' }),
+        JSON.stringify({ ao: fakeAo, git: gitWrapper, gitSystemBinary: '/usr/bin/git' }),
       );
       const output = runPwsh(`
         $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'

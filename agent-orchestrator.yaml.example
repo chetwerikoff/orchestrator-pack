@@ -57,10 +57,12 @@ projects:
         env:
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
           # Out-of-band real-binary resolution (gitignored). Copy docs/autonomous-real-binaries.example.json
-          # to .ao/autonomous-real-binaries.json with absolute ao/git paths — never expose AO_REAL_BINARY
-          # or GIT_REAL_BINARY in orchestrator agentConfig (turn-visible bypass).
+          # to .ao/autonomous-real-binaries.json with pack scripts/git-real-binary + gitSystemBinary host path
+          # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
           # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
-          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
+          # Omit /usr/bin and /bin from PATH; use BASH_ENV interposer to block absolute host git on bash turns.
+          BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-bash-env.sh
+          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin
     worker:
       agent: cursor
       agentConfig:

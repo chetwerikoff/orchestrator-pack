@@ -50,6 +50,15 @@ function Test-TurnVisibleRealBinaryBypassPresent {
     return $false
 }
 
+function Get-PackGitRealBinaryPath {
+    param([string]$PackRoot = '')
+
+    if (-not $PackRoot) {
+        $PackRoot = Get-PackRootFromBoundaryLib
+    }
+    return (Join-Path (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path 'git-real-binary')
+}
+
 function Test-IsPackGitShimPath {
     param([string]$CandidatePath)
 
@@ -63,6 +72,35 @@ function Test-IsPackGitShimPath {
         return $false
     }
     return $resolved -eq (Join-Path $packScripts 'git')
+}
+
+function Test-IsPackGitRealBinaryPath {
+    param(
+        [string]$CandidatePath,
+        [string]$PackRoot = ''
+    )
+
+    if (-not $CandidatePath) { return $false }
+    if ($CandidatePath -like '*git-real-binary*') {
+        return $true
+    }
+    try {
+        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
+    }
+    catch {
+        return $false
+    }
+    return $resolved -eq (Get-PackGitRealBinaryPath -PackRoot $PackRoot)
+}
+
+function Test-IsKnownSystemGitBinaryPath {
+    param([string]$CandidatePath)
+
+    if (-not $CandidatePath) { return $false }
+    $leaf = Split-Path -Leaf $CandidatePath
+    if ($leaf -ne 'git') { return $false }
+    $normalized = ($CandidatePath -replace '\\', '/')
+    return $normalized -match '^(?i)(/usr/bin/|/bin/|/usr/local/bin/)'
 }
 
 function Test-IsPackAoShimPathForBoundary {
@@ -186,9 +224,50 @@ function Resolve-RealAoExecutable {
     return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
 }
 
+function Resolve-SystemGitExecutable {
+    param([string]$PackRoot = '')
+
+    if (-not $PackRoot) {
+        $PackRoot = Get-PackRootFromBoundaryLib
+    }
+    $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot
+    if ($config) {
+        $systemBinary = [string]$config.gitSystemBinary
+        if ($systemBinary -and (Test-Path -LiteralPath $systemBinary)) {
+            $resolved = (Resolve-Path -LiteralPath $systemBinary).Path
+            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $resolved -PackRoot $PackRoot)) {
+                return $resolved
+            }
+        }
+        $configured = [string]$config.git
+        if ($configured -and $configured -ne 'git' -and (Test-Path -LiteralPath $configured)) {
+            $resolved = (Resolve-Path -LiteralPath $configured).Path
+            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $resolved -PackRoot $PackRoot)) {
+                return $resolved
+            }
+        }
+    }
+
+    if ($env:GIT_SYSTEM_BINARY -and (Test-Path -LiteralPath $env:GIT_SYSTEM_BINARY -ErrorAction SilentlyContinue)) {
+        return (Resolve-Path -LiteralPath $env:GIT_SYSTEM_BINARY).Path
+    }
+
+    foreach ($candidate in @('/usr/bin/git', '/bin/git', '/usr/local/bin/git')) {
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    $cmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($cmd -and -not (Test-IsPackGitShimPath -CandidatePath $cmd.Source) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $cmd.Source -PackRoot $PackRoot)) {
+        return $cmd.Source
+    }
+    return 'git'
+}
+
 function Resolve-RealGitExecutable {
     if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
-        return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
+        return Get-PackGitRealBinaryPath
     }
 
     if ($env:GIT_REAL_BINARY -and $env:GIT_REAL_BINARY -ne 'git') {
@@ -283,12 +362,63 @@ function Get-ProcessParentChainCommandLines {
     return @($lines)
 }
 
+function Split-ProcessCommandLineTokens {
+    param([string]$CommandLine)
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    if (-not $CommandLine) {
+        return @($tokens)
+    }
+
+    $current = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    for ($index = 0; $index -lt $CommandLine.Length; $index++) {
+        $char = $CommandLine[$index]
+        if ($char -eq "'" -and -not $inDouble) {
+            $inSingle = -not $inSingle
+            continue
+        }
+        if ($char -eq '"' -and -not $inSingle) {
+            $inDouble = -not $inDouble
+            continue
+        }
+        if ([char]::IsWhiteSpace($char) -and -not $inSingle -and -not $inDouble) {
+            if ($current.Length -gt 0) {
+                $tokens.Add($current.ToString())
+                $current.Clear() | Out-Null
+            }
+            continue
+        }
+        [void]$current.Append($char)
+    }
+    if ($current.Length -gt 0) {
+        $tokens.Add($current.ToString())
+    }
+    return @($tokens)
+}
+
 function Test-ProcessCommandLineIsSanctionedGitParent {
     param([string]$CommandLine)
 
     if (-not $CommandLine) { return $false }
+    $tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
+    if ($tokens.Count -eq 0) { return $false }
+
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        if ($tokens[$index] -ieq '-File' -and ($index + 1) -lt $tokens.Count) {
+            $scriptLeaf = Split-Path -Leaf ($tokens[$index + 1].Trim('"').Trim("'"))
+            foreach ($pattern in $Script:SanctionedGitParentPatterns) {
+                if ($scriptLeaf -ieq $pattern) {
+                    return $true
+                }
+            }
+        }
+    }
+
+    $firstLeaf = Split-Path -Leaf ($tokens[0].Trim('"').Trim("'"))
     foreach ($pattern in $Script:SanctionedGitParentPatterns) {
-        if ($CommandLine -like "*$pattern*") {
+        if ($firstLeaf -ieq $pattern) {
             return $true
         }
     }

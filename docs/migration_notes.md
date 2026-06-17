@@ -109,10 +109,12 @@ orchestrator `agentConfig.env.PATH` (not worker PATH).
 Operator adoption after merge:
 
 1. Copy `docs/autonomous-real-binaries.example.json` to `.ao/autonomous-real-binaries.json`
-   with absolute `ao` and `git` paths for this host.
+   with pack `scripts/git-real-binary` as `git` and the host system binary as `gitSystemBinary`
+   (never point `git` at `/usr/bin/git` directly).
 2. Merge `agent-orchestrator.yaml.example` orchestrator gate block into live
    `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` and
-   orchestrator-only `PATH` prepend of pack `scripts/` — no `AO_REAL_BINARY`/`GIT_REAL_BINARY`).
+   orchestrator-only `PATH` prepend of pack `scripts/` (omit `/usr/bin` and `/bin`; set
+   `BASH_ENV` to `scripts/autonomous-bash-env.sh` for bash-turn absolute-git interposition)
 3. `ao stop` then `ao start` from the operator terminal (not from a managed session).
 4. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
 5. Run boundary inventory check:

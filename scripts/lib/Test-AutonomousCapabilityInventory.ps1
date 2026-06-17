@@ -46,6 +46,27 @@ function Get-AutonomousCapabilityInventoryViolations {
             }
         }
 
+        $configPath = Join-Path $RepoRoot '.ao' 'autonomous-real-binaries.json'
+        if (Test-Path -LiteralPath $configPath) {
+            try {
+                $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                $configuredGit = [string]$config.git
+                if ($configuredGit) {
+                    . (Join-Path $RepoRoot 'scripts/lib/Orchestrator-AutonomousBoundary.ps1')
+                    if (Test-IsKnownSystemGitBinaryPath -CandidatePath $configuredGit) {
+                        $violations.Add('configured git must be pack scripts/git-real-binary, not a host system binary')
+                    }
+                    $expectedWrapper = Get-PackGitRealBinaryPath -PackRoot $RepoRoot
+                    if ($configuredGit -ne $expectedWrapper) {
+                        $violations.Add("configured git must resolve to $expectedWrapper")
+                    }
+                }
+            }
+            catch {
+                $violations.Add('invalid .ao/autonomous-real-binaries.json')
+            }
+        }
+
         $boundaryCli = Join-Path $RepoRoot 'docs/autonomous-orchestrator-boundary.mjs'
         if (-not (Test-Path -LiteralPath $boundaryCli)) {
             $violations.Add('missing docs/autonomous-orchestrator-boundary.mjs')

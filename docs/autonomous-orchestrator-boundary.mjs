@@ -207,23 +207,141 @@ export function evaluateAutonomousGitBoundary(input) {
 }
 
 /**
+ * @param {string} commandLine
+ */
+export function tokenizeProcessCommandLine(commandLine) {
+  const text = String(commandLine ?? '');
+  const tokens = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (char === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (/\s/.test(char) && !inSingle && !inDouble) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+/**
+ * @param {string} commandLine
+ * @param {string[]} [sanctionedScripts]
+ */
+export function isSanctionedGitParentCommandLine(commandLine, sanctionedScripts) {
+  const inventory = loadAutonomousReviewStartCapabilities();
+  const scripts = sanctionedScripts ?? inventory.sanctionedGitParents ?? [];
+  const tokens = tokenizeProcessCommandLine(commandLine);
+  if (tokens.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].toLowerCase() === '-file' && index + 1 < tokens.length) {
+      const leaf = tokens[index + 1].replace(/^['"]|['"]$/g, '').split(/[/\\]/).pop() ?? '';
+      if (scripts.includes(leaf)) {
+        return true;
+      }
+    }
+  }
+  const firstLeaf = tokens[0].replace(/^['"]|['"]$/g, '').split(/[/\\]/).pop() ?? '';
+  return scripts.includes(firstLeaf);
+}
+
+const SYSTEM_GIT_PREFIXES = ['/usr/bin/', '/bin/', '/usr/local/bin/'];
+
+/**
+ * @param {string} candidatePath
+ */
+export function isKnownSystemGitBinaryPath(candidatePath) {
+  const normalized = String(candidatePath ?? '').replace(/\\/g, '/');
+  const leaf = normalized.split('/').pop() ?? '';
+  if (leaf !== 'git') {
+    return false;
+  }
+  return SYSTEM_GIT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.configuredGitPath]
+ * @param {string} [input.packRoot]
+ */
+export function evaluateConfiguredGitBinaryBypass(input) {
+  const configured = String(input.configuredGitPath ?? '');
+  const packRoot = String(input.packRoot ?? '');
+  if (!configured) {
+    return { bypassPresent: false, reason: 'no_configured_git' };
+  }
+  if (isKnownSystemGitBinaryPath(configured)) {
+    return { bypassPresent: true, reason: 'configured_system_git_binary' };
+  }
+  const expectedSuffix = '/scripts/git-real-binary';
+  if (!configured.endsWith('git-real-binary') && !configured.endsWith(expectedSuffix)) {
+    return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
+  }
+  if (packRoot) {
+    const expected = `${packRoot.replace(/\\/g, '/')}/scripts/git-real-binary`;
+    if (configured.replace(/\\/g, '/') !== expected) {
+      return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
+    }
+  }
+  return { bypassPresent: false, reason: 'configured_git_wrapper_ok' };
+}
+
+/**
+ * @param {object} input
+ * @param {string} [input.commandLine]
+ */
+export function evaluateAbsoluteSystemGitInvocationBoundary(input) {
+  const commandLine = String(input.commandLine ?? '');
+  const match = /^(\/usr\/bin\/git|\/bin\/git|\/usr\/local\/bin\/git)\b(.*)$/i.exec(commandLine);
+  if (!match) {
+    return { allowed: true, reason: 'not_absolute_system_git' };
+  }
+  if (!input.autonomousSurface) {
+    return { allowed: true, reason: 'manual_surface' };
+  }
+  const argv = match[2].trim().split(/\s+/).filter(Boolean);
+  return evaluateAutonomousGitBoundary({
+    argv,
+    autonomousSurface: true,
+    parentChain: input.parentChain,
+    claimedBypass: input.claimedBypass,
+  });
+}
+
+/**
  * @param {string[] | undefined} parentChain
  * @param {boolean} [claimedBypass]
  * @param {number} [maxDepth]
  */
 export function hasSanctionedGitParentChain(parentChain, claimedBypass = false, maxDepth) {
   const inventory = loadAutonomousReviewStartCapabilities();
-  const patterns = inventory.sanctionedGitParents ?? [];
+  const scripts = inventory.sanctionedGitParents ?? [];
   const depthLimit = Number.isFinite(maxDepth)
     ? Math.max(0, maxDepth)
     : Number(inventory.sanctionedGitParentMaxDepth ?? 2);
   const chain = Array.isArray(parentChain) ? parentChain.map((line) => String(line)) : [];
   const scoped = chain.slice(0, depthLimit);
   for (const line of scoped) {
-    for (const pattern of patterns) {
-      if (line.includes(pattern)) {
-        return true;
-      }
+    if (isSanctionedGitParentCommandLine(line, scripts)) {
+      return true;
     }
   }
   if (claimedBypass) {

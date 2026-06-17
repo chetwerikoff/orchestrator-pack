@@ -50,6 +50,22 @@ export declare function hasSanctionedGitParentChain(
   claimedBypass?: boolean,
   maxDepth?: number,
 ): boolean;
+export declare function tokenizeProcessCommandLine(commandLine: string): string[];
+export declare function isSanctionedGitParentCommandLine(
+  commandLine: string,
+  sanctionedScripts?: string[],
+): boolean;
+export declare function isKnownSystemGitBinaryPath(candidatePath: string): boolean;
+export declare function evaluateConfiguredGitBinaryBypass(input: {
+  configuredGitPath?: string;
+  packRoot?: string;
+}): TurnBypassVerdict;
+export declare function evaluateAbsoluteSystemGitInvocationBoundary(input: {
+  commandLine?: string;
+  autonomousSurface?: boolean;
+  claimedBypass?: boolean;
+  parentChain?: string[];
+}): GitBoundaryVerdict;
 export declare function evaluateTurnVisibleRealBinaryBypass(input: {
   env?: Record<string, string | undefined>;
   pathValue?: string;

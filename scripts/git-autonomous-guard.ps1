@@ -12,11 +12,17 @@ if ($deny.denied) {
     exit 93
 }
 
-$realGit = Resolve-RealGitExecutable
-if ($realGit -eq 'git') {
-    & git @args
+$env:AO_AUTONOMOUS_GIT_INTERNAL_EXEC = '1'
+try {
+    $realGit = Resolve-SystemGitExecutable
+    if ($realGit -eq 'git') {
+        & git @args
+    }
+    else {
+        & $realGit @args
+    }
+    exit $LASTEXITCODE
 }
-else {
-    & $realGit @args
+finally {
+    Remove-Item Env:AO_AUTONOMOUS_GIT_INTERNAL_EXEC -ErrorAction SilentlyContinue
 }
-exit $LASTEXITCODE
