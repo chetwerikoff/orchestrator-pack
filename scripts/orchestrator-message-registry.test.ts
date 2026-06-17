@@ -426,6 +426,9 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
+    // Warm-fetch PR merge-base refs while the GitHub event is still available (CI checkout).
+    listChangedFiles(repoRoot, 'origin/main');
+    const baseRef = resolveDiffBaseRef(repoRoot, 'origin/main');
     const prevSha = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -439,14 +442,16 @@ describe('orchestrator message registry (Issue #298)', () => {
       ...process.env,
       GITHUB_EVENT_PATH: undefined,
       ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
+      ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF: baseRef,
+      GITHUB_BASE_SHA: baseRef,
     };
     try {
       execFileSync('git', ['checkout', '-B', tempBranch], { cwd: repoRoot, stdio: 'pipe' });
       expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
-      const changed = listChangedFiles(repoRoot, 'origin/main');
+      const changed = listChangedFiles(repoRoot, baseRef);
       expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
       expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
-      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
+      expect(checkProtectedRuntimeForRepo(repoRoot, baseRef).ok).toBe(true);
       execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
         stdio: 'pipe',
         env: cleanEnv,
