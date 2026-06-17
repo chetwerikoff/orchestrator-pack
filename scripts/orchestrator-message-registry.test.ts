@@ -70,6 +70,23 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('fails audit when a declared audit root file is missing on disk', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
+    try {
+      seedMinimalRegistryTree(tmp);
+      const auditRoots = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-audit-roots.manifest.json'), 'utf8'),
+      );
+      auditRoots.ciInvokedScripts = ['scripts/this-ci-script-does-not-exist.ps1'];
+      writeJson(tmp, 'scripts/orchestrator-message-audit-roots.manifest.json', auditRoots);
+      const result = auditRegistration(tmp);
+      expect(result.verdict).toBe('FAIL');
+      expect(result.violations.some((v: string) => v.includes('audit root file missing: scripts/this-ci-script-does-not-exist.ps1'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('fails audit when a seeded raw ao send is outside helpers', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
     try {

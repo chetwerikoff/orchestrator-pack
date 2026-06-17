@@ -421,12 +421,10 @@ export function detectRawSendsInSource(relPath, source, helpers, allowlistEntrie
   return findings;
 }
 
-export function collectAuditRootFiles(repoRoot, auditRoots) {
-  const files = new Set();
+export function listDeclaredAuditRootFiles(auditRoots) {
+  const declared = new Set();
   const add = (rel) => {
-    const norm = rel.replace(/\\/g, '/');
-    const full = path.join(repoRoot, norm);
-    if (existsSync(full) && statSync(full).isFile()) files.add(norm);
+    if (rel) declared.add(String(rel).replace(/\\/g, '/'));
   };
   for (const group of [
     auditRoots.supervisedProcessScripts,
@@ -437,23 +435,31 @@ export function collectAuditRootFiles(repoRoot, auditRoots) {
     for (const rel of group ?? []) add(rel);
   }
   for (const rel of auditRoots.orchestratorRulesBindings ?? []) add(rel);
-  return [...files].sort();
+  return [...declared].sort();
+}
+
+export function collectAuditRootFiles(repoRoot, auditRoots) {
+  return listDeclaredAuditRootFiles(auditRoots).filter((rel) => {
+    const full = path.join(repoRoot, rel);
+    return existsSync(full) && statSync(full).isFile();
+  });
 }
 
 export function validateAuditRootCompleteness(bundle, repoRoot) {
   const violations = [];
   const registryScripts = (bundle.supervisorRegistry.children ?? []).map((c) => `scripts/${c.script}`);
-  const declared = new Set([
+  const declaredSupervised = new Set([
     ...(bundle.auditRoots.supervisedProcessScripts ?? []),
     ...(bundle.auditRoots.supervisorEntrypoints ?? []),
   ]);
   for (const script of registryScripts) {
-    if (!declared.has(script)) {
+    if (!declaredSupervised.has(script)) {
       violations.push(`audit root set missing supervised process: ${script}`);
     }
   }
-  for (const rel of collectAuditRootFiles(repoRoot, bundle.auditRoots)) {
-    if (!existsSync(path.join(repoRoot, rel))) {
+  for (const rel of listDeclaredAuditRootFiles(bundle.auditRoots)) {
+    const full = path.join(repoRoot, rel);
+    if (!existsSync(full) || !statSync(full).isFile()) {
       violations.push(`audit root file missing: ${rel}`);
     }
   }
