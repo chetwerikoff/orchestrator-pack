@@ -747,12 +747,40 @@ export function resolveLinkedIssueNumbers(repoRoot = process.cwd()) {
 }
 
 /** Linked issues evidenced by committed declaration snapshots present in the gated diff. */
-export function resolveLinkedIssuesFromDeclarationSnapshots(changedFiles) {
+function issueLinksFromValidatedDeclarationSnapshot(relPath, snapshot, changed) {
+  const norm = String(relPath).replace(/\\/g, '/');
+  const nameMatch = /^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.exec(norm);
+  if (!nameMatch) return null;
+  const issueFromName = Number(nameMatch[1]);
+  const coordinated = BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS[issueFromName];
+  if (!coordinated) return null;
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  if (Number(snapshot.issue_number) !== issueFromName) return null;
+  if (!Array.isArray(snapshot.declared_paths) || snapshot.declared_paths.length === 0) return null;
+
+  const declared = new Set(
+    snapshot.declared_paths.map((declaredPath) => String(declaredPath).replace(/\\/g, '/')),
+  );
+  const overlaps = coordinated.some(
+    (coordPath) => changed.has(coordPath) && declared.has(coordPath),
+  );
+  return overlaps ? issueFromName : null;
+}
+
+export function resolveLinkedIssuesFromDeclarationSnapshots(
+  repoRoot,
+  changedFiles = [],
+  options = {},
+) {
+  const changed = new Set((changedFiles ?? []).map((file) => String(file).replace(/\\/g, '/')));
+  const gitRef = options.gitRef ?? resolveRepoHeadRef(repoRoot);
   const linked = new Set();
   for (const file of changedFiles ?? []) {
     const norm = String(file).replace(/\\/g, '/');
-    const match = /^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.exec(norm);
-    if (match) linked.add(Number(match[1]));
+    if (!/^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.test(norm)) continue;
+    const snapshot = readDeclarationSnapshotAtRef(repoRoot, norm, gitRef);
+    const issue = issueLinksFromValidatedDeclarationSnapshot(norm, snapshot, changed);
+    if (issue !== null) linked.add(issue);
   }
   return [...linked];
 }
@@ -874,22 +902,9 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
 
   const linked = new Set();
   for (const relPath of snapshotPaths) {
-    const nameMatch = /^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.exec(relPath);
-    if (!nameMatch) continue;
-    const issueFromName = Number(nameMatch[1]);
-    const coordinated = BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS[issueFromName];
-    if (!coordinated) continue;
-
     const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef);
-    if (!snapshot || Number(snapshot.issue_number) !== issueFromName) continue;
-
-    const declared = new Set(
-      (snapshot.declared_paths ?? []).map((declaredPath) => String(declaredPath).replace(/\\/g, '/')),
-    );
-    const overlaps = coordinated.some(
-      (coordPath) => changed.has(coordPath) && declared.has(coordPath),
-    );
-    if (overlaps) linked.add(issueFromName);
+    const issue = issueLinksFromValidatedDeclarationSnapshot(relPath, snapshot, changed);
+    if (issue !== null) linked.add(issue);
   }
   return [...linked];
 }
@@ -900,7 +915,7 @@ export function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changedFi
   return [
     ...new Set([
       ...resolveLinkedIssueNumbers(repoRoot),
-      ...resolveLinkedIssuesFromDeclarationSnapshots(changedFiles),
+      ...resolveLinkedIssuesFromDeclarationSnapshots(repoRoot, changedFiles, { gitRef }),
       ...resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changedFiles, { gitRef }),
     ]),
   ];

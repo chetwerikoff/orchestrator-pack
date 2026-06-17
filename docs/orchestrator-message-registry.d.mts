@@ -65,7 +65,7 @@ export declare function resolveDiffBaseRef(repoRoot: string, baseRef?: string): 
 export declare function parseGitDiffNameOnlyOutput(output: string): string[];
 export declare function listChangedFiles(repoRoot: string, baseRef?: string): string[];
 export declare function resolveLinkedIssueNumbers(repoRoot?: string): number[];
-export declare function resolveLinkedIssuesFromDeclarationSnapshots(changedFiles: string[]): number[];
+export declare function resolveLinkedIssuesFromDeclarationSnapshots(repoRoot: string, changedFiles?: string[], options?: { gitRef?: string }): number[];
 export declare function resolveRepoHeadRef(repoRoot: string): string;
 export declare function resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot: string, changedFiles?: string[], options?: { gitRef?: string }): number[];
 export declare function resolveLinkedIssueNumbersForProtectedRuntime(repoRoot: string, changedFiles?: string[], options?: { gitRef?: string }): number[];

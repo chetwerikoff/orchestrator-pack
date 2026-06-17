@@ -1018,4 +1018,22 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('does not self-authorize issue-324 from fake declaration snapshots in the gated diff', () => {
+    const { dir, baseSha } = initCoordinatedIssue324Fixture();
+    try {
+      mkdirSync(path.join(dir, 'docs/declarations'), { recursive: true });
+      writeFileSync(path.join(dir, 'docs/declarations/324.fake.json'), '{}\n');
+      spawnSync('git', ['add', 'docs/declarations/324.fake.json'], { cwd: dir, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'fake declaration'], { cwd: dir, encoding: 'utf8' });
+      withoutGithubActionsEnv(() => {
+        process.env.GITHUB_BASE_SHA = baseSha;
+        const result = checkProtectedRuntimeForRepo(dir, baseSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('agent-orchestrator.yaml.example'))).toBe(true);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

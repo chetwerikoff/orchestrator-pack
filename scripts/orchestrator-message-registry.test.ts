@@ -580,14 +580,62 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(allowed.ok).toBe(true);
   });
 
-  it('links issue numbers from declaration snapshots in the gated diff', () => {
+  it('links issue numbers from validated declaration snapshots in the gated diff', () => {
     expect(
-      resolveLinkedIssuesFromDeclarationSnapshots([
+      resolveLinkedIssuesFromDeclarationSnapshots(repoRoot, [
         'docs/declarations/324.opk-2.json',
         'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
       ]),
     ).toEqual([324]);
-    expect(resolveLinkedIssuesFromDeclarationSnapshots(['agent-orchestrator.yaml.example'])).toEqual([]);
+    expect(
+      resolveLinkedIssuesFromDeclarationSnapshots(repoRoot, ['agent-orchestrator.yaml.example']),
+    ).toEqual([]);
+  });
+
+  it('does not link issue numbers from malformed declaration snapshots in the gated diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-fake-'));
+    try {
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      fs.mkdirSync(path.join(root, 'docs/declarations'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'docs/declarations/324.fake.json'), '{}\n');
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      fs.writeFileSync(path.join(root, 'docs/declarations/324.fake.json'), 'not-json\n');
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      writeJson(root, 'docs/declarations/324.fake.json', {
+        issue_number: 324,
+        iteration_id: 'fake',
+        declared_paths: [],
+      });
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      writeJson(root, 'docs/declarations/324.fake.json', {
+        issue_number: 324,
+        iteration_id: 'fake',
+        declared_paths: ['scripts/ci-green-wake-reconcile.ps1'],
+      });
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.fake.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('links issue numbers from committed declaration snapshots on disk', () => {
