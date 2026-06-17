@@ -329,12 +329,34 @@ describe('orchestrator message registry (Issue #298)', () => {
   it('prefers GITHUB_BASE_SHA when resolving diff base ref', () => {
     const headParent = execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: repoRoot, encoding: 'utf8' }).trim();
     const prev = process.env.GITHUB_BASE_SHA;
+    const prevEvent = process.env.GITHUB_EVENT_PATH;
+    delete process.env.GITHUB_EVENT_PATH;
     process.env.GITHUB_BASE_SHA = headParent;
     try {
       expect(resolveDiffBaseRef(repoRoot, 'origin/main')).toBe(headParent);
     } finally {
       if (prev === undefined) delete process.env.GITHUB_BASE_SHA;
       else process.env.GITHUB_BASE_SHA = prev;
+      if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = prevEvent;
+    }
+  });
+
+  it('lists changed files from pull_request base and head shas in Actions', () => {
+    const baseSha = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const eventPath = path.join(os.tmpdir(), `github-event-${Date.now()}.json`);
+    fs.writeFileSync(eventPath, JSON.stringify({ pull_request: { base: { sha: baseSha }, head: { sha: headSha } } }));
+    const prev = process.env.GITHUB_EVENT_PATH;
+    process.env.GITHUB_EVENT_PATH = eventPath;
+    try {
+      const files = listChangedFiles(repoRoot, 'origin/main');
+      expect(files.length).toBeGreaterThan(0);
+      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = prev;
+      fs.rmSync(eventPath, { force: true });
     }
   });
 

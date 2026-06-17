@@ -584,26 +584,35 @@ export function generateMessageMap(catalog, overlapResult) {
   return `${lines.join('\n')}\n`;
 }
 
-function readGithubActionsBaseSha() {
+export function readGithubActionsPullRequestShas() {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventPath || !existsSync(eventPath)) return null;
   try {
     const event = JSON.parse(readFileSync(eventPath, 'utf8'));
-    return event.pull_request?.base?.sha ?? null;
+    const baseSha = event.pull_request?.base?.sha;
+    const headSha = event.pull_request?.head?.sha;
+    if (!baseSha || !headSha) return null;
+    return { baseSha, headSha };
   }
   catch {
     return null;
   }
 }
 
-function hydrateGithubPullRequestBase(repoRoot) {
-  const baseSha = readGithubActionsBaseSha();
-  if (!baseSha || gitRefExists(repoRoot, baseSha)) return baseSha;
-  execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', baseSha], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-  });
-  return baseSha;
+function hydrateGithubPullRequestRefs(repoRoot) {
+  const pr = readGithubActionsPullRequestShas();
+  if (!pr) return null;
+  for (const sha of [pr.baseSha, pr.headSha]) {
+    if (gitRefExists(repoRoot, sha)) continue;
+    execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', sha], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+    });
+    if (!gitRefExists(repoRoot, sha)) {
+      throw new Error(`failed to fetch pull_request ref ${sha}`);
+    }
+  }
+  return pr;
 }
 
 export function gitRefExists(repoRoot, ref) {
@@ -620,12 +629,13 @@ export function gitRefExists(repoRoot, ref) {
 }
 
 export function resolveDiffBaseRef(repoRoot, baseRef = 'origin/main') {
-  hydrateGithubPullRequestBase(repoRoot);
+  const pr = readGithubActionsPullRequestShas();
+  if (pr?.baseSha && gitRefExists(repoRoot, pr.baseSha)) return pr.baseSha;
   const candidates = [
     process.env.ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF,
     process.env.GITHUB_BASE_SHA,
     process.env.PR_BASE_SHA,
-    readGithubActionsBaseSha(),
+    pr?.baseSha,
     baseRef,
     'origin/main',
     'main',
@@ -642,6 +652,20 @@ export function resolveDiffBaseRef(repoRoot, baseRef = 'origin/main') {
 }
 
 export function listChangedFiles(repoRoot, baseRef = 'origin/main') {
+  const pr = hydrateGithubPullRequestRefs(repoRoot);
+  if (pr) {
+    try {
+      const out = execFileSync('git', ['diff', '--name-only', pr.baseSha, pr.headSha], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      return out.split('\n').map((line) => line.trim().replace(/\\/g, '/')).filter(Boolean);
+    }
+    catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`failed to list changed files for pull_request ${pr.baseSha}..${pr.headSha}: ${reason}`);
+    }
+  }
   const resolvedBase = resolveDiffBaseRef(repoRoot, baseRef);
   try {
     const out = execFileSync('git', ['diff', '--name-only', `${resolvedBase}...HEAD`], {
@@ -674,8 +698,15 @@ export function checkProtectedRuntimeForRepo(repoRoot, baseRef = 'origin/main') 
   let resolvedBase;
   let changedFiles;
   try {
-    resolvedBase = resolveDiffBaseRef(repoRoot, baseRef);
-    changedFiles = listChangedFiles(repoRoot, baseRef);
+    const pr = hydrateGithubPullRequestRefs(repoRoot);
+    if (pr) {
+      resolvedBase = pr.baseSha;
+      changedFiles = listChangedFiles(repoRoot, baseRef);
+    }
+    else {
+      resolvedBase = resolveDiffBaseRef(repoRoot, baseRef);
+      changedFiles = listChangedFiles(repoRoot, baseRef);
+    }
   }
   catch (err) {
     const message = err instanceof Error ? err.message : String(err);
