@@ -69,6 +69,35 @@ function Get-CiGreenWakeSharedStatePath {
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-green-wake-state.json'
 }
 
+function Merge-LegacyNudgedWithPendingJournal {
+    param(
+        [hashtable]$Nudged,
+        [hashtable]$PendingJournal
+    )
+
+    $merged = Copy-MechanicalJsonMap -Map $Nudged
+    foreach ($transitionId in @($PendingJournal.Keys)) {
+        $pending = $PendingJournal[$transitionId]
+        if (-not $pending) {
+            continue
+        }
+        $key = [string]$transitionId
+        if ($merged.ContainsKey($key)) {
+            continue
+        }
+        $sessionId = [string]$pending.sessionId
+        $sentAtMs = [long]$pending.sentAtMs
+        if (-not $sessionId -or $sentAtMs -le 0) {
+            continue
+        }
+        $merged[$key] = @{
+            sessionId = $sessionId
+            sentAtMs  = $sentAtMs
+        }
+    }
+    return $merged
+}
+
 function Get-CiGreenWakeSharedCycleEvidence {
     param([string]$Path = '')
 
@@ -89,7 +118,7 @@ function Get-CiGreenWakeSharedCycleEvidence {
     $state = Get-MechanicalJsonStateFile -Path $resolved -DefaultState $defaults -ActionTracking
     return @{
         sharedCycleState = $state.cycleState
-        legacyNudged     = $state.nudged
+        legacyNudged     = Merge-LegacyNudgedWithPendingJournal -Nudged $state.nudged -PendingJournal $state.pendingJournal
     }
 }
 

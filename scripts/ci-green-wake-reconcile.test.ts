@@ -16,6 +16,7 @@ import {
   resolveHeadOwningWorkerSessionId,
   preSendRecheck,
   recordSuccessfulNudge,
+  mergeLegacyNudgedWithPendingJournal,
   commitNudgeSentCycleState,
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
@@ -437,6 +438,32 @@ describe('recordSuccessfulNudge / dedupe priority', () => {
       },
     });
     expect(nudgeActions(withoutDedupe.actions)).toHaveLength(1);
+  });
+});
+
+describe('mergeLegacyNudgedWithPendingJournal', () => {
+  it('folds pending journal sends into legacy nudged evidence', () => {
+    const merged = mergeLegacyNudgedWithPendingJournal(
+      {},
+      {
+        '42:abc123:1': {
+          sessionId: 'op-worker',
+          sentAtMs: 5000,
+          message: 'hand off',
+        },
+      },
+    );
+    expect(merged).toEqual({
+      '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 5000 },
+    });
+  });
+
+  it('keeps committed nudged records when both maps contain the same transition', () => {
+    const merged = mergeLegacyNudgedWithPendingJournal(
+      { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 9000 } },
+      { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 5000, message: 'hand off' } },
+    );
+    expect(merged['42:abc123:1']?.sentAtMs).toBe(9000);
   });
 });
 

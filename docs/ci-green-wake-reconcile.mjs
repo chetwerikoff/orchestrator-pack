@@ -514,6 +514,29 @@ export function recordSuccessfulNudge(tracking, transitionId, sessionId, sentAtM
 }
 
 /**
+ * Fold journal-pending nudge sends into legacy nudged evidence for cross-child readers
+ * (review-trigger must see delivered-but-unjournaled nudges).
+ *
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [nudged]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number, message?: string }>} [pendingJournal]
+ */
+export function mergeLegacyNudgedWithPendingJournal(nudged = {}, pendingJournal = {}) {
+  const merged = { ...(nudged ?? {}) };
+  for (const [transitionId, pending] of Object.entries(pendingJournal ?? {})) {
+    if (!pending || merged[transitionId]) {
+      continue;
+    }
+    const sessionId = String(pending.sessionId ?? '').trim();
+    const sentAtMs = Number(pending.sentAtMs ?? 0);
+    if (!sessionId || !(sentAtMs > 0)) {
+      continue;
+    }
+    merged[transitionId] = { sessionId, sentAtMs };
+  }
+  return merged;
+}
+
+/**
  * Persist per-cycle nudge arming only after a successful send — not during planning.
  *
  * @param {Record<string, unknown>} cycleState

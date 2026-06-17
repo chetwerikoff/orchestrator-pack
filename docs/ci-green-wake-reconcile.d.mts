@@ -150,6 +150,11 @@ export declare function recordSuccessfulNudge(
   sentAtMs: number,
 ): CiGreenWakeState;
 
+export declare function mergeLegacyNudgedWithPendingJournal(
+  nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>,
+  pendingJournal?: Record<string, { sessionId?: string; sentAtMs?: number; message?: string }>,
+): Record<string, { sessionId?: string; sentAtMs?: number }>;
+
 export declare function commitNudgeSentCycleState(
   cycleState: Record<string, unknown>,
   input: {

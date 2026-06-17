@@ -28,6 +28,7 @@ import {
   type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
 import { NUDGE_EXPIRY_MS, commitReviewStartedCycleState } from '../docs/worker-iteration-cycle.mjs';
+import { mergeLegacyNudgedWithPendingJournal } from '../docs/ci-green-wake-reconcile.mjs';
 
 const greenChecks = [
   { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
@@ -254,6 +255,36 @@ describe('planReconcileActions', () => {
             },
           },
         },
+      }),
+    );
+    expect(startReviewActions(allowed.actions)).toHaveLength(1);
+    expect(startReviewActions(allowed.actions)[0]?.startReason).toBe(
+      'quiescent_worker_handoff_fallback',
+    );
+  });
+
+  it('allows quiescent fallback when nudge evidence exists only in pendingJournal', () => {
+    const fixture = loadFixture('quiescent-pr260-opk-37.json');
+    const nowMs = Number(fixture.nowMs ?? Date.now());
+    const sessionId = 'opk-37';
+    const prNumber = 260;
+    const transitionId = `${prNumber}:42bf1490dbe8829667d2835b937a33e7af9d82f1:1:nudge`;
+    const legacyNudged = mergeLegacyNudgedWithPendingJournal(
+      {},
+      {
+        [transitionId]: {
+          sessionId,
+          sentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+          message: 'hand off',
+        },
+      },
+    );
+
+    const allowed = unwrapReconcilePlanResult(
+      planReconcileActions({
+        ...fixture,
+        cycleState: {},
+        legacyNudged,
       }),
     );
     expect(startReviewActions(allowed.actions)).toHaveLength(1);
