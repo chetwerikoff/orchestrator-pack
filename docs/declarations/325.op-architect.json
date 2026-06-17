@@ -1,0 +1,17 @@
+{
+  "issue_number": 325,
+  "iteration_id": "op-architect",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-17T01:24:35.683Z",
+  "baseline": {
+    "commit_sha": "9649e55f90066c86d925619e325d3f185ea1c930",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9e3327b230920deb5fed95939507d47dfde660d8ed635494a1d8cdf104373796"
+  },
+  "declared_paths": [
+    "scripts/ao-autonomous-guard.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
