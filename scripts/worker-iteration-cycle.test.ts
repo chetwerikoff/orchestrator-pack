@@ -214,7 +214,7 @@ describe('legacy nudge migration', () => {
       { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } },
       42,
       'op-worker',
-    );
+    ) as { ownerCycles?: Record<string, { nudgeArmed?: boolean }> };
     const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
     const cycle = state.ownerCycles?.[buildOwnerCycleKey(repoId, 42, 'op-worker')];
     expect(cycle?.nudgeArmed).toBe(true);
@@ -250,6 +250,13 @@ describe('review cycle gate matrix cells', () => {
 });
 
 describe('owner cycle advance', () => {
+  type OwnerCycleResult = {
+    state: Record<string, unknown>;
+    cycle?: { cycleId?: string; headAdvanceCount?: number } | null;
+    opened?: boolean;
+    advanced?: boolean;
+  };
+
   it('advances head without opening a new cycle', () => {
     const repoId = 'repo';
     const first = resolveOrAdvanceOwnerCycle({
@@ -259,7 +266,7 @@ describe('owner cycle advance', () => {
       ownerSessionId: 'op-worker',
       headSha: 'h1',
       nowMs: 1000,
-    });
+    }) as OwnerCycleResult;
     const second = resolveOrAdvanceOwnerCycle({
       state: first.state,
       repoId,
@@ -267,7 +274,7 @@ describe('owner cycle advance', () => {
       ownerSessionId: 'op-worker',
       headSha: 'h2',
       nowMs: 2000,
-    });
+    }) as OwnerCycleResult;
     expect(second.advanced).toBe(true);
     expect(second.opened).toBe(false);
     expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);

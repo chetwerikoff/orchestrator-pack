@@ -1,0 +1,32 @@
+{
+  "issue_number": 332,
+  "iteration_id": "opk-24",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-17T16:00:00.000Z",
+  "baseline": {
+    "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9107e4a4fbc455b2250896288735a3bcf647a7145c59bca5c63fd54613560411"
+  },
+  "declared_paths": [
+    "docs/ci-green-wake-reconcile.d.mts",
+    "docs/ci-green-wake-reconcile.mjs",
+    "docs/declarations/332.opk-24.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/review-trigger-reconcile.d.mts",
+    "docs/review-trigger-reconcile.mjs",
+    "docs/worker-iteration-cycle.d.mts",
+    "docs/worker-iteration-cycle.mjs",
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/worker-iteration-cycle.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

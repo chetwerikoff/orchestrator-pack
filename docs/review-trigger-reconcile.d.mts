@@ -165,6 +165,13 @@ export interface PlanReconcileInput {
   aoEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
+  cycleState?: Record<string, unknown>;
+  repoRoot?: string;
+}
+
+export interface ReconcilePlanResult {
+  actions: ReconcileAction[];
+  cycleState: Record<string, unknown>;
 }
 
 export interface ReconcileIntervalAccept {
@@ -281,7 +288,11 @@ export declare function resolveHeadOwningWorkerSessionId(
   openPrs?: OpenPr[],
 ): string | null;
 
-export declare function planReconcileActions(input: PlanReconcileInput): ReconcileAction[];
+export declare function planReconcileActions(input: PlanReconcileInput): ReconcilePlanResult;
+
+export declare function unwrapReconcilePlanResult(
+  result: ReconcilePlanResult | ReconcileAction[],
+): ReconcilePlanResult;
 
 export declare function buildDegradedCiEscalationMessage(
   prNumber: number,

@@ -26,7 +26,9 @@ export interface HeadCiRecord {
 export interface CiGreenWakeState {
   heads?: Record<string, HeadCiRecord>;
   nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+  pendingJournal?: Record<string, Record<string, unknown>>;
   lastTickMs?: number;
+  cycleState?: Record<string, unknown>;
 }
 
 export type CiGreenWakeAction =
@@ -57,6 +59,16 @@ export interface PlanCiGreenWakeInput {
     | Record<string, boolean>
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: CiGreenWakeState;
+  workerDeliveries?: Array<Record<string, unknown>>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  nowMs?: number;
+  repoRoot?: string;
+}
+
+export interface CiGreenWakePlanResult {
+  actions: CiGreenWakeAction[];
+  headRecords: Record<string, HeadCiRecord>;
+  cycleState: Record<string, unknown>;
 }
 
 export declare function classifyRequiredCiLevel(
@@ -113,7 +125,7 @@ export declare function evaluateCiGreenWakeCandidate(input: {
 
 export declare function planCiGreenWakeActions(
   input: PlanCiGreenWakeInput,
-): { actions: CiGreenWakeAction[]; headRecords: Record<string, HeadCiRecord> };
+): CiGreenWakePlanResult;
 
 export declare function normalizeCiChecksByPr(
   ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'],

@@ -145,7 +145,7 @@ function planReconcile(input: PlanReconcileInput) {
   return unwrapReconcilePlanResult(planReconcileActions(input)).actions;
 }
 
-function withExpiredNudgeCycle(fixture: PlanReconcileInput): PlanReconcileInput {
+function withExpiredNudgeCycle(fixture: FixturePayload): FixturePayload {
   const nowMs = Number(fixture.nowMs ?? Date.now());
   const pr = fixture.openPrs?.[0];
   const prNumber = Number(pr?.number ?? 0);
