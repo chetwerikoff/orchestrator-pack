@@ -21,7 +21,9 @@ import {
   normalizeAuditOutput,
   parseGitDiffNameOnlyOutput,
   recipientKeysOverlap,
+  readGithubActionsPullRequestShas,
   resolveDiffBaseRef,
+  resolveLinkedIssueNumbers,
   resolveLinkedIssuesFromDeclarationSnapshots,
   resolveLinkedIssuesFromCommittedDeclarationSnapshots,
   resolveLinkedIssueNumbersForProtectedRuntime,
@@ -425,25 +427,44 @@ describe('orchestrator message registry (Issue #298)', () => {
   });
 
   it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
-    // Warm-fetch PR merge-base refs while the GitHub event is still available (CI checkout).
+    // Warm-fetch PR refs while the real GitHub event (if any) is still available.
     listChangedFiles(repoRoot, 'origin/main');
-    const baseRef = resolveDiffBaseRef(repoRoot, 'origin/main');
+    const pr = readGithubActionsPullRequestShas();
     const prevEvent = process.env.GITHUB_EVENT_PATH;
     const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-    delete process.env.GITHUB_EVENT_PATH;
+    let scrubbedEventPath: string | undefined;
+    if (pr) {
+      scrubbedEventPath = path.join(os.tmpdir(), `registry-no-issue-${Date.now()}.json`);
+      fs.writeFileSync(
+        scrubbedEventPath,
+        JSON.stringify({
+          pull_request: {
+            base: { sha: pr.baseSha },
+            head: { sha: pr.headSha, ref: 'session/registry-no-issue' },
+            title: 'registry protected-runtime regression',
+            body: '',
+          },
+        }),
+      );
+      process.env.GITHUB_EVENT_PATH = scrubbedEventPath;
+    }
+    else {
+      delete process.env.GITHUB_EVENT_PATH;
+    }
     delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
     const cleanEnv = {
       ...process.env,
-      GITHUB_EVENT_PATH: undefined,
       ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
-      ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF: baseRef,
-      GITHUB_BASE_SHA: baseRef,
+      ...(scrubbedEventPath ? { GITHUB_EVENT_PATH: scrubbedEventPath } : { GITHUB_EVENT_PATH: undefined }),
     };
     try {
-      const changed = listChangedFiles(repoRoot, baseRef);
+      if (scrubbedEventPath) {
+        expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
+      }
+      const changed = listChangedFiles(repoRoot, 'origin/main');
       expect(resolveLinkedIssuesFromCommittedDeclarationSnapshots(repoRoot, changed)).toContain(324);
       expect(resolveLinkedIssueNumbersForProtectedRuntime(repoRoot, changed)).toContain(324);
-      expect(checkProtectedRuntimeForRepo(repoRoot, baseRef).ok).toBe(true);
+      expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
       execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
         stdio: 'pipe',
         env: cleanEnv,
@@ -453,6 +474,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       else process.env.GITHUB_EVENT_PATH = prevEvent;
       if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
       else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
+      if (scrubbedEventPath && fs.existsSync(scrubbedEventPath)) fs.unlinkSync(scrubbedEventPath);
     }
   });
 
