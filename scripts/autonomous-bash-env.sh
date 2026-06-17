@@ -16,6 +16,17 @@ __ao_autonomous_rewrite_git_command() {
 
   printf -v quoted_pack_git '%q' "${pack_git}"
 
+  # Quoted absolute git at command start (common BASH_ENV -c shape).
+  if [[ "${cmd}" =~ ^\"(${git_paths})\"(.*)$ ]]; then
+    printf '%s%s' "${quoted_pack_git}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  if [[ "${cmd}" =~ ^\'(${git_paths})\'(.*)$ ]]; then
+    printf '%s%s' "${quoted_pack_git}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
   # Double-quoted absolute git after command start, shell separator, or opening quote.
   if [[ "${cmd}" =~ ${boundary}\"(${git_paths})\"(.*)$ ]]; then
     prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
@@ -34,6 +45,12 @@ __ao_autonomous_rewrite_git_command() {
   if [[ "${cmd}" =~ \"(${git_paths})\"(.*)$ ]]; then
     prefix="${cmd%%\"${BASH_REMATCH[1]}\"*}"
     printf '%s%s%s%s' "${prefix}" "\"" "${quoted_pack_git}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  if [[ "${cmd}" =~ \'(${git_paths})\'(.*)$ ]]; then
+    prefix="${cmd%%\'${BASH_REMATCH[1]}\'*}"
+    printf '%s%s%s%s' "${prefix}" "'" "${quoted_pack_git}" "${BASH_REMATCH[2]}"
     return 0
   fi
 
