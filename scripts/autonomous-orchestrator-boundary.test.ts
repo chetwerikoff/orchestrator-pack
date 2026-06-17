@@ -48,6 +48,65 @@ function withTempGitRepo(run: (dir: string) => void) {
   }
 }
 
+function copyRepoFile(rel: string, destRoot: string) {
+  const dest = path.join(destRoot, rel);
+  mkdirSync(path.dirname(dest), { recursive: true });
+  writeFileSync(dest, readFileSync(path.join(repoRoot, rel)));
+}
+
+function initCoordinatedIssue324Fixture() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'coord-path-324-'));
+  spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, encoding: 'utf8' });
+  for (const rel of [
+    'scripts/orchestrator-message-taxonomy.json',
+    'scripts/orchestrator-message-owner-mechanisms.manifest.json',
+    'scripts/orchestrator-message-send-helpers.manifest.json',
+    'scripts/orchestrator-message-audit-roots.manifest.json',
+    'scripts/orchestrator-message-protected-runtime.manifest.json',
+    'scripts/orchestrator-message-allowlist.json',
+    'scripts/orchestrator-side-process-registry.json',
+    'scripts/orchestrator-message-catalog.json',
+    'docs/orchestrator-message-registry.mjs',
+    'agent-orchestrator.yaml.example',
+  ]) {
+    copyRepoFile(rel, dir);
+  }
+  spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'base'], { cwd: dir, encoding: 'utf8' });
+  const baseSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  const yamlPath = path.join(dir, 'agent-orchestrator.yaml.example');
+  writeFileSync(yamlPath, `${readFileSync(yamlPath, 'utf8')}\n# coordinated edit fixture\n`);
+  spawnSync('git', ['add', 'agent-orchestrator.yaml.example'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'coord'], { cwd: dir, encoding: 'utf8' });
+  return { dir, baseSha };
+}
+
+const githubActionsEnvKeys = [
+  'ORCHESTRATOR_MESSAGE_LINKED_ISSUES',
+  'GITHUB_EVENT_PATH',
+  'GITHUB_BASE_SHA',
+  'PR_BASE_SHA',
+  'ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF',
+] as const;
+
+function withoutGithubActionsEnv<T>(run: () => T): T {
+  const prior: Partial<Record<(typeof githubActionsEnvKeys)[number], string>> = {};
+  for (const key of githubActionsEnvKeys) {
+    prior[key] = process.env[key];
+    delete process.env[key];
+  }
+  try {
+    return run();
+  } finally {
+    for (const key of githubActionsEnvKeys) {
+      if (prior[key] === undefined) delete process.env[key];
+      else process.env[key] = prior[key];
+    }
+  }
+}
+
 describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   it('exports stable boundary markers', () => {
     expect(AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION).toBe('autonomous-orchestrator-boundary/v1');
@@ -523,18 +582,15 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('infers issue-324 coordination from coordinated path edits without PR event context', () => {
-    const prior = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-    const priorEvent = process.env.GITHUB_EVENT_PATH;
-    delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-    delete process.env.GITHUB_EVENT_PATH;
+    const { dir, baseSha } = initCoordinatedIssue324Fixture();
     try {
-      const result = checkProtectedRuntimeForRepo(repoRoot, 'origin/main');
-      expect(result.ok).toBe(true);
+      withoutGithubActionsEnv(() => {
+        process.env.GITHUB_BASE_SHA = baseSha;
+        const result = checkProtectedRuntimeForRepo(dir, baseSha);
+        expect(result.ok).toBe(true);
+      });
     } finally {
-      if (prior === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-      else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prior;
-      if (priorEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
-      else process.env.GITHUB_EVENT_PATH = priorEvent;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
