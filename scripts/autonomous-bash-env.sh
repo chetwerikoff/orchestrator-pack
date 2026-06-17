@@ -11,13 +11,36 @@ __ao_autonomous_pack_git() {
 
 __ao_autonomous_rewrite_git_command() {
   local cmd="${1-}" pack_git="${2-}" quoted_pack_git prefix=""
-  local abs_git_re=$'(^|[;&|[:space:]]|["\'])(["\']?)(/usr/bin/git|/usr/local/bin/git|/bin/git)(["\']?)(.*)$'
+  local git_paths='/usr/bin/git|/usr/local/bin/git|/bin/git'
+  local boundary='(^|[;&|[:space:]]|[\"'"'"'])'
 
   printf -v quoted_pack_git '%q' "${pack_git}"
 
-  if [[ "${cmd}" =~ ${abs_git_re} ]]; then
+  # Double-quoted absolute git after command start, shell separator, or opening quote.
+  if [[ "${cmd}" =~ ${boundary}\"(${git_paths})\"(.*)$ ]]; then
     prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
-    printf '%s%s%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${quoted_pack_git}" "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  # Single-quoted absolute git after command start, shell separator, or opening quote.
+  if [[ "${cmd}" =~ ${boundary}\'(${git_paths})\'(.*)$ ]]; then
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  # String-concatenated quoted absolute git (e.g. foo"/usr/bin/git" …).
+  if [[ "${cmd}" =~ \"(${git_paths})\"(.*)$ ]]; then
+    prefix="${cmd%%\"${BASH_REMATCH[1]}\"*}"
+    printf '%s%s%s%s' "${prefix}" "\"" "${quoted_pack_git}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  # Unquoted absolute git.
+  if [[ "${cmd}" =~ (^|[;&|[:space:]])(/usr/bin/git|/usr/local/bin/git|/bin/git)(.*)$ ]]; then
+    prefix="${cmd%%"${BASH_REMATCH[0]}"*}"
+    printf '%s%s%s%s' "${prefix}" "${BASH_REMATCH[1]}" "${quoted_pack_git}" "${BASH_REMATCH[3]}"
     return 0
   fi
 
