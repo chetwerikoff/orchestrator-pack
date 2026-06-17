@@ -461,7 +461,6 @@ describe('planReconcileActions', () => {
             findingCount: 1,
             openFindingCount: 1,
             sentFindingCount: 1,
-            sentAt: '2026-06-10T12:00:00.000Z',
           },
         ],
       };
