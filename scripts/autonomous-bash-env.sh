@@ -33,31 +33,38 @@ __ao_autonomous_rewrite_git_command() {
   return 1
 }
 
-__ao_autonomous_redirect_absolute_git() {
-  local cmd="${BASH_COMMAND-}"
-  [[ -n "${cmd}" ]] || return 0
+__ao_autonomous_rewrite_all_git_in_command() {
+  local cmd="${1-}" pack_git="${2-}" next=""
+
+  while :; do
+    if ! next="$(__ao_autonomous_rewrite_git_command "${cmd}" "${pack_git}")"; then
+      printf '%s' "${cmd}"
+      return 0
+    fi
+    if [[ "${next}" == "${cmd}" ]]; then
+      break
+    fi
+    cmd="${next}"
+  done
+
+  printf '%s' "${cmd}"
+}
+
+__ao_autonomous_interpose_execution_string() {
+  [[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
+  [[ -n "${BASH_EXECUTION_STRING:-}" ]] || return 0
 
   local pack_git rewritten="" ec
   pack_git="$(__ao_autonomous_pack_git)"
-  # Skip our own shim invocations and guard subprocesses.
-  [[ "${cmd}" == *"${pack_git}"* ]] && return 0
-  [[ "${cmd}" == *git-autonomous-guard.ps1* ]] && return 0
-
-  if ! rewritten="$(__ao_autonomous_rewrite_git_command "${cmd}" "${pack_git}")"; then
+  rewritten="$(__ao_autonomous_rewrite_all_git_in_command "${BASH_EXECUTION_STRING}" "${pack_git}")"
+  if [[ "${rewritten}" == "${BASH_EXECUTION_STRING}" ]]; then
     return 0
   fi
 
+  __AO_AUTONOMOUS_BASH_INTERPOSED=1
   eval "${rewritten}"
   ec=$?
-  if (( ec != 0 )); then
-    __AO_AUTONOMOUS_ABSOLUTE_GIT_EC="${ec}"
-    # Propagate shim denial to callers; allowed read-only paths use return 1 below.
-    exit "${ec}"
-  fi
-  unset -v __AO_AUTONOMOUS_ABSOLUTE_GIT_EC 2>/dev/null || true
-  # Skip the original absolute git invocation without terminating the shell.
-  return 1
+  exit "${ec}"
 }
 
-shopt -s extdebug
-trap '__ao_autonomous_redirect_absolute_git' DEBUG
+__ao_autonomous_interpose_execution_string

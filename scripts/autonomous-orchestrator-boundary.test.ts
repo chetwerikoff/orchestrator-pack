@@ -459,6 +459,24 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         );
         expect(envPathGit.status).toBe(93);
         expect(envPathGit.stderr || envPathGit.stdout).toMatch(/autonomous tree-mutating git denied/i);
+
+        const directBashEnvShort = spawnSync('bash', ['-c', '/usr/bin/git status --short'], {
+          cwd: dir,
+          encoding: 'utf8',
+        });
+        const bashEnvInterposed = spawnSync('bash', ['-c', '/usr/bin/git status --short'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            BASH_ENV: bashEnvPath,
+          },
+        });
+        expect(bashEnvInterposed.status).toBe(0);
+        expect(bashEnvInterposed.stdout).toBe(directBashEnvShort.stdout);
+        expect(bashEnvInterposed.stderr).not.toMatch(/debugger|bashdb|extdebug/i);
+        expect(bashEnvInterposed.stdout).not.toBe(`${directBashEnvShort.stdout}${directBashEnvShort.stdout}`);
       });
     }
   });
