@@ -246,19 +246,39 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(existsSync(gitRealBinaryPath)).toBe(true);
 
     if (existsSync('/usr/bin/git')) {
-      const denyAbsolute = spawnSync(
-        'bash',
-        ['-c', `source ${bashEnvPath}; /usr/bin/git branch -m blocked-abs`],
-        {
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+      withTempGitRepo((dir) => {
+        const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
+        const denyAbsolute = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/git branch -m blocked-abs; echo done-marker`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
           },
-        },
-      );
-      expect(denyAbsolute.status).toBe(93);
-      expect(denyAbsolute.stderr || denyAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
+        );
+        const after = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
+        expect(denyAbsolute.stdout).toMatch(/done-marker/);
+        expect(denyAbsolute.stderr || denyAbsolute.stdout).toMatch(/autonomous tree-mutating git denied/i);
+        expect(after.stdout.trim()).toBe(before.stdout.trim());
+
+        const allowChain = spawnSync(
+          'bash',
+          ['-c', `source ${bashEnvPath}; /usr/bin/git status; echo done-marker`],
+          {
+            cwd: dir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            },
+          },
+        );
+        expect(allowChain.stdout).toMatch(/done-marker/);
+      });
     }
   });
 

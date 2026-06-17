@@ -14,7 +14,7 @@ __ao_autonomous_redirect_absolute_git() {
   [[ -n "${cmd}" ]] || return 0
   [[ "${cmd}" =~ ^(/usr/bin/git|/bin/git|/usr/local/bin/git)([[:space:]]|$) ]] || return 0
 
-  local pack_git args
+  local pack_git args ec
   pack_git="$(__ao_autonomous_pack_git)"
   if [[ "${cmd}" =~ ^(/usr/bin/git|/bin/git|/usr/local/bin/git)[[:space:]]+(.*)$ ]]; then
     args="${BASH_REMATCH[2]}"
@@ -24,7 +24,12 @@ __ao_autonomous_redirect_absolute_git() {
 
   # shellcheck disable=SC2086
   "${pack_git}" ${args}
-  exit $?
+  ec=$?
+  if (( ec != 0 )); then
+    return "$ec"
+  fi
+  # Skip the original absolute git invocation without terminating the shell.
+  return 1
 }
 
 shopt -s extdebug
