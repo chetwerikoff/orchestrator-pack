@@ -26,6 +26,7 @@ import {
   validateOverlapOverride,
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
+import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
@@ -35,29 +36,6 @@ function writeJson(root: string, rel: string, value: unknown) {
   const full = path.join(root, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function copyTree(srcRel: string, destRoot: string) {
-  const src = path.join(repoRoot, srcRel);
-  const dest = path.join(destRoot, srcRel);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
-}
-
-function seedMinimalRegistryTree(root: string) {
-  for (const rel of [
-    'scripts/orchestrator-message-taxonomy.json',
-    'scripts/orchestrator-message-owner-mechanisms.manifest.json',
-    'scripts/orchestrator-message-send-helpers.manifest.json',
-    'scripts/orchestrator-message-audit-roots.manifest.json',
-    'scripts/orchestrator-message-protected-runtime.manifest.json',
-    'scripts/orchestrator-message-allowlist.json',
-    'scripts/orchestrator-side-process-registry.json',
-    'scripts/orchestrator-message-catalog.json',
-    'docs/orchestrator-message-registry.mjs',
-  ]) {
-    copyTree(rel, root);
-  }
 }
 
 const gitFixtureEnv = {

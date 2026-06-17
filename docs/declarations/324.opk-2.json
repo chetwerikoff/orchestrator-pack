@@ -22,6 +22,7 @@
     "docs/orchestrator-message-registry.d.mts",
     "docs/orchestrator-message-registry.mjs",
     "scripts/_invoke-system-git.sh",
+    "scripts/_test-registry-fixture.ts",
     "scripts/ao",
     "scripts/ao-autonomous-guard.ps1",
     "scripts/autonomous-bash-env.sh",

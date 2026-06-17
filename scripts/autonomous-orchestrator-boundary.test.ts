@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 import {
   AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION,
   TURN_VISIBLE_REAL_BINARY_ENV_VARS,
@@ -48,31 +49,12 @@ function withTempGitRepo(run: (dir: string) => void) {
   }
 }
 
-function copyRepoFile(rel: string, destRoot: string) {
-  const dest = path.join(destRoot, rel);
-  mkdirSync(path.dirname(dest), { recursive: true });
-  writeFileSync(dest, readFileSync(path.join(repoRoot, rel)));
-}
-
 function initCoordinatedIssue324Fixture() {
   const dir = mkdtempSync(path.join(tmpdir(), 'coord-path-324-'));
   spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
   spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' });
   spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, encoding: 'utf8' });
-  for (const rel of [
-    'scripts/orchestrator-message-taxonomy.json',
-    'scripts/orchestrator-message-owner-mechanisms.manifest.json',
-    'scripts/orchestrator-message-send-helpers.manifest.json',
-    'scripts/orchestrator-message-audit-roots.manifest.json',
-    'scripts/orchestrator-message-protected-runtime.manifest.json',
-    'scripts/orchestrator-message-allowlist.json',
-    'scripts/orchestrator-side-process-registry.json',
-    'scripts/orchestrator-message-catalog.json',
-    'docs/orchestrator-message-registry.mjs',
-    'agent-orchestrator.yaml.example',
-  ]) {
-    copyRepoFile(rel, dir);
-  }
+  seedMinimalRegistryTree(dir, ['agent-orchestrator.yaml.example']);
   spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' });
   spawnSync('git', ['commit', '-m', 'base'], { cwd: dir, encoding: 'utf8' });
   const baseSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
