@@ -666,11 +666,14 @@ export function evaluateReadyForReviewSettleDebounce(input) {
     handoffAccepted = false,
     handoffHeadSha = '',
     headCommittedAtMs,
+    handoffReportedAtMs,
   } = input;
   if (!handoffAccepted) {
     return { settled: true, waiting: false, reason: 'no_handoff' };
   }
   const handoffHead = normalizeSha(handoffHeadSha || headSha);
+  const handoffAtMs =
+    Number(handoffReportedAtMs ?? 0) > 0 ? Number(handoffReportedAtMs) : nowMs;
   const headStableMs =
     Number.isFinite(Number(headCommittedAtMs)) && Number(headCommittedAtMs) > 0
       ? nowMs - Number(headCommittedAtMs)
@@ -700,7 +703,7 @@ export function evaluateReadyForReviewSettleDebounce(input) {
           settled: false,
           waiting: true,
           reason: 'ready_for_review_debounce_pending',
-          startedAtMs: nowMs,
+          startedAtMs: handoffAtMs,
           handoffHeadSha: handoffHead,
           staleHandoff: true,
         };
@@ -714,6 +717,22 @@ export function evaluateReadyForReviewSettleDebounce(input) {
           handoffHeadSha: boundHead || handoffHead,
         };
       }
+      const currentHead = normalizeSha(headSha);
+      if (boundHead && currentHead && boundHead !== currentHead) {
+        return {
+          settled: false,
+          waiting: false,
+          reason: 'stale_handoff_head',
+          handoffHeadSha: boundHead,
+          currentHeadSha: currentHead,
+        };
+      }
+      return {
+        settled: true,
+        waiting: false,
+        reason: 'settled',
+        handoffHeadSha: boundHead || handoffHead,
+      };
     }
     const currentHead = normalizeSha(headSha);
     if (handoffHead && currentHead && handoffHead !== currentHead) {
@@ -725,6 +744,15 @@ export function evaluateReadyForReviewSettleDebounce(input) {
         currentHeadSha: currentHead,
       };
     }
+    if (nowMs - handoffAtMs < QUIESCENCE_DEBOUNCE_MS) {
+      return {
+        settled: false,
+        waiting: true,
+        reason: 'ready_for_review_debounce_pending',
+        startedAtMs: handoffAtMs,
+        handoffHeadSha: handoffHead,
+      };
+    }
     return { settled: true, waiting: false, reason: 'settled', handoffHeadSha: handoffHead };
   }
 
@@ -734,7 +762,7 @@ export function evaluateReadyForReviewSettleDebounce(input) {
       settled: false,
       waiting: true,
       reason: 'ready_for_review_debounce_pending',
-      startedAtMs: nowMs,
+      startedAtMs: handoffAtMs,
       handoffHeadSha: handoffHead,
     };
   }
@@ -745,7 +773,7 @@ export function evaluateReadyForReviewSettleDebounce(input) {
       settled: false,
       waiting: true,
       reason: 'ready_for_review_debounce_pending',
-      startedAtMs: nowMs,
+      startedAtMs: handoffAtMs,
       handoffHeadSha: handoffHead,
       staleHandoff: true,
     };
@@ -1156,6 +1184,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
     headCommittedAtMs,
     handoffAccepted = false,
     legacyNudged = null,
+    handoffReportedAtMs,
   } = input;
 
   const repoId = normalizeCanonicalRepoIdentity(repoRoot || cycleState?.repoId);
@@ -1234,6 +1263,7 @@ export function evaluateWorkerIterationCycleForPr(input) {
     handoffAccepted,
     handoffHeadSha: handoffAccepted ? headSha : '',
     headCommittedAtMs,
+    handoffReportedAtMs,
   });
 
   const settle = isWorkerSettledIdle(session, headSha, nowMs, {

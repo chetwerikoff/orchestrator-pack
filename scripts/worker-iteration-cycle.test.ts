@@ -239,6 +239,32 @@ describe('ready_for_review settle debounce', () => {
     expect(afterHandoffDebounce.settled).toBe(true);
     expect(afterHandoffDebounce.waiting).toBe(false);
   });
+
+  it('starts handoff debounce on an old head when ready_for_review is recent', () => {
+    const handoffAtMs = headCommittedAtMs + 20 * 60 * 1000;
+    const result = evaluateReadyForReviewSettleDebounce({
+      cycle: {},
+      headSha,
+      nowMs: handoffAtMs,
+      handoffAccepted: true,
+      headCommittedAtMs,
+      handoffReportedAtMs: handoffAtMs,
+    });
+    expect(result.waiting).toBe(true);
+    expect(result.settled).toBe(false);
+    expect(result.startedAtMs).toBe(handoffAtMs);
+
+    const settled = evaluateReadyForReviewSettleDebounce({
+      cycle: {},
+      headSha,
+      nowMs: handoffAtMs + QUIESCENCE_DEBOUNCE_MS,
+      handoffAccepted: true,
+      headCommittedAtMs,
+      handoffReportedAtMs: handoffAtMs,
+    });
+    expect(settled.settled).toBe(true);
+    expect(settled.waiting).toBe(false);
+  });
 });
 
 describe('legacy nudge migration', () => {

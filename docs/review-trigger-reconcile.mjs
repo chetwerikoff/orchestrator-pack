@@ -25,6 +25,7 @@ import {
   buildNoStartDecisionRecord,
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
+  findLatestAcceptedReportForHead,
   formatDecisionRecordForLog,
   hasReadyForReviewForHead,
   mergeWorkerDeliveriesFromPlanInput,
@@ -746,6 +747,11 @@ export function planReconcileActions({
     const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
     const reportBindingOptions = { headCommittedAtMs };
     const handoffAccepted = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
+    const handoffReportedAtMs = handoffAccepted
+      ? getReportTimestampMs(
+          findLatestAcceptedReportForHead(session, headSha, reportBindingOptions) ?? {},
+        )
+      : 0;
     const cycleEval = evaluateWorkerIterationCycleForPr({
       cycleState: nextCycleState,
       repoRoot,
@@ -759,6 +765,7 @@ export function planReconcileActions({
       nowMs,
       headCommittedAtMs,
       handoffAccepted,
+      handoffReportedAtMs,
       legacyNudged: sharedNudged,
     });
     nextCycleState = cycleEval.state;
