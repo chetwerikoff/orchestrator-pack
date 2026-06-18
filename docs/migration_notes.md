@@ -1340,3 +1340,29 @@ Operator adoption after merge (blocking phase 2 for issue closure):
 Residuals intentionally remain: reverse ordering (orchestrator sends first, then the
 unconditional daemon `ci-failed` reaction fires) is not closed unless the operator disables
 or gates the built-in reaction, or AO core learns to consult shared state.
+
+## Per-cycle review/nudge settle gate (Issue #332)
+
+Adds `docs/worker-iteration-cycle.mjs`: shared worker-iteration cycle state for
+`review-trigger-reconcile.ps1` and `ci-green-wake-reconcile.ps1`. Both reconcilers now
+arm at most once per worker-iteration cycle (not per head), suppress CI-green nudges while
+the worker is actively working, defer new review revisions while a prior revision is open,
+and enforce nudge-before-fallback precedence for lost-handoff cycles.
+
+**Operator adoption** — after merge (mandatory even when no YAML changes):
+
+1. Pull the merged pack and restart supervised children from the **operator terminal**
+   (`ao stop` / `ao start`, or the supervisor restart path). Live loops keep old per-head
+   behavior until restarted.
+2. Confirm `review-trigger-reconcile` and `ci-green-wake-reconcile` child processes reload
+   the new `docs/*.mjs` helpers (supervisor log shows fresh child start after restart).
+3. **Live confirmation:** on a PR where a worker is mid-cycle (pushing fix commits without
+   `ready_for_review`), verify reconcile logs show **one** nudge/review arm for the cycle —
+   not one per intermediate head. A code-merged-but-not-restarted runtime still produces
+   per-head storms; that is not adopted.
+4. Optional dry-run: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun`
+   and `pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun`.
+5. Verify tests: `npx vitest run scripts/worker-iteration-cycle.test.ts scripts/review-trigger-reconcile.test.ts scripts/ci-green-wake-reconcile.test.ts`.
+
+Cycle state persists in the existing reconcile state files (`cycleState` key alongside
+`degradedCi` / `nudged`); no new env vars required.

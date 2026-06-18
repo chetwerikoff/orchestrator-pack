@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
-import { planReconcileActions, type OpenPr } from '../docs/review-trigger-reconcile.mjs';
+import { planReconcileActions, unwrapReconcilePlanResult, type OpenPr } from '../docs/review-trigger-reconcile.mjs';
 import {
   DEFERRED_WATCH_WINDOW_MS,
   INCIDENT_WAKE_TO_READINESS_DELAY_MS,
@@ -550,12 +550,12 @@ describe('scenario matrix cells', () => {
   it('reconcile observer agrees with re-eval verdict on same state', () => {
     const fixture = loadFixture('wake-before-ready-then-ready.json');
     const reeval = evaluateFixtureVerdict(fixture);
-    const reconcile = planReconcileActions({
+    const reconcile = unwrapReconcilePlanResult(planReconcileActions({
       openPrs: (fixture.openPrs ?? []) as unknown as OpenPr[],
       reviewRuns: fixture.reviewRuns ?? [],
       sessions: fixture.sessions ?? [],
       ciChecksByPr: fixture.ciChecksByPr,
-    });
+    })).actions;
     const reconcileStart = reconcile.find((a: { type: string }) => a.type === 'start_review');
     expect(reeval.triggerReviewRun).toBe(Boolean(reconcileStart));
   });

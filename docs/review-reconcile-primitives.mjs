@@ -1,0 +1,167 @@
+/**
+ * Leaf helpers shared by worker-iteration-cycle and review-trigger-reconcile.
+ * Keep this module free of imports from cycle/head-ready/ci-green modules.
+ */
+
+/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string }} ReviewRun */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
+
+export const IN_FLIGHT_REVIEW_STATUSES = new Set([
+  'queued',
+  'preparing',
+  'running',
+  'reviewing',
+]);
+
+export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
+  'clean',
+  'needs_triage',
+  'waiting_update',
+]);
+
+export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
+  'done',
+  'merged',
+  'terminated',
+  'killed',
+  'errored',
+  'exited',
+  'cleanup',
+  'closed',
+  'detecting',
+]);
+
+/** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
+export function toArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * @param {string | undefined | null} sha
+ */
+export function normalizeSha(sha) {
+  return String(sha ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * @param {ReviewRun} run
+ */
+export function isRunCoveringHead(run) {
+  const status = String(run?.status ?? '').toLowerCase();
+  if (status === 'outdated') {
+    return false;
+  }
+  if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
+    return true;
+  }
+  if (COVERED_TERMINAL_REVIEW_STATUSES.has(status)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {ReviewRun[]} runs
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function isHeadCovered(runs, prNumber, headSha) {
+  const head = normalizeSha(headSha);
+  const forHead = runs.filter(
+    (run) => Number(run?.prNumber) === prNumber && normalizeSha(run?.targetSha) === head,
+  );
+  if (forHead.length === 0) {
+    return false;
+  }
+  return forHead.some((run) => isRunCoveringHead(run));
+}
+
+/**
+ * @param {AoSession} session
+ */
+export function isLiveWorkerSession(session) {
+  const status = String(session?.status ?? '').toLowerCase();
+  if (!status) {
+    return true;
+  }
+  return !NON_LIVE_WORKER_SESSION_STATUSES.has(status);
+}
+
+/**
+ * @param {AoSession} session
+ */
+export function getSessionIdentifier(session) {
+  const name = String(session?.name ?? '').trim();
+  if (name) {
+    return name;
+  }
+  const sessionId = String(session?.sessionId ?? '').trim();
+  if (sessionId) {
+    return sessionId;
+  }
+  const id = String(session?.id ?? '').trim();
+  if (id) {
+    return id;
+  }
+  return null;
+}
+
+/**
+ * All non-empty session identifiers (name, sessionId, id) for delivery matching.
+ *
+ * @param {AoSession | null | undefined} session
+ */
+export function collectSessionIdentifiers(session) {
+  /** @type {string[]} */
+  const ids = [];
+  for (const field of [session?.name, session?.sessionId, session?.id]) {
+    const value = String(field ?? '').trim();
+    if (value && !ids.includes(value)) {
+      ids.push(value);
+    }
+  }
+  return ids;
+}
+
+/**
+ * @param {string | undefined | null} lastActivity
+ * @returns {number | null}
+ */
+export function parseLastActivityAgeMs(lastActivity) {
+  const raw = String(lastActivity ?? '')
+    .trim()
+    .toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw === 'just now' || raw === 'now') {
+    return 0;
+  }
+  const match = raw.match(
+    /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*ago$/,
+  );
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const unit = match[2];
+  if (unit.startsWith('s')) {
+    return value * 1000;
+  }
+  if (unit.startsWith('m')) {
+    return value * 60 * 1000;
+  }
+  if (unit.startsWith('h')) {
+    return value * 60 * 60 * 1000;
+  }
+  if (unit.startsWith('d')) {
+    return value * 24 * 60 * 60 * 1000;
+  }
+  return null;
+}

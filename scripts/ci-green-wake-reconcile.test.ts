@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -15,42 +16,22 @@ import {
   resolveHeadOwningWorkerSessionId,
   preSendRecheck,
   recordSuccessfulNudge,
+  mergeLegacyNudgedWithPendingJournal,
+  commitNudgeSentCycleState,
   type CiGreenWakeAction,
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
 import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
+import { QUIESCENCE_DEBOUNCE_MS } from '../docs/worker-iteration-cycle.mjs';
+import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/ci-green-wake-reconcile',
 );
 
-const greenChecks = [
-  { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
-  { name: 'PR scope guard', state: 'SUCCESS' },
-  { name: 'Run pack contract tests', state: 'SUCCESS' },
-  { name: 'Self-architect lint', state: 'SUCCESS' },
-];
-
-const redChecks = [
-  { name: 'Verify orchestrator-pack structure', state: 'FAILURE' },
-  { name: 'PR scope guard', state: 'SUCCESS' },
-  { name: 'Run pack contract tests', state: 'SUCCESS' },
-  { name: 'Self-architect lint', state: 'SUCCESS' },
-];
-
-function liveWorker(overrides: Record<string, unknown> = {}) {
-  return {
-    name: 'op-worker',
-    role: 'worker',
-    prNumber: 42,
-    ownedHeadSha: 'abc123',
-    status: 'fixing_ci',
-    activity: 'ready',
-    reports: [],
-    ...overrides,
-  };
-}
+const greenChecks = [...packGreenCiChecks];
+const redChecks = [...packRedCiChecks];
 
 function plan(input: PlanCiGreenWakeInput) {
   return planCiGreenWakeActions(input);
@@ -201,6 +182,48 @@ describe('planCiGreenWakeActions', () => {
     });
   });
 
+  it('defers nudge when dispatch journal records pending unconsumed delivery', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const deliveredAtMs = settledAtMs - 60_000;
+    const result = plan({
+      openPrs: [
+        {
+          number: 42,
+          headRefOid: 'abc123',
+          headCommittedAt: new Date(settledAtMs).toISOString(),
+        },
+      ],
+      sessions: [
+        liveWorker({
+          activity: 'idle',
+          status: 'working',
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+        }),
+      ],
+      ciChecksByPr: { 42: greenChecks },
+      tracking: { heads: { '42:abc123': { lastCiLevel: 'green', greenEpoch: 1 } } },
+      dispatchJournal: {
+        'op-worker:1000:pack-send:ci-green:tr-42': {
+          deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+          sessionId: 'op-worker',
+          deliveredAtMs,
+          source: 'pack-send',
+          sourceKey: 'ci-green:tr-42',
+          deliveryPath: 'pending-draft',
+        },
+      },
+      aoEvents: [],
+      nowMs,
+    });
+    expect(nudgeActions(result.actions)).toHaveLength(0);
+    const skip = result.actions.find((a) => a.type === 'skip');
+    expect(
+      skip?.reason === 'worker_actively_working' ||
+        String(skip?.reason ?? '').includes('pending_unconsumed_delivery'),
+    ).toBe(true);
+  });
+
   it('(b) skips second identical green observation after nudge recorded', () => {
     const transitionId = buildTransitionId(42, 'abc123', 1);
     const result = plan({
@@ -217,10 +240,16 @@ describe('planCiGreenWakeActions', () => {
       },
     });
     expect(nudgeActions(result.actions)).toHaveLength(0);
-    expect(result.actions.some((a) => a.type === 'skip' && a.reason === 'already_nudged')).toBe(true);
+    expect(
+      result.actions.some(
+        (a) =>
+          a.type === 'skip' &&
+          (a.reason === 'already_nudged' || a.reason === 'already_nudged_this_cycle'),
+      ),
+    ).toBe(true);
   });
 
-  it('(c) treats renewed red→green on same head as new transition', () => {
+  it('(c) does not re-nudge on red→green flap within the same worker cycle (#332 C6b)', () => {
     const first = plan({
       openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [
@@ -232,11 +261,22 @@ describe('planCiGreenWakeActions', () => {
       tracking: {
         heads: { '42:abc123': { lastCiLevel: 'red', greenEpoch: 1 } },
         nudged: { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1 } },
+        cycleState: {
+          repoId: 'orchestrator-pack',
+          ownerCycles: {
+            'orchestrator-pack:pr:42:owner:op-worker': {
+              cycleId: 'seed-cycle',
+              ownerSessionId: 'op-worker',
+              prNumber: 42,
+              nudgeArmed: true,
+              nudgeSentAtMs: 1,
+              nudgeExpiresAtMs: Date.now() + 60_000,
+            },
+          },
+        },
       },
     });
-    const nudges = nudgeActions(first.actions);
-    expect(nudges).toHaveLength(1);
-    expect(nudges[0]?.transitionId).toBe('42:abc123:2');
+    expect(nudgeActions(first.actions)).toHaveLength(0);
   });
 
   it('(e) does not nudge when ready_for_review accepted for head', () => {
@@ -344,6 +384,37 @@ describe('planCiGreenWakeActions', () => {
     });
     expect(nudgeActions(result.actions)).toHaveLength(1);
   });
+
+  it('does not mark nudgeArmed in cycleState during planning', () => {
+    const settledAt = Date.parse('2026-06-01T00:00:00.000Z');
+    const result = plan({
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: settledAt }],
+      sessions: [
+        liveWorker({
+          reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+        }),
+      ],
+      ciChecksByPr: { 42: greenChecks },
+      tracking: {},
+      nowMs: settledAt + QUIESCENCE_DEBOUNCE_MS + 1000,
+    });
+    const nudge = nudgeActions(result.actions)[0];
+    expect(nudge?.ownerCycle).toBeDefined();
+    const ownerCycles = (result.cycleState?.ownerCycles ?? {}) as Record<
+      string,
+      { nudgeArmed?: boolean }
+    >;
+    expect(Object.values(ownerCycles).every((cycle) => !cycle?.nudgeArmed)).toBe(true);
+    const committed = commitNudgeSentCycleState(result.cycleState ?? {}, {
+      repoId: nudge.ownerCycle!.repoId,
+      prNumber: 42,
+      ownerSessionId: nudge.sessionId,
+      cycle: nudge.ownerCycle!.cycle,
+      sentAtMs: settledAt + QUIESCENCE_DEBOUNCE_MS + 1000,
+    });
+    const armedCycles = (committed.ownerCycles ?? {}) as Record<string, { nudgeArmed?: boolean }>;
+    expect(Object.values(armedCycles).some((cycle) => cycle?.nudgeArmed)).toBe(true);
+  });
 });
 
 describe('preSendRecheck', () => {
@@ -388,6 +459,111 @@ describe('preSendRecheck', () => {
     );
     expect(recheck.ok).toBe(false);
   });
+
+  it('fails when worker resumed active work after planning', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'active',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('worker_actively_working');
+  });
+
+  it('fails when fresh snapshot shows unconsumed delivery', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const deliveredAtMs = settledAtMs - 60_000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'idle',
+            status: 'working',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        dispatchJournal: {
+          'op-worker:1000:pack-send:ci-green:tr-42': {
+            deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+            sessionId: 'op-worker',
+            deliveredAtMs,
+            source: 'pack-send',
+            sourceKey: 'ci-green:tr-42',
+            deliveryPath: 'pending-draft',
+          },
+        },
+        aoEvents: [],
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('worker_actively_working');
+  });
+
+  it('fails when prior review revision opened after planning', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'idle',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        reviewRuns: [
+          {
+            id: 'rev-open',
+            prNumber: 42,
+            targetSha: 'abc123',
+            status: 'needs_triage',
+            findingCount: 1,
+            openFindingCount: 1,
+            sentFindingCount: 1,
+          },
+        ],
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('prior_revision_open');
+  });
 });
 
 describe('recordSuccessfulNudge / dedupe priority', () => {
@@ -409,6 +585,32 @@ describe('recordSuccessfulNudge / dedupe priority', () => {
       },
     });
     expect(nudgeActions(withoutDedupe.actions)).toHaveLength(1);
+  });
+});
+
+describe('mergeLegacyNudgedWithPendingJournal', () => {
+  it('folds pending journal sends into legacy nudged evidence', () => {
+    const merged = mergeLegacyNudgedWithPendingJournal(
+      {},
+      {
+        '42:abc123:1': {
+          sessionId: 'op-worker',
+          sentAtMs: 5000,
+          message: 'hand off',
+        },
+      },
+    );
+    expect(merged).toEqual({
+      '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 5000 },
+    });
+  });
+
+  it('keeps committed nudged records when both maps contain the same transition', () => {
+    const merged = mergeLegacyNudgedWithPendingJournal(
+      { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 9000 } },
+      { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 5000, message: 'hand off' } },
+    );
+    expect(merged['42:abc123:1']?.sentAtMs).toBe(9000);
   });
 });
 
@@ -480,7 +682,15 @@ describe('evaluateCiGreenWakeCandidate', () => {
 describe('fixture payloads', () => {
   it('loads pre-hand-off-green fixture', () => {
     const fixture = loadFixture('pre-handoff-green.json');
-    const result = plan(fixture);
+    const result = plan({
+      ...fixture,
+      nowMs: Date.parse('2026-06-05T14:00:00.000Z'),
+      sessions: fixture.sessions.map((session) => ({
+        ...session,
+        runtime: 'alive',
+        activity: 'idle',
+      })),
+    });
     expect(nudgeActions(result.actions).length).toBeGreaterThanOrEqual(1);
   });
 });
@@ -500,5 +710,20 @@ describe('backstop preserved (AC6)', () => {
 describe('latency bound (AC1)', () => {
   it('defaults to 1-minute mechanical tick', () => {
     expect(DEFAULT_CI_GREEN_WAKE_INTERVAL_MS).toBe(60 * 1000);
+  });
+});
+
+describe('native plan CLI', () => {
+  it('initializes without circular import failure', () => {
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const result = spawnSync('node', ['docs/ci-green-wake-reconcile.mjs', 'plan'], {
+      cwd: repoRoot,
+      input: '{}',
+      encoding: 'utf8',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toMatch(/before initialization/);
+    expect(JSON.parse(result.stdout || '{}')).toEqual(expect.objectContaining({ actions: expect.any(Array) }));
   });
 });

@@ -3,14 +3,13 @@
  * Shared by report-driven triggers, ROUND PROGRESSION, and review-trigger-reconcile.
  * Vitest: scripts/review-head-ready.test.ts
  */
-import { classifyRequiredCiLevel } from './ci-green-wake-reconcile.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
-  DEFAULT_GRACE_MS,
+  classifyRequiredCiLevel,
   findLatestReportForHead,
   getStoredReportHeadSha,
   PACK_MERGE_CONTRACT_CHECK_NAMES,
 } from './review-ready-stuck-guard.mjs';
+import { getReportState } from './review-finding-delivery-confirm.mjs';
 import {
   getSessionActivity,
   isDeliveryConsumed,
@@ -18,6 +17,12 @@ import {
   mergeDeliveryRecords,
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
+import { parseLastActivityAgeMs } from './review-reconcile-primitives.mjs';
+import {
+  evaluateQuiescentFallbackNudgePrecedence,
+  evaluateWorkerIterationCycleForPr,
+  mergeSharedWorkerIterationCycleState,
+} from './worker-iteration-cycle.mjs';
 import {
   AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
   collectSessionIdentifiers,
@@ -37,7 +42,7 @@ import {
 } from './review-trigger-reconcile.mjs';
 
 /** Sustained-quiescence debounce — tied to review-ready stuck grace (Issue #174 / #261). */
-export const QUIESCENCE_DEBOUNCE_MS = DEFAULT_GRACE_MS;
+export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
 
 /** Report states that imply the worker is still mid-hand-off (Issue #261 row 2). */
 export const ACTIVELY_WORKING_REPORT_STATES = new Set([
@@ -195,41 +200,7 @@ export function hasReadyForReviewForHead(session, headSha, options = {}) {
 /**
  * @param {string | undefined | null} lastActivity
  */
-export function parseLastActivityAgeMs(lastActivity) {
-  const raw = String(lastActivity ?? '')
-    .trim()
-    .toLowerCase();
-  if (!raw) {
-    return null;
-  }
-  if (raw === 'just now' || raw === 'now') {
-    return 0;
-  }
-  const match = raw.match(
-    /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*ago$/,
-  );
-  if (!match) {
-    return null;
-  }
-  const value = Number(match[1]);
-  if (!Number.isFinite(value)) {
-    return null;
-  }
-  const unit = match[2];
-  if (unit.startsWith('s')) {
-    return value * 1000;
-  }
-  if (unit.startsWith('m')) {
-    return value * 60 * 1000;
-  }
-  if (unit.startsWith('h')) {
-    return value * 60 * 60 * 1000;
-  }
-  if (unit.startsWith('d')) {
-    return value * 24 * 60 * 60 * 1000;
-  }
-  return null;
-}
+export { parseLastActivityAgeMs };
 
 /**
  * @param {object} input
@@ -718,6 +689,10 @@ export function resolveCurrentPrHeadSha(openPrs, prNumber) {
  * @param {number} [fresh.nowMs]
  * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
  * @param {{ sessionId?: string | null, reason?: string, failClosed?: boolean }} [fresh.ownerResolution]
+ * @param {Record<string, unknown>} [fresh.cycleState]
+ * @param {Record<string, unknown>} [fresh.sharedCycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [fresh.legacyNudged]
+ * @param {string} [fresh.repoRoot]
  */
 export function preRunHeadReadyRecheck(planned, fresh) {
   const prNumber = Number(planned?.prNumber);
@@ -836,6 +811,43 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     workerDeliveries,
     allowFailedRetry: failedRetryEligible,
   });
+
+  const startReason = String(planned?.startReason ?? '');
+  if (decision.eligible && startReason === 'quiescent_worker_handoff_fallback') {
+    const ownerSessionId = String(
+      plannedSessionId || ownerResolution?.sessionId || getSessionIdentifier(sessionForRecheck) || '',
+    );
+    const mergedCycleState = mergeSharedWorkerIterationCycleState(
+      { ...(fresh?.cycleState ?? {}) },
+      fresh?.sharedCycleState ?? {},
+    );
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState: mergedCycleState,
+      repoRoot: fresh?.repoRoot ?? '',
+      prNumber,
+      headSha: currentHead,
+      ownerSessionId,
+      reviewRuns,
+      session: sessionForRecheck ?? null,
+      workerDeliveries,
+      nowMs,
+      headCommittedAtMs: resolveHeadCommittedAtMs(fresh?.openPrs, prNumber),
+      handoffAccepted: false,
+      legacyNudged: fresh?.legacyNudged ?? null,
+    });
+    const nudgePrecedence = evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs);
+    if (nudgePrecedence.blocked) {
+      return {
+        emitReviewRun: false,
+        reason: `pre_run_recheck_${nudgePrecedence.reason}`,
+        decision: {
+          eligible: false,
+          reason: nudgePrecedence.reason,
+          route: 'none',
+        },
+      };
+    }
+  }
 
   return {
     emitReviewRun: decision.eligible,

@@ -97,6 +97,11 @@ export interface StartReviewAction {
   sessionId: string;
   startReason?: string;
   quiescenceBasis?: Record<string, unknown>;
+  ownerCycle?: {
+    repoId: string;
+    cycle: Record<string, unknown>;
+    isQuiescentFallback?: boolean;
+  };
 }
 
 export interface NoStartDecisionRecord {
@@ -144,6 +149,9 @@ export interface DegradedCiRecord {
 
 export interface DegradedCiTrackingState {
   degradedCi?: Record<string, DegradedCiRecord>;
+  cycleState?: Record<string, unknown>;
+  sharedCycleState?: Record<string, unknown>;
+  legacyNudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
 }
 
 export interface PlanReconcileInput {
@@ -165,6 +173,15 @@ export interface PlanReconcileInput {
   aoEvents?: Array<Record<string, unknown>>;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
+  cycleState?: Record<string, unknown>;
+  sharedCycleState?: Record<string, unknown>;
+  legacyNudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+  repoRoot?: string;
+}
+
+export interface ReconcilePlanResult {
+  actions: ReconcileAction[];
+  cycleState: Record<string, unknown>;
 }
 
 export interface ReconcileIntervalAccept {
@@ -281,7 +298,11 @@ export declare function resolveHeadOwningWorkerSessionId(
   openPrs?: OpenPr[],
 ): string | null;
 
-export declare function planReconcileActions(input: PlanReconcileInput): ReconcileAction[];
+export declare function planReconcileActions(input: PlanReconcileInput): ReconcilePlanResult;
+
+export declare function unwrapReconcilePlanResult(
+  result: ReconcilePlanResult | ReconcileAction[],
+): ReconcilePlanResult;
 
 export declare function buildDegradedCiEscalationMessage(
   prNumber: number,

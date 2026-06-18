@@ -16,6 +16,7 @@ import {
   QUIESCENCE_DEBOUNCE_MS,
 } from '../docs/review-head-ready.mjs';
 import { reportCoversHead } from '../docs/review-trigger-reconcile.mjs';
+import { NUDGE_EXPIRY_MS } from '../docs/worker-iteration-cycle.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -516,7 +517,31 @@ describe('preRunHeadReadyRecheck', () => {
       };
       expect: { emitReviewRun: boolean; reasonPrefix: string };
     }>('pre-run-single-implicit-owner.json');
-    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    const nowMs = Number(fixture.fresh.nowMs ?? Date.now());
+    const result = preRunHeadReadyRecheck(fixture.planned, {
+      ...fixture.fresh,
+      sharedCycleState: {
+        repoId: 'orchestrator-pack',
+        ownerCycles: {
+          'orchestrator-pack:pr:260:owner:opk-37': {
+            cycleId: 'orchestrator-pack:260:opk-37:seed',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+            nudgeExpiresAtMs: nowMs - 1000,
+            nudgeExpiredFallbackPending: true,
+          },
+        },
+      },
+      legacyNudged: {
+        '260:42bf1490dbe8829667d2835b937a33e7af9d82f1:1:nudge': {
+          sessionId: 'opk-37',
+          sentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+        },
+      },
+    });
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
   });
@@ -553,6 +578,59 @@ describe('preRunHeadReadyRecheck', () => {
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
+  });
+
+  it('aborts quiescent fallback when fresh shared nudge is still outstanding', () => {
+    const fixture = loadFixture<{
+      nowMs: number;
+      openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
+      sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
+      ciChecksByPr: Record<string, typeof greenChecks>;
+    }>('quiescent-pr260-opk-37.json');
+    const nowMs = Number(fixture.nowMs ?? Date.now());
+    const sessionId = 'opk-37';
+    const prNumber = 260;
+    const headSha = '42bf1490dbe8829667d2835b937a33e7af9d82f1';
+    const repoId = 'orchestrator-pack';
+    const ownerKey = `${repoId}:pr:${prNumber}:owner:${sessionId}`;
+    const sentAtMs = nowMs - 60_000;
+
+    const result = preRunHeadReadyRecheck(
+      {
+        prNumber,
+        headSha,
+        sessionId,
+        startReason: 'quiescent_worker_handoff_fallback',
+      },
+      {
+        nowMs,
+        openPrs: fixture.openPrs,
+        reviewRuns: [],
+        sessions: fixture.sessions,
+        ciChecks: fixture.ciChecksByPr?.[String(prNumber)] ?? greenChecks,
+        aoEvents: [],
+        dispatchJournal: {},
+        workerDeliveries: [],
+        sharedCycleState: {
+          repoId,
+          ownerCycles: {
+            [ownerKey]: {
+              cycleId: 'cg-cycle',
+              ownerSessionId: sessionId,
+              prNumber,
+              nudgeArmed: true,
+              nudgeSentAtMs: sentAtMs,
+              nudgeExpiresAtMs: sentAtMs + NUDGE_EXPIRY_MS,
+            },
+          },
+        },
+        legacyNudged: {
+          [`${prNumber}:${headSha}:1:nudge`]: { sessionId, sentAtMs },
+        },
+      },
+    );
+    expect(result.emitReviewRun).toBe(false);
+    expect(result.reason).toContain('nudge_outstanding');
   });
 
   it('aborts when fail-closed ownership would reuse a ready planned session', () => {

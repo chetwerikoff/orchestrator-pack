@@ -9,14 +9,20 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
+import {
+  commitOwnerCyclePatch,
+  evaluateWorkerIterationCycleForPr,
+  NUDGE_EXPIRY_MS,
+} from './worker-iteration-cycle.mjs';
+import {
+  getReportState,
+} from './review-finding-delivery-confirm.mjs';
 import {
   findLatestReportForHead,
-  isCiCheckFailure,
-  isCiCheckPending,
-  isMergeContractCiGreen,
   isRuntimeAlive,
+  classifyRequiredCiLevel,
 } from './review-ready-stuck-guard.mjs';
+import { mergeWorkerDeliveriesFromPlanInput } from './review-head-ready.mjs';
 import {
   findSessionById,
   getSessionIdentifier,
@@ -29,6 +35,7 @@ import {
 } from './review-trigger-reconcile.mjs';
 
 export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.mjs';
+export { classifyRequiredCiLevel } from './review-ready-stuck-guard.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
 export const DEFAULT_CI_GREEN_WAKE_INTERVAL_MS = 60 * 1000;
 
@@ -49,60 +56,8 @@ export const CI_GREEN_WAKE_MESSAGE =
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ lastCiLevel?: CiLevel, greenEpoch?: number }} HeadCiRecord */
-/** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number }} CiGreenWakeState */
-/** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
-
-/**
- * Required CI per prompts/agent_rules.md: branch-protection contexts when configured,
- * else pack merge-contract fallback via isMergeContractCiGreen default names.
- *
- * @param {CiCheck[]} checks
- * @param {{ requiredCheckNames?: string[] }} [options]
- */
-export function classifyRequiredCiLevel(checks, options = {}) {
-  if (options.requiredCheckLookupFailed) {
-    return /** @type {CiLevel} */ ('pending');
-  }
-
-  const list = toArray(checks);
-  if (list.length === 0) {
-    return /** @type {CiLevel} */ ('pending');
-  }
-
-  const branchRequired = toArray(options.requiredCheckNames)
-    .map((name) => String(name ?? '').trim())
-    .filter(Boolean);
-  const greenOpts =
-    branchRequired.length > 0 ? { requiredCheckNames: branchRequired } : {};
-
-  if (isMergeContractCiGreen(list, greenOpts)) {
-    return 'green';
-  }
-
-  const normalizedRequired = branchRequired.map((name) => name.toLowerCase());
-  const scope =
-    normalizedRequired.length > 0
-      ? list.filter((check) =>
-          normalizedRequired.includes(String(check?.name ?? '').toLowerCase()),
-        )
-      : list;
-
-  if (scope.length === 0 && normalizedRequired.length > 0) {
-    return 'pending';
-  }
-
-  for (const check of scope) {
-    if (isCiCheckPending(check)) {
-      return 'pending';
-    }
-  }
-  for (const check of scope) {
-    if (isCiCheckFailure(check)) {
-      return 'red';
-    }
-  }
-  return 'red';
-}
+/** @typedef {{ heads?: Record<string, HeadCiRecord>, nudged?: Record<string, { sessionId?: string, sentAtMs?: number }>, lastTickMs?: number, cycleState?: Record<string, unknown> }} CiGreenWakeState */
+/** @typedef {{ type: 'nudge', prNumber: number, headSha: string, sessionId: string, transitionId: string, message: string, ownerCycle?: { repoId: string, cycle: Record<string, unknown> } } | { type: 'skip', prNumber: number, headSha: string, reason: string, transitionId?: string }} CiGreenWakeAction */
 
 /**
  * @param {number} prNumber
@@ -270,6 +225,13 @@ export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [input.requiredCheckLookupFailedByPr]
  * @param {CiGreenWakeState} [input.tracking]
+ * @param {Array<Record<string, unknown>>} [input.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [input.aoEvents]
+ * @param {Record<string, unknown>} [input.dispatchJournal]
+ * @param {Record<string, string>} [input.reactionMessages]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
+ * @param {number} [input.nowMs]
+ * @param {string} [input.repoRoot]
  */
 export function planCiGreenWakeActions({
   openPrs,
@@ -278,12 +240,28 @@ export function planCiGreenWakeActions({
   requiredCheckNamesByPr,
   requiredCheckLookupFailedByPr,
   tracking = {},
+  workerDeliveries = [],
+  aoEvents,
+  dispatchJournal,
+  reactionMessages,
+  reviewRuns = [],
+  nowMs = Date.now(),
+  repoRoot = '',
 }) {
   /** @type {CiGreenWakeAction[]} */
   const actions = [];
   const sessionList = toArray(sessions);
   const headRecords = { ...(tracking.heads ?? {}) };
   const nudged = tracking.nudged ?? {};
+  let cycleState = { ...(tracking.cycleState ?? {}) };
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries,
+    aoEvents,
+    dispatchJournal,
+    reviewRuns,
+    reactionMessages,
+    nowMs,
+  });
 
   const checksMap = normalizeCiChecksByPr(ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(requiredCheckNamesByPr);
@@ -340,6 +318,24 @@ export function planCiGreenWakeActions({
       requiredCheckLookupFailed,
     });
 
+    const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(openPrs), prNumber);
+
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState,
+      repoRoot,
+      prNumber,
+      headSha,
+      ownerSessionId: sessionId,
+      reviewRuns,
+      session,
+      workerDeliveries: mergedDeliveries,
+      nowMs,
+      headCommittedAtMs,
+      handoffAccepted: !candidate.eligible && candidate.reasons.includes('post_handoff_or_ineligible_report'),
+      legacyNudged: nudged,
+    });
+    cycleState = cycleEval.state;
+
     if (!candidate.eligible) {
       actions.push({
         type: 'skip',
@@ -350,7 +346,20 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    const transitionId = buildTransitionId(prNumber, headSha, derived.greenEpoch);
+    const nudgeRecheck = evaluateCiGreenNudgeRecheck(cycleEval);
+    if (!nudgeRecheck.ok) {
+      actions.push({
+        type: 'skip',
+        prNumber,
+        headSha,
+        reason: nudgeRecheck.reason === 'worker_actively_working'
+          ? 'worker_actively_working'
+          : nudgeRecheck.reason,
+      });
+      continue;
+    }
+
+    const transitionId = `${cycleEval.cycle?.cycleId ?? buildTransitionId(prNumber, headSha, derived.greenEpoch)}:nudge`;
     if (nudged[transitionId]) {
       actions.push({
         type: 'skip',
@@ -369,10 +378,14 @@ export function planCiGreenWakeActions({
       sessionId,
       transitionId,
       message: CI_GREEN_WAKE_MESSAGE,
+      ownerCycle: {
+        repoId: cycleEval.repoId,
+        cycle: cycleEval.cycle ?? {},
+      },
     });
   }
 
-  return { actions, headRecords };
+  return { actions, headRecords, cycleState };
 }
 
 /**
@@ -438,6 +451,33 @@ export function normalizeRequiredCheckNamesByPr(requiredByPr) {
 }
 
 /**
+ * @param {object} cycleEval
+ */
+function isCiGreenActiveWorkBlocked(cycleEval) {
+  return (
+    cycleEval.settle.activelyWorking ||
+    cycleEval.nudgeGate.blockers.includes('worker_actively_working') ||
+    cycleEval.nudgeGate.blockers.includes('pending_unconsumed_delivery')
+  );
+}
+
+/**
+ * @param {object} cycleEval
+ */
+function evaluateCiGreenNudgeRecheck(cycleEval) {
+  if (isCiGreenActiveWorkBlocked(cycleEval)) {
+    return { ok: false, reason: 'worker_actively_working' };
+  }
+  if (!cycleEval.nudgeGate.allow) {
+    return { ok: false, reason: cycleEval.nudgeGate.deferReason };
+  }
+  if (cycleEval.settleAction.action !== 'nudge') {
+    return { ok: false, reason: cycleEval.settleAction.reason };
+  }
+  return { ok: true, reason: 'ok' };
+}
+
+/**
  * Pre-send snapshot recheck (fail-closed; criterion 3).
  *
  * @param {object} planned
@@ -450,6 +490,14 @@ export function normalizeRequiredCheckNamesByPr(requiredByPr) {
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} fresh.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [fresh.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [fresh.requiredCheckLookupFailedByPr]
+ * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [fresh.aoEvents]
+ * @param {Record<string, unknown>} [fresh.dispatchJournal]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [fresh.reviewRuns]
+ * @param {Record<string, unknown>} [fresh.cycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [fresh.nudged]
+ * @param {number} [fresh.nowMs]
+ * @param {string} [fresh.repoRoot]
  */
 export function preSendRecheck(planned, fresh) {
   const { sessionId, prNumber, headSha } = planned;
@@ -483,6 +531,36 @@ export function preSendRecheck(planned, fresh) {
     return { ok: false, reason: `recheck_failed:${candidate.reasons.join(',')}` };
   }
 
+  const nowMs = Number(fresh.nowMs) || Date.now();
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries: fresh.workerDeliveries ?? [],
+    aoEvents: fresh.aoEvents,
+    dispatchJournal: fresh.dispatchJournal,
+    reviewRuns: fresh.reviewRuns ?? [],
+    reactionMessages: fresh.reactionMessages,
+    nowMs,
+  });
+  const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(fresh.openPrs), prNumber);
+  const cycleEval = evaluateWorkerIterationCycleForPr({
+    cycleState: fresh.cycleState ?? {},
+    repoRoot: fresh.repoRoot ?? '',
+    prNumber,
+    headSha,
+    ownerSessionId: sessionId,
+    reviewRuns: toArray(fresh.reviewRuns),
+    session,
+    workerDeliveries: mergedDeliveries,
+    nowMs,
+    headCommittedAtMs,
+    handoffAccepted: false,
+    legacyNudged: fresh.nudged ?? null,
+  });
+
+  const nudgeRecheck = evaluateCiGreenNudgeRecheck(cycleEval);
+  if (!nudgeRecheck.ok) {
+    return { ok: false, reason: `recheck_failed:${nudgeRecheck.reason}` };
+  }
+
   return { ok: true, reason: 'ok' };
 }
 
@@ -496,6 +574,50 @@ export function recordSuccessfulNudge(tracking, transitionId, sessionId, sentAtM
   const nudged = { ...(tracking.nudged ?? {}) };
   nudged[transitionId] = { sessionId, sentAtMs };
   return { ...tracking, nudged };
+}
+
+/**
+ * Fold journal-pending nudge sends into legacy nudged evidence for cross-child readers
+ * (review-trigger must see delivered-but-unjournaled nudges).
+ *
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [nudged]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number, message?: string }>} [pendingJournal]
+ */
+export function mergeLegacyNudgedWithPendingJournal(nudged = {}, pendingJournal = {}) {
+  const merged = { ...(nudged ?? {}) };
+  for (const [transitionId, pending] of Object.entries(pendingJournal ?? {})) {
+    if (!pending || merged[transitionId]) {
+      continue;
+    }
+    const sessionId = String(pending.sessionId ?? '').trim();
+    const sentAtMs = Number(pending.sentAtMs ?? 0);
+    if (!sessionId || !(sentAtMs > 0)) {
+      continue;
+    }
+    merged[transitionId] = { sessionId, sentAtMs };
+  }
+  return merged;
+}
+
+/**
+ * Persist per-cycle nudge arming only after a successful send — not during planning.
+ *
+ * @param {Record<string, unknown>} cycleState
+ * @param {object} input
+ * @param {string} input.repoId
+ * @param {number} input.prNumber
+ * @param {string} input.ownerSessionId
+ * @param {Record<string, unknown>} [input.cycle]
+ * @param {number} input.sentAtMs
+ */
+export function commitNudgeSentCycleState(cycleState, input) {
+  const sentAtMs = Number(input.sentAtMs ?? Date.now());
+  return commitOwnerCyclePatch(cycleState, input.repoId, input.prNumber, input.ownerSessionId, {
+    ...(input.cycle ?? {}),
+    nudgeArmed: true,
+    nudgeSentAtMs: sentAtMs,
+    nudgeExpiresAtMs: sentAtMs + NUDGE_EXPIRY_MS,
+  });
 }
 
 /**
@@ -600,5 +722,17 @@ runStdinJsonCli('ci-green-wake-reconcile.mjs', {
   'merge-required-names': () => {
     const payload = readStdinJson();
     return mergeBranchRequiredCheckNames(payload.contexts, payload.checks);
+  },
+  'commit-nudge-sent': () => {
+    const payload = readStdinJson();
+    return {
+      cycleState: commitNudgeSentCycleState(payload.cycleState ?? {}, {
+        repoId: payload.repoId,
+        prNumber: Number(payload.prNumber),
+        ownerSessionId: String(payload.ownerSessionId ?? ''),
+        cycle: payload.cycle,
+        sentAtMs: Number(payload.sentAtMs) || Date.now(),
+      }),
+    };
   },
 });

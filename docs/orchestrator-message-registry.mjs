@@ -791,6 +791,10 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'agent-orchestrator.yaml.example',
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
   ],
+  332: [
+    'scripts/ci-green-wake-reconcile.ps1',
+    'scripts/review-trigger-reconcile.ps1',
+  ],
 };
 
 /**

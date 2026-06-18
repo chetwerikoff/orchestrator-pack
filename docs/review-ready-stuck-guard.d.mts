@@ -96,6 +96,10 @@ export declare function isMergeContractCiGreen(
   checks: CiCheck[],
   options?: { requiredCheckNames?: string[] },
 ): boolean;
+export declare function classifyRequiredCiLevel(
+  checks: CiCheck[],
+  options?: { requiredCheckNames?: string[]; requiredCheckLookupFailed?: boolean },
+): 'green' | 'red' | 'pending';
 export declare function getReportHeadSha(report: Record<string, unknown>): string;
 export declare function getStoredReportHeadSha(report: Record<string, unknown>): string;
 export declare function reportCoversHead(

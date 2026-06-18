@@ -10,14 +10,38 @@ import {
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
 import {
+  COVERED_TERMINAL_REVIEW_STATUSES,
+  collectSessionIdentifiers,
+  getSessionIdentifier,
+  IN_FLIGHT_REVIEW_STATUSES,
+  isHeadCovered,
+  isLiveWorkerSession,
+  isRunCoveringHead,
+  NON_LIVE_WORKER_SESSION_STATUSES,
+  normalizeSha,
+  toArray,
+} from './review-reconcile-primitives.mjs';
+import {
   buildNoStartDecisionRecord,
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
+  findLatestAcceptedReportForHead,
   formatDecisionRecordForLog,
+  hasReadyForReviewForHead,
   mergeWorkerDeliveriesFromPlanInput,
   preRunHeadReadyRecheck,
   resolveMaxDegradedCiAttempts,
 } from './review-head-ready.mjs';
+import {
+  coalesceSuppressAudit,
+  commitOwnerCyclePatch,
+  commitReviewStartedCycleState,
+  evaluateWorkerIterationCycleForPr,
+  evaluateQuiescentFallbackNudgePrecedence,
+  mergeSharedWorkerIterationCycleState,
+  NUDGE_EXPIRY_MS,
+  CYCLE_SURFACE_READY_FOR_REVIEW,
+} from './worker-iteration-cycle.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number, terminationReason?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
@@ -32,34 +56,18 @@ import {
 /** Default cadence: 10 minutes (low-frequency; tens of minutes). */
 export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 
-export const IN_FLIGHT_REVIEW_STATUSES = new Set([
-  'queued',
-  'preparing',
-  'running',
-  'reviewing',
-]);
-
-export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
-  'clean',
-  'needs_triage',
-  'waiting_update',
-]);
-
-/**
- * Worker session statuses that must not receive ao review run (orphan / dead session).
- * Aligns with orchestrator-diagnose.ps1 terminal workers and recovery runbook orphan signals.
- */
-export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
-  'done',
-  'merged',
-  'terminated',
-  'killed',
-  'errored',
-  'exited',
-  'cleanup',
-  'closed',
-  'detecting',
-]);
+export {
+  COVERED_TERMINAL_REVIEW_STATUSES,
+  IN_FLIGHT_REVIEW_STATUSES,
+  NON_LIVE_WORKER_SESSION_STATUSES,
+  collectSessionIdentifiers,
+  getSessionIdentifier,
+  isHeadCovered,
+  isLiveWorkerSession,
+  isRunCoveringHead,
+  normalizeSha,
+  toArray,
+} from './review-reconcile-primitives.mjs';
 
 /** Shell fragments the reconcile entrypoint must never invoke (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL;
@@ -68,54 +76,6 @@ export const FORBIDDEN_LIFECYCLE_PATTERNS = MECHANICAL_FORBIDDEN_REVIEW_MECHANIC
 export const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON = 'ambiguous_implicit_head_owner';
 
 const FAILED_OR_CANCELLED = new Set(['failed', 'cancelled']);
-
-/** PowerShell ConvertTo-Json may emit a single object instead of a one-element array. */
-export function toArray(value) {
-  if (value == null) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
-/**
- * @param {string | undefined | null} sha
- */
-export function normalizeSha(sha) {
-  return String(sha ?? '')
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * @param {ReviewRun} run
- */
-export function isRunCoveringHead(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === 'outdated') {
-    return false;
-  }
-  if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
-    return true;
-  }
-  if (COVERED_TERMINAL_REVIEW_STATUSES.has(status)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * @param {ReviewRun[]} runs
- * @param {number} prNumber
- * @param {string} headSha
- */
-export function isHeadCovered(runs, prNumber, headSha) {
-  const head = normalizeSha(headSha);
-  const forHead = runs.filter(
-    (run) => Number(run?.prNumber) === prNumber && normalizeSha(run?.targetSha) === head,
-  );
-  if (forHead.length === 0) {
-    return false;
-  }
-  return forHead.some((run) => isRunCoveringHead(run));
-}
 
 /**
  * @param {ReviewRun[]} runs
@@ -175,53 +135,6 @@ export function findCoveringRunForHead(runs, prNumber, headSha) {
         isRunCoveringHead(run),
     ) ?? null
   );
-}
-
-/**
- * @param {AoSession} session
- */
-export function isLiveWorkerSession(session) {
-  const status = String(session?.status ?? '').toLowerCase();
-  if (!status) {
-    return true;
-  }
-  return !NON_LIVE_WORKER_SESSION_STATUSES.has(status);
-}
-
-/**
- * @param {AoSession} session
- */
-export function getSessionIdentifier(session) {
-  const name = String(session?.name ?? '').trim();
-  if (name) {
-    return name;
-  }
-  const sessionId = String(session?.sessionId ?? '').trim();
-  if (sessionId) {
-    return sessionId;
-  }
-  const id = String(session?.id ?? '').trim();
-  if (id) {
-    return id;
-  }
-  return null;
-}
-
-/**
- * All non-empty session identifiers (name, sessionId, id) for delivery matching.
- *
- * @param {AoSession | null | undefined} session
- */
-export function collectSessionIdentifiers(session) {
-  /** @type {string[]} */
-  const ids = [];
-  for (const field of [session?.name, session?.sessionId, session?.id]) {
-    const value = String(field ?? '').trim();
-    if (value && !ids.includes(value)) {
-      ids.push(value);
-    }
-  }
-  return ids;
 }
 
 /**
@@ -712,6 +625,42 @@ function getDegradedCiAttempts(tracking, prNumber, headSha) {
 }
 
 /**
+ * Persist ready_for_review settle debounce so later ticks do not reset startedAtMs.
+ *
+ * @param {Record<string, unknown>} cycleState
+ * @param {Record<string, unknown>} cycleEval
+ * @param {number} prNumber
+ * @param {string} sessionId
+ * @param {string} headSha
+ * @param {number} nowMs
+ */
+function commitReadyForReviewDebounceIfWaiting(cycleState, cycleEval, prNumber, sessionId, headSha, nowMs) {
+  if (
+    !cycleEval.cycle ||
+    !cycleEval.readyDebounce?.waiting ||
+    cycleEval.readyDebounce?.settled
+  ) {
+    return cycleState;
+  }
+  const debouncePatch = {
+    debounce: {
+      ...(cycleEval.cycle.debounce ?? {}),
+      [CYCLE_SURFACE_READY_FOR_REVIEW]: {
+        startedAtMs: cycleEval.readyDebounce.startedAtMs ?? nowMs,
+        handoffHeadSha: cycleEval.readyDebounce.handoffHeadSha ?? normalizeSha(headSha),
+      },
+    },
+  };
+  return commitOwnerCyclePatch(
+    cycleState,
+    cycleEval.repoId,
+    prNumber,
+    sessionId,
+    { ...cycleEval.cycle, ...debouncePatch },
+  );
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {string} sessionId
  */
@@ -733,6 +682,10 @@ export function findSessionByIdForReconcile(sessions, sessionId) {
  * @param {Array<Record<string, unknown>>} [input.aoEvents]
  * @param {Record<string, Record<string, unknown>>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
+ * @param {Record<string, unknown>} [input.cycleState]
+ * @param {Record<string, unknown>} [input.sharedCycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [input.legacyNudged]
+ * @param {string} [input.repoRoot]
  */
 export function planReconcileActions({
   openPrs,
@@ -747,6 +700,10 @@ export function planReconcileActions({
   aoEvents,
   dispatchJournal,
   reactionMessages,
+  cycleState,
+  sharedCycleState,
+  legacyNudged,
+  repoRoot,
 }) {
   /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
@@ -754,6 +711,11 @@ export function planReconcileActions({
   const runList = toArray(reviewRuns);
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
+  const sharedNudged = legacyNudged ?? tracking?.legacyNudged ?? null;
+  let nextCycleState = mergeSharedWorkerIterationCycleState(
+    { ...(cycleState ?? tracking?.cycleState ?? {}) },
+    sharedCycleState ?? tracking?.sharedCycleState ?? {},
+  );
   const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
     workerDeliveries,
     aoEvents,
@@ -784,6 +746,30 @@ export function planReconcileActions({
     );
     const degradedCiAttempts = getDegradedCiAttempts(tracking, prNumber, headSha);
     const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
+    const reportBindingOptions = { headCommittedAtMs };
+    const handoffAccepted = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
+    const handoffReportedAtMs = handoffAccepted
+      ? getReportTimestampMs(
+          findLatestAcceptedReportForHead(session, headSha, reportBindingOptions) ?? {},
+        )
+      : 0;
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState: nextCycleState,
+      repoRoot,
+      prNumber,
+      headSha,
+      ownerSessionId: sessionId ?? '',
+      ownerResolutionFailClosed: Boolean(ownerResolution?.failClosed),
+      reviewRuns: runList,
+      session,
+      workerDeliveries: mergedDeliveries,
+      nowMs,
+      headCommittedAtMs,
+      handoffAccepted,
+      handoffReportedAtMs,
+      legacyNudged: sharedNudged,
+    });
+    nextCycleState = cycleEval.state;
 
     const decision = evaluateHeadReadyForReview({
       reviewRuns: runList,
@@ -827,13 +813,112 @@ export function planReconcileActions({
         });
         continue;
       }
+
+      const isQuiescentFallback = decision.reason === 'quiescent_worker_handoff_fallback';
+      if (isQuiescentFallback) {
+        const nudgePrecedence = evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs);
+        if (nudgePrecedence.blocked) {
+          actions.push({
+            type: 'skip',
+            prNumber,
+            headSha,
+            reason: nudgePrecedence.reason,
+            record: buildNoStartDecisionRecord({
+              ...decisionRecordBase,
+              reason: nudgePrecedence.reason,
+            }),
+          });
+          continue;
+        }
+      }
+
+      if (!cycleEval.reviewGate.allow) {
+        const blockers = cycleEval.reviewGate.blockers;
+        let cycle = cycleEval.cycle;
+        if (cycle) {
+          cycle = {
+            ...cycle,
+            suppressAudit: coalesceSuppressAudit(
+              cycle,
+              isQuiescentFallback ? 'quiescent_fallback' : 'ready_for_review',
+              headSha,
+              blockers,
+            ),
+          };
+          nextCycleState = commitOwnerCyclePatch(
+            nextCycleState,
+            cycleEval.repoId,
+            prNumber,
+            sessionId,
+            cycle,
+          );
+        }
+        if (
+          handoffAccepted &&
+          cycleEval.readyDebounce?.waiting &&
+          !cycleEval.readyDebounce?.settled
+        ) {
+          nextCycleState = commitReadyForReviewDebounceIfWaiting(
+            nextCycleState,
+            cycleEval,
+            prNumber,
+            sessionId,
+            headSha,
+            nowMs,
+          );
+        }
+        actions.push({
+          type: 'skip',
+          prNumber,
+          headSha,
+          reason: cycleEval.reviewGate.deferReason,
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: cycleEval.reviewGate.deferReason,
+            failedComponents: blockers,
+          }),
+        });
+        continue;
+      }
+
+      if (
+        handoffAccepted &&
+        cycleEval.readyDebounce.waiting &&
+        !cycleEval.readyDebounce.settled
+      ) {
+        nextCycleState = commitReadyForReviewDebounceIfWaiting(
+          nextCycleState,
+          cycleEval,
+          prNumber,
+          sessionId,
+          headSha,
+          nowMs,
+        );
+        actions.push({
+          type: 'skip',
+          prNumber,
+          headSha,
+          reason: 'ready_for_review_debounce_pending',
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: 'ready_for_review_debounce_pending',
+          }),
+        });
+        continue;
+      }
+
       const startAction = {
         type: 'start_review',
         prNumber,
         headSha,
         sessionId,
+        ownerCycle: {
+          repoId: cycleEval.repoId,
+          cycle: cycleEval.cycle ?? {},
+          isQuiescentFallback,
+        },
       };
-      if (decision.reason === 'quiescent_worker_handoff_fallback') {
+      if (isQuiescentFallback) {
         startAction.startReason = decision.reason;
         if (decision.quiescenceBasis) {
           startAction.quiescenceBasis = decision.quiescenceBasis;
@@ -894,7 +979,20 @@ export function planReconcileActions({
     });
   }
 
-  return actions;
+  return { actions, cycleState: nextCycleState };
+}
+
+/**
+ * @param {{ actions?: unknown[], cycleState?: Record<string, unknown> } | unknown[]} result
+ */
+export function unwrapReconcilePlanResult(result) {
+  if (Array.isArray(result)) {
+    return { actions: result, cycleState: {} };
+  }
+  return {
+    actions: toArray(result?.actions),
+    cycleState: result?.cycleState ?? {},
+  };
 }
 
 /**
@@ -955,5 +1053,17 @@ runStdinJsonCli('review-trigger-reconcile.mjs', {
   preRunRecheck: () => {
     const payload = readStdinJson();
     return preRunHeadReadyRecheck(payload.planned, payload.fresh);
+  },
+  'commit-review-started': () => {
+    const payload = readStdinJson();
+    return {
+      cycleState: commitReviewStartedCycleState(payload.cycleState ?? {}, {
+        repoId: payload.repoId,
+        prNumber: Number(payload.prNumber),
+        ownerSessionId: String(payload.ownerSessionId ?? ''),
+        cycle: payload.cycle,
+        isQuiescentFallback: Boolean(payload.isQuiescentFallback),
+      }),
+    };
   },
 });

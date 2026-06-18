@@ -173,7 +173,7 @@
   "inlineOptOuts": [
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 113,
+      "line": 114,
       "reason": "Defensive regression for legacy stored-SHA binding; synthetic input, not modeled ao report output (Issue #218)"
     }
   ]

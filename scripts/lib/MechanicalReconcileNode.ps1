@@ -53,6 +53,24 @@ function Copy-MechanicalJsonMap {
     return ConvertTo-MechanicalJsonMap -Value $Map
 }
 
+function Merge-MechanicalFixtureDeliveryFields {
+    param(
+        [hashtable]$Payload,
+        [object]$Fixture
+    )
+
+    if ($Fixture.workerDeliveries) {
+        $Payload.workerDeliveries = @($Fixture.workerDeliveries)
+    }
+    if ($Fixture.aoEvents) {
+        $Payload.aoEvents = @($Fixture.aoEvents)
+    }
+    if ($Fixture.dispatchJournal) {
+        $Payload.dispatchJournal = ConvertTo-MechanicalJsonMap -Value $Fixture.dispatchJournal
+    }
+    return $Payload
+}
+
 function Get-MechanicalJsonStateMapFieldNames {
     param([hashtable]$DefaultState)
 

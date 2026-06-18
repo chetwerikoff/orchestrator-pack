@@ -1,0 +1,727 @@
+import { describe, expect, it } from 'vitest';
+import {
+  BLOCKER_PRECEDENCE,
+  NUDGE_EXPIRY_MS,
+  OPEN_REVISION_STUCK_BOUND_MS,
+  QUIESCENCE_DEBOUNCE_MS,
+  STALE_PENDING_DELIVERY_BOUND_MS,
+  CYCLE_SURFACE_READY_FOR_REVIEW,
+  bootstrapLegacyNudgedCycle,
+  buildOwnerCycleKey,
+  buildPrScopedKey,
+  buildSurfaceStateKey,
+  choosePrimaryBlocker,
+  commitOwnerCyclePatch,
+  commitReviewStartedCycleState,
+  evaluateNudgeCycleGate,
+  evaluateOpenReviewRevision,
+  evaluateReadyForReviewSettleDebounce,
+  evaluateReviewCycleGate,
+  evaluateWorkerIterationCycleForPr,
+  evaluateSettleActionPrecedence,
+  isWorkerSettledIdle,
+  mergeSharedWorkerIterationCycleState,
+  normalizeCanonicalRepoIdentity,
+  pruneStaleOwnerCyclesForPr,
+  resolveOrAdvanceOwnerCycle,
+} from '../docs/worker-iteration-cycle.mjs';
+import { planCiGreenWakeActions, commitNudgeSentCycleState } from '../docs/ci-green-wake-reconcile.mjs';
+import { liveWorker, packGreenCiChecks as greenChecks } from './_test-worker-session-fixtures.js';
+
+describe('named timer bounds', () => {
+  it('nudge expiry is at least quiescence debounce', () => {
+    expect(NUDGE_EXPIRY_MS).toBeGreaterThanOrEqual(QUIESCENCE_DEBOUNCE_MS);
+  });
+
+  it('exports stuck and stale delivery bounds', () => {
+    expect(OPEN_REVISION_STUCK_BOUND_MS).toBeGreaterThan(0);
+    expect(STALE_PENDING_DELIVERY_BOUND_MS).toBeGreaterThan(0);
+  });
+});
+
+describe('canonical key helpers', () => {
+  it('normalizes WSL and Windows repo paths to the same identity', () => {
+    const linux = normalizeCanonicalRepoIdentity('/mnt/c/Users/op/orchestrator-pack');
+    const windows = normalizeCanonicalRepoIdentity('C:\\Users\\op\\orchestrator-pack');
+    expect(linux).toBe(windows);
+  });
+
+  it('builds discriminated surface keys', () => {
+    const repoId = normalizeCanonicalRepoIdentity('/repo');
+    expect(buildSurfaceStateKey('ci_green_nudge', repoId, 42, 'op-1')).toContain('surface:ci_green_nudge');
+    expect(buildPrScopedKey(repoId, 42)).toBe(`${repoId}:pr:42`);
+    expect(buildOwnerCycleKey(repoId, 42, 'op-1')).toContain(':owner:op-1');
+  });
+});
+
+describe('multi-blocker precedence', () => {
+  it('chooses the most durable blocker', () => {
+    expect(
+      choosePrimaryBlocker(['quiescence_debounce_pending', 'prior_revision_open', 'worker_actively_working']),
+    ).toBe('prior_revision_open');
+    expect(BLOCKER_PRECEDENCE.indexOf('prior_revision_open')).toBeLessThan(
+      BLOCKER_PRECEDENCE.indexOf('quiescence_debounce_pending'),
+    );
+  });
+});
+
+describe('open review revision', () => {
+  it('defers while findings are dispatched but not drained', () => {
+    const open = evaluateOpenReviewRevision({
+      reviewRuns: [
+        {
+          id: 'run-1',
+          prNumber: 42,
+          targetSha: 'abc123',
+          status: 'waiting_update',
+          sentFindingCount: 2,
+          sentAt: '2026-06-01T00:00:00.000Z',
+        },
+      ],
+      prNumber: 42,
+      session: liveWorker({ reports: [{ reportState: 'addressing_reviews', reportedAt: '2026-06-01T00:01:00.000Z' }] }),
+      currentHeadSha: 'def456',
+      nowMs: Date.parse('2026-06-01T00:02:00.000Z'),
+    });
+    expect(open.open).toBe(true);
+    expect(open.runId).toBe('run-1');
+  });
+
+  it('releases immediately on clean no-findings review', () => {
+    const open = evaluateOpenReviewRevision({
+      reviewRuns: [
+        {
+          id: 'run-clean',
+          prNumber: 42,
+          targetSha: 'abc123',
+          status: 'clean',
+          findingCount: 0,
+          sentFindingCount: 0,
+        },
+      ],
+      prNumber: 42,
+      session: liveWorker(),
+      currentHeadSha: 'abc123',
+    });
+    expect(open.open).toBe(false);
+  });
+});
+
+describe('per-cycle head burst', () => {
+  const baseNow = Date.parse('2026-06-01T01:00:00.000Z');
+  const settledAt = baseNow - QUIESCENCE_DEBOUNCE_MS - 1000;
+
+  it('allows at most one CI-green nudge across H1→H2→H3 within one cycle', () => {
+    let cycleState = {};
+    const heads = ['h1', 'h2', 'h3'];
+    let nudgeCount = 0;
+
+    for (const headSha of heads) {
+      const result = planCiGreenWakeActions({
+        openPrs: [{ number: 42, headRefOid: headSha, headCommittedAt: settledAt }],
+        sessions: [
+          liveWorker({
+            ownedHeadSha: headSha,
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        tracking: { cycleState, heads: {}, nudged: {} },
+        reviewRuns: [],
+        nowMs: baseNow,
+      });
+      const nudge = result.actions.find((a) => a.type === 'nudge');
+      if (nudge?.type === 'nudge' && nudge.ownerCycle) {
+        cycleState = commitNudgeSentCycleState(result.cycleState ?? cycleState, {
+          repoId: nudge.ownerCycle.repoId,
+          prNumber: nudge.prNumber,
+          ownerSessionId: nudge.sessionId,
+          cycle: nudge.ownerCycle.cycle,
+          sentAtMs: baseNow,
+        });
+      } else {
+        cycleState = result.cycleState ?? cycleState;
+      }
+      nudgeCount += result.actions.filter((a) => a.type === 'nudge').length;
+    }
+
+    expect(nudgeCount).toBeLessThanOrEqual(1);
+  });
+
+  it('suppresses nudge for actively working worker even when CI is green', () => {
+    const result = planCiGreenWakeActions({
+      openPrs: [{ number: 42, headRefOid: 'abc123', headCommittedAt: baseNow }],
+      sessions: [
+        liveWorker({
+          activity: 'active',
+          status: 'working',
+          reports: [{ reportState: 'working', reportedAt: '2026-06-01T01:00:00.000Z' }],
+        }),
+      ],
+      ciChecksByPr: { 42: greenChecks },
+      tracking: {},
+      nowMs: baseNow,
+    });
+    expect(result.actions.some((a) => a.type === 'nudge')).toBe(false);
+    expect(result.actions.some((a) => a.type === 'skip' && a.reason === 'worker_actively_working')).toBe(true);
+  });
+});
+
+describe('settle action precedence', () => {
+  it('prefers nudge before fallback and never co-fires both', () => {
+    const first = evaluateSettleActionPrecedence({
+      cycle: { cycleId: 'c1', nudgeArmed: false, fallbackArmed: false },
+      quiescentFallbackEligible: true,
+      nudgeEligible: true,
+      nowMs: 1000,
+    });
+    expect(first.action).toBe('nudge');
+
+    const outstanding = evaluateSettleActionPrecedence({
+      cycle: {
+        cycleId: 'c1',
+        nudgeArmed: true,
+        nudgeExpiresAtMs: 5000,
+        fallbackArmed: false,
+      },
+      quiescentFallbackEligible: true,
+      nudgeEligible: false,
+      nowMs: 2000,
+    });
+    expect(outstanding.action).not.toBe('nudge');
+    expect(outstanding.action).not.toBe('fallback');
+
+    const afterExpiry = evaluateSettleActionPrecedence({
+      cycle: {
+        cycleId: 'c1',
+        nudgeArmed: true,
+        nudgeExpiresAtMs: 5000,
+        fallbackArmed: false,
+      },
+      quiescentFallbackEligible: true,
+      nudgeEligible: false,
+      nowMs: 6000,
+    });
+    expect(afterExpiry.action).toBe('fallback');
+  });
+});
+
+describe('worker settle idle', () => {
+  it('treats recent lastActivity strings as debounce pending', () => {
+    const result = isWorkerSettledIdle(
+      {
+        name: 'op-worker',
+        role: 'worker',
+        status: 'idle',
+        lastActivity: '2m ago',
+      },
+      'abc123',
+      Date.now(),
+    );
+    expect(result.settled).toBe(false);
+    expect(result.debouncePending).toBe(true);
+    expect(result.activelyWorking).toBe(false);
+  });
+});
+
+describe('ready_for_review settle debounce', () => {
+  const headSha = 'abc123';
+  const headCommittedAtMs = Date.parse('2026-06-01T00:00:00.000Z');
+  const handoffAtMs = headCommittedAtMs + 14 * 60 * 1000;
+
+  it('honors persisted handoff debounce after head commit age crosses quiescence', () => {
+    const cycle = {
+      debounce: {
+        [CYCLE_SURFACE_READY_FOR_REVIEW]: {
+          startedAtMs: handoffAtMs,
+          handoffHeadSha: headSha,
+        },
+      },
+    };
+    const atHeadSettle = evaluateReadyForReviewSettleDebounce({
+      cycle,
+      headSha,
+      nowMs: headCommittedAtMs + 15 * 60 * 1000,
+      handoffAccepted: true,
+      headCommittedAtMs,
+    });
+    expect(atHeadSettle.waiting).toBe(true);
+    expect(atHeadSettle.startedAtMs).toBe(handoffAtMs);
+
+    const afterHandoffDebounce = evaluateReadyForReviewSettleDebounce({
+      cycle,
+      headSha,
+      nowMs: handoffAtMs + QUIESCENCE_DEBOUNCE_MS,
+      handoffAccepted: true,
+      headCommittedAtMs,
+    });
+    expect(afterHandoffDebounce.settled).toBe(true);
+    expect(afterHandoffDebounce.waiting).toBe(false);
+  });
+
+  it('starts handoff debounce on an old head when ready_for_review is recent', () => {
+    const handoffAtMs = headCommittedAtMs + 20 * 60 * 1000;
+    const result = evaluateReadyForReviewSettleDebounce({
+      cycle: {},
+      headSha,
+      nowMs: handoffAtMs,
+      handoffAccepted: true,
+      headCommittedAtMs,
+      handoffReportedAtMs: handoffAtMs,
+    });
+    expect(result.waiting).toBe(true);
+    expect(result.settled).toBe(false);
+    expect(result.startedAtMs).toBe(handoffAtMs);
+
+    const settled = evaluateReadyForReviewSettleDebounce({
+      cycle: {},
+      headSha,
+      nowMs: handoffAtMs + QUIESCENCE_DEBOUNCE_MS,
+      handoffAccepted: true,
+      headCommittedAtMs,
+      handoffReportedAtMs: handoffAtMs,
+    });
+    expect(settled.settled).toBe(true);
+    expect(settled.waiting).toBe(false);
+  });
+});
+
+describe('legacy nudge migration', () => {
+  it('bootstraps already-nudged state from per-head transition journal', () => {
+    const state = bootstrapLegacyNudgedCycle(
+      {},
+      { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } },
+      42,
+      'op-worker',
+    ) as { ownerCycles?: Record<string, { nudgeArmed?: boolean }> };
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const cycle = state.ownerCycles?.[buildOwnerCycleKey(repoId, 42, 'op-worker')];
+    expect(cycle?.nudgeArmed).toBe(true);
+  });
+
+  it('does not re-bootstrap legacy nudge after migration when a new cycle opens', () => {
+    const legacy = { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } };
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = buildOwnerCycleKey(repoId, 42, 'op-worker');
+    const migrated = bootstrapLegacyNudgedCycle({}, legacy, 42, 'op-worker') as {
+      ownerCycles?: Record<string, unknown>;
+      migratedLegacyNudgeKeys?: Record<string, boolean>;
+    };
+    expect(migrated.migratedLegacyNudgeKeys?.[ownerKey]).toBe(true);
+
+    const closedCycleState = {
+      ...migrated,
+      ownerCycles: {},
+    };
+    const again = bootstrapLegacyNudgedCycle(closedCycleState, legacy, 42, 'op-worker') as {
+      ownerCycles?: Record<string, { nudgeArmed?: boolean }>;
+    };
+    expect(again.ownerCycles?.[ownerKey]?.nudgeArmed).toBeUndefined();
+  });
+
+  it('allows a fresh nudge on a new cycle after legacy migration', () => {
+    const legacy = { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } };
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = buildOwnerCycleKey(repoId, 42, 'op-worker');
+    const migrated = bootstrapLegacyNudgedCycle({}, legacy, 42, 'op-worker');
+    const closedCycleState = { ...migrated, ownerCycles: {} };
+
+    const evalResult = evaluateWorkerIterationCycleForPr({
+      cycleState: closedCycleState,
+      repoRoot: 'orchestrator-pack',
+      prNumber: 42,
+      headSha: 'def456',
+      ownerSessionId: 'op-worker',
+      legacyNudged: legacy,
+      reviewRuns: [],
+      session: liveWorker({
+        reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+      }),
+      nowMs: Date.parse('2026-06-01T02:00:00.000Z'),
+      headCommittedAtMs: Date.parse('2026-06-01T00:00:00.000Z'),
+    }) as {
+      cycle?: { nudgeArmed?: boolean };
+      nudgeGate?: { allow?: boolean };
+    };
+
+    expect(evalResult.cycle?.nudgeArmed).not.toBe(true);
+    expect(evalResult.nudgeGate?.allow).toBe(true);
+    expect(ownerKey).toBeTruthy();
+  });
+});
+
+describe('review cycle gate matrix cells', () => {
+  it('C2/C4: prior revision open defers new review', () => {
+    const gate = evaluateReviewCycleGate({
+      cycle: { reviewArmed: false },
+      openRevision: { open: true, runId: 'run-9', reason: 'revision_findings_open' },
+      reviewRuns: [],
+      prNumber: 42,
+      headSha: 'abc123',
+      handoffAccepted: true,
+      readyDebounce: { settled: true, waiting: false, reason: 'settled' },
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.primary).toBe('prior_revision_open');
+  });
+
+  it('C8: nudge gate blocks while prior revision open even if idle', () => {
+    const gate = evaluateNudgeCycleGate({
+      cycle: { nudgeArmed: false },
+      openRevision: { open: true, runId: 'run-9' },
+      activelyWorking: false,
+      debouncePending: false,
+      handedOff: false,
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.primary).toBe('prior_revision_open');
+  });
+});
+
+describe('shared cycle state merge', () => {
+  it('imports ci-green nudge arms into review-trigger local state', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      { repoId, ownerCycles: {} },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'cg-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+          },
+        },
+      },
+    ) as { ownerCycles?: Record<string, { nudgeArmed?: boolean }> };
+    expect(merged.ownerCycles?.[ownerKey]?.nudgeArmed).toBe(true);
+  });
+
+  it('does not import ci-green nudge arms when shared cycle is for a prior iteration head', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'local-new-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: nowMs,
+            firstHeadSha: 'h2-new-handoff',
+            currentHeadSha: 'h2-new-handoff',
+            nudgeArmed: false,
+          },
+        },
+      },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'cg-old-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            firstHeadSha: 'h1-reviewed',
+            currentHeadSha: 'h1-reviewed',
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs - 1000,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS - 1000,
+            nudgeExpiredFallbackPending: true,
+          },
+        },
+      },
+    ) as {
+      ownerCycles?: Record<
+        string,
+        {
+          cycleId?: string;
+          nudgeArmed?: boolean;
+          nudgeExpiredFallbackPending?: boolean;
+        }
+      >;
+    };
+    const cycle = merged.ownerCycles?.[ownerKey];
+    expect(cycle?.cycleId).toBe('local-new-cycle');
+    expect(cycle?.nudgeArmed).toBe(false);
+    expect(cycle?.nudgeExpiredFallbackPending).toBe(false);
+  });
+
+  it('imports ci-green nudge arms when cycleIds differ but iteration head matches', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const headSha = 'abc123deadbeef';
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: `${repoId}:260:opk-37:1000`,
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: 1000,
+            firstHeadSha: headSha,
+            currentHeadSha: headSha,
+            nudgeArmed: false,
+          },
+        },
+      },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: `${repoId}:260:opk-37:2000`,
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: 2000,
+            firstHeadSha: headSha,
+            currentHeadSha: headSha,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+          },
+        },
+      },
+    ) as {
+      ownerCycles?: Record<
+        string,
+        {
+          cycleId?: string;
+          nudgeArmed?: boolean;
+          nudgeExpiresAtMs?: number;
+        }
+      >;
+    };
+    const cycle = merged.ownerCycles?.[ownerKey];
+    expect(cycle?.cycleId).toBe(`${repoId}:260:opk-37:2000`);
+    expect(cycle?.nudgeArmed).toBe(true);
+    expect(cycle?.nudgeExpiresAtMs).toBe(nowMs + NUDGE_EXPIRY_MS);
+  });
+});
+
+describe('pending delivery staleness', () => {
+  type CycleEvalResult = {
+    state: Record<string, unknown>;
+    cycle?: { debounce?: { pendingDeliveryFirstSeenAtMs?: number } } | null;
+    pendingDelivery?: { pending?: boolean; stale?: boolean };
+    nudgeGate?: { blockers?: string[] };
+    settle?: { activelyWorking?: boolean; settled?: boolean };
+  };
+
+  it('records first-seen time and becomes stale after STALE_PENDING_DELIVERY_BOUND_MS', () => {
+    const session = liveWorker();
+    const deliveries = [
+      {
+        deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+        sessionId: 'op-worker',
+        deliveredAtMs: 1000,
+        source: 'pack-send',
+        sourceKey: 'ci-green:tr-42',
+        deliveryPath: 'pending-draft',
+      },
+    ];
+    const firstSeenMs = 1000;
+    const first = evaluateWorkerIterationCycleForPr({
+      cycleState: {},
+      prNumber: 42,
+      headSha: 'abc123',
+      ownerSessionId: 'op-worker',
+      session,
+      workerDeliveries: deliveries,
+      nowMs: firstSeenMs,
+      reviewRuns: [],
+    }) as CycleEvalResult;
+    expect(first.cycle?.debounce?.pendingDeliveryFirstSeenAtMs).toBe(firstSeenMs);
+    expect(first.pendingDelivery?.pending).toBe(true);
+    expect(first.pendingDelivery?.stale).toBe(false);
+
+    const laterMs = firstSeenMs + STALE_PENDING_DELIVERY_BOUND_MS + 1;
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: first.state,
+      prNumber: 42,
+      headSha: 'abc123',
+      ownerSessionId: 'op-worker',
+      session,
+      workerDeliveries: deliveries,
+      nowMs: laterMs,
+      reviewRuns: [],
+    }) as CycleEvalResult;
+    expect(second.pendingDelivery?.stale).toBe(true);
+    expect(second.nudgeGate?.blockers ?? []).not.toContain('pending_unconsumed_delivery');
+    expect(second.nudgeGate?.blockers ?? []).not.toContain('worker_actively_working');
+    expect(second.settle?.activelyWorking).toBe(false);
+  });
+});
+
+describe('review started cycle commit', () => {
+  it('arms review only via commitReviewStartedCycleState', () => {
+    const armed = commitReviewStartedCycleState({}, {
+      repoId: 'repo',
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      cycle: { cycleId: 'c1' },
+      isQuiescentFallback: true,
+    }) as { ownerCycles?: Record<string, { reviewArmed?: boolean; fallbackArmed?: boolean }> };
+    const cycle = armed.ownerCycles?.['repo:pr:42:owner:op-worker'];
+    expect(cycle?.reviewArmed).toBe(true);
+    expect(cycle?.fallbackArmed).toBe(true);
+  });
+});
+
+describe('owner cycle advance', () => {
+  type OwnerCycleResult = {
+    state: Record<string, unknown>;
+    cycle?: { cycleId?: string; headAdvanceCount?: number; reviewArmed?: boolean } | null;
+    opened?: boolean;
+    advanced?: boolean;
+    reviewGate?: { allow?: boolean; blockers?: string[] };
+  };
+
+  it('preserves reviewArmed cycle across repeated handoff ticks', () => {
+    const repoId = 'repo';
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitOwnerCyclePatch(first.state, repoId, 42, 'op-worker', {
+      ...(first.cycle ?? {}),
+      reviewArmed: true,
+    });
+    const second = resolveOrAdvanceOwnerCycle({
+      state: armedState,
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h1',
+      nowMs: 2000,
+      handoffAccepted: true,
+    }) as OwnerCycleResult;
+    expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
+    expect(second.cycle?.reviewArmed).toBe(true);
+  });
+
+  it('advances head without opening a new cycle', () => {
+    const repoId = 'repo';
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const second = resolveOrAdvanceOwnerCycle({
+      state: first.state,
+      repoId,
+      prNumber: 42,
+      ownerSessionId: 'op-worker',
+      headSha: 'h2',
+      nowMs: 2000,
+    }) as OwnerCycleResult;
+    expect(second.advanced).toBe(true);
+    expect(second.opened).toBe(false);
+    expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
+    expect(second.cycle?.headAdvanceCount).toBe(1);
+  });
+
+  it('prunes stale owner rows without reopening the current owner cycle', () => {
+    const repoId = 'repo';
+    const oldOwner = 'op-old';
+    const newOwner = 'op-new';
+    const oldKey = buildOwnerCycleKey(repoId, 42, oldOwner);
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: newOwner,
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitOwnerCyclePatch(first.state, repoId, 42, newOwner, {
+      ...(first.cycle ?? {}),
+      reviewArmed: true,
+      nudgeArmed: true,
+    });
+    const stateWithStale = {
+      ...armedState,
+      ownerCycles: {
+        ...(armedState.ownerCycles ?? {}),
+        [oldKey]: {
+          cycleId: 'stale-cycle',
+          ownerSessionId: oldOwner,
+          prNumber: 42,
+          reviewArmed: true,
+        },
+      },
+    };
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: stateWithStale,
+      prNumber: 42,
+      headSha: 'h1',
+      ownerSessionId: newOwner,
+      session: { name: newOwner, role: 'worker', status: 'working', activity: 'idle', runtime: 'alive' },
+      nowMs: 2000,
+      reviewRuns: [],
+    }) as OwnerCycleResult & { state: { ownerCycles?: Record<string, unknown> } };
+    expect(second.state.ownerCycles?.[oldKey]).toBeUndefined();
+    expect(second.cycle?.cycleId).toBe(first.cycle?.cycleId);
+    expect(second.cycle?.reviewArmed).toBe(true);
+    expect(second.opened).toBe(false);
+  });
+
+  it('reopens the owner cycle after a clean review so a follow-up revision can review', () => {
+    const repoId = 'repo';
+    const owner = 'op-worker';
+    const first = resolveOrAdvanceOwnerCycle({
+      state: {},
+      repoId,
+      prNumber: 42,
+      ownerSessionId: owner,
+      headSha: 'h1',
+      nowMs: 1000,
+    }) as OwnerCycleResult;
+    const armedState = commitReviewStartedCycleState(first.state, {
+      repoId,
+      prNumber: 42,
+      ownerSessionId: owner,
+      cycle: first.cycle ?? {},
+      isQuiescentFallback: false,
+    });
+    const cleanReviewRuns = [
+      {
+        id: 'run-clean',
+        prNumber: 42,
+        targetSha: 'h1',
+        status: 'clean',
+        findingCount: 0,
+        sentFindingCount: 0,
+      },
+    ];
+    const second = evaluateWorkerIterationCycleForPr({
+      cycleState: armedState,
+      repoRoot: repoId,
+      prNumber: 42,
+      headSha: 'h2',
+      ownerSessionId: owner,
+      handoffAccepted: true,
+      reviewRuns: cleanReviewRuns,
+      session: liveWorker({ ownedHeadSha: 'h2' }),
+      nowMs: 2000,
+    }) as OwnerCycleResult;
+    expect(second.cycle?.reviewArmed).toBe(false);
+    expect(second.cycle?.cycleId).not.toBe(first.cycle?.cycleId);
+    expect(second.reviewGate?.allow).toBe(true);
+    expect(second.reviewGate?.blockers ?? []).not.toContain('already_reviewed_this_cycle');
+  });
+});

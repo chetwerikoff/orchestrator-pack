@@ -26,7 +26,9 @@ export interface HeadCiRecord {
 export interface CiGreenWakeState {
   heads?: Record<string, HeadCiRecord>;
   nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+  pendingJournal?: Record<string, Record<string, unknown>>;
   lastTickMs?: number;
+  cycleState?: Record<string, unknown>;
 }
 
 export type CiGreenWakeAction =
@@ -37,6 +39,7 @@ export type CiGreenWakeAction =
       sessionId: string;
       transitionId: string;
       message: string;
+      ownerCycle?: { repoId: string; cycle: Record<string, unknown> };
     }
   | {
       type: 'skip';
@@ -57,6 +60,19 @@ export interface PlanCiGreenWakeInput {
     | Record<string, boolean>
     | Array<{ prNumber: number; failed: boolean }>;
   tracking?: CiGreenWakeState;
+  workerDeliveries?: Array<Record<string, unknown>>;
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  nowMs?: number;
+  repoRoot?: string;
+}
+
+export interface CiGreenWakePlanResult {
+  actions: CiGreenWakeAction[];
+  headRecords: Record<string, HeadCiRecord>;
+  cycleState: Record<string, unknown>;
 }
 
 export declare function classifyRequiredCiLevel(
@@ -113,7 +129,7 @@ export declare function evaluateCiGreenWakeCandidate(input: {
 
 export declare function planCiGreenWakeActions(
   input: PlanCiGreenWakeInput,
-): { actions: CiGreenWakeAction[]; headRecords: Record<string, HeadCiRecord> };
+): CiGreenWakePlanResult;
 
 export declare function normalizeCiChecksByPr(
   ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'],
@@ -127,6 +143,15 @@ export declare function preSendRecheck(
     ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'];
     requiredCheckNamesByPr?: PlanCiGreenWakeInput['requiredCheckNamesByPr'];
     requiredCheckLookupFailedByPr?: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'];
+    workerDeliveries?: PlanCiGreenWakeInput['workerDeliveries'];
+    aoEvents?: PlanCiGreenWakeInput['aoEvents'];
+    dispatchJournal?: PlanCiGreenWakeInput['dispatchJournal'];
+    reactionMessages?: PlanCiGreenWakeInput['reactionMessages'];
+    reviewRuns?: PlanCiGreenWakeInput['reviewRuns'];
+    cycleState?: Record<string, unknown>;
+    nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+    nowMs?: number;
+    repoRoot?: string;
   },
 ): { ok: boolean; reason: string };
 
@@ -136,6 +161,22 @@ export declare function recordSuccessfulNudge(
   sessionId: string,
   sentAtMs: number,
 ): CiGreenWakeState;
+
+export declare function mergeLegacyNudgedWithPendingJournal(
+  nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>,
+  pendingJournal?: Record<string, { sessionId?: string; sentAtMs?: number; message?: string }>,
+): Record<string, { sessionId?: string; sentAtMs?: number }>;
+
+export declare function commitNudgeSentCycleState(
+  cycleState: Record<string, unknown>,
+  input: {
+    repoId: string;
+    prNumber: number;
+    ownerSessionId: string;
+    cycle?: Record<string, unknown>;
+    sentAtMs: number;
+  },
+): Record<string, unknown>;
 
 export declare function mergeTrackingAfterTick(
   tracking: CiGreenWakeState,
