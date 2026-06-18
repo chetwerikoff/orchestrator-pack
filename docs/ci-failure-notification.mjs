@@ -264,13 +264,28 @@ export function evaluateLiveWorkerSuppressor({ episode, workerState, headShaFirs
   };
 }
 
+
+function reactionEventAction(event) {
+  return String(
+    field(event, ['data.action', 'action', 'metadata.action', 'details.action', 'payload.action', 'data.reaction.action'])
+    ?? '',
+  ).trim();
+}
+
+function isCiFailedWorkerDeliveryEvent(event) {
+  const type = String(field(event, ['type', 'kind', 'event', 'name']) ?? '');
+  const reactionKey = String(field(event, ['reactionKey', 'reaction.key', 'metadata.reactionKey', 'details.reactionKey', 'payload.reactionKey', 'data.reactionKey', 'data.reaction.key']) ?? '');
+  if (type !== 'reaction.action_succeeded' || reactionKey !== 'ci-failed') {
+    return false;
+  }
+  return reactionEventAction(event) === 'send-to-agent';
+}
+
 export function bindReactionEvent(episode, events = [], { excludeDigest = null } = {}) {
   let sawCandidate = false;
   let sawUnbindable = false;
   for (const event of events ?? []) {
-    const type = String(field(event, ['type', 'kind', 'event', 'name']) ?? '');
-    const reactionKey = String(field(event, ['reactionKey', 'reaction.key', 'metadata.reactionKey', 'details.reactionKey', 'payload.reactionKey', 'data.reactionKey', 'data.reaction.key']) ?? '');
-    if (type !== 'reaction.action_succeeded' || reactionKey !== 'ci-failed') continue;
+    if (!isCiFailedWorkerDeliveryEvent(event)) continue;
     sawCandidate = true;
     const ep = eventEpisode(event);
     try {

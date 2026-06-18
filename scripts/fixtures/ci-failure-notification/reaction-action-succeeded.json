@@ -2,6 +2,10 @@
   "id": "evt-redacted-ci-failed-1",
   "type": "reaction.action_succeeded",
   "reactionKey": "ci-failed",
+  "data": {
+    "action": "send-to-agent",
+    "reactionKey": "ci-failed"
+  },
   "episode": {
     "repo": "chetwerikoff/orchestrator-pack",
     "prNumber": 283,

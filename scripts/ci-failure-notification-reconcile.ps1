@@ -138,6 +138,23 @@ function Invoke-CiFailureTerminalizeCiRecovered {
     }
 }
 
+
+function Test-CiFailureDispatchJournalRecorded {
+    param(
+        [string]$SessionId,
+        [string]$SourceKey
+    )
+
+    if (-not $SourceKey) { return $false }
+    $journal = Get-WorkerMessageDispatchJournal
+    foreach ($entry in @($journal.Values)) {
+        if ([string]$entry.sessionId -eq $SessionId -and [string]$entry.sourceKey -eq $SourceKey) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Invoke-PlannedCiFailureReconcileSend {
     param(
         [string]$TargetId,
@@ -222,10 +239,12 @@ function Invoke-CiFailureEpisodeDelivery {
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
     $recordState = [string]$intent.record.state
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
+    $idempotencyKey = [string]$intent.idempotencyKey
+    $dispatchRecorded = Test-CiFailureDispatchJournalRecorded -SessionId $targetId -SourceKey $idempotencyKey
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
         $sendDelivered -or
-        ($recordState -eq 'submit-intent-reserved')
+        $dispatchRecorded
     )
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
@@ -257,7 +276,10 @@ function Invoke-CiFailureEpisodeDelivery {
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
     }
     else {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (submit intent reentry; send already delivered)"
+        if (-not $sendDelivered -and $dispatchRecorded) {
+            $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+        }
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"
     }
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }

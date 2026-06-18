@@ -165,11 +165,13 @@ projects:
            values are SEND or SUPPRESS. Missing/incompatible workerState is a non-terminal
            hard failure (re-evaluable next tick) — never a silent unconditional ping.
         4. SUPPRESS when the predicate binds a reaction.action_succeeded event with
-           reactionKey=ci-failed to the full episode identity (excluding own record),
-           when the live PR-owning worker session is in fixing_ci and passes liveness,
-           when no live owner exists (abandoned-no-live-owner), when the episode is
-           superseded (abandoned-superseded), or when an exact episode-keyed orchestrator
-           intent token already owns the ping (excluding own claim).
+           reactionKey=ci-failed and action=send-to-agent to the full episode identity
+           (excluding own record). Notify-only ci-failed reactions (action: notify) record
+           pending episodes but do not prove worker delivery and MUST NOT suppress the
+           reconcile ping. Also SUPPRESS when the live PR-owning worker session is in
+           fixing_ci and passes liveness, when no live owner exists (abandoned-no-live-owner),
+           when the episode is superseded (abandoned-superseded), or when an exact
+           episode-keyed orchestrator intent token already owns the ping (excluding own claim).
            working and pr_created do NOT suppress. A reaction/intent for an earlier head,
            earlier red-period, or superseded session MUST NOT suppress the active session's ping.
         5. If the verdict is SEND, use strict outbox: claim/preflight → pre-submit

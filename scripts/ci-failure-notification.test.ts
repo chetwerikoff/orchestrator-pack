@@ -112,6 +112,17 @@ function tempStore() {
 }
 
 describe('CI failure notification predicate (Issue #283 regressions)', () => {
+
+  it('does not suppress on notify-only ci-failed reaction events', () => {
+    const notifyEvent = {
+      ...fixture<any>('reaction-action-succeeded.json'),
+      data: { action: 'notify', reactionKey: 'ci-failed' },
+    };
+    const result = decision({ reactionEvents: [notifyEvent], intentTokens: [] });
+    expect(result.terminal_action).not.toBe('SUPPRESS');
+    expect(result.reason).not.toBe('reaction_ci_failed_sent_to_active_target');
+  });
+
   it('suppresses duplicate when ci-failed reaction already sent to active target', () => {
     const event = fixture<any>('reaction-action-succeeded.json');
     const result = decision({ reactionEvents: [event] });
