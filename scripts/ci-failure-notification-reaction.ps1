@@ -53,6 +53,7 @@ function Invoke-CiFailureReactionRecordTick {
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
     $plan = Invoke-CiFailureHelper -Mode 'reaction-record-plan' -Payload @{
+        storeDir                      = $StoreDir
         repo                          = $repo
         openPrs                       = $openPrs
         sessions                      = $sessions

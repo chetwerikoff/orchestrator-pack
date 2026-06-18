@@ -92,6 +92,35 @@ function Invoke-CiFailurePreSendCiRecheck {
     }
 }
 
+
+function Invoke-CiFailurePreSendRecheckFailure {
+    param(
+        [object]$Episode,
+        [string]$StoreDir,
+        [string]$Digest,
+        [string]$Reason,
+        [string]$ReadSource = 'pre_send_ci_recheck'
+    )
+
+    if ($Reason -match '^ci_not_red:') {
+        Invoke-CiFailureTerminalizeCiRecovered -Episode $Episode -StoreDir $StoreDir -Reason $Reason
+        return
+    }
+    $terminalReason = switch ($Reason) {
+        'abandoned-superseded' { 'abandoned-superseded' }
+        'abandoned-no-live-owner' { 'abandoned-no-live-owner' }
+        default { 'abandoned-superseded' }
+    }
+    $null = Invoke-CiFailureHelper -Mode 'terminalize' -Payload @{
+        storeDir       = $StoreDir
+        episode        = $Episode
+        terminalReason = $terminalReason
+        terminalAction = 'SUPPRESS'
+        readSource     = $ReadSource
+        diagnostics    = @{ pre_send_recheck = $Reason }
+    }
+}
+
 function Invoke-CiFailureTerminalizeCiRecovered {
     param(
         [object]$Episode,
@@ -171,8 +200,8 @@ function Invoke-CiFailureEpisodeDelivery {
 
     $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode -OpenPrs @($WorkerState.openPrs)
     if (-not $recheck.ok) {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send CI recheck failed digest=$Digest reason=$($recheck.reason)"
-        Invoke-CiFailureTerminalizeCiRecovered -Episode $Episode -StoreDir $StoreDir -Reason ([string]$recheck.reason)
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send recheck failed digest=$Digest reason=$($recheck.reason)"
+        Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$recheck.reason)
         return $false
     }
 
@@ -201,6 +230,16 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     if (-not $skipSend) {
+        $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber) -OpenPrs @($WorkerState.openPrs)
+        $sendRecheck = Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
+            episode = $Episode
+            fresh   = $sendSnapshot
+        }
+        if (-not $sendRecheck.ok) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "immediate pre-send recheck failed digest=$Digest reason=$($sendRecheck.reason)"
+            Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$sendRecheck.reason) -ReadSource 'pre_send_target_recheck'
+            return $false
+        }
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
                 -IdempotencyKey ([string]$intent.idempotencyKey)

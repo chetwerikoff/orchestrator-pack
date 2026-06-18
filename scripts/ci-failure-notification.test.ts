@@ -34,6 +34,7 @@ import {
   scanFixtureSafety,
   terminalizeEpisode,
   buildCiSourceFromRequiredChecks,
+  resolveRedPeriodAggregateId,
   listIntentTokensFromStore,
   planCiFailureReactionRecords,
   preSendCiRedRecheck,
@@ -128,6 +129,42 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
     const result = decision({ reactionEvents: [], intentTokens: [otherOwnerToken] });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('orchestrator_intent_token_present');
+  });
+
+
+  it('pre-send CI recheck rejects superseded notification target', () => {
+    const recheck = preSendCiRedRecheck(episode, {
+      openPrs: [{ number: episode.prNumber, headRefOid: episode.headSha }],
+      sessions: workerState({ targetId: 'session-new', targetGeneration: 'generation-new' }).sessions,
+      ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }] }],
+      requiredCheckNamesByPr: [{ prNumber: episode.prNumber, requiredCheckNames: ['Run pack contract tests'] }],
+      requiredCheckLookupFailedByPr: [],
+    });
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toBe('abandoned-superseded');
+  });
+
+  it('mark-send-delivered subcommand is registered on helper CLI map', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      const result = spawnSync(
+        'node',
+        [path.join(repoRoot, 'docs/ci-failure-notification.mjs'), 'mark-send-delivered'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({ storeDir: dir, episode }),
+          encoding: 'utf8',
+        },
+      );
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout.trim());
+      expect(payload.ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('pre-send CI recheck rejects when required CI is no longer red', () => {
@@ -335,21 +372,28 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
 
   it('keeps check churn out of red-period identity', () => {
-    const headSha = episode.headSha;
-    const first = buildCiSourceFromRequiredChecks(
-      [{ name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' }],
-      { requiredCheckNames: ['CI'], headSha },
-    );
-    const second = buildCiSourceFromRequiredChecks(
+    const dir = tempStore();
+    try {
+      const headSha = episode.headSha;
+      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha };
+      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      expect(first).toBe(second);
+      resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'green' });
+      const afterGreen = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      expect(afterGreen).not.toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const source = buildCiSourceFromRequiredChecks(
       [
         { name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' },
         { name: 'Lint', conclusion: 'failure', workflow: 'wf2', link: 'l2', startedAt: '2' },
       ],
-      { requiredCheckNames: ['CI', 'Lint'], headSha },
+      { requiredCheckNames: ['CI', 'Lint'], headSha: episode.headSha },
     );
-    expect(first.aggregateRunId).toBe(`head-red:${headSha}`);
-    expect(second.aggregateRunId).toBe(first.aggregateRunId);
-    expect(second.failedCheckNames).toEqual(['ci', 'lint']);
+    expect(source.failedCheckNames).toEqual(['ci', 'lint']);
+    expect(source.aggregateRunId).toBeUndefined();
   });
 
   it('marks send delivered for post-intent recovery without false resend skip', () => {

@@ -352,16 +352,54 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
     .map((check) => String(check?.name ?? 'check').trim().toLowerCase())
     .filter(Boolean)
     .sort();
-  const headSha = normalizeSha(options.headSha ?? '');
-  const aggregateRunId = headSha
-    ? `head-red:${headSha}`
-    : `required-red:${failedCheckNames.join('|') || scope.length}`;
   return {
     aggregateStatus: 'red',
-    aggregateRunId,
     failedCheckNames,
     source: 'gh-required-checks',
   };
+}
+
+
+
+export function resolveRedPeriodAggregateId(input) {
+  const storeDir = String(input?.storeDir ?? '').trim();
+  const repo = String(input?.repo ?? '').trim();
+  const prNumber = Number(input?.prNumber);
+  const headSha = normalizeSha(input?.headSha ?? '');
+  const aggregateStatus = String(input?.aggregateStatus ?? 'red').trim();
+  if (!headSha) {
+    throw new Error('resolveRedPeriodAggregateId requires headSha');
+  }
+  if (!storeDir) {
+    return `head-red:${headSha}:stint-1`;
+  }
+  ensureStore(storeDir);
+  const trackerKey = createHash('sha256').update(`${repo}#${prNumber}#${headSha}`).digest('hex');
+  const trackerPath = path.join(storeDir, 'red-stints', `${trackerKey}.json`);
+  /** @type {{ lastLevel?: string | null, stintId?: number }} */
+  let tracker = { lastLevel: null, stintId: 0 };
+  if (existsSync(trackerPath)) {
+    try {
+      tracker = JSON.parse(readFileSync(trackerPath, 'utf8'));
+    } catch {
+      tracker = { lastLevel: null, stintId: 0 };
+    }
+  }
+  if (aggregateStatus === 'red') {
+    if (tracker.lastLevel !== 'red') {
+      tracker.stintId = Number(tracker.stintId ?? 0) + 1;
+    }
+    tracker.lastLevel = 'red';
+  } else {
+    tracker.lastLevel = aggregateStatus;
+  }
+  mkdirSync(path.dirname(trackerPath), { recursive: true });
+  writeFileSync(trackerPath, `${JSON.stringify(tracker)}
+`, 'utf8');
+  if (aggregateStatus !== 'red') {
+    return null;
+  }
+  return `head-red:${headSha}:stint-${tracker.stintId}`;
 }
 
 export function listIntentTokensFromStore(storeDir) {
@@ -398,6 +436,14 @@ export function planCiFailureReactionRecords(input) {
     const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
     const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed, headSha });
     if (String(ciSource.aggregateStatus) !== 'red') continue;
+    const aggregateRunId = resolveRedPeriodAggregateId({
+      storeDir: input?.storeDir,
+      repo,
+      prNumber,
+      headSha,
+      aggregateStatus: 'red',
+    });
+    const enrichedCiSource = { ...ciSource, aggregateRunId };
     const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
     if (!targetId) continue;
     const owner = findSessionByIdentifier(sessions, targetId);
@@ -405,7 +451,7 @@ export function planCiFailureReactionRecords(input) {
       targetId,
       targetGeneration: owner ? deriveTargetGeneration(owner) : targetId,
     };
-    const episode = deriveEpisodeFromCiSource({ repo, prNumber, headSha, activeTarget, ciSource });
+    const episode = deriveEpisodeFromCiSource({ repo, prNumber, headSha, activeTarget, ciSource: enrichedCiSource });
     if (!episode) continue;
     records.push({ episode, ciSource });
   }
@@ -428,6 +474,18 @@ export function preSendCiRedRecheck(episode, fresh) {
   const ciLevel = classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed });
   if (ciLevel !== 'red') {
     return { ok: false, reason: `ci_not_red:${ciLevel}` };
+  }
+  const workerState = {
+    sessions: toArray(fresh?.sessions),
+    openPrs: toArray(fresh?.openPrs),
+  };
+  const ownerResolution = resolveLivePrOwner({ workerState, episode: ep });
+  if (!ownerResolution.live || !ownerResolution.owner) {
+    return { ok: false, reason: 'abandoned-no-live-owner' };
+  }
+  const currentGen = ownerResolution.targetGeneration ?? ownerResolution.ownerId;
+  if (ownerResolution.ownerId !== ep.targetId || currentGen !== ep.targetGeneration) {
+    return { ok: false, reason: 'abandoned-superseded' };
   }
   return { ok: true, reason: 'ci_still_red' };
 }
@@ -1310,6 +1368,7 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'preflight-revalidate': cli,
   'reserve-intent': cli,
   'mark-submitted': cli,
+  'mark-send-delivered': cli,
   'resolve-delivery': cli,
   terminalize: cli,
   'expire-scan': cli,
