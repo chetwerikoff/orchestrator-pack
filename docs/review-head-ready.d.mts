@@ -158,6 +158,10 @@ export declare function preRunHeadReadyRecheck(
     aoEvents?: Array<Record<string, unknown>>;
     dispatchJournal?: Record<string, Record<string, unknown>>;
     reactionMessages?: Record<string, string>;
+    cycleState?: Record<string, unknown>;
+    sharedCycleState?: Record<string, unknown>;
+    legacyNudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+    repoRoot?: string;
   },
 ): PreRunHeadReadyRecheckResult;
 

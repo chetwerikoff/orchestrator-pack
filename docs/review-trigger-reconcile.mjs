@@ -37,6 +37,7 @@ import {
   commitOwnerCyclePatch,
   commitReviewStartedCycleState,
   evaluateWorkerIterationCycleForPr,
+  evaluateQuiescentFallbackNudgePrecedence,
   mergeSharedWorkerIterationCycleState,
   NUDGE_EXPIRY_MS,
   CYCLE_SURFACE_READY_FOR_REVIEW,
@@ -815,36 +816,16 @@ export function planReconcileActions({
 
       const isQuiescentFallback = decision.reason === 'quiescent_worker_handoff_fallback';
       if (isQuiescentFallback) {
-        const nudgeOutstanding = Boolean(
-          cycleEval.cycle?.nudgeArmed &&
-            cycleEval.cycle?.nudgeExpiresAtMs &&
-            nowMs < Number(cycleEval.cycle.nudgeExpiresAtMs),
-        );
-        const awaitingFirstNudge = Boolean(
-          !cycleEval.cycle?.nudgeArmed && !cycleEval.cycle?.nudgeExpiredFallbackPending,
-        );
-        if (awaitingFirstNudge || nudgeOutstanding) {
+        const nudgePrecedence = evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs);
+        if (nudgePrecedence.blocked) {
           actions.push({
             type: 'skip',
             prNumber,
             headSha,
-            reason: awaitingFirstNudge ? 'nudge_precedence_over_fallback' : 'nudge_outstanding',
+            reason: nudgePrecedence.reason,
             record: buildNoStartDecisionRecord({
               ...decisionRecordBase,
-              reason: awaitingFirstNudge ? 'nudge_precedence_over_fallback' : 'nudge_outstanding',
-            }),
-          });
-          continue;
-        }
-        if (cycleEval.cycle?.fallbackArmed) {
-          actions.push({
-            type: 'skip',
-            prNumber,
-            headSha,
-            reason: 'already_reviewed_this_cycle',
-            record: buildNoStartDecisionRecord({
-              ...decisionRecordBase,
-              reason: 'already_reviewed_this_cycle',
+              reason: nudgePrecedence.reason,
             }),
           });
           continue;

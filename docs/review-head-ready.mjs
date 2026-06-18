@@ -19,6 +19,11 @@ import {
 } from './worker-message-dispatch-observe.mjs';
 import { parseLastActivityAgeMs } from './review-reconcile-primitives.mjs';
 import {
+  evaluateQuiescentFallbackNudgePrecedence,
+  evaluateWorkerIterationCycleForPr,
+  mergeSharedWorkerIterationCycleState,
+} from './worker-iteration-cycle.mjs';
+import {
   AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON,
   collectSessionIdentifiers,
   findCoveringRunForHead,
@@ -684,6 +689,10 @@ export function resolveCurrentPrHeadSha(openPrs, prNumber) {
  * @param {number} [fresh.nowMs]
  * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
  * @param {{ sessionId?: string | null, reason?: string, failClosed?: boolean }} [fresh.ownerResolution]
+ * @param {Record<string, unknown>} [fresh.cycleState]
+ * @param {Record<string, unknown>} [fresh.sharedCycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [fresh.legacyNudged]
+ * @param {string} [fresh.repoRoot]
  */
 export function preRunHeadReadyRecheck(planned, fresh) {
   const prNumber = Number(planned?.prNumber);
@@ -802,6 +811,43 @@ export function preRunHeadReadyRecheck(planned, fresh) {
     workerDeliveries,
     allowFailedRetry: failedRetryEligible,
   });
+
+  const startReason = String(planned?.startReason ?? '');
+  if (decision.eligible && startReason === 'quiescent_worker_handoff_fallback') {
+    const ownerSessionId = String(
+      plannedSessionId || ownerResolution?.sessionId || getSessionIdentifier(sessionForRecheck) || '',
+    );
+    const mergedCycleState = mergeSharedWorkerIterationCycleState(
+      { ...(fresh?.cycleState ?? {}) },
+      fresh?.sharedCycleState ?? {},
+    );
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState: mergedCycleState,
+      repoRoot: fresh?.repoRoot ?? '',
+      prNumber,
+      headSha: currentHead,
+      ownerSessionId,
+      reviewRuns,
+      session: sessionForRecheck ?? null,
+      workerDeliveries,
+      nowMs,
+      headCommittedAtMs: resolveHeadCommittedAtMs(fresh?.openPrs, prNumber),
+      handoffAccepted: false,
+      legacyNudged: fresh?.legacyNudged ?? null,
+    });
+    const nudgePrecedence = evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs);
+    if (nudgePrecedence.blocked) {
+      return {
+        emitReviewRun: false,
+        reason: `pre_run_recheck_${nudgePrecedence.reason}`,
+        decision: {
+          eligible: false,
+          reason: nudgePrecedence.reason,
+          route: 'none',
+        },
+      };
+    }
+  }
 
   return {
     emitReviewRun: decision.eligible,

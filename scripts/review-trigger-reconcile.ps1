@@ -282,7 +282,8 @@ function Test-PreRunHeadReadyRecheck {
     param(
         [hashtable]$PlannedAction,
         [string]$Project,
-        [hashtable]$FixtureSnapshot
+        [hashtable]$FixtureSnapshot,
+        [hashtable]$TrackingState = $null
     )
 
     $fresh = if ($FixtureSnapshot) {
@@ -290,6 +291,16 @@ function Test-PreRunHeadReadyRecheck {
     }
     else {
         Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project
+    }
+
+    if (-not $FixtureSnapshot) {
+        $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence
+        if ($TrackingState -and $TrackingState.cycleState) {
+            $fresh.cycleState = $TrackingState.cycleState
+        }
+        $fresh.sharedCycleState = $sharedEvidence.sharedCycleState
+        $fresh.legacyNudged = $sharedEvidence.legacyNudged
+        $fresh.repoRoot = $RepoRoot
     }
 
     $prKey = [string]$PlannedAction.prNumber
@@ -312,6 +323,10 @@ function Test-PreRunHeadReadyRecheck {
             workerDeliveries              = Get-ReconcileWorkerDeliveries $fresh.workerDeliveries
             reactionMessages              = $fresh.reactionMessages
             nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            cycleState                    = $fresh.cycleState
+            sharedCycleState              = $fresh.sharedCycleState
+            legacyNudged                  = $fresh.legacyNudged
+            repoRoot                      = $fresh.repoRoot
         }
     }
 
@@ -327,6 +342,7 @@ function Invoke-PlannedReviewRun {
         [string]$Project,
         [switch]$DryRunMode,
         [hashtable]$FixtureSnapshot,
+        [hashtable]$TrackingState = $null,
         [string]$StartReason = ''
     )
 
@@ -361,7 +377,7 @@ function Invoke-PlannedReviewRun {
             headSha     = $HeadSha
             sessionId   = $SessionId
             startReason = $StartReason
-        } -Project $Project -FixtureSnapshot $FixtureSnapshot
+        } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState
     }
     catch {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
@@ -469,6 +485,10 @@ function Invoke-ReconcileTick {
             dispatchJournal               = $payload.dispatchJournal
             workerDeliveries              = Get-ReconcileWorkerDeliveries $payload.workerDeliveries
             reactionMessages              = $payload.reactionMessages
+            cycleState                    = $payload.cycleState
+            sharedCycleState              = $payload.sharedCycleState
+            legacyNudged                  = $payload.legacyNudged
+            repoRoot                      = $RepoRoot
         }
     }
     else {
@@ -544,7 +564,8 @@ function Invoke-ReconcileTick {
 
         $startResult = Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
-            -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -StartReason $action.startReason
+            -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -TrackingState $TrackingState `
+            -StartReason $action.startReason
         if ($startResult.started) {
             if (-not $DryRunMode -and $action.ownerCycle) {
                 $commit = Invoke-ReconcileFilterCli -Subcommand 'commit-review-started' -Payload @{

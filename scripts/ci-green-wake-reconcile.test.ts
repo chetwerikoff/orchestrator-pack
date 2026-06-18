@@ -526,6 +526,44 @@ describe('preSendRecheck', () => {
     expect(recheck.ok).toBe(false);
     expect(recheck.reason).toContain('worker_actively_working');
   });
+
+  it('fails when prior review revision opened after planning', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'idle',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        reviewRuns: [
+          {
+            id: 'rev-open',
+            prNumber: 42,
+            targetSha: 'abc123',
+            status: 'needs_triage',
+            findingCount: 1,
+            openFindingCount: 1,
+            sentFindingCount: 1,
+          },
+        ],
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('prior_revision_open');
+  });
 });
 
 describe('recordSuccessfulNudge / dedupe priority', () => {

@@ -79,6 +79,10 @@ export declare function evaluateReadyForReviewSettleDebounce(
 export declare function evaluateReviewCycleGate(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateNudgeCycleGate(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateSettleActionPrecedence(input: Record<string, unknown>): Record<string, unknown>;
+export declare function evaluateQuiescentFallbackNudgePrecedence(
+  cycleEval: Record<string, unknown>,
+  nowMs?: number,
+): { blocked: boolean; reason: string };
 export declare function patchOwnerCycle(
   cycle: Record<string, unknown>,
   patch: Record<string, unknown>,

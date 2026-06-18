@@ -346,32 +346,15 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    if (isCiGreenActiveWorkBlocked(cycleEval)) {
+    const nudgeRecheck = evaluateCiGreenNudgeRecheck(cycleEval);
+    if (!nudgeRecheck.ok) {
       actions.push({
         type: 'skip',
         prNumber,
         headSha,
-        reason: 'worker_actively_working',
-      });
-      continue;
-    }
-
-    if (!cycleEval.nudgeGate.allow) {
-      actions.push({
-        type: 'skip',
-        prNumber,
-        headSha,
-        reason: cycleEval.nudgeGate.deferReason,
-      });
-      continue;
-    }
-
-    if (cycleEval.settleAction.action !== 'nudge') {
-      actions.push({
-        type: 'skip',
-        prNumber,
-        headSha,
-        reason: cycleEval.settleAction.reason,
+        reason: nudgeRecheck.reason === 'worker_actively_working'
+          ? 'worker_actively_working'
+          : nudgeRecheck.reason,
       });
       continue;
     }
@@ -479,6 +462,22 @@ function isCiGreenActiveWorkBlocked(cycleEval) {
 }
 
 /**
+ * @param {object} cycleEval
+ */
+function evaluateCiGreenNudgeRecheck(cycleEval) {
+  if (isCiGreenActiveWorkBlocked(cycleEval)) {
+    return { ok: false, reason: 'worker_actively_working' };
+  }
+  if (!cycleEval.nudgeGate.allow) {
+    return { ok: false, reason: cycleEval.nudgeGate.deferReason };
+  }
+  if (cycleEval.settleAction.action !== 'nudge') {
+    return { ok: false, reason: cycleEval.settleAction.reason };
+  }
+  return { ok: true, reason: 'ok' };
+}
+
+/**
  * Pre-send snapshot recheck (fail-closed; criterion 3).
  *
  * @param {object} planned
@@ -557,8 +556,9 @@ export function preSendRecheck(planned, fresh) {
     legacyNudged: fresh.nudged ?? null,
   });
 
-  if (isCiGreenActiveWorkBlocked(cycleEval)) {
-    return { ok: false, reason: 'recheck_failed:worker_actively_working' };
+  const nudgeRecheck = evaluateCiGreenNudgeRecheck(cycleEval);
+  if (!nudgeRecheck.ok) {
+    return { ok: false, reason: `recheck_failed:${nudgeRecheck.reason}` };
   }
 
   return { ok: true, reason: 'ok' };

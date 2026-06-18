@@ -947,6 +947,34 @@ export function evaluateSettleActionPrecedence(input) {
 }
 
 /**
+ * Quiescent fallback must not start while CI-green nudge precedence applies (#332).
+ *
+ * @param {object} cycleEval
+ * @param {number} [nowMs]
+ */
+export function evaluateQuiescentFallbackNudgePrecedence(cycleEval, nowMs = Date.now()) {
+  const cycle = cycleEval?.cycle ?? null;
+  const nudgeOutstanding = Boolean(
+    cycle?.nudgeArmed &&
+      cycle?.nudgeExpiresAtMs &&
+      nowMs < Number(cycle.nudgeExpiresAtMs),
+  );
+  const awaitingFirstNudge = Boolean(
+    !cycle?.nudgeArmed && !cycle?.nudgeExpiredFallbackPending,
+  );
+  if (awaitingFirstNudge) {
+    return { blocked: true, reason: 'nudge_precedence_over_fallback' };
+  }
+  if (nudgeOutstanding) {
+    return { blocked: true, reason: 'nudge_outstanding' };
+  }
+  if (cycle?.fallbackArmed) {
+    return { blocked: true, reason: 'already_reviewed_this_cycle' };
+  }
+  return { blocked: false, reason: '' };
+}
+
+/**
  * @param {Record<string, unknown>} cycle
  * @param {string} branch
  * @param {Record<string, unknown>} patch
