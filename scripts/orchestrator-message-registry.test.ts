@@ -37,6 +37,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
 const checkScript = path.join(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
 
+function removeTempDir(dir: string) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 function writeJson(root: string, rel: string, value: unknown) {
   const full = path.join(root, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -106,7 +110,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('audit root file missing: scripts/this-ci-script-does-not-exist.ps1'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -128,7 +132,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -150,7 +154,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -172,7 +176,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -194,7 +198,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('raw send outside helper'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -311,7 +315,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(result.verdict).toBe('FAIL');
       expect(result.violations.some((v: string) => v.includes('scripts/orchestrator-wake-common.ps1'))).toBe(true);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
@@ -544,7 +548,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         else process.env.GITHUB_EVENT_PATH = prevEvent;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -581,7 +585,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -651,7 +655,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         ]),
       ).toEqual([]);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -678,7 +682,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['scripts/ci-green-wake-reconcile.ps1']),
       ).toEqual([]);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -707,7 +711,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         ]),
       ).toEqual([324]);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -756,7 +760,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -801,7 +805,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -842,7 +846,7 @@ describe('orchestrator message registry (Issue #298)', () => {
         else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -860,7 +864,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       expect(gitRefExists(root, baseSha)).toBe(true);
       expect(explicit.changedFileCount).toBeGreaterThan(0);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -877,7 +881,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       else process.env.GITHUB_BASE_SHA = prev;
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -905,7 +909,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       if (prev === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prev;
       fs.rmSync(eventPath, { force: true });
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTempDir(root);
     }
   });
 
@@ -925,7 +929,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       });
       expect(() => resolveDiffBaseRef(tmp, 'origin/main')).toThrow(/failed to resolve diff base ref/);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeTempDir(tmp);
     }
   });
 
