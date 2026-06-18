@@ -143,6 +143,15 @@ export declare function preSendRecheck(
     ciChecksByPr: PlanCiGreenWakeInput['ciChecksByPr'];
     requiredCheckNamesByPr?: PlanCiGreenWakeInput['requiredCheckNamesByPr'];
     requiredCheckLookupFailedByPr?: PlanCiGreenWakeInput['requiredCheckLookupFailedByPr'];
+    workerDeliveries?: PlanCiGreenWakeInput['workerDeliveries'];
+    aoEvents?: PlanCiGreenWakeInput['aoEvents'];
+    dispatchJournal?: PlanCiGreenWakeInput['dispatchJournal'];
+    reactionMessages?: PlanCiGreenWakeInput['reactionMessages'];
+    reviewRuns?: PlanCiGreenWakeInput['reviewRuns'];
+    cycleState?: Record<string, unknown>;
+    nudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
+    nowMs?: number;
+    repoRoot?: string;
   },
 ): { ok: boolean; reason: string };
 

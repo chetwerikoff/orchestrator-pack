@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f"
+    "active_scope_hash": "sha256:7f2a6c27f399604d7266c02e19e67026b8e26aee575440475efaf74baa8bf8ec"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -27,6 +27,7 @@
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.test.ts",
     "scripts/lib/MechanicalReconcileNode.ps1",
+    "scripts/orchestrator-message-catalog.json",
     "scripts/orchestrator-message-registry.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
@@ -38,18 +39,19 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
-      "new_active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f",
+      "new_active_scope_hash": "sha256:7f2a6c27f399604d7266c02e19e67026b8e26aee575440475efaf74baa8bf8ec",
       "changed": {
         "added": [
           "docs/review-head-ready.mjs",
           "docs/review-ready-stuck-guard.d.mts",
           "docs/review-ready-stuck-guard.mjs",
           "docs/review-reconcile-primitives.mjs",
-          "scripts/lib/MechanicalReconcileNode.ps1"
+          "scripts/lib/MechanicalReconcileNode.ps1",
+          "scripts/orchestrator-message-catalog.json"
         ],
         "removed": []
       },
-      "reason": "Review fix: break ci-green ESM cycle via primitives/shared CI classifier; self-architect lint shared fixture delivery-field merge helper",
+      "reason": "Review fix: break ci-green ESM cycle via primitives/shared CI classifier; self-architect lint shared fixture delivery-field merge helper; registry hash refresh for pre-send active-work recheck",
       "actor": "opk-30",
       "timestamp": "2026-06-17T19:00:00.000Z",
       "applied": true
