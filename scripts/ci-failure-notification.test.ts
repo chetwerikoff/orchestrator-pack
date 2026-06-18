@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -751,6 +751,46 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
       const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { cwd: repoRoot, encoding: 'utf8' });
       const rows = JSON.parse(result.stdout.trim());
       expect(rows.filter((r: any) => r.claimed)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('terminalizeEpisode persists terminal audit records', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      const suppressed = evaluatePreflightRevalidation({
+        storeDir: dir,
+        episode,
+        workerState: workerState({ status: 'fixing_ci' }),
+      });
+      expect(suppressed.action).toBe('suppressed');
+      const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));
+      expect(auditFiles.length).toBeGreaterThan(0);
+      const audit = JSON.parse(readFileSync(path.join(dir, 'audit', auditFiles[0]!), 'utf8'));
+      expect(audit.reason).toBe('suppressed-live-worker');
+      expect(audit.terminal_action).toBe('SUPPRESS');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveSubmittedDelivery persists sent terminal audit records', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      markSendDelivered({ storeDir: dir, episode });
+      const resolved = resolveSubmittedDelivery({ storeDir: dir, episode, acknowledged: true });
+      expect(resolved.terminalReason).toBe('sent');
+      const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));
+      expect(auditFiles.some((name) => {
+        const audit = JSON.parse(readFileSync(path.join(dir, 'audit', name), 'utf8'));
+        return audit.reason === 'sent' && audit.terminal_action === 'SEND';
+      })).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

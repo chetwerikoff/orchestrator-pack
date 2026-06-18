@@ -1219,7 +1219,8 @@ export function terminalizeEpisode(input) {
     diagnostics: input?.diagnostics ?? {},
     readSource: input?.readSource,
   });
-  return { ok: true, record: updated, audit };
+  const auditWritten = appendAudit({ storeDir, audit });
+  return { ok: true, record: updated, audit, auditWritten };
 }
 
 export function resolveSubmittedDelivery(input) {
