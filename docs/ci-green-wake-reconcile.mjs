@@ -346,7 +346,7 @@ export function planCiGreenWakeActions({
       continue;
     }
 
-    if (cycleEval.settle.activelyWorking || cycleEval.nudgeGate.blockers.includes('worker_actively_working')) {
+    if (isCiGreenActiveWorkBlocked(cycleEval)) {
       actions.push({
         type: 'skip',
         prNumber,
@@ -468,6 +468,17 @@ export function normalizeRequiredCheckNamesByPr(requiredByPr) {
 }
 
 /**
+ * @param {object} cycleEval
+ */
+function isCiGreenActiveWorkBlocked(cycleEval) {
+  return (
+    cycleEval.settle.activelyWorking ||
+    cycleEval.nudgeGate.blockers.includes('worker_actively_working') ||
+    cycleEval.nudgeGate.blockers.includes('pending_unconsumed_delivery')
+  );
+}
+
+/**
  * Pre-send snapshot recheck (fail-closed; criterion 3).
  *
  * @param {object} planned
@@ -480,6 +491,14 @@ export function normalizeRequiredCheckNamesByPr(requiredByPr) {
  * @param {Record<string, CiCheck[]> | Array<{ prNumber: number, checks: CiCheck[] }>} fresh.ciChecksByPr
  * @param {Record<string, string[]> | Array<{ prNumber: number, requiredCheckNames: string[] }>} [fresh.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber: number, failed: boolean }>} [fresh.requiredCheckLookupFailedByPr]
+ * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
+ * @param {Array<Record<string, unknown>>} [fresh.aoEvents]
+ * @param {Record<string, unknown>} [fresh.dispatchJournal]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [fresh.reviewRuns]
+ * @param {Record<string, unknown>} [fresh.cycleState]
+ * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [fresh.nudged]
+ * @param {number} [fresh.nowMs]
+ * @param {string} [fresh.repoRoot]
  */
 export function preSendRecheck(planned, fresh) {
   const { sessionId, prNumber, headSha } = planned;
@@ -511,6 +530,35 @@ export function preSendRecheck(planned, fresh) {
 
   if (!candidate.eligible) {
     return { ok: false, reason: `recheck_failed:${candidate.reasons.join(',')}` };
+  }
+
+  const nowMs = Number(fresh.nowMs) || Date.now();
+  const mergedDeliveries = mergeWorkerDeliveriesFromPlanInput({
+    workerDeliveries: fresh.workerDeliveries ?? [],
+    aoEvents: fresh.aoEvents,
+    dispatchJournal: fresh.dispatchJournal,
+    reviewRuns: fresh.reviewRuns ?? [],
+    reactionMessages: fresh.reactionMessages,
+    nowMs,
+  });
+  const headCommittedAtMs = resolveHeadCommittedAtMs(toArray(fresh.openPrs), prNumber);
+  const cycleEval = evaluateWorkerIterationCycleForPr({
+    cycleState: fresh.cycleState ?? {},
+    repoRoot: fresh.repoRoot ?? '',
+    prNumber,
+    headSha,
+    ownerSessionId: sessionId,
+    reviewRuns: toArray(fresh.reviewRuns),
+    session,
+    workerDeliveries: mergedDeliveries,
+    nowMs,
+    headCommittedAtMs,
+    handoffAccepted: false,
+    legacyNudged: fresh.nudged ?? null,
+  });
+
+  if (isCiGreenActiveWorkBlocked(cycleEval)) {
+    return { ok: false, reason: 'recheck_failed:worker_actively_working' };
   }
 
   return { ok: true, reason: 'ok' };

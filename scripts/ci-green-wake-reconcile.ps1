@@ -212,7 +212,8 @@ function Get-CiGreenWakeDeliveryPayload {
 function Get-CiGreenWakePreSendSnapshot {
     param(
         [int]$PrNumber,
-        [string]$Project
+        [string]$Project,
+        [object]$Tracking = $null
     )
 
     $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
@@ -220,14 +221,29 @@ function Get-CiGreenWakePreSendSnapshot {
     $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @(
         @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
     )
+    $deliveryPayload = Get-CiGreenWakeDeliveryPayload -Project $Project
 
-    return @{
+    $snapshot = @{
         openPrs                         = @($openPrs)
         sessions                        = @($sessions)
         ciChecksByPr                    = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
+        reviewRuns                      = @($deliveryPayload.reviewRuns)
+        aoEvents                        = @($deliveryPayload.aoEvents)
+        dispatchJournal                 = $deliveryPayload.dispatchJournal
+        nowMs                           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        repoRoot                        = $RepoRoot
     }
+    if ($Tracking) {
+        if ($Tracking.cycleState) {
+            $snapshot.cycleState = $Tracking.cycleState
+        }
+        if ($Tracking.nudged) {
+            $snapshot.nudged = $Tracking.nudged
+        }
+    }
+    return $snapshot
 }
 
 function Get-FixtureCiGreenWakePayload {
@@ -253,6 +269,7 @@ function Invoke-PlannedCiGreenWakeSend {
         [object]$Action,
         [object]$FreshPayload,
         [string]$Project,
+        [object]$Tracking = $null,
         [switch]$DryRunMode,
         [switch]$UseFixtureSnapshot
     )
@@ -263,7 +280,8 @@ function Invoke-PlannedCiGreenWakeSend {
         }
     }
     else {
-        $FreshPayload = Get-CiGreenWakePreSendSnapshot -PrNumber ([int]$Action.prNumber) -Project $Project
+        $FreshPayload = Get-CiGreenWakePreSendSnapshot -PrNumber ([int]$Action.prNumber) -Project $Project `
+            -Tracking $Tracking
     }
 
     $recheck = Invoke-CiGreenWakeFilterCli -Subcommand 'recheck' -Payload @{
@@ -426,6 +444,17 @@ function Invoke-CiGreenWakeTick {
 
     $plan = Invoke-CiGreenWakeFilterCli -Subcommand 'plan' -Payload $planPayload
     $useFixtureSnapshot = [bool]$Fixture
+
+    $headRecords = Copy-MechanicalJsonMap -Map $plan.headRecords
+    $cycleState = $plan.cycleState
+    if (-not $cycleState) {
+        $cycleState = $tracking.cycleState
+    }
+
+    $sent = 0
+    $nudged = Copy-MechanicalJsonMap -Map $tracking.nudged
+    $pendingJournal = Copy-MechanicalJsonMap -Map $tracking.pendingJournal
+
     $fixtureFreshPayload = $null
     if ($useFixtureSnapshot) {
         $fixtureFreshPayload = @{
@@ -434,17 +463,14 @@ function Invoke-CiGreenWakeTick {
             ciChecksByPr                    = $ciChecksByPr
             requiredCheckNamesByPr          = $requiredCheckNamesByPr
             requiredCheckLookupFailedByPr   = $requiredCheckLookupFailedByPr
+            reviewRuns                      = @($reviewRuns)
+            aoEvents                        = @($aoEvents)
+            dispatchJournal                 = $dispatchJournal
+            cycleState                      = $cycleState
+            nudged                          = $nudged
+            nowMs                           = $nowMs
+            repoRoot                        = $RepoRoot
         }
-    }
-
-    $sent = 0
-    $nudged = Copy-MechanicalJsonMap -Map $tracking.nudged
-    $pendingJournal = Copy-MechanicalJsonMap -Map $tracking.pendingJournal
-
-    $headRecords = Copy-MechanicalJsonMap -Map $plan.headRecords
-    $cycleState = $plan.cycleState
-    if (-not $cycleState) {
-        $cycleState = $tracking.cycleState
     }
 
     $partialStatePath = if ($DryRunMode) { '' } else { $StatePath }
@@ -465,7 +491,7 @@ function Invoke-CiGreenWakeTick {
 
         try {
             $result = Invoke-PlannedCiGreenWakeSend -Action $action -FreshPayload $fixtureFreshPayload `
-                -Project $Project -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
+                -Project $Project -Tracking $tracking -DryRunMode:$DryRunMode -UseFixtureSnapshot:$useFixtureSnapshot
         }
         catch {
             Write-CiGreenWakeLog "send error PR #$($action.prNumber): $_"

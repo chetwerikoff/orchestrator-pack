@@ -459,6 +459,73 @@ describe('preSendRecheck', () => {
     );
     expect(recheck.ok).toBe(false);
   });
+
+  it('fails when worker resumed active work after planning', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'active',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('worker_actively_working');
+  });
+
+  it('fails when fresh snapshot shows unconsumed delivery', () => {
+    const nowMs = Date.parse('2026-06-01T01:00:00.000Z');
+    const settledAtMs = nowMs - QUIESCENCE_DEBOUNCE_MS - 1000;
+    const deliveredAtMs = settledAtMs - 60_000;
+    const recheck = preSendRecheck(
+      { sessionId: 'op-worker', prNumber: 42, headSha: 'abc123' },
+      {
+        openPrs: [
+          {
+            number: 42,
+            headRefOid: 'abc123',
+            headCommittedAt: new Date(settledAtMs).toISOString(),
+          },
+        ],
+        sessions: [
+          liveWorker({
+            activity: 'idle',
+            status: 'working',
+            reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+          }),
+        ],
+        ciChecksByPr: { 42: greenChecks },
+        dispatchJournal: {
+          'op-worker:1000:pack-send:ci-green:tr-42': {
+            deliveryId: 'op-worker:1000:pack-send:ci-green:tr-42',
+            sessionId: 'op-worker',
+            deliveredAtMs,
+            source: 'pack-send',
+            sourceKey: 'ci-green:tr-42',
+            deliveryPath: 'pending-draft',
+          },
+        },
+        aoEvents: [],
+        nowMs,
+      },
+    );
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toContain('worker_actively_working');
+  });
 });
 
 describe('recordSuccessfulNudge / dedupe priority', () => {
