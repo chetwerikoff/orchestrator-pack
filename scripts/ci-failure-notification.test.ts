@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,10 @@ import {
   reserveSubmitIntent,
   scanFixtureSafety,
   terminalizeEpisode,
+  buildCiSourceFromRequiredChecks,
+  listIntentTokensFromStore,
+  planCiFailureReactionRecords,
+  preSendCiRedRecheck,
   validateInitGate,
   validateWorkerStateInput,
 } from '../docs/ci-failure-notification.mjs';
@@ -110,6 +114,45 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
     const result = decision({ reactionEvents: [event] });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
+  });
+
+
+  it('suppresses when another owner intent token is present without excludeOwnDigest', () => {
+    const otherOwnerToken = {
+      episode,
+      digest: episodeKeyDigest(episode),
+      owner: 'other-sender',
+      status: 'claimed',
+    };
+    const result = decision({ reactionEvents: [], intentTokens: [otherOwnerToken] });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('orchestrator_intent_token_present');
+  });
+
+  it('pre-send CI recheck rejects when required CI is no longer red', () => {
+    const recheck = preSendCiRedRecheck(episode, {
+      openPrs: [{ number: episode.prNumber, headRefOid: episode.headSha }],
+      ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'SUCCESS' }] }],
+      requiredCheckNamesByPr: [{ prNumber: episode.prNumber, requiredCheckNames: ['Run pack contract tests'] }],
+      requiredCheckLookupFailedByPr: [],
+    });
+    expect(recheck.ok).toBe(false);
+    expect(recheck.reason).toMatch(/^ci_not_red:/);
+  });
+
+  it('lists intent tokens from store directory', () => {
+    const dir = tempStore();
+    try {
+      mkdirSync(path.join(dir, 'tokens'), { recursive: true });
+      const token = { episode, digest: episodeKeyDigest(episode), owner: 'orchestrator', status: 'claimed' };
+      const tokenPath = path.join(dir, 'tokens', `${episodeKeyDigest(episode)}.json`);
+      writeFileSync(tokenPath, JSON.stringify(token));
+      const tokens = listIntentTokensFromStore(dir);
+      expect(tokens).toHaveLength(1);
+      expect((tokens[0] as { owner?: string }).owner).toBe('orchestrator');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('sends when reaction absent, worker idle, no token', () => {
@@ -339,7 +382,8 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
 
   it('init gate requires worker state wiring and durable submit ack', () => {
     expect(validateInitGate({ workerStateInputConfigured: false, durableSubmitAckConfigured: true }).reactionEnabled).toBe(false);
-    expect(validateInitGate({ workerStateInputConfigured: true, durableSubmitAckConfigured: true }).reactionEnabled).toBe(true);
+    expect(validateInitGate({ workerStateInputConfigured: true, durableSubmitAckConfigured: true, reactionRecordConfigured: true }).reactionEnabled).toBe(true);
+    expect(validateInitGate({ workerStateInputConfigured: true, durableSubmitAckConfigured: true, reactionRecordConfigured: false }).reactionEnabled).toBe(false);
   });
 
   it('wrapper decide path returns live-worker suppression', () => {

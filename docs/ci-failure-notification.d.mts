@@ -59,6 +59,11 @@ export declare function evaluateLiveWorkerSuppressor(input: unknown): Record<str
 export declare function bindReactionEvent(episode: unknown, events?: unknown[], options?: unknown): { status: string; eventId: string | null; event?: unknown };
 export declare function bindSelfFixReport(episode: unknown, reports?: unknown[]): { status: string; reportId: string | null };
 export declare function exactIntentTokenLookup(episode: unknown, tokens?: unknown[], options?: unknown): { status: string; tokenId: string | null };
+
+export declare function buildCiSourceFromRequiredChecks(checks?: unknown[], options?: unknown): Record<string, unknown>;
+export declare function listIntentTokensFromStore(storeDir: string): unknown[];
+export declare function planCiFailureReactionRecords(input: unknown): { records?: Array<{ episode: CiFailureEpisodeKey; ciSource?: Record<string, unknown> }> };
+export declare function preSendCiRedRecheck(episode: unknown, fresh: unknown): { ok: boolean; reason: string };
 export declare function deriveEpisodeFromCiSource(input: unknown): CiFailureEpisodeKey | null;
 export declare function buildDiagnosticAudit(input: unknown): Record<string, unknown>;
 export declare function mapReasonToTerminalAction(reason: string): TerminalAction;

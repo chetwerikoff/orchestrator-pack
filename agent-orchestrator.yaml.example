@@ -575,11 +575,20 @@ projects:
 # - Keep Codex reviewer integration upgrade-safe: implement it as an external plugin/workflow
 #   under plugins/** or CI, never as a packages/core patch.
 
+# CI-FAILURE REACTION RECORD (Issue #342 — executable wiring; not orchestratorRules prose):
+# Side-process supervisor child ci-failure-notification-reaction records pending episodes:
+#   pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1
+# Delivery evaluation remains in ci-failure-notification-reconcile.ps1 (ao send only there).
+
 reactions:
   ci-failed:
     auto: true
-    action: send-to-agent
-    retries: 2
+    action: notify
+    message: >-
+      Red CI enqueued for pack ci-failure-notification reconcile delivery (Issue #342).
+      Pending episode record runs via ci-failure-notification-reaction.ps1; worker ping
+      is never sent from this reaction path.
+    priority: action
   changes-requested:
     auto: true
     action: send-to-agent

@@ -1,0 +1,124 @@
+#requires -Version 7.0
+<#
+.SYNOPSIS
+  Executable ci-failed reaction record hook (Issue #342).
+
+.DESCRIPTION
+  Records pending CI-failure episodes when required CI is red for an open worker PR.
+  Side-process supervisor runs this script; it is the machine-checkable record callsite
+  for reactions.ci-failed enqueue-only delivery (not orchestratorRules prose).
+#>
+[CmdletBinding()]
+param(
+    [string]$RepoRoot = '',
+    [string]$StateDir = '',
+    [int]$IntervalMinutes = 1,
+    [switch]$Once,
+    [switch]$DryRun
+)
+
+$ErrorActionPreference = 'Stop'
+$Script:ReactionLogPrefix = 'ci-failure-notification-reaction'
+
+$PackRoot = Split-Path -Parent $PSScriptRoot
+if (-not $RepoRoot) { $RepoRoot = $PackRoot }
+
+$Wrapper = Join-Path $PackRoot 'scripts/ci-failure-notification.ps1'
+
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+
+function Write-CiFailureReactionLog {
+    param([string]$Message)
+    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Host "[$stamp] $($Script:ReactionLogPrefix): $Message"
+}
+
+function Get-CiFailureNotificationStoreDir {
+    if ($StateDir) { return Join-Path $StateDir 'ci-failure-notification' }
+    if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification'
+}
+
+function Invoke-CiFailureHelper {
+    param(
+        [string]$Mode,
+        [hashtable]$Payload
+    )
+    $json = $Payload | ConvertTo-Json -Compress -Depth 30
+    $output = $json | pwsh -NoProfile -ExecutionPolicy Bypass -File $Wrapper -Mode $Mode 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "ci-failure-notification.ps1 -Mode $Mode exited $LASTEXITCODE`: $output" }
+    return ($output | Out-String).Trim() | ConvertFrom-Json
+}
+
+function Get-RepoIdentity {
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
+        return [string]$raw.Trim()
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Invoke-CiFailureReactionRecordTick {
+    param(
+        [string]$StoreDir,
+        [string]$EnqueueTickId
+    )
+
+    $repo = Get-RepoIdentity
+    $openPrs = @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+    $sessions = @(Get-AoStatusSessions)
+    $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
+    $plan = Invoke-CiFailureHelper -Mode 'reaction-record-plan' -Payload @{
+        repo                          = $repo
+        openPrs                       = $openPrs
+        sessions                      = $sessions
+        ciChecksByPr                  = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+    }
+
+    foreach ($row in @($plan.records)) {
+        $episode = $row.episode
+        if (-not $episode) { continue }
+        if ($DryRun) {
+            Write-CiFailureReactionLog "dry-run would record PR #$($episode.prNumber) head=$($episode.headSha)"
+            continue
+        }
+        $result = Invoke-CiFailureHelper -Mode 'record' -Payload @{
+            storeDir      = $StoreDir
+            episode       = $episode
+            enqueueTickId = $EnqueueTickId
+            nowMs         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        if ($result.recorded) {
+            Write-CiFailureReactionLog "recorded pending episode PR #$($episode.prNumber) digest=$($result.digest)"
+        }
+    }
+}
+
+$storeDir = Get-CiFailureNotificationStoreDir
+if (-not (Test-Path -LiteralPath $storeDir)) {
+    New-Item -ItemType Directory -Path $storeDir -Force | Out-Null
+}
+
+do {
+    try {
+        Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reaction' -Phase 'poll'
+        $tickId = "reaction-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+        Invoke-CiFailureReactionRecordTick -StoreDir $storeDir -EnqueueTickId $tickId
+        Write-OrchestratorSideProcessTickSuccess -ChildId 'ci-failure-notification-reaction'
+    }
+    catch {
+        Write-OrchestratorSideProcessTickError -ChildId 'ci-failure-notification-reaction' -ErrorMessage "$_"
+        if ($Once) { exit 1 }
+    }
+    if ($Once) { break }
+    Start-Sleep -Seconds ([Math]::Max(30, $IntervalMinutes * 60))
+} while ($true)

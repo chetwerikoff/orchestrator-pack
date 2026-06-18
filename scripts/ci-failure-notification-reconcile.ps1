@@ -29,6 +29,7 @@ $Wrapper = Join-Path $PackRoot 'scripts/ci-failure-notification.ps1'
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
@@ -57,11 +58,84 @@ function Invoke-CiFailureHelper {
     return ($output | Out-String).Trim() | ConvertFrom-Json
 }
 
-function Invoke-PlannedCiFailureReconcileSend {
+function Get-CiFailureReactionEvents {
+    return @(Get-AoEventsSince -SinceMinutes 120 | Where-Object {
+            $type = [string]$_.type
+            if ($type -ne 'reaction.action_succeeded') { return $false }
+            $reactionKey = [string]($_.reactionKey ?? $_.reaction?.key ?? $_.metadata?.reactionKey ?? $_.details?.reactionKey ?? $_.data?.reactionKey ?? $_.data?.reaction?.key ?? '')
+            return $reactionKey -eq 'ci-failed'
+        })
+}
+
+function Get-CiFailureIntentTokens {
+    param([string]$StoreDir)
+    $result = Invoke-CiFailureHelper -Mode 'list-intent-tokens' -Payload @{ storeDir = $StoreDir }
+    return @($result.tokens)
+}
+
+function Get-CiFailureDedupPayload {
+    param([string]$StoreDir)
+    return @{
+        reactionEvents = @(Get-CiFailureReactionEvents)
+        intentTokens   = @(Get-CiFailureIntentTokens -StoreDir $StoreDir)
+    }
+}
+
+function Get-CiFailurePreSendSnapshot {
+    param(
+        [int]$PrNumber,
+        [array]$OpenPrs = @()
+    )
+
+    $resolvedOpenPrs = if ($OpenPrs.Count -gt 0) { @($OpenPrs) } else { @((Invoke-GhOpenPrList -RepoRoot $RepoRoot)) }
+    $sessions = @(Get-AoStatusSessions)
+    $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
+        @($resolvedOpenPrs | Where-Object { [int]$_.number -eq $PrNumber })
+    )
+    return @{
+        openPrs                         = @($resolvedOpenPrs)
+        sessions                        = @($sessions)
+        ciChecksByPr                    = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
+        nowMs                           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
+}
+
+function Invoke-CiFailurePreSendCiRecheck {
+    param(
+        [object]$Episode,
+        [array]$OpenPrs = @()
+    )
+
+    $fresh = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber) -OpenPrs $OpenPrs
+    return Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
+        episode = $Episode
+        fresh   = $fresh
+    }
+}
+
+function Invoke-CiFailureTerminalizeCiRecovered {
+    param(
+        [object]$Episode,
+        [string]$StoreDir,
+        [string]$Reason
+    )
+
+    $null = Invoke-CiFailureHelper -Mode 'terminalize' -Payload @{
+        storeDir       = $StoreDir
+        episode        = $Episode
+        terminalReason = 'abandoned-ci-recovered'
+        terminalAction = 'SUPPRESS'
+        readSource     = 'pre_send_ci_recheck'
+        diagnostics    = @{ ci_recheck = $Reason }
+    }
+}
+
+function Invoke-PlannedCiFailureAoSend {
     param(
         [string]$TargetId,
-        [string]$Message,
-        [string]$IdempotencyKey
+        [string]$Message
     )
 
     Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
@@ -70,9 +144,6 @@ function Invoke-PlannedCiFailureReconcileSend {
     if ($LASTEXITCODE -ne 0) {
         throw "ao send failed session=$TargetId exit=$LASTEXITCODE"
     }
-
-    return Register-WorkerMessageDispatch -SessionId $TargetId -Message $Message `
-        -Source 'ci-failure-notification-reconcile' -SourceKey $IdempotencyKey -DeliveryPath 'pending-draft'
 }
 
 function Test-CiFailurePreflightOutcome {
@@ -105,17 +176,26 @@ function Invoke-CiFailureEpisodeDelivery {
         [string]$Phase = 'full'
     )
 
+    $dedup = Get-CiFailureDedupPayload -StoreDir $StoreDir
+
     if ($Phase -eq 'full') {
         $preflight = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
             storeDir       = $StoreDir
             episode        = $Episode
             workerState    = $WorkerState
-            reactionEvents = @()
-            intentTokens   = @()
+            reactionEvents = @($dedup.reactionEvents)
+            intentTokens   = @($dedup.intentTokens)
         }
         if (-not (Test-CiFailurePreflightOutcome -Preflight $preflight -Digest $Digest)) {
             return $false
         }
+    }
+
+    $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode -OpenPrs @($WorkerState.openPrs)
+    if (-not $recheck.ok) {
+        Write-CiFailureReconcileLog "pre-send CI recheck failed digest=$Digest reason=$($recheck.reason)"
+        Invoke-CiFailureTerminalizeCiRecovered -Episode $Episode -StoreDir $StoreDir -Reason ([string]$recheck.reason)
+        return $false
     }
 
     $intent = Invoke-CiFailureHelper -Mode 'reserve-intent' -Payload @{
@@ -139,14 +219,27 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     try {
-        $null = Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
-            -IdempotencyKey ([string]$intent.idempotencyKey)
+        Invoke-PlannedCiFailureAoSend -TargetId $targetId -Message $message
     }
     catch {
         Write-CiFailureReconcileLog "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"
         return $false
     }
+
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+
+    try {
+        $dispatchResult = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
+            -Source 'ci-failure-notification-reconcile' -SourceKey ([string]$intent.idempotencyKey) -DeliveryPath 'pending-draft'
+        $outcome = Resolve-DispatchJournalSendOutcomeAfterDelivered -DispatchResult $dispatchResult
+        if (-not $outcome.journalRecorded) {
+            Write-CiFailureReconcileLog "dispatch journal record failed digest=$Digest reason=$($outcome.journalFailureReason) (send delivered; deduped, journal will retry)"
+        }
+    }
+    catch {
+        Write-CiFailureReconcileLog "dispatch journal record failed digest=$Digest error=$($_.Exception.Message) (send delivered; preserving submitted-unacked)"
+    }
+
     $null = Invoke-CiFailureHelper -Mode 'resolve-delivery' -Payload @{
         storeDir     = $StoreDir
         episode      = $Episode

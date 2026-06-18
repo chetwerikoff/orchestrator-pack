@@ -12,7 +12,13 @@ import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTi
 import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr } from './review-trigger-reconcile.mjs';
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
-import { normalizeSessionReportState } from './ci-green-wake-reconcile.mjs';
+import {
+  classifyRequiredCiLevel,
+  normalizeCiChecksByPr,
+  normalizeRequiredCheckLookupFailedByPr,
+  normalizeRequiredCheckNamesByPr,
+  normalizeSessionReportState,
+} from './ci-green-wake-reconcile.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
 export const DEFAULT_HELPER_ERROR_LIMIT = 3;
@@ -327,6 +333,99 @@ export function deriveEpisodeFromCiSource({ repo, prNumber, headSha, activeTarge
   });
 }
 
+export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
+  const level = classifyRequiredCiLevel(checks, options);
+  if (level === 'green') {
+    return { aggregateStatus: 'green', source: 'gh-required-checks' };
+  }
+  if (level === 'pending') {
+    return { aggregateStatus: 'pending', source: 'gh-required-checks' };
+  }
+  const branchRequired = toArray(options.requiredCheckNames)
+    .map((name) => String(name ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  const scope = branchRequired.length > 0
+    ? toArray(checks).filter((check) => branchRequired.includes(String(check?.name ?? '').trim().toLowerCase()))
+    : toArray(checks);
+  const failed = scope
+    .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
+    .map((check) => `${String(check?.name ?? 'check')}:${String(check?.workflow ?? check?.link ?? check?.startedAt ?? '')}`)
+    .sort();
+  const aggregateRunId = createHash('sha256')
+    .update(failed.join('|') || `red:${scope.length}`)
+    .digest('hex')
+    .slice(0, 32);
+  return { aggregateStatus: 'red', aggregateRunId, source: 'gh-required-checks' };
+}
+
+export function listIntentTokensFromStore(storeDir) {
+  const dir = path.join(String(storeDir ?? ''), 'tokens');
+  if (!existsSync(dir)) return [];
+  const tokens = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const token = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
+      tokens.push(token);
+    } catch {
+      // ignore corrupt token files
+    }
+  }
+  return tokens;
+}
+
+export function planCiFailureReactionRecords(input) {
+  const repo = String(input?.repo ?? '').trim();
+  const openPrs = toArray(input?.openPrs);
+  const sessions = toArray(input?.sessions);
+  const checksMap = normalizeCiChecksByPr(input?.ciChecksByPr);
+  const requiredNamesMap = normalizeRequiredCheckNamesByPr(input?.requiredCheckNamesByPr);
+  const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(input?.requiredCheckLookupFailedByPr);
+  /** @type {Array<{ episode: ReturnType<typeof normalizeEpisodeKey>, ciSource: Record<string, unknown> }>} */
+  const records = [];
+  for (const pr of openPrs) {
+    const prNumber = Number(pr?.number);
+    const headSha = normalizeSha(pr?.headRefOid);
+    if (!repo || !prNumber || !headSha) continue;
+    const checks = checksMap.get(prNumber) ?? [];
+    const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
+    const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
+    const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed });
+    if (String(ciSource.aggregateStatus) !== 'red') continue;
+    const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+    if (!targetId) continue;
+    const owner = findSessionByIdentifier(sessions, targetId);
+    const activeTarget = {
+      targetId,
+      targetGeneration: owner ? deriveTargetGeneration(owner) : targetId,
+    };
+    const episode = deriveEpisodeFromCiSource({ repo, prNumber, headSha, activeTarget, ciSource });
+    if (!episode) continue;
+    records.push({ episode, ciSource });
+  }
+  return { records };
+}
+
+export function preSendCiRedRecheck(episode, fresh) {
+  const ep = normalizeEpisodeKey(episode);
+  const pr = toArray(fresh?.openPrs).find((row) => Number(row?.number) === ep.prNumber);
+  const currentHead = normalizeSha(pr?.headRefOid);
+  if (!currentHead || currentHead !== ep.headSha) {
+    return { ok: false, reason: 'head_rotated_or_pr_closed' };
+  }
+  const checksMap = normalizeCiChecksByPr(fresh?.ciChecksByPr);
+  const requiredNamesMap = normalizeRequiredCheckNamesByPr(fresh?.requiredCheckNamesByPr);
+  const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(fresh?.requiredCheckLookupFailedByPr);
+  const checks = checksMap.get(ep.prNumber) ?? [];
+  const requiredCheckNames = requiredNamesMap.get(ep.prNumber) ?? [];
+  const requiredCheckLookupFailed = lookupFailedMap.get(ep.prNumber) ?? false;
+  const ciLevel = classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed });
+  if (ciLevel !== 'red') {
+    return { ok: false, reason: `ci_not_red:${ciLevel}` };
+  }
+  return { ok: true, reason: 'ci_still_red' };
+}
+
 export function buildDiagnosticAudit({ episode, errorKind, detail = null, nowUtc = new Date().toISOString() }) {
   const normalized = normalizeEpisodeKey(episode);
   return {
@@ -354,7 +453,7 @@ export function mapTerminalReasonToAuditReason(reason) {
 export function evaluateEpisodeTerminal(input) {
   const episode = normalizeEpisodeKey(input?.episode);
   const digest = episodeKeyDigest(episode);
-  const excludeDigest = input?.excludeOwnDigest ?? digest;
+  const excludeDigest = input?.excludeOwnDigest ?? null;
   const readSource = input?.readSource ?? 'initial_eligible_snapshot';
   const config = resolveConfig(input?.config);
 
@@ -1073,6 +1172,7 @@ export function validateInitGate(input) {
   const errors = [];
   if (!input?.workerStateInputConfigured) errors.push('missing_worker_state_input_wiring');
   if (!input?.durableSubmitAckConfigured) errors.push('missing_durable_submit_ack');
+  if (!input?.reactionRecordConfigured) errors.push('missing_reaction_record_wiring');
   return {
     ok: errors.length === 0,
     errors,
@@ -1116,6 +1216,9 @@ function cli() {
   if (sub === 'append-audit') return appendAudit(input);
   if (sub === 'helper-error') return evaluateHelperErrorEscalation(input);
   if (sub === 'adoption-artifact') return buildAdoptionArtifact(input);
+  if (sub === 'reaction-record-plan') return planCiFailureReactionRecords(input);
+  if (sub === 'list-intent-tokens') return { tokens: listIntentTokensFromStore(input?.storeDir) };
+  if (sub === 'pre-send-recheck') return preSendCiRedRecheck(input?.episode, input?.fresh);
   throw new Error(`unsupported subcommand: ${sub}`);
 }
 
@@ -1134,6 +1237,9 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'reconcile-plan': cli,
   health: cli,
   'init-gate': cli,
+  'reaction-record-plan': cli,
+  'list-intent-tokens': cli,
+  'pre-send-recheck': cli,
   claim: cli,
   'mark-send-failure': cli,
   'append-audit': cli,

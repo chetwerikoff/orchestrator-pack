@@ -22,6 +22,7 @@
     "scripts/check-ci-failure-notification-reconcile.ps1",
     "scripts/check-ci-failure-notification.ps1",
     "scripts/ci-failure-notification-reconcile.ps1",
+    "scripts/ci-failure-notification-reaction.ps1",
     "scripts/ci-failure-notification.ps1",
     "scripts/ci-failure-notification.test.ts",
     "scripts/fixtures/ci-failure-notification/README.md",
