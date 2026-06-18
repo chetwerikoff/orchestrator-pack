@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7f2a6c27f399604d7266c02e19e67026b8e26aee575440475efaf74baa8bf8ec"
+    "active_scope_hash": "sha256:45969f52a7b93e954104d849d6b09d623c8d9c85265f0571821bdb2e074a7431"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -15,6 +15,7 @@
     "docs/declarations/332.opk-24.json",
     "docs/migration_notes.md",
     "docs/orchestrator-message-registry.mjs",
+    "docs/review-head-ready.d.mts",
     "docs/review-head-ready.mjs",
     "docs/review-ready-stuck-guard.d.mts",
     "docs/review-ready-stuck-guard.mjs",
@@ -29,25 +30,30 @@
     "scripts/lib/MechanicalReconcileNode.ps1",
     "scripts/orchestrator-message-catalog.json",
     "scripts/orchestrator-message-registry.test.ts",
+    "scripts/review-head-ready.test.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reconcile.test.ts",
     "scripts/review-trigger-reeval.test.ts",
     "scripts/review-wake-trigger.test.ts",
-    "scripts/worker-iteration-cycle.test.ts"
+    "scripts/worker-iteration-cycle.test.ts",
+    "tests/external-output-references/trigger-fixture-classification.json"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
-      "new_active_scope_hash": "sha256:7f2a6c27f399604d7266c02e19e67026b8e26aee575440475efaf74baa8bf8ec",
+      "new_active_scope_hash": "sha256:45969f52a7b93e954104d849d6b09d623c8d9c85265f0571821bdb2e074a7431",
       "changed": {
         "added": [
+          "docs/review-head-ready.d.mts",
           "docs/review-head-ready.mjs",
           "docs/review-ready-stuck-guard.d.mts",
           "docs/review-ready-stuck-guard.mjs",
           "docs/review-reconcile-primitives.mjs",
           "scripts/lib/MechanicalReconcileNode.ps1",
-          "scripts/orchestrator-message-catalog.json"
+          "scripts/orchestrator-message-catalog.json",
+          "scripts/review-head-ready.test.ts",
+          "tests/external-output-references/trigger-fixture-classification.json"
         ],
         "removed": []
       },
