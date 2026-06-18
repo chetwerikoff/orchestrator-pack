@@ -347,15 +347,21 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
   const scope = branchRequired.length > 0
     ? toArray(checks).filter((check) => branchRequired.includes(String(check?.name ?? '').trim().toLowerCase()))
     : toArray(checks);
-  const failed = scope
+  const failedCheckNames = scope
     .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
-    .map((check) => `${String(check?.name ?? 'check')}:${String(check?.workflow ?? check?.link ?? check?.startedAt ?? '')}`)
+    .map((check) => String(check?.name ?? 'check').trim().toLowerCase())
+    .filter(Boolean)
     .sort();
-  const aggregateRunId = createHash('sha256')
-    .update(failed.join('|') || `red:${scope.length}`)
-    .digest('hex')
-    .slice(0, 32);
-  return { aggregateStatus: 'red', aggregateRunId, source: 'gh-required-checks' };
+  const headSha = normalizeSha(options.headSha ?? '');
+  const aggregateRunId = headSha
+    ? `head-red:${headSha}`
+    : `required-red:${failedCheckNames.join('|') || scope.length}`;
+  return {
+    aggregateStatus: 'red',
+    aggregateRunId,
+    failedCheckNames,
+    source: 'gh-required-checks',
+  };
 }
 
 export function listIntentTokensFromStore(storeDir) {
@@ -390,7 +396,7 @@ export function planCiFailureReactionRecords(input) {
     const checks = checksMap.get(prNumber) ?? [];
     const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
     const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
-    const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed });
+    const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed, headSha });
     if (String(ciSource.aggregateStatus) !== 'red') continue;
     const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
     if (!targetId) continue;
@@ -720,6 +726,19 @@ export function ensureStore(root) {
   mkdirSync(path.join(root, 'tokens'), { recursive: true });
   mkdirSync(path.join(root, 'audit'), { recursive: true });
   mkdirSync(path.join(root, 'episodes'), { recursive: true });
+  mkdirSync(path.join(root, 'claims'), { recursive: true });
+}
+
+function safeEpisodeClaimName(digest) {
+  return `${String(digest ?? '').trim()}.json`;
+}
+
+function removeEpisodeClaim(storeDir, digest) {
+  try {
+    rmSync(path.join(String(storeDir ?? ''), 'claims', safeEpisodeClaimName(digest)), { force: true });
+  } catch {
+    // best-effort claim cleanup
+  }
 }
 
 export function readEpisodeRecord(storeDir, episode) {
@@ -798,6 +817,7 @@ export function claimEpisodePreflight(input) {
   const digest = episodeKeyDigest(episode);
   const claimOwner = String(input?.claimOwner ?? 'reconcile');
   const nowMs = Number(input?.nowMs) || Date.now();
+  ensureStore(storeDir);
   const record = readEpisodeRecord(storeDir, episode);
   if (!record) return { claimed: false, reason: 'missing_record' };
   if (record.terminalReason) return { claimed: false, reason: 'already_terminal', record };
@@ -806,6 +826,45 @@ export function claimEpisodePreflight(input) {
     return { claimed: false, reason: 'claim_held_by_other', record };
   }
   if (record.state !== 'pending') return { claimed: false, reason: 'invalid_prior_state', record };
+
+  const claimPath = path.join(storeDir, 'claims', safeEpisodeClaimName(digest));
+  let fd;
+  try {
+    fd = openSync(claimPath, 'wx');
+    writeFileSync(fd, `${JSON.stringify({
+      schema: 'ci-failure-notification.claim.v1',
+      digest,
+      claimOwner,
+      claimedAtMs: nowMs,
+      claimedAtUtc: new Date(nowMs).toISOString(),
+    })}
+`, 'utf8');
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      let existingClaim = null;
+      try {
+        existingClaim = JSON.parse(readFileSync(claimPath, 'utf8'));
+      } catch {
+        return { claimed: false, reason: 'claim_held_by_other', record };
+      }
+      if (String(existingClaim?.claimOwner ?? '') !== claimOwner) {
+        return { claimed: false, reason: 'claim_held_by_other', record };
+      }
+      const recovered = {
+        ...record,
+        state: 'claimed',
+        claimOwner,
+        claimedAtMs: nowMs,
+        claimedAtUtc: new Date(nowMs).toISOString(),
+      };
+      writeEpisodeRecord(storeDir, recovered);
+      return { claimed: true, record: recovered, reentry: true };
+    }
+    throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+
   const updated = {
     ...record,
     state: 'claimed',
@@ -855,6 +914,25 @@ export function markSubmittedUnacked(input) {
   return { ok: true, record: updated };
 }
 
+export function markSendDelivered(input) {
+  const storeDir = input?.storeDir;
+  const episode = normalizeEpisodeKey(input?.episode);
+  const record = readEpisodeRecord(storeDir, episode);
+  if (!record) return { ok: false, reason: 'missing_record' };
+  if (record.state !== 'submit-intent-reserved' && record.state !== 'submitted-unacked') {
+    return { ok: false, reason: 'invalid_prior_state', record };
+  }
+  if (record.sendDeliveredAtMs) {
+    return { ok: true, idempotent: true, record };
+  }
+  const updated = {
+    ...record,
+    sendDeliveredAtMs: Number(input?.nowMs) || Date.now(),
+  };
+  writeEpisodeRecord(storeDir, updated);
+  return { ok: true, record: updated };
+}
+
 export function terminalizeEpisode(input) {
   const storeDir = input?.storeDir;
   const episode = normalizeEpisodeKey(input?.episode);
@@ -874,6 +952,7 @@ export function terminalizeEpisode(input) {
     readSource: input?.readSource ?? null,
   };
   writeEpisodeRecord(storeDir, updated);
+  removeEpisodeClaim(storeDir, episodeKeyDigest(episode));
   const audit = buildTerminalAudit({
     episode,
     terminal_action: terminalAction,
@@ -1204,6 +1283,7 @@ function cli() {
   if (sub === 'preflight-revalidate') return evaluatePreflightRevalidation(input);
   if (sub === 'reserve-intent') return reserveSubmitIntent(input);
   if (sub === 'mark-submitted') return markSubmittedUnacked(input);
+  if (sub === 'mark-send-delivered') return markSendDelivered(input);
   if (sub === 'resolve-delivery') return resolveSubmittedDelivery(input);
   if (sub === 'terminalize') return terminalizeEpisode(input);
   if (sub === 'expire-scan') return scanExpiredPendingRecords(input?.storeDir, input?.nowMs);

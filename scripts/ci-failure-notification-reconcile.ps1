@@ -191,7 +191,9 @@ function Invoke-CiFailureEpisodeDelivery {
 
     $targetId = [string]$Episode.targetId
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
-    $skipSend = [bool]$intent.reentry
+    $recordState = [string]$intent.record.state
+    $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
+    $skipSend = [bool]$intent.reentry -and ($recordState -eq 'submitted-unacked' -or $sendDelivered)
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would $dryRunAction session=$targetId digest=$Digest phase=$Phase"
@@ -204,12 +206,14 @@ function Invoke-CiFailureEpisodeDelivery {
                 -IdempotencyKey ([string]$intent.idempotencyKey)
         }
         catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (preserving submit-intent-reserved for retry)"
             return $false
         }
+
+        $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
     }
     else {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (submit intent reentry)"
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (submit intent reentry; send already delivered)"
     }
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
@@ -307,7 +311,7 @@ function Invoke-CiFailureNotificationTick {
 
 if ($FixturePath) {
     $fixture = Get-Content -LiteralPath $FixturePath -Raw | ConvertFrom-Json
-    $store = Get-CiFailureNotificationStoreDir
+    $store = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
     $tickId = "fixture-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
     $null = Invoke-CiFailureNotificationTick -WorkerState @{
         sessions = @($fixture.sessions)
@@ -316,7 +320,7 @@ if ($FixturePath) {
     exit 0
 }
 
-$storeDir = Get-CiFailureNotificationStoreDir
+$storeDir = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
 if (-not (Test-Path -LiteralPath $storeDir)) {
     New-Item -ItemType Directory -Path $storeDir -Force | Out-Null
 }

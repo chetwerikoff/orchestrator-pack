@@ -80,7 +80,7 @@ function Invoke-CiFailureReactionRecordTick {
     }
 }
 
-$storeDir = Get-CiFailureNotificationStoreDir
+$storeDir = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
 if (-not (Test-Path -LiteralPath $storeDir)) {
     New-Item -ItemType Directory -Path $storeDir -Force | Out-Null
 }

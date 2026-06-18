@@ -17,9 +17,25 @@ function Write-CiFailureNotificationLog {
 }
 
 function Get-CiFailureNotificationStoreDir {
+    param(
+        [string]$ProjectIdOverride = ''
+    )
+
     if ($StateDir) { return Join-Path $StateDir 'ci-failure-notification' }
     if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification'
+
+    $resolvedProjectId = if ($ProjectIdOverride) {
+        $ProjectIdOverride
+    }
+    elseif ($ProjectId) {
+        [string]$ProjectId
+    }
+    else {
+        'orchestrator-pack'
+    }
+    $safeProject = ($resolvedProjectId -replace '[^\w\-.]', '_').Trim('_')
+    if (-not $safeProject) { $safeProject = 'orchestrator-pack' }
+    return Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification') $safeProject
 }
 
 function Invoke-CiFailureHelper {

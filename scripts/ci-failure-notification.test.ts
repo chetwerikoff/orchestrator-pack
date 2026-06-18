@@ -30,6 +30,7 @@ import {
   resolveConfig,
   resolveSubmittedDelivery,
   reserveSubmitIntent,
+  markSendDelivered,
   scanFixtureSafety,
   terminalizeEpisode,
   buildCiSourceFromRequiredChecks,
@@ -327,6 +328,42 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const expired = expirePendingEpisode({ storeDir: dir, episode, nowMs: 5000 });
       expect(expired.audit!.reason).toBe('abandoned-expired');
       expect(expired.audit!.diagnostic!.backstop_handoff).toBe('report-stale');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
+  it('keeps check churn out of red-period identity', () => {
+    const headSha = episode.headSha;
+    const first = buildCiSourceFromRequiredChecks(
+      [{ name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' }],
+      { requiredCheckNames: ['CI'], headSha },
+    );
+    const second = buildCiSourceFromRequiredChecks(
+      [
+        { name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' },
+        { name: 'Lint', conclusion: 'failure', workflow: 'wf2', link: 'l2', startedAt: '2' },
+      ],
+      { requiredCheckNames: ['CI', 'Lint'], headSha },
+    );
+    expect(first.aggregateRunId).toBe(`head-red:${headSha}`);
+    expect(second.aggregateRunId).toBe(first.aggregateRunId);
+    expect(second.failedCheckNames).toEqual(['ci', 'lint']);
+  });
+
+  it('marks send delivered for post-intent recovery without false resend skip', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      const beforeSend = reserveSubmitIntent({ storeDir: dir, episode });
+      expect(beforeSend.reentry).toBe(true);
+      expect(beforeSend.record.sendDeliveredAtMs).toBeUndefined();
+      markSendDelivered({ storeDir: dir, episode });
+      const afterSend = reserveSubmitIntent({ storeDir: dir, episode });
+      expect(afterSend.record.sendDeliveredAtMs).toBeTruthy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
