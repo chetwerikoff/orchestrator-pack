@@ -883,6 +883,14 @@ function Get-OrchestratorWakeSupervisorChildStatus {
 
 function Get-OrchestratorWakeSupervisorChildStallThresholdMs {
     param($ChildEntry)
+    $childId = [string]$ChildEntry.Id
+    if ($childId) {
+        $perChildKey = "AO_WAKE_SUPERVISOR_TEST_STALL_SECONDS_$($childId -replace '-', '_')"
+        $perChildSec = [Environment]::GetEnvironmentVariable($perChildKey, 'Process')
+        if ($perChildSec -and [int]::TryParse($perChildSec, [ref]$null)) {
+            return [Math]::Max(1, [int]$perChildSec) * 1000
+        }
+    }
     $testSec = $env:AO_WAKE_SUPERVISOR_TEST_STALL_SECONDS
     if ($testSec -and [int]::TryParse($testSec, [ref]$null)) {
         return [Math]::Max(1, [int]$testSec) * 1000

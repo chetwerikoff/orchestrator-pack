@@ -726,11 +726,11 @@ describe('Issue #205 side-process registry', () => {
       ],
       {
         AO_WAKE_SUPERVISOR_TEST_MODE_review_trigger_reconcile: 'hang',
-        AO_WAKE_SUPERVISOR_TEST_STALL_SECONDS: '5',
+        AO_WAKE_SUPERVISOR_TEST_STALL_SECONDS_review_trigger_reconcile: '5',
       },
     );
     expect(start.status).toBe(0);
-    await waitForMarkers(stateDir, 20_000);
+    await waitForMarkers(stateDir, 25_000, ['review-trigger-reconcile', 'heartbeat']);
 
     const first = await readMarker(stateDir, 'review-trigger-reconcile');
     const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
@@ -771,7 +771,7 @@ describe('Issue #205 side-process registry', () => {
       { AO_WAKE_SUPERVISOR_TEST_MODE_ci_green_wake_reconcile: 'slow-side-effect' },
     );
     expect(start.status).toBe(0);
-    await waitForMarkers(stateDir, 20_000);
+    await waitForMarkers(stateDir, 25_000, ['ci-green-wake-reconcile']);
 
     const first = await readMarker(stateDir, 'ci-green-wake-reconcile');
     await new Promise((resolve) => setTimeout(resolve, 6000));
