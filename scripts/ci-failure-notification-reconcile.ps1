@@ -137,20 +137,32 @@ function Invoke-CiFailureTerminalizeCiRecovered {
 }
 
 
-function Test-CiFailureDispatchJournalRecorded {
+function Get-CiFailureDispatchJournalEntry {
     param(
         [string]$SessionId,
         [string]$SourceKey
     )
 
-    if (-not $SourceKey) { return $false }
+    if (-not $SourceKey) { return $null }
     $journal = Get-WorkerMessageDispatchJournal
     foreach ($entry in @($journal.Values)) {
         if ([string]$entry.sessionId -eq $SessionId -and [string]$entry.sourceKey -eq $SourceKey) {
-            return $true
+            return $entry
         }
     }
-    return $false
+    return $null
+}
+
+function Test-CiFailureDispatchJournalDelivered {
+    param(
+        [string]$SessionId,
+        [string]$SourceKey
+    )
+
+    $entry = Get-CiFailureDispatchJournalEntry -SessionId $SessionId -SourceKey $SourceKey
+    if (-not $entry) { return $false }
+    $outcome = [string]$entry.dispatchOutcome
+    return $outcome -eq 'dispatched' -or $outcome -eq 'dispatch_unknown'
 }
 
 function Invoke-PlannedCiFailureReconcileSend {
@@ -239,11 +251,11 @@ function Invoke-CiFailureEpisodeDelivery {
     $recordState = [string]$intent.record.state
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
     $idempotencyKey = [string]$intent.idempotencyKey
-    $dispatchRecorded = Test-CiFailureDispatchJournalRecorded -SessionId $targetId -SourceKey $idempotencyKey
+    $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
         $sendDelivered -or
-        $dispatchRecorded
+        $dispatchDelivered
     )
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
@@ -264,9 +276,26 @@ function Invoke-CiFailureEpisodeDelivery {
                 return $false
             }
         }
+        $existingDispatch = Get-CiFailureDispatchJournalEntry -SessionId $targetId -SourceKey $idempotencyKey
+        $dispatchDeliveryId = $null
+        if ($existingDispatch -and [string]$existingDispatch.dispatchOutcome -eq 'dispatch_in_flight') {
+            $dispatchDeliveryId = [string]$existingDispatch.deliveryId
+        }
+        else {
+            $dispatchRegister = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
+                -Source 'ci-failure-notification-reconcile' -SourceKey $idempotencyKey `
+                -DeliveryPath 'pending-draft' -DispatchOutcome 'dispatch_in_flight'
+            if (-not $dispatchRegister.recorded) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal pre-send record failed digest=$Digest reason=$($dispatchRegister.reason)"
+                $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+                return $false
+            }
+            $dispatchDeliveryId = [string]$dispatchRegister.deliveryId
+        }
+
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
-                -IdempotencyKey ([string]$intent.idempotencyKey)
+                -IdempotencyKey $idempotencyKey
         }
         catch {
             Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for retry)"
@@ -275,9 +304,18 @@ function Invoke-CiFailureEpisodeDelivery {
         }
 
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+        try {
+            $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'dispatched' -DraftState 'draft_present'
+            if (-not $update.updated) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest delivery=$dispatchDeliveryId (send delivered; journal will retry)"
+            }
+        }
+        catch {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest error=$($_.Exception.Message) (send delivered; journal will retry)"
+        }
     }
     else {
-        if (-not $sendDelivered -and $dispatchRecorded) {
+        if (-not $sendDelivered -and $dispatchDelivered) {
             $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"
@@ -285,20 +323,7 @@ function Invoke-CiFailureEpisodeDelivery {
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
 
-    $journalRecorded = $false
-    try {
-        $dispatchResult = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
-            -Source 'ci-failure-notification-reconcile' -SourceKey ([string]$intent.idempotencyKey) -DeliveryPath 'pending-draft'
-        $outcome = Resolve-DispatchJournalSendOutcomeAfterDelivered -DispatchResult $dispatchResult
-        $journalRecorded = [bool]$outcome.journalRecorded
-        if (-not $journalRecorded) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal record failed digest=$Digest reason=$($outcome.journalFailureReason) (send delivered; deduped, journal will retry)"
-        }
-    }
-    catch {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal record failed digest=$Digest error=$($_.Exception.Message) (send delivered; preserving submitted-unacked)"
-    }
-
+    $journalRecorded = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
     if (-not $journalRecorded) {
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "preserving submitted-unacked digest=$Digest phase=$Phase (journal retry pending)"
         return $true
@@ -336,6 +361,9 @@ function Invoke-CiFailureNotificationTick {
         nowMs          = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         enqueueTickId  = $EnqueueTickId
         workerState    = $WorkerState
+    }
+    if ($plan.hard_failure) {
+        throw "ci-failure reconcile-plan hard_failure: $($plan.reason)"
     }
 
     foreach ($action in @($plan.actions)) {

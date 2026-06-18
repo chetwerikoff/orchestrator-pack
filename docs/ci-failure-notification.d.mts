@@ -62,6 +62,7 @@ export declare function exactIntentTokenLookup(episode: unknown, tokens?: unknow
 
 export declare function buildCiSourceFromRequiredChecks(checks?: unknown[], options?: unknown): Record<string, unknown>;
 export declare function buildRedFailureFingerprint(checks?: unknown[], options?: unknown): string | null;
+export declare function buildRedFailingRunMap(checks?: unknown[], options?: unknown): Record<string, string>;
 export declare function resolveRedPeriodAggregateId(input: unknown): string | null;
 export declare function listIntentTokensFromStore(storeDir: string): unknown[];
 export declare function planCiFailureReactionRecords(input: unknown): { records?: Array<{ episode: CiFailureEpisodeKey; ciSource?: Record<string, unknown> }> };

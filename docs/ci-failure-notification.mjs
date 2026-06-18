@@ -374,26 +374,52 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
   };
 }
 
-export function buildRedFailureFingerprint(checks = [], options = {}) {
-  const level = classifyRequiredCiLevel(checks, options);
-  if (level !== 'red') return null;
+function buildRedCheckRunSignature(check) {
+  return [
+    String(check?.startedAt ?? check?.completedAt ?? '').trim(),
+    String(check?.link ?? '').trim(),
+    String(check?.workflow ?? '').trim(),
+  ].join('|');
+}
+
+function redFailingCheckScope(checks = [], options = {}) {
   const branchRequired = toArray(options.requiredCheckNames)
     .map((name) => String(name ?? '').trim().toLowerCase())
     .filter(Boolean);
-  const scope = branchRequired.length > 0
+  return branchRequired.length > 0
     ? toArray(checks).filter((check) => branchRequired.includes(String(check?.name ?? '').trim().toLowerCase()))
     : toArray(checks);
-  const parts = scope
+}
+
+export function buildRedFailureFingerprint(checks = [], options = {}) {
+  const level = classifyRequiredCiLevel(checks, options);
+  if (level !== 'red') return null;
+  const parts = redFailingCheckScope(checks, options)
     .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
     .map((check) => [
       String(check?.name ?? '').trim().toLowerCase(),
-      String(check?.startedAt ?? check?.completedAt ?? '').trim(),
-      String(check?.link ?? '').trim(),
-      String(check?.workflow ?? '').trim(),
+      buildRedCheckRunSignature(check),
     ].join('|'))
     .sort();
   if (parts.length === 0) return null;
   return createHash('sha256').update(parts.join(';')).digest('hex').slice(0, 16);
+}
+
+/** @returns {Record<string, string>} */
+export function buildRedFailingRunMap(checks = [], options = {}) {
+  const level = classifyRequiredCiLevel(checks, options);
+  if (level !== 'red') return {};
+  /** @type {Record<string, string>} */
+  const runs = {};
+  for (const check of redFailingCheckScope(checks, options)) {
+    if (!String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail')) {
+      continue;
+    }
+    const name = String(check?.name ?? '').trim().toLowerCase();
+    if (!name) continue;
+    runs[name] = buildRedCheckRunSignature(check);
+  }
+  return runs;
 }
 
 export function resolveRedPeriodAggregateId(input) {
@@ -411,31 +437,43 @@ export function resolveRedPeriodAggregateId(input) {
   ensureStore(storeDir);
   const trackerKey = createHash('sha256').update(`${repo}#${prNumber}#${headSha}`).digest('hex');
   const trackerPath = path.join(storeDir, 'red-stints', `${trackerKey}.json`);
-  /** @type {{ lastLevel?: string | null, stintId?: number, lastRedFingerprint?: string | null }} */
-  let tracker = { lastLevel: null, stintId: 0, lastRedFingerprint: null };
+  /** @type {{ lastLevel?: string | null, stintId?: number, lastRedRuns?: Record<string, string> }} */
+  let tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
   if (existsSync(trackerPath)) {
     try {
-      tracker = JSON.parse(readFileSync(trackerPath, 'utf8'));
+      const parsed = JSON.parse(readFileSync(trackerPath, 'utf8'));
+      tracker = {
+        lastLevel: parsed?.lastLevel ?? null,
+        stintId: Number(parsed?.stintId ?? 0),
+        lastRedRuns: parsed?.lastRedRuns && typeof parsed.lastRedRuns === 'object' ? parsed.lastRedRuns : {},
+      };
     } catch {
-      tracker = { lastLevel: null, stintId: 0, lastRedFingerprint: null };
+      tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
     }
   }
   if (aggregateStatus === 'red') {
-    const priorFingerprint = String(tracker.lastRedFingerprint ?? '').trim();
-    const redFingerprint = String(input?.redFingerprint ?? '').trim();
-    const stintAdvanced = tracker.lastLevel !== 'red'
-      || (redFingerprint && priorFingerprint && redFingerprint !== priorFingerprint);
+    const currentRuns = input?.redFailingRuns && typeof input.redFailingRuns === 'object'
+      ? input.redFailingRuns
+      : {};
+    const priorRuns = tracker.lastRedRuns ?? {};
+    let stintAdvanced = tracker.lastLevel !== 'red';
+    if (!stintAdvanced) {
+      for (const [name, signature] of Object.entries(priorRuns)) {
+        if (Object.prototype.hasOwnProperty.call(currentRuns, name) && currentRuns[name] !== signature) {
+          stintAdvanced = true;
+          break;
+        }
+      }
+    }
     if (stintAdvanced) {
       tracker.stintId = Number(tracker.stintId ?? 0) + 1;
     }
     tracker.lastLevel = 'red';
-    if (redFingerprint) {
-      tracker.lastRedFingerprint = redFingerprint;
-    }
+    tracker.lastRedRuns = { ...priorRuns, ...currentRuns };
   } else {
     tracker.lastLevel = aggregateStatus;
     if (aggregateStatus !== 'red') {
-      tracker.lastRedFingerprint = null;
+      tracker.lastRedRuns = {};
     }
   }
   mkdirSync(path.dirname(trackerPath), { recursive: true });
@@ -490,7 +528,7 @@ export function planCiFailureReactionRecords(input) {
       });
       continue;
     }
-    const redFingerprint = buildRedFailureFingerprint(checks, {
+    const redFailingRuns = buildRedFailingRunMap(checks, {
       requiredCheckNames,
       requiredCheckLookupFailed,
       headSha,
@@ -501,7 +539,7 @@ export function planCiFailureReactionRecords(input) {
       prNumber,
       headSha,
       aggregateStatus: 'red',
-      redFingerprint,
+      redFailingRuns,
     });
     const enrichedCiSource = { ...ciSource, aggregateRunId };
     const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);

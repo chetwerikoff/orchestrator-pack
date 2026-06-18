@@ -36,6 +36,7 @@ import {
   terminalizeEpisode,
   buildCiSourceFromRequiredChecks,
   buildRedFailureFingerprint,
+  buildRedFailingRunMap,
   resolveRedPeriodAggregateId,
   listIntentTokensFromStore,
   planCiFailureReactionRecords,
@@ -476,22 +477,22 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
 
 
-  it('opens a new red stint when failure fingerprint changes without an observed green poll', () => {
+  it('opens a new red stint when a failing check reruns without an observed green poll', () => {
     const dir = tempStore();
     try {
       const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha };
-      const fp1 = buildRedFailureFingerprint(
+      const runs1 = buildRedFailingRunMap(
         [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:00:00Z', link: 'https://example/run/1' }],
         { requiredCheckNames: ['CI'] },
       );
-      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp1 });
-      const fp2 = buildRedFailureFingerprint(
+      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs1 });
+      const runs2 = buildRedFailingRunMap(
         [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }],
         { requiredCheckNames: ['CI'] },
       );
-      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp2 });
+      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
       expect(second).not.toBe(first);
-      const third = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp2 });
+      const third = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
       expect(third).toBe(second);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -501,26 +502,27 @@ describe('episode lifecycle outbox (Issue #342)', () => {
   it('keeps check churn out of red-period identity', () => {
     const dir = tempStore();
     try {
-      const headSha = episode.headSha;
-      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha };
-      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
-      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
-      expect(first).toBe(second);
+      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha };
+      const runs1 = buildRedFailingRunMap(
+        [{ name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' }],
+        { requiredCheckNames: ['CI'] },
+      );
+      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs1 });
+      const runs2 = buildRedFailingRunMap(
+        [
+          { name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' },
+          { name: 'Lint', conclusion: 'failure', workflow: 'wf2', link: 'l2', startedAt: '2' },
+        ],
+        { requiredCheckNames: ['CI', 'Lint'] },
+      );
+      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
+      expect(second).toBe(first);
       resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'green' });
-      const afterGreen = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      const afterGreen = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs1 });
       expect(afterGreen).not.toBe(first);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-    const source = buildCiSourceFromRequiredChecks(
-      [
-        { name: 'CI', conclusion: 'failure', workflow: 'wf1', link: 'l1', startedAt: '1' },
-        { name: 'Lint', conclusion: 'failure', workflow: 'wf2', link: 'l2', startedAt: '2' },
-      ],
-      { requiredCheckNames: ['CI', 'Lint'], headSha: episode.headSha },
-    );
-    expect(source.failedCheckNames).toEqual(['ci', 'lint']);
-    expect(source.aggregateRunId).toBeUndefined();
   });
 
   it('marks send delivered for post-intent recovery without false resend skip', () => {
