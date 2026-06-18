@@ -419,6 +419,56 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     }
   });
 
+
+  it('plan reconcile tick expires stale pending before evaluate', () => {
+    const dir = tempStore();
+    try {
+      const shortConfig = { pendingExpiryMs: 1000, reconcileIntervalMs: 1000 };
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1, config: shortConfig });
+      const plan = planReconcileTick({ storeDir: dir, nowMs: 2000, enqueueTickId: 'tick-expire', config: shortConfig });
+      expect(plan.actions!.some((a: any) => a.type === 'evaluate')).toBe(false);
+      expect(plan.actions!.some((a: any) => a.type === 'expire')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('plan reconcile tick schedules recover_in_flight for claimed episodes', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'stale-tick' });
+      const plan = planReconcileTick({ storeDir: dir, nowMs: Date.now(), enqueueTickId: 'tick-recover' });
+      expect(plan.actions!.some((a: any) => a.type === 'recover_in_flight' && a.state === 'claimed')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('wrapper lifecycle mode returns hard_failure on helper timeout', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'timeout-test' });
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapperPath, '-Mode', 'preflight-revalidate', '-TimeoutSeconds', '0'],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({ storeDir: dir, episode, workerState: workerState() }),
+          encoding: 'utf8',
+        },
+      );
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout.trim());
+      expect(payload.hard_failure).toBe(true);
+      expect(payload.action).toBe('hard_failure');
+      expect(payload.terminal_action).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('plan reconcile tick includes evaluate and expire actions', () => {
     const dir = tempStore();
     try {

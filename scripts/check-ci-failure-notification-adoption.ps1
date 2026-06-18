@@ -13,6 +13,19 @@ $result = @{
     workerStateInputConfigured = [bool]$workerStateOk
     durableSubmitAckConfigured = [bool]$dispatchOk
 } | ConvertTo-Json -Compress
-$result | pwsh -NoProfile -File (Join-Path $Root 'scripts/ci-failure-notification.ps1') -Mode init-gate
-if ($LASTEXITCODE -ne 0) { exit 1 }
+$output = $result | pwsh -NoProfile -File (Join-Path $Root 'scripts/ci-failure-notification.ps1') -Mode init-gate 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host $output
+    exit 1
+}
+$gate = ($output | Out-String).Trim() | ConvertFrom-Json
+if (-not $gate.ok -or -not $gate.reactionEnabled) {
+    Write-Host "[FAIL] live YAML ci-failed adoption gate (Issue #342): ok=$($gate.ok) reactionEnabled=$($gate.reactionEnabled)"
+    if ($gate.errors) {
+        foreach ($err in @($gate.errors)) {
+            Write-Host "  - $err"
+        }
+    }
+    exit 1
+}
 Write-Host '[PASS] live YAML ci-failed adoption gate (Issue #342)'

@@ -22,6 +22,23 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $helper = Join-Path $repoRoot 'docs/ci-failure-notification.mjs'
+$DecisionModes = @('decide', 'evaluate')
+function New-CiFailureWrapperHardFailure {
+    param(
+        [string]$Reason,
+        [hashtable]$Diagnostic,
+        [string]$Mode
+    )
+    $payload = [ordered]@{
+        hard_failure = $true
+        reason       = $Reason
+        diagnostic   = $Diagnostic
+    }
+    if ($Mode -notin $DecisionModes) {
+        $payload.action = 'hard_failure'
+    }
+    [pscustomobject]$payload | ConvertTo-Json -Compress -Depth 20
+}
 try {
     if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw "Missing helper: $helper" }
     if ($InputPath) {
@@ -45,21 +62,20 @@ try {
     $p.StandardInput.Close()
     if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
         try { $p.Kill($true) } catch {}
-        [pscustomobject]@{
-            terminal_action = 'SUPPRESS'
-            reason = 'helper_timeout'
-            diagnostic = @{ error_kind = 'helper_error'; phase = 'diagnostic' }
-        } | ConvertTo-Json -Compress -Depth 20
+        New-CiFailureWrapperHardFailure -Reason 'helper_timeout' -Mode $Mode -Diagnostic @{
+            error_kind = 'helper_error'
+            phase      = 'diagnostic'
+        }
         exit 0
     }
     $out = $p.StandardOutput.ReadToEnd()
     $err = $p.StandardError.ReadToEnd()
     if ($p.ExitCode -ne 0) {
-        [pscustomobject]@{
-            terminal_action = 'SUPPRESS'
-            reason = 'helper_error'
-            diagnostic = @{ error_kind = 'helper_error'; detail = $err.Trim(); phase = 'diagnostic' }
-        } | ConvertTo-Json -Compress -Depth 20
+        New-CiFailureWrapperHardFailure -Reason 'helper_error' -Mode $Mode -Diagnostic @{
+            error_kind = 'helper_error'
+            detail     = $err.Trim()
+            phase      = 'diagnostic'
+        }
         exit 0
     }
     $json = $out.Trim()
@@ -74,10 +90,10 @@ try {
     $json
 }
 catch {
-    [pscustomobject]@{
-        terminal_action = 'SUPPRESS'
-        reason = 'wrapper_error'
-        diagnostic = @{ error_kind = 'helper_error'; detail = $_.Exception.Message; phase = 'diagnostic' }
-    } | ConvertTo-Json -Compress -Depth 20
+    New-CiFailureWrapperHardFailure -Reason 'wrapper_error' -Mode $Mode -Diagnostic @{
+        error_kind = 'helper_error'
+        detail     = $_.Exception.Message
+        phase      = 'diagnostic'
+    }
     exit 0
 }

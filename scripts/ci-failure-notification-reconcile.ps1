@@ -75,6 +75,87 @@ function Invoke-PlannedCiFailureReconcileSend {
         -Source 'ci-failure-notification-reconcile' -SourceKey $IdempotencyKey -DeliveryPath 'pending-draft'
 }
 
+function Test-CiFailurePreflightOutcome {
+    param(
+        [object]$Preflight,
+        [string]$Digest
+    )
+    if ($Preflight.hard_failure -or $Preflight.action -eq 'hard_failure') {
+        Write-CiFailureReconcileLog "preflight hard_failure digest=$Digest reason=$($Preflight.reason)"
+        return $false
+    }
+    if ($Preflight.action -eq 'suppressed') {
+        Write-CiFailureReconcileLog "preflight suppressed digest=$Digest"
+        return $false
+    }
+    if ($Preflight.action -ne 'send_allowed') {
+        Write-CiFailureReconcileLog "preflight rejected malformed action=$($Preflight.action) digest=$Digest"
+        return $false
+    }
+    return $true
+}
+
+function Invoke-CiFailureEpisodeDelivery {
+    param(
+        [object]$Episode,
+        [hashtable]$WorkerState,
+        [string]$StoreDir,
+        [string]$Digest,
+        [ValidateSet('full', 'post-intent')]
+        [string]$Phase = 'full'
+    )
+
+    if ($Phase -eq 'full') {
+        $preflight = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
+            storeDir       = $StoreDir
+            episode        = $Episode
+            workerState    = $WorkerState
+            reactionEvents = @()
+            intentTokens   = @()
+        }
+        if (-not (Test-CiFailurePreflightOutcome -Preflight $preflight -Digest $Digest)) {
+            return $false
+        }
+    }
+
+    $intent = Invoke-CiFailureHelper -Mode 'reserve-intent' -Payload @{
+        storeDir = $StoreDir
+        episode  = $Episode
+    }
+    if ($intent.hard_failure) {
+        Write-CiFailureReconcileLog "reserve-intent hard_failure digest=$Digest reason=$($intent.reason)"
+        return $false
+    }
+    if (-not $intent.reserved) {
+        Write-CiFailureReconcileLog "reserve-intent not reserved digest=$Digest reason=$($intent.reason)"
+        return $false
+    }
+
+    $targetId = [string]$Episode.targetId
+    $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    if ($DryRun) {
+        Write-CiFailureReconcileLog "dry-run would send ci-failed ping session=$targetId digest=$Digest phase=$Phase"
+        return $true
+    }
+
+    try {
+        $null = Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
+            -IdempotencyKey ([string]$intent.idempotencyKey)
+    }
+    catch {
+        Write-CiFailureReconcileLog "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"
+        return $false
+    }
+    $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+    $null = Invoke-CiFailureHelper -Mode 'resolve-delivery' -Payload @{
+        storeDir     = $StoreDir
+        episode      = $Episode
+        acknowledged = $true
+    }
+    Write-CiFailureReconcileLog "sent ci-failed ping session=$targetId digest=$Digest phase=$Phase"
+    return $true
+}
+
 function Get-CiFailureWorkerStateSnapshot {
     param([array]$OpenPrs = @())
 
@@ -109,6 +190,14 @@ function Invoke-CiFailureNotificationTick {
             Write-CiFailureReconcileLog "expired episode digest=$($action.digest) reason=$($result.audit.reason)"
             continue
         }
+        if ($action.type -eq 'recover_in_flight') {
+            $episode = $action.episode
+            $phase = if ($action.state -eq 'claimed') { 'full' } else { 'post-intent' }
+            Write-CiFailureReconcileLog "recover_in_flight state=$($action.state) digest=$($action.digest) phase=$phase"
+            $null = Invoke-CiFailureEpisodeDelivery -Episode $episode -WorkerState $WorkerState `
+                -StoreDir $StoreDir -Digest ([string]$action.digest) -Phase $phase
+            continue
+        }
         if ($action.type -ne 'evaluate') { continue }
 
         $episode = $action.episode
@@ -117,48 +206,14 @@ function Invoke-CiFailureNotificationTick {
             episode     = $episode
             claimOwner  = $EnqueueTickId
         }
+        if ($claim.hard_failure) {
+            Write-CiFailureReconcileLog "claim hard_failure digest=$($action.digest) reason=$($claim.reason)"
+            continue
+        }
         if (-not $claim.claimed) { continue }
 
-        $preflight = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
-            storeDir      = $StoreDir
-            episode       = $episode
-            workerState   = $WorkerState
-            reactionEvents = @()
-            intentTokens   = @()
-        }
-        if ($preflight.action -eq 'suppressed' -or $preflight.action -eq 'hard_failure') {
-            Write-CiFailureReconcileLog "preflight $($preflight.action) digest=$($action.digest)"
-            continue
-        }
-
-        $intent = Invoke-CiFailureHelper -Mode 'reserve-intent' -Payload @{
-            storeDir = $StoreDir
-            episode  = $episode
-        }
-        if (-not $intent.reserved) { continue }
-
-        $targetId = [string]$episode.targetId
-        $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
-        if ($DryRun) {
-            Write-CiFailureReconcileLog "dry-run would send ci-failed ping session=$targetId digest=$($action.digest)"
-            continue
-        }
-
-        try {
-            $null = Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
-                -IdempotencyKey ([string]$intent.idempotencyKey)
-        }
-        catch {
-            Write-CiFailureReconcileLog "ao send failed session=$targetId error=$($_.Exception.Message)"
-            continue
-        }
-        $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $episode }
-        $null = Invoke-CiFailureHelper -Mode 'resolve-delivery' -Payload @{
-            storeDir      = $StoreDir
-            episode       = $episode
-            acknowledged  = $true
-        }
-        Write-CiFailureReconcileLog "sent ci-failed ping session=$targetId digest=$($action.digest)"
+        $null = Invoke-CiFailureEpisodeDelivery -Episode $episode -WorkerState $WorkerState `
+            -StoreDir $StoreDir -Digest ([string]$action.digest) -Phase 'full'
     }
 
     return $plan

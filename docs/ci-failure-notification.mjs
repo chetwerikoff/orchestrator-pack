@@ -684,6 +684,9 @@ export function isEvaluationEligible(record, nowMs = Date.now(), { enqueueTickId
   if (enqueueTickId && record.enqueueTickId === enqueueTickId) {
     return { eligible: false, reason: 'enqueue_tick_boundary' };
   }
+  if (nowMs >= Number(record.expiresAtMs ?? 0)) {
+    return { eligible: false, reason: 'expired_pending' };
+  }
   if (nowMs < Number(record.eligibleAfterMs ?? 0)) {
     return { eligible: false, reason: 'eligibility_boundary' };
   }
@@ -956,10 +959,21 @@ export function planReconcileTick(input) {
       pendingRecords.push(JSON.parse(readFileSync(path.join(dir, name), 'utf8')));
     }
   }
+  const expired = scanExpiredPendingRecords(storeDir, nowMs);
+  const expiredDigests = new Set(expired.expired.map((record) => record.digest));
+  for (const record of expired.expired) {
+    actions.push({ type: 'expire', digest: record.digest, episode: record.episode });
+  }
   for (const record of pendingRecords) {
     if (record.terminalReason) continue;
+    if (expiredDigests.has(record.digest)) continue;
     if (record.state === 'claimed' || record.state === 'submit-intent-reserved' || record.state === 'submitted-unacked') {
-      actions.push({ type: 'recover_in_flight', digest: record.digest, state: record.state });
+      actions.push({
+        type: 'recover_in_flight',
+        digest: record.digest,
+        state: record.state,
+        episode: record.episode,
+      });
       continue;
     }
     const eligibility = isEvaluationEligible(record, nowMs, { enqueueTickId: input?.sameEnqueueTickId ? enqueueTickId : null });
@@ -967,10 +981,6 @@ export function planReconcileTick(input) {
     actions.push({ type: 'evaluate', digest: record.digest, episode: record.episode });
   }
   const health = computeReconcileHealth({ pendingRecords, nowMs, config });
-  const expired = scanExpiredPendingRecords(storeDir, nowMs);
-  for (const record of expired.expired) {
-    actions.push({ type: 'expire', digest: record.digest, episode: record.episode });
-  }
   return { actions, health, config, enqueueTickId };
 }
 
