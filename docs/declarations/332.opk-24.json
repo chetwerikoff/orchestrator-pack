@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b706f5cf0d3636b0ec1c4b4d60995d0b54e88e74",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:45969f52a7b93e954104d849d6b09d623c8d9c85265f0571821bdb2e074a7431"
+    "active_scope_hash": "sha256:67dd0bdcdc097de4d7b23c13f188bf893e018b2551e5405c10cefbc0130b16f0"
   },
   "declared_paths": [
     "docs/ci-green-wake-reconcile.d.mts",
@@ -27,6 +27,7 @@
     "scripts/_test-worker-session-fixtures.ts",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.test.ts",
+    "scripts/external-output-shape-guard.test.ts",
     "scripts/lib/MechanicalReconcileNode.ps1",
     "scripts/orchestrator-message-catalog.json",
     "scripts/orchestrator-message-registry.test.ts",
@@ -42,7 +43,7 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
-      "new_active_scope_hash": "sha256:45969f52a7b93e954104d849d6b09d623c8d9c85265f0571821bdb2e074a7431",
+      "new_active_scope_hash": "sha256:67dd0bdcdc097de4d7b23c13f188bf893e018b2551e5405c10cefbc0130b16f0",
       "changed": {
         "added": [
           "docs/review-head-ready.d.mts",
@@ -50,6 +51,7 @@
           "docs/review-ready-stuck-guard.d.mts",
           "docs/review-ready-stuck-guard.mjs",
           "docs/review-reconcile-primitives.mjs",
+          "scripts/external-output-shape-guard.test.ts",
           "scripts/lib/MechanicalReconcileNode.ps1",
           "scripts/orchestrator-message-catalog.json",
           "scripts/review-head-ready.test.ts",
