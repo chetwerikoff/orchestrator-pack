@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "description": "Explicit audit roots validated against supervisor inventory, CI workflows, and command entrypoints.",
   "supervisedProcessScripts": [
+    "scripts/ci-failure-notification-reaction.ps1",
     "scripts/ci-failure-notification-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/orchestrator-wake-heartbeat.ps1",

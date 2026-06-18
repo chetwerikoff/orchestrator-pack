@@ -132,10 +132,11 @@ function Invoke-CiFailureTerminalizeCiRecovered {
     }
 }
 
-function Invoke-PlannedCiFailureAoSend {
+function Invoke-PlannedCiFailureReconcileSend {
     param(
         [string]$TargetId,
-        [string]$Message
+        [string]$Message,
+        [string]$IdempotencyKey
     )
 
     Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
@@ -219,7 +220,8 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     try {
-        Invoke-PlannedCiFailureAoSend -TargetId $targetId -Message $message
+        Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
+            -IdempotencyKey ([string]$intent.idempotencyKey)
     }
     catch {
         Write-CiFailureReconcileLog "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"

@@ -16,6 +16,12 @@
       "path": "{temp}/orchestrator-ci-failure-notification",
       "owner": "docs/ci-failure-notification.mjs",
       "reason": "Episode pending/terminal store is file-based under node helper episodes/tokens/audit dirs, outside PowerShell mechanical JSON state helper"
+    },
+    {
+      "childId": "ci-failure-notification-reaction",
+      "path": "{temp}/orchestrator-ci-failure-notification",
+      "owner": "docs/ci-failure-notification.mjs",
+      "reason": "Reaction record hook shares the node helper episode store with ci-failure-notification-reconcile"
     }
   ],
   "children": [
