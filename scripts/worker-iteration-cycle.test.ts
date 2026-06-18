@@ -19,6 +19,7 @@ import {
   evaluateReviewCycleGate,
   evaluateWorkerIterationCycleForPr,
   evaluateSettleActionPrecedence,
+  isWorkerSettledIdle,
   mergeSharedWorkerIterationCycleState,
   normalizeCanonicalRepoIdentity,
   pruneStaleOwnerCyclesForPr,
@@ -202,6 +203,24 @@ describe('settle action precedence', () => {
       nowMs: 6000,
     });
     expect(afterExpiry.action).toBe('fallback');
+  });
+});
+
+describe('worker settle idle', () => {
+  it('treats recent lastActivity strings as debounce pending', () => {
+    const result = isWorkerSettledIdle(
+      {
+        name: 'op-worker',
+        role: 'worker',
+        status: 'idle',
+        lastActivity: '2m ago',
+      },
+      'abc123',
+      Date.now(),
+    );
+    expect(result.settled).toBe(false);
+    expect(result.debouncePending).toBe(true);
+    expect(result.activelyWorking).toBe(false);
   });
 });
 

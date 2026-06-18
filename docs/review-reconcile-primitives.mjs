@@ -125,3 +125,43 @@ export function collectSessionIdentifiers(session) {
   }
   return ids;
 }
+
+/**
+ * @param {string | undefined | null} lastActivity
+ * @returns {number | null}
+ */
+export function parseLastActivityAgeMs(lastActivity) {
+  const raw = String(lastActivity ?? '')
+    .trim()
+    .toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw === 'just now' || raw === 'now') {
+    return 0;
+  }
+  const match = raw.match(
+    /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*ago$/,
+  );
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const unit = match[2];
+  if (unit.startsWith('s')) {
+    return value * 1000;
+  }
+  if (unit.startsWith('m')) {
+    return value * 60 * 1000;
+  }
+  if (unit.startsWith('h')) {
+    return value * 60 * 60 * 1000;
+  }
+  if (unit.startsWith('d')) {
+    return value * 24 * 60 * 60 * 1000;
+  }
+  return null;
+}

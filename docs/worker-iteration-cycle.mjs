@@ -28,6 +28,7 @@ import {
   isHeadCovered,
   isLiveWorkerSession,
   normalizeSha,
+  parseLastActivityAgeMs,
   toArray,
 } from './review-reconcile-primitives.mjs';
 
@@ -1078,7 +1079,14 @@ export function isWorkerSettledIdle(session, headSha, nowMs, options = {}) {
     return { settled: false, activelyWorking: true, debouncePending: true };
   }
   const activelyWorking = isWorkerActivelyWorkingLocal(session, headSha, nowMs, options);
-  const lastActivityAgeMs = Number(session?.lastActivityAgeMs ?? NaN);
+  const parsedLastActivityAgeMs = parseLastActivityAgeMs(session?.lastActivity);
+  const numericLastActivityAgeMs = Number(session?.lastActivityAgeMs ?? NaN);
+  const lastActivityAgeMs =
+    parsedLastActivityAgeMs != null
+      ? parsedLastActivityAgeMs
+      : Number.isFinite(numericLastActivityAgeMs)
+        ? numericLastActivityAgeMs
+        : null;
   const headCommittedAtMs = Number(options.headCommittedAtMs ?? NaN);
   const headStableMs =
     Number.isFinite(headCommittedAtMs) && headCommittedAtMs > 0
@@ -1087,7 +1095,7 @@ export function isWorkerSettledIdle(session, headSha, nowMs, options = {}) {
   const debouncePending =
     activelyWorking ||
     (headStableMs != null && headStableMs < QUIESCENCE_DEBOUNCE_MS) ||
-    (Number.isFinite(lastActivityAgeMs) && lastActivityAgeMs < QUIESCENCE_DEBOUNCE_MS);
+    (lastActivityAgeMs != null && lastActivityAgeMs < QUIESCENCE_DEBOUNCE_MS);
   return {
     settled: !activelyWorking && !debouncePending,
     activelyWorking,
