@@ -136,10 +136,14 @@ const managedChildRoles = [
 
 type ManagedChildRole = (typeof managedChildRoles)[number];
 
-async function waitForMarkers(stateDir: string, timeoutMs = 25_000) {
+async function waitForMarkers(
+  stateDir: string,
+  timeoutMs = 25_000,
+  roles: readonly ManagedChildRole[] = managedChildRoles,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = managedChildRoles.every((role) =>
+    const ready = roles.every((role) =>
       fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`)),
     );
     if (ready) {
@@ -147,7 +151,7 @@ async function waitForMarkers(stateDir: string, timeoutMs = 25_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error('timed out waiting for supervisor child markers');
+  throw new Error(`timed out waiting for supervisor child markers: ${roles.join(', ')}`);
 }
 
 type WakeMarker = {
@@ -497,10 +501,12 @@ describe('orchestrator-wake-supervisor', () => {
     expect(statusDown.stdout).toContain('stopped');
   });
 
-  it('stops supervisor before children so no orphan wake processes remain', async () => {
+  it(
+    'stops supervisor before children so no orphan wake processes remain',
+    async () => {
     const stateDir = makeStateDir();
     startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-stop-order']);
-    await waitForMarkers(stateDir);
+    await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
     const listenerBefore = await readMarker(stateDir, 'listener');
     const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
@@ -516,7 +522,9 @@ describe('orchestrator-wake-supervisor', () => {
 
     const statusDown = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusDown.stdout).toContain('stopped');
-  });
+    },
+    detachedSupervisorTimeoutMs,
+  );
 
   it('status exits non-zero when supervisor is stopped but children remain', async () => {
     const stateDir = makeStateDir();
