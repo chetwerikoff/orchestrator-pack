@@ -1,6 +1,6 @@
 # CI-failure ping must suppress on live worker state, re-checked at delivery
 
-GitHub Issue: TBD
+GitHub Issue: #342
 
 ## Prerequisite
 
