@@ -38,33 +38,20 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:0bb9f5b67d7325f5e0745bb20e0acaa0bee0c79157dc9eee99764254f3d88324",
-      "new_active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e",
+      "new_active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f",
       "changed": {
         "added": [
           "docs/review-head-ready.mjs",
           "docs/review-ready-stuck-guard.d.mts",
           "docs/review-ready-stuck-guard.mjs",
-          "docs/review-reconcile-primitives.mjs"
-        ],
-        "removed": []
-      },
-      "reason": "Review fix: break ci-green ESM cycle via primitives and shared CI classifier",
-      "actor": "opk-28",
-      "timestamp": "2026-06-17T17:46:18.992Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:14019496cc4e8d76a8f0ad79940e87dd7cd81b978a4ac1a741196ba1676a285e",
-      "new_active_scope_hash": "sha256:04830d5b548acf79407caae78095bee16e751447fe16a24f7b99f6537d04aa5f",
-      "changed": {
-        "added": [
+          "docs/review-reconcile-primitives.mjs",
           "scripts/lib/MechanicalReconcileNode.ps1"
         ],
         "removed": []
       },
-      "reason": "Self-architect lint: shared fixture delivery-field merge helper",
-      "actor": "opk-28",
-      "timestamp": "2026-06-17T18:50:00.000Z",
+      "reason": "Review fix: break ci-green ESM cycle via primitives/shared CI classifier; self-architect lint shared fixture delivery-field merge helper",
+      "actor": "opk-30",
+      "timestamp": "2026-06-17T19:00:00.000Z",
       "applied": true
     }
   ]
