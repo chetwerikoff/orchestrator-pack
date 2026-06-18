@@ -623,6 +623,42 @@ function getDegradedCiAttempts(tracking, prNumber, headSha) {
 }
 
 /**
+ * Persist ready_for_review settle debounce so later ticks do not reset startedAtMs.
+ *
+ * @param {Record<string, unknown>} cycleState
+ * @param {Record<string, unknown>} cycleEval
+ * @param {number} prNumber
+ * @param {string} sessionId
+ * @param {string} headSha
+ * @param {number} nowMs
+ */
+function commitReadyForReviewDebounceIfWaiting(cycleState, cycleEval, prNumber, sessionId, headSha, nowMs) {
+  if (
+    !cycleEval.cycle ||
+    !cycleEval.readyDebounce?.waiting ||
+    cycleEval.readyDebounce?.settled
+  ) {
+    return cycleState;
+  }
+  const debouncePatch = {
+    debounce: {
+      ...(cycleEval.cycle.debounce ?? {}),
+      [CYCLE_SURFACE_READY_FOR_REVIEW]: {
+        startedAtMs: cycleEval.readyDebounce.startedAtMs ?? nowMs,
+        handoffHeadSha: cycleEval.readyDebounce.handoffHeadSha ?? normalizeSha(headSha),
+      },
+    },
+  };
+  return commitOwnerCyclePatch(
+    cycleState,
+    cycleEval.repoId,
+    prNumber,
+    sessionId,
+    { ...cycleEval.cycle, ...debouncePatch },
+  );
+}
+
+/**
  * @param {AoSession[]} sessions
  * @param {string} sessionId
  */
@@ -829,6 +865,20 @@ export function planReconcileActions({
             cycle,
           );
         }
+        if (
+          handoffAccepted &&
+          cycleEval.readyDebounce?.waiting &&
+          !cycleEval.readyDebounce?.settled
+        ) {
+          nextCycleState = commitReadyForReviewDebounceIfWaiting(
+            nextCycleState,
+            cycleEval,
+            prNumber,
+            sessionId,
+            headSha,
+            nowMs,
+          );
+        }
         actions.push({
           type: 'skip',
           prNumber,
@@ -848,21 +898,13 @@ export function planReconcileActions({
         cycleEval.readyDebounce.waiting &&
         !cycleEval.readyDebounce.settled
       ) {
-        const debouncePatch = {
-          debounce: {
-            ...(cycleEval.cycle?.debounce ?? {}),
-            [CYCLE_SURFACE_READY_FOR_REVIEW]: {
-              startedAtMs: cycleEval.readyDebounce.startedAtMs ?? nowMs,
-              handoffHeadSha: cycleEval.readyDebounce.handoffHeadSha ?? normalizeSha(headSha),
-            },
-          },
-        };
-        nextCycleState = commitOwnerCyclePatch(
+        nextCycleState = commitReadyForReviewDebounceIfWaiting(
           nextCycleState,
-          cycleEval.repoId,
+          cycleEval,
           prNumber,
           sessionId,
-          { ...(cycleEval.cycle ?? {}), ...debouncePatch },
+          headSha,
+          nowMs,
         );
         actions.push({
           type: 'skip',

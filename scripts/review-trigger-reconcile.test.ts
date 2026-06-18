@@ -27,7 +27,7 @@ import {
   type PlanReconcileInput,
   type ReconcileAction,
 } from '../docs/review-trigger-reconcile.mjs';
-import { NUDGE_EXPIRY_MS, commitReviewStartedCycleState } from '../docs/worker-iteration-cycle.mjs';
+import { NUDGE_EXPIRY_MS, QUIESCENCE_DEBOUNCE_MS, CYCLE_SURFACE_READY_FOR_REVIEW, commitReviewStartedCycleState, buildOwnerCycleKey, normalizeCanonicalRepoIdentity } from '../docs/worker-iteration-cycle.mjs';
 import { mergeLegacyNudgedWithPendingJournal } from '../docs/ci-green-wake-reconcile.mjs';
 
 const greenChecks = [
@@ -194,6 +194,75 @@ function withExpiredNudgeCycle(fixture: FixturePayload): FixturePayload {
 }
 
 describe('planReconcileActions', () => {
+  it('persists ready_for_review debounce when reviewGate blocks on debounce pending', () => {
+    const headSha = 'deadbeef';
+    const headCommittedAtMs = Date.parse('2026-06-01T00:00:00.000Z');
+    const handoffAtMs = headCommittedAtMs + 14 * 60 * 1000;
+    const prNumber = 99;
+    const sessionId = 'op-live-worker';
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = buildOwnerCycleKey(repoId, prNumber, sessionId);
+    const baseInput = {
+      openPrs: [
+        {
+          number: prNumber,
+          headRefOid: headSha,
+          headCommittedAt: new Date(headCommittedAtMs).toISOString(),
+        },
+      ],
+      reviewRuns: [],
+      sessions: [
+        {
+          name: sessionId,
+          role: 'worker',
+          prNumber,
+          status: 'working',
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              reportedAt: new Date(handoffAtMs).toISOString(),
+            },
+          ],
+        },
+      ],
+      ciChecksByPr: { [String(prNumber)]: greenChecks },
+      repoRoot: 'orchestrator-pack',
+    };
+
+    const first = unwrapReconcilePlanResult(
+      planReconcileActions({ ...baseInput, nowMs: handoffAtMs }),
+    );
+    expect(startReviewActions(first.actions)).toHaveLength(0);
+    expect(
+      skipActions(first.actions).some((a) => a.reason === 'ready_for_review_debounce_pending'),
+    ).toBe(true);
+    const debounce = (
+      first.cycleState?.ownerCycles as Record<
+        string,
+        { debounce?: Record<string, { startedAtMs?: number }> }
+      >
+    )?.[ownerKey]?.debounce?.[CYCLE_SURFACE_READY_FOR_REVIEW];
+    expect(debounce?.startedAtMs).toBe(handoffAtMs);
+
+    const tooEarly = unwrapReconcilePlanResult(
+      planReconcileActions({
+        ...baseInput,
+        cycleState: first.cycleState,
+        nowMs: headCommittedAtMs + 15 * 60 * 1000,
+      }),
+    );
+    expect(startReviewActions(tooEarly.actions)).toHaveLength(0);
+
+    const settled = unwrapReconcilePlanResult(
+      planReconcileActions({
+        ...baseInput,
+        cycleState: first.cycleState,
+        nowMs: handoffAtMs + QUIESCENCE_DEBOUNCE_MS,
+      }),
+    );
+    expect(startReviewActions(settled.actions)).toHaveLength(1);
+  });
+
   it('does not mark reviewArmed in cycleState during planning', () => {
     const fixture = withExpiredNudgeCycle(loadFixture('quiescent-pr260-opk-37.json'));
     const result = unwrapReconcilePlanResult(planReconcileActions(fixture));

@@ -691,6 +691,30 @@ export function evaluateReadyForReviewSettleDebounce(input) {
   }
 
   if (headStableMs >= QUIESCENCE_DEBOUNCE_MS) {
+    const debounce = cycle?.debounce?.[CYCLE_SURFACE_READY_FOR_REVIEW];
+    if (debounce) {
+      const startedAtMs = Number(debounce.startedAtMs ?? 0);
+      const boundHead = normalizeSha(debounce.handoffHeadSha);
+      if (boundHead && handoffHead && boundHead !== handoffHead) {
+        return {
+          settled: false,
+          waiting: true,
+          reason: 'ready_for_review_debounce_pending',
+          startedAtMs: nowMs,
+          handoffHeadSha: handoffHead,
+          staleHandoff: true,
+        };
+      }
+      if (startedAtMs > 0 && nowMs - startedAtMs < QUIESCENCE_DEBOUNCE_MS) {
+        return {
+          settled: false,
+          waiting: true,
+          reason: 'ready_for_review_debounce_pending',
+          startedAtMs,
+          handoffHeadSha: boundHead || handoffHead,
+        };
+      }
+    }
     const currentHead = normalizeSha(headSha);
     if (handoffHead && currentHead && handoffHead !== currentHead) {
       return {

@@ -5,6 +5,7 @@ import {
   OPEN_REVISION_STUCK_BOUND_MS,
   QUIESCENCE_DEBOUNCE_MS,
   STALE_PENDING_DELIVERY_BOUND_MS,
+  CYCLE_SURFACE_READY_FOR_REVIEW,
   bootstrapLegacyNudgedCycle,
   buildOwnerCycleKey,
   buildPrScopedKey,
@@ -14,6 +15,7 @@ import {
   commitReviewStartedCycleState,
   evaluateNudgeCycleGate,
   evaluateOpenReviewRevision,
+  evaluateReadyForReviewSettleDebounce,
   evaluateReviewCycleGate,
   evaluateWorkerIterationCycleForPr,
   evaluateSettleActionPrecedence,
@@ -200,6 +202,42 @@ describe('settle action precedence', () => {
       nowMs: 6000,
     });
     expect(afterExpiry.action).toBe('fallback');
+  });
+});
+
+describe('ready_for_review settle debounce', () => {
+  const headSha = 'abc123';
+  const headCommittedAtMs = Date.parse('2026-06-01T00:00:00.000Z');
+  const handoffAtMs = headCommittedAtMs + 14 * 60 * 1000;
+
+  it('honors persisted handoff debounce after head commit age crosses quiescence', () => {
+    const cycle = {
+      debounce: {
+        [CYCLE_SURFACE_READY_FOR_REVIEW]: {
+          startedAtMs: handoffAtMs,
+          handoffHeadSha: headSha,
+        },
+      },
+    };
+    const atHeadSettle = evaluateReadyForReviewSettleDebounce({
+      cycle,
+      headSha,
+      nowMs: headCommittedAtMs + 15 * 60 * 1000,
+      handoffAccepted: true,
+      headCommittedAtMs,
+    });
+    expect(atHeadSettle.waiting).toBe(true);
+    expect(atHeadSettle.startedAtMs).toBe(handoffAtMs);
+
+    const afterHandoffDebounce = evaluateReadyForReviewSettleDebounce({
+      cycle,
+      headSha,
+      nowMs: handoffAtMs + QUIESCENCE_DEBOUNCE_MS,
+      handoffAccepted: true,
+      headCommittedAtMs,
+    });
+    expect(afterHandoffDebounce.settled).toBe(true);
+    expect(afterHandoffDebounce.waiting).toBe(false);
   });
 });
 
