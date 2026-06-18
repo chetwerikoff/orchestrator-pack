@@ -366,7 +366,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const released = releaseSubmitIntent({ storeDir: dir, episode });
       expect(released.ok).toBe(true);
       expect((released.record as { state?: string }).state).toBe('claimed');
-      expect((released.record as { sendIssuedAtMs?: number }).sendIssuedAtMs).toBeUndefined();
+      expect((released.record as { sendIssuedAtMs?: number | null }).sendIssuedAtMs).toBeNull();
       const reentry = reserveSubmitIntent({ storeDir: dir, episode });
       expect(reentry.reentry).not.toBe(true);
     } finally {
