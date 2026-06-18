@@ -800,6 +800,14 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/lib/Record-WorkerMessageDispatch.ps1',
     'scripts/worker-message-submit-reconcile.ps1',
   ],
+  342: [
+    'docs/ci-failure-notification.mjs',
+    'scripts/ci-failure-notification.ps1',
+    'scripts/ci-failure-notification-reconcile.ps1',
+    'scripts/orchestrator-side-process-registry.json',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+    'agent-orchestrator.yaml.example',
+  ],
 };
 
 /**

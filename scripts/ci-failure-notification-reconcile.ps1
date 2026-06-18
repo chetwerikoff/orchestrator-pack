@@ -57,6 +57,24 @@ function Invoke-CiFailureHelper {
     return ($output | Out-String).Trim() | ConvertFrom-Json
 }
 
+function Invoke-PlannedCiFailureReconcileSend {
+    param(
+        [string]$TargetId,
+        [string]$Message,
+        [string]$IdempotencyKey
+    )
+
+    Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
+    $sendArgs = @('send', $TargetId, $Message)
+    & ao @sendArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "ao send failed session=$TargetId exit=$LASTEXITCODE"
+    }
+
+    return Register-WorkerMessageDispatch -SessionId $TargetId -Message $Message `
+        -Source 'ci-failure-notification-reconcile' -SourceKey $IdempotencyKey -DeliveryPath 'pending-draft'
+}
+
 function Get-CiFailureWorkerStateSnapshot {
     param([array]$OpenPrs = @())
 
@@ -126,15 +144,14 @@ function Invoke-CiFailureNotificationTick {
             continue
         }
 
-        Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
-        $sendArgs = @('send', $targetId, $message)
-        & ao @sendArgs | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-CiFailureReconcileLog "ao send failed session=$targetId exit=$LASTEXITCODE"
+        try {
+            $null = Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
+                -IdempotencyKey ([string]$intent.idempotencyKey)
+        }
+        catch {
+            Write-CiFailureReconcileLog "ao send failed session=$targetId error=$($_.Exception.Message)"
             continue
         }
-
-        $null = Register-WorkerMessageDispatch -SessionId $targetId -Message $message -Source 'ci-failure-notification-reconcile' -SourceKey ([string]$intent.idempotencyKey) -DeliveryPath 'pending-draft'
         $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $episode }
         $null = Invoke-CiFailureHelper -Mode 'resolve-delivery' -Payload @{
             storeDir      = $StoreDir

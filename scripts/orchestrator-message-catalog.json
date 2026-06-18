@@ -59,6 +59,40 @@
       }
     },
     {
+      "message_class_id": "ci-failure-reconcile-ping",
+      "trigger": {
+        "summary": "Pending red-CI episode eligible after reconcile preflight",
+        "event": "ci_failure_reconcile_send"
+      },
+      "owning_process": "ci-failure-notification-reconcile",
+      "recipient_key": "head-owning-worker",
+      "intent_key": "ci-failure-fix",
+      "mechanism": "ao-send",
+      "delivery_idempotency_owner": "issue-281",
+      "semantic_dedup_owner": "issue-283",
+      "semanticDedupCoverage": {
+        "recipientKeys": [
+          "head-owning-worker",
+          "specific-session"
+        ],
+        "intentKeys": [
+          "ci-failure-fix",
+          "red-status"
+        ],
+        "messageClassIds": [
+          "ci-failure-reaction-routed",
+          "ci-failure-orchestrator-turn",
+          "ci-failure-reconcile-ping"
+        ]
+      },
+      "callsite": {
+        "file": "scripts/ci-failure-notification-reconcile.ps1",
+        "function": "Invoke-PlannedCiFailureReconcileSend",
+        "anchor": "helper-body",
+        "predicateBodyHash": "170602d7d35fedac"
+      }
+    },
+    {
       "message_class_id": "ci-failure-reaction-routed",
       "trigger": {
         "summary": "AO ci-failed reaction routed through journaled-worker-send wrapper",
@@ -71,9 +105,19 @@
       "delivery_idempotency_owner": "issue-281",
       "semantic_dedup_owner": "issue-283",
       "semanticDedupCoverage": {
-        "recipientKeys": ["head-owning-worker", "specific-session"],
-        "intentKeys": ["ci-failure-fix", "red-status"],
-        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-orchestrator-turn"]
+        "recipientKeys": [
+          "head-owning-worker",
+          "specific-session"
+        ],
+        "intentKeys": [
+          "ci-failure-fix",
+          "red-status"
+        ],
+        "messageClassIds": [
+          "ci-failure-reaction-routed",
+          "ci-failure-orchestrator-turn",
+          "ci-failure-reconcile-ping"
+        ]
       },
       "callsite": {
         "file": "scripts/journaled-worker-send.ps1",
@@ -85,7 +129,7 @@
     {
       "message_class_id": "ci-failure-orchestrator-turn",
       "trigger": {
-        "summary": "Orchestrator turn CI FAILURE DISCIPLINE predicate returns SEND",
+        "summary": "Orchestrator turn records red-CI episode; reconcile evaluates SEND",
         "event": "orchestrator_turn_ci_red"
       },
       "owning_process": "orchestrator-rules",
@@ -95,15 +139,25 @@
       "delivery_idempotency_owner": "none",
       "semantic_dedup_owner": "issue-283",
       "semanticDedupCoverage": {
-        "recipientKeys": ["head-owning-worker", "specific-session"],
-        "intentKeys": ["ci-failure-fix", "red-status"],
-        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-orchestrator-turn"]
+        "recipientKeys": [
+          "head-owning-worker",
+          "specific-session"
+        ],
+        "intentKeys": [
+          "ci-failure-fix",
+          "red-status"
+        ],
+        "messageClassIds": [
+          "ci-failure-reaction-routed",
+          "ci-failure-orchestrator-turn",
+          "ci-failure-reconcile-ping"
+        ]
       },
       "callsite": {
         "file": "agent-orchestrator.yaml.example",
         "function": "CI FAILURE DISCIPLINE",
         "anchor": "orchestrator-rules",
-        "predicateBodyHash": "792e513d4b7e72e9"
+        "predicateBodyHash": "f86a499b864d7394"
       }
     },
     {
@@ -170,8 +224,16 @@
       "rationale": "CI green hand-off and CI failure ping are mutually exclusive on required CI state",
       "reviewer": "issue-298",
       "linkedIssue": 283,
-      "messageClassIds": ["ci-green-worker-nudge", "ci-failure-reaction-routed"],
-      "pairs": [["ci-green-worker-nudge", "ci-failure-reaction-routed"]],
+      "messageClassIds": [
+        "ci-green-worker-nudge",
+        "ci-failure-reaction-routed"
+      ],
+      "pairs": [
+        [
+          "ci-green-worker-nudge",
+          "ci-failure-reaction-routed"
+        ]
+      ],
       "evidenceKind": "trigger-mutual-exclusion",
       "evidence": "ci-green requires green required CI; ci-failure requires red required CI on the same episode"
     },
@@ -180,18 +242,52 @@
       "rationale": "CI green hand-off and orchestrator-turn CI failure ping are mutually exclusive on required CI state",
       "reviewer": "issue-298",
       "linkedIssue": 283,
-      "messageClassIds": ["ci-green-worker-nudge", "ci-failure-orchestrator-turn"],
-      "pairs": [["ci-green-worker-nudge", "ci-failure-orchestrator-turn"]],
+      "messageClassIds": [
+        "ci-green-worker-nudge",
+        "ci-failure-orchestrator-turn"
+      ],
+      "pairs": [
+        [
+          "ci-green-worker-nudge",
+          "ci-failure-orchestrator-turn"
+        ]
+      ],
       "evidenceKind": "trigger-mutual-exclusion",
       "evidence": "ci-green requires green required CI; orchestrator-turn ci-failure requires red required CI"
+    },
+    {
+      "id": "ci-green-vs-ci-failure-reconcile-mutex",
+      "rationale": "CI green hand-off and CI failure reconcile ping are mutually exclusive on required CI state",
+      "reviewer": "issue-298",
+      "linkedIssue": 342,
+      "messageClassIds": [
+        "ci-green-worker-nudge",
+        "ci-failure-reconcile-ping"
+      ],
+      "pairs": [
+        [
+          "ci-green-worker-nudge",
+          "ci-failure-reconcile-ping"
+        ]
+      ],
+      "evidenceKind": "trigger-mutual-exclusion",
+      "evidence": "ci-green requires green required CI; ci-failure reconcile requires red required CI"
     },
     {
       "id": "orch-wake-webhook-vs-heartbeat",
       "rationale": "Webhook wakes and heartbeat ticks target orchestrator with distinct intents and dedup paths",
       "reviewer": "issue-298",
       "linkedIssue": 298,
-      "messageClassIds": ["orchestrator-wake-webhook", "orchestrator-wake-heartbeat"],
-      "pairs": [["orchestrator-wake-webhook", "orchestrator-wake-heartbeat"]],
+      "messageClassIds": [
+        "orchestrator-wake-webhook",
+        "orchestrator-wake-heartbeat"
+      ],
+      "pairs": [
+        [
+          "orchestrator-wake-webhook",
+          "orchestrator-wake-heartbeat"
+        ]
+      ],
       "evidenceKind": "recipient-non-equivalence",
       "evidence": "Heartbeat uses periodic tick predicate; webhook uses HTTP filter evaluation"
     }

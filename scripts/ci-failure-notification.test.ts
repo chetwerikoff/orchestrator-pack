@@ -149,7 +149,7 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
-    expect(result.audit.phase).toBe('terminal');
+    expect(result.audit!.phase).toBe('terminal');
   });
 
   it('sends for idle live owner (row 3)', () => {
@@ -182,14 +182,14 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
   it('hard-fails on missing workerState (row 11)', () => {
     const result = decideCiFailureNotification({ episode });
     expect(result.hard_failure).toBe(true);
-    expect(result.audit.phase).toBe('diagnostic');
+    expect(result.audit!.phase).toBe('diagnostic');
     expect(result.terminal_action).toBeUndefined();
   });
 
   it('hard-fails on incompatible workerState shape', () => {
     const result = decideCiFailureNotification({ episode, workerState: { sessions: [] } });
     expect(result.hard_failure).toBe(true);
-    expect(result.diagnostic.error_kind).toBe('incompatible_worker_state_shape');
+    expect(result.diagnostic!.error_kind).toBe('incompatible_worker_state_shape');
   });
 
   it('self-dedup: first idle episode is SEND not suppressed-dedup against own record', () => {
@@ -223,7 +223,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     try {
       const recorded = recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
       expect(recorded.recorded).toBe(true);
-      expect(recorded.audit.phase).toBe('record');
+      expect(recorded.audit!.phase).toBe('record');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -252,7 +252,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
         workerState: workerState({ status: 'fixing_ci' }),
       });
       expect(result.action).toBe('suppressed');
-      expect(result.terminal.audit.reason).toBe('suppressed-live-worker');
+      expect(result.terminal!.audit!.reason).toBe('suppressed-live-worker');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -282,8 +282,8 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     try {
       recordPendingEpisode({ storeDir: dir, episode, nowMs: 0, config: { pendingExpiryMs: 1000 } });
       const expired = expirePendingEpisode({ storeDir: dir, episode, nowMs: 5000 });
-      expect(expired.audit.reason).toBe('abandoned-expired');
-      expect(expired.audit.diagnostic.backstop_handoff).toBe('report-stale');
+      expect(expired.audit!.reason).toBe('abandoned-expired');
+      expect(expired.audit!.diagnostic!.backstop_handoff).toBe('report-stale');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -304,7 +304,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
   it('freshness SLA config is bounded', () => {
     const config = resolveConfig({ reconcileIntervalMs: 60_000 });
-    expect(config.maxEligibleEvaluationAgeMs).toBeLessThanOrEqual(3 * config.reconcileIntervalMs);
+    expect(config.maxEligibleEvaluationAgeMs).toBeLessThanOrEqual(3 * config.reconcileIntervalMs!);
     expect(config.maxEligibleEvaluationAgeMs).toBeLessThan(30 * 60 * 1000);
   });
 
@@ -356,7 +356,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     try {
       const result = runWrapper('record', { storeDir: dir, episode, nowMs: Date.now() });
       expect(result.recorded).toBe(true);
-      expect(result.audit.phase).toBe('record');
+      expect(result.audit!.phase).toBe('record');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -424,7 +424,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     try {
       recordPendingEpisode({ storeDir: dir, episode, nowMs: Date.now() - 120_000, enqueueTickId: 'enqueue' });
       const plan = planReconcileTick({ storeDir: dir, nowMs: Date.now(), enqueueTickId: 'tick-2' });
-      expect(plan.actions.some((a: any) => a.type === 'evaluate')).toBe(true);
+      expect(plan.actions!.some((a: any) => a.type === 'evaluate')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
