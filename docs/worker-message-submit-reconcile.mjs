@@ -1275,7 +1275,7 @@ export function planWorkerMessageSubmitActions(input) {
   const actions = [];
   /** @type {Record<string, Record<string, unknown>>} */
   const nextDeliveries = { ...(baseTracking?.deliveries ?? {}) };
-  const nextFailedDeliveries = { ...(tracking?.failedDeliveries ?? {}) };
+  const nextFailedDeliveries = { ...(baseTracking?.failedDeliveries ?? {}) };
   /** @type {Array<Record<string, unknown>>} */
   const audit = [];
 

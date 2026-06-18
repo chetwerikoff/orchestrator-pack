@@ -22,6 +22,10 @@ import {
   DISPATCH_SOURCE_AO_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
 import {
+  FAILED_DELIVERY_RESOLVED,
+  SUBMIT_DELIVERY_RETENTION_MS,
+} from '../docs/mechanical-reconcile-bounds.mjs';
+import {
   applySubmitOutcomes,
   evaluateConcurrentSubmitClaim,
   evaluateSubmitDecision,
@@ -1234,6 +1238,37 @@ describe('auditable decisions (AC7)', () => {
     const { tracking } = planFixture('long-script-nudge.json');
     expect(Array.isArray(tracking.audit)).toBe(true);
     expect(tracking.audit?.length).toBeGreaterThan(0);
+  });
+});
+
+
+describe('issue #339 bounded reconcile state', () => {
+  it('builds failed-delivery state from compacted tracking after convergence', () => {
+    const nowMs = Date.now();
+    const resolvedAtMs = nowMs - SUBMIT_DELIVERY_RETENTION_MS - 60_000;
+    const failedDeliveries: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 40; i++) {
+      failedDeliveries[`failed-${i}`] = {
+        deliveryId: `failed-${i}`,
+        sessionId: 'opk-bounded',
+        reason: 'resolved_test',
+        unresolvedState: FAILED_DELIVERY_RESOLVED,
+        resolvedAtMs,
+        payload: 'x'.repeat(6000),
+      };
+    }
+
+    const result = planWorkerMessageSubmitActions({
+      sessions: [],
+      dispatchJournal: {},
+      tracking: { deliveries: {}, failedDeliveries, audit: [] },
+      nowMs,
+    });
+
+    for (let i = 0; i < 40; i++) {
+      expect(result.tracking.failedDeliveries?.[`failed-${i}`]).toBeUndefined();
+    }
+    expect(result.overCapacity).not.toBe(true);
   });
 });
 

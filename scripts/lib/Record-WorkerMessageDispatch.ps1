@@ -33,19 +33,7 @@ function Get-WorkerMessageDispatchJournal {
     param([string]$Path = '')
 
     $journalPath = if ($Path) { $Path } else { Get-WorkerMessageDispatchJournalPath }
-    $journal = Get-MechanicalJsonStateFile -Path $journalPath -DefaultState @{} -ActionTracking
-    if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
-        return $journal
-    }
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $compacted = Invoke-DispatchJournalCli -Subcommand 'journal-compact' -Payload @{
-        journal = $journal
-        nowMs   = $nowMs
-    }
-    if ($compacted.evicted -and @($compacted.evicted).Count -gt 0) {
-        Set-WorkerMessageDispatchJournal -Path $journalPath -Journal (ConvertTo-MechanicalJsonMap -Value $compacted.journal)
-    }
-    return ConvertTo-MechanicalJsonMap -Value $compacted.journal
+    return Get-MechanicalJsonStateFile -Path $journalPath -DefaultState @{} -ActionTracking
 }
 
 function Set-WorkerMessageDispatchJournal {
