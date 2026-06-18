@@ -127,6 +127,7 @@ const managedChildRoles = [
   'review-trigger-reconcile',
   'review-trigger-reeval',
   'ci-green-wake-reconcile',
+  'ci-failure-notification-reconcile',
   'review-send-reconcile',
   'review-finding-delivery-confirm',
   'worker-message-submit-reconcile',

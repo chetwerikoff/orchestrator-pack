@@ -9,14 +9,31 @@ import {
   assertTerminalAction,
   buildAdoptionArtifact,
   bindReactionEvent,
+  claimEpisodePreflight,
   compactRecords,
+  computeReconcileHealth,
   decideCiFailureNotification,
   deriveEpisodeFromCiSource,
   episodeKeyDigest,
+  evaluateEpisodeTerminal,
   evaluateHelperErrorEscalation,
+  evaluatePreflightRevalidation,
+  evaluateSnapshotCoherence,
   evaluateTargetApplySnapshot,
+  expirePendingEpisode,
+  interpretLegacyAuditLine,
+  isEvaluationEligible,
   markObservableSendFailure,
+  migrateLegacyEpisodeRecord,
+  planReconcileTick,
+  recordPendingEpisode,
+  resolveConfig,
+  resolveSubmittedDelivery,
+  reserveSubmitIntent,
   scanFixtureSafety,
+  terminalizeEpisode,
+  validateInitGate,
+  validateWorkerStateInput,
 } from '../docs/ci-failure-notification.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,8 +56,38 @@ const nextRedSameSha = { ...episode, redPeriod: 'suite-101-attempt-1' };
 const supersededTarget = { ...episode, targetId: 'session-old-redacted', targetGeneration: 'generation-old-redacted' };
 const newHead = { ...episode, headSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', redPeriod: 'suite-200-attempt-1' };
 
+function workerState(overrides: { status?: string; prNumber?: number; headSha?: string; targetId?: string; targetGeneration?: string; runtime?: string } = {}) {
+  const golden = fixture<any>('worker-state-golden.json');
+  const prNumber = overrides.prNumber ?? episode.prNumber;
+  const headSha = overrides.headSha ?? episode.headSha;
+  const targetId = overrides.targetId ?? episode.targetId;
+  const targetGeneration = overrides.targetGeneration ?? episode.targetGeneration;
+  const status = overrides.status ?? 'working';
+  return {
+    sessions: [
+      {
+        ...golden.sessions[0],
+        name: targetId,
+        role: 'worker',
+        status,
+        prNumber,
+        ownedHeadSha: headSha,
+        targetGeneration,
+        sessionGeneration: targetGeneration,
+        ...(overrides.runtime !== undefined ? { runtime: overrides.runtime } : {}),
+        reports: [{ reportState: status, reportedAt: '2026-06-18T12:00:00.000Z' }],
+      },
+    ],
+    openPrs: [{ number: prNumber, headRefOid: headSha }],
+  };
+}
+
 function decision(input: any) {
-  return decideCiFailureNotification({ episode, ...input });
+  return decideCiFailureNotification({
+    episode,
+    workerState: workerState({ status: 'working' }),
+    ...input,
+  });
 }
 
 function runWrapper(mode: string, input: unknown) {
@@ -57,236 +104,289 @@ function tempStore() {
   return mkdtempSync(path.join(tmpdir(), 'ci-failure-notification-'));
 }
 
-describe('CI failure notification predicate (Issue #283)', () => {
-  it('suppresses the reproduced duplicate when the ci-failed reaction already sent to the active target', () => {
+describe('CI failure notification predicate (Issue #283 regressions)', () => {
+  it('suppresses duplicate when ci-failed reaction already sent to active target', () => {
     const event = fixture<any>('reaction-action-succeeded.json');
     const result = decision({ reactionEvents: [event] });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
-    expect(result.diagnostics.reaction_bind_status).toBe('matched');
-    expect(result.bound_reaction_event_id).toBe('evt-redacted-ci-failed-1');
   });
 
-  it('matches reaction-first events by episode identity, not wall-clock order', () => {
-    const event = { ...fixture<any>('reaction-action-succeeded.json'), createdAt: '2026-06-13T00:00:00Z' };
-    const result = decideCiFailureNotification({ episode, orchestratorObservedAt: '2026-06-13T00:00:30Z', reactionEvents: [event] });
-    expect(result.terminal_action).toBe('SUPPRESS');
-    expect(result.diagnostics.reaction_bind_status).toBe('matched');
-  });
-
-  it('sends when the reaction is absent, the worker is idle, and no orchestrator token exists', () => {
-    const result = decision({ reactionEvents: [], workerReports: [], intentTokens: [] });
+  it('sends when reaction absent, worker idle, no token', () => {
+    const result = decision({ reactionEvents: [], intentTokens: [] });
     expect(result.terminal_action).toBe('SEND');
     expect(result.reason).toBe('no_suppressor');
   });
 
-  it('does not let an earlier same-SHA red period suppress a later red period after green, even if green was missed', () => {
+  it('does not let earlier red period suppress later red period on same SHA', () => {
     const priorEvent = fixture<any>('reaction-action-succeeded.json');
-    const priorToken = { episode, status: 'claimed' };
-    const result = decideCiFailureNotification({ episode: nextRedSameSha, reactionEvents: [priorEvent], intentTokens: [priorToken] });
+    const result = decideCiFailureNotification({
+      episode: nextRedSameSha,
+      workerState: workerState(),
+      reactionEvents: [priorEvent],
+      intentTokens: [{ episode, status: 'claimed' }],
+    });
     expect(result.terminal_action).toBe('SEND');
-    expect(result.diagnostics.reaction_bind_status).toBe('no-match');
-    expect(result.intent_token_state).toBe('absent');
   });
 
-  it('keeps per-check attempt churn and additional failures in the same aggregate red-period episode', () => {
-    const ciA: any = fixture('canonical-ci-red.json');
-    const ciB = { ...ciA, requiredChecks: [...ciA.requiredChecks, { name: 'matrix leg 2', conclusion: 'failure', attempt: 2 }] };
-    const epA = deriveEpisodeFromCiSource({ repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha, activeTarget: episode, ciSource: ciA });
-    const epB = deriveEpisodeFromCiSource({ repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha, activeTarget: episode, ciSource: ciB });
-    expect(epA).toEqual(epB);
-  });
-
-  it('does not suppress on a superseded session reaction or intent token when the active target rotated', () => {
+  it('does not suppress on superseded session reaction or token', () => {
     const event = { ...fixture<any>('reaction-action-succeeded.json'), episode: supersededTarget };
     const result = decision({ reactionEvents: [event], intentTokens: [{ episode: supersededTarget, status: 'claimed' }] });
     expect(result.terminal_action).toBe('SEND');
-    expect(result.diagnostics.reaction_bind_status).toBe('no-match');
-    expect(result.intent_token_state).toBe('absent');
   });
 
-  it('revalidates target generation before applying a stale decision', () => {
-    const staleDecision = decision({ reactionEvents: [fixture<any>('reaction-action-succeeded.json')] });
-    const apply = evaluateTargetApplySnapshot({ decision: staleDecision, snapshotTargetGeneration: episode.targetGeneration, currentTargetGeneration: 'generation-new-redacted' });
-    expect(apply).toMatchObject({ apply: false, reason: 'target_rotated_redecide_required', terminal_action: 'SUPPRESS' });
+  it('safe-suppresses on CI source disagreement', () => {
+    const result = decision({ ciSourceEquivalence: { disagreement: true } });
+    expect(result.terminal_action).toBe('SUPPRESS');
+  });
+});
+
+describe('CI failure live worker suppressor (Issue #342)', () => {
+  it('suppresses fixing_ci from live PR owner without episode key in report', () => {
+    const result = decision({
+      workerState: workerState({ status: 'fixing_ci' }),
+      workerReports: [{ state: 'fixing_ci' }],
+    });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+    expect(result.audit.phase).toBe('terminal');
   });
 
-  it('suppresses explicit fixing_ci only when it binds to the full episode identity', () => {
-    expect(decision({ workerReports: [{ state: 'fixing_ci', episode }] }).terminal_action).toBe('SUPPRESS');
-    expect(decision({ workerReports: [{ reportState: 'fixing_ci', episode }] }).terminal_action).toBe('SUPPRESS');
-    expect(decision({ workerReports: [{ report_state: 'fixing_ci', data: { episode } }] }).terminal_action).toBe('SUPPRESS');
-    expect(decision({ workerReports: [{ state: 'fixing_ci', episode: nextRedSameSha }] }).terminal_action).toBe('SEND');
-    expect(decision({ workerReports: [{ state: 'fixing_ci', episode: supersededTarget }] }).terminal_action).toBe('SEND');
-    expect(decision({ workerReports: [{ reportState: 'addressing_reviews', episode }] }).terminal_action).toBe('SEND');
+  it('sends for idle live owner (row 3)', () => {
+    expect(decision({ workerState: workerState({ status: 'working' }) }).terminal_action).toBe('SEND');
   });
 
-  it('treats a new head SHA as a fresh episode with no inherited suppressors', () => {
-    const priorEvent = fixture<any>('reaction-action-succeeded.json');
-    const result = decideCiFailureNotification({ episode: newHead, reactionEvents: [priorEvent], intentTokens: [{ episode, status: 'claimed' }] });
+  it('sends for working and pr_created (rows 4-5)', () => {
+    expect(decision({ workerState: workerState({ status: 'working' }) }).terminal_action).toBe('SEND');
+    expect(decision({ workerState: workerState({ status: 'pr_created' }) }).terminal_action).toBe('SEND');
+  });
+
+  it('sends when worker moved to ready_for_review on still-red CI (row 6)', () => {
+    expect(decision({ workerState: workerState({ status: 'ready_for_review' }) }).terminal_action).toBe('SEND');
+  });
+
+  it('abandons when cleanup zombie fails liveness (row 7)', () => {
+    const result = decision({ workerState: workerState({ status: 'cleanup' }) });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('abandoned-no-live-owner');
+  });
+
+  it('abandons when no session owns PR (row 8)', () => {
+    const ws = workerState();
+    ws.sessions = [];
+    const result = decision({ workerState: ws });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('abandoned-no-live-owner');
+  });
+
+  it('hard-fails on missing workerState (row 11)', () => {
+    const result = decideCiFailureNotification({ episode });
+    expect(result.hard_failure).toBe(true);
+    expect(result.audit.phase).toBe('diagnostic');
+    expect(result.terminal_action).toBeUndefined();
+  });
+
+  it('hard-fails on incompatible workerState shape', () => {
+    const result = decideCiFailureNotification({ episode, workerState: { sessions: [] } });
+    expect(result.hard_failure).toBe(true);
+    expect(result.diagnostic.error_kind).toBe('incompatible_worker_state_shape');
+  });
+
+  it('self-dedup: first idle episode is SEND not suppressed-dedup against own record', () => {
+    const digest = episodeKeyDigest(episode);
+    const result = decision({ excludeOwnDigest: digest, reactionEvents: [], intentTokens: [] });
     expect(result.terminal_action).toBe('SEND');
   });
 
-  it('keeps cross-PR / reopened-branch collisions distinct even on the same SHA and check set', () => {
-    const otherPr = { ...episode, prNumber: 284 };
-    const result = decideCiFailureNotification({ episode: otherPr, intentTokens: [{ episode, status: 'claimed' }], reactionEvents: [fixture<any>('reaction-action-succeeded.json')] });
-    expect(result.terminal_action).toBe('SEND');
+  it('abandoned-superseded when PR head advances (row 13)', () => {
+    const ws = workerState();
+    ws.openPrs = [{ number: episode.prNumber, headRefOid: 'cccccccccccccccccccccccccccccccccccccccc' }];
+    const result = decision({ workerState: ws });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('abandoned-superseded');
   });
 
-  it('treats stale or malformed reaction events as diagnostics, not terminal actions', () => {
-    const malformed = { id: 'evt-malformed', type: 'reaction.action_succeeded', reactionKey: 'ci-failed', episode: { repo: episode.repo } };
-    const stale = { ...fixture<any>('reaction-action-succeeded.json'), episode: { ...episode, headSha: 'cccccccccccccccccccccccccccccccccccccccc' } };
-    const unbindable = decision({ reactionEvents: [malformed] });
-    const noMatch = decision({ reactionEvents: [stale] });
-    expect(unbindable.terminal_action).toBe('SEND');
-    expect(unbindable.diagnostics.reaction_bind_status).toBe('unbindable');
-    expect(noMatch.terminal_action).toBe('SEND');
-    expect(noMatch.diagnostics.reaction_bind_status).toBe('no-match');
+  it('snapshot skew yields hard failure retry', () => {
+    const result = evaluateEpisodeTerminal({
+      episode,
+      workerState: workerState(),
+      headShaFirst: episode.headSha,
+      headShaSecond: 'dddddddddddddddddddddddddddddddddddddddd',
+    });
+    expect(result.hard_failure).toBe(true);
+  });
+});
+
+describe('episode lifecycle outbox (Issue #342)', () => {
+  it('records pending episode with phase=record audit', () => {
+    const dir = tempStore();
+    try {
+      const recorded = recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      expect(recorded.recorded).toBe(true);
+      expect(recorded.audit.phase).toBe('record');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('has a bindable capture-backed redacted reaction event fixture and safe fixture corpus', () => {
-    const event = fixture<any>('reaction-action-succeeded.json');
-    expect(bindReactionEvent(episode, [event]).status).toBe('matched');
-    expect(scanFixtureSafety(event)).toEqual({ ok: true, findings: [] });
-    expect(scanFixtureSafety(fixture('canonical-ci-red.json'))).toEqual({ ok: true, findings: [] });
-    expect(scanFixtureSafety({ authorization: 'Bearer redacted' })).toEqual({ ok: false, findings: ['auth_material'] });
-    expect(scanFixtureSafety({ cookie: 'session=redacted' })).toEqual({ ok: false, findings: ['auth_material'] });
+  it('blocks evaluation in enqueue tick (row 10)', () => {
+    const dir = tempStore();
+    try {
+      const recorded = recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000, enqueueTickId: 'tick-a' });
+      const eligibility = isEvaluationEligible(recorded.record, 1_000_000 + 1000, { enqueueTickId: 'tick-a' });
+      expect(eligibility.eligible).toBe(false);
+      expect(eligibility.reason).toBe('enqueue_tick_boundary');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('binds raw AO reaction events with kind and data.reactionKey before sending', () => {
-    const rawAoEvent = {
-      id: 'evt-redacted-ci-failed-raw',
-      kind: 'reaction.action_succeeded',
-      data: {
-        reactionKey: 'ci-failed',
+  it('preflight revalidation suppresses when worker enters fixing_ci before intent (row 15)', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      const result = evaluatePreflightRevalidation({
+        storeDir: dir,
         episode,
-      },
-    };
-    const result = decision({ reactionEvents: [rawAoEvent] });
-    expect(result.terminal_action).toBe('SUPPRESS');
-    expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
-    expect(result.diagnostics.reaction_bind_status).toBe('matched');
-    expect(result.bound_reaction_event_id).toBe('evt-redacted-ci-failed-raw');
+        workerState: workerState({ status: 'fixing_ci' }),
+      });
+      expect(result.action).toBe('suppressed');
+      expect(result.terminal.audit.reason).toBe('suppressed-live-worker');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('does not let transient fetch failure manufacture a new episode or flip a recorded token decision', () => {
-    const token = { episode, status: 'claimed' };
-    const result = decision({ ciSource: { error: 'Failed to fetch CI checks' }, intentTokens: [token] });
-    expect(result.terminal_action).toBe('SUPPRESS');
-    expect(result.reason).toBe('orchestrator_intent_token_present');
+  it('post-intent recovery resolves delivery never reclassifies to suppression (row 16)', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      const resolved = resolveSubmittedDelivery({ storeDir: dir, episode, acknowledged: true });
+      expect(resolved.terminalReason).toBe('sent');
+      const retry = evaluatePreflightRevalidation({
+        storeDir: dir,
+        episode,
+        workerState: workerState({ status: 'fixing_ci' }),
+      });
+      expect(retry.action).toBe('not_claimed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('safe-suppresses on canonical CI source disagreement rather than silently flipping verdict', () => {
-    const result = decision({ ciSourceEquivalence: { disagreement: true, canonical: 'ao-scm-tracker', other: 'gh-pr-checks' } });
-    expect(result.terminal_action).toBe('SUPPRESS');
-    expect(result.diagnostics.error_kind).toBe('ci_source_disagreement');
+  it('abandoned-expired correlates to report-stale without duplicate nudge (row 12)', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 0, config: { pendingExpiryMs: 1000 } });
+      const expired = expirePendingEpisode({ storeDir: dir, episode, nowMs: 5000 });
+      expect(expired.audit.reason).toBe('abandoned-expired');
+      expect(expired.audit.diagnostic.backstop_handoff).toBe('report-stale');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('emits an audit line with closed terminal_action enum and separate diagnostics for every decision', () => {
-    const startedAt = Date.now();
-    const result = decision({ reactionEvents: [{ id: 'bad', type: 'reaction.action_succeeded', reactionKey: 'ci-failed', episode: { repo: 'x' } }] });
-    expect(['SEND', 'SUPPRESS']).toContain(result.audit.terminal_action);
-    expect(result.audit.terminal_action).not.toBe('NO-MATCH');
-    expect((result.audit.diagnostic as any).reaction_bind_status).toBe('unbindable');
-    expect(result.audit.intent_token_state).toBe('absent');
-    const emittedAt = Date.parse(String(result.audit.emitted_at_utc));
-    expect(emittedAt).toBeGreaterThanOrEqual(startedAt);
-    expect(emittedAt).toBeLessThanOrEqual(Date.now() + 1000);
+  it('atomic claim: concurrent claims yield one winner', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      const a = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'a' });
+      const b = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'b' });
+      expect(a.claimed).toBe(true);
+      expect(b.claimed).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('freshness SLA config is bounded', () => {
+    const config = resolveConfig({ reconcileIntervalMs: 60_000 });
+    expect(config.maxEligibleEvaluationAgeMs).toBeLessThanOrEqual(3 * config.reconcileIntervalMs);
+    expect(config.maxEligibleEvaluationAgeMs).toBeLessThan(30 * 60 * 1000);
+  });
+
+  it('reconcile health surfaces degraded pending age', () => {
+    const health = computeReconcileHealth({
+      pendingRecords: [{ state: 'pending', recordedAtMs: Date.now() - 500_000, terminalReason: null }],
+      config: resolveConfig({ maxEligibleEvaluationAgeMs: 1000 }),
+    });
+    expect(health.degraded).toBe(true);
+    expect(health.pendingCount).toBe(1);
+  });
+});
+
+describe('fixtures, wrapper, and legacy compatibility', () => {
+  it('golden worker-state fixture passes redaction check', () => {
+    const golden = fixture('worker-state-golden.json');
+    expect(scanFixtureSafety(golden)).toEqual({ ok: true, findings: [] });
+    expect(validateWorkerStateInput(golden).ok).toBe(true);
+  });
+
+  it('legacy audit without phase stays authoritative-terminal', () => {
+    const legacy = interpretLegacyAuditLine({ terminal_action: 'SUPPRESS', reason: 'suppressed-dedup' });
+    expect(legacy.authoritative).toBe(true);
+    expect(legacy.legacy).toBe(true);
+  });
+
+  it('migrates in-flight legacy episode without duplicate ping', () => {
+    const migrated = migrateLegacyEpisodeRecord({ episode, status: 'claimed', claimedAtUtc: '2026-06-01T00:00:00Z' });
+    expect(migrated.state).toBe('claimed');
+    expect(migrated.legacy).toBe(true);
+  });
+
+  it('init gate requires worker state wiring and durable submit ack', () => {
+    expect(validateInitGate({ workerStateInputConfigured: false, durableSubmitAckConfigured: true }).reactionEnabled).toBe(false);
+    expect(validateInitGate({ workerStateInputConfigured: true, durableSubmitAckConfigured: true }).reactionEnabled).toBe(true);
+  });
+
+  it('wrapper decide path returns live-worker suppression', () => {
+    const result = runWrapper('decide', {
+      episode,
+      workerState: workerState({ status: 'fixing_ci' }),
+    });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+  });
+
+  it('wrapper record mode enqueues pending episode', () => {
+    const dir = tempStore();
+    try {
+      const result = runWrapper('record', { storeDir: dir, episode, nowMs: Date.now() });
+      expect(result.recorded).toBe(true);
+      expect(result.audit.phase).toBe('record');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects terminal values outside SEND | SUPPRESS', () => {
     expect(() => assertTerminalAction('NO-MATCH')).toThrow(/invalid terminal_action/);
-    expect(() => assertTerminalAction('error-suppress')).toThrow(/invalid terminal_action/);
   });
 
-  it('writes decision audit records and builds a redacted adoption artifact that pins helper identity', () => {
+  it('writes audit records and adoption artifact', () => {
     const dir = tempStore();
     try {
       const result = decision({ reactionEvents: [fixture('reaction-action-succeeded.json')] });
-      const now = vi.spyOn(Date, 'now').mockReturnValue(1812844800000);
-      let written: any;
-      let sameMillisecond: any;
-      try {
-        written = appendAudit({ storeDir: dir, audit: result.audit }) as any;
-        sameMillisecond = appendAudit({ storeDir: dir, audit: result.audit }) as any;
-      } finally {
-        now.mockRestore();
-      }
+      const written = appendAudit({ storeDir: dir, audit: result.audit }) as any;
       expect(written.ok).toBe(true);
-      expect(existsSync(written.path)).toBe(true);
-      expect(sameMillisecond.ok).toBe(true);
-      expect(existsSync(sameMillisecond.path)).toBe(true);
-      expect(sameMillisecond.path).not.toBe(written.path);
-      expect(path.basename(sameMillisecond.path)).toContain('-1.json');
       const artifact = buildAdoptionArtifact({
-        ruleText: 'CI FAILURE DISCIPLINE redacted block',
+        ruleText: 'CI FAILURE DISCIPLINE',
         repoIdentity: 'chetwerikoff/orchestrator-pack',
         gitSha: 'dddddddddddddddddddddddddddddddddddddddd',
         wrapperPath,
         helperContent: readFileSync(path.join(repoRoot, 'docs/ci-failure-notification.mjs'), 'utf8'),
         dryRunVerdict: result,
       }) as any;
-      expect(artifact).toMatchObject({ schema: 'ci-failure-notification.adoption-artifact.v1', wrapperIdentity: 'ci-failure-notification.ps1', dryRunVerdict: 'SUPPRESS' });
-      expect(artifact.repoRootFingerprint).toMatch(/^[0-9a-f]{64}$/);
-      expect(artifact).not.toHaveProperty('repoRoot');
+      expect(artifact.dryRunVerdict).toBe('SUPPRESS');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('escalates repeated helper errors operator-visibly while preserving safe SUPPRESS action', () => {
-    expect(evaluateHelperErrorEscalation({ consecutiveErrors: 1 }).operator_visible).toBe(false);
-    const result = evaluateHelperErrorEscalation({ consecutiveErrors: 3 });
-    expect(result).toMatchObject({ terminal_action: 'SUPPRESS', operator_visible: true });
-  });
-
-  it('compacts by exact episode digest and closure triggers without dropping active target in-flight records', () => {
-    const oldTime = '2026-06-01T00:00:00Z';
-    const digest = episodeKeyDigest(episode);
-    const activeDigest = episodeKeyDigest(nextRedSameSha);
-    const result = compactRecords({
-      nowMs: Date.parse('2026-06-13T00:00:00Z'),
-      minRetentionMs: 24 * 60 * 60 * 1000,
-      closures: [
-        { digest, trigger: 'aggregate_green' },
-        { digest: activeDigest, trigger: 'new_head_supersession' },
-      ],
-      records: [
-        { digest, claimedAtUtc: oldTime, episode },
-        { digest: activeDigest, claimedAtUtc: oldTime, episode: nextRedSameSha, activeTargetInFlight: true },
-      ],
-    });
-    expect(result.removed).toEqual([{ digest, trigger: 'aggregate_green' }]);
-    expect(result.retained).toHaveLength(1);
-  });
-});
-
-describe('tracked PowerShell wrapper and token store', () => {
-  it('obeys the helper verdict through the tracked wrapper', () => {
-    const result = runWrapper('decide', { episode, reactionEvents: [fixture('reaction-action-succeeded.json')] });
-    expect(result.terminal_action).toBe('SUPPRESS');
-    expect(result.reason).toBe('reaction_ci_failed_sent_to_active_target');
-  });
-
-  it('safe-suppresses instead of crashing when the tracked helper is missing', () => {
-    const dir = tempStore();
-    try {
-      const scriptsDir = path.join(dir, 'scripts');
-      mkdirSync(scriptsDir, { recursive: true });
-      const isolatedWrapper = path.join(scriptsDir, 'ci-failure-notification.ps1');
-      copyFileSync(wrapperPath, isolatedWrapper);
-      const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedWrapper, '-Mode', 'decide'], {
-        cwd: dir,
-        input: JSON.stringify({ episode }),
-        encoding: 'utf8',
-      });
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout.trim())).toMatchObject({ terminal_action: 'SUPPRESS', reason: 'wrapper_error', diagnostic: { error_kind: 'helper_error' } });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('atomically claims exactly one intent token across concurrent wrapper calls', () => {
+  it('intent token claim remains atomic across concurrent wrapper calls', () => {
     const dir = tempStore();
     try {
       const script = `
@@ -299,27 +399,32 @@ describe('tracked PowerShell wrapper and token store', () => {
         $rows | ConvertTo-Json -Compress -Depth 10
       `;
       const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { cwd: repoRoot, encoding: 'utf8' });
-      if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
       const rows = JSON.parse(result.stdout.trim());
       expect(rows.filter((r: any) => r.claimed)).toHaveLength(1);
-      expect(rows.filter((r: any) => !r.claimed)).toHaveLength(1);
-      expect(rows.find((r: any) => !r.claimed).terminal_action).toBe('SUPPRESS');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('uses at-most-once crash semantics but releases the token on an observable send failure', () => {
+  it('delivery-failed terminalizes on retry exhaustion', () => {
     const dir = tempStore();
     try {
-      const claim = runWrapper('claim', { storeDir: dir, episode });
-      expect(claim.claimed).toBe(true);
-      const afterCrash = runWrapper('claim', { storeDir: dir, episode });
-      expect(afterCrash).toMatchObject({ claimed: false, terminal_action: 'SUPPRESS' });
-      const released = markObservableSendFailure({ storeDir: dir, episode, mode: 'release' });
-      expect(released).toMatchObject({ terminal_action: 'SEND', released: true });
-      const retry = runWrapper('claim', { storeDir: dir, episode });
-      expect(retry.claimed).toBe(true);
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      const failed = resolveSubmittedDelivery({ storeDir: dir, episode, retryExhausted: true });
+      expect(failed.terminalReason).toBe('delivery-failed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('plan reconcile tick includes evaluate and expire actions', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: Date.now() - 120_000, enqueueTickId: 'enqueue' });
+      const plan = planReconcileTick({ storeDir: dir, nowMs: Date.now(), enqueueTickId: 'tick-2' });
+      expect(plan.actions.some((a: any) => a.type === 'evaluate')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

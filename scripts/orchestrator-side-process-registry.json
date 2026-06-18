@@ -9,7 +9,8 @@
     "review-send-reconcile",
     "review-finding-delivery-confirm",
     "worker-message-submit-reconcile",
-    "review-run-recovery"
+    "review-run-recovery",
+    "ci-failure-notification-reconcile"
   ],
   "children": [
     {
@@ -104,6 +105,16 @@
       "script": "review-run-recovery.ps1",
       "sideEffecting": true,
       "sideEffectLockFile": "review-run-recovery-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 60,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "ci-failure-notification-reconcile",
+      "script": "ci-failure-notification-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "ci-failure-notification-side-effect.lock",
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,
