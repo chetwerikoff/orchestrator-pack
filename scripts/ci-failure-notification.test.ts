@@ -360,10 +360,10 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       reserveSubmitIntent({ storeDir: dir, episode });
       const beforeSend = reserveSubmitIntent({ storeDir: dir, episode });
       expect(beforeSend.reentry).toBe(true);
-      expect(beforeSend.record.sendDeliveredAtMs).toBeUndefined();
+      expect((beforeSend.record as { sendDeliveredAtMs?: number }).sendDeliveredAtMs).toBeUndefined();
       markSendDelivered({ storeDir: dir, episode });
       const afterSend = reserveSubmitIntent({ storeDir: dir, episode });
-      expect(afterSend.record.sendDeliveredAtMs).toBeTruthy();
+      expect((afterSend.record as { sendDeliveredAtMs?: number }).sendDeliveredAtMs).toBeTruthy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
