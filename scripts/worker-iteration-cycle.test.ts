@@ -401,6 +401,53 @@ describe('shared cycle state merge', () => {
     ) as { ownerCycles?: Record<string, { nudgeArmed?: boolean }> };
     expect(merged.ownerCycles?.[ownerKey]?.nudgeArmed).toBe(true);
   });
+
+  it('does not import ci-green nudge arms when shared cycleId differs from local', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'local-new-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: nowMs,
+            nudgeArmed: false,
+          },
+        },
+      },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'cg-old-cycle',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs - 1000,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS - 1000,
+            nudgeExpiredFallbackPending: true,
+          },
+        },
+      },
+    ) as {
+      ownerCycles?: Record<
+        string,
+        {
+          cycleId?: string;
+          nudgeArmed?: boolean;
+          nudgeExpiredFallbackPending?: boolean;
+        }
+      >;
+    };
+    const cycle = merged.ownerCycles?.[ownerKey];
+    expect(cycle?.cycleId).toBe('local-new-cycle');
+    expect(cycle?.nudgeArmed).toBe(false);
+    expect(cycle?.nudgeExpiredFallbackPending).toBe(false);
+  });
 });
 
 describe('pending delivery staleness', () => {

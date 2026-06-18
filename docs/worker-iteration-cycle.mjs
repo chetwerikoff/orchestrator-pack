@@ -984,8 +984,22 @@ export function patchOwnerCycle(cycle, patch) {
 }
 
 /**
+ * @param {Record<string, unknown>} local
+ * @param {Record<string, unknown>} shared
+ */
+function ownerCyclesShareIdentity(local, shared) {
+  const localId = String(local.cycleId ?? '');
+  const sharedId = String(shared.cycleId ?? '');
+  if (!localId || !sharedId) {
+    return true;
+  }
+  return localId === sharedId;
+}
+
+/**
  * Merge owner-cycle rows from ci-green-wake into review-trigger local state.
  * Ci-green is authoritative for nudge arms; review-trigger keeps review arms.
+ * Nudge fields merge only when both records represent the same cycle.
  *
  * @param {Record<string, unknown>} localRecord
  * @param {Record<string, unknown>} sharedRecord
@@ -994,14 +1008,21 @@ function mergeOwnerCycleRecords(localRecord, sharedRecord) {
   const local = defaultOwnerCycleRecord(localRecord);
   const shared = defaultOwnerCycleRecord(sharedRecord);
   const merged = { ...local, ...shared };
-  const localNudgeAt = Number(local.nudgeSentAtMs ?? 0);
-  const sharedNudgeAt = Number(shared.nudgeSentAtMs ?? 0);
-  if (shared.nudgeArmed && sharedNudgeAt >= localNudgeAt) {
-    merged.nudgeArmed = shared.nudgeArmed;
-    merged.nudgeSentAtMs = shared.nudgeSentAtMs;
-    merged.nudgeExpiresAtMs = shared.nudgeExpiresAtMs;
-    merged.nudgeExpiredFallbackPending = shared.nudgeExpiredFallbackPending;
-  } else if (local.nudgeArmed) {
+  if (ownerCyclesShareIdentity(local, shared)) {
+    const localNudgeAt = Number(local.nudgeSentAtMs ?? 0);
+    const sharedNudgeAt = Number(shared.nudgeSentAtMs ?? 0);
+    if (shared.nudgeArmed && sharedNudgeAt >= localNudgeAt) {
+      merged.nudgeArmed = shared.nudgeArmed;
+      merged.nudgeSentAtMs = shared.nudgeSentAtMs;
+      merged.nudgeExpiresAtMs = shared.nudgeExpiresAtMs;
+      merged.nudgeExpiredFallbackPending = shared.nudgeExpiredFallbackPending;
+    } else if (local.nudgeArmed) {
+      merged.nudgeArmed = local.nudgeArmed;
+      merged.nudgeSentAtMs = local.nudgeSentAtMs;
+      merged.nudgeExpiresAtMs = local.nudgeExpiresAtMs;
+      merged.nudgeExpiredFallbackPending = local.nudgeExpiredFallbackPending;
+    }
+  } else {
     merged.nudgeArmed = local.nudgeArmed;
     merged.nudgeSentAtMs = local.nudgeSentAtMs;
     merged.nudgeExpiresAtMs = local.nudgeExpiresAtMs;
