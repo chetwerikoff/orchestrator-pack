@@ -1171,7 +1171,7 @@ describe('review-trigger-reconcile.ps1 fixture wiring', () => {
   });
 
   it('preserves fixture cycle evidence instead of overwriting with empty tracking', () => {
-    const base = loadFixture('quiescent-pr260-opk-37.json') as Record<string, unknown>;
+    const base = loadFixture('quiescent-pr260-opk-37.json');
     const nowMs = Number(base.nowMs ?? Date.now());
     const sessionId = 'opk-37';
     const prNumber = 260;
