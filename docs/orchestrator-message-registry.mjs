@@ -798,6 +798,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   339: [
     'docs/worker-message-submit-reconcile.mjs',
     'scripts/lib/Record-WorkerMessageDispatch.ps1',
+    'scripts/worker-message-submit-reconcile.ps1',
   ],
 };
 

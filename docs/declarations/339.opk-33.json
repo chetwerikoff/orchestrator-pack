@@ -21,6 +21,7 @@
     "scripts/lib/MechanicalReconcileNode.ps1",
     "scripts/lib/Record-WorkerMessageDispatch.ps1",
     "scripts/mechanical-reconcile-bounds.test.ts",
+    "scripts/worker-message-submit-reconcile.ps1",
     "scripts/orchestrator-message-protected-runtime.manifest.json"
   ],
   "declared_globs": [
