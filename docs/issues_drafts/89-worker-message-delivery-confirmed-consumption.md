@@ -1,6 +1,6 @@
 # Source-agnostic worker-message delivery with confirmed consumption
 
-GitHub Issue: TBD
+GitHub Issue: #347
 
 ## Prerequisite
 

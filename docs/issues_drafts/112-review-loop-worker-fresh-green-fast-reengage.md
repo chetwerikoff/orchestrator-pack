@@ -1,6 +1,6 @@
 # Fast re-engagement for a review-loop worker idling on a fresh green head it never re-reported
 
-GitHub Issue: TBD
+GitHub Issue: #348
 
 ## Prerequisite
 
