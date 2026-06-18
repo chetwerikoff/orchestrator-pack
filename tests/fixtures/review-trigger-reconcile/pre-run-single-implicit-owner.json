@@ -33,28 +33,7 @@
       { "name": "PR scope guard", "state": "SUCCESS" },
       { "name": "Run pack contract tests", "state": "SUCCESS" },
       { "name": "Self-architect lint", "state": "SUCCESS" }
-    ],
-    "sharedCycleState": {
-      "repoId": "orchestrator-pack",
-      "ownerCycles": {
-        "orchestrator-pack:pr:260:owner:opk-37": {
-          "cycleId": "orchestrator-pack:260:opk-37:seed",
-          "ownerSessionId": "opk-37",
-          "prNumber": 260,
-          "openedAtMs": 1781092800000,
-          "nudgeArmed": true,
-          "nudgeSentAtMs": 1781092800000,
-          "nudgeExpiresAtMs": 1781096399000,
-          "nudgeExpiredFallbackPending": true
-        }
-      }
-    },
-    "legacyNudged": {
-      "260:42bf1490dbe8829667d2835b937a33e7af9d82f1:1:nudge": {
-        "sessionId": "opk-37",
-        "sentAtMs": 1781092800000
-      }
-    }
+    ]
   },
   "expect": {
     "emitReviewRun": true,

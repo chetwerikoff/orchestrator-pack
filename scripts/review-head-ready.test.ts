@@ -517,7 +517,31 @@ describe('preRunHeadReadyRecheck', () => {
       };
       expect: { emitReviewRun: boolean; reasonPrefix: string };
     }>('pre-run-single-implicit-owner.json');
-    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
+    const nowMs = Number(fixture.fresh.nowMs ?? Date.now());
+    const result = preRunHeadReadyRecheck(fixture.planned, {
+      ...fixture.fresh,
+      sharedCycleState: {
+        repoId: 'orchestrator-pack',
+        ownerCycles: {
+          'orchestrator-pack:pr:260:owner:opk-37': {
+            cycleId: 'orchestrator-pack:260:opk-37:seed',
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+            nudgeExpiresAtMs: nowMs - 1000,
+            nudgeExpiredFallbackPending: true,
+          },
+        },
+      },
+      legacyNudged: {
+        '260:42bf1490dbe8829667d2835b937a33e7af9d82f1:1:nudge': {
+          sessionId: 'opk-37',
+          sentAtMs: nowMs - NUDGE_EXPIRY_MS - 1000,
+        },
+      },
+    });
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toMatch(new RegExp(`^${fixture.expect.reasonPrefix}`));
   });
