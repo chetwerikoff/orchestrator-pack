@@ -26,6 +26,7 @@ export const DEFAULT_MIN_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
 export const DEFAULT_MAX_ELIGIBLE_EVALUATION_AGE_MS = 180_000;
 export const DEFAULT_PENDING_EXPIRY_MS = 30 * 60 * 1000;
+export const DEFAULT_CLAIM_STALE_MS = 60 * 1000;
 export const REPORT_STALE_BACKSTOP_MS = 30 * 60 * 1000;
 
 export const TERMINAL_REASONS = Object.freeze([
@@ -182,10 +183,16 @@ export function resolveConfig(input = {}) {
     DEFAULT_PENDING_EXPIRY_MS,
     reconcileIntervalMs,
   );
+  const claimStaleMs = resolveBoundedInt(
+    input.claimStaleMs,
+    Math.max(3 * reconcileIntervalMs, DEFAULT_CLAIM_STALE_MS),
+    1000,
+  );
   return {
     reconcileIntervalMs,
     maxEligibleEvaluationAgeMs: Math.min(maxEligibleEvaluationAgeMs, REPORT_STALE_BACKSTOP_MS - 1),
     pendingExpiryMs: Math.min(pendingExpiryMs, REPORT_STALE_BACKSTOP_MS),
+    claimStaleMs,
   };
 }
 
@@ -885,6 +892,19 @@ export function ensureStore(root) {
   mkdirSync(path.join(root, 'claims'), { recursive: true });
 }
 
+function isPreflightClaimStale(existingClaim, nowMs, config = resolveConfig()) {
+  const claimSinceMs = Number(existingClaim?.claimedAtMs ?? 0);
+  if (claimSinceMs <= 0) {
+    return true;
+  }
+  const claimStaleMs = resolveBoundedInt(
+    config.claimStaleMs,
+    Math.max(3 * Number(config.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS), DEFAULT_CLAIM_STALE_MS),
+    1000,
+  );
+  return nowMs - claimSinceMs >= claimStaleMs;
+}
+
 function safeEpisodeClaimName(digest) {
   return `${String(digest ?? '').trim()}.json`;
 }
@@ -977,6 +997,7 @@ export function claimEpisodePreflight(input) {
   const digest = episodeKeyDigest(episode);
   const claimOwner = String(input?.claimOwner ?? 'reconcile');
   const nowMs = Number(input?.nowMs) || Date.now();
+  const config = resolveConfig(input?.config);
   ensureStore(storeDir);
   const record = readEpisodeRecord(storeDir, episode);
   if (!record) return { claimed: false, reason: 'missing_record' };
@@ -1008,6 +1029,9 @@ export function claimEpisodePreflight(input) {
         return { claimed: false, reason: 'claim_held_by_other', record };
       }
       if (record.state === 'pending') {
+        if (!isPreflightClaimStale(existingClaim, nowMs, config)) {
+          return { claimed: false, reason: 'claim_held_by_other', record };
+        }
         const recovered = {
           ...record,
           state: 'claimed',
@@ -1045,8 +1069,21 @@ export function claimEpisodePreflight(input) {
     if (fd !== undefined) closeSync(fd);
   }
 
+  const latest = readEpisodeRecord(storeDir, episode);
+  if (!latest) return { claimed: false, reason: 'missing_record' };
+  if (latest.terminalReason) return { claimed: false, reason: 'already_terminal', record: latest };
+  if (latest.state === 'claimed') {
+    if (latest.claimOwner === claimOwner) {
+      return { claimed: true, record: latest, reentry: true };
+    }
+    return { claimed: false, reason: 'claim_held_by_other', record: latest };
+  }
+  if (latest.state !== 'pending') {
+    return { claimed: false, reason: 'invalid_prior_state', record: latest };
+  }
+
   const updated = {
-    ...record,
+    ...latest,
     state: 'claimed',
     claimOwner,
     claimedAtMs: nowMs,

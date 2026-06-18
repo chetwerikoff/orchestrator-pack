@@ -31,6 +31,7 @@ export declare const DEFAULT_MIN_RETENTION_MS: number;
 export declare const DEFAULT_RECONCILE_INTERVAL_MS: number;
 export declare const DEFAULT_MAX_ELIGIBLE_EVALUATION_AGE_MS: number;
 export declare const DEFAULT_PENDING_EXPIRY_MS: number;
+export declare const DEFAULT_CLAIM_STALE_MS: number;
 export declare const REPORT_STALE_BACKSTOP_MS: number;
 export declare const TERMINAL_REASONS: readonly string[];
 export declare const EPISODE_OUTBOX_STATES: readonly string[];

@@ -571,11 +571,35 @@ describe('episode lifecycle outbox (Issue #342)', () => {
         claimedAtUtc: '2026-06-01T00:00:00.000Z',
       })}
 `);
-      const result = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'new-tick' });
+      const result = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'new-tick', nowMs: 1_000_000 + 200_000 });
       expect(result.claimed).toBe(true);
       expect(result.orphanReclaimed).toBe(true);
       expect((result.record as { state?: string }).state).toBe('claimed');
       expect((result.record as { claimOwner?: string }).claimOwner).toBe('new-tick');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reclaim an active preflight claim while episode record is still pending', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      const digest = episodeKeyDigest(episode);
+      const claimPath = path.join(dir, 'claims', `${digest}.json`);
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      const nowMs = 1_000_000;
+      writeFileSync(claimPath, `${JSON.stringify({
+        schema: 'ci-failure-notification.claim.v1',
+        digest,
+        claimOwner: 'active-tick',
+        claimedAtMs: nowMs,
+        claimedAtUtc: new Date(nowMs).toISOString(),
+      })}
+`);
+      const result = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'new-tick', nowMs: nowMs + 1_000 });
+      expect(result.claimed).toBe(false);
+      expect(result.reason).toBe('claim_held_by_other');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
