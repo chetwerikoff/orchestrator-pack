@@ -35,7 +35,6 @@ if (-not $RepoRoot) {
 }
 
 $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
-$CiGreenWakeFilterCli = Join-Path $PackRoot 'docs/ci-green-wake-reconcile.mjs'
 $Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
@@ -47,6 +46,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
 function Get-ReconcileIntervalMinutes {
@@ -158,18 +158,6 @@ function Set-ReconcileState {
     )
 
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReconcileDefaultState -JsonDepth 30
-}
-
-function Get-ReconcileChecksByPr {
-    param([array]$OpenPrs)
-
-    return Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @($OpenPrs) `
-        -MergeRequiredNames {
-            param($payload)
-            Invoke-MechanicalNodeFilterCli -FilterCliPath $CiGreenWakeFilterCli -Subcommand 'merge-required-names' `
-                -Payload $payload -Label 'ci-green-wake-reconcile' -JsonDepth 20
-        } `
-        -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as degraded'
 }
 
 function Get-ReconcileReactionMessages {
@@ -291,7 +279,7 @@ function Get-PreRunRecheckSnapshot {
         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
-        $checksBundle = Get-ReconcileChecksByPr -OpenPrs @(
+        $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
         $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
@@ -531,7 +519,7 @@ function Invoke-ReconcileTick {
         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
-        $checksBundle = Get-ReconcileChecksByPr -OpenPrs @($openPrs)
+        $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @($openPrs)
         $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
         $payload = @{
             openPrs                       = @($openPrs)

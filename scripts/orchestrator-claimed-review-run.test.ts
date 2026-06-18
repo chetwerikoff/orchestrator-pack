@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -357,5 +357,134 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     );
     expect(result.status).toBe(93);
     expect(result.stderr).toMatch(/autonomous review-starts paused/i);
+  });
+});
+
+describe('claimed review-start dependency closure (#335)', () => {
+  const reconcileChecksHelperPath = path.join(repoRoot, 'scripts/lib/Get-ReconcileChecksByPr.ps1');
+  const issue335Sha = 'abc3350000000000000000000000000000000000';
+
+  function listGetReconcileChecksByPrDefinitions(): string[] {
+    const matches: string[] = [];
+    const scan = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scan(fullPath);
+          continue;
+        }
+        if (!entry.name.endsWith('.ps1')) {
+          continue;
+        }
+        const text = readFileSync(fullPath, 'utf8');
+        if (/function\s+Get-ReconcileChecksByPr\b/.test(text)) {
+          matches.push(path.relative(repoRoot, fullPath));
+        }
+      }
+    };
+    scan(path.join(repoRoot, 'scripts'));
+    return matches.sort();
+  }
+
+  it('defines Get-ReconcileChecksByPr exactly once in scripts/lib', () => {
+    expect(listGetReconcileChecksByPrDefinitions()).toEqual(['scripts/lib/Get-ReconcileChecksByPr.ps1']);
+  });
+
+  it('loads Get-ReconcileChecksByPr into the claimed path closure', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      if (-not (Get-Command Get-ReconcileChecksByPr -ErrorAction SilentlyContinue)) {
+        throw 'Get-ReconcileChecksByPr missing from claimed review-start load closure'
+      }
+      'ok'
+    `);
+    expect(output).toBe('ok');
+  });
+
+  it('non-fixture snapshot resolves checks bundle and reaches head-ready gate evaluation', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'orch-claimed-nonfixture-'));
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
+        function Invoke-GhOpenPrList {
+          param([string]$RepoRoot)
+          @(@{ number = 335; headRefOid = '${issue335Sha}'; headCommittedAt = '2026-06-18T00:00:00.000Z' })
+        }
+        function Get-AoReviewRuns { param([string]$Project) @() }
+        function Get-AoStatusSessions {
+          @(@{
+            name = 'opk-335'
+            role = 'worker'
+            prNumber = 335
+            status = 'ready_for_review'
+            reports = @(@{ reportState = 'ready_for_review'; reportedAt = '2026-06-18T00:00:00.000Z' })
+          })
+        }
+        $script:resolveCalls = 0
+        function Get-GhChecksBundleByPr {
+          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
+          $script:resolveCalls++
+          @{
+            ciChecksByPr = @{
+              '335' = @(
+                @{ name = 'Verify orchestrator-pack structure'; state = 'SUCCESS' },
+                @{ name = 'PR scope guard'; state = 'SUCCESS' },
+                @{ name = 'Run pack contract tests'; state = 'SUCCESS' },
+                @{ name = 'Self-architect lint'; state = 'SUCCESS' }
+              )
+            }
+            requiredCheckNamesByPr = @{
+              '335' = @(
+                'Verify orchestrator-pack structure',
+                'PR scope guard',
+                'Run pack contract tests',
+                'Self-architect lint'
+              )
+            }
+            requiredCheckLookupFailedByPr = @{ '335' = $false }
+          }
+        }
+        $snap = Get-OrchestratorClaimedReviewSnapshot -PrNumber 335 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -FixtureSnapshot $null
+        if ($script:resolveCalls -lt 1) { throw 'checks-bundle resolver was not invoked on non-fixture path' }
+        if (-not $snap.ciChecksByPr.ContainsKey('335')) { throw 'snapshot missing ciChecksByPr for target PR' }
+        $result = Invoke-OrchestratorClaimedReviewRun -SessionId 'opk-335' -ReviewCommand 'echo review' -PrNumber 335 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -DryRun -AuditRoot ${psString(path.join(dir, 'audit'))} -LogWriter { param($m) }
+        [pscustomobject]@{
+          resolveCalls = $script:resolveCalls
+          started = [bool]$result.started
+          reason = [string]$result.reason
+          deniedBeforeClaim = [bool]$result.deniedBeforeClaim
+        } | ConvertTo-Json -Compress
+      `;
+      const parsed = JSON.parse(runPwsh(script));
+      expect(parsed.resolveCalls).toBeGreaterThanOrEqual(1);
+      expect(parsed.started).toBe(true);
+      expect(parsed.reason).toBe('dry_run');
+      expect(parsed.deniedBeforeClaim).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('shared reconcile helper is loadable without review-trigger-reconcile.ps1', () => {
+    const output = runPwsh(`
+      . ${psString(reconcileChecksHelperPath)}
+      if (-not (Get-Command Get-ReconcileChecksByPr -ErrorAction SilentlyContinue)) {
+        throw 'shared helper failed to define Get-ReconcileChecksByPr'
+      }
+      'ok'
+    `);
+    expect(output).toBe('ok');
+  });
+
+  it('returns an empty bundle when OpenPrs is an empty collection', () => {
+    const output = runPwsh(`
+      . ${psString(reconcileChecksHelperPath)}
+      $bundle = Get-ReconcileChecksByPr -RepoRoot ${psString(repoRoot)} -OpenPrs @()
+      if (@($bundle.ciChecksByPr.Keys).Count -ne 0) { throw 'expected empty ciChecksByPr' }
+      if (@($bundle.requiredCheckNamesByPr.Keys).Count -ne 0) { throw 'expected empty requiredCheckNamesByPr' }
+      'ok'
+    `);
+    expect(output).toBe('ok');
   });
 });
