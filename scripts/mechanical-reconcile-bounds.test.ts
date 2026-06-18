@@ -13,6 +13,7 @@ import {
   convergeOversizedReconcileState,
   evaluateDispatchJournalAdmission,
   evaluateSubmitTrackingCapacity,
+  estimateSerializedUtf8Bytes,
   interpretDispatchFenceLifecycle,
   isSubmitDeliveryEvictable,
   maxChildOutputBytesForStorage,
@@ -171,6 +172,38 @@ describe('dispatch journal admission', () => {
     }, nowMs);
     expect(admitted.ok).toBe(true);
     expect((admitted.record as Record<string, unknown>)?.fenceLifecycle).toBe('pending');
+  });
+
+  it('measures the complete journal including property keys before admitting', () => {
+    const nowMs = Date.now();
+    const longDeliveryId = `k-${'x'.repeat(8000)}`;
+    const journal: Record<string, unknown> = {
+      keep: {
+        deliveryId: 'keep',
+        sessionId: 's1',
+        deliveredAtMs: nowMs - 1000,
+        dispatchOutcome: 'dispatched',
+        draftState: 'draft_present',
+        blob: 'a'.repeat(MECHANICAL_STORAGE_CEILING_BYTES - 9000),
+      },
+    };
+    const candidate = withPendingDispatchFence({
+      deliveryId: longDeliveryId,
+      sessionId: 's1',
+      deliveredAtMs: nowMs,
+      dispatchOutcome: 'dispatch_in_flight',
+      draftState: 'draft_present',
+    });
+    const currentBytes = estimateSerializedUtf8Bytes(journal);
+    const legacyReservedBytes = estimateSerializedUtf8Bytes(candidate);
+    const admittedJournalBytes = estimateSerializedUtf8Bytes({ ...journal, [longDeliveryId]: candidate });
+
+    expect(currentBytes + legacyReservedBytes).toBeLessThanOrEqual(MECHANICAL_STORAGE_CEILING_BYTES);
+    expect(admittedJournalBytes).toBeGreaterThan(MECHANICAL_STORAGE_CEILING_BYTES);
+
+    const admission = evaluateDispatchJournalAdmission(journal, candidate);
+    expect(admission.ok).toBe(false);
+    expect(admission.reason).toBe('over_capacity');
   });
 });
 

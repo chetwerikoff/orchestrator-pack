@@ -266,25 +266,45 @@ export function worstCaseDispatchJournalRecord(record) {
  * @param {number} [ceilingBytes]
  */
 export function evaluateDispatchJournalAdmission(journal, candidateRecord, ceilingBytes = MECHANICAL_STORAGE_CEILING_BYTES) {
-  const currentBytes = estimateSerializedUtf8Bytes(journal ?? {});
-  const pendingBytes = estimateSerializedUtf8Bytes({
-    ...candidateRecord,
-    fenceLifecycle: FENCE_LIFECYCLE_PENDING,
-  });
-  const terminalBytes = estimateSerializedUtf8Bytes(worstCaseDispatchJournalRecord(candidateRecord));
-  const reservedBytes = Math.max(pendingBytes, terminalBytes);
+  const baseJournal = { ...(journal ?? {}) };
+  const currentBytes = estimateSerializedUtf8Bytes(baseJournal);
+  const deliveryId = trimString(candidateRecord?.deliveryId);
+  if (!deliveryId) {
+    return {
+      ok: false,
+      reason: 'invalid_delivery_id',
+      currentBytes,
+      ceilingBytes,
+    };
+  }
 
-  if (currentBytes + reservedBytes > ceilingBytes) {
+  const pendingJournal = { ...baseJournal, [deliveryId]: candidateRecord };
+  const pendingJournalBytes = estimateSerializedUtf8Bytes(pendingJournal);
+  const terminalJournal = {
+    ...baseJournal,
+    [deliveryId]: worstCaseDispatchJournalRecord(candidateRecord),
+  };
+  const terminalJournalBytes = estimateSerializedUtf8Bytes(terminalJournal);
+
+  if (pendingJournalBytes > ceilingBytes || terminalJournalBytes > ceilingBytes) {
     return {
       ok: false,
       reason: 'over_capacity',
       backpressure: true,
       currentBytes,
-      reservedBytes,
+      admittedBytes: pendingJournalBytes,
+      terminalJournalBytes,
       ceilingBytes,
     };
   }
-  return { ok: true, currentBytes, reservedBytes, ceilingBytes };
+
+  return {
+    ok: true,
+    currentBytes,
+    admittedBytes: pendingJournalBytes,
+    terminalJournalBytes,
+    ceilingBytes,
+  };
 }
 
 /**
