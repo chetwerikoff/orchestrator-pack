@@ -19,9 +19,11 @@ import {
   parseCompleteJsonText,
   storageBytesWithinTransportEnvelope,
   SUBMIT_DELIVERY_RETENTION_MS,
+  FAILED_DELIVERY_RESOLVED,
   withPendingDispatchFence,
 } from '../docs/mechanical-reconcile-bounds.mjs';
 import { admitDispatchJournalRecord } from '../docs/worker-message-dispatch-observe.mjs';
+import { planWorkerMessageSubmitActions } from '../docs/worker-message-submit-reconcile.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const libScript = path.join(repoRoot, 'scripts/lib/MechanicalReconcileNode.ps1');
@@ -259,5 +261,35 @@ describe('submit tracking capacity helper', () => {
     const tracking = { deliveries: { x: { blob: 'a'.repeat(MECHANICAL_STORAGE_CEILING_BYTES) } } };
     const capacity = evaluateSubmitTrackingCapacity(tracking);
     expect(capacity.overCapacity).toBe(true);
+  });
+});
+
+describe('issue #339 bounded reconcile state', () => {
+  it('builds failed-delivery state from compacted tracking after convergence', () => {
+    const nowMs = Date.now();
+    const resolvedAtMs = nowMs - SUBMIT_DELIVERY_RETENTION_MS - 60_000;
+    const failedDeliveries: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 40; i++) {
+      failedDeliveries[`failed-${i}`] = {
+        deliveryId: `failed-${i}`,
+        sessionId: 'opk-bounded',
+        reason: 'resolved_test',
+        unresolvedState: FAILED_DELIVERY_RESOLVED,
+        resolvedAtMs,
+        payload: 'x'.repeat(6000),
+      };
+    }
+
+    const result = planWorkerMessageSubmitActions({
+      sessions: [],
+      dispatchJournal: {},
+      tracking: { deliveries: {}, failedDeliveries, audit: [] },
+      nowMs,
+    });
+
+    for (let i = 0; i < 40; i++) {
+      expect(result.tracking.failedDeliveries?.[`failed-${i}`]).toBeUndefined();
+    }
+    expect(result.overCapacity).not.toBe(true);
   });
 });
