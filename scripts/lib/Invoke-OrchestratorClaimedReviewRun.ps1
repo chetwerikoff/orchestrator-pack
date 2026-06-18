@@ -13,6 +13,7 @@
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+. (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
 
 $Script:OrchestratorPreRecheckFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reconcile.mjs'
 
@@ -27,7 +28,7 @@ function Get-OrchestratorClaimedReviewSnapshot {
     return Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
         -FixtureSnapshot $FixtureSnapshot -ResolveChecksBundle {
             param($OpenPrs, $TargetPr, $Root)
-            Get-ReconcileChecksByPr -OpenPrs @(@($OpenPrs | Where-Object { [int]$_.number -eq $TargetPr }))
+            Get-ReconcileChecksByPr -RepoRoot $Root -OpenPrs @(@($OpenPrs | Where-Object { [int]$_.number -eq $TargetPr }))
         }
 }
 
