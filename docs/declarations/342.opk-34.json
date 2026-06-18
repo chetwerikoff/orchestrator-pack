@@ -27,6 +27,7 @@
     "scripts/lib/Ci-Failure-Notification-Common.ps1",
     "scripts/ci-failure-notification.test.ts",
     "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/reaction-action-succeeded.json",
     "scripts/fixtures/ci-failure-notification/worker-state-golden.json",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
     "scripts/orchestrator-message-audit-roots.manifest.json",

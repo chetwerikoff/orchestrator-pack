@@ -157,7 +157,7 @@
         "file": "agent-orchestrator.yaml.example",
         "function": "CI FAILURE DISCIPLINE",
         "anchor": "orchestrator-rules",
-        "predicateBodyHash": "f86a499b864d7394"
+        "predicateBodyHash": "3d374368bdefbba9"
       }
     },
     {
