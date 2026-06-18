@@ -10,6 +10,7 @@
 #>
 [CmdletBinding()]
 param(
+    [string]$ProjectId = 'orchestrator-pack',
     [string]$RepoRoot = '',
     [string]$StateDir = '',
     [int]$IntervalMinutes = 1,

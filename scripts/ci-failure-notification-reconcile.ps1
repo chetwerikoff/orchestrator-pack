@@ -191,32 +191,46 @@ function Invoke-CiFailureEpisodeDelivery {
 
     $targetId = [string]$Episode.targetId
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    $skipSend = [bool]$intent.reentry
     if ($DryRun) {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would send ci-failed ping session=$targetId digest=$Digest phase=$Phase"
+        $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would $dryRunAction session=$targetId digest=$Digest phase=$Phase"
         return $true
     }
 
-    try {
-        Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
-            -IdempotencyKey ([string]$intent.idempotencyKey)
+    if (-not $skipSend) {
+        try {
+            Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
+                -IdempotencyKey ([string]$intent.idempotencyKey)
+        }
+        catch {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"
+            return $false
+        }
     }
-    catch {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message)"
-        return $false
+    else {
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (submit intent reentry)"
     }
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
 
+    $journalRecorded = $false
     try {
         $dispatchResult = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
             -Source 'ci-failure-notification-reconcile' -SourceKey ([string]$intent.idempotencyKey) -DeliveryPath 'pending-draft'
         $outcome = Resolve-DispatchJournalSendOutcomeAfterDelivered -DispatchResult $dispatchResult
-        if (-not $outcome.journalRecorded) {
+        $journalRecorded = [bool]$outcome.journalRecorded
+        if (-not $journalRecorded) {
             Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal record failed digest=$Digest reason=$($outcome.journalFailureReason) (send delivered; deduped, journal will retry)"
         }
     }
     catch {
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal record failed digest=$Digest error=$($_.Exception.Message) (send delivered; preserving submitted-unacked)"
+    }
+
+    if (-not $journalRecorded) {
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "preserving submitted-unacked digest=$Digest phase=$Phase (journal retry pending)"
+        return $true
     }
 
     $null = Invoke-CiFailureHelper -Mode 'resolve-delivery' -Payload @{
