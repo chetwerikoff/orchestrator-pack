@@ -545,15 +545,26 @@ export function admitDispatchJournalRecord(journal, record, nowMs = Date.now()) 
  * @param {string} dispatchOutcome
  * @param {number} [nowMs]
  */
-export function finalizeDispatchJournalRecord(journal, deliveryId, dispatchOutcome, nowMs = Date.now()) {
+export function finalizeDispatchJournalRecord(
+  journal,
+  deliveryId,
+  dispatchOutcome,
+  nowMs = Date.now(),
+  draftState = '',
+) {
   const nextJournal = { ...(journal ?? {}) };
   const key = String(deliveryId ?? '').trim();
   if (!key || !nextJournal[key]) {
     return { ok: false, reason: 'not_found', journal: nextJournal };
   }
-  nextJournal[key] = advanceDispatchFenceLifecycle(nextJournal[key], dispatchOutcome);
+  let record = advanceDispatchFenceLifecycle(nextJournal[key], dispatchOutcome);
+  const resolvedDraftState = String(draftState ?? '').trim();
+  if (resolvedDraftState) {
+    record = { ...record, draftState: resolvedDraftState };
+  }
+  nextJournal[key] = record;
   const compacted = compactDispatchJournal(nextJournal, nowMs);
-  return { ok: true, journal: compacted.journal, record: nextJournal[key] };
+  return { ok: true, journal: compacted.journal, record, evicted: !compacted.journal[key] };
 }
 
 export { interpretDispatchFenceLifecycle };
@@ -582,6 +593,7 @@ runStdinJsonCli('worker-message-dispatch-observe.mjs', {
       String(payload.deliveryId ?? ''),
       String(payload.dispatchOutcome ?? ''),
       Number(payload.nowMs ?? Date.now()),
+      String(payload.draftState ?? ''),
     );
   },
   'journal-compact'() {

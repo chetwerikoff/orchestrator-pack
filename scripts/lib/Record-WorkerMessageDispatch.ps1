@@ -81,7 +81,7 @@ function Invoke-DispatchJournalCli {
     $outputPath = $tempPaths.OutputPath
     try {
         $json = $Payload | ConvertTo-Json -Depth 20 -Compress
-        [System.IO.File]::WriteAllText($inputPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-MechanicalTransportPrivateFile -Path $inputPath -Content $json
         $stderr = & node $DispatchCli $Subcommand --input-file $inputPath --output-file $outputPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "worker-message-dispatch-observe.mjs $Subcommand exited ${LASTEXITCODE}: $stderr"
@@ -359,18 +359,13 @@ function Update-WorkerMessageDispatchOutcome {
             journal         = $journal
             deliveryId      = $DeliveryId
             dispatchOutcome = $DispatchOutcome
+            draftState      = $DraftState
             nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
         if (-not $finalized.ok) {
             return
         }
-        $journal = ConvertTo-MechanicalJsonMap -Value $finalized.journal
-        if ($DraftState) {
-            $record = ConvertTo-MechanicalJsonMap -Value $journal[$DeliveryId]
-            $record['draftState'] = $DraftState
-            $journal[$DeliveryId] = $record
-        }
-        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $finalized.journal)
         $updateHolder.updated = $true
     }
     $updated = [bool]$updateHolder.updated

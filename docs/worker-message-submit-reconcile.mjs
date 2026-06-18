@@ -1262,9 +1262,10 @@ export function planWorkerMessageSubmitActions(input) {
     };
   }
   const baseTracking = convergence.tracking;
+  const compactedJournal = convergence.journal ?? dispatchJournal ?? {};
   const deliveries = mergeDeliveryRecords({
     aoEvents,
-    dispatchJournal,
+    dispatchJournal: compactedJournal,
     reviewRuns,
     reactionMessages,
     nowMs,

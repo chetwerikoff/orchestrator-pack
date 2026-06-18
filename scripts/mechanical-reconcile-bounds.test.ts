@@ -18,11 +18,12 @@ import {
   maxChildOutputBytesForStorage,
   parseCompleteJsonText,
   storageBytesWithinTransportEnvelope,
+  DISPATCH_JOURNAL_RETENTION_MS,
   SUBMIT_DELIVERY_RETENTION_MS,
   FAILED_DELIVERY_RESOLVED,
   withPendingDispatchFence,
 } from '../docs/mechanical-reconcile-bounds.mjs';
-import { admitDispatchJournalRecord } from '../docs/worker-message-dispatch-observe.mjs';
+import { admitDispatchJournalRecord, finalizeDispatchJournalRecord } from '../docs/worker-message-dispatch-observe.mjs';
 import { planWorkerMessageSubmitActions } from '../docs/worker-message-submit-reconcile.mjs';
 import type { FailedDeliveryRecord } from '../docs/worker-message-submit-reconcile.d.mts';
 
@@ -255,6 +256,31 @@ describe('Invoke-MechanicalNodeFilterCli over-buffer round-trip', () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it('creates user-private transport temp files on unix hosts', () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mech-perms-'));
+    const escapedLib = libScript.replace(/'/g, "''");
+    const escapedRoot = stateDir.replace(/'/g, "''");
+    try {
+      runPwsh(`
+        $env:AO_MECHANICAL_TRANSPORT_TEMP = '${escapedRoot}'
+        . '${escapedLib}'
+        $paths = New-MechanicalTransportTempPaths
+        Write-MechanicalTransportPrivateFile -Path $paths.InputPath -Content '{"private":true}'
+        Write-Output $paths.InputPath
+      `);
+      const rootMode = fs.statSync(stateDir).mode & 0o777;
+      const inputPath = path.join(stateDir, fs.readdirSync(stateDir).find((name) => name.endsWith('.in.json')) ?? '');
+      const fileMode = fs.statSync(inputPath).mode & 0o777;
+      expect(rootMode).toBe(0o700);
+      expect(fileMode).toBe(0o600);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('submit tracking capacity helper', () => {
@@ -291,5 +317,71 @@ describe('issue #339 bounded reconcile state', () => {
       expect(result.tracking.failedDeliveries?.[`failed-${i}`]).toBeUndefined();
     }
     expect(result.actions.some((action) => action.deliveryId === 'over-capacity')).toBe(false);
+  });
+
+  it('reconciles against compacted dispatch journal after convergence', () => {
+    const nowMs = Date.now();
+    const deliveredAtMs = nowMs - DISPATCH_JOURNAL_RETENTION_MS - 60_000;
+    const dispatchJournal: Record<string, Record<string, unknown>> = {};
+    const entryCount = Math.ceil(MECHANICAL_STORAGE_CEILING_BYTES / 50_000) + 5;
+    for (let i = 0; i < entryCount; i++) {
+      const id = `old:${i}:${deliveredAtMs}:ao-send`;
+      dispatchJournal[id] = {
+        deliveryId: id,
+        sessionId: 'opk-stale',
+        deliveredAtMs,
+        source: 'ao-send',
+        deliveryPath: 'pending-draft',
+        dispatchOutcome: 'dispatched',
+        draftState: 'draft_present',
+        messageShape: { charLength: 240, lineCount: 3 },
+        note: 'x'.repeat(50_000),
+      };
+    }
+
+    const result = planWorkerMessageSubmitActions({
+      sessions: [{
+        sessionId: 'opk-stale',
+        role: 'worker',
+        status: 'working',
+        runtime: 'alive',
+        activity: 'idle',
+        reports: [],
+      }],
+      dispatchJournal,
+      tracking: { deliveries: {}, failedDeliveries: {}, audit: [] },
+      nowMs,
+    });
+
+    expect(result.deliveryCount).toBe(0);
+    expect(result.actions.some((action) => action.type === 'escalate')).toBe(false);
+  });
+
+  it('finalizes draft state atomically before compaction evicts stale records', () => {
+    const nowMs = Date.now();
+    const deliveredAtMs = nowMs - DISPATCH_JOURNAL_RETENTION_MS - 60_000;
+    const deliveryId = 'old:1000:ao-send';
+    const journal = {
+      [deliveryId]: {
+        deliveryId,
+        sessionId: 'opk-stale',
+        deliveredAtMs,
+        source: 'ao-send',
+        dispatchOutcome: 'dispatch_in_flight',
+        draftState: 'unknown',
+      },
+    };
+
+    const result = finalizeDispatchJournalRecord(
+      journal,
+      deliveryId,
+      'dispatched',
+      nowMs,
+      'draft_present',
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.evicted).toBe(true);
+    expect(result.journal[deliveryId]).toBeUndefined();
   });
 });

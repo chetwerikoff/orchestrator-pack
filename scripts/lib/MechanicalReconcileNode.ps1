@@ -24,14 +24,89 @@ function Get-MechanicalTransportTempRoot {
     if ($env:AO_MECHANICAL_TRANSPORT_TEMP) {
         return $env:AO_MECHANICAL_TRANSPORT_TEMP
     }
+    if ($IsLinux -or $IsMacOS) {
+        $homeRoot = if ($env:HOME) { $env:HOME } else { [System.IO.Path]::GetTempPath() }
+        return Join-Path $homeRoot '.orchestrator-mechanical-transport'
+    }
+    if ($env:LOCALAPPDATA) {
+        return Join-Path $env:LOCALAPPDATA 'orchestrator-mechanical-transport'
+    }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-mechanical-transport'
+}
+
+function Protect-MechanicalTransportPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [switch]$Directory
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    if ($IsLinux -or $IsMacOS) {
+        $mode = if ($Directory) { '700' } else { '600' }
+        if (Get-Command chmod -ErrorAction SilentlyContinue) {
+            & chmod $mode -- $Path 2>$null
+        }
+        return
+    }
+
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $acl.SetOwner($identity.User)
+        $acl.SetAccessRuleProtection($true, $false)
+        $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+        $inherit = if ($Directory) {
+            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        }
+        else {
+            [System.Security.AccessControl.InheritanceFlags]::None
+        }
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity.Name,
+            $rights,
+            $inherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $acl.AddAccessRule($rule)
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    }
+    catch {
+        # Best-effort hardening; transport still works if ACL tightening is unavailable.
+    }
+}
+
+function Initialize-MechanicalTransportTempRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root
+    )
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        New-Item -ItemType Directory -Path $Root -Force | Out-Null
+    }
+    Protect-MechanicalTransportPath -Path $Root -Directory
+}
+
+function Write-MechanicalTransportPrivateFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
+    Protect-MechanicalTransportPath -Path $Path
 }
 
 function New-MechanicalTransportTempPaths {
     $root = Get-MechanicalTransportTempRoot
-    if (-not (Test-Path -LiteralPath $root)) {
-        New-Item -ItemType Directory -Path $root -Force | Out-Null
-    }
+    Initialize-MechanicalTransportTempRoot -Root $root
     $token = [guid]::NewGuid().ToString('N')
     return @{
         InputPath  = Join-Path $root "${token}.in.json"
@@ -381,7 +456,7 @@ function Invoke-MechanicalNodeFilterCli {
     $inputPath = $tempPaths.InputPath
     $outputPath = $tempPaths.OutputPath
     try {
-        [System.IO.File]::WriteAllText($inputPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-MechanicalTransportPrivateFile -Path $inputPath -Content $json
         $stderr = & node $FilterCliPath $Subcommand --input-file $inputPath --output-file $outputPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "${Label}.mjs $Subcommand exited ${LASTEXITCODE}: $stderr"

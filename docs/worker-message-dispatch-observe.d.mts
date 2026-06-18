@@ -143,7 +143,14 @@ export declare function finalizeDispatchJournalRecord(
   deliveryId: string,
   dispatchOutcome: string,
   nowMs?: number,
-): Record<string, unknown>;
+  draftState?: string,
+): {
+  ok: boolean;
+  reason?: string;
+  journal: Record<string, unknown>;
+  record?: Record<string, unknown>;
+  evicted?: boolean;
+};
 
 export declare function interpretDispatchFenceLifecycle(
   record: Record<string, unknown> | null | undefined,
