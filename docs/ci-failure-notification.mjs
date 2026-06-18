@@ -878,7 +878,7 @@ export function recordPendingEpisode(input) {
   }
 }
 
-export function isEvaluationEligible(record, nowMs = Date.now(), { enqueueTickId = null } = {}) {
+export function isEvaluationEligible(record, nowMs = Date.now(), { enqueueTickId = null, config = resolveConfig() } = {}) {
   if (!record || record.terminalReason) return { eligible: false, reason: 'already_terminal' };
   if (record.state !== 'pending') return { eligible: false, reason: 'not_pending' };
   if (enqueueTickId && record.enqueueTickId === enqueueTickId) {
@@ -886,6 +886,10 @@ export function isEvaluationEligible(record, nowMs = Date.now(), { enqueueTickId
   }
   if (nowMs >= Number(record.expiresAtMs ?? 0)) {
     return { eligible: false, reason: 'expired_pending' };
+  }
+  const ageMs = nowMs - Number(record.recordedAtMs ?? nowMs);
+  if (ageMs > config.maxEligibleEvaluationAgeMs) {
+    return { eligible: false, reason: 'freshness_sla_exceeded' };
   }
   if (nowMs < Number(record.eligibleAfterMs ?? 0)) {
     return { eligible: false, reason: 'eligibility_boundary' };
@@ -1147,6 +1151,24 @@ export function scanExpiredPendingRecords(storeDir, nowMs = Date.now()) {
   return { expired };
 }
 
+export function scanFreshnessSlaExceededPendingRecords(storeDir, nowMs = Date.now(), config = resolveConfig()) {
+  const dir = path.join(storeDir, 'episodes');
+  if (!existsSync(dir)) return { exceeded: [] };
+  const exceeded = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.episode.json')) continue;
+    const record = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
+    if (record.terminalReason) continue;
+    if (record.state !== 'pending') continue;
+    if (nowMs >= Number(record.expiresAtMs ?? 0)) continue;
+    const ageMs = nowMs - Number(record.recordedAtMs ?? nowMs);
+    if (ageMs > config.maxEligibleEvaluationAgeMs) {
+      exceeded.push(record);
+    }
+  }
+  return { exceeded };
+}
+
 export function expirePendingEpisode(input) {
   const storeDir = input?.storeDir;
   const episode = normalizeEpisodeKey(input?.episode);
@@ -1159,10 +1181,11 @@ export function expirePendingEpisode(input) {
     episode,
     terminalReason: 'abandoned-expired',
     terminalAction: 'SUPPRESS',
-    readSource: 'expiry_scanner',
+    readSource: input?.freshnessSla ? 'freshness_sla_scanner' : 'expiry_scanner',
     diagnostics: {
       backstop_handoff: 'report-stale',
       reconcile_health: 'degraded',
+      ...(input?.freshnessSla ? { freshness_sla_exceeded: true } : {}),
     },
     nowMs: input?.nowMs,
   });
@@ -1245,6 +1268,12 @@ export function planReconcileTick(input) {
   for (const record of expired.expired) {
     actions.push({ type: 'expire', digest: record.digest, episode: record.episode });
   }
+  const freshnessExceeded = scanFreshnessSlaExceededPendingRecords(storeDir, nowMs, config);
+  for (const record of freshnessExceeded.exceeded) {
+    if (expiredDigests.has(record.digest)) continue;
+    expiredDigests.add(record.digest);
+    actions.push({ type: 'expire', digest: record.digest, episode: record.episode, freshnessSla: true });
+  }
   for (const record of pendingRecords) {
     if (record.terminalReason) continue;
     if (expiredDigests.has(record.digest)) continue;
@@ -1257,7 +1286,10 @@ export function planReconcileTick(input) {
       });
       continue;
     }
-    const eligibility = isEvaluationEligible(record, nowMs, { enqueueTickId: input?.sameEnqueueTickId ? enqueueTickId : null });
+    const eligibility = isEvaluationEligible(record, nowMs, {
+      enqueueTickId: input?.sameEnqueueTickId ? enqueueTickId : null,
+      config,
+    });
     if (!eligibility.eligible) continue;
     actions.push({ type: 'evaluate', digest: record.digest, episode: record.episode });
   }

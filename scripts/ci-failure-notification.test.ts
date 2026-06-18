@@ -511,6 +511,34 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     expect(health.degraded).toBe(true);
     expect(health.pendingCount).toBe(1);
   });
+
+  it('blocks evaluation when freshness SLA exceeded', () => {
+    const dir = tempStore();
+    try {
+      const config = resolveConfig({ reconcileIntervalMs: 60_000, maxEligibleEvaluationAgeMs: 5_000, pendingExpiryMs: 600_000 });
+      const recorded = recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000, config, enqueueTickId: 'tick-old' });
+      const tooLate = isEvaluationEligible(recorded.record, 1_000_000 + 6_000, { config });
+      expect(tooLate.eligible).toBe(false);
+      expect(tooLate.reason).toBe('freshness_sla_exceeded');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('plan reconcile tick expires freshness-SLA exceeded pending before evaluate', () => {
+    const dir = tempStore();
+    try {
+      const config = resolveConfig({ reconcileIntervalMs: 60_000, maxEligibleEvaluationAgeMs: 5_000, pendingExpiryMs: 600_000 });
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000, config, enqueueTickId: 'tick-old' });
+      const plan = planReconcileTick({ storeDir: dir, nowMs: 1_000_000 + 6_000, enqueueTickId: 'tick-new', config });
+      const expireAction = plan.actions!.find((a: any) => a.type === 'expire' && a.freshnessSla);
+      expect(expireAction).toBeTruthy();
+      expect(plan.actions!.some((a: any) => a.type === 'evaluate')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe('fixtures, wrapper, and legacy compatibility', () => {

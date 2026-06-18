@@ -98,6 +98,7 @@ export declare function evaluatePreflightRevalidation(input: unknown): {
   [key: string]: unknown;
 };
 export declare function scanExpiredPendingRecords(storeDir: string, nowMs?: number): Record<string, unknown>;
+export declare function scanFreshnessSlaExceededPendingRecords(storeDir: string, nowMs?: number, config?: unknown): { exceeded: unknown[] };
 export declare function expirePendingEpisode(input: unknown): {
   audit?: { reason?: string; diagnostic?: { backstop_handoff?: string; [key: string]: unknown }; [key: string]: unknown };
   [key: string]: unknown;

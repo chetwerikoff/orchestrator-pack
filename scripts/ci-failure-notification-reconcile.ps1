@@ -60,11 +60,10 @@ function Get-CiFailureDedupPayload {
 
 function Get-CiFailurePreSendSnapshot {
     param(
-        [int]$PrNumber,
-        [array]$OpenPrs = @()
+        [int]$PrNumber
     )
 
-    $resolvedOpenPrs = if ($OpenPrs.Count -gt 0) { @($OpenPrs) } else { @((Invoke-GhOpenPrList -RepoRoot $RepoRoot)) }
+    $resolvedOpenPrs = @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
         @($resolvedOpenPrs | Where-Object { [int]$_.number -eq $PrNumber })
@@ -81,11 +80,10 @@ function Get-CiFailurePreSendSnapshot {
 
 function Invoke-CiFailurePreSendCiRecheck {
     param(
-        [object]$Episode,
-        [array]$OpenPrs = @()
+        [object]$Episode
     )
 
-    $fresh = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber) -OpenPrs $OpenPrs
+    $fresh = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
     return Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
         episode = $Episode
         fresh   = $fresh
@@ -215,7 +213,7 @@ function Invoke-CiFailureEpisodeDelivery {
         }
     }
 
-    $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode -OpenPrs @($WorkerState.openPrs)
+    $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode
     if (-not $recheck.ok) {
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send recheck failed digest=$Digest reason=$($recheck.reason)"
         Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$recheck.reason)
@@ -243,6 +241,7 @@ function Invoke-CiFailureEpisodeDelivery {
     $dispatchRecorded = Test-CiFailureDispatchJournalRecorded -SessionId $targetId -SourceKey $idempotencyKey
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
+        $recordState -eq 'submit-intent-reserved' -or
         $sendDelivered -or
         $dispatchRecorded
     )
@@ -253,7 +252,7 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     if (-not $skipSend) {
-        $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber) -OpenPrs @($WorkerState.openPrs)
+        $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
         $sendRecheck = Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
             episode = $Episode
             fresh   = $sendSnapshot
@@ -276,7 +275,7 @@ function Invoke-CiFailureEpisodeDelivery {
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
     }
     else {
-        if (-not $sendDelivered -and $dispatchRecorded) {
+        if (-not $sendDelivered) {
             $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"
@@ -339,10 +338,12 @@ function Invoke-CiFailureNotificationTick {
 
     foreach ($action in @($plan.actions)) {
         if ($action.type -eq 'expire') {
-            $result = Invoke-CiFailureHelper -Mode 'expire' -Payload @{
+            $expirePayload = @{
                 storeDir = $StoreDir
                 episode  = $action.episode
             }
+            if ($action.freshnessSla) { $expirePayload.freshnessSla = $true }
+            $result = Invoke-CiFailureHelper -Mode 'expire' -Payload $expirePayload
             Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "expired episode digest=$($action.digest) reason=$($result.audit.reason)"
             continue
         }
