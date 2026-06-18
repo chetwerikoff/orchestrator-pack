@@ -581,7 +581,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     }
   });
 
-  it('treats in-flight dispatch plus sendIssued as durable delivery evidence on reentry', () => {
+  it('treats in-flight dispatch plus pre-send sendIssued as durable delivery evidence on reentry', () => {
     const dir = tempStore();
     try {
       recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });

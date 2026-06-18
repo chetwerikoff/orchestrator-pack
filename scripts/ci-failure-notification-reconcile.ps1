@@ -296,25 +296,26 @@ function Invoke-CiFailureEpisodeDelivery {
             $dispatchDeliveryId = [string]$dispatchRegister.deliveryId
         }
 
+        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+        if (-not $issued.ok) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason)"
+            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+            return $false
+        }
+
+        $sendOutcome = 'dispatched'
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
                 -IdempotencyKey $idempotencyKey
         }
         catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for retry)"
-            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-            return $false
-        }
-
-        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-        if (-not $issued.ok) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason)"
-            return $false
+            $sendOutcome = 'dispatch_unknown'
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed after send-issued session=$targetId digest=$Digest error=$($_.Exception.Message) (preserving intent; completing delivery bookkeeping)"
         }
 
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         try {
-            $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'dispatched' -DraftState 'draft_present'
+            $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome $sendOutcome -DraftState 'draft_present'
             if (-not $update.updated) {
                 Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest delivery=$dispatchDeliveryId (send delivered; journal will retry)"
             }
