@@ -20,8 +20,12 @@ import {
   parseCompleteJsonText,
   storageBytesWithinTransportEnvelope,
   DISPATCH_JOURNAL_RETENTION_MS,
+  DISPATCH_OUTCOME_SEND_FAILED,
+  DISPATCH_OUTCOME_UNKNOWN,
   SUBMIT_DELIVERY_RETENTION_MS,
   FAILED_DELIVERY_RESOLVED,
+  FENCE_LIFECYCLE_FAILED_UNCERTAIN,
+  isDispatchJournalEntryEvictable,
   withPendingDispatchFence,
 } from '../docs/mechanical-reconcile-bounds.mjs';
 import { admitDispatchJournalRecord, finalizeDispatchJournalRecord } from '../docs/worker-message-dispatch-observe.mjs';
@@ -204,6 +208,91 @@ describe('dispatch journal admission', () => {
     const admission = evaluateDispatchJournalAdmission(journal, candidate);
     expect(admission.ok).toBe(false);
     expect(admission.reason).toBe('over_capacity');
+  });
+});
+
+
+describe('dispatch journal retention', () => {
+  it('allows terminal failed dispatches to age out after retention', () => {
+    const nowMs = Date.now();
+    const deliveredAtMs = nowMs - DISPATCH_JOURNAL_RETENTION_MS - 60_000;
+    const sendFailed = {
+      deliveryId: 'failed-send',
+      sessionId: 's1',
+      deliveredAtMs,
+      dispatchOutcome: DISPATCH_OUTCOME_SEND_FAILED,
+      fenceLifecycle: FENCE_LIFECYCLE_FAILED_UNCERTAIN,
+    };
+    const dispatchUnknown = {
+      deliveryId: 'failed-unknown',
+      sessionId: 's1',
+      deliveredAtMs,
+      dispatchOutcome: DISPATCH_OUTCOME_UNKNOWN,
+      fenceLifecycle: FENCE_LIFECYCLE_FAILED_UNCERTAIN,
+    };
+
+    expect(isDispatchJournalEntryEvictable(sendFailed, nowMs)).toBe(true);
+    expect(isDispatchJournalEntryEvictable(dispatchUnknown, nowMs)).toBe(true);
+
+    const compacted = compactDispatchJournal({
+      [sendFailed.deliveryId]: sendFailed,
+      [dispatchUnknown.deliveryId]: dispatchUnknown,
+    }, nowMs);
+    expect(compacted.evicted).toEqual(expect.arrayContaining(['failed-send', 'failed-unknown']));
+  });
+
+  it('retains in-flight or fresh terminal failures until retention expires', () => {
+    const nowMs = Date.now();
+    const freshFailed = {
+      deliveryId: 'fresh-failed',
+      sessionId: 's1',
+      deliveredAtMs: nowMs - 1000,
+      dispatchOutcome: DISPATCH_OUTCOME_SEND_FAILED,
+      fenceLifecycle: FENCE_LIFECYCLE_FAILED_UNCERTAIN,
+    };
+    const inFlightUnknown = {
+      deliveryId: 'in-flight-unknown',
+      sessionId: 's1',
+      deliveredAtMs: nowMs - DISPATCH_JOURNAL_RETENTION_MS - 60_000,
+      dispatchOutcome: DISPATCH_OUTCOME_UNKNOWN,
+    };
+
+    expect(isDispatchJournalEntryEvictable(freshFailed, nowMs)).toBe(false);
+    expect(isDispatchJournalEntryEvictable(inFlightUnknown, nowMs)).toBe(false);
+  });
+
+  it('bounds retention of completed adoption probe records', () => {
+    const nowMs = Date.now();
+    const deliveredAtMs = nowMs - DISPATCH_JOURNAL_RETENTION_MS - 60_000;
+    const probe = {
+      deliveryId: 'probe-old',
+      sessionId: 'synthetic',
+      deliveredAtMs,
+      source: 'adoption-probe',
+      adoptionProbe: true,
+      dispatchOutcome: 'dispatched',
+      draftState: 'auto_submitted',
+      fenceLifecycle: 'completed',
+    };
+
+    expect(isDispatchJournalEntryEvictable(probe, nowMs)).toBe(true);
+    const compacted = compactDispatchJournal({ [probe.deliveryId]: probe }, nowMs);
+    expect(compacted.evicted).toContain('probe-old');
+  });
+
+  it('retains in-flight adoption probe records until finalized and aged', () => {
+    const nowMs = Date.now();
+    const probe = {
+      deliveryId: 'probe-fresh',
+      sessionId: 'synthetic',
+      deliveredAtMs: nowMs - 1000,
+      source: 'adoption-probe',
+      adoptionProbe: true,
+      dispatchOutcome: 'dispatch_in_flight',
+      fenceLifecycle: 'pending',
+    };
+
+    expect(isDispatchJournalEntryEvictable(probe, nowMs)).toBe(false);
   });
 });
 

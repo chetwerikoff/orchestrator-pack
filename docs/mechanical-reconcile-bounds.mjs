@@ -162,20 +162,16 @@ export function isFailedDeliveryEvictable(record, nowMs) {
 export function isDispatchJournalEntryEvictable(record, nowMs) {
   const deliveryId = trimString(record?.deliveryId ?? record?.id);
   if (!deliveryId || deliveryId.startsWith('_')) return false;
-  if (record?.adoptionProbe === true) return false;
-  if (trimString(record?.source) === 'adoption-probe') return false;
 
   const lifecycle = interpretDispatchFenceLifecycle(record);
   if (lifecycle === FENCE_LIFECYCLE_PENDING) return false;
-  if (lifecycle === FENCE_LIFECYCLE_FAILED_UNCERTAIN) return false;
 
   const deliveredAt = Number(record?.deliveredAtMs ?? 0);
   if (!deliveredAt || nowMs - deliveredAt < DISPATCH_JOURNAL_RETENTION_MS) return false;
 
   const outcome = trimString(record?.dispatchOutcome);
-  if (outcome === DISPATCH_OUTCOME_IN_FLIGHT || outcome === DISPATCH_OUTCOME_UNKNOWN) {
-    return false;
-  }
+  if (outcome === DISPATCH_OUTCOME_IN_FLIGHT) return false;
+
   return true;
 }
 
