@@ -402,7 +402,7 @@ describe('shared cycle state merge', () => {
     expect(merged.ownerCycles?.[ownerKey]?.nudgeArmed).toBe(true);
   });
 
-  it('does not import ci-green nudge arms when shared cycleId differs from local', () => {
+  it('does not import ci-green nudge arms when shared cycle is for a prior iteration head', () => {
     const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
     const ownerKey = `${repoId}:pr:260:owner:opk-37`;
     const nowMs = 1_000_000;
@@ -415,6 +415,8 @@ describe('shared cycle state merge', () => {
             ownerSessionId: 'opk-37',
             prNumber: 260,
             openedAtMs: nowMs,
+            firstHeadSha: 'h2-new-handoff',
+            currentHeadSha: 'h2-new-handoff',
             nudgeArmed: false,
           },
         },
@@ -426,6 +428,8 @@ describe('shared cycle state merge', () => {
             cycleId: 'cg-old-cycle',
             ownerSessionId: 'opk-37',
             prNumber: 260,
+            firstHeadSha: 'h1-reviewed',
+            currentHeadSha: 'h1-reviewed',
             nudgeArmed: true,
             nudgeSentAtMs: nowMs - 1000,
             nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS - 1000,
@@ -447,6 +451,58 @@ describe('shared cycle state merge', () => {
     expect(cycle?.cycleId).toBe('local-new-cycle');
     expect(cycle?.nudgeArmed).toBe(false);
     expect(cycle?.nudgeExpiredFallbackPending).toBe(false);
+  });
+
+  it('imports ci-green nudge arms when cycleIds differ but iteration head matches', () => {
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = `${repoId}:pr:260:owner:opk-37`;
+    const headSha = 'abc123deadbeef';
+    const nowMs = 1_000_000;
+    const merged = mergeSharedWorkerIterationCycleState(
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: `${repoId}:260:opk-37:1000`,
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: 1000,
+            firstHeadSha: headSha,
+            currentHeadSha: headSha,
+            nudgeArmed: false,
+          },
+        },
+      },
+      {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: `${repoId}:260:opk-37:2000`,
+            ownerSessionId: 'opk-37',
+            prNumber: 260,
+            openedAtMs: 2000,
+            firstHeadSha: headSha,
+            currentHeadSha: headSha,
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+          },
+        },
+      },
+    ) as {
+      ownerCycles?: Record<
+        string,
+        {
+          cycleId?: string;
+          nudgeArmed?: boolean;
+          nudgeExpiresAtMs?: number;
+        }
+      >;
+    };
+    const cycle = merged.ownerCycles?.[ownerKey];
+    expect(cycle?.cycleId).toBe(`${repoId}:260:opk-37:2000`);
+    expect(cycle?.nudgeArmed).toBe(true);
+    expect(cycle?.nudgeExpiresAtMs).toBe(nowMs + NUDGE_EXPIRY_MS);
   });
 });
 

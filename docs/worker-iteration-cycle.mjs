@@ -984,22 +984,60 @@ export function patchOwnerCycle(cycle, patch) {
 }
 
 /**
+ * @param {Record<string, unknown>} cycle
+ */
+function ownerIterationHead(cycle) {
+  const row = defaultOwnerCycleRecord(cycle);
+  return normalizeSha(row.firstHeadSha || row.currentHeadSha || row.lastHeadSha);
+}
+
+/**
  * @param {Record<string, unknown>} local
  * @param {Record<string, unknown>} shared
  */
-function ownerCyclesShareIdentity(local, shared) {
+function ownerCyclesRepresentSameIteration(local, shared) {
   const localId = String(local.cycleId ?? '');
   const sharedId = String(shared.cycleId ?? '');
-  if (!localId || !sharedId) {
+  if (localId && sharedId && localId === sharedId) {
     return true;
   }
-  return localId === sharedId;
+  const localHead = ownerIterationHead(local);
+  const sharedHead = ownerIterationHead(shared);
+  if (localHead && sharedHead) {
+    return localHead === sharedHead;
+  }
+  return !localId || !sharedId;
+}
+
+/**
+ * @param {Record<string, unknown>} local
+ * @param {Record<string, unknown>} shared
+ * @param {boolean} nudgeImportedFromShared
+ */
+function reconcileMergedOwnerCycleId(local, shared, nudgeImportedFromShared) {
+  const localId = String(local.cycleId ?? '');
+  const sharedId = String(shared.cycleId ?? '');
+  if (!localId) {
+    return sharedId;
+  }
+  if (!sharedId || localId === sharedId) {
+    return localId;
+  }
+  if (nudgeImportedFromShared) {
+    return sharedId;
+  }
+  const localOpened = Number(local.openedAtMs ?? 0);
+  const sharedOpened = Number(shared.openedAtMs ?? 0);
+  if (localOpened > 0 && sharedOpened > 0) {
+    return localOpened <= sharedOpened ? localId : sharedId;
+  }
+  return localId;
 }
 
 /**
  * Merge owner-cycle rows from ci-green-wake into review-trigger local state.
  * Ci-green is authoritative for nudge arms; review-trigger keeps review arms.
- * Nudge fields merge only when both records represent the same cycle.
+ * Nudge fields merge only when both records represent the same iteration.
  *
  * @param {Record<string, unknown>} localRecord
  * @param {Record<string, unknown>} sharedRecord
@@ -1008,7 +1046,9 @@ function mergeOwnerCycleRecords(localRecord, sharedRecord) {
   const local = defaultOwnerCycleRecord(localRecord);
   const shared = defaultOwnerCycleRecord(sharedRecord);
   const merged = { ...local, ...shared };
-  if (ownerCyclesShareIdentity(local, shared)) {
+  const sameIteration = ownerCyclesRepresentSameIteration(local, shared);
+  let nudgeImportedFromShared = false;
+  if (sameIteration) {
     const localNudgeAt = Number(local.nudgeSentAtMs ?? 0);
     const sharedNudgeAt = Number(shared.nudgeSentAtMs ?? 0);
     if (shared.nudgeArmed && sharedNudgeAt >= localNudgeAt) {
@@ -1016,6 +1056,7 @@ function mergeOwnerCycleRecords(localRecord, sharedRecord) {
       merged.nudgeSentAtMs = shared.nudgeSentAtMs;
       merged.nudgeExpiresAtMs = shared.nudgeExpiresAtMs;
       merged.nudgeExpiredFallbackPending = shared.nudgeExpiredFallbackPending;
+      nudgeImportedFromShared = true;
     } else if (local.nudgeArmed) {
       merged.nudgeArmed = local.nudgeArmed;
       merged.nudgeSentAtMs = local.nudgeSentAtMs;
@@ -1034,7 +1075,7 @@ function mergeOwnerCycleRecords(localRecord, sharedRecord) {
   }
   merged.debounce = { ...(shared.debounce ?? {}), ...(local.debounce ?? {}) };
   merged.suppressAudit = { ...(local.suppressAudit ?? {}) };
-  merged.cycleId = local.cycleId || shared.cycleId;
+  merged.cycleId = reconcileMergedOwnerCycleId(local, shared, nudgeImportedFromShared);
   merged.openedAtMs = local.openedAtMs || shared.openedAtMs;
   merged.ownerSessionId = local.ownerSessionId || shared.ownerSessionId;
   merged.prNumber = local.prNumber || shared.prNumber;
