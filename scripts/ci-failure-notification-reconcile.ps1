@@ -242,7 +242,6 @@ function Invoke-CiFailureEpisodeDelivery {
     $dispatchRecorded = Test-CiFailureDispatchJournalRecorded -SessionId $targetId -SourceKey $idempotencyKey
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
-        $recordState -eq 'submit-intent-reserved' -or
         $sendDelivered -or
         $dispatchRecorded
     )
@@ -278,7 +277,7 @@ function Invoke-CiFailureEpisodeDelivery {
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
     }
     else {
-        if (-not $sendDelivered) {
+        if (-not $sendDelivered -and $dispatchRecorded) {
             $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"

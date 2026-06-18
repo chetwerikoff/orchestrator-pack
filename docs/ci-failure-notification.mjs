@@ -374,7 +374,27 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
   };
 }
 
-
+export function buildRedFailureFingerprint(checks = [], options = {}) {
+  const level = classifyRequiredCiLevel(checks, options);
+  if (level !== 'red') return null;
+  const branchRequired = toArray(options.requiredCheckNames)
+    .map((name) => String(name ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  const scope = branchRequired.length > 0
+    ? toArray(checks).filter((check) => branchRequired.includes(String(check?.name ?? '').trim().toLowerCase()))
+    : toArray(checks);
+  const parts = scope
+    .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
+    .map((check) => [
+      String(check?.name ?? '').trim().toLowerCase(),
+      String(check?.startedAt ?? check?.completedAt ?? '').trim(),
+      String(check?.link ?? '').trim(),
+      String(check?.workflow ?? '').trim(),
+    ].join('|'))
+    .sort();
+  if (parts.length === 0) return null;
+  return createHash('sha256').update(parts.join(';')).digest('hex').slice(0, 16);
+}
 
 export function resolveRedPeriodAggregateId(input) {
   const storeDir = String(input?.storeDir ?? '').trim();
@@ -391,22 +411,32 @@ export function resolveRedPeriodAggregateId(input) {
   ensureStore(storeDir);
   const trackerKey = createHash('sha256').update(`${repo}#${prNumber}#${headSha}`).digest('hex');
   const trackerPath = path.join(storeDir, 'red-stints', `${trackerKey}.json`);
-  /** @type {{ lastLevel?: string | null, stintId?: number }} */
-  let tracker = { lastLevel: null, stintId: 0 };
+  /** @type {{ lastLevel?: string | null, stintId?: number, lastRedFingerprint?: string | null }} */
+  let tracker = { lastLevel: null, stintId: 0, lastRedFingerprint: null };
   if (existsSync(trackerPath)) {
     try {
       tracker = JSON.parse(readFileSync(trackerPath, 'utf8'));
     } catch {
-      tracker = { lastLevel: null, stintId: 0 };
+      tracker = { lastLevel: null, stintId: 0, lastRedFingerprint: null };
     }
   }
   if (aggregateStatus === 'red') {
-    if (tracker.lastLevel !== 'red') {
+    const priorFingerprint = String(tracker.lastRedFingerprint ?? '').trim();
+    const redFingerprint = String(input?.redFingerprint ?? '').trim();
+    const stintAdvanced = tracker.lastLevel !== 'red'
+      || (redFingerprint && priorFingerprint && redFingerprint !== priorFingerprint);
+    if (stintAdvanced) {
       tracker.stintId = Number(tracker.stintId ?? 0) + 1;
     }
     tracker.lastLevel = 'red';
+    if (redFingerprint) {
+      tracker.lastRedFingerprint = redFingerprint;
+    }
   } else {
     tracker.lastLevel = aggregateStatus;
+    if (aggregateStatus !== 'red') {
+      tracker.lastRedFingerprint = null;
+    }
   }
   mkdirSync(path.dirname(trackerPath), { recursive: true });
   writeFileSync(trackerPath, `${JSON.stringify(tracker)}
@@ -460,12 +490,18 @@ export function planCiFailureReactionRecords(input) {
       });
       continue;
     }
+    const redFingerprint = buildRedFailureFingerprint(checks, {
+      requiredCheckNames,
+      requiredCheckLookupFailed,
+      headSha,
+    });
     const aggregateRunId = resolveRedPeriodAggregateId({
       storeDir: input?.storeDir,
       repo,
       prNumber,
       headSha,
       aggregateStatus: 'red',
+      redFingerprint,
     });
     const enrichedCiSource = { ...ciSource, aggregateRunId };
     const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);

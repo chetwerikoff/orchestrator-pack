@@ -35,6 +35,7 @@ import {
   scanFixtureSafety,
   terminalizeEpisode,
   buildCiSourceFromRequiredChecks,
+  buildRedFailureFingerprint,
   resolveRedPeriodAggregateId,
   listIntentTokensFromStore,
   planCiFailureReactionRecords,
@@ -369,6 +370,38 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     }
   });
 
+
+  it('plans distinct reaction records when CI re-fails between polls without observed green', () => {
+    const dir = tempStore();
+    try {
+      const headSha = episode.headSha;
+      const base = {
+        storeDir: dir,
+        repo: episode.repo,
+        openPrs: [{ number: episode.prNumber, headRefOid: headSha }],
+        sessions: workerState().sessions,
+        requiredCheckNamesByPr: [{ prNumber: episode.prNumber, requiredCheckNames: ['Run pack contract tests'] }],
+        requiredCheckLookupFailedByPr: [],
+      };
+      const firstChecks = [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '2026-06-18T10:00:00Z', link: 'https://example/run/1' }];
+      const firstPlan = planCiFailureReactionRecords({ ...base, ciChecksByPr: [{ prNumber: episode.prNumber, checks: firstChecks }] });
+      expect(firstPlan.records).toHaveLength(1);
+      recordPendingEpisode({ storeDir: dir, episode: firstPlan.records![0].episode, nowMs: 1_000_000 });
+      terminalizeEpisode({
+        storeDir: dir,
+        episode: firstPlan.records![0].episode,
+        terminalReason: 'sent',
+        terminalAction: 'SEND',
+      });
+      const secondChecks = [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }];
+      const secondPlan = planCiFailureReactionRecords({ ...base, ciChecksByPr: [{ prNumber: episode.prNumber, checks: secondChecks }] });
+      expect(secondPlan.records).toHaveLength(1);
+      expect(secondPlan.records![0].episode.redPeriod).not.toBe(firstPlan.records![0].episode.redPeriod);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('records green transitions while planning non-red PR heads', () => {
     const dir = tempStore();
     try {
@@ -441,6 +474,29 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     }
   });
 
+
+
+  it('opens a new red stint when failure fingerprint changes without an observed green poll', () => {
+    const dir = tempStore();
+    try {
+      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha };
+      const fp1 = buildRedFailureFingerprint(
+        [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:00:00Z', link: 'https://example/run/1' }],
+        { requiredCheckNames: ['CI'] },
+      );
+      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp1 });
+      const fp2 = buildRedFailureFingerprint(
+        [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }],
+        { requiredCheckNames: ['CI'] },
+      );
+      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp2 });
+      expect(second).not.toBe(first);
+      const third = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFingerprint: fp2 });
+      expect(third).toBe(second);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('keeps check churn out of red-period identity', () => {
     const dir = tempStore();
