@@ -1257,6 +1257,7 @@ export function planWorkerMessageSubmitActions(input) {
         diagnosis: `${OPERATOR_ESCALATION_PREFIX} reconcile state exceeds storage ceiling with no evictable entries; failing closed.`,
       }],
       tracking: convergence.tracking,
+      dispatchJournal: convergence.journal ?? dispatchJournal ?? {},
       deliveryCount: 0,
       overCapacity: true,
     };
@@ -1600,6 +1601,7 @@ export function planWorkerMessageSubmitActions(input) {
         diagnosis: `${OPERATOR_ESCALATION_PREFIX} submit tracking exceeds storage ceiling with no evictable entries; failing closed.`,
       }],
       tracking: compacted.tracking,
+      dispatchJournal: compactedJournal,
       deliveryCount: deliveries.length,
       overCapacity: true,
     };
@@ -1608,6 +1610,7 @@ export function planWorkerMessageSubmitActions(input) {
   return {
     actions,
     tracking: compacted.tracking,
+    dispatchJournal: compactedJournal,
     deliveryCount: deliveries.length,
   };
 }

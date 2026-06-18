@@ -10,10 +10,18 @@ export const MECHANICAL_PIPE_BUFFER_BYTES = 65_536;
 /** Maximum serialised parent↔child round-trip payload (bytes, UTF-8). */
 export const MECHANICAL_TRANSPORT_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
-/** Persisted state ceiling with headroom below the transport envelope. */
+/** Combined persisted-state ceiling (tracking + journal) below the transport envelope. */
 export const MECHANICAL_STORAGE_CEILING_BYTES = Math.floor(
   MECHANICAL_TRANSPORT_ENVELOPE_BYTES * 0.65,
 );
+
+/** Per-store ceiling when tracking and journal share one transport round-trip. */
+export const MECHANICAL_PERSISTED_STORE_CEILING_BYTES = Math.floor(
+  MECHANICAL_STORAGE_CEILING_BYTES / 2,
+);
+
+/** Reserved bytes for non-store plan payload fields (actions, sessions wrapper keys). */
+export const MECHANICAL_RECONCILE_PLAN_OVERHEAD_BYTES = MECHANICAL_PIPE_BUFFER_BYTES;
 
 /** Worst-case encoding/transform expansion factor for ceiling↔envelope checks. */
 export const MECHANICAL_ENCODING_EXPANSION_FACTOR = 1.35;
@@ -261,7 +269,7 @@ export function worstCaseDispatchJournalRecord(record) {
  * @param {Record<string, unknown>} candidateRecord
  * @param {number} [ceilingBytes]
  */
-export function evaluateDispatchJournalAdmission(journal, candidateRecord, ceilingBytes = MECHANICAL_STORAGE_CEILING_BYTES) {
+export function evaluateDispatchJournalAdmission(journal, candidateRecord, ceilingBytes = MECHANICAL_PERSISTED_STORE_CEILING_BYTES) {
   const baseJournal = { ...(journal ?? {}) };
   const currentBytes = estimateSerializedUtf8Bytes(baseJournal);
   const deliveryId = trimString(candidateRecord?.deliveryId);
@@ -307,13 +315,47 @@ export function evaluateDispatchJournalAdmission(journal, candidateRecord, ceili
  * @param {Record<string, unknown>} tracking
  * @param {number} [ceilingBytes]
  */
-export function evaluateSubmitTrackingCapacity(tracking, ceilingBytes = MECHANICAL_STORAGE_CEILING_BYTES) {
+export function evaluateSubmitTrackingCapacity(tracking, ceilingBytes = MECHANICAL_PERSISTED_STORE_CEILING_BYTES) {
   const bytes = estimateSerializedUtf8Bytes(tracking ?? {});
   return {
     ok: bytes <= ceilingBytes,
     bytes,
     ceilingBytes,
     overCapacity: bytes > ceilingBytes,
+  };
+}
+
+/**
+ * Budget tracking + journal together for one parent↔child transport round-trip.
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.tracking]
+ * @param {Record<string, unknown>} [input.journal]
+ * @param {number} [input.overheadBytes]
+ * @param {number} [input.envelopeBytes]
+ */
+export function evaluateReconcileTransportPayloadBudget(input) {
+  const {
+    tracking,
+    journal,
+    overheadBytes = MECHANICAL_RECONCILE_PLAN_OVERHEAD_BYTES,
+    envelopeBytes = MECHANICAL_TRANSPORT_ENVELOPE_BYTES,
+  } = input ?? {};
+  const trackingCapacity = evaluateSubmitTrackingCapacity(tracking);
+  const journalCapacity = evaluateSubmitTrackingCapacity(journal);
+  const combinedBytes =
+    trackingCapacity.bytes + journalCapacity.bytes + overheadBytes;
+  return {
+    ok:
+      trackingCapacity.ok &&
+      journalCapacity.ok &&
+      combinedBytes <= envelopeBytes,
+    trackingBytes: trackingCapacity.bytes,
+    journalBytes: journalCapacity.bytes,
+    combinedBytes,
+    overheadBytes,
+    envelopeBytes,
+    storeCeilingBytes: MECHANICAL_PERSISTED_STORE_CEILING_BYTES,
+    combinedStoreCeilingBytes: MECHANICAL_STORAGE_CEILING_BYTES,
   };
 }
 
@@ -341,13 +383,13 @@ export function convergeOversizedReconcileState(input) {
 
   if (nextJournal) {
     let journalBytes = estimateSerializedUtf8Bytes(nextJournal);
-    if (journalBytes > MECHANICAL_STORAGE_CEILING_BYTES) {
+    if (journalBytes > MECHANICAL_PERSISTED_STORE_CEILING_BYTES) {
       const compactedJournal = compactDispatchJournal(nextJournal, nowMs);
       nextJournal = compactedJournal.journal;
       evicted.push(...compactedJournal.evicted);
       journalBytes = estimateSerializedUtf8Bytes(nextJournal);
     }
-    if (journalBytes > MECHANICAL_STORAGE_CEILING_BYTES) {
+    if (journalBytes > MECHANICAL_PERSISTED_STORE_CEILING_BYTES) {
       return {
         ok: false,
         reason: 'journal_over_capacity_non_evictable',

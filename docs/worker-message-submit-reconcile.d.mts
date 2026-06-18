@@ -277,6 +277,8 @@ export declare function planWorkerMessageSubmitActions(input: {
   actions: WorkerMessageSubmitAction[];
   tracking: SubmitTrackingState;
   deliveryCount: number;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  overCapacity?: boolean;
 };
 
 export declare function evaluateConcurrentSubmitClaim(input: {

@@ -5,8 +5,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   MECHANICAL_PIPE_BUFFER_BYTES,
+  MECHANICAL_PERSISTED_STORE_CEILING_BYTES,
   MECHANICAL_STORAGE_CEILING_BYTES,
   MECHANICAL_TRANSPORT_ENVELOPE_BYTES,
+  evaluateReconcileTransportPayloadBudget,
   assertTransportEnvelope,
   compactDispatchJournal,
   compactWorkerMessageSubmitTracking,
@@ -57,6 +59,12 @@ describe('mechanical reconcile bounds constants', () => {
     expect(MECHANICAL_STORAGE_CEILING_BYTES).toBeLessThan(MECHANICAL_TRANSPORT_ENVELOPE_BYTES);
     const childOutput = maxChildOutputBytesForStorage(MECHANICAL_STORAGE_CEILING_BYTES);
     expect(storageBytesWithinTransportEnvelope(childOutput)).toBe(true);
+  });
+
+  it('splits persisted store ceiling so tracking and journal share one transport envelope', () => {
+    expect(MECHANICAL_PERSISTED_STORE_CEILING_BYTES * 2).toBeLessThanOrEqual(
+      MECHANICAL_STORAGE_CEILING_BYTES,
+    );
   });
 
   it('uses the observed pipe buffer boundary as reference', () => {
@@ -139,7 +147,7 @@ describe('dispatch journal admission', () => {
         deliveredAtMs: nowMs - 1000,
         dispatchOutcome: 'dispatch_in_flight',
         draftState: 'draft_present',
-        payload: 'r'.repeat(MECHANICAL_STORAGE_CEILING_BYTES),
+        payload: 'r'.repeat(MECHANICAL_PERSISTED_STORE_CEILING_BYTES),
       }),
     };
     const admission = evaluateDispatchJournalAdmission(journal, {
@@ -188,7 +196,7 @@ describe('dispatch journal admission', () => {
         deliveredAtMs: nowMs - 1000,
         dispatchOutcome: 'dispatched',
         draftState: 'draft_present',
-        blob: 'a'.repeat(MECHANICAL_STORAGE_CEILING_BYTES - 9000),
+        blob: 'a'.repeat(MECHANICAL_PERSISTED_STORE_CEILING_BYTES - 9000),
       },
     };
     const candidate = withPendingDispatchFence({
@@ -202,8 +210,8 @@ describe('dispatch journal admission', () => {
     const legacyReservedBytes = estimateSerializedUtf8Bytes(candidate);
     const admittedJournalBytes = estimateSerializedUtf8Bytes({ ...journal, [longDeliveryId]: candidate });
 
-    expect(currentBytes + legacyReservedBytes).toBeLessThanOrEqual(MECHANICAL_STORAGE_CEILING_BYTES);
-    expect(admittedJournalBytes).toBeGreaterThan(MECHANICAL_STORAGE_CEILING_BYTES);
+    expect(currentBytes + legacyReservedBytes).toBeLessThanOrEqual(MECHANICAL_PERSISTED_STORE_CEILING_BYTES);
+    expect(admittedJournalBytes).toBeGreaterThan(MECHANICAL_PERSISTED_STORE_CEILING_BYTES);
 
     const admission = evaluateDispatchJournalAdmission(journal, candidate);
     expect(admission.ok).toBe(false);
@@ -407,9 +415,27 @@ describe('Invoke-MechanicalNodeFilterCli over-buffer round-trip', () => {
 
 describe('submit tracking capacity helper', () => {
   it('reports over-capacity when tracking exceeds the ceiling', () => {
-    const tracking = { deliveries: { x: { blob: 'a'.repeat(MECHANICAL_STORAGE_CEILING_BYTES) } } };
+    const tracking = { deliveries: { x: { blob: 'a'.repeat(MECHANICAL_PERSISTED_STORE_CEILING_BYTES + 1) } } };
     const capacity = evaluateSubmitTrackingCapacity(tracking);
     expect(capacity.overCapacity).toBe(true);
+  });
+});
+
+describe('reconcile transport payload budget', () => {
+  it('accepts tracking and journal each at the per-store ceiling', () => {
+    const padLen = Math.max(0, MECHANICAL_PERSISTED_STORE_CEILING_BYTES - 400);
+    const tracking = { deliveries: { a: { pad: 't'.repeat(padLen) } } };
+    const journal = { b: { deliveryId: 'b', pad: 'j'.repeat(padLen) } };
+    const budget = evaluateReconcileTransportPayloadBudget({ tracking, journal });
+    expect(budget.ok).toBe(true);
+  });
+
+  it('rejects combined persisted state that exceeds the transport envelope', () => {
+    const pad = 'x'.repeat(MECHANICAL_STORAGE_CEILING_BYTES);
+    const tracking = { deliveries: { a: { pad } } };
+    const journal = { b: { deliveryId: 'b', pad } };
+    const budget = evaluateReconcileTransportPayloadBudget({ tracking, journal });
+    expect(budget.ok).toBe(false);
   });
 });
 
@@ -477,6 +503,11 @@ describe('issue #339 bounded reconcile state', () => {
 
     expect(result.deliveryCount).toBe(0);
     expect(result.actions.some((action) => action.type === 'escalate')).toBe(false);
+    expect(result.dispatchJournal).toBeDefined();
+    expect(Object.keys(result.dispatchJournal ?? {}).length).toBeLessThan(entryCount);
+    expect(estimateSerializedUtf8Bytes(result.dispatchJournal)).toBeLessThan(
+      estimateSerializedUtf8Bytes(dispatchJournal),
+    );
   });
 
   it('finalizes draft state atomically before compaction evicts stale records', () => {

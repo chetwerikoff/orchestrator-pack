@@ -11,6 +11,8 @@ $Script:MechanicalJsonReflectionKeys = @(
 $Script:MechanicalPipeBufferBytes = 65536
 $Script:MechanicalTransportEnvelopeBytes = 2 * 1024 * 1024
 $Script:MechanicalStorageCeilingBytes = [Math]::Floor($Script:MechanicalTransportEnvelopeBytes * 0.65)
+$Script:MechanicalPersistedStoreCeilingBytes = [Math]::Floor($Script:MechanicalStorageCeilingBytes / 2)
+$Script:MechanicalReconcilePlanOverheadBytes = $Script:MechanicalPipeBufferBytes
 
 function Get-MechanicalTransportEnvelopeBytes {
     return $Script:MechanicalTransportEnvelopeBytes
@@ -18,6 +20,10 @@ function Get-MechanicalTransportEnvelopeBytes {
 
 function Get-MechanicalStorageCeilingBytes {
     return $Script:MechanicalStorageCeilingBytes
+}
+
+function Get-MechanicalPersistedStoreCeilingBytes {
+    return $Script:MechanicalPersistedStoreCeilingBytes
 }
 
 function Get-MechanicalTransportTempRoot {

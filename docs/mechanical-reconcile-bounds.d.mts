@@ -1,6 +1,8 @@
 export declare const MECHANICAL_PIPE_BUFFER_BYTES: number;
 export declare const MECHANICAL_TRANSPORT_ENVELOPE_BYTES: number;
 export declare const MECHANICAL_STORAGE_CEILING_BYTES: number;
+export declare const MECHANICAL_PERSISTED_STORE_CEILING_BYTES: number;
+export declare const MECHANICAL_RECONCILE_PLAN_OVERHEAD_BYTES: number;
 export declare const MECHANICAL_ENCODING_EXPANSION_FACTOR: number;
 
 export declare const FENCE_LIFECYCLE_PENDING: 'pending';
@@ -61,6 +63,12 @@ export declare function evaluateSubmitTrackingCapacity(
   tracking: Record<string, unknown>,
   ceilingBytes?: number,
 ): Record<string, unknown>;
+export declare function evaluateReconcileTransportPayloadBudget(input: {
+  tracking?: Record<string, unknown>;
+  journal?: Record<string, unknown>;
+  overheadBytes?: number;
+  envelopeBytes?: number;
+}): Record<string, unknown>;
 export declare function convergeOversizedReconcileState(input: {
   tracking: Record<string, unknown>;
   journal?: Record<string, unknown>;

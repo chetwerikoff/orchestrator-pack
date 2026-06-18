@@ -188,6 +188,12 @@ function Invoke-SubmitReconcileTick {
     $submitOutcomes = @()
     $tracking = $plan.tracking
 
+    if ($plan.PSObject.Properties.Name -contains 'dispatchJournal' -and $null -ne $plan.dispatchJournal) {
+        if (-not $DryRunMode -and -not $Fixture) {
+            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $plan.dispatchJournal)
+        }
+    }
+
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'submit' {
