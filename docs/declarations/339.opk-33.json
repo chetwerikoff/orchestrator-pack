@@ -2,7 +2,7 @@
   "issue_number": 339,
   "iteration_id": "opk-33",
   "iteration_id_source": "ao_session",
-  "supersedes": "docs/declarations/250.opk-33.json",
+  "supersedes": null,
   "created_at": "2026-06-18T12:35:00.000Z",
   "baseline": {
     "commit_sha": "8b8527a8b8527a8b8527a8b8527a8b8527a8b8527a",
