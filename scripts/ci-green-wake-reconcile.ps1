@@ -122,6 +122,31 @@ function Save-PartialCiGreenWakeTracking {
     Set-CiGreenWakeState -Path $Path -State $merged
 }
 
+function Commit-CiGreenNudgeSentCycleState {
+    param(
+        [object]$CycleState,
+        [object]$Action,
+        [long]$SentAtMs
+    )
+
+    if (-not $Action.ownerCycle) {
+        return $CycleState
+    }
+
+    $commit = Invoke-CiGreenWakeFilterCli -Subcommand 'commit-nudge-sent' -Payload @{
+        cycleState     = $CycleState
+        repoId         = [string]$Action.ownerCycle.repoId
+        prNumber       = [int]$Action.prNumber
+        ownerSessionId = [string]$Action.sessionId
+        cycle          = $Action.ownerCycle.cycle
+        sentAtMs       = $SentAtMs
+    }
+    if ($commit.cycleState) {
+        return $commit.cycleState
+    }
+    return $CycleState
+}
+
 function Retry-PendingCiGreenDispatchJournals {
     param(
         [hashtable]$PendingJournal,
@@ -460,6 +485,7 @@ function Invoke-CiGreenWakeTick {
                     sentAtMs  = $sentAtMs
                     message   = [string]$action.message
                 }
+                $cycleState = Commit-CiGreenNudgeSentCycleState -CycleState $cycleState -Action $action -SentAtMs $sentAtMs
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
                     -Nudged $nudged -PendingJournal $pendingJournal -CycleState $cycleState -DryRunMode:$DryRunMode
             }
@@ -473,19 +499,7 @@ function Invoke-CiGreenWakeTick {
                     sessionId = [string]$action.sessionId
                     sentAtMs  = $nowMs
                 }
-                if ($action.ownerCycle) {
-                    $commit = Invoke-CiGreenWakeFilterCli -Subcommand 'commit-nudge-sent' -Payload @{
-                        cycleState     = $cycleState
-                        repoId         = [string]$action.ownerCycle.repoId
-                        prNumber       = [int]$action.prNumber
-                        ownerSessionId = [string]$action.sessionId
-                        cycle          = $action.ownerCycle.cycle
-                        sentAtMs       = $nowMs
-                    }
-                    if ($commit.cycleState) {
-                        $cycleState = $commit.cycleState
-                    }
-                }
+                $cycleState = Commit-CiGreenNudgeSentCycleState -CycleState $cycleState -Action $action -SentAtMs $nowMs
                 Save-PartialCiGreenWakeTracking -Path $partialStatePath -HeadRecords $headRecords `
                     -Nudged $nudged -PendingJournal $pendingJournal -CycleState $cycleState -DryRunMode:$DryRunMode
             }

@@ -973,6 +973,12 @@ export function bootstrapLegacyNudgedCycle(cycleState, legacyNudged, prNumber, o
   if (!legacyNudged || !ownerSessionId) {
     return cycleState;
   }
+  const repoId = normalizeCanonicalRepoIdentity(cycleState?.repoId);
+  const migrationKey = buildOwnerCycleKey(repoId, prNumber, ownerSessionId);
+  const migratedKeys = { ...(cycleState?.migratedLegacyNudgeKeys ?? {}) };
+  if (migratedKeys[migrationKey]) {
+    return cycleState;
+  }
   const prefix = `${prNumber}:`;
   let latestSentAt = 0;
   for (const [key, record] of Object.entries(legacyNudged)) {
@@ -987,7 +993,6 @@ export function bootstrapLegacyNudgedCycle(cycleState, legacyNudged, prNumber, o
   if (!latestSentAt) {
     return cycleState;
   }
-  const repoId = normalizeCanonicalRepoIdentity(cycleState?.repoId);
   const { state, cycle } = resolveOrAdvanceOwnerCycle({
     state: cycleState,
     repoId,
@@ -1006,7 +1011,8 @@ export function bootstrapLegacyNudgedCycle(cycleState, legacyNudged, prNumber, o
     nudgeSentAtMs: latestSentAt,
     nudgeExpiresAtMs: latestSentAt + NUDGE_EXPIRY_MS,
   });
-  return { ...state, ownerCycles, migratedLegacyNudge: true };
+  migratedKeys[migrationKey] = true;
+  return { ...state, ownerCycles, migratedLegacyNudgeKeys: migratedKeys };
 }
 
 /**

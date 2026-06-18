@@ -215,6 +215,56 @@ describe('legacy nudge migration', () => {
     const cycle = state.ownerCycles?.[buildOwnerCycleKey(repoId, 42, 'op-worker')];
     expect(cycle?.nudgeArmed).toBe(true);
   });
+
+  it('does not re-bootstrap legacy nudge after migration when a new cycle opens', () => {
+    const legacy = { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } };
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = buildOwnerCycleKey(repoId, 42, 'op-worker');
+    const migrated = bootstrapLegacyNudgedCycle({}, legacy, 42, 'op-worker') as {
+      ownerCycles?: Record<string, unknown>;
+      migratedLegacyNudgeKeys?: Record<string, boolean>;
+    };
+    expect(migrated.migratedLegacyNudgeKeys?.[ownerKey]).toBe(true);
+
+    const closedCycleState = {
+      ...migrated,
+      ownerCycles: {},
+    };
+    const again = bootstrapLegacyNudgedCycle(closedCycleState, legacy, 42, 'op-worker') as {
+      ownerCycles?: Record<string, { nudgeArmed?: boolean }>;
+    };
+    expect(again.ownerCycles?.[ownerKey]?.nudgeArmed).toBeUndefined();
+  });
+
+  it('allows a fresh nudge on a new cycle after legacy migration', () => {
+    const legacy = { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 1000 } };
+    const repoId = normalizeCanonicalRepoIdentity('orchestrator-pack');
+    const ownerKey = buildOwnerCycleKey(repoId, 42, 'op-worker');
+    const migrated = bootstrapLegacyNudgedCycle({}, legacy, 42, 'op-worker');
+    const closedCycleState = { ...migrated, ownerCycles: {} };
+
+    const evalResult = evaluateWorkerIterationCycleForPr({
+      cycleState: closedCycleState,
+      repoRoot: 'orchestrator-pack',
+      prNumber: 42,
+      headSha: 'def456',
+      ownerSessionId: 'op-worker',
+      legacyNudged: legacy,
+      reviewRuns: [],
+      session: liveWorker({
+        reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+      }),
+      nowMs: Date.parse('2026-06-01T02:00:00.000Z'),
+      headCommittedAtMs: Date.parse('2026-06-01T00:00:00.000Z'),
+    }) as {
+      cycle?: { nudgeArmed?: boolean };
+      nudgeGate?: { allow?: boolean };
+    };
+
+    expect(evalResult.cycle?.nudgeArmed).not.toBe(true);
+    expect(evalResult.nudgeGate?.allow).toBe(true);
+    expect(ownerKey).toBeTruthy();
+  });
 });
 
 describe('review cycle gate matrix cells', () => {
