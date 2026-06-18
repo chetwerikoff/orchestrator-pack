@@ -1,0 +1,17 @@
+{
+  "issue_number": 335,
+  "iteration_id": "opk-31",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-18T05:43:30.602Z",
+  "baseline": {
+    "commit_sha": "7d90f2e975ce1d5f3ef9001d7950adf0c50ed625",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:59f03f1d0e6191cb83e44a9da8653ee0ea6683487669443999e192f306fa5d20"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}
