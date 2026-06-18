@@ -7,6 +7,7 @@ export declare function evaluateMechanicalTickInterval(input: {
 
 export declare function readStdinJson(): Record<string, unknown>;
 export declare function printJson(value: unknown): void;
+export declare function resolveMechanicalCliArg(flag: string): string;
 export declare function runStdinJsonCli(
   scriptBasename: string,
   handlers: Record<string, () => unknown>,

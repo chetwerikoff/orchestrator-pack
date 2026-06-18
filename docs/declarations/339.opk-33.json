@@ -1,0 +1,32 @@
+{
+  "issue_number": 339,
+  "iteration_id": "opk-33",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-18T12:35:00.000Z",
+  "baseline": {
+    "commit_sha": "8b8527a8b8527a8b8527a8b8527a8b8527a8b8527a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/mechanical-reconcile-bounds.mjs",
+    "docs/mechanical-reconcile-bounds.d.mts",
+    "docs/review-mechanical-cli.mjs",
+    "docs/review-mechanical-cli.d.mts",
+    "docs/worker-message-dispatch-observe.mjs",
+    "docs/worker-message-dispatch-observe.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "scripts/fixtures/mechanical-json-state/echo-filter.mjs",
+    "scripts/lib/MechanicalReconcileNode.ps1",
+    "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "scripts/mechanical-reconcile-bounds.test.ts",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/orchestrator-message-protected-runtime.manifest.json"
+  ],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**"
+  ],
+  "amendments": []
+}

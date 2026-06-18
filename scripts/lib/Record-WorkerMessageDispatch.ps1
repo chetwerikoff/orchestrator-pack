@@ -69,6 +69,31 @@ function Invoke-DispatchShapeCli {
 }
 
 
+function Invoke-DispatchJournalCli {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+
+    $tempPaths = New-MechanicalTransportTempPaths
+    $inputPath = $tempPaths.InputPath
+    $outputPath = $tempPaths.OutputPath
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 20 -Compress
+        Write-MechanicalTransportPrivateFile -Path $inputPath -Content $json
+        $stderr = & node $DispatchCli $Subcommand --input-file $inputPath --output-file $outputPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "worker-message-dispatch-observe.mjs $Subcommand exited ${LASTEXITCODE}: $stderr"
+        }
+        return Read-MechanicalNodeFilterCliOutput -OutputPath $outputPath -Label 'worker-message-dispatch-observe' -Subcommand $Subcommand
+    }
+    finally {
+        Remove-MechanicalTransportTempPaths -Paths @($inputPath, $outputPath)
+    }
+}
+
+
 function ConvertTo-WorkerMessageSafeIdComponent {
     param([string]$Value)
 
@@ -202,7 +227,7 @@ function Register-WorkerMessageDispatch {
                 $recordHolder.reason = 'journal_untrusted'
                 return
             }
-            $journal[$deliveryId] = @{
+            $candidate = @{
                 deliveryId    = $deliveryId
                 sessionId     = $SessionId
                 deliveredAtMs = $deliveredMs
@@ -221,7 +246,19 @@ function Register-WorkerMessageDispatch {
                 configPathHash = $configPathHash
                 adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
             }
-            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+            $admitted = Invoke-DispatchJournalCli -Subcommand 'journal-admit' -Payload @{
+                journal = $journal
+                record  = $candidate
+                nowMs   = $deliveredMs
+            }
+            if (-not $admitted.ok) {
+                $recordHolder.reason = [string]$admitted.reason
+                if ($admitted.reason -eq 'over_capacity') {
+                    $recordHolder.reason = 'journal_over_capacity'
+                }
+                return
+            }
+            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $admitted.journal)
             $recordHolder.recorded = $true
         }
 
@@ -303,6 +340,45 @@ function Resolve-DispatchJournalSendOutcomeAfterDelivered {
 }
 
 
+
+function Compact-WorkerMessageDispatchJournal {
+    param(
+        [string]$JournalPath = '',
+        [long]$NowMs = 0
+    )
+
+    $journalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
+    $nowMs = if ($NowMs -gt 0) { $NowMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $journalPath
+    $resultHolder = @{ ok = $false; reason = 'compact_failed' }
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+        kind = 'worker-message-dispatch-journal-compact'
+    } -Action {
+        $journal = Get-WorkerMessageDispatchJournal -Path $journalPath
+        if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
+            $resultHolder.reason = 'journal_untrusted'
+            return
+        }
+        $compacted = Invoke-DispatchJournalCli -Subcommand 'journal-compact' -Payload @{
+            journal = $journal
+            nowMs   = $nowMs
+        }
+        Set-WorkerMessageDispatchJournal -Path $journalPath -Journal (ConvertTo-MechanicalJsonMap -Value $compacted.journal)
+        $resultHolder.ok = $true
+        $resultHolder.reason = 'compacted'
+        $resultHolder.evicted = @($compacted.evicted)
+    }
+
+    if (-not $fenced.ok) {
+        return @{ ok = $false; reason = 'journal_busy' }
+    }
+    return @{
+        ok      = [bool]$resultHolder.ok
+        reason  = [string]$resultHolder.reason
+        evicted = @($resultHolder.evicted)
+    }
+}
+
 function Update-WorkerMessageDispatchOutcome {
     param(
         [Parameter(Mandatory = $true)]
@@ -318,11 +394,17 @@ function Update-WorkerMessageDispatchOutcome {
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{ kind = 'worker-message-dispatch-journal-outcome' } -Action {
         $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         if (-not $journal.ContainsKey($DeliveryId)) { return }
-        $record = ConvertTo-MechanicalJsonMap -Value $journal[$DeliveryId]
-        $record['dispatchOutcome'] = $DispatchOutcome
-        if ($DraftState) { $record['draftState'] = $DraftState }
-        $journal[$DeliveryId] = $record
-        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+        $finalized = Invoke-DispatchJournalCli -Subcommand 'journal-finalize' -Payload @{
+            journal         = $journal
+            deliveryId      = $DeliveryId
+            dispatchOutcome = $DispatchOutcome
+            draftState      = $DraftState
+            nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        if (-not $finalized.ok) {
+            return
+        }
+        Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $finalized.journal)
         $updateHolder.updated = $true
     }
     $updated = [bool]$updateHolder.updated

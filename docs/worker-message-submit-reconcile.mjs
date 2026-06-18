@@ -33,6 +33,11 @@ import {
   mergeDeliveryRecords,
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
+import {
+  compactWorkerMessageSubmitTracking,
+  convergeOversizedReconcileState,
+  evaluateSubmitTrackingCapacity,
+} from './mechanical-reconcile-bounds.mjs';
 
 /** Default tick cadence: 30 seconds. */
 export const DEFAULT_SUBMIT_RECONCILE_INTERVAL_MS = 30 * 1000;
@@ -748,12 +753,13 @@ export function applySubmitOutcomes(tracking, outcomes, nowMs) {
     }
   }
 
-  return {
+  const draft = {
     ...tracking,
     deliveries: nextDeliveries,
     failedDeliveries: nextFailedDeliveries,
-    audit: audit.slice(-200),
+    audit,
   };
+  return compactWorkerMessageSubmitTracking(draft, nowMs).tracking;
 }
 
 function buildBackstopEscalation(deliveryId, sessionId, reason, diagnosis) {
@@ -1235,9 +1241,32 @@ export function planWorkerMessageSubmitActions(input) {
     };
   }
 
+
+  const convergence = convergeOversizedReconcileState({
+    tracking: tracking ?? { deliveries: {}, failedDeliveries: {}, audit: [] },
+    journal: dispatchJournal ?? {},
+    nowMs,
+  });
+  if (!convergence.ok) {
+    return {
+      actions: [{
+        type: 'escalate',
+        deliveryId: 'over-capacity',
+        sessionId: 'operator',
+        reason: convergence.reason,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} reconcile state exceeds storage ceiling with no evictable entries; failing closed.`,
+      }],
+      tracking: convergence.tracking,
+      dispatchJournal: convergence.journal ?? dispatchJournal ?? {},
+      deliveryCount: 0,
+      overCapacity: true,
+    };
+  }
+  const baseTracking = convergence.tracking;
+  const compactedJournal = convergence.journal ?? dispatchJournal ?? {};
   const deliveries = mergeDeliveryRecords({
     aoEvents,
-    dispatchJournal,
+    dispatchJournal: compactedJournal,
     reviewRuns,
     reactionMessages,
     nowMs,
@@ -1247,8 +1276,8 @@ export function planWorkerMessageSubmitActions(input) {
   /** @type {Array<Record<string, unknown>>} */
   const actions = [];
   /** @type {Record<string, Record<string, unknown>>} */
-  const nextDeliveries = { ...(tracking?.deliveries ?? {}) };
-  const nextFailedDeliveries = { ...(tracking?.failedDeliveries ?? {}) };
+  const nextDeliveries = { ...(baseTracking?.deliveries ?? {}) };
+  const nextFailedDeliveries = { ...(baseTracking?.failedDeliveries ?? {}) };
   /** @type {Array<Record<string, unknown>>} */
   const audit = [];
 
@@ -1554,14 +1583,34 @@ export function planWorkerMessageSubmitActions(input) {
     }
   }
 
+  const draftTracking = {
+    deliveries: nextDeliveries,
+    failedDeliveries: nextFailedDeliveries,
+    lastTickMs: nowMs,
+    audit: [...toArray(baseTracking?.audit), ...audit],
+  };
+  const compacted = compactWorkerMessageSubmitTracking(draftTracking, nowMs);
+  const capacity = evaluateSubmitTrackingCapacity(compacted.tracking);
+  if (!capacity.ok) {
+    return {
+      actions: [{
+        type: 'escalate',
+        deliveryId: 'over-capacity',
+        sessionId: 'operator',
+        reason: 'tracking_over_capacity_non_evictable',
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} submit tracking exceeds storage ceiling with no evictable entries; failing closed.`,
+      }],
+      tracking: compacted.tracking,
+      dispatchJournal: compactedJournal,
+      deliveryCount: deliveries.length,
+      overCapacity: true,
+    };
+  }
+
   return {
     actions,
-    tracking: {
-      deliveries: nextDeliveries,
-      failedDeliveries: nextFailedDeliveries,
-      lastTickMs: nowMs,
-      audit: [...toArray(tracking?.audit), ...audit].slice(-200),
-    },
+    tracking: compacted.tracking,
+    dispatchJournal: compactedJournal,
     deliveryCount: deliveries.length,
   };
 }

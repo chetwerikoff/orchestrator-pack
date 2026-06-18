@@ -188,6 +188,15 @@ function Invoke-SubmitReconcileTick {
     $submitOutcomes = @()
     $tracking = $plan.tracking
 
+    if ($plan.PSObject.Properties.Name -contains 'dispatchJournal' -and $null -ne $plan.dispatchJournal) {
+        if (-not $DryRunMode -and -not $Fixture) {
+            $compactResult = Compact-WorkerMessageDispatchJournal -JournalPath $JournalPath -NowMs $now
+            if (-not $compactResult.ok) {
+                Write-SubmitReconcileLog "dispatch journal compaction skipped: reason=$($compactResult.reason)"
+            }
+        }
+    }
+
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'submit' {
