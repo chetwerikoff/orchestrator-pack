@@ -24,6 +24,7 @@ import {
 } from '../docs/mechanical-reconcile-bounds.mjs';
 import { admitDispatchJournalRecord } from '../docs/worker-message-dispatch-observe.mjs';
 import { planWorkerMessageSubmitActions } from '../docs/worker-message-submit-reconcile.mjs';
+import type { FailedDeliveryRecord } from '../docs/worker-message-submit-reconcile.d.mts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const libScript = path.join(repoRoot, 'scripts/lib/MechanicalReconcileNode.ps1');
@@ -268,15 +269,14 @@ describe('issue #339 bounded reconcile state', () => {
   it('builds failed-delivery state from compacted tracking after convergence', () => {
     const nowMs = Date.now();
     const resolvedAtMs = nowMs - SUBMIT_DELIVERY_RETENTION_MS - 60_000;
-    const failedDeliveries: Record<string, Record<string, unknown>> = {};
+    const failedDeliveries: Record<string, FailedDeliveryRecord> = {};
     for (let i = 0; i < 40; i++) {
       failedDeliveries[`failed-${i}`] = {
         deliveryId: `failed-${i}`,
         sessionId: 'opk-bounded',
-        reason: 'resolved_test',
+        reason: 'resolved_test:' + 'x'.repeat(6000),
         unresolvedState: FAILED_DELIVERY_RESOLVED,
         resolvedAtMs,
-        payload: 'x'.repeat(6000),
       };
     }
 
@@ -290,6 +290,6 @@ describe('issue #339 bounded reconcile state', () => {
     for (let i = 0; i < 40; i++) {
       expect(result.tracking.failedDeliveries?.[`failed-${i}`]).toBeUndefined();
     }
-    expect(result.overCapacity).not.toBe(true);
+    expect(result.actions.some((action) => action.deliveryId === 'over-capacity')).toBe(false);
   });
 });
