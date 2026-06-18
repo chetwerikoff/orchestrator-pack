@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -1152,6 +1154,104 @@ describe('Issue #212 defer subreason records', () => {
       if (skipReason) {
         expect(skipActions(actions).some((a) => a.reason === skipReason), fixture).toBe(true);
       }
+    }
+  });
+});
+
+describe('review-trigger-reconcile.ps1 fixture wiring', () => {
+  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const scriptPath = path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1');
+
+  it('honors -CiGreenWakeStateFile when loading shared nudge evidence', () => {
+    const ps1 = readFileSync(scriptPath, 'utf8');
+    expect(ps1).toContain('CiGreenWakeStateFile');
+    expect(ps1).toMatch(/function Get-CiGreenWakeSharedStatePath[\s\S]*CliPath/);
+    expect(ps1).toContain('Get-CiGreenWakeSharedCycleEvidence -Path $ciGreenWakeStatePath');
+    expect(ps1).toContain('Merge-ReconcileTrackingIntoPlanPayload');
+  });
+
+  it('preserves fixture cycle evidence instead of overwriting with empty tracking', () => {
+    const base = loadFixture('quiescent-pr260-opk-37.json') as Record<string, unknown>;
+    const nowMs = Number(base.nowMs ?? Date.now());
+    const sessionId = 'opk-37';
+    const prNumber = 260;
+    const repoId = 'orchestrator-pack';
+    const ownerKey = `${repoId}:pr:${prNumber}:owner:${sessionId}`;
+    const blockedFixture = {
+      ...base,
+      reviewCommand: 'codex review',
+      cycleState: {},
+      sharedCycleState: {
+        repoId,
+        ownerCycles: {
+          [ownerKey]: {
+            cycleId: 'cg-cycle',
+            ownerSessionId: sessionId,
+            prNumber,
+            firstHeadSha: '42bf1490dbe8829667d2835b937a33e7af9d82f1',
+            currentHeadSha: '42bf1490dbe8829667d2835b937a33e7af9d82f1',
+            nudgeArmed: true,
+            nudgeSentAtMs: nowMs,
+            nudgeExpiresAtMs: nowMs + NUDGE_EXPIRY_MS,
+          },
+        },
+      },
+      legacyNudged: {},
+    };
+
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'review-trigger-fixture-'));
+    const fixturePath = path.join(tempDir, 'blocked-quiescent.json');
+    writeFileSync(fixturePath, JSON.stringify(blockedFixture, null, 2));
+
+    try {
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', scriptPath, '-FixturePath', fixturePath, '-DryRun'],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      expect(result.status).toBe(0);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(output).toMatch(/nudge_precedence_over_fallback/);
+      expect(output).toMatch(/fixture tick complete \(started=0\)/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs the configured -CiGreenWakeStateFile path at startup', () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'review-trigger-cg-state-'));
+    const fixturePath = path.join(tempDir, 'quiescent.json');
+    const ciGreenStatePath = path.join(tempDir, 'ci-green-state.json');
+    writeFileSync(
+      fixturePath,
+      JSON.stringify(
+        { ...loadFixture('quiescent-pr260-opk-37.json'), reviewCommand: 'codex review' },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(ciGreenStatePath, JSON.stringify({ heads: {}, nudged: {}, pendingJournal: {}, cycleState: {} }, null, 2));
+
+    try {
+      const result = spawnSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-File',
+          scriptPath,
+          '-FixturePath',
+          fixturePath,
+          '-CiGreenWakeStateFile',
+          ciGreenStatePath,
+          '-DryRun',
+        ],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      expect(result.status).toBe(0);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(output).toContain(`ciGreenWakeState=${ciGreenStatePath}`);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

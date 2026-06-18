@@ -19,6 +19,7 @@ param(
     [int]$IntervalMinutes = 0,
     [int]$PollSeconds = 60,
     [string]$StateFile = '',
+    [string]$CiGreenWakeStateFile = '',
     [string]$YamlPath = '',
     [switch]$DryRun,
     [switch]$Once,
@@ -65,6 +66,8 @@ function Get-ReconcileStatePath {
 }
 
 function Get-CiGreenWakeSharedStatePath {
+    param([string]$CliPath = '')
+    if ($CliPath) { return $CliPath }
     if ($env:AO_CI_GREEN_WAKE_RECONCILE_STATE) { return $env:AO_CI_GREEN_WAKE_RECONCILE_STATE }
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-green-wake-state.json'
 }
@@ -213,6 +216,15 @@ function Get-FixtureReconcilePayload {
     if ($fixture.nowMs) {
         $payload.nowMs = [long]$fixture.nowMs
     }
+    if ($fixture.cycleState) {
+        $payload.cycleState = Copy-MechanicalJsonMap -Map $fixture.cycleState
+    }
+    if ($fixture.sharedCycleState) {
+        $payload.sharedCycleState = Copy-MechanicalJsonMap -Map $fixture.sharedCycleState
+    }
+    if ($fixture.legacyNudged) {
+        $payload.legacyNudged = Copy-MechanicalJsonMap -Map $fixture.legacyNudged
+    }
     $payload = Merge-MechanicalFixtureDeliveryFields -Payload $payload -Fixture $fixture
     $payload.reactionMessages = Get-ReconcileReactionMessages -Fixture $fixture
     return $payload
@@ -250,6 +262,26 @@ function Get-ReconcileWorkerDeliveries {
     return @($Deliveries)
 }
 
+function Merge-ReconcileTrackingIntoPlanPayload {
+    param(
+        [hashtable]$PlanPayload,
+        [hashtable]$TrackingState
+    )
+
+    if ($null -eq $TrackingState) {
+        return
+    }
+    if ($TrackingState.ContainsKey('cycleState')) {
+        $PlanPayload.cycleState = $TrackingState.cycleState
+    }
+    if ($TrackingState.ContainsKey('sharedCycleState')) {
+        $PlanPayload.sharedCycleState = $TrackingState.sharedCycleState
+    }
+    if ($TrackingState.ContainsKey('legacyNudged')) {
+        $PlanPayload.legacyNudged = $TrackingState.legacyNudged
+    }
+}
+
 function Get-PreRunRecheckSnapshot {
     param(
         [int]$PrNumber,
@@ -283,7 +315,8 @@ function Test-PreRunHeadReadyRecheck {
         [hashtable]$PlannedAction,
         [string]$Project,
         [hashtable]$FixtureSnapshot,
-        [hashtable]$TrackingState = $null
+        [hashtable]$TrackingState = $null,
+        [string]$CiGreenWakeStatePath = ''
     )
 
     $fresh = if ($FixtureSnapshot) {
@@ -294,7 +327,7 @@ function Test-PreRunHeadReadyRecheck {
     }
 
     if (-not $FixtureSnapshot) {
-        $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence
+        $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence -Path $CiGreenWakeStatePath
         if ($TrackingState -and $TrackingState.cycleState) {
             $fresh.cycleState = $TrackingState.cycleState
         }
@@ -343,7 +376,8 @@ function Invoke-PlannedReviewRun {
         [switch]$DryRunMode,
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
-        [string]$StartReason = ''
+        [string]$StartReason = '',
+        [string]$CiGreenWakeStatePath = ''
     )
 
     $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
@@ -377,7 +411,8 @@ function Invoke-PlannedReviewRun {
             headSha     = $HeadSha
             sessionId   = $SessionId
             startReason = $StartReason
-        } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState
+        } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState `
+            -CiGreenWakeStatePath $CiGreenWakeStatePath
     }
     catch {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
@@ -464,7 +499,8 @@ function Invoke-ReconcileTick {
         [string]$ConfigYaml,
         [switch]$DryRunMode,
         [string]$Fixture,
-        [hashtable]$TrackingState
+        [hashtable]$TrackingState,
+        [string]$CiGreenWakeStatePath = ''
     )
 
     $fixtureSnapshot = $null
@@ -518,9 +554,7 @@ function Invoke-ReconcileTick {
     $planPayload = $payload.Clone()
     $planPayload.tracking = $TrackingState
     $planPayload.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $planPayload.cycleState = $TrackingState.cycleState
-    $planPayload.sharedCycleState = $TrackingState.sharedCycleState
-    $planPayload.legacyNudged = $TrackingState.legacyNudged
+    Merge-ReconcileTrackingIntoPlanPayload -PlanPayload $planPayload -TrackingState $TrackingState
     $planPayload.repoRoot = $RepoRoot
 
     $planResult = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
@@ -565,7 +599,7 @@ function Invoke-ReconcileTick {
         $startResult = Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
             -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -TrackingState $TrackingState `
-            -StartReason $action.startReason
+            -StartReason $action.startReason -CiGreenWakeStatePath $CiGreenWakeStatePath
         if ($startResult.started) {
             if (-not $DryRunMode -and $action.ownerCycle) {
                 $commit = Invoke-ReconcileFilterCli -Subcommand 'commit-review-started' -Payload @{
@@ -595,6 +629,7 @@ $intervalMinutes = Get-ReconcileIntervalMinutes
 $intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-ReconcileStatePath -CliPath $StateFile
+$ciGreenWakeStatePath = Get-CiGreenWakeSharedStatePath -CliPath $CiGreenWakeStateFile
 $configYaml = if ($YamlPath) {
     (Resolve-Path -LiteralPath $YamlPath).Path
 }
@@ -605,13 +640,13 @@ else {
 
 $claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null
-Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+Write-ReconcileLog "starting (project=$ProjectId, interval=${intervalMinutes}m, state=$statePath, ciGreenWakeState=$ciGreenWakeStatePath, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 
 if ($FixturePath) {
     $state = Get-ReconcileState -Path $statePath
     $tracking = @{ degradedCi = (Copy-MechanicalJsonMap -Map $state.degradedCi) }
     $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml -DryRunMode:$DryRun `
-        -Fixture $FixturePath -TrackingState $tracking
+        -Fixture $FixturePath -TrackingState $tracking -CiGreenWakeStatePath $ciGreenWakeStatePath
     Write-ReconcileLog "fixture tick complete (started=$($result.started))"
     exit 0
 }
@@ -642,7 +677,7 @@ try {
                 Write-OrchestratorSideProcessTickError -ChildId 'review-trigger-reconcile' -ErrorMessage "fences untrusted: $reason"
             }
             else {
-            $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence
+            $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence -Path $ciGreenWakeStatePath
             $tickTracking = @{
                 degradedCi         = (Copy-MechanicalJsonMap -Map $state.degradedCi)
                 cycleState         = $state.cycleState
@@ -651,7 +686,7 @@ try {
             }
             try {
                 $result = Invoke-ReconcileTick -Project $ProjectId -ConfigYaml $configYaml `
-                    -DryRunMode:$DryRun -TrackingState $tickTracking
+                    -DryRunMode:$DryRun -TrackingState $tickTracking -CiGreenWakeStatePath $ciGreenWakeStatePath
                 Write-ReconcileLog "tick complete (started=$($result.started))"
                 Write-OrchestratorSideProcessTickSuccess -ChildId 'review-trigger-reconcile'
             }
