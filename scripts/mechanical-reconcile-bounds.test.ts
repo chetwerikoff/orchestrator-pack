@@ -99,8 +99,9 @@ describe('submit tracking compaction', () => {
 
     expect(isSubmitDeliveryEvictable(tracking.deliveries.oldSubmitted, nowMs)).toBe(true);
     const compacted = compactWorkerMessageSubmitTracking(tracking, nowMs);
-    expect(compacted.tracking.deliveries.active).toBeTruthy();
-    expect(compacted.tracking.deliveries.oldSubmitted).toBeUndefined();
+    const deliveries = compacted.tracking.deliveries as Record<string, unknown>;
+    expect(deliveries.active).toBeTruthy();
+    expect(deliveries.oldSubmitted).toBeUndefined();
   });
 
   it('fails closed when only required entries remain over ceiling', () => {
@@ -165,7 +166,7 @@ describe('dispatch journal admission', () => {
       draftState: 'draft_present',
     }, nowMs);
     expect(admitted.ok).toBe(true);
-    expect(admitted.record?.fenceLifecycle).toBe('pending');
+    expect((admitted.record as Record<string, unknown>)?.fenceLifecycle).toBe('pending');
   });
 });
 

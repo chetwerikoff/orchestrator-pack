@@ -131,3 +131,20 @@ export declare function findOverwrittenDeliveries(
   deliveries: DeliveryRecord[],
   sessionId: string,
 ): DeliveryRecord[];
+
+export declare function admitDispatchJournalRecord(
+  journal: Record<string, unknown>,
+  record: Record<string, unknown>,
+  nowMs?: number,
+): Record<string, unknown>;
+
+export declare function finalizeDispatchJournalRecord(
+  journal: Record<string, unknown>,
+  deliveryId: string,
+  dispatchOutcome: string,
+  nowMs?: number,
+): Record<string, unknown>;
+
+export declare function interpretDispatchFenceLifecycle(
+  record: Record<string, unknown> | null | undefined,
+): string;
