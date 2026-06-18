@@ -12,6 +12,7 @@ function Get-ReconcileChecksByPr {
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [array]$OpenPrs,
         [string]$PackRoot = ''
     )

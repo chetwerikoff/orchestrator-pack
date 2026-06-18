@@ -476,4 +476,15 @@ describe('claimed review-start dependency closure (#335)', () => {
     `);
     expect(output).toBe('ok');
   });
+
+  it('returns an empty bundle when OpenPrs is an empty collection', () => {
+    const output = runPwsh(`
+      . ${psString(reconcileChecksHelperPath)}
+      $bundle = Get-ReconcileChecksByPr -RepoRoot ${psString(repoRoot)} -OpenPrs @()
+      if (@($bundle.ciChecksByPr.Keys).Count -ne 0) { throw 'expected empty ciChecksByPr' }
+      if (@($bundle.requiredCheckNamesByPr.Keys).Count -ne 0) { throw 'expected empty requiredCheckNamesByPr' }
+      'ok'
+    `);
+    expect(output).toBe('ok');
+  });
 });
