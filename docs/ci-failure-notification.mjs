@@ -1007,6 +1007,26 @@ export function claimEpisodePreflight(input) {
       } catch {
         return { claimed: false, reason: 'claim_held_by_other', record };
       }
+      if (record.state === 'pending') {
+        const recovered = {
+          ...record,
+          state: 'claimed',
+          claimOwner,
+          claimedAtMs: nowMs,
+          claimedAtUtc: new Date(nowMs).toISOString(),
+        };
+        writeEpisodeRecord(storeDir, recovered);
+        writeFileSync(claimPath, `${JSON.stringify({
+          schema: 'ci-failure-notification.claim.v1',
+          digest,
+          claimOwner,
+          claimedAtMs: nowMs,
+          claimedAtUtc: new Date(nowMs).toISOString(),
+          orphanReclaimed: true,
+        })}
+`, 'utf8');
+        return { claimed: true, record: recovered, orphanReclaimed: true };
+      }
       if (String(existingClaim?.claimOwner ?? '') !== claimOwner) {
         return { claimed: false, reason: 'claim_held_by_other', record };
       }
@@ -1074,6 +1094,25 @@ export function markSubmittedUnacked(input) {
   return { ok: true, record: updated };
 }
 
+export function markSendIssued(input) {
+  const storeDir = input?.storeDir;
+  const episode = normalizeEpisodeKey(input?.episode);
+  const record = readEpisodeRecord(storeDir, episode);
+  if (!record) return { ok: false, reason: 'missing_record' };
+  if (record.state !== 'submit-intent-reserved' && record.state !== 'submitted-unacked') {
+    return { ok: false, reason: 'invalid_prior_state', record };
+  }
+  if (record.sendIssuedAtMs) {
+    return { ok: true, idempotent: true, record };
+  }
+  const updated = {
+    ...record,
+    sendIssuedAtMs: Number(input?.nowMs) || Date.now(),
+  };
+  writeEpisodeRecord(storeDir, updated);
+  return { ok: true, record: updated };
+}
+
 export function markSendDelivered(input) {
   const storeDir = input?.storeDir;
   const episode = normalizeEpisodeKey(input?.episode);
@@ -1110,6 +1149,7 @@ export function releaseSubmitIntent(input) {
     state: 'claimed',
     submitIntentId: null,
     submitIntentReservedAtMs: null,
+    sendIssuedAtMs: null,
   };
   writeEpisodeRecord(storeDir, updated);
   return { ok: true, record: updated };
@@ -1492,6 +1532,7 @@ function cli() {
   if (sub === 'preflight-revalidate') return evaluatePreflightRevalidation(input);
   if (sub === 'reserve-intent') return reserveSubmitIntent(input);
   if (sub === 'mark-submitted') return markSubmittedUnacked(input);
+  if (sub === 'mark-send-issued') return markSendIssued(input);
   if (sub === 'mark-send-delivered') return markSendDelivered(input);
   if (sub === 'release-submit-intent') return releaseSubmitIntent(input);
   if (sub === 'resolve-delivery') return resolveSubmittedDelivery(input);
@@ -1520,6 +1561,7 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'preflight-revalidate': cli,
   'reserve-intent': cli,
   'mark-submitted': cli,
+  'mark-send-issued': cli,
   'mark-send-delivered': cli,
   'release-submit-intent': cli,
   'resolve-delivery': cli,

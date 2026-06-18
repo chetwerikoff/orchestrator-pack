@@ -30,6 +30,7 @@ import {
   resolveConfig,
   resolveSubmittedDelivery,
   reserveSubmitIntent,
+  markSendIssued,
   markSendDelivered,
   releaseSubmitIntent,
   scanFixtureSafety,
@@ -550,6 +551,47 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const b = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'b' });
       expect(a.claimed).toBe(true);
       expect(b.claimed).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims orphaned preflight claim files when episode record is still pending', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      const digest = episodeKeyDigest(episode);
+      const claimPath = path.join(dir, 'claims', `${digest}.json`);
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      writeFileSync(claimPath, `${JSON.stringify({
+        schema: 'ci-failure-notification.claim.v1',
+        digest,
+        claimOwner: 'stale-tick',
+        claimedAtMs: 1,
+        claimedAtUtc: '2026-06-01T00:00:00.000Z',
+      })}
+`);
+      const result = claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'new-tick' });
+      expect(result.claimed).toBe(true);
+      expect(result.orphanReclaimed).toBe(true);
+      expect((result.record as { state?: string }).state).toBe('claimed');
+      expect((result.record as { claimOwner?: string }).claimOwner).toBe('new-tick');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats in-flight dispatch plus sendIssued as durable delivery evidence on reentry', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      markSendIssued({ storeDir: dir, episode });
+      const reentry = reserveSubmitIntent({ storeDir: dir, episode });
+      expect(reentry.reentry).toBe(true);
+      expect((reentry.record as { sendIssuedAtMs?: number }).sendIssuedAtMs).toBeTruthy();
+      expect((reentry.record as { sendDeliveredAtMs?: number }).sendDeliveredAtMs).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
