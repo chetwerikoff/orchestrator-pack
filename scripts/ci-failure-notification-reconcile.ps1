@@ -200,6 +200,7 @@ function Invoke-CiFailureEpisodeDelivery {
 
     $dedup = Get-CiFailureDedupPayload -StoreDir $StoreDir
 
+    # post-intent recovery must not run pre-send CI recheck; complete journal/ack only.
     if ($Phase -eq 'full') {
         $preflight = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
             storeDir       = $StoreDir
@@ -211,13 +212,13 @@ function Invoke-CiFailureEpisodeDelivery {
         if (-not (Test-CiFailurePreflightOutcome -Preflight $preflight -Digest $Digest)) {
             return $false
         }
-    }
 
-    $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode
-    if (-not $recheck.ok) {
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send recheck failed digest=$Digest reason=$($recheck.reason)"
-        Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$recheck.reason)
-        return $false
+        $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode
+        if (-not $recheck.ok) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send recheck failed digest=$Digest reason=$($recheck.reason)"
+            Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$recheck.reason)
+            return $false
+        }
     }
 
     $intent = Invoke-CiFailureHelper -Mode 'reserve-intent' -Payload @{
@@ -252,15 +253,17 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     if (-not $skipSend) {
-        $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
-        $sendRecheck = Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
-            episode = $Episode
-            fresh   = $sendSnapshot
-        }
-        if (-not $sendRecheck.ok) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "immediate pre-send recheck failed digest=$Digest reason=$($sendRecheck.reason)"
-            Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$sendRecheck.reason) -ReadSource 'pre_send_target_recheck'
-            return $false
+        if ($Phase -eq 'full') {
+            $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
+            $sendRecheck = Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
+                episode = $Episode
+                fresh   = $sendSnapshot
+            }
+            if (-not $sendRecheck.ok) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "immediate pre-send recheck failed digest=$Digest reason=$($sendRecheck.reason)"
+                Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$sendRecheck.reason) -ReadSource 'pre_send_target_recheck'
+                return $false
+            }
         }
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `

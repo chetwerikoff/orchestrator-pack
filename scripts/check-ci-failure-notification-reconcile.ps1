@@ -12,6 +12,10 @@ $mjs = Get-Content -LiteralPath (Join-Path $Root 'docs/ci-failure-notification.m
 foreach ($phrase in @('evaluateLiveWorkerSuppressor', 'recordPendingEpisode', 'suppressed-live-worker', 'abandoned-superseded', "phase: 'record'")) {
   if ($mjs -notlike "*$phrase*") { throw "ci-failure-notification.mjs missing $phrase" }
 }
+$reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification-reconcile.ps1') -Raw
+if ($reconcile -notlike '*post-intent recovery must not run pre-send CI recheck*') {
+  throw 'ci-failure-notification-reconcile.ps1 missing post-intent pre-send recheck guard'
+}
 $registry = Get-Content -LiteralPath (Join-Path $Root 'scripts/orchestrator-side-process-registry.json') -Raw | ConvertFrom-Json
 if ($registry.requiredChildIds -notcontains 'ci-failure-notification-reconcile') {
   throw 'orchestrator-side-process-registry.json missing ci-failure-notification-reconcile'
