@@ -33,7 +33,19 @@ function Get-WorkerMessageDispatchJournal {
     param([string]$Path = '')
 
     $journalPath = if ($Path) { $Path } else { Get-WorkerMessageDispatchJournalPath }
-    return Get-MechanicalJsonStateFile -Path $journalPath -DefaultState @{} -ActionTracking
+    $journal = Get-MechanicalJsonStateFile -Path $journalPath -DefaultState @{} -ActionTracking
+    if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
+        return $journal
+    }
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $compacted = Invoke-DispatchJournalCli -Subcommand 'journal-compact' -Payload @{
+        journal = $journal
+        nowMs   = $nowMs
+    }
+    if ($compacted.evicted -and @($compacted.evicted).Count -gt 0) {
+        Set-WorkerMessageDispatchJournal -Path $journalPath -Journal (ConvertTo-MechanicalJsonMap -Value $compacted.journal)
+    }
+    return ConvertTo-MechanicalJsonMap -Value $compacted.journal
 }
 
 function Set-WorkerMessageDispatchJournal {
@@ -66,6 +78,31 @@ function Invoke-DispatchShapeCli {
     }
     $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
     return $text | ConvertFrom-Json
+}
+
+
+function Invoke-DispatchJournalCli {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+
+    $tempPaths = New-MechanicalTransportTempPaths
+    $inputPath = $tempPaths.InputPath
+    $outputPath = $tempPaths.OutputPath
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 20 -Compress
+        [System.IO.File]::WriteAllText($inputPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $stderr = & node $DispatchCli $Subcommand --input-file $inputPath --output-file $outputPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "worker-message-dispatch-observe.mjs $Subcommand exited ${LASTEXITCODE}: $stderr"
+        }
+        return Read-MechanicalNodeFilterCliOutput -OutputPath $outputPath -Label 'worker-message-dispatch-observe' -Subcommand $Subcommand
+    }
+    finally {
+        Remove-MechanicalTransportTempPaths -Paths @($inputPath, $outputPath)
+    }
 }
 
 
@@ -202,7 +239,7 @@ function Register-WorkerMessageDispatch {
                 $recordHolder.reason = 'journal_untrusted'
                 return
             }
-            $journal[$deliveryId] = @{
+            $candidate = @{
                 deliveryId    = $deliveryId
                 sessionId     = $SessionId
                 deliveredAtMs = $deliveredMs
@@ -221,7 +258,19 @@ function Register-WorkerMessageDispatch {
                 configPathHash = $configPathHash
                 adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
             }
-            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
+            $admitted = Invoke-DispatchJournalCli -Subcommand 'journal-admit' -Payload @{
+                journal = $journal
+                record  = $candidate
+                nowMs   = $deliveredMs
+            }
+            if (-not $admitted.ok) {
+                $recordHolder.reason = [string]$admitted.reason
+                if ($admitted.reason -eq 'over_capacity') {
+                    $recordHolder.reason = 'journal_over_capacity'
+                }
+                return
+            }
+            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $admitted.journal)
             $recordHolder.recorded = $true
         }
 
@@ -318,10 +367,21 @@ function Update-WorkerMessageDispatchOutcome {
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{ kind = 'worker-message-dispatch-journal-outcome' } -Action {
         $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         if (-not $journal.ContainsKey($DeliveryId)) { return }
-        $record = ConvertTo-MechanicalJsonMap -Value $journal[$DeliveryId]
-        $record['dispatchOutcome'] = $DispatchOutcome
-        if ($DraftState) { $record['draftState'] = $DraftState }
-        $journal[$DeliveryId] = $record
+        $finalized = Invoke-DispatchJournalCli -Subcommand 'journal-finalize' -Payload @{
+            journal         = $journal
+            deliveryId      = $DeliveryId
+            dispatchOutcome = $DispatchOutcome
+            nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        if (-not $finalized.ok) {
+            return
+        }
+        $journal = ConvertTo-MechanicalJsonMap -Value $finalized.journal
+        if ($DraftState) {
+            $record = ConvertTo-MechanicalJsonMap -Value $journal[$DeliveryId]
+            $record['draftState'] = $DraftState
+            $journal[$DeliveryId] = $record
+        }
         Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal $journal
         $updateHolder.updated = $true
     }

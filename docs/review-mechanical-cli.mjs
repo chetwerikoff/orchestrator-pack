@@ -1,18 +1,41 @@
 /**
  * Shared stdin/JSON CLI helpers for low-frequency review mechanical scripts.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import {
+  assertTransportEnvelope,
+  parseCompleteJsonText,
+} from './mechanical-reconcile-bounds.mjs';
 
 export function readStdinJson() {
+  const inputFile = resolveMechanicalCliArg('--input-file');
+  if (inputFile) {
+    return parseCompleteJsonText(readFileSync(inputFile, 'utf8'));
+  }
   const text = readFileSync(0, 'utf8').trim();
   if (!text) {
     return {};
   }
-  return JSON.parse(text);
+  return parseCompleteJsonText(text);
 }
 
 export function printJson(value) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  const outputFile = resolveMechanicalCliArg('--output-file');
+  const text = `${JSON.stringify(value)}\n`;
+  assertTransportEnvelope(text);
+  if (outputFile) {
+    writeFileSync(outputFile, text, 'utf8');
+    return;
+  }
+  process.stdout.write(text);
+}
+
+export function resolveMechanicalCliArg(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0) {
+    return '';
+  }
+  return String(process.argv[index + 1] ?? '').trim();
 }
 
 /**

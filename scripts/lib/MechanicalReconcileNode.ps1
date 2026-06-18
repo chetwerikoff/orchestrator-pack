@@ -8,6 +8,88 @@ $Script:MechanicalJsonReflectionKeys = @(
     'Keys', 'Values', 'Count', 'SyncRoot', 'IsFixedSize', 'IsReadOnly', 'IsSynchronized'
 )
 
+$Script:MechanicalPipeBufferBytes = 65536
+$Script:MechanicalTransportEnvelopeBytes = 2 * 1024 * 1024
+$Script:MechanicalStorageCeilingBytes = [Math]::Floor($Script:MechanicalTransportEnvelopeBytes * 0.65)
+
+function Get-MechanicalTransportEnvelopeBytes {
+    return $Script:MechanicalTransportEnvelopeBytes
+}
+
+function Get-MechanicalStorageCeilingBytes {
+    return $Script:MechanicalStorageCeilingBytes
+}
+
+function Get-MechanicalTransportTempRoot {
+    if ($env:AO_MECHANICAL_TRANSPORT_TEMP) {
+        return $env:AO_MECHANICAL_TRANSPORT_TEMP
+    }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-mechanical-transport'
+}
+
+function New-MechanicalTransportTempPaths {
+    $root = Get-MechanicalTransportTempRoot
+    if (-not (Test-Path -LiteralPath $root)) {
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+    }
+    $token = [guid]::NewGuid().ToString('N')
+    return @{
+        InputPath  = Join-Path $root "${token}.in.json"
+        OutputPath = Join-Path $root "${token}.out.json"
+    }
+}
+
+function Remove-MechanicalTransportTempPaths {
+    param(
+        [string[]]$Paths
+    )
+
+    foreach ($path in @($Paths)) {
+        if ($path -and (Test-Path -LiteralPath $path)) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-MechanicalJsonTextComplete {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+    try {
+        $null = $Text | ConvertFrom-Json
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Read-MechanicalNodeFilterCliOutput {
+    param(
+        [string]$OutputPath,
+        [string]$Label,
+        [string]$Subcommand
+    )
+
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "${Label}.mjs ${Subcommand} produced no output file (partial or interrupted child result)"
+    }
+
+    $outputText = Get-Content -LiteralPath $OutputPath -Raw
+    $outputBytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$outputText)
+    if ($outputBytes -gt $Script:MechanicalTransportEnvelopeBytes) {
+        throw "${Label}.mjs ${Subcommand} output exceeds transport envelope (${outputBytes} > $($Script:MechanicalTransportEnvelopeBytes))"
+    }
+    if (-not (Test-MechanicalJsonTextComplete -Text $outputText)) {
+        throw "${Label}.mjs ${Subcommand} returned malformed or truncated JSON output"
+    }
+
+    return $outputText | ConvertFrom-Json
+}
+
+
 function Get-MechanicalJsonReflectionKeys {
     return @($Script:MechanicalJsonReflectionKeys)
 }
@@ -290,13 +372,32 @@ function Invoke-MechanicalNodeFilterCli {
     )
 
     $json = $Payload | ConvertTo-Json -Depth $JsonDepth -Compress
-    $output = $json | & node $FilterCliPath $Subcommand 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "${Label}.mjs $Subcommand exited ${LASTEXITCODE}: $output"
+    $inputBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+    if ($inputBytes -gt $Script:MechanicalTransportEnvelopeBytes) {
+        throw "${Label}.mjs ${Subcommand} payload exceeds transport envelope (${inputBytes} > $($Script:MechanicalTransportEnvelopeBytes))"
     }
 
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    return $text | ConvertFrom-Json
+    $tempPaths = New-MechanicalTransportTempPaths
+    $inputPath = $tempPaths.InputPath
+    $outputPath = $tempPaths.OutputPath
+    try {
+        [System.IO.File]::WriteAllText($inputPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $stderr = & node $FilterCliPath $Subcommand --input-file $inputPath --output-file $outputPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "${Label}.mjs $Subcommand exited ${LASTEXITCODE}: $stderr"
+        }
+
+        return Read-MechanicalNodeFilterCliOutput -OutputPath $outputPath -Label $Label -Subcommand $Subcommand
+    }
+    catch {
+        if ($_.Exception.Message -match 'disk|space|no space|ENOSPC') {
+            Remove-MechanicalTransportTempPaths -Paths @($inputPath, $outputPath)
+        }
+        throw
+    }
+    finally {
+        Remove-MechanicalTransportTempPaths -Paths @($inputPath, $outputPath)
+    }
 }
 
 function Get-MechanicalJsonStateFile {

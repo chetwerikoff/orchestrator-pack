@@ -6,6 +6,13 @@
  * state — never from pane text. Human keystrokes carry no AO dispatch record.
  */
 import { readStdinJson, resolveBoundedInt, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import {
+  advanceDispatchFenceLifecycle,
+  compactDispatchJournal,
+  evaluateDispatchJournalAdmission,
+  interpretDispatchFenceLifecycle,
+  withPendingDispatchFence,
+} from './mechanical-reconcile-bounds.mjs';
 import { isRuntimeFieldLive } from './session-runtime-liveness.mjs';
 import { isLiveWorkerSession, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
 import {
@@ -507,6 +514,50 @@ export function findOverwrittenDeliveries(deliveries, sessionId) {
   });
 }
 
+
+/**
+ * @param {Record<string, unknown>} journal
+ * @param {Record<string, unknown>} record
+ * @param {number} [nowMs]
+ */
+export function admitDispatchJournalRecord(journal, record, nowMs = Date.now()) {
+  let nextJournal = { ...(journal ?? {}) };
+  const compacted = compactDispatchJournal(nextJournal, nowMs);
+  nextJournal = compacted.journal;
+  const pendingRecord = withPendingDispatchFence(record);
+  const admission = evaluateDispatchJournalAdmission(nextJournal, pendingRecord);
+  if (!admission.ok) {
+    return {
+      ok: false,
+      reason: admission.reason,
+      backpressure: Boolean(admission.backpressure),
+      journal: nextJournal,
+    };
+  }
+  const deliveryId = String(pendingRecord.deliveryId ?? '');
+  nextJournal[deliveryId] = pendingRecord;
+  return { ok: true, journal: nextJournal, record: pendingRecord };
+}
+
+/**
+ * @param {Record<string, unknown>} journal
+ * @param {string} deliveryId
+ * @param {string} dispatchOutcome
+ * @param {number} [nowMs]
+ */
+export function finalizeDispatchJournalRecord(journal, deliveryId, dispatchOutcome, nowMs = Date.now()) {
+  const nextJournal = { ...(journal ?? {}) };
+  const key = String(deliveryId ?? '').trim();
+  if (!key || !nextJournal[key]) {
+    return { ok: false, reason: 'not_found', journal: nextJournal };
+  }
+  nextJournal[key] = advanceDispatchFenceLifecycle(nextJournal[key], dispatchOutcome);
+  const compacted = compactDispatchJournal(nextJournal, nowMs);
+  return { ok: true, journal: compacted.journal, record: nextJournal[key] };
+}
+
+export { interpretDispatchFenceLifecycle };
+
 runStdinJsonCli('worker-message-dispatch-observe.mjs', {
   merge() {
     const payload = readStdinJson();
@@ -515,5 +566,27 @@ runStdinJsonCli('worker-message-dispatch-observe.mjs', {
   classify() {
     const payload = readStdinJson();
     return deriveMessageShape(payload.message, payload.senderSessionId);
+  },
+  'journal-admit'() {
+    const payload = readStdinJson();
+    return admitDispatchJournalRecord(
+      payload.journal ?? {},
+      payload.record ?? {},
+      Number(payload.nowMs ?? Date.now()),
+    );
+  },
+  'journal-finalize'() {
+    const payload = readStdinJson();
+    return finalizeDispatchJournalRecord(
+      payload.journal ?? {},
+      String(payload.deliveryId ?? ''),
+      String(payload.dispatchOutcome ?? ''),
+      Number(payload.nowMs ?? Date.now()),
+    );
+  },
+  'journal-compact'() {
+    const payload = readStdinJson();
+    const compacted = compactDispatchJournal(payload.journal ?? {}, Number(payload.nowMs ?? Date.now()));
+    return { journal: compacted.journal, evicted: compacted.evicted };
   },
 });
