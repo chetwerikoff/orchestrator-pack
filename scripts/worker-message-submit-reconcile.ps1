@@ -190,7 +190,10 @@ function Invoke-SubmitReconcileTick {
 
     if ($plan.PSObject.Properties.Name -contains 'dispatchJournal' -and $null -ne $plan.dispatchJournal) {
         if (-not $DryRunMode -and -not $Fixture) {
-            Set-WorkerMessageDispatchJournal -Path $JournalPath -Journal (ConvertTo-MechanicalJsonMap -Value $plan.dispatchJournal)
+            $compactResult = Compact-WorkerMessageDispatchJournal -JournalPath $JournalPath -NowMs $now
+            if (-not $compactResult.ok) {
+                Write-SubmitReconcileLog "dispatch journal compaction skipped: reason=$($compactResult.reason)"
+            }
         }
     }
 

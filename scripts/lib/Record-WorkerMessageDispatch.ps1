@@ -340,6 +340,45 @@ function Resolve-DispatchJournalSendOutcomeAfterDelivered {
 }
 
 
+
+function Compact-WorkerMessageDispatchJournal {
+    param(
+        [string]$JournalPath = '',
+        [long]$NowMs = 0
+    )
+
+    $journalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
+    $nowMs = if ($NowMs -gt 0) { $NowMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    $lockPath = Get-WorkerMessageDispatchJournalLockPath -JournalPath $journalPath
+    $resultHolder = @{ ok = $false; reason = 'compact_failed' }
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+        kind = 'worker-message-dispatch-journal-compact'
+    } -Action {
+        $journal = Get-WorkerMessageDispatchJournal -Path $journalPath
+        if (-not (Test-MechanicalJsonStateFencesTrusted -State $journal)) {
+            $resultHolder.reason = 'journal_untrusted'
+            return
+        }
+        $compacted = Invoke-DispatchJournalCli -Subcommand 'journal-compact' -Payload @{
+            journal = $journal
+            nowMs   = $nowMs
+        }
+        Set-WorkerMessageDispatchJournal -Path $journalPath -Journal (ConvertTo-MechanicalJsonMap -Value $compacted.journal)
+        $resultHolder.ok = $true
+        $resultHolder.reason = 'compacted'
+        $resultHolder.evicted = @($compacted.evicted)
+    }
+
+    if (-not $fenced.ok) {
+        return @{ ok = $false; reason = 'journal_busy' }
+    }
+    return @{
+        ok      = [bool]$resultHolder.ok
+        reason  = [string]$resultHolder.reason
+        evicted = @($resultHolder.evicted)
+    }
+}
+
 function Update-WorkerMessageDispatchOutcome {
     param(
         [Parameter(Mandatory = $true)]
