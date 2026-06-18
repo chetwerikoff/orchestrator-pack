@@ -154,13 +154,15 @@ Use `--allow-code` only under the upstream file gate below.
 **Invalid forms (do not use):** `--file`, `--stdin`, pipes (`git diff | coworker`),
 heredocs (`<<EOF`), or a bare question string without `--question`.
 
-**Diffs are read directly (Issue #337; strengthens #148).** Diff material — `git diff`
-/ `git show` output and `.diff` / `.patch` files — is read **directly** on the
-reasoning model at **any size** by **every agent**, not only the reviewer. Diffs are
-review and edit evidence; line-level correctness lives in the exact diff text. Never
-hand a diff to `coworker ask` for summarization. The #148 reviewer-judgment carve-out
-(producing or shaping PR-review findings) is unchanged; this rule extends the same
-principle to the diff read itself.
+**PR diff recipe (reviewers).** When a diff exceeds the read-delegation floor,
+write it to a file first, then delegate — never pipe into coworker:
+
+```bash
+git diff <base-ref>...HEAD > /tmp/review.diff
+coworker ask --profile code --allow-code \
+  --paths /tmp/review.diff \
+  --question "Summarize this PR diff for a reviewer. List changed files and behavior changes. Do not make final review judgments."
+```
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
@@ -221,17 +223,15 @@ Cursor do not count toward these floors** — see the carve-out below.
   paths in that invocation (includes multi-file/bootstrap bulk reads that sum past this floor).
 - **3 or more delegable files** under one question **only when** combined delegable corpus
   is also **≥400 lines** (file count alone with a trivial line total does not fire).
-- Log or other non-diff bulk material to summarize is **more than 200 lines** (diffs
-  are excluded — read directly per the carve-out above).
+- Diff or log material to summarize is **more than 200 lines**.
 
 **Cursor index-coverage carve-out (Issue #309).** When this agent reads **tracked
 first-party source-code** in its own worktree through Cursor's semantic code index,
 that read owes **no** coworker delegation — regardless of file size. Classification keys
 to **corpus source**, not to a runtime retrieval signal: the index already performed
 targeted chunk retrieval; there is no bulk I/O to offload. This carve-out does **not**
-apply to corpus the code index does not serve. Diffs are read directly on the reasoning
-model at any size (#337) — they are not delegable bulk. The following stay on the
-existing read-delegation triggers unchanged: CI/job logs, content fetched from external
+apply to corpus the code index does not serve. The following stay on the existing
+read-delegation triggers unchanged: CI/job logs, diffs, content fetched from external
 URLs/docs, vendored or generated dumps, and **tracked non-code bulk** (markdown/JSON/data
 — coworker's cheap-text delegable corpus). The provider-input fence (#52) is unchanged:
 secret or private-data corpus is never sent to coworker and never a delegation

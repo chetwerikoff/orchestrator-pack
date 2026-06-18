@@ -670,20 +670,12 @@ Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only 
 
 5. **Cursor index-coverage carve-out (Issue #309).** Amended 2026-06-16: Cursor workers reading
    tracked first-party source-code through the semantic code index owe no coworker read-delegation;
-   out-of-index bulk (logs, external fetches, vendored/generated dumps, tracked non-code bulk)
+   out-of-index bulk (logs, diffs, external fetches, vendored/generated dumps, tracked non-code bulk)
    keeps the #255 triggers unchanged. Classification is by corpus source at stop-time audit, not by a
    runtime retrieval signal. Parity at the rule level is preserved: Claude/Codex have no index, so their
    source reads remain delegable; Cursor differs only where the index genuinely covers in-tree source.
    The #255 residual-non-compliance metric excludes `index-served` units like other non-delegable
    classes; mixed sessions stay measurable (depends on #264 reviewer-path denominator repair).
-
-6. **Diff read carve-out (Issue #337; strengthens #148).** Amended 2026-06-18: diff material —
-   `git diff` / `git show` output and `.diff` / `.patch` files — is read **directly** on the
-   reasoning model at any size by **every agent**, not only the reviewer. Diffs are never handed to
-   `coworker ask` for summarization; the former "diff or log >200 lines" ask trigger applies to logs
-   and other non-diff bulk only. Extends the #148 reviewer-judgment prohibition to the diff read
-   itself — line-level correctness lives in the exact diff text. Log and general (400-line / 3-file)
-   delegation floors and the provider-input fence are unchanged.
 
 See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149) and
 `docs/issues_drafts/52-coworker-cli-delegation-policy.md` (GitHub #148).
