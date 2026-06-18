@@ -12,7 +12,7 @@ param(
     [Parameter(Mandatory=$true)]
     [ValidateSet(
         'decide','evaluate','record','claim-preflight','preflight-revalidate','reserve-intent',
-        'mark-submitted','mark-send-delivered','resolve-delivery','terminalize','expire-scan','expire','reconcile-plan',
+        'mark-submitted','mark-send-delivered','release-submit-intent','resolve-delivery','terminalize','expire-scan','expire','reconcile-plan',
         'health','init-gate','claim','mark-send-failure','append-audit','helper-error','adoption-artifact',
         'reaction-record-plan','list-intent-tokens','pre-send-recheck'
     )]

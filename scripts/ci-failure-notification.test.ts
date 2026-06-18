@@ -31,6 +31,7 @@ import {
   resolveSubmittedDelivery,
   reserveSubmitIntent,
   markSendDelivered,
+  releaseSubmitIntent,
   scanFixtureSafety,
   terminalizeEpisode,
   buildCiSourceFromRequiredChecks,
@@ -317,6 +318,65 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const eligibility = isEvaluationEligible(recorded.record, 1_000_000 + 1000, { enqueueTickId: 'tick-a' });
       expect(eligibility.eligible).toBe(false);
       expect(eligibility.reason).toBe('enqueue_tick_boundary');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
+  it('preflight revalidation suppresses exact-key intent token from another sender', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      const result = evaluatePreflightRevalidation({
+        storeDir: dir,
+        episode,
+        workerState: workerState(),
+        intentTokens: [{ episode, digest: episodeKeyDigest(episode), owner: 'reaction', status: 'claimed' }],
+      });
+      expect(result.action).toBe('suppressed');
+      expect((result.decision as { legacy_reason?: string }).legacy_reason).toBe('orchestrator_intent_token_present');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('release submit intent returns claimed state for ao send retry', () => {
+    const dir = tempStore();
+    try {
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
+      claimEpisodePreflight({ storeDir: dir, episode, claimOwner: 'test' });
+      reserveSubmitIntent({ storeDir: dir, episode });
+      const released = releaseSubmitIntent({ storeDir: dir, episode });
+      expect(released.ok).toBe(true);
+      expect((released.record as { state?: string }).state).toBe('claimed');
+      const reentry = reserveSubmitIntent({ storeDir: dir, episode });
+      expect(reentry.reentry).not.toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records green transitions while planning non-red PR heads', () => {
+    const dir = tempStore();
+    try {
+      const headSha = episode.headSha;
+      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha };
+      const firstRed = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'green' });
+      const plan = planCiFailureReactionRecords({
+        storeDir: dir,
+        repo: episode.repo,
+        openPrs: [{ number: episode.prNumber, headRefOid: headSha }],
+        sessions: workerState().sessions,
+        ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'SUCCESS' }] }],
+        requiredCheckNamesByPr: [{ prNumber: episode.prNumber, requiredCheckNames: ['Run pack contract tests'] }],
+        requiredCheckLookupFailedByPr: [],
+      });
+      expect(plan.records).toHaveLength(0);
+      const secondRed = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red' });
+      expect(secondRed).not.toBe(firstRed);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

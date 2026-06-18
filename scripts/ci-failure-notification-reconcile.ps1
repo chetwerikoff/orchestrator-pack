@@ -222,7 +222,11 @@ function Invoke-CiFailureEpisodeDelivery {
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
     $recordState = [string]$intent.record.state
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
-    $skipSend = [bool]$intent.reentry -and ($recordState -eq 'submitted-unacked' -or $sendDelivered)
+    $skipSend = [bool]$intent.reentry -and (
+        $recordState -eq 'submitted-unacked' -or
+        $sendDelivered -or
+        ($recordState -eq 'submit-intent-reserved')
+    )
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would $dryRunAction session=$targetId digest=$Digest phase=$Phase"
@@ -245,7 +249,8 @@ function Invoke-CiFailureEpisodeDelivery {
                 -IdempotencyKey ([string]$intent.idempotencyKey)
         }
         catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (preserving submit-intent-reserved for retry)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for retry)"
+            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
             return $false
         }
 

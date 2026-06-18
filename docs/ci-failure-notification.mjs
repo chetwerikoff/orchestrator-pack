@@ -435,7 +435,16 @@ export function planCiFailureReactionRecords(input) {
     const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
     const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
     const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed, headSha });
-    if (String(ciSource.aggregateStatus) !== 'red') continue;
+    if (String(ciSource.aggregateStatus) !== 'red') {
+      resolveRedPeriodAggregateId({
+        storeDir: input?.storeDir,
+        repo,
+        prNumber,
+        headSha,
+        aggregateStatus: String(ciSource.aggregateStatus ?? 'green'),
+      });
+      continue;
+    }
     const aggregateRunId = resolveRedPeriodAggregateId({
       storeDir: input?.storeDir,
       repo,
@@ -991,6 +1000,28 @@ export function markSendDelivered(input) {
   return { ok: true, record: updated };
 }
 
+
+export function releaseSubmitIntent(input) {
+  const storeDir = input?.storeDir;
+  const episode = normalizeEpisodeKey(input?.episode);
+  const record = readEpisodeRecord(storeDir, episode);
+  if (!record) return { ok: false, reason: 'missing_record' };
+  if (record.state !== 'submit-intent-reserved') {
+    return { ok: false, reason: 'invalid_prior_state', record };
+  }
+  if (record.sendDeliveredAtMs) {
+    return { ok: false, reason: 'already_delivered', record };
+  }
+  const updated = {
+    ...record,
+    state: 'claimed',
+    submitIntentId: null,
+    submitIntentReservedAtMs: null,
+  };
+  writeEpisodeRecord(storeDir, updated);
+  return { ok: true, record: updated };
+}
+
 export function terminalizeEpisode(input) {
   const storeDir = input?.storeDir;
   const episode = normalizeEpisodeKey(input?.episode);
@@ -1066,7 +1097,6 @@ export function evaluatePreflightRevalidation(input) {
     ...input,
     episode,
     readSource: 'pre_submit_revalidation',
-    excludeOwnDigest: episodeKeyDigest(episode),
   });
   if (decision.hard_failure) {
     return { action: 'hard_failure', decision, record };
@@ -1342,6 +1372,7 @@ function cli() {
   if (sub === 'reserve-intent') return reserveSubmitIntent(input);
   if (sub === 'mark-submitted') return markSubmittedUnacked(input);
   if (sub === 'mark-send-delivered') return markSendDelivered(input);
+  if (sub === 'release-submit-intent') return releaseSubmitIntent(input);
   if (sub === 'resolve-delivery') return resolveSubmittedDelivery(input);
   if (sub === 'terminalize') return terminalizeEpisode(input);
   if (sub === 'expire-scan') return scanExpiredPendingRecords(input?.storeDir, input?.nowMs);
@@ -1369,6 +1400,7 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'reserve-intent': cli,
   'mark-submitted': cli,
   'mark-send-delivered': cli,
+  'release-submit-intent': cli,
   'resolve-delivery': cli,
   terminalize: cli,
   'expire-scan': cli,

@@ -89,6 +89,7 @@ export declare function claimEpisodePreflight(input: unknown): Record<string, un
 export declare function reserveSubmitIntent(input: unknown): Record<string, unknown>;
 export declare function markSubmittedUnacked(input: unknown): Record<string, unknown>;
 export declare function markSendDelivered(input: unknown): Record<string, unknown>;
+export declare function releaseSubmitIntent(input: unknown): Record<string, unknown>;
 export declare function terminalizeEpisode(input: unknown): Record<string, unknown>;
 export declare function resolveSubmittedDelivery(input: unknown): Record<string, unknown>;
 export declare function evaluatePreflightRevalidation(input: unknown): {
