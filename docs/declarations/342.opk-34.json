@@ -25,6 +25,7 @@
     "scripts/ci-failure-notification-reaction.ps1",
     "scripts/ci-failure-notification.ps1",
     "scripts/lib/Ci-Failure-Notification-Common.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
     "scripts/ci-failure-notification.test.ts",
     "scripts/fixtures/ci-failure-notification/README.md",
     "scripts/fixtures/ci-failure-notification/reaction-action-succeeded.json",
