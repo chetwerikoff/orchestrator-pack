@@ -23,8 +23,7 @@ $Script:ReactionLogPrefix = 'ci-failure-notification-reaction'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 
-$Wrapper = Join-Path $PackRoot 'scripts/ci-failure-notification.ps1'
-
+. (Join-Path $PSScriptRoot 'lib/Ci-Failure-Notification-Common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
@@ -34,23 +33,6 @@ function Write-CiFailureReactionLog {
     param([string]$Message)
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Write-Host "[$stamp] $($Script:ReactionLogPrefix): $Message"
-}
-
-function Get-CiFailureNotificationStoreDir {
-    if ($StateDir) { return Join-Path $StateDir 'ci-failure-notification' }
-    if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification'
-}
-
-function Invoke-CiFailureHelper {
-    param(
-        [string]$Mode,
-        [hashtable]$Payload
-    )
-    $json = $Payload | ConvertTo-Json -Compress -Depth 30
-    $output = $json | pwsh -NoProfile -ExecutionPolicy Bypass -File $Wrapper -Mode $Mode 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "ci-failure-notification.ps1 -Mode $Mode exited $LASTEXITCODE`: $output" }
-    return ($output | Out-String).Trim() | ConvertFrom-Json
 }
 
 function Get-RepoIdentity {
