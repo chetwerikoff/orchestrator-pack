@@ -29,12 +29,6 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
-function Write-CiFailureReactionLog {
-    param([string]$Message)
-    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    Write-Host "[$stamp] $($Script:ReactionLogPrefix): $Message"
-}
-
 function Get-RepoIdentity {
     Push-Location -LiteralPath $RepoRoot
     try {
@@ -70,7 +64,7 @@ function Invoke-CiFailureReactionRecordTick {
         $episode = $row.episode
         if (-not $episode) { continue }
         if ($DryRun) {
-            Write-CiFailureReactionLog "dry-run would record PR #$($episode.prNumber) head=$($episode.headSha)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReactionLogPrefix -Message "dry-run would record PR #$($episode.prNumber) head=$($episode.headSha)"
             continue
         }
         $result = Invoke-CiFailureHelper -Mode 'record' -Payload @{
@@ -80,7 +74,7 @@ function Invoke-CiFailureReactionRecordTick {
             nowMs         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
         if ($result.recorded) {
-            Write-CiFailureReactionLog "recorded pending episode PR #$($episode.prNumber) digest=$($result.digest)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReactionLogPrefix -Message "recorded pending episode PR #$($episode.prNumber) digest=$($result.digest)"
         }
     }
 }

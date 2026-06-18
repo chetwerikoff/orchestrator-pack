@@ -6,6 +6,16 @@
 $Script:CiFailureNotificationPackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Script:CiFailureNotificationWrapper = Join-Path $Script:CiFailureNotificationPackRoot 'scripts/ci-failure-notification.ps1'
 
+function Write-CiFailureNotificationLog {
+    param(
+        [string]$Prefix,
+        [string]$Message
+    )
+
+    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Host "[$stamp] ${Prefix}: $Message"
+}
+
 function Get-CiFailureNotificationStoreDir {
     if ($StateDir) { return Join-Path $StateDir 'ci-failure-notification' }
     if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
