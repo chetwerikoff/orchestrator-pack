@@ -1878,6 +1878,60 @@ describe('worker-message-send adoption preflight', () => {
     expect(readFileSync(prodJournal, 'utf8')).toBe(JSON.stringify({ existing: { deliveryId: 'existing', adoptionProbe: false } }));
   });
 
+
+  it('does not let persisted adoption bypass WriteProbeEntries fresh validation', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-persisted-writeprobe-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const fakeAo = path.join(dir, 'ao');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      lastValidatedAt: new Date().toISOString(),
+      status: 'adopted',
+      aoEpochHash: hash('epoch-persisted'),
+      configPathHash: hash('/cfg/persisted.yaml'),
+      branchCount: 2,
+    }));
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then cat >/dev/null; exit 64; fi\nexit 64\n');
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1',
+      '-JournalPath', journal,
+      '-StateFile', state,
+      '-AoEpoch', 'epoch-persisted',
+      '-ConfigPath', '/cfg/persisted.yaml',
+      '-AoPath', fakeAo,
+      '-WriteProbeEntries',
+    ], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+  });
+
+  it('does not let persisted adoption bypass corrupt journal trust validation', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-persisted-corrupt-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, '{not-json');
+    writeFileSync(state, JSON.stringify({
+      lastValidatedAt: new Date().toISOString(),
+      status: 'adopted',
+      aoEpochHash: hash('epoch-persisted'),
+      configPathHash: hash('/cfg/persisted.yaml'),
+      branchCount: 2,
+    }));
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1',
+      '-JournalPath', journal,
+      '-StateFile', state,
+      '-AoEpoch', 'epoch-persisted',
+      '-ConfigPath', '/cfg/persisted.yaml',
+    ], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('dispatch journal corrupt');
+  });
+
   it('requires adoption probe hash to match supplied AO epoch and config path', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-epoch-'));
     const journal = path.join(dir, 'journal.json');

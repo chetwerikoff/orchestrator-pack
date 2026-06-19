@@ -142,16 +142,6 @@ function Test-WorkerMessageSendAdoptionPreflight {
     $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
     $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
 
-    if ($PersistState -and (Test-PersistedWorkerMessageSendAdoption -StatePath $statePath -EpochHash $epochHash -ConfigHash $configHash)) {
-        return @{
-            ok = $true
-            reason = 'adopted'
-            aoEpochHash = $epochHash
-            configPathHash = $configHash
-            exitCode = 0
-        }
-    }
-
     if ($WriteProbeEntries) {
         $probeRunRef = [ref]$probeRunIdHash
         $generation = Invoke-WorkerMessageAdoptionProbeGeneration `
