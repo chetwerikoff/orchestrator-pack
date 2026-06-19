@@ -1771,6 +1771,35 @@ describe('worker-message-send adoption preflight', () => {
     expect(result.stdout.trim()).toBe(`${configPath}|${startedAt}`);
   });
 
+
+  it('binds adoption config path to AO running.json configPath when env override is absent', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-binding-external-config-'));
+    const packRoot = path.join(dir, 'pack');
+    const aoRoot = path.join(dir, 'ao-root');
+    mkdirSync(packRoot, { recursive: true });
+    mkdirSync(aoRoot, { recursive: true });
+    const externalConfig = path.join(dir, 'external', 'live-agent-orchestrator.yaml');
+    mkdirSync(path.dirname(externalConfig), { recursive: true });
+    const startedAt = '2026-06-19T05:00:00.000Z';
+    writeFileSync(path.join(packRoot, 'agent-orchestrator.yaml'), 'project: orchestrator-pack\n');
+    writeFileSync(externalConfig, 'project: external-live\n');
+    writeFileSync(path.join(aoRoot, 'running.json'), JSON.stringify({
+      pid: 5151,
+      configPath: externalConfig,
+      startedAt,
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      . ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
+      $binding = Get-WorkerMessageAdoptionBinding -PackRoot '${packRoot.replace(/'/g, "''")}'
+      Write-Output "$($binding.ConfigPath)|$($binding.AoEpoch)"
+    `], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: dir, USERPROFILE: dir, AO_STATE_ROOT: aoRoot },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`${externalConfig}|${externalConfig}|${startedAt}`);
+  });
+
   it('fails present-but-incomplete routing branch coverage', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-missing-'));
     const journal = path.join(dir, 'journal.json');

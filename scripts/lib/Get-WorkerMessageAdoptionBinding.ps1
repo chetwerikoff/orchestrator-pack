@@ -52,19 +52,28 @@ function Get-WorkerMessageAdoptionBinding {
 
     $aoEpoch = [string]$env:AO_WORKER_MESSAGE_ADOPTION_EPOCH
     $configPath = [string]$env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH
+    $instance = $null
+    if (-not $configPath -or -not $aoEpoch) {
+        $instance = Get-AoRunningInstanceBinding
+    }
 
     if (-not $configPath) {
-        $live = Join-Path $PackRoot 'agent-orchestrator.yaml'
-        if (Test-Path -LiteralPath $live -PathType Leaf) {
-            $configPath = $live
+        $instanceConfigPath = if ($instance) { [string]$instance.ConfigPath } else { '' }
+        if ($instanceConfigPath.Trim()) {
+            $configPath = $instanceConfigPath
         }
         else {
-            $configPath = Join-Path $PackRoot 'agent-orchestrator.yaml.example'
+            $live = Join-Path $PackRoot 'agent-orchestrator.yaml'
+            if (Test-Path -LiteralPath $live -PathType Leaf) {
+                $configPath = $live
+            }
+            else {
+                $configPath = Join-Path $PackRoot 'agent-orchestrator.yaml.example'
+            }
         }
     }
 
     if (-not $aoEpoch) {
-        $instance = Get-AoRunningInstanceBinding
         if ($instance) {
             $aoEpoch = "$configPath|$($instance.StartedAt)"
         }
