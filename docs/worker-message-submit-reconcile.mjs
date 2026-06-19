@@ -72,6 +72,16 @@ export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
 export const FAILED_DELIVERY_RESOLVED = 'resolved';
 export const FAILED_DELIVERY_AUDITED_CLOSED = 'audited_closed';
 
+
+function isTerminalSubmitState(terminalState) {
+  const terminal = trimString(terminalState);
+  return (
+    terminal === SUBMIT_STATE_ESCALATED ||
+    terminal === SUBMIT_STATE_SUBMITTED ||
+    terminal === SUBMIT_STATE_NOOP
+  );
+}
+
 function trimString(value) {
   return String(value ?? '').trim();
 }
@@ -891,7 +901,7 @@ export function evaluateSubmitDecision({
     return buildConsumptionAction(deliveryId, sessionId, 'consumed');
   }
 
-  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+  if (isTerminalSubmitState(terminalState)) {
     return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
   }
 
@@ -1229,11 +1239,7 @@ function findVanishedTrackedDeliveries(tracking, deliveries) {
       continue;
     }
     const terminal = trimString(record?.terminalState);
-    if (
-      terminal === SUBMIT_STATE_ESCALATED ||
-      terminal === SUBMIT_STATE_SUBMITTED ||
-      terminal === SUBMIT_STATE_NOOP
-    ) {
+    if (isTerminalSubmitState(terminal)) {
       continue;
     }
     if (visibleIds.has(deliveryId)) {
@@ -1389,10 +1395,7 @@ export function planWorkerMessageSubmitActions(input) {
       const failedId = trimString(failed.deliveryId);
       if (!failedId) continue;
       const existing = nextDeliveries[failedId] ?? {};
-      if (
-        existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
-      ) {
+      if (isTerminalSubmitState(existing.terminalState)) {
         continue;
       }
       if (!existing.firstObservedAtMs) {
@@ -1444,10 +1447,7 @@ export function planWorkerMessageSubmitActions(input) {
     for (const lost of overwritten) {
       const lostId = trimString(lost.deliveryId);
       const existing = nextDeliveries[lostId] ?? {};
-      if (
-        existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
-      ) {
+      if (isTerminalSubmitState(existing.terminalState)) {
         continue;
       }
       if ((paneCompetingBySession.get(sessionId) ?? []).length > 1) {
@@ -1516,11 +1516,15 @@ export function planWorkerMessageSubmitActions(input) {
     if (
       surviving.corruptObservation &&
       (survivingTerminalState === SUBMIT_STATE_ESCALATED ||
-        survivingTerminalState === SUBMIT_STATE_SUBMITTED)
+        survivingTerminalState === SUBMIT_STATE_SUBMITTED ||
+        survivingTerminalState === SUBMIT_STATE_NOOP)
     ) {
       continue;
     }
-    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED) {
+    if (
+      survivingTerminalState === SUBMIT_STATE_SUBMITTED ||
+      survivingTerminalState === SUBMIT_STATE_NOOP
+    ) {
       continue;
     }
     const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {
@@ -1528,8 +1532,7 @@ export function planWorkerMessageSubmitActions(input) {
       if (!candidateId || candidateId === deliveryId) return false;
       if (trimString(candidate.dispatchOutcome ?? '') !== DISPATCH_OUTCOME_IN_FLIGHT) return false;
       const candidateRecord = nextDeliveries[candidateId] ?? {};
-      const terminalState = trimString(candidateRecord.terminalState);
-      return terminalState !== SUBMIT_STATE_ESCALATED && terminalState !== SUBMIT_STATE_SUBMITTED;
+      return !isTerminalSubmitState(candidateRecord.terminalState);
     });
     if (activeCompetingInFlight) {
       audit.push({
@@ -1668,11 +1671,7 @@ export function planWorkerMessageSubmitActions(input) {
   for (const { deliveryId, record } of findVanishedTrackedDeliveries(baseTracking, deliveries)) {
     const existing = nextDeliveries[deliveryId] ?? record;
     const terminalState = trimString(existing?.terminalState);
-    if (
-      terminalState === SUBMIT_STATE_ESCALATED ||
-      terminalState === SUBMIT_STATE_SUBMITTED ||
-      terminalState === SUBMIT_STATE_NOOP
-    ) {
+    if (isTerminalSubmitState(terminalState)) {
       continue;
     }
     const drift = evaluateWorktreeDriftVanishSuppression({

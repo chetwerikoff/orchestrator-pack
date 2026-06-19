@@ -2109,6 +2109,71 @@ describe('issue #347 vanish and worktree-drift handling', () => {
   });
 
 
+
+  it('keeps suppressed noop deliveries terminal when they reappear in the journal', () => {
+    const sessionId = 'opk-drift-reappear';
+    const runId = 'run-reappear';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const observedMs = 1717601000000;
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const openPrs = [{ number: 42, headRefOid: targetSha }];
+    const session = {
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09',
+      reports: [],
+    };
+    const activeRun = {
+      id: runId,
+      prNumber: 42,
+      targetSha,
+      status: 'outdated',
+      linkedSessionId: sessionId,
+      sentFindingCount: 2,
+      sentAt: new Date(observedMs).toISOString(),
+    };
+    const tracking = {
+      deliveries: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId,
+          source: DISPATCH_SOURCE_REVIEW_SEND,
+          prNumber: 42,
+          headSha: targetSha,
+          reviewRunId: runId,
+          firstObservedAtMs: observedMs,
+          terminalState: 'noop',
+          escalationReason: 'proven_worktree_drift',
+          vanishedSuppressedAtMs: observedMs + 2000,
+        },
+      },
+      audit: [],
+    };
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [session],
+      dispatchJournal: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId,
+          source: DISPATCH_SOURCE_REVIEW_SEND,
+          deliveredAtMs: observedMs,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+        },
+      },
+      reviewRuns: [activeRun],
+      openPrs,
+      tracking,
+      nowMs: observedMs + 3000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.deliveryId === deliveryId && a.type === 'submit')).toBeUndefined();
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.deliveryId === deliveryId && a.type === 'escalate')).toBeUndefined();
+    expect(actions.filter((a: WorkerMessageSubmitAction) => a.deliveryId === deliveryId)).toHaveLength(0);
+  });
+
   it('escalates ambiguous when worktree drift evidence exists but the PR is closed', () => {
     const sessionId = 'opk-drift-closed';
     const runId = 'run-closed';
@@ -2187,6 +2252,40 @@ describe('issue #347 vanish and worktree-drift handling', () => {
 });
 
 describe('issue #347 supervised adoption preflight', () => {
+
+  it('continues reconciliation when open PR lookup is unavailable', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-gh-down-'));
+    const binDir = path.join(dir, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const fakeGh = path.join(binDir, 'gh');
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(fakeGh, '#!/usr/bin/env bash\necho "gh unavailable" >&2\nexit 1\n');
+    chmodSync(fakeGh, 0o755);
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).toContain('open PR lookup unavailable');
+    expect(result.stdout).not.toContain('tick failed');
+    expect(result.stdout).toMatch(/tick (complete|skipped)/);
+  });
+
   it('blocks live reconcile ticks and escalates wrapper_not_adopted when adoption is missing', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-'));
     const journal = path.join(dir, 'journal.json');
@@ -2323,6 +2422,47 @@ describe('issue #347 supervised adoption preflight', () => {
   });
 
 
+
+
+  it('quarantines legacy shared state with deliveries before assigning stateRootIdentity', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-legacy-identity-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    const foreignId = 'opk-legacy:1717601000000:ao-send:stale';
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      deliveries: {
+        [foreignId]: {
+          deliveryId: foreignId,
+          sessionId: 'opk-legacy',
+          source: DISPATCH_SOURCE_AO_SEND,
+          firstObservedAtMs: 1717601000000,
+          deliveredAtMs: 1717601000000,
+        },
+      },
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).not.toContain('STATE FENCES UNTRUSTED');
+    const reset = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(reset.deliveries).toEqual({});
+    expect(reset.stateRootIdentity).toBeTruthy();
+    expect(reset.adoptionStatus).not.toBe('adopted');
+    const quarantined = readdirSync(dir).some((name) => name.startsWith(path.basename(state) + '.corrupt-'));
+    expect(quarantined).toBe(true);
+  });
 
   it('quarantines and resets mismatched non-empty shared state instead of trusting foreign deliveries', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-wrong-root-nonempty-'));

@@ -79,6 +79,17 @@ function Write-SubmitReconcileLog {
 
 $Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
+
+function Get-SubmitReconcileOpenPrList {
+    try {
+        return @(Invoke-GhOpenPrList -RepoRoot $PackRoot)
+    }
+    catch {
+        Write-SubmitReconcileLog "open PR lookup unavailable: $_; continuing with empty openPrs (vanish drift suppression fail-closed)"
+        return @()
+    }
+}
+
 function Get-SubmitReconcileState {
     param([string]$Path)
 
@@ -96,6 +107,24 @@ function Get-SubmitReconcileState {
         return $state
     }
     elseif (-not $storedIdentity) {
+        $deliveryCount = 0
+        if ($state.deliveries) {
+            $deliveryCount = @($state.deliveries.Keys).Count
+        }
+        $failedCount = 0
+        if ($state.failedDeliveries) {
+            $failedCount = @($state.failedDeliveries.Keys).Count
+        }
+        if ($deliveryCount -gt 0 -or $failedCount -gt 0) {
+            $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
+            if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
+            }
+            $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
+            $state.stateRootIdentity = $identity
+            Set-SubmitReconcileState -Path $Path -State $state
+            return $state
+        }
         $state.stateRootIdentity = $identity
     }
     return $state
@@ -260,7 +289,7 @@ function Invoke-SubmitReconcileTick {
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
-        $openPrs = @(Invoke-GhOpenPrList -RepoRoot $PackRoot)
+        $openPrs = @(Get-SubmitReconcileOpenPrList)
     }
 
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
