@@ -1,0 +1,27 @@
+{
+  "issue_number": 363,
+  "iteration_id": "opk-41",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-19T14:26:00.000Z",
+  "baseline": {
+    "commit_sha": "HEAD",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:issue-363-ci-failure-fixing-ci-head-scoped-report"
+  },
+  "declared_paths": [
+    "docs/ci-failure-notification.d.mts",
+    "docs/ci-failure-notification.mjs",
+    "docs/declarations/363.opk-41.json",
+    "scripts/ci-failure-notification.test.ts",
+    "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/live-worker-fixing-ci-captured.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-same-head-recency.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-stale-head-fixing-ci.json",
+    "scripts/fixtures/ci-failure-notification/worker-state-golden.json",
+    "tests/external-output-references/trigger-fixture-classification.json",
+    "tests/external-output-references/variants/ao-status-session/_shared.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
