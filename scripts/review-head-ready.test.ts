@@ -202,7 +202,38 @@ describe('classifyReadyForReviewFreshness (Issue #352)', () => {
     expect(classification.freshHandoffReport).toBeNull();
   });
 
-  it('accepts direct addressing_reviews and started handoff precursors', () => {
+  it('counts the iteration boundary as a handoff precursor across non-precursor reports', () => {
+    const headSha = '2ad9eb91e7a152cee0f14fa810fe8dfcd7c82d0e';
+    const classification = classifyReadyForReviewFreshness(
+      {
+        ownedHeadSha: headSha,
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-19T06:00:00.000Z',
+            accepted: true,
+            headRefOid: headSha,
+          },
+          {
+            reportState: 'completed',
+            reportedAt: '2026-06-19T05:30:00.000Z',
+            accepted: true,
+          },
+          {
+            reportState: 'working',
+            reportedAt: '2026-06-19T05:00:00.000Z',
+            accepted: true,
+          },
+        ],
+      } as never,
+      headSha,
+      { headCommittedAtMs: Date.parse('2026-06-19T04:00:00.000Z') },
+    );
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+    expect(classification.freshHandoffReport).not.toBeNull();
+  });
+
+    it('accepts direct addressing_reviews and started handoff precursors', () => {
     const headSha = '699499c41d22d6172126fb436dfc81b635d4e30e';
     const headCommittedAtMs = Date.parse('2026-06-19T04:00:00.000Z');
     for (const precursor of ['addressing_reviews', 'started'] as const) {

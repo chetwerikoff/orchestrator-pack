@@ -233,7 +233,12 @@
     },
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 241,
+      "line": 245,
+      "reason": "Synthetic working->completed->ready_for_review boundary precursor regression (Issue #352)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 272,
       "reason": "Synthetic rejected-stream freshness regression (Issue #352)"
     }
   ]
