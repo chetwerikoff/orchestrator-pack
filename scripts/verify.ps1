@@ -489,6 +489,22 @@ else {
     Add-Failure 'Missing CI-failure notification dedup check script (Issue #283)'
 }
 
+$ciFailureReconcileCheck = Join-Path $Root 'scripts/check-ci-failure-notification-reconcile.ps1'
+if (Test-Path -LiteralPath $ciFailureReconcileCheck -PathType Leaf) {
+    & $ciFailureReconcileCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-ci-failure-notification-reconcile.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-ci-failure-notification-reconcile.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'CI-failure notification reconcile checks failed (Issue #342)'
+    }
+}
+else {
+    Write-Check 'scripts/check-ci-failure-notification-reconcile.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing CI-failure notification reconcile check script (Issue #342)'
+}
+
 Write-Host ''
 Write-Host '== first-send review delivery reconcile (Issue #202) =='
 $reviewSendCheck = Join-Path $Root 'scripts/check-review-send-reconcile.ps1'

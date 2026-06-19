@@ -1,0 +1,43 @@
+{
+  "issue_number": 342,
+  "iteration_id": "opk-34",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-18T12:20:00.000Z",
+  "baseline": {
+    "commit_sha": "HEAD",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:issue-342-ci-failure-ping-live-worker-state"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/ci-failure-notification.d.mts",
+    "docs/ci-failure-notification.d.ts",
+    "docs/ci-failure-notification.mjs",
+    "docs/declarations/342.opk-34.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-map.md",
+    "docs/orchestrator-message-registry.mjs",
+    "scripts/check-ci-failure-notification-adoption.ps1",
+    "scripts/check-ci-failure-notification-reconcile.ps1",
+    "scripts/check-ci-failure-notification.ps1",
+    "scripts/ci-failure-notification-reconcile.ps1",
+    "scripts/ci-failure-notification-reaction.ps1",
+    "scripts/ci-failure-notification.ps1",
+    "scripts/lib/Ci-Failure-Notification-Common.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/ci-failure-notification.test.ts",
+    "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/reaction-action-succeeded.json",
+    "scripts/fixtures/ci-failure-notification/worker-state-golden.json",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/orchestrator-message-send-helpers.manifest.json",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

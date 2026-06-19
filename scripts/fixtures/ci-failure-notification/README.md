@@ -1,7 +1,9 @@
 # CI-failure notification fixtures
 
-These fixtures are minimized, redacted captures for Issue #283 predicate tests. They retain
-only the fields the predicate binds on: event id, `reaction.action_succeeded`,
-`reactionKey=ci-failed`, the full episode key including the active target discriminator, and
-canonical aggregate CI red-period context. They intentionally omit raw message payloads,
-absolute operator paths, auth material, and unrelated session metadata.
+Minimized, redacted captures for Issues #283 / #342 predicate and lifecycle tests.
+
+- `reaction-action-succeeded.json` — bindable `reaction.action_succeeded` with full episode key
+- `canonical-ci-red.json` — aggregate red-period CI source
+- `worker-state-golden.json` — sanitized `{sessions, openPrs}` shape from AO status reader
+
+Fixtures omit secrets, absolute paths, env values, and `.ao` payloads.

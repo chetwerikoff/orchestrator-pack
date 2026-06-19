@@ -10,6 +10,18 @@
       "path": "{project}/code-reviews/review-run-recovery-state.json",
       "owner": "docs/review-run-recovery.mjs",
       "reason": "JS-owned AO runtime recovery state uses atomic file replace outside the PowerShell mechanical state helper"
+    },
+    {
+      "childId": "ci-failure-notification-reconcile",
+      "path": "{temp}/orchestrator-ci-failure-notification",
+      "owner": "docs/ci-failure-notification.mjs",
+      "reason": "Episode pending/terminal store is file-based under node helper episodes/tokens/audit dirs, outside PowerShell mechanical JSON state helper"
+    },
+    {
+      "childId": "ci-failure-notification-reaction",
+      "path": "{temp}/orchestrator-ci-failure-notification",
+      "owner": "docs/ci-failure-notification.mjs",
+      "reason": "Reaction record hook shares the node helper episode store with ci-failure-notification-reconcile"
     }
   ],
   "children": [

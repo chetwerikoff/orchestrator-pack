@@ -123,11 +123,23 @@ projects:
         Self-architect lint — not every optional third-party check unless the repo
         already treats it as merge-blocking.
 
-      CI FAILURE DISCIPLINE (turn-driven; Issues #109/#283). A failing GitHub check does NOT
+      CI FAILURE DISCIPLINE (Issues #109/#283/#342). A failing GitHub check does NOT
       by itself schedule an orchestrator turn. Pack rules apply on the next orchestrator
       turn only (worker ao report, webhook wake, operator activity). If nothing creates
       a turn, reactions.report-stale (~30 minutes) and the unconditional reactions.ci-failed
       instant backstop remain upstream — not replaced by pack prose.
+
+      ENQUEUE-ONLY ci-failed + DELIVERY-TIME LIVE-STATE EVALUATION (#342). The built-in
+      reactions.ci-failed reaction records a pending episode (phase=record) keyed to the
+      full episode tuple {repo, PR number, head SHA, aggregate red-period discriminator,
+      active notification targetId + targetGeneration}. It does NOT decide SEND at fire time.
+      A supervised reconcile loop evaluates each eligible pending episode once against live
+      PR-owner worker state (ao status sessions + open PR heads):
+        pwsh -NoProfile -File scripts/ci-failure-notification-reconcile.ps1
+      Default cadence: 1 minute. State/store: AO_CI_FAILURE_NOTIFICATION_STORE or
+      %TEMP%\orchestrator-ci-failure-notification. Eligibility boundary: at least one
+      reconcile tick after enqueue (never evaluate in the enqueue tick). Freshness SLA:
+      max-eligible-evaluation-age ≤ 3× reconcile interval and < report-stale (~30m).
 
       On EVERY orchestrator turn, BEFORE the autonomous review-loop reads below, for each
       open worker PR whose current head has red required CI per the definition above:
@@ -135,39 +147,51 @@ projects:
            the reaction basis (AO SCM tracker status when available; otherwise the
            documented required-check fallback). The CI failure episode key is the full
            tuple {repo, PR number, head SHA, aggregate red-period discriminator,
-           active notification target}. The failing required-check set is message
+           active notification targetId + targetGeneration}. The failing required-check set is message
            context only, never part of the episode identity.
         2. Resolve the active worker notification target and its generation, then invoke
            the tracked wrapper from the repository root:
-             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode decide
-           Feed JSON containing the episode key, red-CI context, minimized
-           ao events list --json reaction.action_succeeded events with
-           reactionKey=ci-failed, worker reports, and exact-key intent-token state.
-           The wrapper timeout/error contract is safe SUPPRESS with
-           diagnostic.error_kind=helper_error; repeated helper errors are operator-visible.
-        3. Obey the returned terminal_action exactly. The only legal values are SEND or
-           SUPPRESS. Reaction no-match / unbindable, stale fixing_ci, and helper details
-           are diagnostics in the audit line, not third actions.
+             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode record
+           to enqueue the pending episode when red CI is first observed for that key.
+           Delivery evaluation uses:
+             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode evaluate
+           Feed JSON containing the episode key, workerState {sessions, openPrs} from
+           ao status --json --reports full + gh pr list, minimized reaction.action_succeeded
+           events with reactionKey=ci-failed, and exact-key intent-token state (excluding
+           the episode's own pending record/claim from dedup/intent suppressors).
+           The wrapper timeout/error contract emits phase=diagnostic hard failures;
+           repeated helper errors are operator-visible via reconcile health.
+        3. Obey the returned terminal_action exactly when phase=terminal. The only legal
+           values are SEND or SUPPRESS. Missing/incompatible workerState is a non-terminal
+           hard failure (re-evaluable next tick) — never a silent unconditional ping.
         4. SUPPRESS when the predicate binds a reaction.action_succeeded event with
-           reactionKey=ci-failed to the full episode identity (including active target),
-           when an explicit fixing_ci report binds to the same full episode, or when an
-           exact episode-keyed orchestrator intent token already owns the ping.
-           A reaction/intent for an earlier head, earlier red-period, or superseded
-           session MUST NOT suppress the active session's ping.
-        5. If the verdict is SEND, revalidate that the target generation is still current.
-           If it rotated, re-decide for the new active target. Then atomically create the
-           write-ahead intent token through the same wrapper/token store; only the winning
-           claimant sends. A loser observes the token and suppresses. After a definite
-           ao send failure, release the token for bounded retry or mark failed-owned with
-           operator-visible escalation; an ambiguous post-crash token suppresses (chosen
-           at-most-once failure mode).
-        6. Emit the redacted episode-keyed audit line returned by the helper for every
-           SEND/SUPPRESS decision, including reaction bind status, self-fix bind status,
-           reason, bound reaction event id (if any), and intent-token state.
+           reactionKey=ci-failed and action=send-to-agent to the full episode identity
+           (excluding own record). Notify-only ci-failed reactions (action: notify) record
+           pending episodes but do not prove worker delivery and MUST NOT suppress the
+           reconcile ping. Also SUPPRESS when the live PR-owning worker session is in
+           fixing_ci and passes liveness, when no live owner exists (abandoned-no-live-owner),
+           when the episode is superseded (abandoned-superseded), or when an exact
+           episode-keyed orchestrator intent token already owns the ping (excluding own claim).
+           working and pr_created do NOT suppress. A reaction/intent for an earlier head,
+           earlier red-period, or superseded session MUST NOT suppress the active session's ping.
+        5. If the verdict is SEND, use strict outbox: claim/preflight → pre-submit
+           revalidation against live workerState → reserve submit-intent (idempotency key)
+           → ao send + Register-WorkerMessageDispatch → resolve delivery ack. Once
+           submit-intent is reserved, recovery never reclassifies to suppression.
+        6. Emit audit lines with phase=record|diagnostic|terminal; only phase=terminal is
+           authoritative. Terminal reasons include sent, delivery-failed, suppressed-live-worker,
+           suppressed-dedup, suppressed-intent-token, abandoned-no-live-owner,
+           abandoned-expired, abandoned-superseded.
 
-      The dominant ordering closed here is reaction-first: the orchestrator defers to the
-      observable ci-failed reaction send. The reverse ordering remains a documented
-      residual because AO's built-in ci-failed reaction cannot consult repo-side state.
+      Startup / operator adoption gate (machine-checkable on live gitignored yaml):
+        pwsh -NoProfile -File scripts/check-ci-failure-notification-adoption.ps1
+      reactions.ci-failed is enabled only when workerState wiring AND durable submit-ack
+      (#232 dispatch journal) are both present; otherwise degraded health disables only
+      this reaction — never the whole orchestrator.
+
+      The dominant ordering closed here is reaction-first for dedup: the orchestrator defers to the
+      observable ci-failed reaction send. Live fixing_ci suppression closes the reproduced ~60s gap
+      via delivery-time evaluation, not episode-key report binding.
 
       Operator target: within ~3 minutes after the next orchestrator turn that observes
       red CI — NOT within ~3 minutes of CI failure wall-clock. Op-6 class: catching turn
@@ -553,11 +577,20 @@ projects:
 # - Keep Codex reviewer integration upgrade-safe: implement it as an external plugin/workflow
 #   under plugins/** or CI, never as a packages/core patch.
 
+# CI-FAILURE REACTION RECORD (Issue #342 — executable wiring; not orchestratorRules prose):
+# Side-process supervisor child ci-failure-notification-reaction records pending episodes:
+#   pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1
+# Delivery evaluation remains in ci-failure-notification-reconcile.ps1 (ao send only there).
+
 reactions:
   ci-failed:
     auto: true
-    action: send-to-agent
-    retries: 2
+    action: notify
+    message: >-
+      Red CI enqueued for pack ci-failure-notification reconcile delivery (Issue #342).
+      Pending episode record runs via ci-failure-notification-reaction.ps1; worker ping
+      is never sent from this reaction path.
+    priority: action
   changes-requested:
     auto: true
     action: send-to-agent

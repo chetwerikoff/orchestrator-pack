@@ -12,6 +12,11 @@
       "mechanisms": ["ao-send"]
     },
     {
+      "name": "Invoke-PlannedCiFailureReconcileSend",
+      "file": "scripts/ci-failure-notification-reconcile.ps1",
+      "mechanisms": ["ao-send"]
+    },
+    {
       "name": "Invoke-PlannedFirstReviewSend",
       "file": "scripts/review-send-reconcile.ps1",
       "mechanisms": ["ao-review-send"]

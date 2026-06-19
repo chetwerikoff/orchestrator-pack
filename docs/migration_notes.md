@@ -1341,6 +1341,22 @@ Residuals intentionally remain: reverse ordering (orchestrator sends first, then
 unconditional daemon `ci-failed` reaction fires) is not closed unless the operator disables
 or gates the built-in reaction, or AO core learns to consult shared state.
 
+## CI-failure ping live-worker suppression (Issue #342)
+
+Issue #342 extends #283: the ci-failed ping is recorded at enqueue time and evaluated at
+delivery against live PR-owner `fixing_ci` state (not episode-key report binding).
+
+1. Merge `agent-orchestrator.yaml.example` CI FAILURE DISCIPLINE / #342 reconcile block into live
+   `agent-orchestrator.yaml`, ensuring `workerState {sessions, openPrs}` feeds the predicate and
+   `Register-WorkerMessageDispatch` is wired for ci-failed sends.
+2. Ensure `scripts/ci-failure-notification-reconcile.ps1` is registered in the side-process
+   supervisor (or run it manually on the same cadence as ci-green-wake).
+3. `ao stop` then `ao start`.
+4. Run `pwsh -NoProfile -File scripts/check-ci-failure-notification-adoption.ps1` on the operator
+   checkout (reads live gitignored yaml). Both workerState wiring and durable submit-ack must pass.
+5. Verify: red CI + worker in `fixing_ci` → audit `suppressed-live-worker`; idle owner → `sent`.
+
+
 ## Per-cycle review/nudge settle gate (Issue #332)
 
 Adds `docs/worker-iteration-cycle.mjs`: shared worker-iteration cycle state for
