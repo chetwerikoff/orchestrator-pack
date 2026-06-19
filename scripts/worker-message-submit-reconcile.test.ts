@@ -2484,11 +2484,15 @@ describe('issue #347 supervised adoption preflight', () => {
         AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
       },
     });
-    expect(result.stdout).not.toContain('STATE FENCES UNTRUSTED');
+    expect(result.stdout).toContain('tick blocked:');
     const reset = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
     expect(reset.deliveries).toEqual({});
     expect(reset.stateRootIdentity).toBeTruthy();
     expect(reset.adoptionStatus).not.toBe('adopted');
+    expect(reset._recovery).toMatchObject({
+      fenceTrusted: false,
+      reason: 'wrong_state_root_active_store',
+    });
     const quarantined = readdirSync(dir).some((name) => name.startsWith(path.basename(state) + '.corrupt-'));
     expect(quarantined).toBe(true);
   });

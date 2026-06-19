@@ -91,8 +91,24 @@ function Get-SubmitReconcileState {
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
             Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
         }
+        $deliveryCount = 0
+        if ($state.deliveries) {
+            $deliveryCount = @($state.deliveries.Keys).Count
+        }
+        $failedCount = 0
+        if ($state.failedDeliveries) {
+            $failedCount = @($state.failedDeliveries.Keys).Count
+        }
+        $hadActiveRecords = ($deliveryCount -gt 0) -or ($failedCount -gt 0)
         $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
         $state.stateRootIdentity = $identity
+        if ($hadActiveRecords) {
+            $state['_recovery'] = @{
+                fenceTrusted = $false
+                reason       = 'wrong_state_root_active_store'
+                quarantined  = $quarantinePath
+            }
+        }
         Set-SubmitReconcileState -Path $Path -State $state
         return $state
     }
