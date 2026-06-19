@@ -71,6 +71,38 @@ export const DEFAULT_DEGRADED_CI_MAX_ATTEMPTS = 3;
 
 export const DEGRADED_CI_MAX_ATTEMPTS_ENV = 'AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS';
 
+/** @typedef {'fresh-by-monotonic-order' | 'stale-only' | 'no-report' | 'ambiguous/incomplete-fail-closed'} ReadyForReviewFreshnessBasis */
+
+export const FRESHNESS_BASIS_FRESH = 'fresh-by-monotonic-order';
+export const FRESHNESS_BASIS_STALE_ONLY = 'stale-only';
+export const FRESHNESS_BASIS_NO_REPORT = 'no-report';
+export const FRESHNESS_BASIS_AMBIGUOUS = 'ambiguous/incomplete-fail-closed';
+
+/** States that open a new worker iteration relative to prior hand-offs (Issue #352). */
+const ITERATION_BOUNDARY_STATES = new Set([
+  'working',
+  'fixing_ci',
+  'addressing_reviews',
+  'pr_created',
+  'started',
+]);
+
+/** States that precede a genuine hand-off within the current iteration segment. */
+const HANDOFF_PRECURSOR_STATES = new Set([
+  'working',
+  'fixing_ci',
+  'addressing_reviews',
+  'pr_created',
+  'started',
+]);
+
+/**
+ * @typedef {object} ReadyForReviewFreshnessClassification
+ * @property {ReadyForReviewFreshnessBasis} freshnessBasis
+ * @property {Record<string, unknown> | null} freshHandoffReport
+ * @property {boolean} [hasOlderStaleReadyReports]
+ */
+
 /** @typedef {'green' | 'pending' | 'red' | 'degraded'} ReviewTriggerCiLevel */
 
 /**
@@ -189,12 +221,185 @@ export function findLatestAcceptedReportForHead(session, headSha, options = {}) 
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
-export function hasReadyForReviewForHead(session, headSha, options = {}) {
-  const latest = findLatestAcceptedReportForHead(session, headSha, options);
-  if (!latest) {
+/**
+ * Normalize AO 0.9.x session reports into chronological emission order.
+ * Live `ao status --json` stores newest-first; fixtures may be oldest-first.
+ *
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ */
+export function enumerateReportsInEmissionOrder(session) {
+  const reports = toArray(session?.reports);
+  if (reports.length <= 1) {
+    return reports.map((report, emissionIndex) => ({ report, emissionIndex }));
+  }
+  const firstMs = getReportTimestampMs(reports[0]);
+  const secondMs = getReportTimestampMs(reports[1]);
+  const newestFirst =
+    firstMs > 0 && secondMs > 0 ? firstMs >= secondMs : firstMs >= secondMs;
+  const ordered = newestFirst ? [...reports].reverse() : [...reports];
+  return ordered.map((report, emissionIndex) => ({ report, emissionIndex }));
+}
+
+/**
+ * @param {Array<{ report: Record<string, unknown>, emissionIndex: number }>} stream
+ */
+function selectAcceptedEmissionStream(stream) {
+  const accepted = stream.filter(({ report }) => report?.accepted !== false);
+  return accepted.length > 0 ? accepted : stream;
+}
+
+/**
+ * @param {Array<{ report: Record<string, unknown>, emissionIndex: number }>} stream
+ * @param {number} fromIndex
+ * @param {number} toIndex
+ */
+function segmentHasHandoffPrecursor(stream, fromIndex, toIndex) {
+  if (toIndex <= fromIndex) {
     return false;
   }
-  return getReportState(latest) === 'ready_for_review';
+  if (toIndex === fromIndex + 1) {
+    const boundaryState = getReportState(stream[fromIndex]?.report);
+    return boundaryState === 'working' || boundaryState === 'fixing_ci' || boundaryState === 'pr_created';
+  }
+  for (let i = fromIndex + 1; i < toIndex; i++) {
+    if (HANDOFF_PRECURSOR_STATES.has(getReportState(stream[i]?.report))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Classify whether the current head has a fresh ready_for_review hand-off using
+ * monotonic report emission order relative to iteration boundaries (Issue #352).
+ *
+ * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
+ * @returns {ReadyForReviewFreshnessClassification}
+ */
+export function classifyReadyForReviewFreshness(session, headSha, options = {}) {
+  const target = normalizeSha(headSha);
+  if (!target || !session) {
+    return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
+  }
+
+  const stream = selectAcceptedEmissionStream(enumerateReportsInEmissionOrder(session));
+  if (stream.length === 0) {
+    return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
+  }
+
+  const owned = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  const hasReady = stream.some(
+    ({ report }) => getReportState(report) === 'ready_for_review',
+  );
+
+  if (owned && owned !== target) {
+    return {
+      freshnessBasis: hasReady ? FRESHNESS_BASIS_STALE_ONLY : FRESHNESS_BASIS_NO_REPORT,
+      freshHandoffReport: null,
+    };
+  }
+
+  let lastBoundaryIndex = -1;
+  for (let i = 0; i < stream.length; i++) {
+    if (ITERATION_BOUNDARY_STATES.has(getReportState(stream[i]?.report))) {
+      lastBoundaryIndex = i;
+    }
+  }
+
+  /** @type {Record<string, unknown> | null} */
+  let freshHandoffReport = null;
+  let freshIndex = -1;
+
+  for (let i = stream.length - 1; i >= 0; i--) {
+    const report = stream[i]?.report;
+    if (getReportState(report) !== 'ready_for_review') {
+      continue;
+    }
+    if (lastBoundaryIndex >= 0 && i <= lastBoundaryIndex) {
+      break;
+    }
+    let boundaryAfter = false;
+    for (let j = i + 1; j < stream.length; j++) {
+      if (ITERATION_BOUNDARY_STATES.has(getReportState(stream[j]?.report))) {
+        boundaryAfter = true;
+        break;
+      }
+    }
+    if (boundaryAfter) {
+      continue;
+    }
+    const stored = getStoredReportHeadSha(report);
+    if (stored && stored !== target) {
+      continue;
+    }
+    if (!stored && !reportCoversHead(report, target, options)) {
+      continue;
+    }
+    freshHandoffReport = report;
+    freshIndex = i;
+    break;
+  }
+
+  if (!freshHandoffReport) {
+    if (lastBoundaryIndex >= 0) {
+      for (let i = lastBoundaryIndex + 1; i < stream.length; i++) {
+        if (getReportState(stream[i]?.report) === 'ready_for_review') {
+          return {
+            freshnessBasis: FRESHNESS_BASIS_AMBIGUOUS,
+            freshHandoffReport: null,
+            hasOlderStaleReadyReports: true,
+          };
+        }
+      }
+    }
+    return {
+      freshnessBasis: hasReady ? FRESHNESS_BASIS_STALE_ONLY : FRESHNESS_BASIS_NO_REPORT,
+      freshHandoffReport: null,
+    };
+  }
+
+  const hasOlderStaleReadyReports = stream.some(
+    ({ report }, index) =>
+      index < freshIndex && getReportState(report) === 'ready_for_review',
+  );
+
+  if (lastBoundaryIndex >= 0) {
+    const precursorStart = Math.max(0, lastBoundaryIndex);
+    if (!segmentHasHandoffPrecursor(stream, precursorStart, freshIndex)) {
+      return {
+        freshnessBasis: FRESHNESS_BASIS_AMBIGUOUS,
+        freshHandoffReport: null,
+        hasOlderStaleReadyReports,
+      };
+    }
+  }
+
+  return {
+    freshnessBasis: FRESHNESS_BASIS_FRESH,
+    freshHandoffReport,
+    hasOlderStaleReadyReports,
+  };
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} headSha
+ * @param {{ headCommittedAtMs?: number }} [options]
+ */
+export function findFreshReadyForReviewHandoff(session, headSha, options = {}) {
+  const classification = classifyReadyForReviewFreshness(session, headSha, options);
+  return classification.freshnessBasis === FRESHNESS_BASIS_FRESH
+    ? classification.freshHandoffReport
+    : null;
+}
+
+export function hasReadyForReviewForHead(session, headSha, options = {}) {
+  return (
+    classifyReadyForReviewFreshness(session, headSha, options).freshnessBasis ===
+    FRESHNESS_BASIS_FRESH
+  );
 }
 
 /**
@@ -606,6 +811,8 @@ export function evaluateHeadReadyForReview({
       reason: 'head_ready_for_review',
       route: 'start_review',
       ciLevel,
+      freshnessBasis: classifyReadyForReviewFreshness(session, headSha, reportBindingOptions)
+        .freshnessBasis,
     };
   }
 
@@ -868,35 +1075,10 @@ export function preRunHeadReadyRecheck(planned, fresh) {
  * @param {{ headCommittedAtMs?: number }} [options]
  */
 export function hasStaleReadyForReviewOnOlderHead(session, currentHeadSha, options = {}) {
-  const current = normalizeSha(currentHeadSha);
-  if (!current) {
-    return false;
-  }
-
-  let foundStale = false;
-  for (const report of toArray(session?.reports)) {
-    if (getReportState(report) !== 'ready_for_review') {
-      continue;
-    }
-    const stored = getStoredReportHeadSha(report);
-    if (stored && stored !== current) {
-      foundStale = true;
-      continue;
-    }
-    if (!stored) {
-      const reportMs = getReportTimestampMs(report);
-      const headCommittedAtMs = Number(options.headCommittedAtMs);
-      if (
-        Number.isFinite(headCommittedAtMs) &&
-        headCommittedAtMs > 0 &&
-        reportMs > 0 &&
-        headCommittedAtMs > reportMs
-      ) {
-        foundStale = true;
-      }
-    }
-  }
-  return foundStale;
+  return (
+    classifyReadyForReviewFreshness(session, currentHeadSha, options).freshnessBasis ===
+    FRESHNESS_BASIS_STALE_ONLY
+  );
 }
 
 /**
@@ -1029,15 +1211,23 @@ export function collectFailedNotReadyComponents({
     return failed;
   }
 
+  const classification = classifyReadyForReviewFreshness(
+    session,
+    headSha,
+    reportBindingOptions,
+  );
   const latestReport = findLatestReportBoundToHead(session, headSha, reportBindingOptions);
-  const readyForReview = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
+  const readyForReview = classification.freshnessBasis === FRESHNESS_BASIS_FRESH;
   const degradedHandoff = isWorkerDegradedCiHandoff(latestReport);
 
-  if (!readyForReview) {
+  if (classification.freshnessBasis === FRESHNESS_BASIS_STALE_ONLY) {
     failed.push('no_ready_for_review');
-  }
-  if (hasStaleReadyForReviewOnOlderHead(session, headSha, reportBindingOptions)) {
     failed.push('stale_report_binding');
+  } else if (
+    classification.freshnessBasis === FRESHNESS_BASIS_NO_REPORT ||
+    classification.freshnessBasis === FRESHNESS_BASIS_AMBIGUOUS
+  ) {
+    failed.push('no_ready_for_review');
   }
   if (degradedHandoff) {
     failed.push('degraded_ci_handoff');
@@ -1112,8 +1302,12 @@ export function buildReportCiObserved({
   const requiredCheckSource =
     toArray(requiredCheckNames).length > 0 ? 'branch_protection' : 'pack_merge_contract_fallback';
 
+  const classification = session
+    ? classifyReadyForReviewFreshness(session, currentHeadSha, reportBindingOptions)
+    : { freshnessBasis: FRESHNESS_BASIS_NO_REPORT };
   /** @type {Record<string, unknown>} */
   const observed = {
+    freshnessBasis: classification.freshnessBasis,
     prNumber,
     currentHeadSha,
     reportBoundHeadSha: reportBoundHeadSha || 'none',
@@ -1252,6 +1446,33 @@ export function buildNoStartDecisionRecord({
     };
   }
 
+  if (reason === 'ready_for_review_debounce_pending') {
+    const classification = classifyReadyForReviewFreshness(session, normalizedHead, {
+      headCommittedAtMs,
+    });
+    return {
+      branch: 'ready_for_review_debounce_pending',
+      reason,
+      primary: 'ready_for_review_debounce_pending',
+      failedComponents: ['ready_for_review_debounce_pending'],
+      observed: {
+        ...buildReportCiObserved({
+          prNumber,
+          headSha: normalizedHead,
+          session,
+          ciChecks,
+          requiredCheckNames,
+          requiredCheckLookupFailed,
+          headCommittedAtMs,
+        }),
+        freshnessBasis: classification.freshnessBasis,
+      },
+    };
+  }
+
+  const classification = classifyReadyForReviewFreshness(session, normalizedHead, {
+    headCommittedAtMs,
+  });
   const failedComponents = collectFailedNotReadyComponents({
     session,
     headSha: normalizedHead,
@@ -1263,15 +1484,18 @@ export function buildNoStartDecisionRecord({
     headCommittedAtMs,
   });
   const primary = choosePrimaryNotReadyComponent(failedComponents);
-  const observed = buildReportCiObserved({
-    prNumber,
-    headSha: normalizedHead,
-    session,
-    ciChecks,
-    requiredCheckNames,
-    requiredCheckLookupFailed,
-    headCommittedAtMs,
-  });
+  const observed = {
+    ...buildReportCiObserved({
+      prNumber,
+      headSha: normalizedHead,
+      session,
+      ciChecks,
+      requiredCheckNames,
+      requiredCheckLookupFailed,
+      headCommittedAtMs,
+    }),
+    freshnessBasis: classification.freshnessBasis,
+  };
 
   return {
     branch: 'uncovered_not_ready',

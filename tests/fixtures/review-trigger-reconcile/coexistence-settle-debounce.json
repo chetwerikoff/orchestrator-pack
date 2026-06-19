@@ -1,0 +1,63 @@
+{
+  "description": "Issue #352 AC5 — coexistence inside #332 settle window debounces without stale_report_binding block",
+  "nowMs": 1781778600000,
+  "openPrs": [
+    {
+      "number": 332,
+      "headRefOid": "settlehead332",
+      "headCommittedAt": "2026-06-18T10:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-332",
+      "role": "worker",
+      "prNumber": 332,
+      "status": "idle",
+      "activity": "idle",
+      "ownedHeadSha": "settlehead332",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-18T10:25:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-18T10:10:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-17T08:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-17T09:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "332": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "ready_for_review_debounce_pending",
+    "record": {
+      "primary": "ready_for_review_debounce_pending",
+      "failedComponents": ["ready_for_review_debounce_pending"],
+      "observed": {
+        "freshnessBasis": "fresh-by-monotonic-order"
+      }
+    }
+  }
+}

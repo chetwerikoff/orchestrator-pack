@@ -1,0 +1,47 @@
+{
+  "description": "Issue #352 AC4 — rewritten commit timestamp must not false-authorize without iteration tie",
+  "nowMs": 1781784000000,
+  "openPrs": [
+    {
+      "number": 401,
+      "headRefOid": "rewrittenhead01",
+      "headCommittedAt": "2026-06-18T11:30:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-401",
+      "role": "worker",
+      "prNumber": 401,
+      "status": "idle",
+      "activity": "idle",
+      "ownedHeadSha": "rewrittenhead01",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-18T11:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-17T09:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "401": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 0,
+    "skipReason": "uncovered_not_ready",
+    "freshnessBasis": "ambiguous/incomplete-fail-closed"
+  }
+}
