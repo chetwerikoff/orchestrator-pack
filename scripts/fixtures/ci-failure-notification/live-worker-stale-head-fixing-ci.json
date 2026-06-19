@@ -1,0 +1,35 @@
+{
+  "description": "Issue #363: fixing_ci report bound to an older head while episode head is still current",
+  "sessions": [
+    {
+      "name": "session-active-redacted",
+      "role": "worker",
+      "status": "working",
+      "activity": "idle",
+      "lastActivity": "5m ago",
+      "prNumber": 283,
+      "ownedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "targetGeneration": "generation-active-redacted",
+      "sessionGeneration": "generation-active-redacted",
+      "reports": [
+        {
+          "reportState": "working",
+          "reportedAt": "2026-06-18T13:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-18T12:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "openPrs": [
+    {
+      "number": 283,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headCommittedAt": "2026-06-18T12:30:00.000Z"
+    }
+  ]
+}
