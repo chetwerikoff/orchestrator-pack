@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "30c92ed6bf51be60ed808a00b73d436e9c77c80e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:pending"
+    "active_scope_hash": "sha256:0a570079f819ac9f3d4ee9c14effc7aed86fbe635a978425182e9ad35ee33ef5"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -19,6 +19,7 @@
     "docs/worker-message-submit-reconcile.mjs",
     "scripts/check-worker-message-submit-reconcile.ps1",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/lib/Get-SubmitReconcileOpenPrList.ps1",
     "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
     "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/worker-message-send-adoption-preflight.ps1",
