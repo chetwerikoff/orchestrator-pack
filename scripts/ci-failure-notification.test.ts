@@ -46,6 +46,10 @@ import {
   validateInitGate,
   validateWorkerStateInput,
 } from '../docs/ci-failure-notification.mjs';
+import {
+  loadVariantCatalog,
+  validateExternalObject,
+} from './external-output-shape-guard.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/ci-failure-notification');
@@ -255,7 +259,7 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
     const captured = fixture<any>('live-worker-fixing-ci-captured.json');
     const result = decideCiFailureNotification({
       episode,
-      workerState: captured,
+      workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
@@ -265,20 +269,18 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
   });
 
   it('does not suppress when latest same-head report is non-fixing_ci after older fixing_ci (Issue #363)', () => {
-    const captured = fixture<any>('live-worker-same-head-recency.json');
     const result = decideCiFailureNotification({
       episode,
-      workerState: captured,
+      workerState: workerState({ fixture: 'live-worker-same-head-recency.json' }),
     });
     expect(result.terminal_action).toBe('SEND');
     expect(result.reason).toBe('no_suppressor');
   });
 
   it('does not suppress stale-head fixing_ci when episode head is still current (Issue #363)', () => {
-    const captured = fixture<any>('live-worker-stale-head-fixing-ci.json');
     const result = decideCiFailureNotification({
       episode,
-      workerState: captured,
+      workerState: workerState({ fixture: 'live-worker-stale-head-fixing-ci.json' }),
     });
     expect(result.terminal_action).toBe('SEND');
     expect(result.reason).toBe('no_suppressor');
@@ -790,6 +792,34 @@ describe('episode lifecycle outbox (Issue #342)', () => {
   });
 
 });
+
+
+  it('capture-backed live-worker fixtures pass ao-worker-report and gh-pr-open shape guard (Issue #363)', () => {
+    const { catalog } = loadVariantCatalog(path.join(repoRoot, 'tests/external-output-references'));
+    for (const name of [
+      'live-worker-fixing-ci-captured.json',
+      'live-worker-same-head-recency.json',
+      'live-worker-stale-head-fixing-ci.json',
+      'worker-state-golden.json',
+    ]) {
+      const data = fixture<any>(name);
+      for (const [index, report] of data.sessions[0].reports.entries()) {
+        const errors = validateExternalObject(
+          report,
+          'ao-worker-report',
+          String(report.reportState),
+          catalog,
+          name,
+          `$.sessions[0].reports[${index}]`,
+        );
+        expect(errors, name).toEqual([]);
+      }
+      for (const [index, openPr] of data.openPrs.entries()) {
+        const errors = validateExternalObject(openPr, 'gh-pr-open', 'open', catalog, name, `$.openPrs[${index}]`);
+        expect(errors, name).toEqual([]);
+      }
+    }
+  });
 
 describe('fixtures, wrapper, and legacy compatibility', () => {
   it('golden worker-state fixture passes redaction check', () => {

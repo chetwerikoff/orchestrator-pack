@@ -18,9 +18,7 @@
     "scripts/fixtures/ci-failure-notification/live-worker-fixing-ci-captured.json",
     "scripts/fixtures/ci-failure-notification/live-worker-same-head-recency.json",
     "scripts/fixtures/ci-failure-notification/live-worker-stale-head-fixing-ci.json",
-    "scripts/fixtures/ci-failure-notification/worker-state-golden.json",
-    "tests/external-output-references/trigger-fixture-classification.json",
-    "tests/external-output-references/variants/ao-status-session/_shared.json"
+    "scripts/fixtures/ci-failure-notification/worker-state-golden.json"
   ],
   "declared_globs": [],
   "amendments": []

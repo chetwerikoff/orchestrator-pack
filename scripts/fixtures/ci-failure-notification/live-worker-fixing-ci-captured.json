@@ -9,8 +9,6 @@
       "lastActivity": "8m ago",
       "prNumber": 283,
       "ownedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "targetGeneration": "generation-active-redacted",
-      "sessionGeneration": "generation-active-redacted",
       "reports": [
         {
           "reportState": "fixing_ci",
