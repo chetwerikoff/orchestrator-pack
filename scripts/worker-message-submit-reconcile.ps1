@@ -127,7 +127,10 @@ function Invoke-SubmitAdoptionPreflightGate {
         [string]$nextTracking.adoptionEpochHash -eq $epochHash -and
         [string]$nextTracking.adoptionConfigPathHash -eq $configHash
     ) {
-        return @{ ok = $true; tracking = $nextTracking; escalated = $false }
+        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+        if (Test-MechanicalJsonStateFencesTrusted -State $journal) {
+            return @{ ok = $true; tracking = $nextTracking; escalated = $false }
+        }
     }
 
     $preflight = Test-WorkerMessageSendAdoptionPreflight `

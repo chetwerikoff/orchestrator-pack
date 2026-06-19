@@ -2216,6 +2216,36 @@ describe('issue #347 supervised adoption preflight', () => {
   });
 
 
+
+  it('does not let cached adoption bypass corrupt dispatch journal trust validation', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-cached-adoption-corrupt-journal-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, '{not-json');
+    writeFileSync(state, JSON.stringify({
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).toContain('dispatch journal corrupt');
+    expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+    expect(result.stdout).not.toContain('tick complete');
+    const tracking = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
+  });
+
   it('revalidates adoption when AO epoch changes after restart', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-restart-'));
     const journal = path.join(dir, 'journal.json');
