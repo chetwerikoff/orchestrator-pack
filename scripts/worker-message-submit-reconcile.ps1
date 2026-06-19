@@ -46,7 +46,7 @@ $Script:DefaultIntervalSeconds = 30
 
 function Get-SubmitReconcileStateRootIdentity {
     $parts = @(
-        (Get-Location).Path
+        $PackRoot
         [string]$env:USERPROFILE
         [string]$env:HOME
         [string]$env:AO_WORKER_MESSAGE_SUBMIT_STATE
@@ -128,6 +128,11 @@ function Get-SubmitReconcileState {
             }
             $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
             $state.stateRootIdentity = $identity
+            $state['_recovery'] = @{
+                fenceTrusted = $false
+                reason       = 'legacy_active_store_migration'
+                quarantined  = $quarantinePath
+            }
             Set-SubmitReconcileState -Path $Path -State $state
             return $state
         }

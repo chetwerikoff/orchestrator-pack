@@ -685,6 +685,8 @@ function classifyFailureTerminalReason(reason) {
     'shape_identical_foreign',
     'draft_identity_changed',
     'lost_delivery_overwritten',
+    'delivery_vanished',
+    'delivery_vanished_ambiguous',
     'delivery_backstop_exhausted',
     'still_live_but_unconsumed',
     'post_dispatch_lease_exhausted',

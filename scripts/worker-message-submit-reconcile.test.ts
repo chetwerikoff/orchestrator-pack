@@ -2009,7 +2009,7 @@ describe('worker-message-send adoption preflight', () => {
 describe('issue #347 vanish and worktree-drift handling', () => {
   it('escalates when a tracked non-terminal delivery vanishes from all sources', () => {
     const id = 'opk-vanish:1717601000000:ao-send:gone';
-    const { actions } = planWorkerMessageSubmitActions({
+    const { actions, tracking } = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'opk-vanish', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
       dispatchJournal: {},
       tracking: {
@@ -2027,6 +2027,10 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       nowMs: 1717602000000,
     });
     expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id))).toBe('delivery_vanished');
+    const delivery = (tracking.deliveries as Record<string, Record<string, unknown>>)[id];
+    expect(delivery.escalationReason).toBe('delivery_vanished');
+    const failed = (tracking.failedDeliveries as Record<string, Record<string, unknown>>)[id];
+    expect(failed.reason).toBe('delivery_vanished');
   });
 
   it('suppresses vanish escalation for proven worktree drift on review-send', () => {
@@ -2443,13 +2447,24 @@ describe('issue #347 supervised adoption preflight', () => {
         AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
       },
     });
-    expect(result.stdout).not.toContain('STATE FENCES UNTRUSTED');
+    expect(result.stdout).toContain('tick blocked:');
     const reset = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
     expect(reset.deliveries).toEqual({});
     expect(reset.stateRootIdentity).toBeTruthy();
     expect(reset.adoptionStatus).not.toBe('adopted');
+    expect(reset._recovery).toMatchObject({
+      fenceTrusted: false,
+      reason: 'legacy_active_store_migration',
+    });
     const quarantined = readdirSync(dir).some((name) => name.startsWith(path.basename(state) + '.corrupt-'));
     expect(quarantined).toBe(true);
+  });
+
+  it('derives stateRootIdentity from the script pack root regardless of cwd', () => {
+    const source = readFileSync('scripts/worker-message-submit-reconcile.ps1', 'utf8');
+    const fn = source.match(/function Get-SubmitReconcileStateRootIdentity[\s\S]*?^}/m)?.[0] ?? '';
+    expect(fn).toContain('$PackRoot');
+    expect(fn).not.toMatch(/\(Get-Location\)/);
   });
 
   it('quarantines and resets mismatched non-empty shared state instead of trusting foreign deliveries', () => {
