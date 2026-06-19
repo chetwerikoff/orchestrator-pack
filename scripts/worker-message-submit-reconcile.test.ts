@@ -2087,28 +2087,25 @@ describe('issue #347 supervised adoption preflight', () => {
   it('honors persisted adoption when journal probes age out', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-retained-'));
     const journal = path.join(dir, 'journal.json');
-    const state = path.join(dir, 'state.json');
+    const adoptionState = path.join(dir, 'adoption-state.json');
     const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
     writeFileSync(journal, JSON.stringify({}));
-    writeFileSync(state, JSON.stringify({
-      deliveries: {},
-      failedDeliveries: {},
-      audit: [],
-      adoptionStatus: 'adopted',
-      adoptionEpochHash: hash('epoch-retained'),
-      adoptionConfigPathHash: hash('/cfg/retained.yaml'),
+    writeFileSync(adoptionState, JSON.stringify({
+      lastValidatedAt: new Date().toISOString(),
+      status: 'adopted',
+      aoEpochHash: hash('epoch-retained'),
+      configPathHash: hash('/cfg/retained.yaml'),
+      branchCount: 2,
     }));
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-retained',
-        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/retained.yaml',
-      },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain('tick blocked: adoption preflight');
-    expect(result.stdout).not.toContain('wrapper_not_adopted');
+    const preflight = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1',
+      '-JournalPath', journal,
+      '-StateFile', adoptionState,
+      '-AoEpoch', 'epoch-retained',
+      '-ConfigPath', '/cfg/retained.yaml',
+    ], { encoding: 'utf8' });
+    expect(preflight.status).toBe(0);
+    expect(preflight.stdout).toContain('effective routing adopted');
   });
 
   it('deduplicates adoption escalation per epoch/config', () => {
