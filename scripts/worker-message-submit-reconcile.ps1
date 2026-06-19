@@ -43,6 +43,7 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-SubmitReconcileOpenPrList.ps1')
 
 function Get-SubmitReconcileStateRootIdentity {
     $parts = @(
@@ -79,16 +80,6 @@ function Write-SubmitReconcileLog {
 
 $Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
-
-function Get-SubmitReconcileOpenPrList {
-    try {
-        return @(Invoke-GhOpenPrList -RepoRoot $PackRoot)
-    }
-    catch {
-        Write-SubmitReconcileLog "open PR lookup unavailable: $_; continuing with empty openPrs (vanish drift suppression fail-closed)"
-        return @()
-    }
-}
 
 function Get-SubmitReconcileState {
     param([string]$Path)
@@ -289,7 +280,7 @@ function Invoke-SubmitReconcileTick {
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
-        $openPrs = @(Get-SubmitReconcileOpenPrList)
+        $openPrs = @(Get-SubmitReconcileOpenPrList -PackRoot $PackRoot -WriteLog { param($Message) Write-SubmitReconcileLog $Message })
     }
 
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `

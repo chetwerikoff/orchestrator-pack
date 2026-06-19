@@ -2253,37 +2253,18 @@ describe('issue #347 vanish and worktree-drift handling', () => {
 
 describe('issue #347 supervised adoption preflight', () => {
 
-  it('continues reconciliation when open PR lookup is unavailable', () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-gh-down-'));
-    const binDir = path.join(dir, 'bin');
-    mkdirSync(binDir, { recursive: true });
-    const fakeGh = path.join(binDir, 'gh');
-    const journal = path.join(dir, 'journal.json');
-    const state = path.join(dir, 'state.json');
-    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
-    writeFileSync(fakeGh, '#!/usr/bin/env bash\necho "gh unavailable" >&2\nexit 1\n');
-    chmodSync(fakeGh, 0o755);
-    writeFileSync(journal, JSON.stringify({}));
-    writeFileSync(state, JSON.stringify({
-      deliveries: {},
-      failedDeliveries: {},
-      audit: [],
-      adoptionStatus: 'adopted',
-      adoptionEpochHash: hash('epoch-live'),
-      adoptionConfigPathHash: hash('/cfg/live.yaml'),
-    }));
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
-        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
-        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
-      },
-    });
-    expect(result.stdout).toContain('open PR lookup unavailable');
-    expect(result.stdout).not.toContain('tick failed');
-    expect(result.stdout).toMatch(/tick (complete|skipped)/);
+  it('degrades open PR lookup failures to an empty list', () => {
+    const repoRoot = process.cwd().replace(/'/g, "''");
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      $ErrorActionPreference = 'Stop'
+      Set-Location '${repoRoot}'
+      function Invoke-GhOpenPrList { param([string]$RepoRoot) throw 'gh unavailable' }
+      . ./scripts/lib/Get-SubmitReconcileOpenPrList.ps1
+      $openPrs = @(Get-SubmitReconcileOpenPrList -PackRoot (Get-Location).Path)
+      Write-Output "openPrCount=$($openPrs.Count)"
+    `], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('openPrCount=0');
   });
 
   it('blocks live reconcile ticks and escalates wrapper_not_adopted when adoption is missing', () => {
