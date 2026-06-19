@@ -44,6 +44,13 @@ function headCommittedAtMsFromPr(pr: Record<string, unknown>) {
   return typeof raw === 'string' && raw ? Date.parse(raw) : undefined;
 }
 
+type TriggerFixture = {
+  sessions: Array<Record<string, unknown>>;
+  openPrs: Array<Record<string, unknown>>;
+  ciChecksByPr?: Record<string, Array<Record<string, unknown>>>;
+  expect?: Record<string, unknown>;
+};
+
 describe('classifyRequiredCiForReviewTrigger', () => {
   it('classifies lookup failure as degraded', () => {
     expect(
@@ -125,32 +132,35 @@ describe('reportCoversHead (Issue #218)', () => {
 
 describe('classifyReadyForReviewFreshness (Issue #352)', () => {
   it('classifies coexistence as fresh-by-monotonic-order', () => {
-    const fixture = loadFixture('coexistence-fresh-handoff-pr344.json');
+    const fixture = loadFixture<TriggerFixture>('coexistence-fresh-handoff-pr344.json');
     const session = fixture.sessions[0]!;
-    const headSha = fixture.openPrs[0]!.headRefOid;
+    const pr = fixture.openPrs[0]!;
+    const headSha = String(pr.headRefOid ?? '');
     const classification = classifyReadyForReviewFreshness(session as never, headSha, {
-      headCommittedAtMs: Date.parse(fixture.openPrs[0]!.headCommittedAt),
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
     });
     expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
     expect(classification.hasOlderStaleReadyReports).toBe(true);
   });
 
   it('distinguishes stale-only from no-report', () => {
-    const staleOnly = loadFixture('defer-stale-only-binding.json');
+    const staleOnly = loadFixture<TriggerFixture>('defer-stale-only-binding.json');
     const staleSession = staleOnly.sessions[0]!;
-    const staleHead = staleOnly.openPrs[0]!.headRefOid;
+    const stalePr = staleOnly.openPrs[0]!;
+    const staleHead = String(stalePr.headRefOid ?? '');
     expect(
       classifyReadyForReviewFreshness(staleSession as never, staleHead, {
-        headCommittedAtMs: Date.parse(staleOnly.openPrs[0]!.headCommittedAt),
+        headCommittedAtMs: headCommittedAtMsFromPr(stalePr),
       }).freshnessBasis,
     ).toBe(FRESHNESS_BASIS_STALE_ONLY);
 
-    const noReport = loadFixture('uncovered-no-report.json');
+    const noReport = loadFixture<TriggerFixture>('uncovered-no-report.json');
     const noSession = noReport.sessions[0]!;
-    const noHead = noReport.openPrs[0]!.headRefOid;
+    const noPr = noReport.openPrs[0]!;
+    const noHead = String(noPr.headRefOid ?? '');
     expect(
       classifyReadyForReviewFreshness(noSession as never, noHead, {
-        headCommittedAtMs: Date.parse(noReport.openPrs[0]!.headCommittedAt),
+        headCommittedAtMs: headCommittedAtMsFromPr(noPr),
       }).freshnessBasis,
     ).toBe(FRESHNESS_BASIS_NO_REPORT);
   });
@@ -160,11 +170,12 @@ describe('classifyReadyForReviewFreshness (Issue #352)', () => {
       'false-fresh-rewritten-commit.json',
       'replayed-stale-after-head-observation.json',
     ]) {
-      const fixture = loadFixture(name);
+      const fixture = loadFixture<TriggerFixture>(name);
+      const pr = fixture.openPrs[0]!;
       const classification = classifyReadyForReviewFreshness(
         fixture.sessions[0] as never,
-        fixture.openPrs[0]!.headRefOid,
-        { headCommittedAtMs: Date.parse(fixture.openPrs[0]!.headCommittedAt) },
+        String(pr.headRefOid ?? ''),
+        { headCommittedAtMs: headCommittedAtMsFromPr(pr) },
       );
       expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
     }

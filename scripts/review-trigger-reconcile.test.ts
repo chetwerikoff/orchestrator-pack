@@ -60,6 +60,7 @@ type FixturePayload = PlanReconcileInput & {
     trackDegradedCi?: boolean;
     escalateDegradedCi?: boolean;
     notSkipReason?: string;
+    freshnessBasis?: string;
     record?: {
       branch?: string;
       primary?: string;
