@@ -2029,8 +2029,8 @@ describe('issue #347 vanish and worktree-drift handling', () => {
     expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id))).toBe('delivery_vanished');
     const delivery = (tracking.deliveries as Record<string, Record<string, unknown>>)[id];
     expect(delivery.escalationReason).toBe('delivery_vanished');
-    const failed = (tracking.failedDeliveries as Record<string, Record<string, unknown>>)[id];
-    expect(failed.reason).toBe('delivery_vanished');
+    const failed = tracking.failedDeliveries?.[id];
+    expect(failed?.reason).toBe('delivery_vanished');
   });
 
   it('suppresses vanish escalation for proven worktree drift on review-send', () => {
