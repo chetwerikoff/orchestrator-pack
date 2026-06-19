@@ -44,13 +44,19 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-SubmitReconcileOpenPrList.ps1')
 
+function Get-SubmitReconcileJournalPath {
+    if ($DispatchJournalPath) { return $DispatchJournalPath }
+    if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) { return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL }
+    return Get-WorkerMessageDispatchJournalPath
+}
+
 function Get-SubmitReconcileStateRootIdentity {
     $parts = @(
         $PackRoot
         [string]$env:USERPROFILE
         [string]$env:HOME
         [string]$env:AO_WORKER_MESSAGE_SUBMIT_STATE
-        [string]$env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
+        (Get-SubmitReconcileJournalPath)
     ) | Where-Object { $_ }
     return (ConvertTo-WorkerMessageSafeIdComponent -Value ($parts -join '|'))
 }
@@ -156,13 +162,15 @@ function Invoke-SubmitAdoptionPreflightGate {
     $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
     $epochHash = ConvertTo-WorkerMessageSafeHashText $binding.AoEpoch
     $configHash = ConvertTo-WorkerMessageSafeHashText $binding.ConfigPath
+    $journalHash = ConvertTo-WorkerMessageSafeHashText $JournalPath
     $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
 
     if (
         (Test-MechanicalJsonStateFencesTrusted -State $nextTracking) -and
         [string]$nextTracking.adoptionStatus -eq 'adopted' -and
         [string]$nextTracking.adoptionEpochHash -eq $epochHash -and
-        [string]$nextTracking.adoptionConfigPathHash -eq $configHash
+        [string]$nextTracking.adoptionConfigPathHash -eq $configHash -and
+        [string]$nextTracking.adoptionJournalPathHash -eq $journalHash
     ) {
         $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         if (Test-MechanicalJsonStateFencesTrusted -State $journal) {
@@ -179,6 +187,7 @@ function Invoke-SubmitAdoptionPreflightGate {
     if ($preflight.ok) {
         $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
         $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
+        $nextTracking.adoptionJournalPathHash = $journalHash
         $nextTracking.adoptionStatus = 'adopted'
         return @{ ok = $true; tracking = $nextTracking; escalated = $false }
     }
@@ -423,7 +432,7 @@ $intervalSeconds = Get-SubmitReconcileIntervalSeconds
 $intervalMs = [Math]::Max(1, $intervalSeconds) * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-SubmitReconcileStatePath -CliPath $StateFile
-$journalPath = if ($DispatchJournalPath) { $DispatchJournalPath } else { Get-WorkerMessageDispatchJournalPath }
+$journalPath = Get-SubmitReconcileJournalPath
 
 Write-SubmitReconcileLog "starting (project=$ProjectId, interval=${intervalSeconds}s, state=$statePath, journal=$journalPath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 

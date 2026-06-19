@@ -2387,6 +2387,37 @@ describe('issue #347 supervised adoption preflight', () => {
     expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
   });
 
+  it('does not let cached adoption bypass preflight for a different journal path', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-cached-adoption-journal-swap-'));
+    const adoptedJournal = path.join(dir, 'adopted-journal.json');
+    const otherJournal = path.join(dir, 'other-journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(adoptedJournal, JSON.stringify({}));
+    writeFileSync(otherJournal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+      adoptionJournalPathHash: hash(adoptedJournal),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', otherJournal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+    expect(result.stdout).not.toContain('tick complete');
+    const tracking = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
+  });
+
   it('revalidates adoption when AO epoch changes after restart', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-restart-'));
     const journal = path.join(dir, 'journal.json');
@@ -2465,6 +2496,7 @@ describe('issue #347 supervised adoption preflight', () => {
     const fn = source.match(/function Get-SubmitReconcileStateRootIdentity[\s\S]*?^}/m)?.[0] ?? '';
     expect(fn).toContain('$PackRoot');
     expect(fn).not.toMatch(/\(Get-Location\)/);
+    expect(fn).toMatch(/Get-SubmitReconcileJournalPath/);
   });
 
   it('quarantines and resets mismatched non-empty shared state instead of trusting foreign deliveries', () => {
