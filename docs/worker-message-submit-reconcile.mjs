@@ -39,6 +39,7 @@ import {
   compactWorkerMessageSubmitTracking,
   convergeOversizedReconcileState,
   evaluateSubmitTrackingCapacity,
+  FENCE_LIFECYCLE_COMPLETED,
 } from './mechanical-reconcile-bounds.mjs';
 
 /** Default tick cadence: 30 seconds. */
@@ -1125,6 +1126,7 @@ function ensureTrackingSeed(prior, surviving, nowMs, busyDispatch, draftIdentity
     prNumber: Number(prior?.prNumber ?? surviving?.prNumber ?? 0),
     headSha: trimString(prior?.headSha ?? surviving?.headSha),
     reviewRunId: trimString(prior?.reviewRunId ?? surviving?.sourceKey),
+    source: trimString(prior?.source) || trimString(surviving?.source),
   };
 }
 
@@ -1227,7 +1229,11 @@ function findVanishedTrackedDeliveries(tracking, deliveries) {
       continue;
     }
     const terminal = trimString(record?.terminalState);
-    if (terminal === SUBMIT_STATE_ESCALATED || terminal === SUBMIT_STATE_SUBMITTED) {
+    if (
+      terminal === SUBMIT_STATE_ESCALATED ||
+      terminal === SUBMIT_STATE_SUBMITTED ||
+      terminal === SUBMIT_STATE_NOOP
+    ) {
       continue;
     }
     if (visibleIds.has(deliveryId)) {
@@ -1653,7 +1659,11 @@ export function planWorkerMessageSubmitActions(input) {
   for (const { deliveryId, record } of findVanishedTrackedDeliveries(baseTracking, deliveries)) {
     const existing = nextDeliveries[deliveryId] ?? record;
     const terminalState = trimString(existing?.terminalState);
-    if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+    if (
+      terminalState === SUBMIT_STATE_ESCALATED ||
+      terminalState === SUBMIT_STATE_SUBMITTED ||
+      terminalState === SUBMIT_STATE_NOOP
+    ) {
       continue;
     }
     const drift = evaluateWorktreeDriftVanishSuppression({
@@ -1665,6 +1675,7 @@ export function planWorkerMessageSubmitActions(input) {
       nextDeliveries[deliveryId] = {
         ...existing,
         terminalState: SUBMIT_STATE_NOOP,
+        fenceLifecycle: FENCE_LIFECYCLE_COMPLETED,
         vanishedSuppressedAtMs: nowMs,
         escalationReason: drift.reason,
       };

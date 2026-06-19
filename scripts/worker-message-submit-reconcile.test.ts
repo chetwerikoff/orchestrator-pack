@@ -1923,30 +1923,54 @@ describe('issue #347 vanish and worktree-drift handling', () => {
   });
 
   it('suppresses vanish escalation for proven worktree drift on review-send', () => {
-    const id = 'opk-drift:review-send:run-1';
-  const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
-    const { actions } = planWorkerMessageSubmitActions({
-      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+    const sessionId = 'opk-drift';
+    const runId = 'run-1';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const observedMs = 1717601000000;
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const session = {
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09',
+      reports: [],
+    };
+    const activeRun = {
+      id: runId,
+      prNumber: 42,
+      targetSha,
+      status: 'waiting_update',
+      linkedSessionId: sessionId,
+      sentFindingCount: 2,
+      sentAt: new Date(observedMs).toISOString(),
+    };
+    const seeded = planWorkerMessageSubmitActions({
+      sessions: [session],
       dispatchJournal: {},
-      reviewRuns: [{ id: 'run-1', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
-      tracking: {
-        deliveries: {
-          [id]: {
-            deliveryId: id,
-            sessionId: 'opk-drift',
-            source: DISPATCH_SOURCE_REVIEW_SEND,
-            reviewRunId: 'run-1',
-            prNumber: 42,
-            headSha: targetSha,
-            firstObservedAtMs: 1717601000000,
-          },
-        },
-        audit: [],
-      },
-      nowMs: 1717602000000,
+      reviewRuns: [activeRun],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: observedMs + 1000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)).toBeUndefined();
-    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id))).toBe('proven_worktree_drift');
+    expect(seeded.tracking.deliveries?.[deliveryId!]?.source).toBe(DISPATCH_SOURCE_REVIEW_SEND);
+    const { actions, tracking } = planWorkerMessageSubmitActions({
+      sessions: [session],
+      dispatchJournal: {},
+      reviewRuns: [{ ...activeRun, status: 'outdated' }],
+      tracking: seeded.tracking,
+      nowMs: observedMs + 2000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === deliveryId)).toBeUndefined();
+    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId))).toBe('proven_worktree_drift');
+    const followUp = planWorkerMessageSubmitActions({
+      sessions: [session],
+      dispatchJournal: {},
+      reviewRuns: [{ ...activeRun, status: 'outdated' }],
+      tracking,
+      nowMs: observedMs + 3000,
+    });
+    expect(followUp.actions.filter((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId)).toHaveLength(0);
   });
 
   it('escalates ambiguous when drift evidence is missing', () => {

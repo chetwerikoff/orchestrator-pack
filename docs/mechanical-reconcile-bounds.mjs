@@ -37,6 +37,7 @@ export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown';
 
 export const SUBMIT_STATE_SUBMITTED = 'submitted';
 export const SUBMIT_STATE_ESCALATED = 'escalated';
+export const SUBMIT_STATE_NOOP = 'noop';
 
 export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
 export const FAILED_DELIVERY_RESOLVED = 'resolved';
@@ -107,6 +108,7 @@ export function interpretSubmitTrackingLifecycle(record) {
   if (explicit) return explicit;
   const terminal = trimString(record?.terminalState);
   if (terminal === SUBMIT_STATE_SUBMITTED) return FENCE_LIFECYCLE_COMPLETED;
+  if (terminal === SUBMIT_STATE_NOOP) return FENCE_LIFECYCLE_COMPLETED;
   if (terminal === SUBMIT_STATE_ESCALATED) {
     const failed = record?.failedDelivery;
     const unresolved = trimString(failed?.unresolvedState) === FAILED_DELIVERY_UNRESOLVED;
@@ -142,6 +144,7 @@ export function isSubmitDeliveryEvictable(record, nowMs) {
   const anchorMs = Math.max(
     Number(record?.consumedAtMs ?? 0),
     Number(record?.escalatedAtMs ?? 0),
+    Number(record?.vanishedSuppressedAtMs ?? 0),
     Number(record?.lastSubmitAtMs ?? 0),
     Number(record?.firstObservedAtMs ?? 0),
   );
