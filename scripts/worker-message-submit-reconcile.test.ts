@@ -2258,13 +2258,20 @@ describe('issue #347 supervised adoption preflight', () => {
     const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
       $ErrorActionPreference = 'Stop'
       Set-Location '${repoRoot}'
-      function Invoke-GhOpenPrList { param([string]$RepoRoot) throw 'gh unavailable' }
+      function gh { throw 'gh unavailable' }
       . ./scripts/lib/Get-SubmitReconcileOpenPrList.ps1
       $openPrs = @(Get-SubmitReconcileOpenPrList -PackRoot (Get-Location).Path)
       Write-Output "openPrCount=$($openPrs.Count)"
     `], { encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe('openPrCount=0');
+  });
+
+  it('uses number-only open PR lookup without per-PR commit API calls', () => {
+    const source = readFileSync('scripts/lib/Get-SubmitReconcileOpenPrList.ps1', 'utf8');
+    expect(source).toMatch(/gh pr list[^\n]*number/);
+    expect(source).not.toMatch(/Invoke-GhOpenPrList/);
+    expect(source).not.toMatch(/gh api[^\n]*commits\//);
   });
 
   it('blocks live reconcile ticks and escalates wrapper_not_adopted when adoption is missing', () => {

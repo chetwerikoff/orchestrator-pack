@@ -42,7 +42,6 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
-. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-SubmitReconcileOpenPrList.ps1')
 
 function Get-SubmitReconcileStateRootIdentity {
