@@ -1,0 +1,62 @@
+{
+  "description": "Issue #352 — fresh current-head ready_for_review coexists with older SHA-less reports (provenance: PR #344 head 0c7da45)",
+  "nowMs": 1781784000000,
+  "openPrs": [
+    {
+      "number": 344,
+      "headRefOid": "0c7da45abc",
+      "headCommittedAt": "2026-06-18T10:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "op-worker-344",
+      "role": "worker",
+      "prNumber": 344,
+      "status": "idle",
+      "activity": "idle",
+      "ownedHeadSha": "0c7da45abc",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-18T11:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-18T10:30:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-17T08:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "addressing_reviews",
+          "reportedAt": "2026-06-17T09:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-16T08:00:00.000Z",
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "344": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "startReviewCount": 1,
+    "sessionId": "op-worker-344",
+    "freshnessBasis": "fresh-by-monotonic-order"
+  }
+}

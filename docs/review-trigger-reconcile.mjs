@@ -25,6 +25,7 @@ import {
   buildNoStartDecisionRecord,
   degradedCiTrackingKey,
   evaluateHeadReadyForReview,
+  findFreshReadyForReviewHandoff,
   findLatestAcceptedReportForHead,
   formatDecisionRecordForLog,
   hasReadyForReviewForHead,
@@ -750,7 +751,7 @@ export function planReconcileActions({
     const handoffAccepted = hasReadyForReviewForHead(session, headSha, reportBindingOptions);
     const handoffReportedAtMs = handoffAccepted
       ? getReportTimestampMs(
-          findLatestAcceptedReportForHead(session, headSha, reportBindingOptions) ?? {},
+          findFreshReadyForReviewHandoff(session, headSha, reportBindingOptions) ?? {},
         )
       : 0;
     const cycleEval = evaluateWorkerIterationCycleForPr({
