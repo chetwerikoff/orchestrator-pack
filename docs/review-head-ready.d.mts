@@ -25,6 +25,37 @@ export declare function findLatestAcceptedReportForHead(
   options?: { headCommittedAtMs?: number },
 ): Record<string, unknown> | null;
 
+export type ReadyForReviewFreshnessBasis =
+  | 'fresh-by-monotonic-order'
+  | 'stale-only'
+  | 'no-report'
+  | 'ambiguous/incomplete-fail-closed';
+
+export declare const FRESHNESS_BASIS_FRESH: 'fresh-by-monotonic-order';
+export declare const FRESHNESS_BASIS_STALE_ONLY: 'stale-only';
+export declare const FRESHNESS_BASIS_NO_REPORT: 'no-report';
+export declare const FRESHNESS_BASIS_AMBIGUOUS: 'ambiguous/incomplete-fail-closed';
+
+export declare function enumerateReportsInEmissionOrder(
+  session: AoSession | null | undefined,
+): Array<{ report: Record<string, unknown>; emissionIndex: number }>;
+
+export declare function classifyReadyForReviewFreshness(
+  session: AoSession | null | undefined,
+  headSha: string,
+  options?: { headCommittedAtMs?: number },
+): {
+  freshnessBasis: ReadyForReviewFreshnessBasis;
+  freshHandoffReport: Record<string, unknown> | null;
+  hasOlderStaleReadyReports?: boolean;
+};
+
+export declare function findFreshReadyForReviewHandoff(
+  session: AoSession,
+  headSha: string,
+  options?: { headCommittedAtMs?: number },
+): Record<string, unknown> | null;
+
 export declare function hasReadyForReviewForHead(
   session: AoSession,
   headSha: string,

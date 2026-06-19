@@ -3,6 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  classifyReadyForReviewFreshness,
+  enumerateReportsInEmissionOrder,
+  FRESHNESS_BASIS_FRESH,
+  FRESHNESS_BASIS_STALE_ONLY,
+  FRESHNESS_BASIS_NO_REPORT,
+  FRESHNESS_BASIS_AMBIGUOUS,
   classifyRequiredCiForReviewTrigger,
   evaluateHeadReadyForReview,
   evaluateQuiescentHandoffFallback,
@@ -38,6 +44,13 @@ function headCommittedAtMsFromPr(pr: Record<string, unknown>) {
   const raw = pr.headCommittedAt ?? pr.headCommitCommittedAt;
   return typeof raw === 'string' && raw ? Date.parse(raw) : undefined;
 }
+
+type TriggerFixture = {
+  sessions: Array<Record<string, unknown>>;
+  openPrs: Array<Record<string, unknown>>;
+  ciChecksByPr?: Record<string, Array<Record<string, unknown>>>;
+  expect?: Record<string, unknown>;
+};
 
 describe('classifyRequiredCiForReviewTrigger', () => {
   it('classifies lookup failure as degraded', () => {
@@ -114,6 +127,167 @@ describe('reportCoversHead (Issue #218)', () => {
     const report = { reportState: 'ready_for_review', headRefOid: 'deadbeef' };
     expect(reportCoversHead(report, 'deadbeef', {})).toBe(true);
     expect(reportCoversHead(report, 'cafebabe', {})).toBe(false);
+  });
+});
+
+
+describe('classifyReadyForReviewFreshness (Issue #352)', () => {
+  it('classifies coexistence as fresh-by-monotonic-order', () => {
+    const fixture = loadFixture<TriggerFixture>('coexistence-fresh-handoff-pr344.json');
+    const session = fixture.sessions[0]!;
+    const pr = fixture.openPrs[0]!;
+    const headSha = String(pr.headRefOid ?? '');
+    const classification = classifyReadyForReviewFreshness(session as never, headSha, {
+      headCommittedAtMs: headCommittedAtMsFromPr(pr),
+    });
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+    expect(classification.hasOlderStaleReadyReports).toBe(true);
+  });
+
+  it('distinguishes stale-only from no-report', () => {
+    const staleOnly = loadFixture<TriggerFixture>('defer-stale-only-binding.json');
+    const staleSession = staleOnly.sessions[0]!;
+    const stalePr = staleOnly.openPrs[0]!;
+    const staleHead = String(stalePr.headRefOid ?? '');
+    expect(
+      classifyReadyForReviewFreshness(staleSession as never, staleHead, {
+        headCommittedAtMs: headCommittedAtMsFromPr(stalePr),
+      }).freshnessBasis,
+    ).toBe(FRESHNESS_BASIS_STALE_ONLY);
+
+    const noReport = loadFixture<TriggerFixture>('uncovered-no-report.json');
+    const noSession = noReport.sessions[0]!;
+    const noPr = noReport.openPrs[0]!;
+    const noHead = String(noPr.headRefOid ?? '');
+    expect(
+      classifyReadyForReviewFreshness(noSession as never, noHead, {
+        headCommittedAtMs: headCommittedAtMsFromPr(noPr),
+      }).freshnessBasis,
+    ).toBe(FRESHNESS_BASIS_NO_REPORT);
+  });
+
+  it('fails closed for false-fresh and replayed stale rows', () => {
+    for (const name of [
+      'false-fresh-rewritten-commit.json',
+      'replayed-stale-after-head-observation.json',
+    ]) {
+      const fixture = loadFixture<TriggerFixture>(name);
+      const pr = fixture.openPrs[0]!;
+      const classification = classifyReadyForReviewFreshness(
+        fixture.sessions[0] as never,
+        String(pr.headRefOid ?? ''),
+        { headCommittedAtMs: headCommittedAtMsFromPr(pr) },
+      );
+      expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
+    }
+  });
+
+  it('preserves AO array order when deriving emission order', () => {
+    const reports = [
+      {
+        reportState: 'ready_for_review',
+        reportedAt: '2026-06-17T08:00:00.000Z',
+      },
+      {
+        reportState: 'addressing_reviews',
+        reportedAt: '2026-06-19T05:00:00.000Z',
+      },
+      {
+        reportState: 'fixing_ci',
+        reportedAt: '2026-06-19T04:30:00.000Z',
+      },
+    ];
+    const emission = enumerateReportsInEmissionOrder({ reports } as never);
+    expect(emission.map(({ report }) => String(report.reportState ?? ''))).toEqual([
+      'fixing_ci',
+      'addressing_reviews',
+      'ready_for_review',
+    ]);
+  });
+
+  it('counts the iteration boundary as a handoff precursor across non-precursor reports', () => {
+    const headSha = '2ad9eb91e7a152cee0f14fa810fe8dfcd7c82d0e';
+    const classification = classifyReadyForReviewFreshness(
+      {
+        ownedHeadSha: headSha,
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-19T06:00:00.000Z',
+            accepted: true,
+            headRefOid: headSha,
+          },
+          {
+            reportState: 'completed',
+            reportedAt: '2026-06-19T05:30:00.000Z',
+            accepted: true,
+          },
+          {
+            reportState: 'working',
+            reportedAt: '2026-06-19T05:00:00.000Z',
+            accepted: true,
+          },
+        ],
+      } as never,
+      headSha,
+      { headCommittedAtMs: Date.parse('2026-06-19T04:00:00.000Z') },
+    );
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+    expect(classification.freshHandoffReport).not.toBeNull();
+  });
+
+    it('accepts direct addressing_reviews and started handoff precursors', () => {
+    const headSha = '699499c41d22d6172126fb436dfc81b635d4e30e';
+    const headCommittedAtMs = Date.parse('2026-06-19T04:00:00.000Z');
+    for (const precursor of ['addressing_reviews', 'started'] as const) {
+      const classification = classifyReadyForReviewFreshness(
+        {
+          ownedHeadSha: headSha,
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              reportedAt: '2026-06-19T05:00:00.000Z',
+              accepted: true,
+              headRefOid: headSha,
+            },
+            {
+              reportState: precursor,
+              reportedAt: '2026-06-19T04:30:00.000Z',
+              accepted: true,
+            },
+          ],
+        } as never,
+        headSha,
+        { headCommittedAtMs },
+      );
+      expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+      expect(classification.freshHandoffReport).not.toBeNull();
+    }
+  });
+
+    it('excludes explicitly rejected reports from freshness classification', () => {
+    const headSha = '5525b365db230c69b7a5f1676442085eb5e0d01b';
+    const classification = classifyReadyForReviewFreshness(
+      {
+        ownedHeadSha: headSha,
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-19T03:00:00.000Z',
+            accepted: false,
+            headRefOid: headSha,
+          },
+          {
+            reportState: 'working',
+            reportedAt: '2026-06-19T02:00:00.000Z',
+            accepted: false,
+          },
+        ],
+      } as never,
+      headSha,
+    );
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_NO_REPORT);
+    expect(classification.freshHandoffReport).toBeNull();
   });
 });
 

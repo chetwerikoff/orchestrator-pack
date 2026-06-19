@@ -22,7 +22,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -38,7 +42,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -54,7 +62,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -75,7 +87,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" }
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        }
       ]
     },
     {
@@ -91,7 +107,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -102,7 +122,11 @@
     {
       "glob": "tests/fixtures/review-orchestrator-loop/*.json",
       "shapes": [
-        { "jsonPath": "$.runs[*]", "command": "ao-review-run", "variantFrom": "status" },
+        {
+          "jsonPath": "$.runs[*]",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        },
         {
           "jsonPath": "$.runsAtTurnStart[*]",
           "command": "ao-review-run",
@@ -113,7 +137,11 @@
           "command": "ao-review-run",
           "variantFrom": "status"
         },
-        { "jsonPath": "$.run", "command": "ao-review-run", "variantFrom": "status" }
+        {
+          "jsonPath": "$.run",
+          "command": "ao-review-run",
+          "variantFrom": "status"
+        }
       ]
     },
     {
@@ -129,7 +157,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPr", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPr",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -145,7 +177,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -161,7 +197,11 @@
           "command": "ao-worker-report",
           "variantFrom": "reportState"
         },
-        { "jsonPath": "$.openPrs[*]", "command": "gh-pr-open", "variant": "open" },
+        {
+          "jsonPath": "$.openPrs[*]",
+          "command": "gh-pr-open",
+          "variant": "open"
+        },
         {
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
@@ -173,8 +213,23 @@
   "inlineOptOuts": [
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 114,
+      "line": 127,
       "reason": "Defensive regression for legacy stored-SHA binding; synthetic input, not modeled ao report output (Issue #218)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 215,
+      "reason": "Synthetic direct-handoff precursor regression for addressing_reviews/started (Issue #352)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 248,
+      "reason": "Synthetic working->completed->ready_for_review boundary precursor regression (Issue #352)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 275,
+      "reason": "Synthetic rejected-stream freshness regression (Issue #352)"
     }
   ]
 }
