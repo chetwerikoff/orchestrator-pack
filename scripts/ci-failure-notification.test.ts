@@ -832,9 +832,10 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
       expect(suppressed.action).toBe('suppressed');
       const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));
       expect(auditFiles.length).toBeGreaterThan(0);
-      const audit = JSON.parse(readFileSync(path.join(dir, 'audit', auditFiles[0]!), 'utf8'));
-      expect(audit.reason).toBe('suppressed-live-worker');
-      expect(audit.terminal_action).toBe('SUPPRESS');
+      const terminalAudit = auditFiles
+        .map((name) => JSON.parse(readFileSync(path.join(dir, 'audit', name), 'utf8')))
+        .find((audit) => audit.phase === 'terminal' && audit.reason === 'suppressed-live-worker');
+      expect(terminalAudit?.terminal_action).toBe('SUPPRESS');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
