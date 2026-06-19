@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "30c92ed6bf51be60ed808a00b73d436e9c77c80e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:0a570079f819ac9f3d4ee9c14effc7aed86fbe635a978425182e9ad35ee33ef5"
+    "active_scope_hash": "sha256:5886697978aaeea1637cb9edddb8bfb6dcda4b3be654e23fd8636ae9805eef87"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -24,7 +24,8 @@
     "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/worker-message-send-adoption-preflight.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "vitest.config.ts"
   ],
   "declared_globs": [],
   "amendments": []
