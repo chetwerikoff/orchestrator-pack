@@ -41,6 +41,7 @@ import {
   resolveRedPeriodAggregateId,
   listIntentTokensFromStore,
   planCiFailureReactionRecords,
+  syncRedPeriodTrackersForOpenPrs,
   preSendCiRedRecheck,
   validateInitGate,
   validateWorkerStateInput,
@@ -320,6 +321,8 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const recorded = recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
       expect(recorded.recorded).toBe(true);
       expect(recorded.audit!.phase).toBe('record');
+      const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));
+      expect(auditFiles.length).toBeGreaterThan(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -375,7 +378,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
   });
 
 
-  it('keeps the same red period when CI re-fails between polls without observed green', () => {
+  it('advances red period after terminal when failing run identity changes without observed green', () => {
     const dir = tempStore();
     try {
       const headSha = episode.headSha;
@@ -400,7 +403,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const secondChecks = [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }];
       const secondPlan = planCiFailureReactionRecords({ ...base, ciChecksByPr: [{ prNumber: episode.prNumber, checks: secondChecks }] });
       expect(secondPlan.records).toHaveLength(1);
-      expect(secondPlan.records![0].episode.redPeriod).toBe(firstPlan.records![0].episode.redPeriod);
+      expect(secondPlan.records![0].episode.redPeriod).not.toBe(firstPlan.records![0].episode.redPeriod);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -479,6 +482,64 @@ describe('episode lifecycle outbox (Issue #342)', () => {
   });
 
 
+
+  it('syncRedPeriodTrackersForOpenPrs observes green transitions between red polls', () => {
+    const dir = tempStore();
+    try {
+      const headSha = episode.headSha;
+      const base = {
+        storeDir: dir,
+        repo: episode.repo,
+        openPrs: [{ number: episode.prNumber, headRefOid: headSha }],
+        ciChecksByPr: [] as Array<{ prNumber: number; checks: unknown[] }>,
+        requiredCheckNamesByPr: [{ prNumber: episode.prNumber, requiredCheckNames: ['Run pack contract tests'] }],
+        requiredCheckLookupFailedByPr: [],
+      };
+      syncRedPeriodTrackersForOpenPrs({
+        ...base,
+        ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '1', link: 'l1' }] }],
+      });
+      const firstPlan = planCiFailureReactionRecords({
+        ...base,
+        sessions: workerState().sessions,
+        ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '1', link: 'l1' }] }],
+      });
+      recordPendingEpisode({ storeDir: dir, episode: firstPlan.records![0].episode, nowMs: 1_000_000 });
+      terminalizeEpisode({ storeDir: dir, episode: firstPlan.records![0].episode, terminalReason: 'sent', terminalAction: 'SEND' });
+      syncRedPeriodTrackersForOpenPrs({
+        ...base,
+        ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'SUCCESS' }] }],
+      });
+      const secondPlan = planCiFailureReactionRecords({
+        ...base,
+        sessions: workerState().sessions,
+        ciChecksByPr: [{ prNumber: episode.prNumber, checks: [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '2', link: 'l2' }] }],
+      });
+      expect(secondPlan.records![0].episode.redPeriod).not.toBe(firstPlan.records![0].episode.redPeriod);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the same red stint for continuous failing reruns before terminalization', () => {
+    const dir = tempStore();
+    try {
+      const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha };
+      const runs1 = buildRedFailingRunMap(
+        [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:00:00Z', link: 'https://example/run/1' }],
+        { requiredCheckNames: ['CI'] },
+      );
+      const first = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs1 });
+      const runs2 = buildRedFailingRunMap(
+        [{ name: 'CI', conclusion: 'failure', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }],
+        { requiredCheckNames: ['CI'] },
+      );
+      const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
+      expect(second).toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('keeps the same red stint when a failing check reruns without leaving red', () => {
     const dir = tempStore();

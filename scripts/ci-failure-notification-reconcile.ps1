@@ -373,6 +373,20 @@ function Invoke-CiFailureNotificationTick {
         [string]$EnqueueTickId
     )
 
+    $repo = Get-RepoIdentity
+    $openPrs = @($WorkerState.openPrs)
+    if ($openPrs.Count -gt 0) {
+        $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
+        $null = Invoke-CiFailureHelper -Mode 'sync-red-period-trackers' -Payload @{
+            storeDir                      = $StoreDir
+            repo                          = $repo
+            openPrs                       = $openPrs
+            ciChecksByPr                  = $checksBundle.ciChecksByPr
+            requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+        }
+    }
+
     $plan = Invoke-CiFailureHelper -Mode 'reconcile-plan' -Payload @{
         storeDir       = $StoreDir
         nowMs          = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

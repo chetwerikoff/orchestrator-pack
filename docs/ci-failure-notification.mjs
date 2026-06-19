@@ -429,6 +429,25 @@ export function buildRedFailingRunMap(checks = [], options = {}) {
   return runs;
 }
 
+function hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, stintId) {
+  const redPeriod = `head-red:${headSha}:stint-${stintId}`;
+  const dir = path.join(String(storeDir ?? ''), 'episodes');
+  if (!existsSync(dir)) return false;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.episode.json')) continue;
+    const record = tryReadEpisodeFile(path.join(dir, name));
+    if (!record?.terminalReason) continue;
+    const ep = record.episode;
+    if (!ep) continue;
+    if (String(ep.repo ?? '') !== String(repo ?? '')) continue;
+    if (Number(ep.prNumber) !== Number(prNumber)) continue;
+    if (normalizeSha(ep.headSha ?? '') !== normalizeSha(headSha ?? '')) continue;
+    if (String(ep.redPeriod ?? '') !== redPeriod) continue;
+    return true;
+  }
+  return false;
+}
+
 export function resolveRedPeriodAggregateId(input) {
   const storeDir = String(input?.storeDir ?? '').trim();
   const repo = String(input?.repo ?? '').trim();
@@ -463,7 +482,18 @@ export function resolveRedPeriodAggregateId(input) {
       ? input.redFailingRuns
       : {};
     const priorRuns = tracker.lastRedRuns ?? {};
-    const stintAdvanced = tracker.lastLevel !== 'red';
+    let stintAdvanced = tracker.lastLevel !== 'red';
+    if (!stintAdvanced && storeDir) {
+      const activeStintId = Number(tracker.stintId ?? 0);
+      if (activeStintId > 0 && hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, activeStintId)) {
+        for (const [name, signature] of Object.entries(priorRuns)) {
+          if (Object.prototype.hasOwnProperty.call(currentRuns, name) && currentRuns[name] !== signature) {
+            stintAdvanced = true;
+            break;
+          }
+        }
+      }
+    }
     if (stintAdvanced) {
       tracker.stintId = Number(tracker.stintId ?? 0) + 1;
     }
@@ -500,6 +530,52 @@ export function listIntentTokensFromStore(storeDir) {
   return tokens;
 }
 
+export function syncRedPeriodTrackersForOpenPrs(input) {
+  const repo = String(input?.repo ?? '').trim();
+  const openPrs = toArray(input?.openPrs);
+  const checksMap = normalizeCiChecksByPr(input?.ciChecksByPr);
+  const requiredNamesMap = normalizeRequiredCheckNamesByPr(input?.requiredCheckNamesByPr);
+  const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(input?.requiredCheckLookupFailedByPr);
+  /** @type {Array<{ prNumber: number, headSha: string, aggregateStatus: string, aggregateRunId: string | null }>} */
+  const snapshots = [];
+  for (const pr of openPrs) {
+    const prNumber = Number(pr?.number);
+    const headSha = normalizeSha(pr?.headRefOid);
+    if (!repo || !prNumber || !headSha) continue;
+    const checks = checksMap.get(prNumber) ?? [];
+    const requiredCheckNames = requiredNamesMap.get(prNumber) ?? [];
+    const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
+    const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed, headSha });
+    const aggregateStatus = String(ciSource.aggregateStatus ?? 'green');
+    let aggregateRunId = null;
+    if (aggregateStatus === 'red') {
+      const redFailingRuns = buildRedFailingRunMap(checks, {
+        requiredCheckNames,
+        requiredCheckLookupFailed,
+        headSha,
+      });
+      aggregateRunId = resolveRedPeriodAggregateId({
+        storeDir: input?.storeDir,
+        repo,
+        prNumber,
+        headSha,
+        aggregateStatus: 'red',
+        redFailingRuns,
+      });
+    } else {
+      resolveRedPeriodAggregateId({
+        storeDir: input?.storeDir,
+        repo,
+        prNumber,
+        headSha,
+        aggregateStatus,
+      });
+    }
+    snapshots.push({ prNumber, headSha, aggregateStatus, aggregateRunId });
+  }
+  return { snapshots };
+}
+
 export function planCiFailureReactionRecords(input) {
   const repo = String(input?.repo ?? '').trim();
   const openPrs = toArray(input?.openPrs);
@@ -507,6 +583,7 @@ export function planCiFailureReactionRecords(input) {
   const checksMap = normalizeCiChecksByPr(input?.ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(input?.requiredCheckNamesByPr);
   const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(input?.requiredCheckLookupFailedByPr);
+  syncRedPeriodTrackersForOpenPrs(input);
   /** @type {Array<{ episode: ReturnType<typeof normalizeEpisodeKey>, ciSource: Record<string, unknown> }>} */
   const records = [];
   for (const pr of openPrs) {
@@ -518,13 +595,6 @@ export function planCiFailureReactionRecords(input) {
     const requiredCheckLookupFailed = lookupFailedMap.get(prNumber) ?? false;
     const ciSource = buildCiSourceFromRequiredChecks(checks, { requiredCheckNames, requiredCheckLookupFailed, headSha });
     if (String(ciSource.aggregateStatus) !== 'red') {
-      resolveRedPeriodAggregateId({
-        storeDir: input?.storeDir,
-        repo,
-        prNumber,
-        headSha,
-        aggregateStatus: String(ciSource.aggregateStatus ?? 'green'),
-      });
       continue;
     }
     const redFailingRuns = buildRedFailingRunMap(checks, {
@@ -968,7 +1038,9 @@ export function recordPendingEpisode(input) {
   try {
     fd = openSync(file, 'wx');
     writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
-    return { recorded: true, record, audit: buildRecordAudit({ episode, nowUtc: record.recordedAtUtc }) };
+    const audit = buildRecordAudit({ episode, nowUtc: record.recordedAtUtc });
+    const auditWritten = appendAudit({ storeDir, audit });
+    return { recorded: true, record, audit, auditWritten };
   } catch (error) {
     if (error?.code === 'EEXIST') {
       const existing = JSON.parse(readFileSync(file, 'utf8'));
@@ -1597,6 +1669,7 @@ function cli() {
   if (sub === 'append-audit') return appendAudit(input);
   if (sub === 'helper-error') return evaluateHelperErrorEscalation(input);
   if (sub === 'adoption-artifact') return buildAdoptionArtifact(input);
+  if (sub === 'sync-red-period-trackers') return syncRedPeriodTrackersForOpenPrs(input);
   if (sub === 'reaction-record-plan') return planCiFailureReactionRecords(input);
   if (sub === 'list-intent-tokens') return { tokens: listIntentTokensFromStore(input?.storeDir) };
   if (sub === 'pre-send-recheck') return preSendCiRedRecheck(input?.episode, input?.fresh);
@@ -1621,6 +1694,7 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'reconcile-plan': cli,
   health: cli,
   'init-gate': cli,
+  'sync-red-period-trackers': cli,
   'reaction-record-plan': cli,
   'list-intent-tokens': cli,
   'pre-send-recheck': cli,
