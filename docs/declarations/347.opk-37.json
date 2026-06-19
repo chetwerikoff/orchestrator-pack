@@ -19,7 +19,6 @@
     "scripts/check-worker-message-submit-reconcile.ps1",
     "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
     "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
-    "scripts/orchestrator-message-protected-runtime.manifest.json",
     "scripts/worker-message-send-adoption-preflight.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
     "scripts/worker-message-submit-reconcile.test.ts"

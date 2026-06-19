@@ -1,14 +1,7 @@
 {
   "schemaVersion": 1,
   "manifestIntegrityHash": "sha256:issue-298-protected-runtime-v1",
-  "prerequisiteIssues": [
-    205,
-    232,
-    267,
-    281,
-    283,
-    347
-  ],
+  "prerequisiteIssues": [205, 232, 267, 281, 283],
   "runtimeSendHelpers": [
     "scripts/orchestrator-wake-common.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
