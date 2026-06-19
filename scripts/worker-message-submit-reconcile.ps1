@@ -42,6 +42,7 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 function Get-SubmitReconcileStateRootIdentity {
     $parts = @(
@@ -84,11 +85,7 @@ function Get-SubmitReconcileState {
     $state = Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
     $identity = Get-SubmitReconcileStateRootIdentity
     $storedIdentity = [string]$state.stateRootIdentity
-    $deliveryCount = 0
-    if ($state.deliveries) {
-        $deliveryCount = @($state.deliveries.Keys).Count
-    }
-    if ($storedIdentity -and $storedIdentity -ne $identity -and $deliveryCount -eq 0) {
+    if ($storedIdentity -and $storedIdentity -ne $identity) {
         $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
             Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
@@ -247,6 +244,7 @@ function Invoke-SubmitReconcileTick {
         else {
             $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
         }
+        $openPrs = if ($fixture.openPrs) { @($fixture.openPrs) } else { @() }
     }
     else {
         $sessions = Get-AoStatusSessions
@@ -262,6 +260,7 @@ function Invoke-SubmitReconcileTick {
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+        $openPrs = @(Invoke-GhOpenPrList -RepoRoot $PackRoot)
     }
 
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
@@ -273,6 +272,7 @@ function Invoke-SubmitReconcileTick {
             reactionMessages    = $reactionMessages
             tracking            = $tracking
             floodActiveSessions = $floodActiveSessions
+            openPrs             = @($openPrs)
             nowMs               = $now
             config              = $tickConfig
         } -Label $Script:ReconcileLogPrefix -JsonDepth 30

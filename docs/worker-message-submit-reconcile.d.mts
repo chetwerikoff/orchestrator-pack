@@ -268,6 +268,7 @@ export declare function evaluateWorktreeDriftVanishSuppression(input: {
   record?: Record<string, unknown>;
   reviewRuns?: Array<Record<string, unknown>>;
   sessions?: Array<Record<string, unknown>>;
+  openPrs?: Array<Record<string, unknown>>;
 }): { suppress: boolean; reason: string };
 
 export declare function planWorkerMessageSubmitActions(input: {
@@ -277,6 +278,7 @@ export declare function planWorkerMessageSubmitActions(input: {
   reviewRuns?: Array<Record<string, unknown>>;
   tracking?: SubmitTrackingState;
   floodActiveSessions?: Record<string, boolean>;
+  openPrs?: Array<Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
   nowMs: number;
   config?: Record<string, unknown>;

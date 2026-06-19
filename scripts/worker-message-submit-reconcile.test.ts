@@ -2053,10 +2053,12 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       sentFindingCount: 2,
       sentAt: new Date(observedMs).toISOString(),
     };
+    const openPrs = [{ number: 42, headRefOid: targetSha }];
     const seeded = planWorkerMessageSubmitActions({
       sessions: [session],
       dispatchJournal: {},
       reviewRuns: [activeRun],
+      openPrs,
       tracking: { deliveries: {}, audit: [] },
       nowMs: observedMs + 1000,
     });
@@ -2065,6 +2067,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       sessions: [session],
       dispatchJournal: {},
       reviewRuns: [{ ...activeRun, status: 'outdated' }],
+      openPrs,
       tracking: seeded.tracking,
       nowMs: observedMs + 2000,
     });
@@ -2074,6 +2077,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       sessions: [session],
       dispatchJournal: {},
       reviewRuns: [{ ...activeRun, status: 'outdated' }],
+      openPrs,
       tracking,
       nowMs: observedMs + 3000,
     });
@@ -2098,9 +2102,55 @@ describe('issue #347 vanish and worktree-drift handling', () => {
         { id: runId, prNumber: 42, targetSha, status: 'outdated' },
       ],
       sessions: [{ sessionId: 'opk-drift', ownedHeadSha: wrongSha }],
+      openPrs: [{ number: 42, headRefOid: targetSha }],
     });
     expect(drift.suppress).toBe(true);
     expect(drift.reason).toBe('proven_worktree_drift');
+  });
+
+
+  it('escalates ambiguous when worktree drift evidence exists but the PR is closed', () => {
+    const sessionId = 'opk-drift-closed';
+    const runId = 'run-closed';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const observedMs = 1717601000000;
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const session = {
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09',
+      reports: [],
+    };
+    const activeRun = {
+      id: runId,
+      prNumber: 42,
+      targetSha,
+      status: 'waiting_update',
+      linkedSessionId: sessionId,
+      sentFindingCount: 2,
+      sentAt: new Date(observedMs).toISOString(),
+    };
+    const seeded = planWorkerMessageSubmitActions({
+      sessions: [session],
+      dispatchJournal: {},
+      reviewRuns: [activeRun],
+      openPrs: [{ number: 42, headRefOid: targetSha }],
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: observedMs + 1000,
+    });
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [session],
+      dispatchJournal: {},
+      reviewRuns: [{ ...activeRun, status: 'outdated' }],
+      openPrs: [],
+      tracking: seeded.tracking,
+      nowMs: observedMs + 2000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId)).toBeUndefined();
+    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === deliveryId))).toBe('delivery_vanished_ambiguous');
   });
 
   it('escalates ambiguous when drift evidence is missing', () => {
@@ -2272,6 +2322,48 @@ describe('issue #347 supervised adoption preflight', () => {
     expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
   });
 
+
+
+  it('quarantines and resets mismatched non-empty shared state instead of trusting foreign deliveries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-wrong-root-nonempty-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    const foreignId = 'opk-foreign:1717601000000:ao-send:stale';
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'sha256-stale-other-worktree',
+      deliveries: {
+        [foreignId]: {
+          deliveryId: foreignId,
+          sessionId: 'opk-foreign',
+          source: DISPATCH_SOURCE_AO_SEND,
+          firstObservedAtMs: 1717601000000,
+          deliveredAtMs: 1717601000000,
+        },
+      },
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).not.toContain('STATE FENCES UNTRUSTED');
+    const reset = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(reset.deliveries).toEqual({});
+    expect(reset.stateRootIdentity).toBeTruthy();
+    expect(reset.adoptionStatus).not.toBe('adopted');
+    const quarantined = readdirSync(dir).some((name) => name.startsWith(path.basename(state) + '.corrupt-'));
+    expect(quarantined).toBe(true);
+  });
 
   it('quarantines and resets mismatched empty shared state instead of failing closed forever', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-wrong-root-'));

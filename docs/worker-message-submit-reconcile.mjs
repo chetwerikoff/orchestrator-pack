@@ -1251,7 +1251,7 @@ function findVanishedTrackedDeliveries(tracking, deliveries) {
   return vanished;
 }
 
-export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, sessions }) {
+export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, sessions, openPrs }) {
   const source = trimString(record?.source);
   if (source !== DISPATCH_SOURCE_REVIEW_SEND) {
     return { suppress: false, reason: 'not_review_send' };
@@ -1284,6 +1284,10 @@ export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, ses
     return { suppress: false, reason: 'ambiguous_missing_worker_head' };
   }
   if (workerHead !== targetSha) {
+    const openPr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
+    if (!openPr) {
+      return { suppress: false, reason: 'ambiguous_pr_not_open' };
+    }
     return { suppress: true, reason: 'proven_worktree_drift' };
   }
   return { suppress: false, reason: 'ambiguous_drift_evidence' };
@@ -1298,6 +1302,7 @@ export function planWorkerMessageSubmitActions(input) {
     sessions,
     tracking,
     floodActiveSessions,
+    openPrs,
     nowMs,
     config,
   } = input;
@@ -1674,6 +1679,7 @@ export function planWorkerMessageSubmitActions(input) {
       record: existing,
       reviewRuns,
       sessions: sessionList,
+      openPrs: toArray(openPrs),
     });
     if (drift.suppress) {
       nextDeliveries[deliveryId] = {
