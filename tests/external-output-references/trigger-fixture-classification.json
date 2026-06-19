@@ -225,6 +225,16 @@
       "file": "scripts/review-head-ready.test.ts",
       "line": 212,
       "reason": "Synthetic session reports for rejected-stream freshness regression (Issue #352)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 214,
+      "reason": "Synthetic direct-handoff precursor regression for addressing_reviews/started (Issue #352)"
+    },
+    {
+      "file": "scripts/review-head-ready.test.ts",
+      "line": 241,
+      "reason": "Synthetic rejected-stream freshness regression (Issue #352)"
     }
   ]
 }

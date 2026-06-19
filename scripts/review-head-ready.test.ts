@@ -202,7 +202,36 @@ describe('classifyReadyForReviewFreshness (Issue #352)', () => {
     expect(classification.freshHandoffReport).toBeNull();
   });
 
-  it('excludes explicitly rejected reports from freshness classification', () => {
+  it('accepts direct addressing_reviews and started handoff precursors', () => {
+    const headSha = '699499c41d22d6172126fb436dfc81b635d4e30e';
+    const headCommittedAtMs = Date.parse('2026-06-19T04:00:00.000Z');
+    for (const precursor of ['addressing_reviews', 'started'] as const) {
+      const classification = classifyReadyForReviewFreshness(
+        {
+          ownedHeadSha: headSha,
+          reports: [
+            {
+              reportState: 'ready_for_review',
+              reportedAt: '2026-06-19T05:00:00.000Z',
+              accepted: true,
+              headRefOid: headSha,
+            },
+            {
+              reportState: precursor,
+              reportedAt: '2026-06-19T04:30:00.000Z',
+              accepted: true,
+            },
+          ],
+        } as never,
+        headSha,
+        { headCommittedAtMs },
+      );
+      expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+      expect(classification.freshHandoffReport).not.toBeNull();
+    }
+  });
+
+    it('excludes explicitly rejected reports from freshness classification', () => {
     const headSha = '5525b365db230c69b7a5f1676442085eb5e0d01b';
     const classification = classifyReadyForReviewFreshness(
       {
