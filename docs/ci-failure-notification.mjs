@@ -5,7 +5,7 @@
  * Terminal predicate action: SEND | SUPPRESS. Episode lifecycle adds pending→terminal
  * outbox states; live worker fixing_ci suppressor binds to PR-owner session state.
  */
-import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync, unlinkSync } from 'node:fs';
+import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
@@ -20,6 +20,7 @@ import {
   normalizeSessionReportState,
 } from './ci-green-wake-reconcile.mjs';
 import { isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
+import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
 export const DEFAULT_HELPER_ERROR_LIMIT = 3;
@@ -455,44 +456,6 @@ function hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, stintI
 }
 
 
-const RED_STINT_LOCK_MAX_ATTEMPTS = 50;
-const RED_STINT_LOCK_RETRY_MS = 20;
-
-function acquireRedStintTrackerLock(trackerPath) {
-  const lockPath = `${trackerPath}.lock`;
-  mkdirSync(path.dirname(trackerPath), { recursive: true });
-  for (let attempt = 0; attempt < RED_STINT_LOCK_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const fd = openSync(lockPath, 'wx');
-      return { fd, lockPath };
-    } catch (error) {
-      if (error?.code === 'EEXIST') {
-        const waitUntil = Date.now() + RED_STINT_LOCK_RETRY_MS;
-        while (Date.now() < waitUntil) {
-          // spin
-        }
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`failed to acquire red-stint tracker lock for ${trackerPath}`);
-}
-
-function releaseRedStintTrackerLock(lock) {
-  if (!lock) return;
-  try {
-    closeSync(lock.fd);
-  } catch {
-    // ignore
-  }
-  try {
-    unlinkSync(lock.lockPath);
-  } catch {
-    // ignore
-  }
-}
-
 function readRedStintTracker(trackerPath) {
   /** @type {{ lastLevel?: string | null, stintId?: number, lastRedRuns?: Record<string, string> }} */
   let tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
@@ -511,15 +474,22 @@ function readRedStintTracker(trackerPath) {
 }
 
 function updateRedStintTracker(trackerPath, updater) {
-  const lock = acquireRedStintTrackerLock(trackerPath);
-  try {
+  const result = withDedupStateFileLock(trackerPath, () => {
     const current = readRedStintTracker(trackerPath);
     const next = updater(current);
     writeJsonAtomic(trackerPath, next);
     return next;
-  } finally {
-    releaseRedStintTrackerLock(lock);
+  }, { maxWaitMs: 1_000 });
+  if (
+    result
+    && typeof result === 'object'
+    && 'ok' in result
+    && /** @type {{ ok?: boolean, reason?: string }} */ (result).ok === false
+    && /** @type {{ ok?: boolean, reason?: string }} */ (result).reason === 'dedup_lock_timeout'
+  ) {
+    throw new Error(`failed to acquire red-stint tracker lock for ${trackerPath}`);
   }
+  return result;
 }
 
 export function resolveRedPeriodAggregateId(input) {
