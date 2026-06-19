@@ -91,6 +91,50 @@ function Invoke-CiFailurePreSendCiRecheck {
 }
 
 
+function Test-CiFailureTransientPreSendHelperFailure {
+    param(
+        [object]$Recheck
+    )
+
+    if ($Recheck.hard_failure) { return $true }
+    $reason = [string]$Recheck.reason
+    return $reason -in @('helper_timeout', 'helper_error', 'wrapper_error')
+}
+
+function Test-CiFailurePreSendRecheckOutcome {
+    param(
+        [object]$Recheck,
+        [string]$Digest,
+        [string]$LogLabel,
+        [object]$Episode,
+        [string]$StoreDir,
+        [string]$ReadSource = 'pre_send_ci_recheck'
+    )
+
+    if ($Recheck.ok -eq $true) { return $true }
+    if (Test-CiFailureTransientPreSendHelperFailure -Recheck $Recheck) {
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "$LogLabel transient helper failure digest=$Digest reason=$($Recheck.reason) (episode remains claimed for retry)"
+        return $false
+    }
+    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "$LogLabel failed digest=$Digest reason=$($Recheck.reason)"
+    Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$Recheck.reason) -ReadSource $ReadSource
+    return $false
+}
+
+function Test-CiFailureEpisodeDeliveryEvidence {
+    param(
+        [object]$IntentRecord,
+        [bool]$DispatchDelivered,
+        [bool]$DispatchInFlight
+    )
+
+    $sendDelivered = $null -ne $IntentRecord.sendDeliveredAtMs
+    $sendIssued = $null -ne $IntentRecord.sendIssuedAtMs
+    $ambiguousPostSend = $DispatchInFlight -and $sendIssued
+    return $sendDelivered -or $DispatchDelivered -or $ambiguousPostSend
+}
+
+
 function Invoke-CiFailurePreSendRecheckFailure {
     param(
         [object]$Episode,
@@ -227,10 +271,8 @@ function Invoke-CiFailureEpisodeDelivery {
             return $false
         }
 
-        $recheck = Invoke-CiFailurePreSendCiRecheck -Episode $Episode
-        if (-not $recheck.ok) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "pre-send recheck failed digest=$Digest reason=$($recheck.reason)"
-            Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$recheck.reason)
+        if (-not (Test-CiFailurePreSendRecheckOutcome -Recheck (Invoke-CiFailurePreSendCiRecheck -Episode $Episode) `
+                -Digest $Digest -LogLabel 'pre-send recheck' -Episode $Episode -StoreDir $StoreDir)) {
             return $false
         }
     }
@@ -251,17 +293,14 @@ function Invoke-CiFailureEpisodeDelivery {
     $targetId = [string]$Episode.targetId
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
     $recordState = [string]$intent.record.state
-    $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
     $idempotencyKey = [string]$intent.idempotencyKey
     $existingDispatch = Get-CiFailureDispatchJournalEntry -SessionId $targetId -SourceKey $idempotencyKey
     $dispatchInFlight = $existingDispatch -and [string]$existingDispatch.dispatchOutcome -eq 'dispatch_in_flight'
     $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
-    $skipSend = [bool]$intent.reentry -and (
-        $recordState -eq 'submitted-unacked' -or
-        $sendDelivered -or
-        $dispatchDelivered -or
-        $dispatchInFlight
-    )
+    $deliveryEvidence = Test-CiFailureEpisodeDeliveryEvidence -IntentRecord $intent.record `
+        -DispatchDelivered $dispatchDelivered -DispatchInFlight ([bool]$dispatchInFlight)
+    $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
+    $skipSend = [bool]$intent.reentry -and $deliveryEvidence
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would $dryRunAction session=$targetId digest=$Digest phase=$Phase"
@@ -275,9 +314,8 @@ function Invoke-CiFailureEpisodeDelivery {
                 episode = $Episode
                 fresh   = $sendSnapshot
             }
-            if (-not $sendRecheck.ok) {
-                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "immediate pre-send recheck failed digest=$Digest reason=$($sendRecheck.reason)"
-                Invoke-CiFailurePreSendRecheckFailure -Episode $Episode -StoreDir $StoreDir -Digest $Digest -Reason ([string]$sendRecheck.reason) -ReadSource 'pre_send_target_recheck'
+            if (-not (Test-CiFailurePreSendRecheckOutcome -Recheck $sendRecheck -Digest $Digest `
+                    -LogLabel 'immediate pre-send recheck' -Episode $Episode -StoreDir $StoreDir -ReadSource 'pre_send_target_recheck')) {
                 return $false
             }
         }
@@ -297,19 +335,12 @@ function Invoke-CiFailureEpisodeDelivery {
             $dispatchDeliveryId = [string]$dispatchRegister.deliveryId
         }
 
-        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-        if (-not $issued.ok) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason)"
-            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-            return $false
-        }
-
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
                 -IdempotencyKey $idempotencyKey
         }
         catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed after send-issued session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for bounded retry)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for bounded retry)"
             try {
                 $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
                 if (-not $update.updated) {
@@ -320,6 +351,12 @@ function Invoke-CiFailureEpisodeDelivery {
                 Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
             }
             $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+            return $false
+        }
+
+        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+        if (-not $issued.ok) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason) (orchestrator delivery completed; episode remains in-flight for retry)"
             return $false
         }
 

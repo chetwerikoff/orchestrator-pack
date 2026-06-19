@@ -17,8 +17,11 @@ $reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notif
 if ($reconcile -notmatch 'Sort-Object \{ \[long\]\$_.deliveredAtMs \} -Descending') {
   throw 'ci-failure-notification-reconcile.ps1 must select the newest dispatch journal entry by deliveredAtMs'
 }
-if ($reconcile -notmatch '(?s)\$skipSend = \[bool\]\$intent\.reentry[\s\S]*\$dispatchInFlight') {
-  throw 'ci-failure-notification-reconcile.ps1 must treat dispatch_in_flight as a no-resend delivery signal'
+if ($reconcile -notmatch 'Test-CiFailureEpisodeDeliveryEvidence') {
+  throw 'ci-failure-notification-reconcile.ps1 must gate resend skips on durable delivery evidence'
+}
+if ($reconcile -notmatch 'Test-CiFailureTransientPreSendHelperFailure') {
+  throw 'ci-failure-notification-reconcile.ps1 must preserve transient pre-send helper failures for retry'
 }
 if ($reconcile -notlike '*post-intent recovery must not run pre-send CI recheck*') {
   throw 'ci-failure-notification-reconcile.ps1 missing post-intent pre-send recheck guard'
