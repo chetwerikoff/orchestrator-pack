@@ -11,8 +11,7 @@
     "scripts/review-send-reconcile.test.ts",
     "scripts/review-finding-delivery-confirm.test.ts",
     "scripts/review-finding-delivery-submit.test.ts",
-    "scripts/session-runtime-liveness.test.ts",
-    "scripts/ci-failure-notification.test.ts"
+    "scripts/session-runtime-liveness.test.ts"
   ],
   "fixtureRoots": [
     {
@@ -207,26 +206,6 @@
           "jsonPath": "$.reviewRuns[*]",
           "command": "ao-review-run",
           "variantFrom": "status"
-        }
-      ]
-    },
-    {
-      "glob": "scripts/fixtures/ci-failure-notification/*.json",
-      "shapes": [
-        {
-          "jsonPath": "$.sessions[*]",
-          "command": "ao-status-session",
-          "variantResolver": "ao-status-session"
-        },
-        {
-          "jsonPath": "$.sessions[*].reports[*]",
-          "command": "ao-worker-report",
-          "variantFrom": "reportState"
-        },
-        {
-          "jsonPath": "$.openPrs[*]",
-          "command": "gh-pr-open",
-          "variant": "open"
         }
       ]
     }

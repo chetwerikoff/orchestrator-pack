@@ -19,9 +19,6 @@
     "activity",
     "reports",
     "ownedHeadSha",
-    "headRefOid",
-    "targetGeneration",
-    "sessionGeneration",
-    "generation"
+    "headRefOid"
   ]
 }
