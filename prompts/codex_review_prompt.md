@@ -10,16 +10,25 @@ You are reviewing a pull request in an Agent Orchestrator managed repository.
 
 {{BASE_SCOPE_SECTION}}
 
-## PR diff reading (direct; Issue #337)
+## Bulk diff read via coworker
 
-Read the PR diff **directly** on this model — at any size. Diff material (`git diff`
-/ `git show` output and `.diff` / `.patch` files) is review evidence; line-level
-correctness lives in the exact diff text and must not be summarized by a cheap model.
+When the PR diff exceeds the read-delegation floor (>200 lines), delegate
+summarization to `coworker ask` — keep review judgments on this model.
 
-Use deterministic repo tools (`git diff`, read tools, or equivalent) to inspect the
-full diff bounded by the base ref below. Do **not** hand a diff to `coworker` for
-summarization. Review judgments stay on this model per the #148 reviewer carve-out;
-the diff read itself is also never delegated (#337).
+**Canonical command** (write diff to a file first; never pipe into coworker):
+
+```bash
+git diff <base-ref>...HEAD > /tmp/review.diff
+coworker ask --profile code --allow-code \
+  --paths /tmp/review.diff \
+  --question "Summarize this PR diff for a reviewer. List changed files and behavior changes. Do not make final review judgments."
+```
+
+**Invalid forms:** `--file`, `--stdin`, `git diff | coworker`, heredocs, positional
+files after `--question`, or a bare question without `--question`.
+
+If `coworker` is missing or unavailable, read in-session and say so in your review
+output.
 
 ## Scope context
 
