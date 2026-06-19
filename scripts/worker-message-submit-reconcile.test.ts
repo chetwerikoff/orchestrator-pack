@@ -1973,6 +1973,29 @@ describe('issue #347 vanish and worktree-drift handling', () => {
     expect(followUp.actions.filter((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId)).toHaveLength(0);
   });
 
+
+  it('prefers the exact review run id before a same-pr fallback', () => {
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const wrongSha = 'fedcba0987654321fedcba0987654321fedcba09';
+    const runId = 'run-exact';
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: {
+        source: DISPATCH_SOURCE_REVIEW_SEND,
+        headSha: targetSha,
+        prNumber: 42,
+        sessionId: 'opk-drift',
+        reviewRunId: runId,
+      },
+      reviewRuns: [
+        { id: 'run-other', prNumber: 42, targetSha: wrongSha, status: 'outdated' },
+        { id: runId, prNumber: 42, targetSha, status: 'outdated' },
+      ],
+      sessions: [{ sessionId: 'opk-drift', ownedHeadSha: wrongSha }],
+    });
+    expect(drift.suppress).toBe(true);
+    expect(drift.reason).toBe('proven_worktree_drift');
+  });
+
   it('escalates ambiguous when drift evidence is missing', () => {
     const id = 'opk-drift:review-send:ambiguous';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
@@ -2028,6 +2051,64 @@ describe('issue #347 supervised adoption preflight', () => {
     expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
     const tracking = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
     expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
+  });
+
+
+  it('re-escalates corrupt-journal adoption failures per epoch/config', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-corrupt-journal-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, '{not-json');
+    const envOne = {
+      ...process.env,
+      AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-one',
+      AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/one.yaml',
+    };
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env: envOne });
+    expect(first.stdout).toContain('dispatch journal corrupt');
+    const trackingOne = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(trackingOne.lastAdoptionEscalationKey).toBe(`${hash('epoch-one')}:${hash('/cfg/one.yaml')}:wrapper_not_adopted`);
+
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env: envOne });
+    expect((second.stdout.match(/dispatch journal corrupt/g) ?? []).length).toBe(0);
+
+    const envTwo = {
+      ...process.env,
+      AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-two',
+      AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/two.yaml',
+    };
+    const third = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env: envTwo });
+    expect(third.stdout).toContain('dispatch journal corrupt');
+    const trackingTwo = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(trackingTwo.lastAdoptionEscalationKey).toBe(`${hash('epoch-two')}:${hash('/cfg/two.yaml')}:wrapper_not_adopted`);
+  });
+
+  it('honors persisted adoption when journal probes age out', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-retained-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-retained'),
+      adoptionConfigPathHash: hash('/cfg/retained.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-retained',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/retained.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('tick blocked: adoption preflight');
+    expect(result.stdout).not.toContain('wrapper_not_adopted');
   });
 
   it('deduplicates adoption escalation per epoch/config', () => {

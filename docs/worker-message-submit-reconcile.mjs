@@ -1263,10 +1263,14 @@ export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, ses
   if (!targetSha || !prNumber || !sessionId) {
     return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
   }
-  const run = toArray(reviewRuns).find((row) => {
-    const runId = trimString(row?.id ?? row?.runId);
-    return (reviewRunId && runId === reviewRunId) || Number(row?.prNumber) === prNumber;
-  });
+  const runs = toArray(reviewRuns);
+  let run;
+  if (reviewRunId) {
+    run = runs.find((row) => trimString(row?.id ?? row?.runId) === reviewRunId);
+  }
+  if (!run) {
+    run = runs.find((row) => Number(row?.prNumber) === prNumber);
+  }
   const runTarget = normalizeSha(run?.targetSha);
   if (!runTarget || runTarget !== targetSha) {
     return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };

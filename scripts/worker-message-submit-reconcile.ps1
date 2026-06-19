@@ -114,13 +114,24 @@ function Invoke-SubmitAdoptionPreflightGate {
     }
 
     $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    $epochHash = ConvertTo-WorkerMessageSafeHashText $binding.AoEpoch
+    $configHash = ConvertTo-WorkerMessageSafeHashText $binding.ConfigPath
+    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
+
+    if (
+        [string]$nextTracking.adoptionStatus -eq 'adopted' -and
+        [string]$nextTracking.adoptionEpochHash -eq $epochHash -and
+        [string]$nextTracking.adoptionConfigPathHash -eq $configHash
+    ) {
+        return @{ ok = $true; tracking = $nextTracking; escalated = $false }
+    }
+
     $preflight = Test-WorkerMessageSendAdoptionPreflight `
         -JournalPath $JournalPath `
         -AoEpoch $binding.AoEpoch `
         -ConfigPath $binding.ConfigPath `
         -PersistState
 
-    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
     if ($preflight.ok) {
         $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
         $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
@@ -128,14 +139,16 @@ function Invoke-SubmitAdoptionPreflightGate {
         return @{ ok = $true; tracking = $nextTracking; escalated = $false }
     }
 
-    $dedupeKey = "$($preflight.aoEpochHash):$($preflight.configPathHash):wrapper_not_adopted"
+    $dedupeEpochHash = if ([string]$preflight.aoEpochHash) { [string]$preflight.aoEpochHash } else { $epochHash }
+    $dedupeConfigHash = if ([string]$preflight.configPathHash) { [string]$preflight.configPathHash } else { $configHash }
+    $dedupeKey = "${dedupeEpochHash}:${dedupeConfigHash}:wrapper_not_adopted"
     $alreadyEscalated = [string]$nextTracking.lastAdoptionEscalationKey -eq $dedupeKey
     if (-not $alreadyEscalated) {
         Write-SubmitReconcileLog $preflight.diagnosis
         $nextTracking.lastAdoptionEscalationKey = $dedupeKey
         $nextTracking.adoptionStatus = 'wrapper_not_adopted'
-        $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
-        $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
+        $nextTracking.adoptionEpochHash = $dedupeEpochHash
+        $nextTracking.adoptionConfigPathHash = $dedupeConfigHash
     }
 
     return @{

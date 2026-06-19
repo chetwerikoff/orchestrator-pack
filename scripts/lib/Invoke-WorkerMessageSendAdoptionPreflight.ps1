@@ -98,6 +98,24 @@ function Invoke-WorkerMessageAdoptionProbeGeneration {
     return @{ ok = $true }
 }
 
+
+function Test-PersistedWorkerMessageSendAdoption {
+    param(
+        [string]$StatePath,
+        [string]$EpochHash,
+        [string]$ConfigHash
+    )
+
+    if (-not $StatePath -or -not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+        return $false
+    }
+    $stored = Get-MechanicalJsonStateFile -Path $StatePath -DefaultState @{}
+    if ([string]$stored.status -ne 'adopted') {
+        return $false
+    }
+    return (([string]$stored.aoEpochHash -eq $EpochHash) -and ([string]$stored.configPathHash -eq $ConfigHash))
+}
+
 function Test-WorkerMessageSendAdoptionPreflight {
     param(
         [string]$JournalPath = '',
@@ -121,6 +139,19 @@ function Test-WorkerMessageSendAdoptionPreflight {
         $effectiveJournalPath = Join-Path $root 'dispatch-journal.json'
     }
 
+    $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
+    $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
+
+    if ($PersistState -and (Test-PersistedWorkerMessageSendAdoption -StatePath $statePath -EpochHash $epochHash -ConfigHash $configHash)) {
+        return @{
+            ok = $true
+            reason = 'adopted'
+            aoEpochHash = $epochHash
+            configPathHash = $configHash
+            exitCode = 0
+        }
+    }
+
     if ($WriteProbeEntries) {
         $probeRunRef = [ref]$probeRunIdHash
         $generation = Invoke-WorkerMessageAdoptionProbeGeneration `
@@ -136,6 +167,8 @@ function Test-WorkerMessageSendAdoptionPreflight {
                 reason = $generation.reason
                 diagnosis = "[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted probe_route_failed branch=$($generation.branch) exit=$($generation.exitCode) diagnostic=$($generation.diagnostic)"
                 exitCode = 46
+                aoEpochHash = $epochHash
+                configPathHash = $configHash
             }
         }
         $probeRunIdHash = $probeRunRef.Value
@@ -148,6 +181,8 @@ function Test-WorkerMessageSendAdoptionPreflight {
             reason = 'wrapper_not_adopted'
             diagnosis = '[worker-message-send-adoption-preflight] ESCALATION: wrapper_not_adopted dispatch journal corrupt/untrusted; failing closed'
             exitCode = 46
+            aoEpochHash = $epochHash
+            configPathHash = $configHash
         }
     }
 
@@ -171,10 +206,16 @@ function Test-WorkerMessageSendAdoptionPreflight {
         if (-not $seen.ContainsKey($safe) -and -not $seen.ContainsKey($branch)) { $missing += $branch }
     }
 
-    $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
-    $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
-
     if ($missing.Count -gt 0) {
+        if ($PersistState -and (Test-PersistedWorkerMessageSendAdoption -StatePath $statePath -EpochHash $epochHash -ConfigHash $configHash)) {
+            return @{
+                ok = $true
+                reason = 'adopted'
+                aoEpochHash = $epochHash
+                configPathHash = $configHash
+                exitCode = 0
+            }
+        }
         if ($PersistState) {
             $failState = @{
                 lastCheckedAt = (Get-Date).ToString('o')
