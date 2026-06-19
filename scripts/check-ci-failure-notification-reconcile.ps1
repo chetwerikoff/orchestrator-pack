@@ -12,7 +12,18 @@ $mjs = Get-Content -LiteralPath (Join-Path $Root 'docs/ci-failure-notification.m
 foreach ($phrase in @('evaluateLiveWorkerSuppressor', 'recordPendingEpisode', 'suppressed-live-worker', 'abandoned-superseded', "phase: 'record'")) {
   if ($mjs -notlike "*$phrase*") { throw "ci-failure-notification.mjs missing $phrase" }
 }
+$common = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Ci-Failure-Notification-Common.ps1') -Raw
 $reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification-reconcile.ps1') -Raw
+
+if ($common -notlike '*function Get-RepoIdentity*') {
+  throw 'Ci-Failure-Notification-Common.ps1 missing Get-RepoIdentity'
+}
+if ($reconcile -notlike '*Get-RepoIdentity*') {
+  throw 'ci-failure-notification-reconcile.ps1 must resolve repo identity for reconcile ticks'
+}
+if ($reconcile -notmatch 'mark-send-issued[\s\S]{0,400}Invoke-PlannedCiFailureReconcileSend') {
+  throw 'ci-failure-notification-reconcile.ps1 must persist send-issued before the orchestrator side effect'
+}
 
 if ($reconcile -notmatch 'Sort-Object \{ \[long\]\$_.deliveredAtMs \} -Descending') {
   throw 'ci-failure-notification-reconcile.ps1 must select the newest dispatch journal entry by deliveredAtMs'

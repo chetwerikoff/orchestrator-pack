@@ -335,12 +335,19 @@ function Invoke-CiFailureEpisodeDelivery {
             $dispatchDeliveryId = [string]$dispatchRegister.deliveryId
         }
 
+        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+        if (-not $issued.ok) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason)"
+            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+            return $false
+        }
+
         try {
             Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
                 -IdempotencyKey $idempotencyKey
         }
         catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "ao send failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for bounded retry)"
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "planned worker ping failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for bounded retry)"
             try {
                 $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
                 if (-not $update.updated) {
@@ -351,12 +358,6 @@ function Invoke-CiFailureEpisodeDelivery {
                 Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
             }
             $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-            return $false
-        }
-
-        $issued = Invoke-CiFailureHelper -Mode 'mark-send-issued' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-        if (-not $issued.ok) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "mark-send-issued failed digest=$Digest reason=$($issued.reason) (orchestrator delivery completed; episode remains in-flight for retry)"
             return $false
         }
 

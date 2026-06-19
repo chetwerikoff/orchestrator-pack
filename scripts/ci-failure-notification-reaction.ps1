@@ -29,19 +29,6 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
-
-function Get-RepoIdentity {
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
-        return [string]$raw.Trim()
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 function Invoke-CiFailureReactionRecordTick {
     param(
         [string]$StoreDir,

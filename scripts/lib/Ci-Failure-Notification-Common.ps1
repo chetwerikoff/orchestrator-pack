@@ -49,3 +49,19 @@ function Invoke-CiFailureHelper {
     if ($LASTEXITCODE -ne 0) { throw "ci-failure-notification.ps1 -Mode $Mode exited $LASTEXITCODE`: $output" }
     return ($output | Out-String).Trim() | ConvertFrom-Json
 }
+
+function Get-RepoIdentity {
+    if (-not $RepoRoot) {
+        throw 'RepoRoot is required for Get-RepoIdentity'
+    }
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
+        return [string]$raw.Trim()
+    }
+    finally {
+        Pop-Location
+    }
+}
+
