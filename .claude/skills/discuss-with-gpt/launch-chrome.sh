@@ -46,9 +46,24 @@ echo "launching automation Chrome (persistent profile $PROFILE)…"
 # down when the launching shell / interop relay exits — the CDP port never
 # comes up and chrome.exe ends with 0 live processes (the "chrome_not_running"
 # symptom). Hand the launch to a Windows-owned, detached process instead.
-if [[ "$CHROME" == /mnt/* ]] && command -v powershell.exe >/dev/null 2>&1; then
+if [[ "$CHROME" == /mnt/* ]]; then
+  # A Windows chrome.exe REQUIRES a Windows-owned launcher. powershell.exe is
+  # frequently not on PATH in non-login shells (e.g. the agent's bash), so do
+  # not gate on `command -v` and silently fall through to the broken `& disown`
+  # interop path below — resolve a powershell first, and fail loudly if none.
+  PS=""
+  if command -v powershell.exe >/dev/null 2>&1; then
+    PS="powershell.exe"
+  elif [ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ]; then
+    PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  else
+    echo "✗ Windows chrome.exe ($CHROME) needs powershell.exe to launch, but none was found" >&2
+    echo "  (not on PATH and not at the default System32 location)." >&2
+    echo "  Add powershell.exe to PATH or set DISCUSS_WITH_GPT_CHROME_PATH to a native Chrome." >&2
+    exit 1
+  fi
   CHROME_WIN="$(wslpath -w "$CHROME")"
-  powershell.exe -NoProfile -Command \
+  "$PS" -NoProfile -Command \
     "Start-Process -FilePath '$CHROME_WIN' -ArgumentList '--remote-debugging-port=9222','--remote-allow-origins=*','--user-data-dir=$PROFILE','$URL'" \
     >/dev/null 2>&1
 else
