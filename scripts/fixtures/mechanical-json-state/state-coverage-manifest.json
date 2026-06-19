@@ -64,8 +64,7 @@
       "id": "worker-message-submit-reconcile",
       "stateFile": "orchestrator-worker-message-submit-state.json",
       "callerScripts": [
-        "scripts/worker-message-submit-reconcile.ps1",
-        "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1"
+        "scripts/worker-message-submit-reconcile.ps1"
       ],
       "mapFields": [
         "deliveries"

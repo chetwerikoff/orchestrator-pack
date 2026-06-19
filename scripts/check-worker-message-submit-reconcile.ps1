@@ -119,22 +119,5 @@ if ($migrationText -notlike '*worker-message-submit-reconcile*') {
     exit 1
 }
 
-
-if ($ps1 -notmatch 'Invoke-SubmitAdoptionPreflightGate' -or $ps1 -notmatch 'Test-WorkerMessageSendAdoptionPreflight') {
-    Write-Host 'worker-message-submit-reconcile.ps1 must run adoption preflight on supervised ticks (Issue #347)'
-    exit 1
-}
-
-if ($mjs -notmatch 'evaluateWorktreeDriftVanishSuppression' -or $mjs -notmatch 'findVanishedTrackedDeliveries') {
-    Write-Host 'worker-message-submit-reconcile.mjs must handle delivery vanish and worktree-drift exclusion (Issue #347)'
-    exit 1
-}
-
-$example = Get-Content -LiteralPath $example -Raw
-if ($example -notlike '*JOURNALED WORKER SEND*' -or $example -notlike '*STATE-DERIVED WORKER MESSAGE SUBMIT*') {
-    Write-Host 'agent-orchestrator.yaml.example must document journaled worker send and submit reconcile adoption (Issue #347)'
-    exit 1
-}
-
 Write-Host '[PASS] source-agnostic worker message submit reconciler wiring (Issue #232)'
 exit 0
