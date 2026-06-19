@@ -13,6 +13,7 @@
     "docs/declarations/347.opk-37.json",
     "agent-orchestrator.yaml.example",
     "docs/migration_notes.md",
+    "docs/mechanical-reconcile-bounds.mjs",
     "docs/orchestrator-message-registry.mjs",
     "docs/worker-message-submit-reconcile.mjs",
     "docs/worker-message-submit-reconcile.d.mts",
