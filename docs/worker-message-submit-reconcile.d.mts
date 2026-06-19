@@ -49,6 +49,7 @@ export interface FailedDeliveryRecord {
 
 export interface DeliveryTrackingRecord {
   deliveryId?: string;
+  source?: string;
   sessionId?: string;
   firstObservedAtMs?: number;
   deliveredAtMs?: number;
@@ -262,6 +263,12 @@ export declare function getFailedDeliveryStatus(input: {
   reviewRunId?: string;
   headSha?: string;
 }): { ok: boolean; failClosed: boolean; unresolved: FailedDeliveryRecord[] };
+
+export declare function evaluateWorktreeDriftVanishSuppression(input: {
+  record?: Record<string, unknown>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  sessions?: Array<Record<string, unknown>>;
+}): { suppress: boolean; reason: string };
 
 export declare function planWorkerMessageSubmitActions(input: {
   sessions: Array<AoSession | Record<string, unknown>>;

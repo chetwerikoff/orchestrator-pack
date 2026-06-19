@@ -40,6 +40,11 @@ import type {
   WorkerMessageSubmitAction,
 } from '../docs/worker-message-submit-reconcile.d.mts';
 
+
+function actionReason(action: WorkerMessageSubmitAction | undefined): string | undefined {
+  return action && 'reason' in action ? action.reason : undefined;
+}
+
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'fixtures/worker-message-submit-reconcile',
@@ -1914,7 +1919,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       },
       nowMs: 1717602000000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished');
+    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id))).toBe('delivery_vanished');
   });
 
   it('suppresses vanish escalation for proven worktree drift on review-send', () => {
@@ -1941,7 +1946,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       nowMs: 1717602000000,
     });
     expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)).toBeUndefined();
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id)?.reason).toBe('proven_worktree_drift');
+    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id))).toBe('proven_worktree_drift');
   });
 
   it('escalates ambiguous when drift evidence is missing', () => {
@@ -1973,7 +1978,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
       },
       nowMs: 1717602000000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished_ambiguous');
+    expect(actionReason(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id))).toBe('delivery_vanished_ambiguous');
   });
 });
 
