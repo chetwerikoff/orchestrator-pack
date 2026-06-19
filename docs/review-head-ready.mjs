@@ -259,8 +259,7 @@ function segmentHasHandoffPrecursor(stream, fromIndex, toIndex) {
     return false;
   }
   if (toIndex === fromIndex + 1) {
-    const boundaryState = getReportState(stream[fromIndex]?.report);
-    return boundaryState === 'working' || boundaryState === 'fixing_ci' || boundaryState === 'pr_created';
+    return HANDOFF_PRECURSOR_STATES.has(getReportState(stream[fromIndex]?.report));
   }
   for (let i = fromIndex + 1; i < toIndex; i++) {
     if (HANDOFF_PRECURSOR_STATES.has(getReportState(stream[i]?.report))) {
