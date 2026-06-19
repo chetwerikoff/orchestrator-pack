@@ -49,6 +49,25 @@ Chrome holding a **logged-in** custom-GPT session. It never types credentials.
   before attaching; the driver's own preflight (project URL + composer present)
   is the real gate; `curl` is just a fast pre-check.
 
+**Bring it up with ONE command — then trust its exit code:**
+
+```bash
+bash .claude/skills/discuss-with-gpt/launch-chrome.sh
+```
+
+`launch-chrome.sh` is idempotent and self-contained: it reuses an already-up
+profile-verified Chrome, else launches one (Windows-owned on WSL), else waits
+for CDP itself via `curl --retry 25`. Exit 0 = ready; non-zero = a real blocker
+named in stderr (fix it, don't paper over).
+
+- **Do NOT wrap it in `timeout`.** It already bounds its own readiness wait; a
+  `timeout NN` truncates that and reports exit 143 as a false "launch failed".
+- **Do NOT run a parallel diagnostic ceremony** (`Get-Process chrome`, hunting
+  the `powershell.exe` absolute path, a hand-rolled `curl` poll-loop, launching
+  `chrome.exe` yourself). The script does all of this; on WSL it resolves
+  powershell (PATH → System32 fallback) internally and fails loud if neither
+  exists. Re-deriving this each session is the recurring time/token sink.
+
 ### Operator configuration (required)
 
 The committed skill ships **no** personal ChatGPT project URL or Chrome profile
