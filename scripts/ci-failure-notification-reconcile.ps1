@@ -254,12 +254,10 @@ function Invoke-CiFailureEpisodeDelivery {
     $existingDispatch = Get-CiFailureDispatchJournalEntry -SessionId $targetId -SourceKey $idempotencyKey
     $dispatchInFlight = $existingDispatch -and [string]$existingDispatch.dispatchOutcome -eq 'dispatch_in_flight'
     $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
-    $sendIssued = $null -ne $intent.record.sendIssuedAtMs
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
         $sendDelivered -or
-        $dispatchDelivered -or
-        ($dispatchInFlight -and $sendIssued)
+        $dispatchDelivered
     )
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
@@ -334,19 +332,8 @@ function Invoke-CiFailureEpisodeDelivery {
         }
     }
     else {
-        if (-not $sendDelivered) {
+        if (-not $sendDelivered -and $dispatchDelivered) {
             $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-        }
-        if ($dispatchInFlight -and $sendIssued -and $existingDispatch) {
-            try {
-                $update = Update-WorkerMessageDispatchOutcome -DeliveryId ([string]$existingDispatch.deliveryId) -DispatchOutcome 'dispatched' -DraftState 'draft_present'
-                if (-not $update.updated) {
-                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest delivery=$($existingDispatch.deliveryId) (recovery finalize pending)"
-                }
-            }
-            catch {
-                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest error=$($_.Exception.Message) (recovery finalize pending)"
-            }
         }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"
     }

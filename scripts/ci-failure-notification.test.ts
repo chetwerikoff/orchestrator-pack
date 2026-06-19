@@ -608,7 +608,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     }
   });
 
-  it('treats in-flight dispatch plus pre-send sendIssued as durable delivery evidence on reentry', () => {
+  it('records sendIssued on reentry without treating it as delivery evidence', () => {
     const dir = tempStore();
     try {
       recordPendingEpisode({ storeDir: dir, episode, nowMs: 1_000_000 });
@@ -619,6 +619,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       expect(reentry.reentry).toBe(true);
       expect((reentry.record as { sendIssuedAtMs?: number }).sendIssuedAtMs).toBeTruthy();
       expect((reentry.record as { sendDeliveredAtMs?: number }).sendDeliveredAtMs).toBeUndefined();
+      expect((reentry.record as { state?: string }).state).toBe('submit-intent-reserved');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
