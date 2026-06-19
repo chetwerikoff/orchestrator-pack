@@ -246,6 +246,28 @@ function Test-CiFailurePreflightOutcome {
     return $true
 }
 
+
+function Invoke-CiFailureDispatchJournalFinalize {
+    param(
+        [string]$DeliveryId,
+        [string]$Digest
+    )
+
+    if (-not $DeliveryId) { return $false }
+    try {
+        $update = Update-WorkerMessageDispatchOutcome -DeliveryId $DeliveryId -DispatchOutcome 'dispatched' -DraftState 'draft_present'
+        if (-not $update.updated) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal finalize failed digest=$Digest delivery=$DeliveryId (will retry)"
+            return $false
+        }
+        return $true
+    }
+    catch {
+        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal finalize failed digest=$Digest delivery=$DeliveryId error=$($_.Exception.Message) (will retry)"
+        return $false
+    }
+}
+
 function Invoke-CiFailureEpisodeDelivery {
     param(
         [object]$Episode,
@@ -301,6 +323,7 @@ function Invoke-CiFailureEpisodeDelivery {
         -DispatchDelivered $dispatchDelivered -DispatchInFlight ([bool]$dispatchInFlight)
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
     $skipSend = [bool]$intent.reentry -and $deliveryEvidence
+    $dispatchDeliveryId = if ($existingDispatch) { [string]$existingDispatch.deliveryId } else { $null }
 
     if (-not $skipSend) {
         if ($Phase -eq 'full') {
@@ -314,11 +337,7 @@ function Invoke-CiFailureEpisodeDelivery {
                 return $false
             }
         }
-        $dispatchDeliveryId = $null
-        if ($dispatchInFlight) {
-            $dispatchDeliveryId = [string]$existingDispatch.deliveryId
-        }
-        else {
+        if (-not $dispatchInFlight) {
             $dispatchRegister = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
                 -Source 'ci-failure-notification-reconcile' -SourceKey $idempotencyKey `
                 -DeliveryPath 'pending-draft' -DispatchOutcome 'dispatch_in_flight'
@@ -357,21 +376,18 @@ function Invoke-CiFailureEpisodeDelivery {
         }
 
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-        try {
-            $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'dispatched' -DraftState 'draft_present'
-            if (-not $update.updated) {
-                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest delivery=$dispatchDeliveryId (send delivered; journal will retry)"
-            }
-        }
-        catch {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal outcome update failed digest=$Digest error=$($_.Exception.Message) (send delivered; journal will retry)"
-        }
+        $sendDelivered = $true
     }
     else {
         if (-not $sendDelivered -and $dispatchDelivered) {
             $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         }
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "skip resend session=$targetId digest=$Digest phase=$Phase (durable delivery evidence)"
+    }
+
+    if (-not $dispatchDelivered -and $dispatchDeliveryId -and ($sendDelivered -or ($skipSend -and $dispatchInFlight))) {
+        $null = Invoke-CiFailureDispatchJournalFinalize -DeliveryId $dispatchDeliveryId -Digest $Digest
+        $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
     }
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }

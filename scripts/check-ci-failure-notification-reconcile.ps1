@@ -31,6 +31,9 @@ if ($reconcile -notmatch 'mark-send-issued[\s\S]{0,400}Invoke-PlannedCiFailureRe
 if ($reconcile -notmatch 'Sort-Object \{ \[long\]\$_.deliveredAtMs \} -Descending') {
   throw 'ci-failure-notification-reconcile.ps1 must select the newest dispatch journal entry by deliveredAtMs'
 }
+if ($reconcile -notlike '*Invoke-CiFailureDispatchJournalFinalize*') {
+  throw 'ci-failure-notification-reconcile.ps1 must retry dispatch journal finalization after delivery'
+}
 if ($reconcile -notmatch 'Test-CiFailureEpisodeDeliveryEvidence') {
   throw 'ci-failure-notification-reconcile.ps1 must gate resend skips on durable delivery evidence'
 }
