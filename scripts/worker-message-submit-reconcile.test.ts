@@ -2273,9 +2273,39 @@ describe('issue #347 supervised adoption preflight', () => {
 
   it('uses number-only open PR lookup without per-PR commit API calls', () => {
     const source = readFileSync('scripts/lib/Get-SubmitReconcileOpenPrList.ps1', 'utf8');
-    expect(source).toMatch(/gh pr list[^\n]*number/);
+    expect(source).toMatch(/gh api[^\n]*pulls/);
     expect(source).not.toMatch(/Invoke-GhOpenPrList/);
     expect(source).not.toMatch(/gh api[^\n]*commits\//);
+    expect(source).not.toMatch(/--limit 200/);
+    expect(source).toMatch(/per_page/);
+    expect(source).toMatch(/page\+\+/);
+  });
+
+  it('paginates open PR lookup across multiple API pages', () => {
+    const repoRoot = process.cwd().replace(/'/g, "''");
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      $ErrorActionPreference = 'Stop'
+      Set-Location '${repoRoot}'
+      $script:GhPage = 0
+      function gh {
+        if ($args[0] -eq 'api') {
+          $script:GhPage++
+          $global:LASTEXITCODE = 0
+          if ($script:GhPage -eq 1) {
+            return ((1..100 | ForEach-Object { [pscustomobject]@{ number = $_ } }) | ConvertTo-Json -Compress)
+          }
+          return (@(@{ number = 351 }) | ConvertTo-Json -Compress)
+        }
+        throw "unexpected gh call: $args"
+      }
+      . ./scripts/lib/Get-SubmitReconcileOpenPrList.ps1
+      $openPrs = @(Get-SubmitReconcileOpenPrList -PackRoot (Get-Location).Path)
+      Write-Output "count=$($openPrs.Count)"
+      Write-Output "last=$($openPrs[-1].number)"
+      Write-Output "pages=$script:GhPage"
+    `], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split(/\r?\n/)).toEqual(['count=101', 'last=351', 'pages=2']);
   });
 
   it('blocks live reconcile ticks and escalates wrapper_not_adopted when adoption is missing', () => {
