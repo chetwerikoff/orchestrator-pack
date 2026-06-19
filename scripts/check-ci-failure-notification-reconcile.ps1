@@ -13,6 +13,13 @@ foreach ($phrase in @('evaluateLiveWorkerSuppressor', 'recordPendingEpisode', 's
   if ($mjs -notlike "*$phrase*") { throw "ci-failure-notification.mjs missing $phrase" }
 }
 $reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification-reconcile.ps1') -Raw
+
+if ($reconcile -notmatch 'Sort-Object \{ \[long\]\$_.deliveredAtMs \} -Descending') {
+  throw 'ci-failure-notification-reconcile.ps1 must select the newest dispatch journal entry by deliveredAtMs'
+}
+if ($reconcile -notmatch '(?s)\$skipSend = \[bool\]\$intent\.reentry[\s\S]*\$dispatchInFlight') {
+  throw 'ci-failure-notification-reconcile.ps1 must treat dispatch_in_flight as a no-resend delivery signal'
+}
 if ($reconcile -notlike '*post-intent recovery must not run pre-send CI recheck*') {
   throw 'ci-failure-notification-reconcile.ps1 missing post-intent pre-send recheck guard'
 }

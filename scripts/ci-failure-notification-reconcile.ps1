@@ -145,12 +145,14 @@ function Get-CiFailureDispatchJournalEntry {
 
     if (-not $SourceKey) { return $null }
     $journal = Get-WorkerMessageDispatchJournal
+    $matches = @()
     foreach ($entry in @($journal.Values)) {
         if ([string]$entry.sessionId -eq $SessionId -and [string]$entry.sourceKey -eq $SourceKey) {
-            return $entry
+            $matches += $entry
         }
     }
-    return $null
+    if ($matches.Count -eq 0) { return $null }
+    return $matches | Sort-Object { [long]$_.deliveredAtMs } -Descending | Select-Object -First 1
 }
 
 function Test-CiFailureDispatchJournalDelivered {
@@ -257,7 +259,8 @@ function Invoke-CiFailureEpisodeDelivery {
     $skipSend = [bool]$intent.reentry -and (
         $recordState -eq 'submitted-unacked' -or
         $sendDelivered -or
-        $dispatchDelivered
+        $dispatchDelivered -or
+        $dispatchInFlight
     )
     if ($DryRun) {
         $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
