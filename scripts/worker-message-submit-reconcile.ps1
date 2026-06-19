@@ -40,26 +40,6 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Submit-WorkerInputDraft.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
-. (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
-. (Join-Path $PSScriptRoot 'lib/Get-SubmitReconcileOpenPrList.ps1')
-
-function Get-SubmitReconcileJournalPath {
-    if ($DispatchJournalPath) { return $DispatchJournalPath }
-    if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) { return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL }
-    return Get-WorkerMessageDispatchJournalPath
-}
-
-function Get-SubmitReconcileStateRootIdentity {
-    $parts = @(
-        $PackRoot
-        [string]$env:USERPROFILE
-        [string]$env:HOME
-        [string]$env:AO_WORKER_MESSAGE_SUBMIT_STATE
-        (Get-SubmitReconcileJournalPath)
-    ) | Where-Object { $_ }
-    return (ConvertTo-WorkerMessageSafeIdComponent -Value ($parts -join '|'))
-}
 
 function Get-SubmitReconcileIntervalSeconds {
     if ($IntervalSeconds -gt 0) { return $IntervalSeconds }
@@ -85,131 +65,10 @@ function Write-SubmitReconcileLog {
 
 $Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
-
 function Get-SubmitReconcileState {
     param([string]$Path)
 
-    $state = Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
-    $identity = Get-SubmitReconcileStateRootIdentity
-    $storedIdentity = [string]$state.stateRootIdentity
-    if ($storedIdentity -and $storedIdentity -ne $identity) {
-        $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
-        if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
-        }
-        $deliveryCount = 0
-        if ($state.deliveries) {
-            $deliveryCount = @($state.deliveries.Keys).Count
-        }
-        $failedCount = 0
-        if ($state.failedDeliveries) {
-            $failedCount = @($state.failedDeliveries.Keys).Count
-        }
-        $hadActiveRecords = ($deliveryCount -gt 0) -or ($failedCount -gt 0)
-        $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
-        $state.stateRootIdentity = $identity
-        if ($hadActiveRecords) {
-            $state['_recovery'] = @{
-                fenceTrusted = $false
-                reason       = 'wrong_state_root_active_store'
-                quarantined  = $quarantinePath
-            }
-        }
-        Set-SubmitReconcileState -Path $Path -State $state
-        return $state
-    }
-    elseif (-not $storedIdentity) {
-        $deliveryCount = 0
-        if ($state.deliveries) {
-            $deliveryCount = @($state.deliveries.Keys).Count
-        }
-        $failedCount = 0
-        if ($state.failedDeliveries) {
-            $failedCount = @($state.failedDeliveries.Keys).Count
-        }
-        if ($deliveryCount -gt 0 -or $failedCount -gt 0) {
-            $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
-            if (Test-Path -LiteralPath $Path -PathType Leaf) {
-                Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
-            }
-            $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
-            $state.stateRootIdentity = $identity
-            $state['_recovery'] = @{
-                fenceTrusted = $false
-                reason       = 'legacy_active_store_migration'
-                quarantined  = $quarantinePath
-            }
-            Set-SubmitReconcileState -Path $Path -State $state
-            return $state
-        }
-        $state.stateRootIdentity = $identity
-    }
-    return $state
-}
-
-function Invoke-SubmitAdoptionPreflightGate {
-    param(
-        [string]$JournalPath,
-        [string]$StatePath,
-        [object]$Tracking,
-        [switch]$DryRunMode
-    )
-
-    if ($DryRunMode) {
-        return @{ ok = $true; tracking = $Tracking; escalated = $false }
-    }
-
-    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
-    $epochHash = ConvertTo-WorkerMessageSafeHashText $binding.AoEpoch
-    $configHash = ConvertTo-WorkerMessageSafeHashText $binding.ConfigPath
-    $journalHash = ConvertTo-WorkerMessageSafeHashText $JournalPath
-    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
-
-    if (
-        (Test-MechanicalJsonStateFencesTrusted -State $nextTracking) -and
-        [string]$nextTracking.adoptionStatus -eq 'adopted' -and
-        [string]$nextTracking.adoptionEpochHash -eq $epochHash -and
-        [string]$nextTracking.adoptionConfigPathHash -eq $configHash -and
-        [string]$nextTracking.adoptionJournalPathHash -eq $journalHash
-    ) {
-        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
-        if (Test-MechanicalJsonStateFencesTrusted -State $journal) {
-            return @{ ok = $true; tracking = $nextTracking; escalated = $false }
-        }
-    }
-
-    $preflight = Test-WorkerMessageSendAdoptionPreflight `
-        -JournalPath $JournalPath `
-        -AoEpoch $binding.AoEpoch `
-        -ConfigPath $binding.ConfigPath `
-        -PersistState
-
-    if ($preflight.ok) {
-        $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
-        $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
-        $nextTracking.adoptionJournalPathHash = $journalHash
-        $nextTracking.adoptionStatus = 'adopted'
-        return @{ ok = $true; tracking = $nextTracking; escalated = $false }
-    }
-
-    $dedupeEpochHash = if ([string]$preflight.aoEpochHash) { [string]$preflight.aoEpochHash } else { $epochHash }
-    $dedupeConfigHash = if ([string]$preflight.configPathHash) { [string]$preflight.configPathHash } else { $configHash }
-    $dedupeKey = "${dedupeEpochHash}:${dedupeConfigHash}:wrapper_not_adopted"
-    $alreadyEscalated = [string]$nextTracking.lastAdoptionEscalationKey -eq $dedupeKey
-    if (-not $alreadyEscalated) {
-        Write-SubmitReconcileLog $preflight.diagnosis
-        $nextTracking.lastAdoptionEscalationKey = $dedupeKey
-        $nextTracking.adoptionStatus = 'wrapper_not_adopted'
-        $nextTracking.adoptionEpochHash = $dedupeEpochHash
-        $nextTracking.adoptionConfigPathHash = $dedupeConfigHash
-    }
-
-    return @{
-        ok = $false
-        tracking = $nextTracking
-        escalated = -not $alreadyEscalated
-        reason = [string]$preflight.reason
-    }
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
 }
 
 function Set-SubmitReconcileState {
@@ -293,7 +152,6 @@ function Invoke-SubmitReconcileTick {
         else {
             $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
         }
-        $openPrs = if ($fixture.openPrs) { @($fixture.openPrs) } else { @() }
     }
     else {
         $sessions = Get-AoStatusSessions
@@ -309,7 +167,6 @@ function Invoke-SubmitReconcileTick {
             'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
-        $openPrs = @(Get-SubmitReconcileOpenPrList -PackRoot $PackRoot -WriteLog { param($Message) Write-SubmitReconcileLog $Message })
     }
 
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
@@ -321,7 +178,6 @@ function Invoke-SubmitReconcileTick {
             reactionMessages    = $reactionMessages
             tracking            = $tracking
             floodActiveSessions = $floodActiveSessions
-            openPrs             = @($openPrs)
             nowMs               = $now
             config              = $tickConfig
         } -Label $Script:ReconcileLogPrefix -JsonDepth 30
@@ -432,7 +288,7 @@ $intervalSeconds = Get-SubmitReconcileIntervalSeconds
 $intervalMs = [Math]::Max(1, $intervalSeconds) * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-SubmitReconcileStatePath -CliPath $StateFile
-$journalPath = Get-SubmitReconcileJournalPath
+$journalPath = if ($DispatchJournalPath) { $DispatchJournalPath } else { Get-WorkerMessageDispatchJournalPath }
 
 Write-SubmitReconcileLog "starting (project=$ProjectId, interval=${intervalSeconds}s, state=$statePath, journal=$journalPath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
 
@@ -470,27 +326,13 @@ try {
         }
         else {
             try {
-                $adoptionGate = Invoke-SubmitAdoptionPreflightGate `
-                    -JournalPath $journalPath `
-                    -StatePath $statePath `
-                    -Tracking $state `
-                    -DryRunMode:$DryRun
+                $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath `
+                    -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs
                 if (-not $DryRun) {
-                    Set-SubmitReconcileState -Path $statePath -State $adoptionGate.tracking
+                    Set-SubmitReconcileState -Path $statePath -State $result.tracking
                 }
-                if (-not $adoptionGate.ok) {
-                    Write-SubmitReconcileLog "tick blocked: adoption preflight $($adoptionGate.reason)"
-                    Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
-                }
-                else {
-                    $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath `
-                        -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs
-                    if (-not $DryRun) {
-                        Set-SubmitReconcileState -Path $statePath -State $result.tracking
-                    }
-                    Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
-                    Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
-                }
+                Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
             }
             catch {
                 $tickFailed = $true

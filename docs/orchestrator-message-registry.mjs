@@ -808,13 +808,6 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/orchestrator-wake-supervisor.test.ts',
     'agent-orchestrator.yaml.example',
   ],
-  347: [
-    'agent-orchestrator.yaml.example',
-    'docs/worker-message-submit-reconcile.mjs',
-    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
-    'scripts/worker-message-submit-reconcile.ps1',
-    'scripts/worker-message-submit-reconcile.test.ts',
-  ],
 };
 
 /**

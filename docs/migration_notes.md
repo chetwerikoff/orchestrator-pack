@@ -1188,12 +1188,7 @@ ordinary trigger-firing unit. The metric summary now also exposes
 `denominatorCause` and `reviewHookCaptureBranch`; `unknown` capability or
 `all-excluded` denominator cause is degraded/fail-loud, not a clean zero.
 
-## Journaled worker-send wrapper adoption (Issues #281 / #347)
-
-Issue #347 extends the supervised `worker-message-submit-reconcile` loop with live adoption
-preflight on every tick (idempotent `wrapper_not_adopted` escalation when journaled routing is
-not observed for the current AO epoch/config), delivery vanish detection against the durable
-active-delivery record, and fail-closed worktree-drift exclusion for review-send deliveries.
+## Journaled worker-send wrapper adoption (Issue #281)
 
 Extends source-agnostic worker-message submit so plain orchestrator `ao send` deliveries
 can be observed through a metadata-only transactional outbox before the send side effect.
