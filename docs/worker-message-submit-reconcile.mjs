@@ -10,6 +10,7 @@ import {
 } from './review-mechanical-cli.mjs';
 import {
   findSessionById,
+  normalizeSha,
   sessionMatchesIdentifier,
   toArray,
 } from './review-trigger-reconcile.mjs';
@@ -30,6 +31,7 @@ import {
   isDeliveryConsumed,
   isSessionAlive,
   isSessionStreaming,
+  DISPATCH_SOURCE_REVIEW_SEND,
   mergeDeliveryRecords,
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
@@ -37,6 +39,7 @@ import {
   compactWorkerMessageSubmitTracking,
   convergeOversizedReconcileState,
   evaluateSubmitTrackingCapacity,
+  FENCE_LIFECYCLE_COMPLETED,
 } from './mechanical-reconcile-bounds.mjs';
 
 /** Default tick cadence: 30 seconds. */
@@ -68,6 +71,16 @@ export const OPERATOR_ESCALATION_PREFIX =
 export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
 export const FAILED_DELIVERY_RESOLVED = 'resolved';
 export const FAILED_DELIVERY_AUDITED_CLOSED = 'audited_closed';
+
+
+function isTerminalSubmitState(terminalState) {
+  const terminal = trimString(terminalState);
+  return (
+    terminal === SUBMIT_STATE_ESCALATED ||
+    terminal === SUBMIT_STATE_SUBMITTED ||
+    terminal === SUBMIT_STATE_NOOP
+  );
+}
 
 function trimString(value) {
   return String(value ?? '').trim();
@@ -672,6 +685,8 @@ function classifyFailureTerminalReason(reason) {
     'shape_identical_foreign',
     'draft_identity_changed',
     'lost_delivery_overwritten',
+    'delivery_vanished',
+    'delivery_vanished_ambiguous',
     'delivery_backstop_exhausted',
     'still_live_but_unconsumed',
     'post_dispatch_lease_exhausted',
@@ -888,7 +903,7 @@ export function evaluateSubmitDecision({
     return buildConsumptionAction(deliveryId, sessionId, 'consumed');
   }
 
-  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+  if (isTerminalSubmitState(terminalState)) {
     return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
   }
 
@@ -1123,6 +1138,7 @@ function ensureTrackingSeed(prior, surviving, nowMs, busyDispatch, draftIdentity
     prNumber: Number(prior?.prNumber ?? surviving?.prNumber ?? 0),
     headSha: trimString(prior?.headSha ?? surviving?.headSha),
     reviewRunId: trimString(prior?.reviewRunId ?? surviving?.sourceKey),
+    source: trimString(prior?.source) || trimString(surviving?.source),
   };
 }
 
@@ -1213,6 +1229,78 @@ export function getFailedDeliveryStatus(input) {
 /**
  * @param {object} input
  */
+
+
+function findVanishedTrackedDeliveries(tracking, deliveries) {
+  const visibleIds = new Set(
+    deliveries.map((d) => trimString(d.deliveryId)).filter(Boolean),
+  );
+  const vanished = [];
+  for (const [deliveryId, record] of Object.entries(tracking?.deliveries ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('corrupt-')) {
+      continue;
+    }
+    const terminal = trimString(record?.terminalState);
+    if (isTerminalSubmitState(terminal)) {
+      continue;
+    }
+    if (visibleIds.has(deliveryId)) {
+      continue;
+    }
+    if (
+      !Number(record?.firstObservedAtMs ?? 0) &&
+      !Number(record?.deliveredAtMs ?? 0) &&
+      !Number(record?.lastSubmitAtMs ?? 0)
+    ) {
+      continue;
+    }
+    vanished.push({ deliveryId, record });
+  }
+  return vanished;
+}
+
+export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, sessions, openPrs }) {
+  const source = trimString(record?.source);
+  if (source !== DISPATCH_SOURCE_REVIEW_SEND) {
+    return { suppress: false, reason: 'not_review_send' };
+  }
+  const targetSha = normalizeSha(record?.headSha);
+  const prNumber = Number(record?.prNumber ?? 0);
+  const sessionId = trimString(record?.sessionId);
+  const reviewRunId = trimString(record?.reviewRunId);
+  if (!targetSha || !prNumber || !sessionId) {
+    return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
+  }
+  const runs = toArray(reviewRuns);
+  let run;
+  if (reviewRunId) {
+    run = runs.find((row) => trimString(row?.id ?? row?.runId) === reviewRunId);
+  }
+  if (!run) {
+    run = runs.find((row) => Number(row?.prNumber) === prNumber);
+  }
+  const runTarget = normalizeSha(run?.targetSha);
+  if (!runTarget || runTarget !== targetSha) {
+    return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
+  }
+  if (trimString(run?.status) !== 'outdated') {
+    return { suppress: false, reason: 'run_not_outdated' };
+  }
+  const session = findSessionById(toArray(sessions), sessionId);
+  const workerHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (!workerHead) {
+    return { suppress: false, reason: 'ambiguous_missing_worker_head' };
+  }
+  if (workerHead !== targetSha) {
+    const openPr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
+    if (!openPr) {
+      return { suppress: false, reason: 'ambiguous_pr_not_open' };
+    }
+    return { suppress: true, reason: 'proven_worktree_drift' };
+  }
+  return { suppress: false, reason: 'ambiguous_drift_evidence' };
+}
+
 export function planWorkerMessageSubmitActions(input) {
   const {
     aoEvents,
@@ -1222,6 +1310,7 @@ export function planWorkerMessageSubmitActions(input) {
     sessions,
     tracking,
     floodActiveSessions,
+    openPrs,
     nowMs,
     config,
   } = input;
@@ -1308,10 +1397,7 @@ export function planWorkerMessageSubmitActions(input) {
       const failedId = trimString(failed.deliveryId);
       if (!failedId) continue;
       const existing = nextDeliveries[failedId] ?? {};
-      if (
-        existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
-      ) {
+      if (isTerminalSubmitState(existing.terminalState)) {
         continue;
       }
       if (!existing.firstObservedAtMs) {
@@ -1363,10 +1449,7 @@ export function planWorkerMessageSubmitActions(input) {
     for (const lost of overwritten) {
       const lostId = trimString(lost.deliveryId);
       const existing = nextDeliveries[lostId] ?? {};
-      if (
-        existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
-      ) {
+      if (isTerminalSubmitState(existing.terminalState)) {
         continue;
       }
       if ((paneCompetingBySession.get(sessionId) ?? []).length > 1) {
@@ -1435,11 +1518,15 @@ export function planWorkerMessageSubmitActions(input) {
     if (
       surviving.corruptObservation &&
       (survivingTerminalState === SUBMIT_STATE_ESCALATED ||
-        survivingTerminalState === SUBMIT_STATE_SUBMITTED)
+        survivingTerminalState === SUBMIT_STATE_SUBMITTED ||
+        survivingTerminalState === SUBMIT_STATE_NOOP)
     ) {
       continue;
     }
-    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED) {
+    if (
+      survivingTerminalState === SUBMIT_STATE_SUBMITTED ||
+      survivingTerminalState === SUBMIT_STATE_NOOP
+    ) {
       continue;
     }
     const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {
@@ -1447,8 +1534,7 @@ export function planWorkerMessageSubmitActions(input) {
       if (!candidateId || candidateId === deliveryId) return false;
       if (trimString(candidate.dispatchOutcome ?? '') !== DISPATCH_OUTCOME_IN_FLIGHT) return false;
       const candidateRecord = nextDeliveries[candidateId] ?? {};
-      const terminalState = trimString(candidateRecord.terminalState);
-      return terminalState !== SUBMIT_STATE_ESCALATED && terminalState !== SUBMIT_STATE_SUBMITTED;
+      return !isTerminalSubmitState(candidateRecord.terminalState);
     });
     if (activeCompetingInFlight) {
       audit.push({
@@ -1581,6 +1667,64 @@ export function planWorkerMessageSubmitActions(input) {
         lastProgressAtMs: getSessionProgressAnchorMs(session, nextDeliveries[deliveryId]),
       };
     }
+  }
+
+
+  for (const { deliveryId, record } of findVanishedTrackedDeliveries(baseTracking, deliveries)) {
+    const existing = nextDeliveries[deliveryId] ?? record;
+    const terminalState = trimString(existing?.terminalState);
+    if (isTerminalSubmitState(terminalState)) {
+      continue;
+    }
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: existing,
+      reviewRuns,
+      sessions: sessionList,
+      openPrs: toArray(openPrs),
+    });
+    if (drift.suppress) {
+      nextDeliveries[deliveryId] = {
+        ...existing,
+        terminalState: SUBMIT_STATE_NOOP,
+        fenceLifecycle: FENCE_LIFECYCLE_COMPLETED,
+        vanishedSuppressedAtMs: nowMs,
+        escalationReason: drift.reason,
+      };
+      audit.push({ deliveryId, action: 'noop', reason: drift.reason });
+      actions.push({
+        type: 'noop',
+        deliveryId,
+        sessionId: trimString(existing?.sessionId),
+        reason: drift.reason,
+      });
+      continue;
+    }
+    const reason = drift.reason.startsWith('ambiguous')
+      ? 'delivery_vanished_ambiguous'
+      : 'delivery_vanished';
+    const escalation = resolveDeliveryTerminalEscalation({
+      delivery: existing,
+      record: existing,
+      nowMs,
+      reason,
+      diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} vanished from all observation sources before confirmed consumption (${drift.reason}).`,
+    });
+    nextDeliveries[deliveryId] = {
+      ...existing,
+      terminalState: escalation.terminalState,
+      escalatedAtMs: escalation.escalatedAtMs,
+      escalationReason: escalation.escalationReason,
+      failedDelivery: escalation.failedDelivery,
+    };
+    updateFailedDeliveryState(nextFailedDeliveries, escalation);
+    actions.push({
+      type: 'escalate',
+      deliveryId,
+      sessionId: trimString(existing?.sessionId),
+      reason,
+      diagnosis: escalation.diagnosis,
+    });
+    audit.push({ deliveryId, action: 'escalate', reason });
   }
 
   const draftTracking = {
