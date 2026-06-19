@@ -1944,6 +1944,7 @@ describe('worker-message-send adoption preflight', () => {
       status: 'adopted',
       aoEpochHash: hash('epoch-persisted'),
       configPathHash: hash('/cfg/persisted.yaml'),
+      adoptionJournalPathHash: hash(journal),
       branchCount: 2,
     }));
     writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then cat >/dev/null; exit 64; fi\nexit 64\n');
@@ -1972,6 +1973,7 @@ describe('worker-message-send adoption preflight', () => {
       status: 'adopted',
       aoEpochHash: hash('epoch-persisted'),
       configPathHash: hash('/cfg/persisted.yaml'),
+      adoptionJournalPathHash: hash(journal),
       branchCount: 2,
     }));
     const result = spawnSync('pwsh', [
@@ -1983,6 +1985,36 @@ describe('worker-message-send adoption preflight', () => {
     ], { encoding: 'utf8' });
     expect(result.status).toBe(46);
     expect(result.stdout).toContain('dispatch journal corrupt');
+  });
+
+  it('does not let persisted adoption bypass preflight for a different journal path', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-persisted-journal-swap-'));
+    const adoptedJournal = path.join(dir, 'adopted-journal.json');
+    const otherJournal = path.join(dir, 'other-journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(adoptedJournal, JSON.stringify({}));
+    writeFileSync(otherJournal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      lastValidatedAt: new Date().toISOString(),
+      status: 'adopted',
+      aoEpochHash: hash('epoch-persisted'),
+      configPathHash: hash('/cfg/persisted.yaml'),
+      adoptionJournalPathHash: hash(adoptedJournal),
+      branchCount: 2,
+    }));
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1',
+      '-JournalPath', otherJournal,
+      '-StateFile', state,
+      '-AoEpoch', 'epoch-persisted',
+      '-ConfigPath', '/cfg/persisted.yaml',
+    ], { encoding: 'utf8' });
+    expect(result.status).toBe(46);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(persisted.status).toBe('wrapper_not_adopted');
+    expect(persisted.adoptionJournalPathHash).toBe(hash(otherJournal));
   });
 
   it('requires adoption probe hash to match supplied AO epoch and config path', () => {
@@ -2274,6 +2306,7 @@ describe('issue #347 supervised adoption preflight', () => {
   it('uses number-only open PR lookup without per-PR commit API calls', () => {
     const source = readFileSync('scripts/lib/Get-SubmitReconcileOpenPrList.ps1', 'utf8');
     expect(source).toMatch(/gh api[^\n]*pulls/);
+    expect(source).toMatch(/--method GET/);
     expect(source).not.toMatch(/Invoke-GhOpenPrList/);
     expect(source).not.toMatch(/gh api[^\n]*commits\//);
     expect(source).not.toMatch(/--limit 200/);
@@ -2289,6 +2322,9 @@ describe('issue #347 supervised adoption preflight', () => {
       $script:GhPage = 0
       function gh {
         if ($args[0] -eq 'api') {
+          if ($args -notcontains '--method' -or $args -notcontains 'GET') {
+            throw 'expected gh api --method GET'
+          }
           $script:GhPage++
           $global:LASTEXITCODE = 0
           if ($script:GhPage -eq 1) {
@@ -2373,6 +2409,7 @@ describe('issue #347 supervised adoption preflight', () => {
       status: 'adopted',
       aoEpochHash: hash('epoch-retained'),
       configPathHash: hash('/cfg/retained.yaml'),
+      adoptionJournalPathHash: hash(journal),
       branchCount: 2,
     }));
     const preflight = spawnSync('pwsh', [

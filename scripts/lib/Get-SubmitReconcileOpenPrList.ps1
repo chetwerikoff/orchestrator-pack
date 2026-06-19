@@ -14,7 +14,7 @@ function Get-SubmitReconcileOpenPrList {
         $page = 1
         $perPage = 100
         while ($true) {
-            $raw = gh api 'repos/{owner}/{repo}/pulls' -f state=open -f per_page="$perPage" -f page="$page" 2>&1
+            $raw = gh api --method GET 'repos/{owner}/{repo}/pulls' -f state=open -f per_page="$perPage" -f page="$page" 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "gh api open PR list failed on page $page (exit $LASTEXITCODE): $raw"
             }

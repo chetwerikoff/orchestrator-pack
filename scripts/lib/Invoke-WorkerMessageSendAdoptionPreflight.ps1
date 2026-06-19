@@ -103,7 +103,8 @@ function Test-PersistedWorkerMessageSendAdoption {
     param(
         [string]$StatePath,
         [string]$EpochHash,
-        [string]$ConfigHash
+        [string]$ConfigHash,
+        [string]$JournalPathHash
     )
 
     if (-not $StatePath -or -not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
@@ -113,7 +114,11 @@ function Test-PersistedWorkerMessageSendAdoption {
     if ([string]$stored.status -ne 'adopted') {
         return $false
     }
-    return (([string]$stored.aoEpochHash -eq $EpochHash) -and ([string]$stored.configPathHash -eq $ConfigHash))
+    return (
+        ([string]$stored.aoEpochHash -eq $EpochHash) -and
+        ([string]$stored.configPathHash -eq $ConfigHash) -and
+        ([string]$stored.adoptionJournalPathHash -eq $JournalPathHash)
+    )
 }
 
 function Test-WorkerMessageSendAdoptionPreflight {
@@ -141,6 +146,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
 
     $epochHash = ConvertTo-WorkerMessageSafeHashText $AoEpoch
     $configHash = ConvertTo-WorkerMessageSafeHashText $ConfigPath
+    $journalHash = ConvertTo-WorkerMessageSafeHashText $effectiveJournalPath
 
     if ($WriteProbeEntries) {
         $probeRunRef = [ref]$probeRunIdHash
@@ -197,12 +203,13 @@ function Test-WorkerMessageSendAdoptionPreflight {
     }
 
     if ($missing.Count -gt 0) {
-        if ($PersistState -and (Test-PersistedWorkerMessageSendAdoption -StatePath $statePath -EpochHash $epochHash -ConfigHash $configHash)) {
+        if ($PersistState -and (Test-PersistedWorkerMessageSendAdoption -StatePath $statePath -EpochHash $epochHash -ConfigHash $configHash -JournalPathHash $journalHash)) {
             return @{
                 ok = $true
                 reason = 'adopted'
                 aoEpochHash = $epochHash
                 configPathHash = $configHash
+                adoptionJournalPathHash = $journalHash
                 exitCode = 0
             }
         }
@@ -213,6 +220,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
                 missingBranchCount = $missing.Count
                 aoEpochHash = $epochHash
                 configPathHash = $configHash
+                adoptionJournalPathHash = $journalHash
             }
             Set-MechanicalJsonStateFile -Path $statePath -State $failState -DefaultState @{} -JsonDepth 10
         }
@@ -232,6 +240,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
             status = 'adopted'
             aoEpochHash = $epochHash
             configPathHash = $configHash
+            adoptionJournalPathHash = $journalHash
             branchCount = $RequiredBranches.Count
         }
         Set-MechanicalJsonStateFile -Path $statePath -State $okState -DefaultState @{} -JsonDepth 10
@@ -242,6 +251,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
         reason = 'adopted'
         aoEpochHash = $epochHash
         configPathHash = $configHash
+        adoptionJournalPathHash = $journalHash
         exitCode = 0
     }
 }
