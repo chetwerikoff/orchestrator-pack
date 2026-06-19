@@ -180,6 +180,52 @@ describe('classifyReadyForReviewFreshness (Issue #352)', () => {
       expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
     }
   });
+
+  it('fails closed when report timestamps cannot determine emission ordering', () => {
+    const headSha = '5525b365db230c69b7a5f1676442085eb5e0d01b';
+    const classification = classifyReadyForReviewFreshness(
+      {
+        ownedHeadSha: headSha,
+        reports: [
+          { reportState: 'working', accepted: true },
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-19T01:00:00.000Z',
+            accepted: true,
+            headRefOid: headSha,
+          },
+        ],
+      } as never,
+      headSha,
+    );
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
+    expect(classification.freshHandoffReport).toBeNull();
+  });
+
+  it('excludes explicitly rejected reports from freshness classification', () => {
+    const headSha = '5525b365db230c69b7a5f1676442085eb5e0d01b';
+    const classification = classifyReadyForReviewFreshness(
+      {
+        ownedHeadSha: headSha,
+        reports: [
+          {
+            reportState: 'ready_for_review',
+            reportedAt: '2026-06-19T03:00:00.000Z',
+            accepted: false,
+            headRefOid: headSha,
+          },
+          {
+            reportState: 'working',
+            reportedAt: '2026-06-19T02:00:00.000Z',
+            accepted: false,
+          },
+        ],
+      } as never,
+      headSha,
+    );
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_NO_REPORT);
+    expect(classification.freshHandoffReport).toBeNull();
+  });
 });
 
 describe('evaluateHeadReadyForReview', () => {

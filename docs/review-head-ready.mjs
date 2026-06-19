@@ -234,8 +234,10 @@ export function enumerateReportsInEmissionOrder(session) {
   }
   const firstMs = getReportTimestampMs(reports[0]);
   const secondMs = getReportTimestampMs(reports[1]);
-  const newestFirst =
-    firstMs > 0 && secondMs > 0 ? firstMs >= secondMs : firstMs >= secondMs;
+  if (firstMs <= 0 || secondMs <= 0) {
+    return null;
+  }
+  const newestFirst = firstMs >= secondMs;
   const ordered = newestFirst ? [...reports].reverse() : [...reports];
   return ordered.map((report, emissionIndex) => ({ report, emissionIndex }));
 }
@@ -244,8 +246,7 @@ export function enumerateReportsInEmissionOrder(session) {
  * @param {Array<{ report: Record<string, unknown>, emissionIndex: number }>} stream
  */
 function selectAcceptedEmissionStream(stream) {
-  const accepted = stream.filter(({ report }) => report?.accepted !== false);
-  return accepted.length > 0 ? accepted : stream;
+  return stream.filter(({ report }) => report?.accepted !== false);
 }
 
 /**
@@ -284,7 +285,11 @@ export function classifyReadyForReviewFreshness(session, headSha, options = {}) 
     return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
   }
 
-  const stream = selectAcceptedEmissionStream(enumerateReportsInEmissionOrder(session));
+  const emission = enumerateReportsInEmissionOrder(session);
+  if (emission === null) {
+    return { freshnessBasis: FRESHNESS_BASIS_AMBIGUOUS, freshHandoffReport: null };
+  }
+  const stream = selectAcceptedEmissionStream(emission);
   if (stream.length === 0) {
     return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
   }

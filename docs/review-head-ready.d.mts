@@ -38,7 +38,7 @@ export declare const FRESHNESS_BASIS_AMBIGUOUS: 'ambiguous/incomplete-fail-close
 
 export declare function enumerateReportsInEmissionOrder(
   session: AoSession | null | undefined,
-): Array<{ report: Record<string, unknown>; emissionIndex: number }>;
+): Array<{ report: Record<string, unknown>; emissionIndex: number }> | null;
 
 export declare function classifyReadyForReviewFreshness(
   session: AoSession | null | undefined,
