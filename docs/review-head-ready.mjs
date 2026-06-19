@@ -223,22 +223,14 @@ export function findLatestAcceptedReportForHead(session, headSha, options = {}) 
  */
 /**
  * Normalize AO 0.9.x session reports into chronological emission order.
- * Live `ao status --json` stores newest-first; fixtures may be oldest-first.
+ * Live `ao status --json` stores newest-first; array position is authoritative
+ * over per-report payload timestamps (Issue #352).
  *
  * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
  */
 export function enumerateReportsInEmissionOrder(session) {
   const reports = toArray(session?.reports);
-  if (reports.length <= 1) {
-    return reports.map((report, emissionIndex) => ({ report, emissionIndex }));
-  }
-  const firstMs = getReportTimestampMs(reports[0]);
-  const secondMs = getReportTimestampMs(reports[1]);
-  if (firstMs <= 0 || secondMs <= 0) {
-    return null;
-  }
-  const newestFirst = firstMs >= secondMs;
-  const ordered = newestFirst ? [...reports].reverse() : [...reports];
+  const ordered = reports.length <= 1 ? reports : [...reports].reverse();
   return ordered.map((report, emissionIndex) => ({ report, emissionIndex }));
 }
 
@@ -281,11 +273,7 @@ export function classifyReadyForReviewFreshness(session, headSha, options = {}) 
     return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
   }
 
-  const emission = enumerateReportsInEmissionOrder(session);
-  if (emission === null) {
-    return { freshnessBasis: FRESHNESS_BASIS_AMBIGUOUS, freshHandoffReport: null };
-  }
-  const stream = selectAcceptedEmissionStream(emission);
+  const stream = selectAcceptedEmissionStream(enumerateReportsInEmissionOrder(session));
   if (stream.length === 0) {
     return { freshnessBasis: FRESHNESS_BASIS_NO_REPORT, freshHandoffReport: null };
   }

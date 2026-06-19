@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   classifyReadyForReviewFreshness,
+  enumerateReportsInEmissionOrder,
   FRESHNESS_BASIS_FRESH,
   FRESHNESS_BASIS_STALE_ONLY,
   FRESHNESS_BASIS_NO_REPORT,
@@ -181,25 +182,27 @@ describe('classifyReadyForReviewFreshness (Issue #352)', () => {
     }
   });
 
-  it('fails closed when report timestamps cannot determine emission ordering', () => {
-    const headSha = '5525b365db230c69b7a5f1676442085eb5e0d01b';
-    const classification = classifyReadyForReviewFreshness(
+  it('preserves AO array order when deriving emission order', () => {
+    const reports = [
       {
-        ownedHeadSha: headSha,
-        reports: [
-          { reportState: 'working', accepted: true },
-          {
-            reportState: 'ready_for_review',
-            reportedAt: '2026-06-19T01:00:00.000Z',
-            accepted: true,
-            headRefOid: headSha,
-          },
-        ],
-      } as never,
-      headSha,
-    );
-    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
-    expect(classification.freshHandoffReport).toBeNull();
+        reportState: 'ready_for_review',
+        reportedAt: '2026-06-17T08:00:00.000Z',
+      },
+      {
+        reportState: 'addressing_reviews',
+        reportedAt: '2026-06-19T05:00:00.000Z',
+      },
+      {
+        reportState: 'fixing_ci',
+        reportedAt: '2026-06-19T04:30:00.000Z',
+      },
+    ];
+    const emission = enumerateReportsInEmissionOrder({ reports } as never);
+    expect(emission.map(({ report }) => String(report.reportState ?? ''))).toEqual([
+      'fixing_ci',
+      'addressing_reviews',
+      'ready_for_review',
+    ]);
   });
 
   it('counts the iteration boundary as a handoff precursor across non-precursor reports', () => {

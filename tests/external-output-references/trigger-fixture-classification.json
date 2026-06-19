@@ -213,32 +213,22 @@
   "inlineOptOuts": [
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 126,
+      "line": 127,
       "reason": "Defensive regression for legacy stored-SHA binding; synthetic input, not modeled ao report output (Issue #218)"
     },
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 192,
-      "reason": "Synthetic session reports for freshness ordering fail-closed regression (Issue #352)"
-    },
-    {
-      "file": "scripts/review-head-ready.test.ts",
-      "line": 212,
-      "reason": "Synthetic session reports for rejected-stream freshness regression (Issue #352)"
-    },
-    {
-      "file": "scripts/review-head-ready.test.ts",
-      "line": 214,
+      "line": 215,
       "reason": "Synthetic direct-handoff precursor regression for addressing_reviews/started (Issue #352)"
     },
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 245,
+      "line": 248,
       "reason": "Synthetic working->completed->ready_for_review boundary precursor regression (Issue #352)"
     },
     {
       "file": "scripts/review-head-ready.test.ts",
-      "line": 272,
+      "line": 275,
       "reason": "Synthetic rejected-stream freshness regression (Issue #352)"
     }
   ]

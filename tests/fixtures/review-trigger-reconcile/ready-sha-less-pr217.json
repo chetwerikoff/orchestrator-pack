@@ -1,5 +1,5 @@
 {
-  "description": "Issue #218 / PR #217 — SHA-less ready_for_review reports authorize current head when commit predates report",
+  "description": "Issue #218 / PR #217 \u2014 SHA-less ready_for_review reports authorize current head when commit predates report",
   "openPrs": [
     {
       "number": 217,
@@ -19,23 +19,35 @@
           "reportState": "ready_for_review",
           "prNumber": 217,
           "accepted": true,
-          "reportedAt": "2026-06-06T06:08:00.000Z"
+          "reportedAt": "2026-06-06T06:10:00.000Z"
         },
         {
           "reportState": "ready_for_review",
           "prNumber": 217,
           "accepted": true,
-          "reportedAt": "2026-06-06T06:10:00.000Z"
+          "reportedAt": "2026-06-06T06:08:00.000Z"
         }
       ]
     }
   ],
   "ciChecksByPr": {
     "217": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "expect": {
