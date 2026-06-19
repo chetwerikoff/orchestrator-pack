@@ -375,7 +375,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
   });
 
 
-  it('plans distinct reaction records when CI re-fails between polls without observed green', () => {
+  it('keeps the same red period when CI re-fails between polls without observed green', () => {
     const dir = tempStore();
     try {
       const headSha = episode.headSha;
@@ -400,7 +400,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const secondChecks = [{ name: 'Run pack contract tests', state: 'FAIL', startedAt: '2026-06-18T10:05:00Z', link: 'https://example/run/2' }];
       const secondPlan = planCiFailureReactionRecords({ ...base, ciChecksByPr: [{ prNumber: episode.prNumber, checks: secondChecks }] });
       expect(secondPlan.records).toHaveLength(1);
-      expect(secondPlan.records![0].episode.redPeriod).not.toBe(firstPlan.records![0].episode.redPeriod);
+      expect(secondPlan.records![0].episode.redPeriod).toBe(firstPlan.records![0].episode.redPeriod);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -480,7 +480,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
 
 
-  it('opens a new red stint when a failing check reruns without an observed green poll', () => {
+  it('keeps the same red stint when a failing check reruns without leaving red', () => {
     const dir = tempStore();
     try {
       const ctx = { storeDir: dir, repo: episode.repo, prNumber: episode.prNumber, headSha: episode.headSha };
@@ -494,9 +494,10 @@ describe('episode lifecycle outbox (Issue #342)', () => {
         { requiredCheckNames: ['CI'] },
       );
       const second = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
-      expect(second).not.toBe(first);
-      const third = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
-      expect(third).toBe(second);
+      expect(second).toBe(first);
+      resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'green' });
+      const afterGreen = resolveRedPeriodAggregateId({ ...ctx, aggregateStatus: 'red', redFailingRuns: runs2 });
+      expect(afterGreen).not.toBe(first);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -809,6 +810,19 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     }
   });
 
+
+  it('planReconcileTick skips corrupt episode records', () => {
+    const dir = tempStore();
+    try {
+      mkdirSync(path.join(dir, 'episodes'), { recursive: true });
+      writeFileSync(path.join(dir, 'episodes', 'corrupt.episode.json'), '{not json');
+      recordPendingEpisode({ storeDir: dir, episode, nowMs: Date.now() - 120_000, enqueueTickId: 'enqueue' });
+      const plan = planReconcileTick({ storeDir: dir, nowMs: Date.now(), enqueueTickId: 'tick-corrupt' });
+      expect(plan.actions!.some((a: any) => a.type === 'evaluate')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('plan reconcile tick expires stale pending before evaluate', () => {
     const dir = tempStore();

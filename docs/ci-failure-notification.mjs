@@ -5,7 +5,7 @@
  * Terminal predicate action: SEND | SUPPRESS. Episode lifecycle adds pending→terminal
  * outbox states; live worker fixing_ci suppressor binds to PR-owner session state.
  */
-import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
@@ -463,15 +463,7 @@ export function resolveRedPeriodAggregateId(input) {
       ? input.redFailingRuns
       : {};
     const priorRuns = tracker.lastRedRuns ?? {};
-    let stintAdvanced = tracker.lastLevel !== 'red';
-    if (!stintAdvanced) {
-      for (const [name, signature] of Object.entries(priorRuns)) {
-        if (Object.prototype.hasOwnProperty.call(currentRuns, name) && currentRuns[name] !== signature) {
-          stintAdvanced = true;
-          break;
-        }
-      }
-    }
+    const stintAdvanced = tracker.lastLevel !== 'red';
     if (stintAdvanced) {
       tracker.stintId = Number(tracker.stintId ?? 0) + 1;
     }
@@ -917,10 +909,26 @@ function removeEpisodeClaim(storeDir, digest) {
   }
 }
 
+function tryReadEpisodeFile(filePath) {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonAtomic(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value)}
+`, 'utf8');
+  renameSync(tmp, filePath);
+}
+
 export function readEpisodeRecord(storeDir, episode) {
   const file = path.join(storeDir, 'episodes', safeEpisodeRecordName(episode));
   if (!existsSync(file)) return null;
-  return JSON.parse(readFileSync(file, 'utf8'));
+  return tryReadEpisodeFile(file);
 }
 
 export function writeEpisodeRecord(storeDir, record) {
@@ -1293,7 +1301,8 @@ export function scanExpiredPendingRecords(storeDir, nowMs = Date.now()) {
   const expired = [];
   for (const name of readdirSync(dir)) {
     if (!name.endsWith('.episode.json')) continue;
-    const record = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
+    const record = tryReadEpisodeFile(path.join(dir, name));
+    if (!record) continue;
     if (record.terminalReason) continue;
     if (record.state !== 'pending') continue;
     if (nowMs >= Number(record.expiresAtMs ?? 0)) {
@@ -1309,7 +1318,8 @@ export function scanFreshnessSlaExceededPendingRecords(storeDir, nowMs = Date.no
   const exceeded = [];
   for (const name of readdirSync(dir)) {
     if (!name.endsWith('.episode.json')) continue;
-    const record = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
+    const record = tryReadEpisodeFile(path.join(dir, name));
+    if (!record) continue;
     if (record.terminalReason) continue;
     if (record.state !== 'pending') continue;
     if (nowMs >= Number(record.expiresAtMs ?? 0)) continue;
@@ -1412,7 +1422,9 @@ export function planReconcileTick(input) {
   if (existsSync(dir)) {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith('.episode.json')) continue;
-      pendingRecords.push(JSON.parse(readFileSync(path.join(dir, name), 'utf8')));
+      const record = tryReadEpisodeFile(path.join(dir, name));
+      if (!record) continue;
+      pendingRecords.push(record);
     }
   }
   const expired = scanExpiredPendingRecords(storeDir, nowMs);
