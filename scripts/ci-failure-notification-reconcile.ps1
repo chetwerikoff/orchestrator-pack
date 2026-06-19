@@ -301,11 +301,6 @@ function Invoke-CiFailureEpisodeDelivery {
         -DispatchDelivered $dispatchDelivered -DispatchInFlight ([bool]$dispatchInFlight)
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
     $skipSend = [bool]$intent.reentry -and $deliveryEvidence
-    if ($DryRun) {
-        $dryRunAction = if ($skipSend) { 'complete delivery without resend' } else { 'send ci-failed ping' }
-        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would $dryRunAction session=$targetId digest=$Digest phase=$Phase"
-        return $true
-    }
 
     if (-not $skipSend) {
         if ($Phase -eq 'full') {
@@ -416,7 +411,7 @@ function Invoke-CiFailureNotificationTick {
 
     $repo = Get-RepoIdentity
     $openPrs = @($WorkerState.openPrs)
-    if ($openPrs.Count -gt 0) {
+    if ($openPrs.Count -gt 0 -and -not $DryRun) {
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
         $null = Invoke-CiFailureHelper -Mode 'sync-red-period-trackers' -Payload @{
             storeDir                      = $StoreDir
@@ -440,6 +435,10 @@ function Invoke-CiFailureNotificationTick {
 
     foreach ($action in @($plan.actions)) {
         if ($action.type -eq 'expire') {
+            if ($DryRun) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would expire episode digest=$($action.digest)"
+                continue
+            }
             $expirePayload = @{
                 storeDir = $StoreDir
                 episode  = $action.episode
@@ -450,6 +449,10 @@ function Invoke-CiFailureNotificationTick {
             continue
         }
         if ($action.type -eq 'recover_in_flight') {
+            if ($DryRun) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would recover_in_flight state=$($action.state) digest=$($action.digest)"
+                continue
+            }
             $episode = $action.episode
             $phase = if ($action.state -eq 'claimed') { 'full' } else { 'post-intent' }
             Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "recover_in_flight state=$($action.state) digest=$($action.digest) phase=$phase"
@@ -460,6 +463,19 @@ function Invoke-CiFailureNotificationTick {
         if ($action.type -ne 'evaluate') { continue }
 
         $episode = $action.episode
+        if ($DryRun) {
+            $dedup = Get-CiFailureDedupPayload -StoreDir $StoreDir
+            $preview = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
+                storeDir       = $StoreDir
+                episode        = $episode
+                workerState    = $WorkerState
+                reactionEvents = @($dedup.reactionEvents)
+                intentTokens   = @($dedup.intentTokens)
+            }
+            $previewAction = if ($preview.action -eq 'send_allowed') { 'send ci-failed ping' } else { "skip ($($preview.action))" }
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would evaluate digest=$($action.digest) -> $previewAction"
+            continue
+        }
         $claim = Invoke-CiFailureHelper -Mode 'claim-preflight' -Payload @{
             storeDir    = $StoreDir
             episode     = $episode

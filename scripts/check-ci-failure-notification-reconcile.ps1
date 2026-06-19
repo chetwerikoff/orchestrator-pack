@@ -21,6 +21,9 @@ if ($common -notlike '*function Get-RepoIdentity*') {
 if ($reconcile -notlike '*Get-RepoIdentity*') {
   throw 'ci-failure-notification-reconcile.ps1 must resolve repo identity for reconcile ticks'
 }
+if ($reconcile -notlike '*dry-run would evaluate*') {
+  throw 'ci-failure-notification-reconcile.ps1 must keep dry-run evaluation non-mutating'
+}
 if ($reconcile -notmatch 'mark-send-issued[\s\S]{0,400}Invoke-PlannedCiFailureReconcileSend') {
   throw 'ci-failure-notification-reconcile.ps1 must persist send-issued before the orchestrator side effect'
 }

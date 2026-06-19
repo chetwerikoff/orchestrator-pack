@@ -521,6 +521,18 @@ describe('episode lifecycle outbox (Issue #342)', () => {
     }
   });
 
+
+  it('tracks terminal red check states in red failing run map', () => {
+    const checks = [
+      { name: 'Run pack contract tests', conclusion: 'error', startedAt: '2026-06-18T10:00:00Z', link: 'https://example/run/1' },
+      { name: 'Self-architect lint', conclusion: 'cancelled', startedAt: '2026-06-18T10:01:00Z', link: 'https://example/run/2' },
+    ];
+    const runs = buildRedFailingRunMap(checks, { requiredCheckNames: ['Run pack contract tests', 'Self-architect lint'] });
+    expect(Object.keys(runs).sort()).toEqual(['run pack contract tests', 'self-architect lint']);
+    const fp = buildRedFailureFingerprint(checks, { requiredCheckNames: ['Run pack contract tests', 'Self-architect lint'] });
+    expect(fp).toBeTruthy();
+  });
+
   it('keeps the same red stint for continuous failing reruns before terminalization', () => {
     const dir = tempStore();
     try {

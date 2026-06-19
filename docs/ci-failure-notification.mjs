@@ -5,7 +5,7 @@
  * Terminal predicate action: SEND | SUPPRESS. Episode lifecycle adds pending→terminal
  * outbox states; live worker fixing_ci suppressor binds to PR-owner session state.
  */
-import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
@@ -19,6 +19,7 @@ import {
   normalizeRequiredCheckNamesByPr,
   normalizeSessionReportState,
 } from './ci-green-wake-reconcile.mjs';
+import { isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
 export const DEFAULT_HELPER_ERROR_LIMIT = 3;
@@ -370,7 +371,7 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
     ? toArray(checks).filter((check) => branchRequired.includes(String(check?.name ?? '').trim().toLowerCase()))
     : toArray(checks);
   const failedCheckNames = scope
-    .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
+    .filter((check) => isTrackedRedFailingCheck(check))
     .map((check) => String(check?.name ?? 'check').trim().toLowerCase())
     .filter(Boolean)
     .sort();
@@ -379,6 +380,11 @@ export function buildCiSourceFromRequiredChecks(checks = [], options = {}) {
     failedCheckNames,
     source: 'gh-required-checks',
   };
+}
+
+function isTrackedRedFailingCheck(check) {
+  const state = normalizeCiState(check?.state ?? check?.conclusion ?? check?.status);
+  return isCiCheckFailure(check) || state === 'fail';
 }
 
 function buildRedCheckRunSignature(check) {
@@ -402,7 +408,7 @@ export function buildRedFailureFingerprint(checks = [], options = {}) {
   const level = classifyRequiredCiLevel(checks, options);
   if (level !== 'red') return null;
   const parts = redFailingCheckScope(checks, options)
-    .filter((check) => String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail'))
+    .filter((check) => isTrackedRedFailingCheck(check))
     .map((check) => [
       String(check?.name ?? '').trim().toLowerCase(),
       buildRedCheckRunSignature(check),
@@ -419,7 +425,7 @@ export function buildRedFailingRunMap(checks = [], options = {}) {
   /** @type {Record<string, string>} */
   const runs = {};
   for (const check of redFailingCheckScope(checks, options)) {
-    if (!String(check?.state ?? check?.conclusion ?? check?.status ?? '').toLowerCase().includes('fail')) {
+    if (!isTrackedRedFailingCheck(check)) {
       continue;
     }
     const name = String(check?.name ?? '').trim().toLowerCase();
@@ -448,6 +454,74 @@ function hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, stintI
   return false;
 }
 
+
+const RED_STINT_LOCK_MAX_ATTEMPTS = 50;
+const RED_STINT_LOCK_RETRY_MS = 20;
+
+function acquireRedStintTrackerLock(trackerPath) {
+  const lockPath = `${trackerPath}.lock`;
+  mkdirSync(path.dirname(trackerPath), { recursive: true });
+  for (let attempt = 0; attempt < RED_STINT_LOCK_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      return { fd, lockPath };
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        const waitUntil = Date.now() + RED_STINT_LOCK_RETRY_MS;
+        while (Date.now() < waitUntil) {
+          // spin
+        }
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`failed to acquire red-stint tracker lock for ${trackerPath}`);
+}
+
+function releaseRedStintTrackerLock(lock) {
+  if (!lock) return;
+  try {
+    closeSync(lock.fd);
+  } catch {
+    // ignore
+  }
+  try {
+    unlinkSync(lock.lockPath);
+  } catch {
+    // ignore
+  }
+}
+
+function readRedStintTracker(trackerPath) {
+  /** @type {{ lastLevel?: string | null, stintId?: number, lastRedRuns?: Record<string, string> }} */
+  let tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
+  if (!existsSync(trackerPath)) return tracker;
+  try {
+    const parsed = JSON.parse(readFileSync(trackerPath, 'utf8'));
+    tracker = {
+      lastLevel: parsed?.lastLevel ?? null,
+      stintId: Number(parsed?.stintId ?? 0),
+      lastRedRuns: parsed?.lastRedRuns && typeof parsed.lastRedRuns === 'object' ? parsed.lastRedRuns : {},
+    };
+  } catch {
+    tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
+  }
+  return tracker;
+}
+
+function updateRedStintTracker(trackerPath, updater) {
+  const lock = acquireRedStintTrackerLock(trackerPath);
+  try {
+    const current = readRedStintTracker(trackerPath);
+    const next = updater(current);
+    writeJsonAtomic(trackerPath, next);
+    return next;
+  } finally {
+    releaseRedStintTrackerLock(lock);
+  }
+}
+
 export function resolveRedPeriodAggregateId(input) {
   const storeDir = String(input?.storeDir ?? '').trim();
   const repo = String(input?.repo ?? '').trim();
@@ -463,51 +537,43 @@ export function resolveRedPeriodAggregateId(input) {
   ensureStore(storeDir);
   const trackerKey = createHash('sha256').update(`${repo}#${prNumber}#${headSha}`).digest('hex');
   const trackerPath = path.join(storeDir, 'red-stints', `${trackerKey}.json`);
+  const tracker = updateRedStintTracker(trackerPath, (current) => {
   /** @type {{ lastLevel?: string | null, stintId?: number, lastRedRuns?: Record<string, string> }} */
-  let tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
-  if (existsSync(trackerPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(trackerPath, 'utf8'));
-      tracker = {
-        lastLevel: parsed?.lastLevel ?? null,
-        stintId: Number(parsed?.stintId ?? 0),
-        lastRedRuns: parsed?.lastRedRuns && typeof parsed.lastRedRuns === 'object' ? parsed.lastRedRuns : {},
-      };
-    } catch {
-      tracker = { lastLevel: null, stintId: 0, lastRedRuns: {} };
-    }
-  }
-  if (aggregateStatus === 'red') {
-    const currentRuns = input?.redFailingRuns && typeof input.redFailingRuns === 'object'
-      ? input.redFailingRuns
-      : {};
-    const priorRuns = tracker.lastRedRuns ?? {};
-    let stintAdvanced = tracker.lastLevel !== 'red';
-    if (!stintAdvanced && storeDir) {
-      const activeStintId = Number(tracker.stintId ?? 0);
-      if (activeStintId > 0 && hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, activeStintId)) {
-        for (const [name, signature] of Object.entries(priorRuns)) {
-          if (Object.prototype.hasOwnProperty.call(currentRuns, name) && currentRuns[name] !== signature) {
-            stintAdvanced = true;
-            break;
+    const next = {
+      lastLevel: current.lastLevel ?? null,
+      stintId: Number(current.stintId ?? 0),
+      lastRedRuns: current.lastRedRuns && typeof current.lastRedRuns === 'object' ? { ...current.lastRedRuns } : {},
+    };
+    if (aggregateStatus === 'red') {
+      const currentRuns = input?.redFailingRuns && typeof input.redFailingRuns === 'object'
+        ? input.redFailingRuns
+        : {};
+      const priorRuns = next.lastRedRuns ?? {};
+      let stintAdvanced = next.lastLevel !== 'red';
+      if (!stintAdvanced) {
+        const activeStintId = Number(next.stintId ?? 0);
+        if (activeStintId > 0 && hasTerminalEpisodeForRedStint(storeDir, repo, prNumber, headSha, activeStintId)) {
+          for (const [name, signature] of Object.entries(priorRuns)) {
+            if (Object.prototype.hasOwnProperty.call(currentRuns, name) && currentRuns[name] !== signature) {
+              stintAdvanced = true;
+              break;
+            }
           }
         }
       }
+      if (stintAdvanced) {
+        next.stintId = Number(next.stintId ?? 0) + 1;
+      }
+      next.lastLevel = 'red';
+      next.lastRedRuns = { ...priorRuns, ...currentRuns };
+      return next;
     }
-    if (stintAdvanced) {
-      tracker.stintId = Number(tracker.stintId ?? 0) + 1;
-    }
-    tracker.lastLevel = 'red';
-    tracker.lastRedRuns = { ...priorRuns, ...currentRuns };
-  } else {
-    tracker.lastLevel = aggregateStatus;
+    next.lastLevel = aggregateStatus;
     if (aggregateStatus !== 'red') {
-      tracker.lastRedRuns = {};
+      next.lastRedRuns = {};
     }
-  }
-  mkdirSync(path.dirname(trackerPath), { recursive: true });
-  writeFileSync(trackerPath, `${JSON.stringify(tracker)}
-`, 'utf8');
+    return next;
+  });
   if (aggregateStatus !== 'red') {
     return null;
   }
