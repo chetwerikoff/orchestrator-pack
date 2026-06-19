@@ -1008,6 +1008,41 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.observed?.staleReadyForReviewRoute).toBe('ready_for_review');
   });
 
+  describe('Issue #352 stale coexistence', () => {
+    it('AC1/3: fresh current-head hand-off starts despite older SHA-less reports', () => {
+      const fixture = loadFixture('coexistence-fresh-handoff-pr344.json');
+      const starts = startReviewActions(planReconcile(fixture));
+      expect(starts).toHaveLength(fixture.expect?.startReviewCount ?? 1);
+      expect(starts[0]?.sessionId).toBe(fixture.expect?.sessionId);
+    });
+
+    it('AC3/12: settle-window debounce uses #332 reason not stale_report_binding', () => {
+      const fixture = loadFixture('coexistence-settle-debounce.json');
+      const skip = skipActions(planReconcile(fixture))[0];
+      expect(skip?.reason).toBe(fixture.expect?.skipReason);
+      expect(skip?.record?.primary).toBe(fixture.expect?.record?.primary);
+      expect(skip?.record?.failedComponents).toEqual(fixture.expect?.record?.failedComponents);
+      expect(skip?.record?.observed?.freshnessBasis).toBe(
+        fixture.expect?.record?.observed?.freshnessBasis,
+      );
+      expect(skip?.record?.failedComponents).not.toContain('stale_report_binding');
+    });
+
+    it('AC4: rewritten commit timestamp alone does not authorize', () => {
+      const fixture = loadFixture('false-fresh-rewritten-commit.json');
+      expect(startReviewActions(planReconcile(fixture))).toHaveLength(0);
+      const skip = skipActions(planReconcile(fixture))[0];
+      expect(skip?.record?.observed?.freshnessBasis).toBe(fixture.expect?.freshnessBasis);
+    });
+
+    it('AC11: replayed stale ready_for_review after head observation defers', () => {
+      const fixture = loadFixture('replayed-stale-after-head-observation.json');
+      expect(startReviewActions(planReconcile(fixture))).toHaveLength(0);
+      const skip = skipActions(planReconcile(fixture))[0];
+      expect(skip?.record?.observed?.freshnessBasis).toBe(fixture.expect?.freshnessBasis);
+    });
+  });
+
   it('AC3: only stale ready_for_review preserves binding in observed', () => {
     const fixture = loadFixture('defer-stale-only-binding.json');
     const skip = skipActions(planReconcile(fixture))[0];

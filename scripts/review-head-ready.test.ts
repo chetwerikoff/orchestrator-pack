@@ -3,6 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  classifyReadyForReviewFreshness,
+  FRESHNESS_BASIS_FRESH,
+  FRESHNESS_BASIS_STALE_ONLY,
+  FRESHNESS_BASIS_NO_REPORT,
+  FRESHNESS_BASIS_AMBIGUOUS,
   classifyRequiredCiForReviewTrigger,
   evaluateHeadReadyForReview,
   evaluateQuiescentHandoffFallback,
@@ -114,6 +119,55 @@ describe('reportCoversHead (Issue #218)', () => {
     const report = { reportState: 'ready_for_review', headRefOid: 'deadbeef' };
     expect(reportCoversHead(report, 'deadbeef', {})).toBe(true);
     expect(reportCoversHead(report, 'cafebabe', {})).toBe(false);
+  });
+});
+
+
+describe('classifyReadyForReviewFreshness (Issue #352)', () => {
+  it('classifies coexistence as fresh-by-monotonic-order', () => {
+    const fixture = loadFixture('coexistence-fresh-handoff-pr344.json');
+    const session = fixture.sessions[0]!;
+    const headSha = fixture.openPrs[0]!.headRefOid;
+    const classification = classifyReadyForReviewFreshness(session as never, headSha, {
+      headCommittedAtMs: Date.parse(fixture.openPrs[0]!.headCommittedAt),
+    });
+    expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_FRESH);
+    expect(classification.hasOlderStaleReadyReports).toBe(true);
+  });
+
+  it('distinguishes stale-only from no-report', () => {
+    const staleOnly = loadFixture('defer-stale-only-binding.json');
+    const staleSession = staleOnly.sessions[0]!;
+    const staleHead = staleOnly.openPrs[0]!.headRefOid;
+    expect(
+      classifyReadyForReviewFreshness(staleSession as never, staleHead, {
+        headCommittedAtMs: Date.parse(staleOnly.openPrs[0]!.headCommittedAt),
+      }).freshnessBasis,
+    ).toBe(FRESHNESS_BASIS_STALE_ONLY);
+
+    const noReport = loadFixture('uncovered-no-report.json');
+    const noSession = noReport.sessions[0]!;
+    const noHead = noReport.openPrs[0]!.headRefOid;
+    expect(
+      classifyReadyForReviewFreshness(noSession as never, noHead, {
+        headCommittedAtMs: Date.parse(noReport.openPrs[0]!.headCommittedAt),
+      }).freshnessBasis,
+    ).toBe(FRESHNESS_BASIS_NO_REPORT);
+  });
+
+  it('fails closed for false-fresh and replayed stale rows', () => {
+    for (const name of [
+      'false-fresh-rewritten-commit.json',
+      'replayed-stale-after-head-observation.json',
+    ]) {
+      const fixture = loadFixture(name);
+      const classification = classifyReadyForReviewFreshness(
+        fixture.sessions[0] as never,
+        fixture.openPrs[0]!.headRefOid,
+        { headCommittedAtMs: Date.parse(fixture.openPrs[0]!.headCommittedAt) },
+      );
+      expect(classification.freshnessBasis).toBe(FRESHNESS_BASIS_AMBIGUOUS);
+    }
   });
 });
 
