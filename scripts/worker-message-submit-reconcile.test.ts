@@ -2034,7 +2034,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
     const runId = 'run-1';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
     const observedMs = 1717601000000;
-    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs)!;
     const session = {
       sessionId,
       role: 'worker',
@@ -2115,7 +2115,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
     const runId = 'run-reappear';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
     const observedMs = 1717601000000;
-    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs)!;
     const openPrs = [{ number: 42, headRefOid: targetSha }];
     const session = {
       sessionId,
@@ -2179,7 +2179,7 @@ describe('issue #347 vanish and worktree-drift handling', () => {
     const runId = 'run-closed';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
     const observedMs = 1717601000000;
-    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs);
+    const deliveryId = buildReviewSendDeliveryId(sessionId, runId, observedMs)!;
     const session = {
       sessionId,
       role: 'worker',
