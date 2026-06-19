@@ -10,14 +10,15 @@
     "active_scope_hash": "sha256:pending"
   },
   "declared_paths": [
-    "docs/declarations/347.opk-37.json",
     "agent-orchestrator.yaml.example",
-    "docs/migration_notes.md",
+    "docs/declarations/347.opk-37.json",
     "docs/mechanical-reconcile-bounds.mjs",
+    "docs/migration_notes.md",
     "docs/orchestrator-message-registry.mjs",
-    "docs/worker-message-submit-reconcile.mjs",
     "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
     "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
     "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
     "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/worker-message-send-adoption-preflight.ps1",
