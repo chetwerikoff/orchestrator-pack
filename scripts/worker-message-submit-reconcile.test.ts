@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
@@ -1747,6 +1747,30 @@ exit 0
 
 
 describe('worker-message-send adoption preflight', () => {
+  it('binds adoption epoch to AO running.json startedAt when env override is absent', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-binding-running-'));
+    const aoRoot = path.join(dir, 'ao-root');
+    mkdirSync(aoRoot, { recursive: true });
+    const startedAt = '2026-06-19T04:00:00.000Z';
+    const configPath = path.join(dir, 'agent-orchestrator.yaml');
+    writeFileSync(configPath, 'project: orchestrator-pack\n');
+    writeFileSync(path.join(aoRoot, 'running.json'), JSON.stringify({
+      pid: 4242,
+      configPath,
+      startedAt,
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      . ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
+      $binding = Get-WorkerMessageAdoptionBinding -PackRoot '${dir.replace(/'/g, "''")}'
+      Write-Output $binding.AoEpoch
+    `], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: dir, USERPROFILE: dir, AO_STATE_ROOT: aoRoot },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`${configPath}|${startedAt}`);
+  });
+
   it('fails present-but-incomplete routing branch coverage', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-preflight-missing-'));
     const journal = path.join(dir, 'journal.json');
@@ -2160,6 +2184,77 @@ describe('issue #347 supervised adoption preflight', () => {
     ], { encoding: 'utf8' });
     expect(preflight.status).toBe(0);
     expect(preflight.stdout).toContain('effective routing adopted');
+  });
+
+
+  it('revalidates adoption when AO epoch changes after restart', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-restart-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-before-restart|/cfg/live.yaml'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-after-restart|/cfg/live.yaml',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.stdout).toContain('wrapper_not_adopted');
+    expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+  });
+
+
+  it('quarantines and resets mismatched empty shared state instead of failing closed forever', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-wrong-root-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const hash = (value: string) => `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'sha256-stale-other-worktree',
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      adoptionStatus: 'adopted',
+      adoptionEpochHash: hash('epoch-live'),
+      adoptionConfigPathHash: hash('/cfg/live.yaml'),
+      _recovery: { fenceTrusted: false, reason: 'wrong_state_root_empty_store', quarantined: state },
+    }));
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(first.stdout).not.toContain('STATE FENCES UNTRUSTED');
+    expect(first.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+    const reset = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(reset._recovery).toBeUndefined();
+    expect(reset.stateRootIdentity).toBeTruthy();
+    expect(reset.adoptionStatus).not.toBe('adopted');
+    const quarantined = readdirSync(dir).some((name) => name.startsWith(path.basename(state) + '.corrupt-'));
+    expect(quarantined).toBe(true);
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(second.stdout).not.toContain('STATE FENCES UNTRUSTED');
   });
 
   it('deduplicates adoption escalation per epoch/config', () => {

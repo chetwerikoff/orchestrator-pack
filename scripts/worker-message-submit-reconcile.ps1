@@ -89,11 +89,14 @@ function Get-SubmitReconcileState {
         $deliveryCount = @($state.deliveries.Keys).Count
     }
     if ($storedIdentity -and $storedIdentity -ne $identity -and $deliveryCount -eq 0) {
-        $state['_recovery'] = @{
-            fenceTrusted = $false
-            reason       = 'wrong_state_root_empty_store'
-            quarantined  = $Path
+        $quarantinePath = Get-MechanicalJsonStateQuarantinePath -Path $Path
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            Move-Item -LiteralPath $Path -Destination $quarantinePath -Force
         }
+        $state = Normalize-MechanicalJsonState -State $Script:SubmitReconcileDefaultState -DefaultState $Script:SubmitReconcileDefaultState
+        $state.stateRootIdentity = $identity
+        Set-SubmitReconcileState -Path $Path -State $state
+        return $state
     }
     elseif (-not $storedIdentity) {
         $state.stateRootIdentity = $identity
@@ -119,6 +122,7 @@ function Invoke-SubmitAdoptionPreflightGate {
     $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
 
     if (
+        (Test-MechanicalJsonStateFencesTrusted -State $nextTracking) -and
         [string]$nextTracking.adoptionStatus -eq 'adopted' -and
         [string]$nextTracking.adoptionEpochHash -eq $epochHash -and
         [string]$nextTracking.adoptionConfigPathHash -eq $configHash

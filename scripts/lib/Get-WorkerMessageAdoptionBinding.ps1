@@ -4,6 +4,43 @@
   Resolve AO epoch/config binding for journaled worker-send adoption preflight.
 #>
 
+function Get-AoRunningInstanceBinding {
+    $roots = @()
+    if ($env:AO_STATE_ROOT) { $roots += $env:AO_STATE_ROOT.Trim() }
+    if ($env:HOME) { $roots += (Join-Path $env:HOME '.agent-orchestrator') }
+    if ($env:USERPROFILE) { $roots += (Join-Path $env:USERPROFILE '.agent-orchestrator') }
+
+    foreach ($root in @($roots | Select-Object -Unique)) {
+        if (-not $root) { continue }
+        $runningPath = Join-Path $root 'running.json'
+        if (-not (Test-Path -LiteralPath $runningPath -PathType Leaf)) { continue }
+        try {
+            $content = Get-Content -LiteralPath $runningPath -Raw
+            $running = $content | ConvertFrom-Json
+            $startedAt = $null
+            if ($content -match '"startedAt"\s*:\s*"([^"]+)"') {
+                $startedAt = $matches[1]
+            }
+            elseif ($running.startedAt -is [DateTime]) {
+                $startedAt = $running.startedAt.ToUniversalTime().ToString('o')
+            }
+            else {
+                $startedAt = [string]$running.startedAt
+            }
+            if (-not $startedAt.Trim()) { continue }
+            return @{
+                StartedAt  = $startedAt
+                ConfigPath = [string]$running.configPath
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
 function Get-WorkerMessageAdoptionBinding {
     param(
         [string]$PackRoot = ''
@@ -27,7 +64,11 @@ function Get-WorkerMessageAdoptionBinding {
     }
 
     if (-not $aoEpoch) {
-        if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $instance = Get-AoRunningInstanceBinding
+        if ($instance) {
+            $aoEpoch = "$configPath|$($instance.StartedAt)"
+        }
+        elseif (Test-Path -LiteralPath $configPath -PathType Leaf) {
             $aoEpoch = (Get-Item -LiteralPath $configPath).LastWriteTimeUtc.ToString('o')
         }
         else {
