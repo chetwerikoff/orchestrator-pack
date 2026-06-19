@@ -471,6 +471,32 @@ projects:
         pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -Once -DryRun
       See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
 
+      JOURNALED WORKER SEND (Issues #281 / #347 — orchestrator-originated ao send only).
+      Route every orchestrator-originated worker message through the metadata-only wrapper
+      instead of bare ao send <session> <message>:
+        printf %s <message> | pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>
+      The wrapper reads stdin/pipe only, records shape metadata + delivery_id in the dispatch
+      journal before invoking ao send, and excludes its internal ao send via the child-scoped
+      AO_JOURNALED_SEND_INTERNAL sentinel (never set on real orchestrator sends). Adoption is
+      fail-closed: run worker-message-send-adoption-preflight.ps1 with -WriteProbeEntries for
+      the running AO epoch/config before relying on journaled delivery. See docs/migration_notes.md.
+
+      STATE-DERIVED WORKER MESSAGE SUBMIT (Issues #232 / #347 — Enter only, never ao send).
+      A supervised reconciliation loop presses Enter for pending-draft worker messages and tracks
+      every journaled delivery to confirmed consumption or bounded escalation:
+        pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1
+      Default cadence: 30 seconds. Override with AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS or
+      -IntervalSeconds. State file: AO_WORKER_MESSAGE_SUBMIT_STATE or
+      %TEMP%\orchestrator-worker-message-submit-state.json. Dispatch journal:
+      AO_WORKER_MESSAGE_DISPATCH_JOURNAL or %TEMP%\orchestrator-worker-message-dispatch-journal.json.
+      Each tick runs adoption preflight for the current AO epoch/config (wrapper_not_adopted
+      escalates idempotently and blocks delivery processing until effective routing is observed),
+      then plans Enter only for dispatched pending-draft deliveries with authoritative
+      draft_present state. Never replays payload; never scrapes pane text. Managed child of
+      orchestrator-wake-supervisor.ps1 (Issue #205). Verification:
+        pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun
+      See docs/orchestrator-recovery-runbook.md (Plain ao send journaled delivery).
+
       NAMED PENDING STATE: waiting_worker_review_response.
       A PR enters this state after ao review send succeeds for a run in needs_triage,
       or while any run for that PR is in waiting_update (sentFindingCount may be > 0

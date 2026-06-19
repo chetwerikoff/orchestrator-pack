@@ -28,6 +28,7 @@ import {
   isActiveSubmitClaim,
   OPERATOR_ESCALATION_PREFIX,
   evaluateDispatchObservability,
+  evaluateWorktreeDriftVanishSuppression,
   getFailedDeliveryStatus,
   planWorkerMessageSubmitActions,
   resolveBusyDispatchCapability,
@@ -1892,3 +1893,130 @@ describe('worker-message-send adoption preflight', () => {
     expect(current.status).toBe(0);
   });
 });
+
+describe('issue #347 vanish and worktree-drift handling', () => {
+  it('escalates when a tracked non-terminal delivery vanishes from all sources', () => {
+    const id = 'opk-vanish:1717601000000:ao-send:gone';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-vanish', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {},
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-vanish',
+            source: DISPATCH_SOURCE_AO_SEND,
+            firstObservedAtMs: 1717601000000,
+            deliveredAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished');
+  });
+
+  it('suppresses vanish escalation for proven worktree drift on review-send', () => {
+    const id = 'opk-drift:review-send:run-1';
+  const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+      dispatchJournal: {},
+      reviewRuns: [{ id: 'run-1', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-drift',
+            source: DISPATCH_SOURCE_REVIEW_SEND,
+            reviewRunId: 'run-1',
+            prNumber: 42,
+            headSha: targetSha,
+            firstObservedAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)).toBeUndefined();
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id)?.reason).toBe('proven_worktree_drift');
+  });
+
+  it('escalates ambiguous when drift evidence is missing', () => {
+    const id = 'opk-drift:review-send:ambiguous';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: { source: DISPATCH_SOURCE_REVIEW_SEND, headSha: targetSha, prNumber: 42, sessionId: 'opk-drift' },
+      reviewRuns: [],
+      sessions: [{ sessionId: 'opk-drift', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09' }],
+    });
+    expect(drift.suppress).toBe(false);
+    expect(drift.reason).toBe('ambiguous_missing_drift_evidence');
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {},
+      reviewRuns: [],
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-drift',
+            source: DISPATCH_SOURCE_REVIEW_SEND,
+            prNumber: 42,
+            headSha: targetSha,
+            firstObservedAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished_ambiguous');
+  });
+});
+
+describe('issue #347 supervised adoption preflight', () => {
+  it('blocks live reconcile ticks and escalates wrapper_not_adopted when adoption is missing', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({}));
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+    expect(result.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+    const tracking = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
+  });
+
+  it('deduplicates adoption escalation per epoch/config', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-dedupe-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({}));
+    const env = {
+      ...process.env,
+      AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-dedupe',
+      AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/dedupe.yaml',
+    };
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    const escalationMatches = (output: string) => (output.match(/ESCALATION: wrapper_not_adopted/g) ?? []).length;
+    expect(escalationMatches(first.stdout)).toBe(1);
+    expect(escalationMatches(second.stdout)).toBe(0);
+    expect(second.stdout).toContain('tick blocked: adoption preflight wrapper_not_adopted');
+  });
+});
+
