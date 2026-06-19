@@ -140,7 +140,7 @@ describe('runExternalOutputShapeGuard', () => {
       catalog,
     });
     expect(result.ok).toBe(false);
-    expect(formatShapeErrors(result.errors)).toMatch(/review-head-ready\.test\.ts:126/);
+    expect(formatShapeErrors(result.errors)).toMatch(/review-head-ready\.test\.ts:127/);
     expect(formatShapeErrors(result.errors)).toMatch(/headRefOid/);
   });
 });

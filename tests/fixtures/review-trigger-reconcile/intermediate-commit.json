@@ -23,12 +23,12 @@
       "status": "addressing_reviews",
       "reports": [
         {
-          "reportState": "ready_for_review",
-          "reportedAt": "2026-06-05T11:00:00.000Z"
-        },
-        {
           "reportState": "addressing_reviews",
           "reportedAt": "2026-06-05T12:00:00.000Z"
+        },
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T11:00:00.000Z"
         }
       ]
     }

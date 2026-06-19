@@ -23,13 +23,8 @@
       "ownedHeadSha": "42bf1490dbe8829667d2835b937a33e7af9d82f1",
       "reports": [
         {
-          "reportState": "started",
-          "reportedAt": "2026-06-10T10:21:49.783Z",
-          "accepted": true
-        },
-        {
-          "reportState": "working",
-          "reportedAt": "2026-06-10T11:05:00.000Z",
+          "reportState": "fixing_ci",
+          "reportedAt": "2026-06-10T12:00:00.000Z",
           "accepted": true
         },
         {
@@ -38,8 +33,13 @@
           "accepted": true
         },
         {
-          "reportState": "fixing_ci",
-          "reportedAt": "2026-06-10T12:00:00.000Z",
+          "reportState": "working",
+          "reportedAt": "2026-06-10T11:05:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "started",
+          "reportedAt": "2026-06-10T10:21:49.783Z",
           "accepted": true
         }
       ]
@@ -47,10 +47,22 @@
   ],
   "ciChecksByPr": {
     "260": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
     ]
   },
   "aoEvents": [],
