@@ -109,6 +109,28 @@ function workerState(overrides: {
   };
 }
 
+function captureWorkerState(scenarioFixture: string) {
+  const base = fixture<any>('ci-failure-worker-state-base.json');
+  const scenario = fixture<any>(scenarioFixture);
+  const openPrs = base.openPrs.map((row: any) => ({
+    ...row,
+    ...(scenario.openPrHeadCommittedAt ? { headCommittedAt: scenario.openPrHeadCommittedAt } : {}),
+  }));
+  return {
+    sessions: [
+      {
+        ...base.sessionShell,
+        status: scenario.status,
+        lastActivity: scenario.lastActivity ?? base.sessionShell.lastActivity,
+        targetGeneration: episode.targetGeneration,
+        sessionGeneration: episode.targetGeneration,
+        reports: scenario.reports,
+      },
+    ],
+    openPrs,
+  };
+}
+
 function decision(input: any) {
   return decideCiFailureNotification({
     episode,
@@ -259,19 +281,19 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
     const captured = fixture<any>('live-worker-fixing-ci-captured.json');
     const result = decideCiFailureNotification({
       episode,
-      workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
     expect(result.audit!.phase).toBe('terminal');
-    expect(captured.sessions[0].status).not.toBe('fixing_ci');
-    expect(captured.sessions[0].reports[0].reportState).toBe('fixing_ci');
+    expect(captured.status).not.toBe('fixing_ci');
+    expect(captured.reports[0].reportState).toBe('fixing_ci');
   });
 
   it('does not suppress when latest same-head report is non-fixing_ci after older fixing_ci (Issue #363)', () => {
     const result = decideCiFailureNotification({
       episode,
-      workerState: workerState({ fixture: 'live-worker-same-head-recency.json' }),
+      workerState: captureWorkerState('live-worker-same-head-recency.json'),
     });
     expect(result.terminal_action).toBe('SEND');
     expect(result.reason).toBe('no_suppressor');
@@ -280,7 +302,7 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
   it('does not suppress stale-head fixing_ci when episode head is still current (Issue #363)', () => {
     const result = decideCiFailureNotification({
       episode,
-      workerState: workerState({ fixture: 'live-worker-stale-head-fixing-ci.json' }),
+      workerState: captureWorkerState('live-worker-stale-head-fixing-ci.json'),
     });
     expect(result.terminal_action).toBe('SEND');
     expect(result.reason).toBe('no_suppressor');
@@ -492,7 +514,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const result = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(result.action).toBe('suppressed');
       expect(result.terminal!.audit!.reason).toBe('suppressed-live-worker');
@@ -512,7 +534,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const retry = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(retry.action).toBe('not_claimed');
     } finally {
@@ -796,13 +818,13 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
   it('capture-backed live-worker fixtures pass ao-worker-report and gh-pr-open shape guard (Issue #363)', () => {
     const { catalog } = loadVariantCatalog(path.join(repoRoot, 'tests/external-output-references'));
-    for (const name of [
+    const scenarios = [
       'live-worker-fixing-ci-captured.json',
       'live-worker-same-head-recency.json',
       'live-worker-stale-head-fixing-ci.json',
-      'worker-state-golden.json',
-    ]) {
-      const data = fixture<any>(name);
+    ];
+    for (const name of scenarios) {
+      const data = captureWorkerState(name);
       for (const [index, report] of data.sessions[0].reports.entries()) {
         const errors = validateExternalObject(
           report,
@@ -818,6 +840,18 @@ describe('episode lifecycle outbox (Issue #342)', () => {
         const errors = validateExternalObject(openPr, 'gh-pr-open', 'open', catalog, name, `$.openPrs[${index}]`);
         expect(errors, name).toEqual([]);
       }
+    }
+    const golden = fixture<any>('worker-state-golden.json');
+    for (const [index, report] of golden.sessions[0].reports.entries()) {
+      const errors = validateExternalObject(
+        report,
+        'ao-worker-report',
+        String(report.reportState),
+        catalog,
+        'worker-state-golden.json',
+        `$.sessions[0].reports[${index}]`,
+      );
+      expect(errors).toEqual([]);
     }
   });
 
@@ -849,7 +883,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
   it('wrapper decide path returns live-worker suppression', () => {
     const result = runWrapper('decide', {
       episode,
-      workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
@@ -918,7 +952,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
       const suppressed = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ fixture: 'live-worker-fixing-ci-captured.json' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(suppressed.action).toBe('suppressed');
       const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));

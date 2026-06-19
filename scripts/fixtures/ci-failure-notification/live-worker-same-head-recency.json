@@ -1,38 +1,22 @@
 {
-  "description": "Issue #363: older fixing_ci superseded by newer non-fixing_ci report for the same head (AO newest-first array order)",
-  "sessions": [
+  "description": "Issue #363: newer non-fixing_ci report wins over older fixing_ci for the same head",
+  "status": "pr_open",
+  "lastActivity": "3m ago",
+  "reports": [
     {
-      "name": "session-active-redacted",
-      "role": "worker",
-      "status": "pr_open",
-      "activity": "idle",
-      "lastActivity": "3m ago",
-      "prNumber": 283,
-      "ownedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "reports": [
-        {
-          "reportState": "ready_for_review",
-          "reportedAt": "2026-06-18T13:10:00.000Z",
-          "accepted": true
-        },
-        {
-          "reportState": "fixing_ci",
-          "reportedAt": "2026-06-18T12:30:00.000Z",
-          "accepted": true
-        },
-        {
-          "reportState": "working",
-          "reportedAt": "2026-06-18T12:00:00.000Z",
-          "accepted": true
-        }
-      ]
-    }
-  ],
-  "openPrs": [
+      "reportState": "ready_for_review",
+      "reportedAt": "2026-06-18T13:10:00.000Z",
+      "accepted": true
+    },
     {
-      "number": 283,
-      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "headCommittedAt": "2026-06-18T10:00:00.000Z"
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T12:30:00.000Z",
+      "accepted": true
+    },
+    {
+      "reportState": "working",
+      "reportedAt": "2026-06-18T12:00:00.000Z",
+      "accepted": true
     }
   ]
 }

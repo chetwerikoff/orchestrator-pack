@@ -1,0 +1,17 @@
+{
+  "openPrs": [
+    {
+      "number": 283,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headCommittedAt": "2026-06-18T10:00:00.000Z"
+    }
+  ],
+  "sessionShell": {
+    "name": "session-active-redacted",
+    "role": "worker",
+    "activity": "idle",
+    "lastActivity": "5m ago",
+    "prNumber": 283,
+    "ownedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

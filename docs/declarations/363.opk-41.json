@@ -15,6 +15,7 @@
     "docs/declarations/363.opk-41.json",
     "scripts/ci-failure-notification.test.ts",
     "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/ci-failure-worker-state-base.json",
     "scripts/fixtures/ci-failure-notification/live-worker-fixing-ci-captured.json",
     "scripts/fixtures/ci-failure-notification/live-worker-same-head-recency.json",
     "scripts/fixtures/ci-failure-notification/live-worker-stale-head-fixing-ci.json",
