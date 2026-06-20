@@ -78,7 +78,10 @@ export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 export const MAPPING_PREFLIGHT_SCRUB_OPTIONS = { allowSafeSecretRedaction: true } as const;
 
 const PEM_PRIVATE_KEY_BLOCK_PATTERN =
-  /(?:^|\n)(?:\+ ?)?-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:\+ ?)?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g;
+  /(?:^|\n)(?:\+ ?)?-----BEGIN (?:RSA |EC |OPENSSH )?(?:ENCRYPTED )?PRIVATE KEY-----[\s\S]*?(?:\+ ?)?-----END (?:RSA |EC |OPENSSH )?(?:ENCRYPTED )?PRIVATE KEY-----/g;
+
+const PEM_PRIVATE_KEY_HEADER_PATTERN =
+  /(?:^|\n)(?:\+ ?)?-----BEGIN [^-]*PRIVATE KEY-----/m;
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
@@ -110,10 +113,10 @@ function isStandaloneCredentialFixtureBody(body: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----$/.test(trimmed)) {
+  if (/^-----BEGIN (?:RSA |EC |OPENSSH )?(?:ENCRYPTED )?PRIVATE KEY-----$/.test(trimmed)) {
     return true;
   }
-  if (/^-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----$/.test(trimmed)) {
+  if (/^-----END (?:RSA |EC |OPENSSH )?(?:ENCRYPTED )?PRIVATE KEY-----$/.test(trimmed)) {
     return true;
   }
   if (/^[A-Za-z0-9+/=]+$/.test(trimmed)) {
@@ -136,10 +139,20 @@ function isStandaloneCredentialFixtureBody(body: string): boolean {
   );
 }
 
+function stripDiffLinePrefix(line: string): string {
+  if (line.startsWith('+')) {
+    return line.slice(1);
+  }
+  if (line.startsWith('-') && !line.startsWith('-----')) {
+    return line.slice(1);
+  }
+  return line;
+}
+
 function isDecisionBearingRedactionSite(content: string, offset: number): boolean {
   const lines = content.split(/\r?\n/);
   const line = lines[lineIndexAtOffset(content, offset)] ?? '';
-  const body = line.replace(/^[+-]/, '').trim();
+  const body = stripDiffLinePrefix(line).trim();
   if (!body) {
     return false;
   }
@@ -158,6 +171,9 @@ function applySafeRedactionPattern(
 ): { scrubbed: string; sawRedaction: boolean; decisionBearing: boolean } {
   let sawRedaction = false;
   let decisionBearing = false;
+  if (pattern.global) {
+    pattern.lastIndex = 0;
+  }
   const scrubbed = current.replace(pattern, (match, ...args) => {
     const offset = args[args.length - 2] as number;
     sawRedaction = true;
@@ -531,6 +547,9 @@ export function scrubForProviderInput(
   scrubbed = pemRedaction.scrubbed;
   sawRedaction ||= pemRedaction.sawRedaction;
   if (pemRedaction.decisionBearing || containsDecisionBearingRedactionMarker(scrubbed)) {
+    return { ok: false, decisionBearingRedaction: true };
+  }
+  if (PEM_PRIVATE_KEY_HEADER_PATTERN.test(scrubbed)) {
     return { ok: false, decisionBearingRedaction: true };
   }
 

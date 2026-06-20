@@ -112,7 +112,7 @@ try {
         $tempBody = Join-Path ([System.IO.Path]::GetTempPath()) ("op362-prbody-" + [Guid]::NewGuid().ToString('n') + '.md')
         Set-Content -LiteralPath $tempBody -Value "Closes #362`n"
         try {
-            $integrationOutput = & $helperPs1 -DiffFile $fixtureDiff -IssueFile $fixtureIssue -PrBodyFile $tempBody -ExplicitIssue 362 2>&1 | Out-String
+            $integrationOutput = & $helperPs1 -DiffFile $fixtureDiff -IssueFile $fixtureIssue -PrBodyFile $tempBody -ExplicitIssue 362 -PreflightOnly 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
                 $failures.Add('invoke-reviewer-contract-mapping.ps1 integration fixture failed')
             }

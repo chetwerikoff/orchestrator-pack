@@ -34,6 +34,7 @@ interface CliOptions {
   lookupAvailable: boolean;
   coworkerAvailable: boolean;
   providerInputByteLimit?: number;
+  preflightOnly?: boolean;
 }
 
 export function parseIssueSpecAssignments(
@@ -91,6 +92,7 @@ function parseArgs(argv: string[]): CliOptions {
     json: true,
     lookupAvailable: true,
     coworkerAvailable: true,
+    preflightOnly: false,
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -125,6 +127,8 @@ function parseArgs(argv: string[]): CliOptions {
       opts.coworkerAvailable = false;
     } else if (arg === '--provider-input-byte-limit') {
       opts.providerInputByteLimit = Number(argv[++i]);
+    } else if (arg === '--preflight-only') {
+      opts.preflightOnly = true;
     } else if (arg === '--text') {
       opts.json = false;
     } else if (arg === '--help' || arg === '-h') {
@@ -154,6 +158,7 @@ Options:
   --lookup-unavailable          Simulate issue lookup failure
   --coworker-unavailable        Simulate coworker missing
   --provider-input-byte-limit <n>  Provider/input ceiling for preflight
+  --preflight-only              Stop after mapping preflight (fixture/integration smoke)
   --text                        Human-readable output instead of JSON
 `);
 }
@@ -246,11 +251,7 @@ export type SpecRereadOutcome =
   | { ok: true; hashes: Array<{ issueNumber: number; snapshotHash: string }> }
   | { ok: false; status: 'lookup_unavailable' | 'stale_spec' };
 
-export function createSpecFreshnessResolver(opts: CliOptions): IssueBodyResolver {
-  const localBodies = loadSpecBodiesFromOptions(opts);
-  if (localBodies.length > 0) {
-    return createLocalIssueBodyResolver(opts);
-  }
+export function createSpecFreshnessResolver(_opts: CliOptions): IssueBodyResolver {
   return createGitHubIssueBodyResolver();
 }
 
@@ -464,6 +465,38 @@ function main(): void {
     lookupAvailable: opts.lookupAvailable,
     coworkerAvailable: opts.coworkerAvailable,
   });
+
+  if (opts.preflightOnly) {
+    const output = {
+      status: preflight.status,
+      shouldInvokeCoworker: preflight.shouldInvokeCoworker,
+      statusRecord: preflight.statusRecord,
+      contractSet: preflight.contractSet.map((member) => ({
+        issueNumber: member.issueNumber,
+        snapshotHash: member.snapshotHash,
+        acceptanceCriteriaCount: member.acceptanceCriteria.length,
+      })),
+      artifactPrep: preflight.artifactPrep
+        ? {
+            artifactDir: preflight.artifactPrep.artifactDir,
+            diffPath: preflight.artifactPrep.diffPath,
+            specPaths: preflight.artifactPrep.specPaths,
+            diffArtifactHash: preflight.artifactPrep.diffArtifactHash,
+            specArtifactHashes: preflight.artifactPrep.specArtifactHashes,
+            combinedByteSize: preflight.artifactPrep.combinedByteSize,
+          }
+        : null,
+      coworkerArgv: preflight.coworkerArgv ?? null,
+      ledger: null,
+    };
+    if (opts.json) {
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.log(`status=${output.status} invoke=${output.shouldInvokeCoworker}`);
+      console.log(`head=${output.statusRecord.prHeadSha}`);
+    }
+    process.exit(0);
+  }
 
   let status = preflight.status;
   let statusRecord = preflight.statusRecord;

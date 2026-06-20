@@ -19,7 +19,8 @@ param(
     [switch]$LookupUnavailable,
     [switch]$CoworkerUnavailable,
     [int]$ProviderInputByteLimit = 0,
-    [switch]$Text
+    [switch]$Text,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +56,7 @@ if ($ProviderInputByteLimit -gt 0) {
     $args += @('--provider-input-byte-limit', [string]$ProviderInputByteLimit)
 }
 if ($Text) { $args += '--text' }
+if ($PreflightOnly) { $args += '--preflight-only' }
 
 Push-Location $packRoot
 try {

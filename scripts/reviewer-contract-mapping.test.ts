@@ -1296,7 +1296,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(hasCompleteChangedFileEvidence(diff, 'scripts/reviewer-contract-mapping.test.ts')).toBe(false);
   });
 
-  it('uses local issue files for spec freshness when provided', () => {
+  it('re-fetches authoritative spec from GitHub for freshness even with local issue files', () => {
     const issuePath = path.join(fixturesDir, 'issue-with-acceptance.md');
     const opts = {
       prBodyFile: null,
@@ -1313,10 +1313,47 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       json: true,
       lookupAvailable: true,
       coworkerAvailable: true,
+      preflightOnly: false,
     };
-    const members = [{ issueNumber: 362, snapshotHash: sha256Hex(fixture('issue-with-acceptance.md')) }];
-    const outcome = tryRecomputeCurrentSpecHashes(opts, members, createSpecFreshnessResolver(opts));
-    expect(outcome.ok).toBe(true);
+    const fileHash = sha256Hex(fixture('issue-with-acceptance.md'));
+    const localOutcome = tryRecomputeCurrentSpecHashes(
+      opts,
+      [{ issueNumber: 362, snapshotHash: fileHash }],
+      createLocalIssueBodyResolver(opts),
+    );
+    expect(localOutcome.ok).toBe(true);
+    const members = [{ issueNumber: 362, snapshotHash: 'stale-bound-hash' }];
+    const githubCalls: number[] = [];
+    const githubOutcome = tryRecomputeCurrentSpecHashes(opts, members, (issueNumber) => {
+      githubCalls.push(issueNumber);
+      return fixture('issue-with-acceptance.md');
+    });
+    expect(githubCalls).toEqual([362]);
+    expect(githubOutcome.ok).toBe(false);
+    if (!githubOutcome.ok) {
+      expect(githubOutcome.status).toBe('stale_spec');
+    }
+    expect(createSpecFreshnessResolver(opts)).toBeTypeOf('function');
+  });
+
+  it('redacts encrypted PKCS#8 private key blocks', () => {
+    const pem = [
+      '-----BEGIN ENCRYPTED PRIVATE KEY-----',
+      'MIIEfakeencryptedmaterial',
+      '-----END ENCRYPTED PRIVATE KEY-----',
+    ].join('\n');
+    const scrubbed = scrubForProviderInput(pem, { allowSafeSecretRedaction: true });
+    expect(scrubbed.ok).toBe(true);
+    if (!scrubbed.ok) {
+      return;
+    }
+    expect(scrubbed.scrubbed).not.toContain('MIIEfakeencryptedmaterial');
+    expect(scrubbed.scrubbed).toContain('[REDACTED_SECRET]');
+  });
+
+  it('fails closed on unrecognized private-key PEM headers', () => {
+    const pem = '-----BEGIN CUSTOM PRIVATE KEY-----\nsecret\n-----END CUSTOM PRIVATE KEY-----';
+    expect(scrubForProviderInput(pem, { allowSafeSecretRedaction: true }).ok).toBe(false);
   });
 
   it('treats opaque GIT binary patches as incomplete evidence', () => {
