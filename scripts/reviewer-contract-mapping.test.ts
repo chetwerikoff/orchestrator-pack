@@ -163,6 +163,32 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     }
   });
 
+  it('keeps indented nested bullets inside their parent criterion', () => {
+    const extracted = extractContractSections(fixture('issue-with-nested-acceptance.md'));
+    const criteria = parseAcceptanceCriteria(extracted.sections['Acceptance criteria']);
+    expect(criteria).toHaveLength(2);
+    expect(criteria[0]).toContain('Parent criterion with nested supporting bullets');
+    expect(criteria[0]).toContain('Supporting detail one for the parent');
+    expect(criteria[0]).toContain('Supporting detail two for the parent');
+    expect(criteria[1]).toBe('Second top-level criterion stands alone');
+  });
+
+  it('rejects not_found ledger entries without actionable gap evidence', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: idx === 0 ? 'not_found' : 'satisfied',
+        kind: idx === 0 ? 'hypothesis' : 'confirmed_observation',
+      })),
+    };
+    expect(validateMappingLedger(ledger, members).ok).toBe(false);
+  });
+
   it('invokes conditional mapping ask for large diff with acceptance criteria', () => {
     const diff = fixture('large.diff');
     const issue = loadIssue('issue-with-acceptance.md', 362);

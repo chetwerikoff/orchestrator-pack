@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b7ea4c459bfe738e05515b18f318585970a5f4a0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c95cbcb6152bebff447c881dd136d48a4bf3a2330b9e8cd8b174f78284872a7f"
+    "active_scope_hash": "sha256:d4eac12dc13a346290f875313cad1cae3ca4463dad212c008988d0d16cc642df"
   },
   "declared_paths": [
     "docs/issues_drafts/00-architecture-decisions.md",
@@ -19,6 +19,7 @@
     "scripts/fixtures/reviewer-contract-mapping/issue-parent-900.md",
     "scripts/fixtures/reviewer-contract-mapping/issue-with-acceptance.md",
     "scripts/fixtures/reviewer-contract-mapping/issue-with-bullet-acceptance.md",
+    "scripts/fixtures/reviewer-contract-mapping/issue-with-nested-acceptance.md",
     "scripts/fixtures/reviewer-contract-mapping/issue-without-acceptance.md",
     "scripts/fixtures/reviewer-contract-mapping/large.diff",
     "scripts/fixtures/reviewer-contract-mapping/small.diff",
@@ -29,5 +30,20 @@
     "scripts/verify.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c95cbcb6152bebff447c881dd136d48a4bf3a2330b9e8cd8b174f78284872a7f",
+      "new_active_scope_hash": "sha256:d4eac12dc13a346290f875313cad1cae3ca4463dad212c008988d0d16cc642df",
+      "changed": {
+        "added": [
+          "scripts/fixtures/reviewer-contract-mapping/issue-with-nested-acceptance.md"
+        ],
+        "removed": []
+      },
+      "reason": "add nested acceptance criteria fixture for review finding fix",
+      "actor": "opk-47",
+      "timestamp": "2026-06-20T10:29:33.760Z",
+      "applied": true
+    }
+  ]
 }

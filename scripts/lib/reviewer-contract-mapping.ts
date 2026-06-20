@@ -289,6 +289,11 @@ export function extractContractSections(issueBody: string): {
 const ACCEPTANCE_CRITERION_ITEM_PATTERN =
   /^\s*(?:\d+\.\s+|[-*]\s+(?:\[[ xX]\]\s+)?)(.+)$/;
 
+function leadingWhitespaceLength(line: string): number {
+  const match = line.match(/^(\s*)/);
+  return match?.[1]?.length ?? 0;
+}
+
 export function parseAcceptanceCriteria(acceptanceSection: string | undefined): string[] {
   if (!acceptanceSection?.trim()) {
     return [];
@@ -296,6 +301,7 @@ export function parseAcceptanceCriteria(acceptanceSection: string | undefined): 
   const lines = acceptanceSection.split(/\r?\n/);
   const criteria: string[] = [];
   let current = '';
+  let baseIndent: number | null = null;
 
   const flushCurrent = (): void => {
     if (current.trim()) {
@@ -305,11 +311,24 @@ export function parseAcceptanceCriteria(acceptanceSection: string | undefined): 
   };
 
   for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    const indent = leadingWhitespaceLength(line);
     const item = line.match(ACCEPTANCE_CRITERION_ITEM_PATTERN);
     if (item) {
-      flushCurrent();
-      current = item[1] ?? '';
-      continue;
+      if (baseIndent === null) {
+        baseIndent = indent;
+      }
+      if (indent === baseIndent) {
+        flushCurrent();
+        current = item[1] ?? '';
+        continue;
+      }
+      if (current) {
+        current += `\n${line.trim()}`;
+        continue;
+      }
     }
     if (current && line.trim()) {
       current += ` ${line.trim()}`;
@@ -891,11 +910,14 @@ export function validateMappingLedger(
       return { ok: false, status: 'malformed' };
     }
 
-    if (entry.mappingStatus === 'gap_candidate' && !entry.concreteFailureScenario?.trim()) {
+    if (
+      (entry.mappingStatus === 'gap_candidate' || entry.mappingStatus === 'not_found') &&
+      !entry.concreteFailureScenario?.trim()
+    ) {
       return { ok: false, status: 'malformed' };
     }
     if (
-      entry.mappingStatus === 'gap_candidate' &&
+      (entry.mappingStatus === 'gap_candidate' || entry.mappingStatus === 'not_found') &&
       !entry.implementationLocation?.trim() &&
       !(entry.expectedOwningSurface?.trim() && entry.verifiedAbsenceFromDiff)
     ) {
