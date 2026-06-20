@@ -17,4 +17,5 @@ evidence: NEW(produced-by AC#1)
 producer: orchestrator-pack
 datum: custom-field
 expected: x
+proof-command: npm test -- producer-emission
 ```

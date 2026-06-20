@@ -20,6 +20,65 @@ const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
 const GENERIC_FENCE_PATTERN = /```([^\r\n]*)\r?\n([\s\S]*?)```/g;
 const NEW_EVIDENCE_PATTERN = /^NEW\(produced-by AC#(\d+)\)$/i;
 const CAPTURE_EVIDENCE_PATTERN = /^capture@(.+)$/i;
+export const PRODUCTION_CAPTURE_CORPUS_ROOT = 'tests/external-output-references';
+const CLI_BINDING_ID_KINDS = new Set(['flag', 'command', 'option']);
+const CAPTURE_BINDING_TYPES = new Set(['structured', 'unstructured', 'cli-behavior']);
+
+
+/**
+ * @param {string} repoRoot
+ * @param {string | undefined} manifestPath
+ */
+function resolveManifestCorpusRoot(repoRoot, manifestPath) {
+  const resolved = manifestPath
+    ? resolveRepoPath(repoRoot, manifestPath)
+    : path.join(repoRoot, PRODUCTION_CAPTURE_CORPUS_ROOT, 'capture-manifest.json');
+  const rel = path.relative(repoRoot, resolved).replace(/\\/g, '/');
+  if (rel === `${PRODUCTION_CAPTURE_CORPUS_ROOT}/capture-manifest.json`) {
+    return PRODUCTION_CAPTURE_CORPUS_ROOT;
+  }
+  return path.dirname(rel).replace(/\\/g, '/');
+}
+
+/**
+ * @param {string} bindingId
+ */
+function bindingIdKind(bindingId) {
+  const parts = bindingId.split(':');
+  if (parts.length < 3) {
+    return null;
+  }
+  return parts[1].trim().toLowerCase();
+}
+
+/**
+ * @param {string} bindingId
+ */
+function bindingIdRequiresCliBehavior(bindingId) {
+  const kind = bindingIdKind(bindingId);
+  return Boolean(kind && CLI_BINDING_ID_KINDS.has(kind));
+}
+
+/**
+ * @param {Record<string, string>} block
+ */
+export function producerEmissionHasExecutableProof(block) {
+  const command = (block['proof-command'] ?? block.command ?? '').trim();
+  const capture = (block['proof-capture'] ?? block.capture ?? '').trim();
+  return Boolean(command || capture);
+}
+
+/**
+ * @param {Record<string, string>} block
+ */
+export function producerEmissionIsComplete(block) {
+  return Boolean(
+    block.producer
+    && (block.datum || block.selector)
+    && block.expected !== undefined
+    && producerEmissionHasExecutableProof(block),
+  );
+}
 
 function resolveRepoPath(repoRoot, candidate) {
   if (!candidate) {
@@ -276,19 +335,8 @@ export function producerEmissionMatchesRow(block, row) {
  * @param {Record<string, string>} row
  * @param {{ exitStatus?: number }} [manifestEntry]
  */
-export function isCliBehaviorBinding(row, manifestEntry = undefined) {
-  const bindingId = (row['binding-id'] ?? '').toLowerCase();
-  const binding = (row.binding ?? '').toLowerCase();
-  if (/:(flag|command):/.test(bindingId)) {
-    return true;
-  }
-  if (/\bcli\s+(flag|command)\b|command behavior\b/.test(binding)) {
-    return true;
-  }
-  if (manifestEntry?.exitStatus !== undefined) {
-    return true;
-  }
-  return Boolean(row.flag || row.command || row['cli-binding']);
+export function isCliBehaviorBinding(row) {
+  return row['binding-type']?.trim().toLowerCase() === 'cli-behavior';
 }
 
 export function criterionHasProducerEmission(markdown, criterionNumber) {
@@ -296,8 +344,7 @@ export function criterionHasProducerEmission(markdown, criterionNumber) {
   if (!section) {
     return false;
   }
-  const blocks = parseProducerEmissionBlocks(section);
-  return blocks.some((block) => block.producer && (block.datum || block.selector) && block.expected);
+  return parseProducerEmissionBlocks(section).some((block) => producerEmissionIsComplete(block));
 }
 
 /**
@@ -310,7 +357,9 @@ export function criterionHasMatchingProducerEmission(markdown, criterionNumber, 
   if (!section) {
     return false;
   }
-  return parseProducerEmissionBlocks(section).some((block) => producerEmissionMatchesRow(block, row));
+  return parseProducerEmissionBlocks(section).some(
+    (block) => producerEmissionIsComplete(block) && producerEmissionMatchesRow(block, row),
+  );
 }
 
 /**
@@ -388,7 +437,11 @@ export function checkContractEvidence(markdown, options = {}) {
     return { ok: false, errors, skipped: false };
   }
 
-  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot: committedManifest.corpusRoot });
+  const corpusRoot = resolveManifestCorpusRoot(repoRoot, manifestPath);
+  if (committedManifest.corpusRoot !== corpusRoot) {
+    errors.push(`capture manifest corpusRoot must be ${corpusRoot}`);
+  }
+  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot });
   errors.push(...compareCaptureManifests(committedManifest, regenerated));
 
   /** @type {Map<string, Record<string, string>>} */
@@ -447,6 +500,29 @@ export function checkContractEvidence(markdown, options = {}) {
       continue;
     }
 
+    if (!row['binding-id']) {
+      errors.push(`${rowLabel}: missing required field binding-id`);
+      continue;
+    }
+    if (!row['binding-type']) {
+      errors.push(`${rowLabel}: missing required field binding-type`);
+      continue;
+    }
+    const bindingType = row['binding-type'].trim().toLowerCase();
+    if (!CAPTURE_BINDING_TYPES.has(bindingType)) {
+      errors.push(`${rowLabel}: binding-type must be structured, unstructured, or cli-behavior`);
+      continue;
+    }
+    const requiresCliBehavior = bindingIdRequiresCliBehavior(row['binding-id']);
+    if (requiresCliBehavior && bindingType !== 'cli-behavior') {
+      errors.push(`${rowLabel}: binding-id kind ${bindingIdKind(row['binding-id'])} requires binding-type cli-behavior`);
+      continue;
+    }
+    if (bindingType === 'cli-behavior' && !requiresCliBehavior) {
+      errors.push(`${rowLabel}: binding-type cli-behavior requires binding-id kind flag, command, or option`);
+      continue;
+    }
+
     const manifestId = captureMatch[1].trim();
     const entry = committedManifest.entries?.[manifestId];
     if (!entry) {
@@ -458,7 +534,7 @@ export function checkContractEvidence(markdown, options = {}) {
       continue;
     }
     errors.push(
-      ...assertCapturePathConfined(repoRoot, committedManifest.corpusRoot, entry.path).map(
+      ...assertCapturePathConfined(repoRoot, corpusRoot, entry.path).map(
         (message) => `${rowLabel}: ${message}`,
       ),
     );
@@ -469,7 +545,7 @@ export function checkContractEvidence(markdown, options = {}) {
       continue;
     }
 
-    const referencesRoot = path.join(repoRoot, committedManifest.corpusRoot);
+    const referencesRoot = path.join(repoRoot, corpusRoot);
     const capturePath = path.join(referencesRoot, entry.path);
     if (!existsSync(capturePath)) {
       errors.push(`${rowLabel}: capture file ${entry.path} is missing`);
@@ -484,7 +560,15 @@ export function checkContractEvidence(markdown, options = {}) {
 
     const parsedKind = detectCaptureKind(captureContent);
     const manifestKind = entry.kind ?? parsedKind;
-    const isCliBehavior = isCliBehaviorBinding(row, entry);
+    if ((manifestKind === 'structured' || parsedKind === 'structured') && bindingType !== 'structured') {
+      errors.push(`${rowLabel}: structured capture requires binding-type structured`);
+      continue;
+    }
+    if (manifestKind === 'unstructured' && parsedKind === 'unstructured' && bindingType === 'structured') {
+      errors.push(`${rowLabel}: unstructured capture cannot use binding-type structured`);
+      continue;
+    }
+    const isCliBehavior = isCliBehaviorBinding(row);
     if (isCliBehavior) {
       if (entry.exitStatus === undefined) {
         errors.push(`${rowLabel}: CLI behavior binding requires manifest exit status`);
@@ -567,7 +651,12 @@ export function checkContractEvidence(markdown, options = {}) {
  */
 export function verifyCaptureManifestIntegrity(repoRoot, manifestPath) {
   const committed = loadCommittedCaptureManifest(repoRoot, manifestPath);
-  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot: committed.corpusRoot });
-  const errors = compareCaptureManifests(committed, regenerated);
+  const corpusRoot = resolveManifestCorpusRoot(repoRoot, manifestPath);
+  const errors = [];
+  if (committed.corpusRoot !== corpusRoot) {
+    errors.push(`capture manifest corpusRoot must be ${corpusRoot}`);
+  }
+  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot });
+  errors.push(...compareCaptureManifests(committed, regenerated));
   return { ok: errors.length === 0, errors };
 }

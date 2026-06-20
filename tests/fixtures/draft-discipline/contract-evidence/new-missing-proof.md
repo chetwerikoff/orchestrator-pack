@@ -1,4 +1,4 @@
-# NEW with numbered plan before acceptance criteria
+# NEW missing executable proof
 
 GitHub Issue: TBD
 
@@ -9,10 +9,6 @@ producer: orchestrator-pack
 evidence: NEW(produced-by AC#1)
 ```
 
-## Plan
-
-1. Unrelated numbered plan step that must not satisfy AC#1.
-
 ## Acceptance criteria
 
 1. Producer emits custom-field in reconciler output.
@@ -21,5 +17,4 @@ evidence: NEW(produced-by AC#1)
 producer: orchestrator-pack
 datum: custom-field
 expected: x
-proof-command: npm test -- producer-emission
 ```

@@ -6,6 +6,7 @@ GitHub Issue: TBD
 binding-id: ao:reportState:missing
 binding: missing capture
 producer: ao
+binding-type: structured
 evidence: capture@ao-worker-report/does-not-exist
 selector: $.reportState
 expected: fixing_ci

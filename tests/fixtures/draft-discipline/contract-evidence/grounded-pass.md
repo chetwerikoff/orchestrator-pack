@@ -16,6 +16,7 @@ action-producing
 binding-id: ao:reportState:fixing_ci
 binding: ao worker report fixing_ci state
 producer: ao
+binding-type: structured
 evidence: capture@ao-worker-report/fixing_ci
 selector: $.reportState
 expected: fixing_ci

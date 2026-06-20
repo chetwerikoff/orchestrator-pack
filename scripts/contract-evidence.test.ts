@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,6 +103,11 @@ describe('checkContractEvidence fixtures', () => {
     expect(result.errors.join(' ')).toMatch(/matching producer-emission/i);
   });
 
+  it('rejects NEW rows when producer-emission lacks executable proof', () => {
+    const result = checkFixture('new-missing-proof.md', false);
+    expect(result.errors.join(' ')).toMatch(/executable proof|proof-command|proof-capture|producer-emission/i);
+  });
+
   it('rejects NEW rows for external gh producer', () => {
     const result = checkFixture('new-external-gh.md', false);
     expect(result.errors.join(' ')).toMatch(/external producer/i);
@@ -140,6 +145,11 @@ describe('checkContractEvidence fixtures', () => {
     checkFixture('cli-behavior-pass.md', true);
   });
 
+  it('rejects CLI option bindings that bypass exit checks via help-text captures', () => {
+    const result = checkFixture('cli-option-help-bypass.md', false);
+    expect(result.errors.join(' ')).toMatch(/binding-type cli-behavior|requires binding-type cli-behavior/i);
+  });
+
   it('grandfathers legacy drafts without a block', () => {
     const result = checkContractEvidence(loadDraft('legacy-grandfather.md'), {
       repoRoot,
@@ -175,6 +185,26 @@ describe('capture manifest integrity', () => {
   it('matches regenerated production manifest', () => {
     const result = verifyCaptureManifestIntegrity(repoRoot, productionManifest);
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects production manifests with a non-pinned corpusRoot', () => {
+    const committed = JSON.parse(
+      readFileSync(path.join(repoRoot, productionManifest), 'utf8'),
+    );
+    const tampered = structuredClone(committed);
+    tampered.corpusRoot = 'tests/fixtures/contract-evidence';
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'capture-manifest-corpus-'));
+    const prodDir = path.join(tempDir, 'tests/external-output-references');
+    mkdirSync(prodDir, { recursive: true });
+    const tempPath = path.join(prodDir, 'capture-manifest.json');
+    writeFileSync(tempPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    const result = verifyCaptureManifestIntegrity(
+      tempDir,
+      'tests/external-output-references/capture-manifest.json',
+    );
+    rmSync(tempDir, { recursive: true, force: true });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/corpusRoot must be tests\/external-output-references/i);
   });
 
   it('rejects hand-edited manifest entries', () => {

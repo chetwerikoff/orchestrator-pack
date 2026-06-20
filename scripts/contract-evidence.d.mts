@@ -33,16 +33,19 @@ export function producerEmissionMatchesRow(
   row: Record<string, string>,
 ): boolean;
 
+export function producerEmissionHasExecutableProof(block: Record<string, string>): boolean;
+
+export function producerEmissionIsComplete(block: Record<string, string>): boolean;
+
 export function criterionHasMatchingProducerEmission(
   markdown: string,
   criterionNumber: number,
   row: Record<string, string>,
 ): boolean;
 
-export function isCliBehaviorBinding(
-  row: Record<string, string>,
-  manifestEntry?: { exitStatus?: number },
-): boolean;
+export function isCliBehaviorBinding(row: Record<string, string>): boolean;
+
+export const PRODUCTION_CAPTURE_CORPUS_ROOT: string;
 
 export function acceptanceCriteriaRegion(markdown: string): string | null;
 

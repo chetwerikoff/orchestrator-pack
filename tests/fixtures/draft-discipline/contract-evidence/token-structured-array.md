@@ -6,6 +6,7 @@ GitHub Issue: TBD
 binding-id: ao:items:a
 binding: token on array json
 producer: ao
+binding-type: structured
 evidence: capture@array-json/items
 token: a
 ```

@@ -349,6 +349,7 @@ Each row asserts exactly one binding and exactly one evidence form:
 
 ```contract-evidence
 binding-id: ao:reportState:fixing_ci
+binding-type: structured
 binding: ao worker report fixing_ci state
 producer: ao
 evidence: capture@ao-worker-report/fixing_ci
@@ -356,14 +357,18 @@ selector: $.reportState
 expected: fixing_ci
 ```
 
-- **Capture evidence:** `evidence: capture@<manifest-entry-id>` plus `selector` +
-  `expected` for structured captures, or `token` for unstructured CLI text only.
-  CLI flag / command behavior bindings require a capture whose manifest entry
-  records the successful `exit-status` plus behavior-specific output — bare flag
-  text in help output is not sufficient.
+- **Capture evidence:** every `capture@` row requires machine-readable `binding-id`
+  and `binding-type` (`structured`, `unstructured`, or `cli-behavior`). Use
+  `binding-type: cli-behavior` when `binding-id` names a `flag`, `command`, or
+  `option` datum; CLI rows require manifest exit status `0` plus behavior-specific
+  output — bare flag text in help output is not sufficient.
+- **Capture evidence (fields):** `evidence: capture@<manifest-entry-id>` plus
+  `selector` + `expected` for structured captures, or `token` for unstructured
+  text captures.
 - **NEW evidence (repo-owned producers only):** `evidence: NEW(produced-by AC#N)`
   where AC#N carries a machine-readable `producer-emission` fence naming
-  `producer`, `datum`/`selector`, and `expected`. External producers (`ao`,
+  `producer`, `datum`/`selector`, `expected`, and executable proof via
+  `proof-command` or `proof-capture`. External producers (`ao`,
   `gh`, `codex`, including alias spellings) cannot use `NEW`; they require
   capture evidence. `NEW` rows are authoring-time obligations recorded in the
   synced issue body, not existence proofs.

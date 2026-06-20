@@ -6,6 +6,7 @@ GitHub Issue: TBD
 binding-id: ao:scalar:hello
 binding: token on scalar json
 producer: ao
+binding-type: structured
 evidence: capture@scalar-json/value
 token: hello
 ```
