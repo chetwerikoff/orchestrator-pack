@@ -128,7 +128,17 @@ describe('checkContractEvidence fixtures', () => {
 
   it('rejects conflicting duplicate binding identities', () => {
     const result = checkFixture('duplicate-identity-conflict.md', false);
-    expect(result.errors.join(' ')).toMatch(/conflicting evidence/i);
+    expect(result.errors.join(' ')).toMatch(/conflicting binding assertion/i);
+  });
+
+  it('rejects conflicting expected values that share one capture reference', () => {
+    const result = checkFixture('shared-evidence-conflicting-expected.md', false);
+    expect(result.errors.join(' ')).toMatch(/conflicting binding assertion/i);
+  });
+
+  it('rejects conflicting NEW assertions with the same binding identity', () => {
+    const result = checkFixture('new-shared-identity-conflict.md', false);
+    expect(result.errors.join(' ')).toMatch(/conflicting binding assertion/i);
   });
 
   it('rejects CLI behavior captures with failed exit status', () => {
@@ -143,6 +153,10 @@ describe('checkContractEvidence fixtures', () => {
 
   it('passes CLI behavior captures with successful exit status', () => {
     checkFixture('cli-behavior-pass.md', true);
+  });
+
+  it('passes structured JSON CLI behavior captures', () => {
+    checkFixture('cli-behavior-structured-pass.md', true);
   });
 
   it('rejects CLI option bindings that bypass exit checks via help-text captures', () => {

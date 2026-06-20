@@ -214,6 +214,57 @@ function normalizeDatumIdentity(datum, kind, row) {
  * @param {Record<string, string>} row
  * @param {'structured' | 'unstructured'} kind
  */
+
+/**
+ * @param {Record<string, string>} prior
+ * @param {Record<string, string>} row
+ * @param {'structured' | 'unstructured'} kind
+ */
+function bindingAssertionsCompatible(prior, row, kind) {
+  if (prior.evidence !== row.evidence) {
+    return false;
+  }
+  if (NEW_EVIDENCE_PATTERN.test(prior.evidence ?? '')) {
+    const priorWant = extractRowProducerEmissionExpectation(prior);
+    const rowWant = extractRowProducerEmissionExpectation(row);
+    return (
+      priorWant.producer === rowWant.producer
+      && priorWant.datum === rowWant.datum
+      && String(priorWant.expected) === String(rowWant.expected)
+    );
+  }
+  if (kind === 'structured') {
+    return (
+      normalizeSelector(prior.selector ?? '') === normalizeSelector(row.selector ?? '')
+      && String(prior.expected ?? '') === String(row.expected ?? '')
+    );
+  }
+  return (
+    normalizeToken(prior.token ?? '') === normalizeToken(row.token ?? '')
+    && String(prior.expected ?? '') === String(row.expected ?? '')
+  );
+}
+
+/**
+ * @param {Map<string, Record<string, string>>} identities
+ * @param {string} identity
+ * @param {Record<string, string>} row
+ * @param {'structured' | 'unstructured'} kind
+ * @param {string} rowLabel
+ * @param {string[]} errors
+ */
+function recordBindingIdentity(identities, identity, row, kind, rowLabel, errors) {
+  const prior = identities.get(identity);
+  if (prior && !bindingAssertionsCompatible(prior, row, kind)) {
+    errors.push(`${rowLabel}: conflicting binding assertion for identity ${identity}`);
+    return;
+  }
+  if (!prior) {
+    identities.set(identity, row);
+  }
+}
+
+
 export function canonicalBindingIdentity(row, kind) {
   const producer = canonicalProducer(row.producer ?? '');
   if (row['binding-id']) {
@@ -484,18 +535,16 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: producer ${producer} is not in the repo-owned registry`);
         continue;
       }
+      const newIdentity = canonicalBindingIdentity(row, 'structured');
+      recordBindingIdentity(identities, newIdentity, row, 'structured', rowLabel, errors);
+      if (errors.some((error) => error.startsWith(rowLabel))) {
+        continue;
+      }
       if (!criterionHasMatchingProducerEmission(markdown, acNumber, row)) {
         errors.push(
           `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding`,
         );
         continue;
-      }
-      const identity = canonicalBindingIdentity(row, 'structured');
-      const prior = identities.get(identity);
-      if (prior && prior.evidence !== evidence) {
-        errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
-      } else {
-        identities.set(identity, row);
       }
       continue;
     }
@@ -545,6 +594,13 @@ export function checkContractEvidence(markdown, options = {}) {
       continue;
     }
 
+    const captureIdentityKind = bindingType === 'unstructured' ? 'unstructured' : 'structured';
+    const captureIdentity = canonicalBindingIdentity(row, captureIdentityKind);
+    recordBindingIdentity(identities, captureIdentity, row, captureIdentityKind, rowLabel, errors);
+    if (errors.some((error) => error.startsWith(rowLabel))) {
+      continue;
+    }
+
     const referencesRoot = path.join(repoRoot, corpusRoot);
     const capturePath = path.join(referencesRoot, entry.path);
     if (!existsSync(capturePath)) {
@@ -560,8 +616,12 @@ export function checkContractEvidence(markdown, options = {}) {
 
     const parsedKind = detectCaptureKind(captureContent);
     const manifestKind = entry.kind ?? parsedKind;
-    if ((manifestKind === 'structured' || parsedKind === 'structured') && bindingType !== 'structured') {
-      errors.push(`${rowLabel}: structured capture requires binding-type structured`);
+    if (
+      (manifestKind === 'structured' || parsedKind === 'structured')
+      && bindingType !== 'structured'
+      && bindingType !== 'cli-behavior'
+    ) {
+      errors.push(`${rowLabel}: structured capture requires binding-type structured or cli-behavior`);
       continue;
     }
     if (manifestKind === 'unstructured' && parsedKind === 'unstructured' && bindingType === 'structured') {
@@ -615,13 +675,6 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: selector ${row.selector} value does not match expected ${row.expected} (${redactCaptureContent(captureContent)})`);
         continue;
       }
-      const identity = canonicalBindingIdentity(row, 'structured');
-      const prior = identities.get(identity);
-      if (prior && prior.evidence !== evidence) {
-        errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
-      } else {
-        identities.set(identity, row);
-      }
       continue;
     }
 
@@ -632,13 +685,6 @@ export function checkContractEvidence(markdown, options = {}) {
     if (!captureContent.includes(row.token)) {
       errors.push(`${rowLabel}: token not found in unstructured capture (${redactCaptureContent(captureContent)})`);
       continue;
-    }
-    const identity = canonicalBindingIdentity(row, 'unstructured');
-    const prior = identities.get(identity);
-    if (prior && prior.evidence !== evidence) {
-      errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
-    } else {
-      identities.set(identity, row);
     }
   }
 

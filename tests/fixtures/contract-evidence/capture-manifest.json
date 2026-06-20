@@ -44,6 +44,15 @@
       "contentHash": "sha256:6db97b3f06bdbba02d99bc8b80eb7dc1b9bbf2f04588800857ac41764cbacd72",
       "exitStatus": 0
     },
+    "cli-behavior/json-success": {
+      "id": "cli-behavior/json-success",
+      "producer": "ao",
+      "sourceCommand": "ao report --note enabled --json",
+      "kind": "structured",
+      "path": "captures/cli-behavior/json-success.raw.json",
+      "contentHash": "sha256:b87b6894d18aff9e72d58083a6199211fd128f1cd221c55bf44daea73e41eea2",
+      "exitStatus": 0
+    },
     "gh-pr-open/open": {
       "id": "gh-pr-open/open",
       "producer": "gh",
