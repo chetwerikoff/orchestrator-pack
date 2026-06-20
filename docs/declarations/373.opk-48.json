@@ -1,0 +1,36 @@
+{
+  "issue_number": 373,
+  "iteration_id": "opk-48",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-20T11:30:00.000Z",
+  "baseline": {
+    "commit_sha": "8647579c8c614914a9b9154d1141833563443c4e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8117229bd01d8f09109535b3e69f0ac1655117ead672f7c49f10b33965063a0b"
+  },
+  "declared_paths": [
+    "docs/ao-send-transport-contract.txt",
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "docs/worker-message-submit-reconcile.mjs",
+    "scripts/check-ao-send-transport-contract.ps1",
+    "scripts/fixtures/worker-message-submit-reconcile/noop-overwritten-no-escalate.json",
+    "scripts/journaled-worker-send.ps1",
+    "scripts/mechanical-json-state.Tests.ps1",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/orchestrator-message-send-helpers.manifest.json",
+    "scripts/worker-message-send-adoption-preflight.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "vitest.config.ts",
+    "docs/declarations/373.opk-48.json",
+    "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
+    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
+    "scripts/lib/MechanicalReconcileNode.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

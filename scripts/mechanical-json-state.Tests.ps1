@@ -27,6 +27,27 @@ BeforeAll {
     }
 }
 
+Describe 'mechanical transport privacy helpers' {
+    It 'reads unix mode via platform stat syntax' {
+        if (-not ($IsLinux -or $IsMacOS)) {
+            Set-ItResult -Inconclusive -Because 'unix-only stat helper coverage'
+            return
+        }
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("mech-transport-mode-" + [guid]::NewGuid().ToString('n'))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        try {
+            Protect-MechanicalTransportPath -Path $dir -Directory | Out-Null
+            $file = Join-Path $dir 'mode.payload'
+            Write-MechanicalWorkerMessagePayloadFile -Path $file -Content 'secret'
+            $mode = Get-MechanicalTransportUnixModeString -Path $file
+            $mode | Should -Be '600'
+        }
+        finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Mechanical JSON state round-trip' {
     It 'preserves populated map entries without reflection keys (review-send sent)' {
         $path = New-TempStatePath

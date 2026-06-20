@@ -1,0 +1,17 @@
+# Captured ao send transport contract (Issue #373)
+capturedAt=2026-06-20T11:22:44.5257876+00:00
+aoPath=ao
+
+Usage: ao send [options] <session> [message...]
+
+Send a message to a session with busy detection and retry
+
+Arguments:
+  session              Session name
+  message              Message to send
+
+Options:
+  -f, --file <path>    Send contents of a file instead
+  --no-wait            Don't wait for session to become idle before sending
+  --timeout <seconds>  Max seconds to wait for idle (default: "600")
+  -h, --help           display help for command

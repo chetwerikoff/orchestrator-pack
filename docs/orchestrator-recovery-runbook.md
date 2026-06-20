@@ -1065,6 +1065,6 @@ If a worker message is stuck unsubmitted:
    metadata (delivery id, shape, outcome, draft state). Do not capture pane text or worker
    output.
 
-If local `ao send --help` does not advertise stdin/pipe ingestion, this pack intentionally
-fails closed. Do not bypass with argv payloads or raw-payload temp files; that would expose
-credentials in process surfaces or persistent files.
+If local `ao send --help` does not advertise `--file` ingestion, this pack intentionally
+fails closed. Do not bypass with unsupported flags; use a published AO version that exposes
+`ao send --file` or `-f, --file <path>`.

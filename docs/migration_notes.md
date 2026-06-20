@@ -1193,7 +1193,8 @@ ordinary trigger-firing unit. The metric summary now also exposes
 Extends source-agnostic worker-message submit so plain orchestrator `ao send` deliveries
 can be observed through a metadata-only transactional outbox before the send side effect.
 The new wrapper is `scripts/journaled-worker-send.ps1`; it reads the worker payload from
-stdin/pipe only, records shape metadata (`delivery_id`, char length, line count, dispatch
+stdin (orchestrator routing pipes the message in), delivers through real `ao send --file`
+ingestion, and records shape metadata (`delivery_id`, char length, line count, dispatch
 outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome), authoritative draft state), and never stores or logs the raw message.
 
 **Operator adoption** — after merge:
@@ -1227,8 +1228,8 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
    `no_manual_enter=true`. Do not record the message body, terminal transcript, session URL, or
    worker output.
 
-Current AO versions that do not advertise stdin/pipe ingestion for `ao send` remain a hard
-gate: the wrapper exits fail-closed and refuses argv or raw temp-file payload fallback.
+Current AO versions that do not advertise `--file` ingestion for `ao send` remain a hard
+gate: the wrapper exits fail-closed rather than binding to unsupported transport forms.
 
 ## Review run recovery side-process (Issue #287)
 
