@@ -131,6 +131,11 @@ describe('checkContractEvidence fixtures', () => {
     expect(result.errors.join(' ')).toMatch(/exit status/i);
   });
 
+  it('rejects CLI behavior rows that trust a nonzero manifest exit status', () => {
+    const result = checkFixture('cli-behavior-nonzero-trusted.md', false);
+    expect(result.errors.join(' ')).toMatch(/successful capture/i);
+  });
+
   it('passes CLI behavior captures with successful exit status', () => {
     checkFixture('cli-behavior-pass.md', true);
   });
@@ -148,6 +153,11 @@ describe('checkContractEvidence fixtures', () => {
 
   it('ignores fenced-only contract-evidence examples', () => {
     const result = checkFixture('fenced-only-none.md', false);
+    expect(result.errors.join(' ')).toMatch(/missing/i);
+  });
+
+  it('ignores contract-evidence fences in the full Example section', () => {
+    const result = checkFixture('example-section-spaced-none.md', false);
     expect(result.errors.join(' ')).toMatch(/missing/i);
   });
 

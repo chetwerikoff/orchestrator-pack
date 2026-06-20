@@ -32,6 +32,27 @@ const PRODUCER_EMISSION_PATTERN = /```producer-emission\s*\r?\n([\s\S]*?)```/gi;
 
 /**
  * @param {string} markdown
+ * @param {RegExp} headingPattern
+ * @returns {Array<{ start: number, end: number }>}
+ */
+function headingSectionSpans(markdown, headingPattern) {
+  /** @type {Array<{ start: number, end: number }>} */
+  const spans = [];
+  const pattern = new RegExp(headingPattern.source, headingPattern.flags.includes('g') ? headingPattern.flags : `${headingPattern.flags}g`);
+  let match;
+  while ((match = pattern.exec(markdown)) !== null) {
+    const start = match.index;
+    const level = (match[0].match(/^#+/) ?? ['##'])[0].length;
+    const rest = markdown.slice(start);
+    const nextHeading = rest.slice(match[0].length).search(new RegExp(`^#{1,${level}}\\s+`, 'm'));
+    const end = nextHeading >= 0 ? start + match[0].length + nextHeading : markdown.length;
+    spans.push({ start, end });
+  }
+  return spans;
+}
+
+/**
+ * @param {string} markdown
  */
 export function extractAuthoritativeContractEvidenceBody(markdown) {
   const genericFences = [];
@@ -41,6 +62,7 @@ export function extractAuthoritativeContractEvidenceBody(markdown) {
     genericFences.push({ start: match.index, end: match.index + match[0].length, kind: match[1].trim() });
   }
 
+  const exampleSpans = headingSectionSpans(markdown, /^#{1,6}\s+example\b/i);
   const candidates = [];
   const contractPattern = new RegExp(FENCE_PATTERN.source, FENCE_PATTERN.flags);
   while ((match = contractPattern.exec(markdown)) !== null) {
@@ -59,9 +81,7 @@ export function extractAuthoritativeContractEvidenceBody(markdown) {
     if (insideGeneric) {
       continue;
     }
-    const before = markdown.slice(0, start);
-    const recentHeading = before.split('\n').slice(-5).join('\n');
-    if (/^#{1,6}\s+example\b/im.test(recentHeading)) {
+    if (exampleSpans.some((span) => start >= span.start && start < span.end)) {
       continue;
     }
     candidates.push(match[2].trim());
@@ -466,13 +486,21 @@ export function checkContractEvidence(markdown, options = {}) {
     const manifestKind = entry.kind ?? parsedKind;
     const isCliBehavior = isCliBehaviorBinding(row, entry);
     if (isCliBehavior) {
-      const expectedExit = row['exit-status'] ?? row['expected-exit-status'] ?? '0';
       if (entry.exitStatus === undefined) {
         errors.push(`${rowLabel}: CLI behavior binding requires manifest exit status`);
         continue;
       }
-      if (String(entry.exitStatus) !== String(expectedExit)) {
-        errors.push(`${rowLabel}: manifest exit status ${entry.exitStatus} does not match expected ${expectedExit}`);
+      if (Number(entry.exitStatus) !== 0) {
+        errors.push(
+          `${rowLabel}: CLI behavior evidence requires successful capture (manifest exit status 0), got ${entry.exitStatus}`,
+        );
+        continue;
+      }
+      const expectedExit = row['exit-status'] ?? row['expected-exit-status'] ?? '0';
+      if (String(expectedExit) !== '0') {
+        errors.push(
+          `${rowLabel}: CLI behavior binding must assert successful exit status 0, got ${expectedExit}`,
+        );
         continue;
       }
     }
