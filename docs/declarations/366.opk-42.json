@@ -73,13 +73,5 @@
     "tests/fixtures/draft-discipline/contract-evidence/unstructured-missing-token.md"
   ],
   "declared_globs": [],
-  "amendments": [
-    {
-      "reason": "Review fixes: publish workflow contract-evidence guard and NEW/CLI matching tests",
-      "added_paths": [
-        ".claude/skills/publish-issue-draft/SKILL.md",
-        "tests/fixtures/draft-discipline/contract-evidence/new-unmatched-emission-ac.md"
-      ]
-    }
-  ]
+  "amendments": []
 }
