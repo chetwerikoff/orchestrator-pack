@@ -1997,9 +1997,10 @@ describe('issue #373 vanish and worktree-drift handling', () => {
       tracking: { deliveries: {}, audit: [] },
       nowMs: 1717601000000,
     });
-    const deliveryId = Object.keys(tick1.tracking.deliveries)[0];
+    const deliveries = tick1.tracking?.deliveries ?? {};
+    const deliveryId = Object.keys(deliveries)[0];
     expect(deliveryId).toBeTruthy();
-    expect(tick1.tracking.deliveries[deliveryId]?.source).toBe(DISPATCH_SOURCE_REVIEW_SEND);
+    expect(deliveries[deliveryId]?.source).toBe(DISPATCH_SOURCE_REVIEW_SEND);
     const tick2 = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
       reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
