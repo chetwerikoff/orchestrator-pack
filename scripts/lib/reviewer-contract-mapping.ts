@@ -61,6 +61,17 @@ export type ContractSections = Partial<Record<ContractSectionHeading, string>>;
 
 export const DIFF_DELEGATION_FLOOR_LINES = 200;
 
+export function countDiffLines(content: string): number {
+  if (!content) {
+    return 0;
+  }
+  const lines = content.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === '') {
+    return lines.length - 1;
+  }
+  return lines.length;
+}
+
 export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 
 const SECRET_PATTERNS: readonly RegExp[] = [
@@ -75,6 +86,8 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /ghp_[A-Za-z0-9]{20,}/g,
   /gho_[A-Za-z0-9]{20,}/g,
   /sk-[A-Za-z0-9]{20,}/g,
+  /(?:database_url|redis_url|mongodb(?:\+srv)?_url|amqp_url|postgres(?:ql)?|mysql|mariadb|mongodb):\/\/[^\s'"]+/gi,
+  /\b[A-Z][A-Z0-9_]*_URL\s*=\s*\S+/g,
 ];
 
 const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
@@ -121,6 +134,7 @@ export interface ContractSpecMember {
 export interface ContractMappingStatusRecord {
   status: ContractMappingStatus;
   prHeadSha: string;
+  diffArtifactHash?: string;
   specSet: Array<{ issueNumber: number; snapshotHash: string }>;
   usability: 'usable' | 'not_usable' | 'n_a';
   staleDimensions?: { head?: boolean; spec?: boolean };
@@ -158,6 +172,7 @@ export type ArtifactPrepResult = ArtifactPrepSuccess | ArtifactPrepFailure;
 export interface MappingPreflightInput {
   diffLineCount: number;
   diffContent: string;
+  prHeadSha?: string;
   changedPaths: string[];
   binding: ReviewBindingContext;
   specBodies: BoundSpecInput[];
@@ -606,6 +621,7 @@ export function resolveStatusPrecedence(
 export function buildStructuredStatusRecord(input: {
   status: ContractMappingStatus;
   prHeadSha: string;
+  diffArtifactHash?: string;
   members?: ContractSpecMember[];
   staleDimensions?: { head?: boolean; spec?: boolean };
 }): ContractMappingStatusRecord {
@@ -617,6 +633,7 @@ export function buildStructuredStatusRecord(input: {
   return {
     status: input.status,
     prHeadSha: input.prHeadSha,
+    diffArtifactHash: input.diffArtifactHash,
     specSet,
     usability,
     staleDimensions: input.staleDimensions,
@@ -627,15 +644,20 @@ export function evaluateFinalUsability(input: {
   prior: ContractMappingStatusRecord;
   currentHeadSha: string;
   currentSpecHashes: Array<{ issueNumber: number; snapshotHash: string }>;
+  currentDiffArtifactHash?: string;
 }): ContractMappingStatusRecord {
   const headStale = input.prior.prHeadSha !== input.currentHeadSha;
+  const diffStale =
+    input.prior.diffArtifactHash !== undefined &&
+    input.currentDiffArtifactHash !== undefined &&
+    input.prior.diffArtifactHash !== input.currentDiffArtifactHash;
   const specStale = input.prior.specSet.some((bound) => {
     const current = input.currentSpecHashes.find((c) => c.issueNumber === bound.issueNumber);
     return !current || current.snapshotHash !== bound.snapshotHash;
   });
 
-  if (input.prior.status === 'mapped' && (headStale || specStale)) {
-    const status: ContractMappingStatus = headStale ? 'stale_head' : 'stale_spec';
+  if (input.prior.status === 'mapped' && (headStale || diffStale || specStale)) {
+    const status: ContractMappingStatus = headStale || diffStale ? 'stale_head' : 'stale_spec';
     return buildStructuredStatusRecord({
       status,
       prHeadSha: input.currentHeadSha,
@@ -645,7 +667,7 @@ export function evaluateFinalUsability(input: {
         sections: {},
         acceptanceCriteria: [],
       })),
-      staleDimensions: { head: headStale, spec: specStale },
+      staleDimensions: { head: headStale || diffStale, spec: specStale },
     });
   }
 
@@ -714,6 +736,84 @@ export function buildCoworkerInvokeArgv(
 }
 
 
+const MAPPING_STATUS_VALUES = new Set<MappingCandidate['mappingStatus']>([
+  'satisfied',
+  'gap_candidate',
+  'not_found',
+]);
+const MAPPING_KIND_VALUES = new Set<MappingCandidate['kind']>([
+  'confirmed_observation',
+  'hypothesis',
+  'missing_validation',
+]);
+
+export function isValidMappingCandidate(entry: unknown): entry is MappingCandidate {
+  if (!entry || typeof entry !== 'object') {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  if (typeof candidate.requirementId !== 'string' || !candidate.requirementId.trim()) {
+    return false;
+  }
+  if (typeof candidate.specIssueNumber !== 'number' || !Number.isInteger(candidate.specIssueNumber)) {
+    return false;
+  }
+  if (typeof candidate.specSnapshotHash !== 'string' || !candidate.specSnapshotHash.trim()) {
+    return false;
+  }
+  if (typeof candidate.citedRequirementText !== 'string' || !candidate.citedRequirementText.trim()) {
+    return false;
+  }
+  if (!MAPPING_STATUS_VALUES.has(candidate.mappingStatus as MappingCandidate['mappingStatus'])) {
+    return false;
+  }
+  if (!MAPPING_KIND_VALUES.has(candidate.kind as MappingCandidate['kind'])) {
+    return false;
+  }
+  if (
+    candidate.verifiedAbsenceFromDiff !== undefined &&
+    typeof candidate.verifiedAbsenceFromDiff !== 'boolean'
+  ) {
+    return false;
+  }
+  for (const key of [
+    'implementationLocation',
+    'expectedOwningSurface',
+    'concreteFailureScenario',
+    'testEvidence',
+  ] as const) {
+    const value = candidate[key];
+    if (value !== undefined && value !== null && typeof value !== 'string') {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function computeBoundDiffArtifactHash(diffContent: string): string | null {
+  const scrub = scrubForProviderInput(diffContent);
+  if (!scrub.ok) {
+    return null;
+  }
+  return sha256Hex(scrub.scrubbed);
+}
+
+export function validateMappingArtifactBinding(input: {
+  boundHeadSha: string;
+  boundDiffArtifactHash: string;
+  currentHeadSha: string;
+  currentDiffContent: string;
+}): { ok: true } | { ok: false; status: 'stale_head' } {
+  if (input.boundHeadSha !== input.currentHeadSha) {
+    return { ok: false, status: 'stale_head' };
+  }
+  const currentDiffArtifactHash = computeBoundDiffArtifactHash(input.currentDiffContent);
+  if (!currentDiffArtifactHash || currentDiffArtifactHash !== input.boundDiffArtifactHash) {
+    return { ok: false, status: 'stale_head' };
+  }
+  return { ok: true };
+}
+
 export function isMissingTestClaim(entry: MappingCandidate): boolean {
   if (entry.kind === 'missing_validation') {
     return true;
@@ -738,13 +838,16 @@ export function coerceMappingLedger(payload: unknown): MappingLedger | null {
     return null;
   }
   const obj = payload as Record<string, unknown>;
-  if (Array.isArray(obj.entries) && typeof obj.exhaustive === 'boolean') {
-    return {
-      entries: obj.entries as MappingCandidate[],
-      exhaustive: obj.exhaustive,
-    };
+  if (!Array.isArray(obj.entries) || typeof obj.exhaustive !== 'boolean') {
+    return null;
   }
-  return null;
+  if (!obj.entries.every((entry) => isValidMappingCandidate(entry))) {
+    return null;
+  }
+  return {
+    entries: obj.entries,
+    exhaustive: obj.exhaustive,
+  };
 }
 
 export function validateMappingLedger(
@@ -773,6 +876,9 @@ export function validateMappingLedger(
   }
 
   for (const entry of ledger.entries) {
+    if (!isValidMappingCandidate(entry)) {
+      return { ok: false, status: 'malformed' };
+    }
     const member = memberByIssue.get(entry.specIssueNumber);
     if (!member || entry.specSnapshotHash !== member.snapshotHash) {
       return { ok: false, status: 'malformed' };
@@ -808,7 +914,7 @@ export function validateMappingLedger(
 
 export function evaluateMappingPreflight(input: MappingPreflightInput): MappingPreflightResult {
   const providerLimit = input.providerInputByteLimit ?? DEFAULT_PROVIDER_INPUT_BYTE_LIMIT;
-  const prHeadSha = 'pending';
+  const prHeadSha = input.prHeadSha ?? 'pending';
   const failureCandidates: ContractMappingStatus[] = [];
 
   if (input.lookupAvailable === false) {
@@ -960,6 +1066,7 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     statusRecord: buildStructuredStatusRecord({
       status: 'mapping_pending',
       prHeadSha,
+      diffArtifactHash: artifactPrep.diffArtifactHash,
       members: resolved.members,
     }),
     artifactPrep,
@@ -973,14 +1080,49 @@ export function finalizeMappingFromLedger(input: {
   preflight: MappingPreflightResult;
   ledgerPayload: unknown;
   diffContent: string;
+  currentHeadSha: string;
   coworkerInvocationFailed?: boolean;
 }): {
   status: ContractMappingStatus;
   statusRecord: ContractMappingStatusRecord;
   ledger?: MappingLedger;
 } {
-  const prHeadSha = input.preflight.statusRecord.prHeadSha;
   const members = input.preflight.contractSet;
+  const boundHeadSha = input.preflight.statusRecord.prHeadSha;
+  const boundDiffArtifactHash = input.preflight.statusRecord.diffArtifactHash;
+
+  if (boundDiffArtifactHash) {
+    const binding = validateMappingArtifactBinding({
+      boundHeadSha,
+      boundDiffArtifactHash,
+      currentHeadSha: input.currentHeadSha,
+      currentDiffContent: input.diffContent,
+    });
+    if (!binding.ok) {
+      return {
+        status: 'stale_head',
+        statusRecord: buildStructuredStatusRecord({
+          status: 'stale_head',
+          prHeadSha: input.currentHeadSha,
+          diffArtifactHash: boundDiffArtifactHash,
+          members,
+          staleDimensions: { head: true },
+        }),
+      };
+    }
+  } else if (boundHeadSha !== input.currentHeadSha) {
+    return {
+      status: 'stale_head',
+      statusRecord: buildStructuredStatusRecord({
+        status: 'stale_head',
+        prHeadSha: input.currentHeadSha,
+        members,
+        staleDimensions: { head: true },
+      }),
+    };
+  }
+
+  const prHeadSha = boundHeadSha;
 
   if (input.coworkerInvocationFailed) {
     const status: ContractMappingStatus = 'unavailable';
@@ -1015,7 +1157,12 @@ export function finalizeMappingFromLedger(input: {
   const status: ContractMappingStatus = 'mapped';
   return {
     status,
-    statusRecord: buildStructuredStatusRecord({ status, prHeadSha, members }),
+    statusRecord: buildStructuredStatusRecord({
+      status,
+      prHeadSha,
+      diffArtifactHash: boundDiffArtifactHash,
+      members,
+    }),
     ledger,
   };
 }

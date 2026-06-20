@@ -3,6 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
+  computeBoundDiffArtifactHash,
+  countDiffLines,
   evaluateFinalUsability,
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
@@ -225,7 +227,8 @@ function main(): void {
   }
 
   const diffContent = readText(opts.diffFile);
-  const diffLineCount = diffContent.split(/\r?\n/).length;
+  const diffLineCount = countDiffLines(diffContent);
+  const prHeadSha = resolveHeadSha(opts.prHeadSha);
   const changedPaths = opts.changedPathsFile ? readLines(opts.changedPathsFile) : [];
 
   let specBodies: Array<{ issueNumber: number; body: string }> = [];
@@ -239,6 +242,7 @@ function main(): void {
   const preflight = evaluateMappingPreflight({
     diffLineCount,
     diffContent,
+    prHeadSha,
     changedPaths,
     binding: {
       explicitIssueNumber: opts.explicitIssue,
@@ -250,9 +254,6 @@ function main(): void {
     lookupAvailable: opts.lookupAvailable,
     coworkerAvailable: opts.coworkerAvailable,
   });
-
-  const prHeadSha = resolveHeadSha(opts.prHeadSha);
-  preflight.statusRecord.prHeadSha = prHeadSha;
 
   let status = preflight.status;
   let statusRecord = preflight.statusRecord;
@@ -284,6 +285,7 @@ function main(): void {
       preflight,
       ledgerPayload,
       diffContent,
+      currentHeadSha: prHeadSha,
       coworkerInvocationFailed,
     });
     status = finalized.status;
@@ -324,7 +326,8 @@ function main(): void {
   if (status === 'mapped') {
     const final = evaluateFinalUsability({
       prior: statusRecord,
-      currentHeadSha: prHeadSha,
+      currentHeadSha: resolveHeadSha(opts.prHeadSha),
+      currentDiffArtifactHash: computeBoundDiffArtifactHash(diffContent) ?? undefined,
       currentSpecHashes: preflight.contractSet.map((member) => ({
         issueNumber: member.issueNumber,
         snapshotHash: member.snapshotHash,

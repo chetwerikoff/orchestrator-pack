@@ -10,7 +10,10 @@ import {
   classifyChangedTestFiles,
   collectAuthoritativeReferences,
   coerceMappingLedger,
+  countDiffLines,
+  computeBoundDiffArtifactHash,
   isMissingTestClaim,
+  isValidMappingCandidate,
   CONTRACT_MAPPING_QUESTION,
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
@@ -657,14 +660,17 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   it('finalizes mapped status only after ledger validation succeeds', () => {
     const diff = fixture('large.diff');
     const issue = loadIssue('issue-with-acceptance.md', 362);
+    const prHeadSha = 'abc123';
     const preflight = evaluateMappingPreflight({
-      diffLineCount: diff.split(/\r?\n/).length,
+      diffLineCount: countDiffLines(diff),
       diffContent: diff,
+      prHeadSha,
       changedPaths: ['scripts/example.ts'],
       binding: { explicitIssueNumber: 362 },
       specBodies: [issue],
     });
     expect(preflight.status).toBe('mapping_pending');
+    expect(preflight.statusRecord.diffArtifactHash).toBeTruthy();
 
     const members = preflight.contractSet;
     const validLedger: MappingLedger = {
@@ -682,6 +688,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       preflight,
       ledgerPayload: validLedger,
       diffContent: diff,
+      currentHeadSha: prHeadSha,
     });
     expect(mapped.status).toBe('mapped');
     expect(mapped.statusRecord.usability).toBe('usable');
@@ -690,6 +697,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       preflight,
       ledgerPayload: { entries: [], exhaustive: false },
       diffContent: diff,
+      currentHeadSha: prHeadSha,
     });
     expect(malformed.status).toBe('malformed');
 
@@ -697,9 +705,116 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       preflight,
       ledgerPayload: null,
       diffContent: diff,
+      currentHeadSha: prHeadSha,
       coworkerInvocationFailed: true,
     });
     expect(unavailable.status).toBe('unavailable');
+  });
+
+
+  it('rejects malformed coworker ledger enum values before mapping', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const base = {
+      requirementId: '1',
+      specIssueNumber: 362,
+      specSnapshotHash: members[0]!.snapshotHash,
+      citedRequirementText: members[0]!.acceptanceCriteria[0]!,
+    };
+    expect(
+      coerceMappingLedger({
+        exhaustive: true,
+        entries: [{ ...base, mappingStatus: 'complete', kind: 'confirmed_observation' }],
+      }),
+    ).toBeNull();
+    expect(
+      coerceMappingLedger({
+        exhaustive: true,
+        entries: [{ ...base, mappingStatus: 'satisfied', kind: 'observation' }],
+      }),
+    ).toBeNull();
+    expect(isValidMappingCandidate({ ...base, mappingStatus: 'satisfied', kind: 'confirmed_observation' })).toBe(true);
+  });
+
+  it('returns stale_head when ledger finalization head or diff binding drifts', () => {
+    const diff = fixture('large.diff');
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const prHeadSha = 'bound-head';
+    const preflight = evaluateMappingPreflight({
+      diffLineCount: countDiffLines(diff),
+      diffContent: diff,
+      prHeadSha,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    const members = preflight.contractSet;
+    const validLedger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: 'satisfied',
+        kind: 'confirmed_observation',
+      })),
+    };
+    const staleHead = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: validLedger,
+      diffContent: diff,
+      currentHeadSha: 'new-head',
+    });
+    expect(staleHead.status).toBe('stale_head');
+
+    const staleDiff = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: validLedger,
+      diffContent: diff + '\n+stale drift\n',
+      currentHeadSha: prHeadSha,
+    });
+    expect(staleDiff.status).toBe('stale_head');
+  });
+
+  it('counts trailing-newline diffs at the delegation floor without off-by-one', () => {
+    const lines = Array.from({ length: 200 }, (_, idx) => `+line-${idx}`);
+    const diff = `${lines.join('\n')}\n`;
+    expect(countDiffLines(diff)).toBe(200);
+    expect(diff.split(/\r?\n/).length).toBe(201);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const atFloor = evaluateMappingPreflight({
+      diffLineCount: countDiffLines(diff),
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(atFloor.shouldInvokeCoworker).toBe(false);
+
+    const aboveFloor = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(aboveFloor.shouldInvokeCoworker).toBe(true);
+    expect(aboveFloor.status).toBe('mapping_pending');
+  });
+
+  it('reports skipped_provider_fence for raw connection-string secrets', () => {
+    const diff = fixture('large.diff') + '\n+DATABASE_URL=postgres://alice:s3cr3t@db/prod\n';
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: countDiffLines(diff),
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(scrubForProviderInput(diff).ok).toBe(false);
   });
 
   it('exposes prompt contract markers for static checks', () => {
