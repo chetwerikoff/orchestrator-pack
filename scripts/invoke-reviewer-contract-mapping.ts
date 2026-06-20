@@ -185,22 +185,62 @@ function resolveHeadSha(explicit: string | null): string {
   return resolveLiveHeadSha();
 }
 
-export function recomputeCurrentSpecHashes(
-  opts: CliOptions,
-  contractSet: Array<Pick<ContractSpecMember, 'issueNumber'>>,
-): Array<{ issueNumber: number; snapshotHash: string }> {
+export type IssueBodyResolver = (issueNumber: number) => string;
+
+export function fetchIssueBodyFromGitHub(
+  issueNumber: number,
+  repoRoot: string = process.cwd(),
+): string {
+  const output = execFileSync(
+    'gh',
+    ['issue', 'view', String(issueNumber), '--json', 'body'],
+    { encoding: 'utf8', cwd: repoRoot },
+  );
+  const parsed = JSON.parse(output) as { body?: string };
+  if (typeof parsed.body !== 'string') {
+    throw new Error(`gh issue view ${issueNumber} did not return a body`);
+  }
+  return parsed.body;
+}
+
+export function createGitHubIssueBodyResolver(repoRoot?: string): IssueBodyResolver {
+  const root = repoRoot ?? process.cwd();
+  return (issueNumber) => fetchIssueBodyFromGitHub(issueNumber, root);
+}
+
+export function createLocalIssueBodyResolver(opts: CliOptions): IssueBodyResolver {
   const bodies = loadSpecBodiesFromOptions(opts);
   const bodyByIssue = new Map(bodies.map((spec) => [spec.issueNumber, spec.body] as const));
-  return contractSet.map((member) => {
-    const body = bodyByIssue.get(member.issueNumber);
+  return (issueNumber) => {
+    const body = bodyByIssue.get(issueNumber);
     if (!body) {
-      throw new Error(`missing spec body for issue #${member.issueNumber} on freshness re-read`);
+      throw new Error(`missing spec body for issue #${issueNumber} on freshness re-read`);
     }
+    return body;
+  };
+}
+
+export function recomputeCurrentSpecHashesWithResolver(
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber'>>,
+  resolveIssueBody: IssueBodyResolver,
+): Array<{ issueNumber: number; snapshotHash: string }> {
+  return contractSet.map((member) => {
+    const body = resolveIssueBody(member.issueNumber);
     return {
       issueNumber: member.issueNumber,
       snapshotHash: sha256Hex(body),
     };
   });
+}
+
+export function recomputeCurrentSpecHashes(
+  opts: CliOptions,
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber'>>,
+): Array<{ issueNumber: number; snapshotHash: string }> {
+  return recomputeCurrentSpecHashesWithResolver(
+    contractSet,
+    createLocalIssueBodyResolver(opts),
+  );
 }
 
 export type SpecRereadOutcome =
@@ -210,9 +250,10 @@ export type SpecRereadOutcome =
 export function tryRecomputeCurrentSpecHashes(
   opts: CliOptions,
   contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>,
+  resolveIssueBody: IssueBodyResolver = createGitHubIssueBodyResolver(),
 ): SpecRereadOutcome {
   try {
-    const hashes = recomputeCurrentSpecHashes(opts, contractSet);
+    const hashes = recomputeCurrentSpecHashesWithResolver(contractSet, resolveIssueBody);
     const hashByIssue = new Map(hashes.map((entry) => [entry.issueNumber, entry.snapshotHash] as const));
     for (const member of contractSet) {
       const currentHash = hashByIssue.get(member.issueNumber);

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
+import path, { win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -22,6 +22,7 @@ import {
   finalizeMappingFromLedger,
   extractChangedFileContentFromDiff,
   hasCompleteChangedFileEvidence,
+  isResolvedPathInsideDir,
   extractContractSections,
   hasCompleteTestFileCoverage,
   hasTestableAcceptanceCriteria,
@@ -43,6 +44,8 @@ import {
   parseIssueSpecAssignments,
   recomputeCurrentSpecHashes,
   tryRecomputeCurrentSpecHashes,
+  createLocalIssueBodyResolver,
+  createGitHubIssueBodyResolver,
   buildSpecRereadFallbackOutput,
   resolveLiveHeadSha,
 } from './invoke-reviewer-contract-mapping.js';
@@ -992,25 +995,13 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('returns lookup_unavailable when bound spec files cannot be reread', () => {
-    const opts = {
-      prBodyFile: null,
-      issueFile: path.join(fixturesDir, 'missing-on-reread.md'),
-      issuesFile: null,
-      issueSpecs: [],
-      diffFile: null,
-      changedPathsFile: null,
-      explicitIssue: 362,
-      declarationIssue: null,
-      prHeadSha: null,
-      ledgerFile: null,
-      invokeCoworker: false,
-      json: true,
-      lookupAvailable: true,
-      coworkerAvailable: true,
-    };
-    const outcome = tryRecomputeCurrentSpecHashes(opts, [
-      { issueNumber: 362, snapshotHash: 'bound-hash' },
-    ]);
+    const outcome = tryRecomputeCurrentSpecHashes(
+      {} as never,
+      [{ issueNumber: 362, snapshotHash: 'bound-hash' }],
+      () => {
+        throw new Error('gh issue view failed');
+      },
+    );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.status).toBe('lookup_unavailable');
@@ -1034,9 +1025,11 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       lookupAvailable: true,
       coworkerAvailable: true,
     };
-    const outcome = tryRecomputeCurrentSpecHashes(opts, [
-      { issueNumber: 362, snapshotHash: 'stale-bound-hash' },
-    ]);
+    const outcome = tryRecomputeCurrentSpecHashes(
+      opts,
+      [{ issueNumber: 362, snapshotHash: 'stale-bound-hash' }],
+      createLocalIssueBodyResolver(opts),
+    );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.status).toBe('stale_spec');
@@ -1056,4 +1049,52 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(fallback.statusRecord.usability).toBe('not_usable');
     expect(fallback.ledger).toBeUndefined();
   });
+  it('re-fetches bound specs through the GitHub resolver by default', () => {
+    const calls: number[] = [];
+    const body = fixture('issue-with-acceptance.md');
+    const outcome = tryRecomputeCurrentSpecHashes(
+      {} as never,
+      [{ issueNumber: 362, snapshotHash: sha256Hex(body) }],
+      (issueNumber) => {
+        calls.push(issueNumber);
+        return body;
+      },
+    );
+    expect(calls).toEqual([362]);
+    expect(outcome.ok).toBe(true);
+    expect(createGitHubIssueBodyResolver).toBeTypeOf('function');
+  });
+
+  it('accepts child artifact paths inside controlled dirs on Windows separators', () => {
+    expect(
+      isResolvedPathInsideDir('C:\\tmp\\artifact', 'C:\\tmp\\artifact\\scrubbed.diff', win32),
+    ).toBe(true);
+    expect(
+      isResolvedPathInsideDir('C:\\tmp\\artifact', 'C:\\tmp\\other\\scrubbed.diff', win32),
+    ).toBe(false);
+  });
+
+  it('treats opaque GIT binary patches as incomplete evidence', () => {
+    const binaryPatch = [
+      'diff --git a/assets/logo.png b/assets/logo.png',
+      'index 111..222 100644',
+      '--- a/assets/logo.png',
+      '+++ b/assets/logo.png',
+      'GIT binary patch',
+      'literal 120',
+      'zcmVhbCBiaW5hcnkgZGF0YQ==',
+    ].join('\n');
+    expect(hasCompleteChangedFileEvidence(binaryPatch, 'assets/logo.png')).toBe(false);
+    const diff = `${binaryPatch}\n${fixture('large.diff')}`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['assets/logo.png', 'scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+  });
+
 });

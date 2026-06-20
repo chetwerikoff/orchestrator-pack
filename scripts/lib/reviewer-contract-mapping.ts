@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from '../pr-scope-contract.js';
 
 /** Fixed review-status vocabulary (Issue #362). */
@@ -544,7 +544,7 @@ export function hasCompleteChangedFileEvidence(diffContent: string, filePath: st
     return false;
   }
   if (chunk.includes('GIT binary patch')) {
-    return true;
+    return false;
   }
   if (/^@@/m.test(chunk)) {
     return true;
@@ -565,10 +565,28 @@ export function hasCompleteTestFileCoverage(
   return testFiles.every((file) => hasCompleteChangedFileEvidence(diffContent, file));
 }
 
+export function isResolvedPathInsideDir(
+  parentDir: string,
+  childPath: string,
+  platformPath: Pick<typeof import('node:path'), 'resolve' | 'relative' | 'sep'> = {
+    resolve,
+    relative,
+    sep,
+  },
+): boolean {
+  const parent = platformPath.resolve(parentDir);
+  const child = platformPath.resolve(childPath);
+  if (child === parent) {
+    return true;
+  }
+  const rel = platformPath.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !rel.split(platformPath.sep).includes('..');
+}
+
 function assertFreshRegularFileInDir(filePath: string, artifactDir: string): void {
   const resolvedFile = resolve(filePath);
   const resolvedDir = resolve(artifactDir);
-  if (!resolvedFile.startsWith(resolvedDir + '/') && resolvedFile !== resolvedDir) {
+  if (!isResolvedPathInsideDir(resolvedDir, resolvedFile)) {
     throw new Error('artifact path escapes controlled directory');
   }
   const stat = lstatSync(resolvedFile);
@@ -579,7 +597,8 @@ function assertFreshRegularFileInDir(filePath: string, artifactDir: string): voi
     throw new Error('artifact path is a symlink');
   }
   const real = realpathSync(resolvedFile);
-  if (!real.startsWith(realpathSync(resolvedDir) + '/') && real !== realpathSync(resolvedDir)) {
+  const realDir = realpathSync(resolvedDir);
+  if (!isResolvedPathInsideDir(realDir, real)) {
     throw new Error('artifact realpath escapes controlled directory');
   }
 }
