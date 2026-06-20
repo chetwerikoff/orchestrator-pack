@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { ISSUE_LINK_PATTERN } from '../pr-scope-contract.js';
+import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from '../pr-scope-contract.js';
 
 /** Fixed review-status vocabulary (Issue #362). */
 export const CONTRACT_MAPPING_STATUSES = [
@@ -220,9 +220,10 @@ export interface MappingLedger {
 
 
 function extractClosingIssueNumbers(prBody: string): number[] {
+  const scannable = prBodyScannableForIssueLinks(prBody);
   ISSUE_LINK_PATTERN.lastIndex = 0;
   const numbers: number[] = [];
-  for (const match of prBody.matchAll(ISSUE_LINK_PATTERN)) {
+  for (const match of scannable.matchAll(ISSUE_LINK_PATTERN)) {
     const issueNumber = Number(match[1]);
     if (Number.isInteger(issueNumber) && issueNumber > 0) {
       numbers.push(issueNumber);
@@ -285,6 +286,9 @@ export function extractContractSections(issueBody: string): {
   };
 }
 
+const ACCEPTANCE_CRITERION_ITEM_PATTERN =
+  /^\s*(?:\d+\.\s+|[-*]\s+(?:\[[ xX]\]\s+)?)(.+)$/;
+
 export function parseAcceptanceCriteria(acceptanceSection: string | undefined): string[] {
   if (!acceptanceSection?.trim()) {
     return [];
@@ -293,22 +297,25 @@ export function parseAcceptanceCriteria(acceptanceSection: string | undefined): 
   const criteria: string[] = [];
   let current = '';
 
+  const flushCurrent = (): void => {
+    if (current.trim()) {
+      criteria.push(current.trim());
+    }
+    current = '';
+  };
+
   for (const line of lines) {
-    const numbered = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (numbered) {
-      if (current.trim()) {
-        criteria.push(current.trim());
-      }
-      current = numbered[1] ?? '';
+    const item = line.match(ACCEPTANCE_CRITERION_ITEM_PATTERN);
+    if (item) {
+      flushCurrent();
+      current = item[1] ?? '';
       continue;
     }
     if (current && line.trim()) {
       current += ` ${line.trim()}`;
     }
   }
-  if (current.trim()) {
-    criteria.push(current.trim());
-  }
+  flushCurrent();
   return criteria;
 }
 

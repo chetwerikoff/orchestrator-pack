@@ -93,6 +93,13 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     }
   });
 
+  it('ignores closing keywords inside fenced PR-body examples', () => {
+    const refs = collectAuthoritativeReferences({
+      prBody: 'Closes #362\n\n```markdown\nCloses #123\n```',
+    });
+    expect(refs).toEqual([362]);
+  });
+
   it('resolves co-applicable multi-spec sets via prerequisite links', () => {
     const parent = loadIssue('issue-parent-900.md', 900);
     const child = loadIssue('issue-child-901.md', 901);
@@ -136,6 +143,24 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     }
     const sections = extractContractSections(issue.body).sections;
     expect(hasTestableAcceptanceCriteria(sections)).toBe(false);
+  });
+
+  it('parses bullet and checkbox acceptance criteria', () => {
+    const extracted = extractContractSections(fixture('issue-with-bullet-acceptance.md'));
+    const criteria = parseAcceptanceCriteria(extracted.sections['Acceptance criteria']);
+    expect(criteria).toEqual([
+      'First bullet acceptance criterion for fixture mapping.',
+      'Second bullet acceptance criterion for fixture mapping.',
+      'Checkbox acceptance criterion remains testable.',
+      'Completed checkbox acceptance criterion is also parsed.',
+    ]);
+    expect(hasTestableAcceptanceCriteria(extracted.sections)).toBe(true);
+    const issue = loadIssue('issue-with-bullet-acceptance.md', 410);
+    const resolved = resolveContractSet([410], [issue]);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.members[0]!.acceptanceCriteria).toHaveLength(4);
+    }
   });
 
   it('invokes conditional mapping ask for large diff with acceptance criteria', () => {
