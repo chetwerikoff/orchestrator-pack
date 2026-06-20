@@ -9,8 +9,10 @@ import {
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
   validateMappingLedger,
+  sha256Hex,
   type ContractMappingStatus,
   type ContractMappingStatusRecord,
+  type ContractSpecMember,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
 
@@ -165,10 +167,7 @@ function readLines(filePath: string): string[] {
     .filter(Boolean);
 }
 
-function resolveHeadSha(explicit: string | null): string {
-  if (explicit) {
-    return explicit;
-  }
+export function resolveLiveHeadSha(): string {
   try {
     return execFileSync('git', ['rev-parse', 'HEAD'], {
       encoding: 'utf8',
@@ -176,6 +175,31 @@ function resolveHeadSha(explicit: string | null): string {
   } catch {
     return 'unknown';
   }
+}
+
+function resolveHeadSha(explicit: string | null): string {
+  if (explicit) {
+    return explicit;
+  }
+  return resolveLiveHeadSha();
+}
+
+export function recomputeCurrentSpecHashes(
+  opts: CliOptions,
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber'>>,
+): Array<{ issueNumber: number; snapshotHash: string }> {
+  const bodies = loadSpecBodiesFromOptions(opts);
+  const bodyByIssue = new Map(bodies.map((spec) => [spec.issueNumber, spec.body] as const));
+  return contractSet.map((member) => {
+    const body = bodyByIssue.get(member.issueNumber);
+    if (!body) {
+      throw new Error(`missing spec body for issue #${member.issueNumber} on freshness re-read`);
+    }
+    return {
+      issueNumber: member.issueNumber,
+      snapshotHash: sha256Hex(body),
+    };
+  });
 }
 
 export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber: number; body: string }> {
@@ -325,7 +349,7 @@ function main(): void {
       ledgerPayload = null;
     }
 
-    const currentHeadShaAfterCoworker = resolveHeadSha(opts.prHeadSha);
+    const currentHeadShaAfterCoworker = resolveLiveHeadSha();
     const finalized = finalizeMappingFromLedger({
       preflight,
       ledgerPayload,
@@ -338,17 +362,26 @@ function main(): void {
     ledger = finalized.ledger;
   }
 
-  const currentHeadSha = resolveHeadSha(opts.prHeadSha);
+  const currentHeadSha = resolveLiveHeadSha();
+  let currentSpecHashes = preflight.contractSet.map((member) => ({
+    issueNumber: member.issueNumber,
+    snapshotHash: member.snapshotHash,
+  }));
+  if (preflight.contractSet.length > 0) {
+    try {
+      currentSpecHashes = recomputeCurrentSpecHashes(opts, preflight.contractSet);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(2);
+    }
+  }
   const finalizedOutput = applyMappedOutputFinalUsability({
     status,
     statusRecord,
     ledger,
     currentHeadSha,
     diffContent,
-    currentSpecHashes: preflight.contractSet.map((member) => ({
-      issueNumber: member.issueNumber,
-      snapshotHash: member.snapshotHash,
-    })),
+    currentSpecHashes,
   });
   status = finalizedOutput.status;
   statusRecord = finalizedOutput.statusRecord;

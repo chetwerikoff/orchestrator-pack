@@ -17,6 +17,7 @@ import {
   CONTRACT_MAPPING_QUESTION,
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
+  sha256Hex,
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
   extractChangedFileContentFromDiff,
@@ -40,6 +41,8 @@ import {
   applyMappedOutputFinalUsability,
   loadSpecBodiesFromOptions,
   parseIssueSpecAssignments,
+  recomputeCurrentSpecHashes,
+  resolveLiveHeadSha,
 } from './invoke-reviewer-contract-mapping.js';
 
 const fixturesDir = path.join(
@@ -336,6 +339,53 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     });
     expect(stale.status).toBe('stale_head');
     expect(stale.staleDimensions).toEqual({ head: true, spec: true });
+  });
+
+  it('uses live git HEAD for freshness instead of an explicit bind override', () => {
+    const explicit = 'explicit-bound-head-sha';
+    const live = resolveLiveHeadSha();
+    expect(live).not.toBe('unknown');
+    expect(live).not.toBe(explicit);
+  });
+
+  it('recomputes spec snapshot hashes from disk before final usability', () => {
+    const issuePath = path.join(fixturesDir, 'issue-with-acceptance.md');
+    const opts = {
+      prBodyFile: null,
+      issueFile: null,
+      issuesFile: null,
+      issueSpecs: [{ issueNumber: 362, filePath: issuePath }],
+      diffFile: null,
+      changedPathsFile: null,
+      explicitIssue: null,
+      declarationIssue: null,
+      prHeadSha: null,
+      ledgerFile: null,
+      invokeCoworker: false,
+      json: true,
+      lookupAvailable: true,
+      coworkerAvailable: true,
+    };
+    const hashes = recomputeCurrentSpecHashes(opts, [{ issueNumber: 362 }]);
+    expect(hashes).toEqual([
+      { issueNumber: 362, snapshotHash: sha256Hex(fixture('issue-with-acceptance.md')) },
+    ]);
+
+    const prior = buildStructuredStatusRecord({
+      status: 'mapped',
+      prHeadSha: resolveLiveHeadSha(),
+      members: [memberFromIssue('issue-with-acceptance.md', 362)],
+    });
+    const staleSpec = applyMappedOutputFinalUsability({
+      status: 'mapped',
+      statusRecord: prior,
+      ledger: { exhaustive: true, entries: [] },
+      currentHeadSha: prior.prHeadSha,
+      diffContent: fixture('small.diff'),
+      currentSpecHashes: [{ issueNumber: 362, snapshotHash: 'changed-on-disk' }],
+    });
+    expect(staleSpec.status).toBe('stale_spec');
+    expect(staleSpec.ledger).toBeUndefined();
   });
 
   it('emits reevaluated stale status before returning mapped output', () => {
