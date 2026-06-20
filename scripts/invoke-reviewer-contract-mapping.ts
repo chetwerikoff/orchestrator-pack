@@ -11,7 +11,7 @@ import {
   finalizeMappingFromLedger,
   resolveStatusPrecedence,
   validateMappingLedger,
-  sha256Hex,
+  hashIssueBodySnapshot,
   type ContractMappingStatus,
   type ContractMappingStatusRecord,
   type ContractSpecMember,
@@ -232,7 +232,7 @@ export function recomputeCurrentSpecHashesWithResolver(
     const body = resolveIssueBody(member.issueNumber);
     return {
       issueNumber: member.issueNumber,
-      snapshotHash: sha256Hex(body),
+      snapshotHash: hashIssueBodySnapshot(body),
     };
   });
 }

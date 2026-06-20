@@ -323,6 +323,14 @@ function extractClosingIssueNumbers(prBody: string): number[] {
   return numbers;
 }
 
+export function normalizeIssueBodyForHash(body: string): string {
+  return body.replace(/\r\n/g, '\n').replace(/\n+$/, '');
+}
+
+export function hashIssueBodySnapshot(body: string): string {
+  return sha256Hex(normalizeIssueBodyForHash(body));
+}
+
 export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
@@ -522,7 +530,7 @@ export function resolveContractSet(
     const acceptanceCriteria = parseAcceptanceCriteria(extracted.sections['Acceptance criteria']);
     members.push({
       issueNumber,
-      snapshotHash: sha256Hex(body),
+      snapshotHash: hashIssueBodySnapshot(body),
       sections: extracted.sections,
       acceptanceCriteria,
     });

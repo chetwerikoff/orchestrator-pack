@@ -17,6 +17,7 @@ import {
   CONTRACT_MAPPING_QUESTION,
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
+  hashIssueBodySnapshot,
   sha256Hex,
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
@@ -530,7 +531,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     };
     const hashes = recomputeCurrentSpecHashes(opts, [{ issueNumber: 362 }]);
     expect(hashes).toEqual([
-      { issueNumber: 362, snapshotHash: sha256Hex(fixture('issue-with-acceptance.md')) },
+      { issueNumber: 362, snapshotHash: hashIssueBodySnapshot(fixture('issue-with-acceptance.md')) },
     ]);
 
     const prior = buildStructuredStatusRecord({
@@ -1331,12 +1332,35 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(fallback.statusRecord.usability).toBe('not_usable');
     expect(fallback.ledger).toBeUndefined();
   });
+
+  it('normalizes line endings and trailing newlines before freshness hashing', () => {
+    const body = fixture('issue-with-acceptance.md');
+    const resolved = resolveContractSet([362], [{ issueNumber: 362, body: `${body}\n` }]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      return;
+    }
+    const bound = resolved.members[0]!;
+    const withoutCliNewline = tryRecomputeCurrentSpecHashes(
+      {} as never,
+      [{ issueNumber: bound.issueNumber, snapshotHash: bound.snapshotHash }],
+      () => body,
+    );
+    expect(withoutCliNewline.ok).toBe(true);
+    const withCrlf = tryRecomputeCurrentSpecHashes(
+      {} as never,
+      [{ issueNumber: bound.issueNumber, snapshotHash: bound.snapshotHash }],
+      () => body.replace(/\n/g, '\r\n'),
+    );
+    expect(withCrlf.ok).toBe(true);
+  });
+
   it('re-fetches bound specs through the GitHub resolver by default', () => {
     const calls: number[] = [];
     const body = fixture('issue-with-acceptance.md');
     const outcome = tryRecomputeCurrentSpecHashes(
       {} as never,
-      [{ issueNumber: 362, snapshotHash: sha256Hex(body) }],
+      [{ issueNumber: 362, snapshotHash: hashIssueBodySnapshot(body) }],
       (issueNumber) => {
         calls.push(issueNumber);
         return body;
@@ -1391,7 +1415,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       coworkerAvailable: true,
       preflightOnly: false,
     };
-    const fileHash = sha256Hex(fixture('issue-with-acceptance.md'));
+    const fileHash = hashIssueBodySnapshot(fixture('issue-with-acceptance.md'));
     const localOutcome = tryRecomputeCurrentSpecHashes(
       opts,
       [{ issueNumber: 362, snapshotHash: fileHash }],
