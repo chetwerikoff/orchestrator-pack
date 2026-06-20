@@ -422,15 +422,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function isRelationshipSectionBlock(block: string): boolean {
+  return /^##\s*(?:Prerequisite|Prerequisites|Parent|Child|Related|Depends on)\b/im.test(
+    block.trimStart(),
+  );
+}
+
 function issueMentionedInRelationshipSections(body: string, issueNumber: number): boolean {
-  const relMatch = body.match(RELATIONSHIP_SECTION_RE);
-  if (!relMatch || relMatch.index === undefined) {
-    return false;
+  const issueRef = new RegExp(`#${issueNumber}\\b`);
+  const parts = body.split(/\r?\n(?=##\s+)/);
+  for (const part of parts) {
+    if (!isRelationshipSectionBlock(part)) {
+      continue;
+    }
+    if (issueRef.test(part)) {
+      return true;
+    }
   }
-  const tail = body.slice(relMatch.index);
-  const nextHeading = tail.slice(1).search(/^##\s+/m);
-  const relBlock = nextHeading >= 0 ? tail.slice(0, nextHeading + 1) : tail;
-  return new RegExp(`#${issueNumber}\\b`).test(relBlock);
+  return false;
 }
 
 export function specsDeclareCoApplicability(
@@ -668,23 +677,23 @@ export function collectIncompleteDiffEvidencePaths(
   changedPaths: string[],
   diffContent: string,
 ): string[] {
-  const paths = new Set<string>();
-  for (const rawPath of changedPaths) {
-    paths.add(rawPath.replace(/\\/g, '/'));
-  }
+  const changed = new Set(changedPaths.map((rawPath) => rawPath.replace(/\\/g, '/')));
+  const diffPaths = new Set<string>();
   for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\//gm)) {
-    paths.add(match[1]!.replace(/\\/g, '/'));
+    diffPaths.add(match[1]!.replace(/\\/g, '/'));
   }
 
   const incomplete: string[] = [];
-  for (const path of paths) {
+  for (const path of changed) {
     const inDiff =
       diffContent.includes(`diff --git a/${path}`) ||
       diffContent.includes(`b/${path}`);
-    if (!inDiff) {
-      if (isBinaryOrNonDiffablePath(path)) {
-        incomplete.push(path);
-      }
+    if (!inDiff || !hasCompleteChangedFileEvidence(diffContent, path)) {
+      incomplete.push(path);
+    }
+  }
+  for (const path of diffPaths) {
+    if (changed.has(path)) {
       continue;
     }
     if (!hasCompleteChangedFileEvidence(diffContent, path)) {

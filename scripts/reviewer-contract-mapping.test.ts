@@ -49,6 +49,7 @@ import {
   createGitHubIssueBodyResolver,
   buildSpecRereadFallbackOutput,
   mergeSpecRereadFailure,
+  shouldInvokeCoworkerForStatus,
   resolveLiveHeadSha,
 } from './invoke-reviewer-contract-mapping.js';
 
@@ -110,6 +111,80 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       prBody: 'Closes #362\n\n```markdown\nCloses #123\n```',
     });
     expect(refs).toEqual([362]);
+  });
+
+
+  it('finds issue links in later relationship sections', () => {
+    const parentBody = [
+      '## Goal',
+      '',
+      'Parent spec.',
+      '',
+      '## Related',
+      '',
+      '- Unrelated tracker item',
+      '',
+      '## Parent',
+      '',
+      '- GitHub #901 — child prerequisite fixture',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. Parent criterion.',
+    ].join('\n');
+    const child = loadIssue('issue-child-901.md', 901);
+    expect(
+      specsDeclareCoApplicability([
+        { issueNumber: 900, body: parentBody },
+        { issueNumber: 901, body: child.body },
+      ]),
+    ).toBe(true);
+  });
+
+  it('treats changed text paths missing from the diff as incomplete evidence', () => {
+    const diff = fixture('large.diff');
+    expect(collectIncompleteDiffEvidencePaths(['scripts/missing.ts'], diff)).toEqual([
+      'scripts/missing.ts',
+    ]);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/missing.ts', 'scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('clears invocation readiness after spec reread failure', () => {
+    expect(shouldInvokeCoworkerForStatus('mapping_pending')).toBe(true);
+    expect(shouldInvokeCoworkerForStatus('stale_spec')).toBe(false);
+    expect(shouldInvokeCoworkerForStatus('lookup_unavailable')).toBe(false);
+    const merged = mergeSpecRereadFailure({
+      status: 'mapped',
+      statusRecord: buildStructuredStatusRecord({
+        status: 'mapped',
+        prHeadSha: 'head-sha',
+        members: [memberFromIssue('issue-with-acceptance.md', 362)],
+      }),
+      ledger: { exhaustive: true, entries: [] },
+      fallback: buildSpecRereadFallbackOutput({
+        status: 'stale_spec',
+        prHeadSha: 'head-sha',
+        contractSet: [memberFromIssue('issue-with-acceptance.md', 362)],
+        diffContent: fixture('small.diff'),
+        preflightStatusRecord: buildStructuredStatusRecord({
+          status: 'mapped',
+          prHeadSha: 'head-sha',
+          members: [memberFromIssue('issue-with-acceptance.md', 362)],
+        }),
+      }),
+      specRereadStatus: 'stale_spec',
+    });
+    expect(merged.status).toBe('stale_spec');
+    expect(shouldInvokeCoworkerForStatus(merged.status)).toBe(false);
   });
 
   it('resolves co-applicable multi-spec sets via prerequisite links', () => {
@@ -677,7 +752,9 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       'diff --git a/scripts/model.dat b/scripts/model.dat',
       'Binary files a/scripts/model.dat and b/scripts/model.dat differ',
     ].join('\n');
+    expect(collectIncompleteDiffEvidencePaths([], binarySummary)).toEqual(['scripts/model.dat']);
     expect(collectIncompleteDiffEvidencePaths(['scripts/example.ts'], binarySummary)).toEqual([
+      'scripts/example.ts',
       'scripts/model.dat',
     ]);
 
@@ -1001,7 +1078,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     const atFloor = evaluateMappingPreflight({
       diffLineCount: countDiffLines(diff),
       diffContent: diff,
-      changedPaths: ['scripts/example.ts'],
+      changedPaths: [],
       binding: { explicitIssueNumber: 362 },
       specBodies: [issue],
     });
@@ -1010,7 +1087,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     const aboveFloor = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
       diffContent: diff,
-      changedPaths: ['scripts/example.ts'],
+      changedPaths: [],
       binding: { explicitIssueNumber: 362 },
       specBodies: [issue],
     });

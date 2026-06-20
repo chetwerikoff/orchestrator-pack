@@ -331,6 +331,10 @@ export function invokeCoworkerArgv(argv: string[]): string {
 }
 
 
+export function shouldInvokeCoworkerForStatus(status: ContractMappingStatus): boolean {
+  return status === 'mapping_pending';
+}
+
 export function mergeSpecRereadFailure(input: {
   status: ContractMappingStatus;
   statusRecord: ContractMappingStatusRecord;
@@ -537,7 +541,7 @@ function main(): void {
 
   const output = {
     status,
-    shouldInvokeCoworker: preflight.shouldInvokeCoworker,
+    shouldInvokeCoworker: shouldInvokeCoworkerForStatus(status),
     statusRecord,
     contractSet: preflight.contractSet.map((member) => ({
       issueNumber: member.issueNumber,
