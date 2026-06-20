@@ -1,0 +1,17 @@
+{
+  "description": "Issue #363: fixing_ci only on a head older than the episode head",
+  "status": "working",
+  "openPrHeadCommittedAt": "2026-06-18T12:30:00.000Z",
+  "reports": [
+    {
+      "reportState": "working",
+      "reportedAt": "2026-06-18T13:00:00.000Z",
+      "accepted": true
+    },
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T12:00:00.000Z",
+      "accepted": true
+    }
+  ]
+}

@@ -3,21 +3,30 @@
     {
       "name": "opk-worker-redacted",
       "role": "worker",
-      "status": "working",
-      "prNumber": 342,
+      "status": "stuck",
+      "activity": "idle",
+      "lastActivity": "12m ago",
+      "prNumber": 283,
       "ownedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "reports": [
         {
           "reportState": "working",
-          "reportedAt": "2026-06-18T12:00:00.000Z"
+          "reportedAt": "2026-06-18T12:00:00.000Z",
+          "accepted": true
+        },
+        {
+          "reportState": "started",
+          "reportedAt": "2026-06-18T11:30:00.000Z",
+          "accepted": true
         }
       ]
     }
   ],
   "openPrs": [
     {
-      "number": 342,
-      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "number": 283,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headCommittedAt": "2026-06-18T10:00:00.000Z"
     }
   ]
 }

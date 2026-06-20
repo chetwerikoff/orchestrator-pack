@@ -46,6 +46,10 @@ import {
   validateInitGate,
   validateWorkerStateInput,
 } from '../docs/ci-failure-notification.mjs';
+import {
+  loadVariantCatalog,
+  validateExternalObject,
+} from './external-output-shape-guard.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/ci-failure-notification');
@@ -67,13 +71,25 @@ const nextRedSameSha = { ...episode, redPeriod: 'suite-101-attempt-1' };
 const supersededTarget = { ...episode, targetId: 'session-old-redacted', targetGeneration: 'generation-old-redacted' };
 const newHead = { ...episode, headSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', redPeriod: 'suite-200-attempt-1' };
 
-function workerState(overrides: { status?: string; prNumber?: number; headSha?: string; targetId?: string; targetGeneration?: string; runtime?: string } = {}) {
-  const golden = fixture<any>('worker-state-golden.json');
+function workerState(overrides: {
+  status?: string;
+  prNumber?: number;
+  headSha?: string;
+  targetId?: string;
+  targetGeneration?: string;
+  runtime?: string;
+  reports?: Array<Record<string, unknown>>;
+  openPrs?: Array<Record<string, unknown>>;
+  fixture?: string;
+} = {}) {
+  const golden = fixture<any>(overrides.fixture ?? 'worker-state-golden.json');
   const prNumber = overrides.prNumber ?? episode.prNumber;
   const headSha = overrides.headSha ?? episode.headSha;
   const targetId = overrides.targetId ?? episode.targetId;
   const targetGeneration = overrides.targetGeneration ?? episode.targetGeneration;
-  const status = overrides.status ?? 'working';
+  const status = overrides.status ?? golden.sessions[0]?.status ?? 'working';
+  const reports = overrides.reports ?? golden.sessions[0]?.reports ?? [{ reportState: status, reportedAt: '2026-06-18T12:00:00.000Z', accepted: true }];
+  const openPrs = overrides.openPrs ?? golden.openPrs ?? [{ number: prNumber, headRefOid: headSha, headCommittedAt: '2026-06-18T10:00:00.000Z' }];
   return {
     sessions: [
       {
@@ -86,10 +102,32 @@ function workerState(overrides: { status?: string; prNumber?: number; headSha?: 
         targetGeneration,
         sessionGeneration: targetGeneration,
         ...(overrides.runtime !== undefined ? { runtime: overrides.runtime } : {}),
-        reports: [{ reportState: status, reportedAt: '2026-06-18T12:00:00.000Z' }],
+        reports,
       },
     ],
-    openPrs: [{ number: prNumber, headRefOid: headSha }],
+    openPrs,
+  };
+}
+
+function captureWorkerState(scenarioFixture: string) {
+  const base = fixture<any>('ci-failure-worker-state-base.json');
+  const scenario = fixture<any>(scenarioFixture);
+  const openPrs = base.openPrs.map((row: any) => ({
+    ...row,
+    ...(scenario.openPrHeadCommittedAt ? { headCommittedAt: scenario.openPrHeadCommittedAt } : {}),
+  }));
+  return {
+    sessions: [
+      {
+        ...base.sessionShell,
+        status: scenario.status,
+        lastActivity: scenario.lastActivity ?? base.sessionShell.lastActivity,
+        targetGeneration: episode.targetGeneration,
+        sessionGeneration: episode.targetGeneration,
+        reports: scenario.reports,
+      },
+    ],
+    openPrs,
   };
 }
 
@@ -239,14 +277,49 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
 });
 
 describe('CI failure live worker suppressor (Issue #342)', () => {
-  it('suppresses fixing_ci from live PR owner without episode key in report', () => {
-    const result = decision({
-      workerState: workerState({ status: 'fixing_ci' }),
-      workerReports: [{ state: 'fixing_ci' }],
+  it('suppresses fixing_ci from head-scoped report when session status is non-fixing_ci (Issue #363)', () => {
+    const captured = fixture<any>('live-worker-fixing-ci-captured.json');
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
     expect(result.audit!.phase).toBe('terminal');
+    expect(captured.status).not.toBe('fixing_ci');
+    expect(captured.reports[0].reportState).toBe('fixing_ci');
+  });
+
+  it('does not suppress when latest same-head report is non-fixing_ci after older fixing_ci (Issue #363)', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-same-head-recency.json'),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).toBe('no_suppressor');
+  });
+
+  it('does not suppress stale-head fixing_ci when episode head is still current (Issue #363)', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-stale-head-fixing-ci.json'),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).toBe('no_suppressor');
+  });
+
+  it('hard-fails on renamed reportState field instead of silent SEND (Issue #363)', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: workerState({
+        status: 'stuck',
+        reports: [{ state: 'fixing_ci', reportedAt: '2026-06-18T13:05:00.000Z', accepted: true }],
+      }),
+    });
+    expect(result.hard_failure).toBe(true);
+    expect(result.terminal_action).toBeUndefined();
+    expect(result.diagnostic!.error_kind).toBe('incompatible_worker_state_shape');
+    expect(result.audit!.phase).toBe('diagnostic');
   });
 
   it('sends for idle live owner (row 3)', () => {
@@ -441,7 +514,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const result = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ status: 'fixing_ci' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(result.action).toBe('suppressed');
       expect(result.terminal!.audit!.reason).toBe('suppressed-live-worker');
@@ -461,7 +534,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
       const retry = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ status: 'fixing_ci' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(retry.action).toBe('not_claimed');
     } finally {
@@ -742,6 +815,46 @@ describe('episode lifecycle outbox (Issue #342)', () => {
 
 });
 
+
+  it('capture-backed live-worker fixtures pass ao-worker-report and gh-pr-open shape guard (Issue #363)', () => {
+    const { catalog } = loadVariantCatalog(path.join(repoRoot, 'tests/external-output-references'));
+    const scenarios = [
+      'live-worker-fixing-ci-captured.json',
+      'live-worker-same-head-recency.json',
+      'live-worker-stale-head-fixing-ci.json',
+    ];
+    for (const name of scenarios) {
+      const data = captureWorkerState(name);
+      for (const [index, report] of data.sessions[0].reports.entries()) {
+        const errors = validateExternalObject(
+          report,
+          'ao-worker-report',
+          String(report.reportState),
+          catalog,
+          name,
+          `$.sessions[0].reports[${index}]`,
+        );
+        expect(errors, name).toEqual([]);
+      }
+      for (const [index, openPr] of data.openPrs.entries()) {
+        const errors = validateExternalObject(openPr, 'gh-pr-open', 'open', catalog, name, `$.openPrs[${index}]`);
+        expect(errors, name).toEqual([]);
+      }
+    }
+    const golden = fixture<any>('worker-state-golden.json');
+    for (const [index, report] of golden.sessions[0].reports.entries()) {
+      const errors = validateExternalObject(
+        report,
+        'ao-worker-report',
+        String(report.reportState),
+        catalog,
+        'worker-state-golden.json',
+        `$.sessions[0].reports[${index}]`,
+      );
+      expect(errors).toEqual([]);
+    }
+  });
+
 describe('fixtures, wrapper, and legacy compatibility', () => {
   it('golden worker-state fixture passes redaction check', () => {
     const golden = fixture('worker-state-golden.json');
@@ -770,7 +883,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
   it('wrapper decide path returns live-worker suppression', () => {
     const result = runWrapper('decide', {
       episode,
-      workerState: workerState({ status: 'fixing_ci' }),
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
@@ -839,7 +952,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
       const suppressed = evaluatePreflightRevalidation({
         storeDir: dir,
         episode,
-        workerState: workerState({ status: 'fixing_ci' }),
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       });
       expect(suppressed.action).toBe('suppressed');
       const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));

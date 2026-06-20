@@ -1,0 +1,22 @@
+{
+  "description": "Issue #363 positive-outcome: session status stuck with latest head-scoped report fixing_ci",
+  "status": "stuck",
+  "lastActivity": "8m ago",
+  "reports": [
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T13:05:00.000Z",
+      "accepted": true
+    },
+    {
+      "reportState": "working",
+      "reportedAt": "2026-06-18T12:00:00.000Z",
+      "accepted": true
+    },
+    {
+      "reportState": "started",
+      "reportedAt": "2026-06-18T11:30:00.000Z",
+      "accepted": true
+    }
+  ]
+}

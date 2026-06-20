@@ -55,10 +55,10 @@ export declare function resolveConfig(input?: unknown): {
   [key: string]: unknown;
 };
 export declare function evaluateSnapshotCoherence(input: unknown): Record<string, unknown>;
+export declare function resolveHeadScopedReportState(session: unknown, headSha: unknown, openPrs: unknown, prNumber: unknown): { ok: boolean; reportState?: string | null; error?: string; code?: string; field?: string };
 export declare function resolveLivePrOwner(input: unknown): Record<string, unknown>;
 export declare function evaluateLiveWorkerSuppressor(input: unknown): Record<string, unknown>;
 export declare function bindReactionEvent(episode: unknown, events?: unknown[], options?: unknown): { status: string; eventId: string | null; event?: unknown };
-export declare function bindSelfFixReport(episode: unknown, reports?: unknown[]): { status: string; reportId: string | null };
 export declare function exactIntentTokenLookup(episode: unknown, tokens?: unknown[], options?: unknown): { status: string; tokenId: string | null };
 
 export declare function buildCiSourceFromRequiredChecks(checks?: unknown[], options?: unknown): Record<string, unknown>;

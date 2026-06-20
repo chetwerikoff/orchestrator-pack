@@ -3,13 +3,14 @@
  * CI-failure notification predicate and episode lifecycle (Issues #283 / #342).
  *
  * Terminal predicate action: SEND | SUPPRESS. Episode lifecycle adds pending→terminal
- * outbox states; live worker fixing_ci suppressor binds to PR-owner session state.
+ * outbox states; live worker fixing_ci suppressor binds to the PR-owner's latest
+ * head-scoped worker report (not session.status).
  */
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, readdirSync, renameSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
-import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr } from './review-trigger-reconcile.mjs';
+import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs } from './review-trigger-reconcile.mjs';
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 import {
@@ -17,9 +18,9 @@ import {
   normalizeCiChecksByPr,
   normalizeRequiredCheckLookupFailedByPr,
   normalizeRequiredCheckNamesByPr,
-  normalizeSessionReportState,
 } from './ci-green-wake-reconcile.mjs';
-import { isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
+import { findLatestReportForHead, isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
+import { getReportState } from './review-finding-delivery-confirm.mjs';
 import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
@@ -215,6 +216,26 @@ export function evaluateSnapshotCoherence({ openPrs, prNumber, headShaFirst, hea
   return { skew: false, currentHead: currentHead || first || second };
 }
 
+export function resolveHeadScopedReportState(session, headSha, openPrs, prNumber) {
+  const headCommittedAtMs = resolveHeadCommittedAtMs(openPrs, prNumber);
+  const latest = findLatestReportForHead(session, headSha, { headCommittedAtMs });
+  if (!latest) {
+    return { ok: true, reportState: null };
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(latest, 'reportState')
+    && !Object.prototype.hasOwnProperty.call(latest, 'report_state')
+  ) {
+    return {
+      ok: false,
+      error: 'incompatible_worker_state_shape',
+      code: 'missing_report_state_field',
+      field: 'reportState',
+    };
+  }
+  return { ok: true, reportState: getReportState(latest) || null };
+}
+
 export function resolveLivePrOwner({ workerState, episode }) {
   const validation = validateWorkerStateInput(workerState);
   if (!validation.ok) return { ok: false, ...validation };
@@ -225,7 +246,14 @@ export function resolveLivePrOwner({ workerState, episode }) {
   }
   const owner = findSessionByIdentifier(workerState.sessions, ownerId);
   const live = Boolean(owner && isSessionAlive(owner));
-  const reportState = owner ? normalizeSessionReportState(owner) : null;
+  let reportState = null;
+  if (owner) {
+    const scoped = resolveHeadScopedReportState(owner, ep.headSha, workerState.openPrs, ep.prNumber);
+    if (!scoped.ok) {
+      return { ok: false, ...scoped };
+    }
+    reportState = scoped.reportState;
+  }
   const targetGeneration = owner ? deriveTargetGeneration(owner) : null;
   return { ok: true, ownerId, owner, live, reportState, targetGeneration };
 }
@@ -251,6 +279,14 @@ export function evaluateLiveWorkerSuppressor({ episode, workerState, headShaFirs
     return { status: 'superseded', reason: 'abandoned-superseded', currentHead: coherence.currentHead };
   }
   const ownerResolution = resolveLivePrOwner({ workerState, episode: ep });
+  if (!ownerResolution.ok) {
+    return {
+      status: 'input_error',
+      error_kind: ownerResolution.error,
+      code: ownerResolution.code,
+      field: ownerResolution.field,
+    };
+  }
   if (!ownerResolution.live || !ownerResolution.owner) {
     return { status: 'no_live_owner', reason: 'abandoned-no-live-owner' };
   }
@@ -309,21 +345,6 @@ export function bindReactionEvent(episode, events = [], { excludeDigest = null }
     }
   }
   return { status: sawUnbindable ? 'unbindable' : (sawCandidate ? 'no-match' : 'absent'), eventId: null };
-}
-
-/** @deprecated Episode-key binding retained for legacy audit only; #342 uses live worker state. */
-export function bindSelfFixReport(episode, reports = []) {
-  let sawCandidate = false;
-  for (const report of reports ?? []) {
-    const state = String(field(report, ['state', 'status', 'report', 'reportState', 'report_state']) ?? '').toLowerCase();
-    if (state !== 'fixing_ci') continue;
-    sawCandidate = true;
-    const ep = field(report, ['episode', 'metadata.episode', 'details.episode']) ?? eventEpisode(report);
-    if (sameEpisode(episode, ep)) {
-      return { status: 'matched', reportId: String(field(report, ['id', 'reportId']) ?? '') };
-    }
-  }
-  return { status: sawCandidate ? 'no-match' : 'absent', reportId: null };
 }
 
 export function exactIntentTokenLookup(episode, tokens = [], { excludeDigest = null } = {}) {
@@ -683,6 +704,9 @@ export function preSendCiRedRecheck(episode, fresh) {
     openPrs: toArray(fresh?.openPrs),
   };
   const ownerResolution = resolveLivePrOwner({ workerState, episode: ep });
+  if (!ownerResolution.ok) {
+    return { ok: false, reason: ownerResolution.error ?? 'incompatible_worker_state_shape' };
+  }
   if (!ownerResolution.live || !ownerResolution.owner) {
     return { ok: false, reason: 'abandoned-no-live-owner' };
   }
@@ -772,6 +796,25 @@ export function evaluateEpisodeTerminal(input) {
       episode_key_digest: digest,
       diagnostic: { error_kind: 'snapshot_skew', reason: live.reason },
       audit: buildDiagnosticAudit({ episode, errorKind: 'snapshot_skew', detail: live.reason }),
+    };
+  }
+
+  if (live.status === 'input_error') {
+    return {
+      hard_failure: true,
+      reevaluable: true,
+      episode_key: episode,
+      episode_key_digest: digest,
+      diagnostic: {
+        error_kind: live.error_kind,
+        code: live.code,
+        field: live.field,
+      },
+      audit: buildDiagnosticAudit({
+        episode,
+        errorKind: live.error_kind,
+        detail: live.field ?? live.code ?? null,
+      }),
     };
   }
 
