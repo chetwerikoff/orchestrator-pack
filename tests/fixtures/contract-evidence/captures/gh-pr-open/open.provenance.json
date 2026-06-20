@@ -1,0 +1,3 @@
+{
+  "sourceCommand": "gh pr list --json number,headRefOid"
+}

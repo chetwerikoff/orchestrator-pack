@@ -1,0 +1,4 @@
+{
+  "sourceCommand": "ao report --note enabled --json",
+  "exitStatus": 0
+}

@@ -1,0 +1,4 @@
+{
+  "sourceCommand": "ao report --fake-flag",
+  "exitStatus": 1
+}

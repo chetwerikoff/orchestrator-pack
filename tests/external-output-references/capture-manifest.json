@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "corpusRoot": "tests/external-output-references",
+  "entries": {
+    "ao-review-run/cancelled": {
+      "id": "ao-review-run/cancelled",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/cancelled.raw.json",
+      "contentHash": "sha256:db5dce45ca167f11ef791220024560c65684b3361b616f1d5213a4b607f49064"
+    },
+    "ao-review-run/clean": {
+      "id": "ao-review-run/clean",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/clean.raw.json",
+      "contentHash": "sha256:12e4e5718f8d5403097ada15ac0694369c2e67b6349a4b3c6461a75a7263844a"
+    },
+    "ao-review-run/failed": {
+      "id": "ao-review-run/failed",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/failed.raw.json",
+      "contentHash": "sha256:771ca6627c06ea3897d745b9af63c6e7c2c81c5083a421115a20a1dfbdce9ad7"
+    },
+    "ao-review-run/needs_triage": {
+      "id": "ao-review-run/needs_triage",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/needs_triage.raw.json",
+      "contentHash": "sha256:9904eabdd7cacbfdb02fb1b9ec9f78d31d70b763fe1a17c48435111fb256eb8d"
+    },
+    "ao-review-run/outdated": {
+      "id": "ao-review-run/outdated",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/outdated.raw.json",
+      "contentHash": "sha256:f805fc4c198cd9754d1a1833a3dd691a34d403b6de1126d73584da1277ec9d4c"
+    },
+    "ao-review-run/queued": {
+      "id": "ao-review-run/queued",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/queued.raw.json",
+      "contentHash": "sha256:991329ea2ed79ff69e243a21b072aa8fcf7e9287e9479dafbd44c6a2e54ca668"
+    },
+    "ao-review-run/running": {
+      "id": "ao-review-run/running",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/running.raw.json",
+      "contentHash": "sha256:49664a5263aaaa28f2d9bc156208b9b78096a5ed4f43a5b7100d10da17c4d665"
+    },
+    "ao-review-run/sent_to_agent": {
+      "id": "ao-review-run/sent_to_agent",
+      "producer": "ao",
+      "sourceCommand": "pack delivery tracking overlay on ao review list rows",
+      "kind": "structured",
+      "path": "captures/ao-review-run/sent_to_agent.raw.json",
+      "contentHash": "sha256:7e820e058d8abf3c1433430dea42917a64c3588da0e8c4732184ed57a4b895f4"
+    },
+    "ao-review-run/waiting_update": {
+      "id": "ao-review-run/waiting_update",
+      "producer": "ao",
+      "sourceCommand": "ao review list orchestrator-pack --json",
+      "kind": "structured",
+      "path": "captures/ao-review-run/waiting_update.raw.json",
+      "contentHash": "sha256:197f6ac9ada374e31408c51e7e0acd18771f0655b8a19901e075a73e09ad1f32"
+    },
+    "ao-status-session/runtime-alive": {
+      "id": "ao-status-session/runtime-alive",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full (forward-compat sample)",
+      "kind": "structured",
+      "path": "captures/ao-status-session/runtime-alive.raw.json",
+      "contentHash": "sha256:1a1953ad60cdee0d6552260b5b243c8c5214543121f6d7906a5b8cf2c1843856"
+    },
+    "ao-status-session/runtime-exited": {
+      "id": "ao-status-session/runtime-exited",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full (death variant)",
+      "kind": "structured",
+      "path": "captures/ao-status-session/runtime-exited.raw.json",
+      "contentHash": "sha256:49b86abe0fe22792109505802a1e93bfaf36e93143f1adddd64b0b1daeae7c52"
+    },
+    "ao-status-session/runtime-present-unknown": {
+      "id": "ao-status-session/runtime-present-unknown",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full (present-non-live variant)",
+      "kind": "structured",
+      "path": "captures/ao-status-session/runtime-present-unknown.raw.json",
+      "contentHash": "sha256:96eaf08b253cd3aec74f8b8c77f0f36fd4c32c0571971e13a247605aa242fb91"
+    },
+    "ao-status-session/runtime-process_missing": {
+      "id": "ao-status-session/runtime-process_missing",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full (death variant)",
+      "kind": "structured",
+      "path": "captures/ao-status-session/runtime-process_missing.raw.json",
+      "contentHash": "sha256:30d2caa437de4dfd8741e19402e91c36ac7cbc8683646a615725f9b70e06cea6"
+    },
+    "ao-status-session/working-no-runtime": {
+      "id": "ao-status-session/working-no-runtime",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full",
+      "kind": "structured",
+      "path": "captures/ao-status-session/working-no-runtime.raw.json",
+      "contentHash": "sha256:019be58ae0c067efda08366b012a9429943550c8dffc9063204fbe2f48473fe6"
+    },
+    "ao-webhook-notification/ready_for_review": {
+      "id": "ao-webhook-notification/ready_for_review",
+      "producer": "ao",
+      "sourceCommand": "ao webhook notification capture (incident PR #234/opk-27)",
+      "kind": "structured",
+      "path": "captures/ao-webhook-notification/ready_for_review.raw.json",
+      "contentHash": "sha256:e7e229dca286aa883a436d5fe7238ba2d5b37b0b36c38b578527ff36ae0b8ad4"
+    },
+    "ao-webhook-notification/ready_for_review.action-priority": {
+      "id": "ao-webhook-notification/ready_for_review.action-priority",
+      "producer": "ao",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-webhook-notification/ready_for_review.action-priority.raw.json",
+      "contentHash": "sha256:13e46a06a40b89828b55f5ce7aebfd131c822830c7234929cc4d92ed1e8cbe83"
+    },
+    "ao-worker-report/addressing_reviews": {
+      "id": "ao-worker-report/addressing_reviews",
+      "producer": "ao",
+      "sourceCommand": "ao report addressing_reviews",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/addressing_reviews.raw.json",
+      "contentHash": "sha256:4d66125f4245f59b265b9c502d8a22a0abe85b36670154b6bad642d51e960118"
+    },
+    "ao-worker-report/completed": {
+      "id": "ao-worker-report/completed",
+      "producer": "ao",
+      "sourceCommand": "ao report completed --note \"...\"",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/completed.raw.json",
+      "contentHash": "sha256:711f21246d1a0d5c180d10e62e6905eea41a4633ff04bb64e33960a078444453"
+    },
+    "ao-worker-report/fixing_ci": {
+      "id": "ao-worker-report/fixing_ci",
+      "producer": "ao",
+      "sourceCommand": "ao report fixing_ci --note \"...\"",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/fixing_ci.raw.json",
+      "contentHash": "sha256:7209254592c12171af683821b45b65095303fb4edb4bdaa606f1755640dc728b"
+    },
+    "ao-worker-report/pr_created": {
+      "id": "ao-worker-report/pr_created",
+      "producer": "ao",
+      "sourceCommand": "ao report pr_created --pr-url ...",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/pr_created.raw.json",
+      "contentHash": "sha256:7534128d55cf54bd8640c4df2ca86c60e7fb1251e4c0039afe9cbfa3fad0bfcb"
+    },
+    "ao-worker-report/ready_for_review": {
+      "id": "ao-worker-report/ready_for_review",
+      "producer": "ao",
+      "sourceCommand": "ao report ready_for_review",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/ready_for_review.raw.json",
+      "contentHash": "sha256:358c6e865a5144873d8ee911eced51616e3bca8c5fa26d41cd0ac3d928ffeeb8"
+    },
+    "ao-worker-report/started": {
+      "id": "ao-worker-report/started",
+      "producer": "ao",
+      "sourceCommand": "ao acknowledge",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/started.raw.json",
+      "contentHash": "sha256:19d33125856caa8963d1636ecde3aaae6d91c236268c890b2f617939910f5b94"
+    },
+    "ao-worker-report/working": {
+      "id": "ao-worker-report/working",
+      "producer": "ao",
+      "sourceCommand": "ao report working --note \"...\"",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/working.raw.json",
+      "contentHash": "sha256:8f97b7e395f0c2abe53cfb8ab24a2109e47267f7ef836d8512e0ed0cc8dd9710"
+    },
+    "gh-pr-open/open": {
+      "id": "gh-pr-open/open",
+      "producer": "gh",
+      "sourceCommand": "gh pr list --state open --json number,headRefOid,commits --limit 200",
+      "kind": "structured",
+      "path": "captures/gh-pr-open/open.raw.json",
+      "contentHash": "sha256:190ae89f3773084ac603b90ba608aa9c4f689f36010376700f822dd0e15cb9ac"
+    }
+  }
+}

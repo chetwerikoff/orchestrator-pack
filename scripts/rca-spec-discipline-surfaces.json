@@ -3,7 +3,10 @@
   "rules": [
     {
       "id": "positive-outcome",
-      "markers": ["behavior-kind", "positive-outcome"],
+      "markers": [
+        "behavior-kind",
+        "positive-outcome"
+      ],
       "surfaces": [
         ".claude/skills/create-issue-draft/SKILL.md",
         ".claude/skills/publish-issue-draft/SKILL.md",
@@ -12,7 +15,10 @@
     },
     {
       "id": "recurrence-diagnostic",
-      "markers": ["recurrence-diagnostic", "pass + reproduce"],
+      "markers": [
+        "recurrence-diagnostic",
+        "pass + reproduce"
+      ],
       "surfaces": [
         "prompts/investigate_root_cause.md",
         ".claude/skills/investigate-root-cause/SKILL.md"
@@ -20,7 +26,10 @@
     },
     {
       "id": "5-whys-stop",
-      "markers": ["5-Whys stop condition", "terminal root cause"],
+      "markers": [
+        "5-Whys stop condition",
+        "terminal root cause"
+      ],
       "surfaces": [
         "prompts/investigate_root_cause.md",
         ".claude/skills/investigate-root-cause/SKILL.md"
@@ -28,11 +37,24 @@
     },
     {
       "id": "parked-roots",
-      "markers": ["parked-root-cause", "parked root"],
+      "markers": [
+        "parked-root-cause",
+        "parked root"
+      ],
       "surfaces": [
         ".claude/skills/create-issue-draft/SKILL.md",
         ".claude/skills/publish-issue-draft/SKILL.md",
         "prompts/agent_rules.md"
+      ]
+    },
+    {
+      "id": "contract-evidence",
+      "markers": [
+        "contract-evidence",
+        "contract grounding"
+      ],
+      "surfaces": [
+        ".claude/skills/create-issue-draft/SKILL.md"
       ]
     }
   ],
