@@ -117,6 +117,10 @@ describe('checkContractEvidence fixtures', () => {
     checkFixture('new-repo-owned-pass.md', true);
   });
 
+  it('anchors NEW AC lookup to the acceptance criteria section', () => {
+    checkFixture('new-ac-section-anchored-pass.md', true);
+  });
+
   it('rejects conflicting duplicate binding identities', () => {
     const result = checkFixture('duplicate-identity-conflict.md', false);
     expect(result.errors.join(' ')).toMatch(/conflicting evidence/i);

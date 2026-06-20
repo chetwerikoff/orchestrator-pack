@@ -166,16 +166,35 @@ export function parseProducerEmissionBlocks(markdown) {
 
 /**
  * @param {string} markdown
+ */
+export function acceptanceCriteriaRegion(markdown) {
+  const heading = markdown.match(/^#{1,6}\s+acceptance criteria\b/im);
+  if (!heading) {
+    return null;
+  }
+  const start = heading.index ?? 0;
+  const rest = markdown.slice(start);
+  const level = (heading[0].match(/^#+/) ?? ['##'])[0].length;
+  const nextHeading = rest.slice(heading[0].length).search(new RegExp(`^#{1,${level}}\\s+`, 'm'));
+  return nextHeading >= 0 ? rest.slice(0, heading[0].length + nextHeading) : rest;
+}
+
+/**
+ * @param {string} markdown
  * @param {number} criterionNumber
  */
 export function acceptanceCriterionSection(markdown, criterionNumber) {
+  const region = acceptanceCriteriaRegion(markdown);
+  if (!region) {
+    return null;
+  }
   const pattern = new RegExp(`^${criterionNumber}\\.\\s+(.+)$`, 'im');
-  const match = markdown.match(pattern);
+  const match = region.match(pattern);
   if (!match) {
     return null;
   }
   const start = match.index ?? 0;
-  const rest = markdown.slice(start);
+  const rest = region.slice(start);
   const next = rest.slice(match[0].length).search(/^\d+\.\s+/m);
   return next >= 0 ? rest.slice(0, match[0].length + next) : rest;
 }

@@ -939,6 +939,33 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
         }
     }
 
+
+    Push-Location $Root
+    try {
+        $contractEvidenceVitestReady = $true
+        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+            & npm ci --include=dev
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'contract-evidence/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+                Add-Failure 'contract-evidence vitest prerequisites failed (Issue #366)'
+                $contractEvidenceVitestReady = $false
+            }
+        }
+        if ($contractEvidenceVitestReady) {
+            & npx vitest run scripts/contract-evidence.test.ts
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'contract-evidence/vitest' 'FAIL' "exit=$LASTEXITCODE"
+                Add-Failure 'contract-evidence vitest suite failed (Issue #366)'
+            }
+            else {
+                Write-Check 'contract-evidence/vitest' 'PASS' 'completed'
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
     $productionManifest = Join-Path $Root 'tests/external-output-references/capture-manifest.json'
     node (Join-Path $Root 'scripts/generate-capture-manifest.mjs') --verify $productionManifest 2>$null
     if ($LASTEXITCODE -ne 0) {

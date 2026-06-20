@@ -1,7 +1,3 @@
-export function normalizeLine(value: string): string;
-
-export function parseKeyValueBlock(body: string): Record<string, string>;
-
 export function extractAuthoritativeContractEvidenceBody(markdown: string): string | null;
 
 export function parseContractEvidenceRows(body: string): {
@@ -48,15 +44,12 @@ export function isCliBehaviorBinding(
   manifestEntry?: { exitStatus?: number },
 ): boolean;
 
+export function acceptanceCriteriaRegion(markdown: string): string | null;
+
 export function acceptanceCriterionSection(
   markdown: string,
   criterionNumber: number,
 ): string | null;
-
-export function criterionHasProducerEmission(
-  markdown: string,
-  criterionNumber: number,
-): boolean;
 
 export function checkContractEvidence(
   markdown: string,

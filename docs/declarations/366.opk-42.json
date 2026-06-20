@@ -57,6 +57,7 @@
     "tests/fixtures/draft-discipline/contract-evidence/legacy-list.json",
     "tests/fixtures/draft-discipline/contract-evidence/malformed-row.md",
     "tests/fixtures/draft-discipline/contract-evidence/missing-manifest-entry.md",
+    "tests/fixtures/draft-discipline/contract-evidence/new-ac-section-anchored-pass.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-consumer-only-ac.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-external-alias.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-external-gh.md",
