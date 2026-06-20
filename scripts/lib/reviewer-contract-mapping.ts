@@ -74,6 +74,9 @@ export function countDiffLines(content: string): number {
 
 export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 
+/** Mapping preflight redacts secrets/private data safely; decision-bearing markers still fail closed. */
+export const MAPPING_PREFLIGHT_SCRUB_OPTIONS = { allowSafeSecretRedaction: true } as const;
+
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
   /(?:authorization|auth)\s*:\s*Bearer\s+\S+/gi,
@@ -836,7 +839,7 @@ export function isValidMappingCandidate(entry: unknown): entry is MappingCandida
 }
 
 export function computeBoundDiffArtifactHash(diffContent: string): string | null {
-  const scrub = scrubForProviderInput(diffContent);
+  const scrub = scrubForProviderInput(diffContent, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
   if (!scrub.ok) {
     return null;
   }
@@ -907,16 +910,19 @@ export function validateMappingLedger(
 
   const memberByIssue = new Map(members.map((member) => [member.issueNumber, member] as const));
 
+  const usedEntryIndexes = new Set<number>();
   for (const member of members) {
     for (const criterion of member.acceptanceCriteria) {
-      const entry = ledger.entries.find(
-        (e) =>
+      const entryIndex = ledger.entries.findIndex(
+        (e, index) =>
+          !usedEntryIndexes.has(index) &&
           e.specIssueNumber === member.issueNumber &&
           e.citedRequirementText.trim() === criterion.trim(),
       );
-      if (!entry) {
+      if (entryIndex === -1) {
         return { ok: false, status: 'malformed' };
       }
+      usedEntryIndexes.add(entryIndex);
     }
   }
 
@@ -926,6 +932,13 @@ export function validateMappingLedger(
     }
     const member = memberByIssue.get(entry.specIssueNumber);
     if (!member || entry.specSnapshotHash !== member.snapshotHash) {
+      return { ok: false, status: 'malformed' };
+    }
+    if (
+      !member.acceptanceCriteria.some(
+        (criterion) => criterion.trim() === entry.citedRequirementText.trim(),
+      )
+    ) {
       return { ok: false, status: 'malformed' };
     }
 
@@ -1036,7 +1049,7 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     }
   }
 
-  const diffScrub = scrubForProviderInput(input.diffContent);
+  const diffScrub = scrubForProviderInput(input.diffContent, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
   if (!diffScrub.ok) {
     const status = resolveStatusPrecedence([...failureCandidates, 'skipped_provider_fence']);
     return {
@@ -1052,7 +1065,7 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
   }
 
   const specArtifactPreview = buildSpecArtifactContent(resolved.members);
-  const specScrub = scrubForProviderInput(specArtifactPreview);
+  const specScrub = scrubForProviderInput(specArtifactPreview, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
   if (!specScrub.ok) {
     const status = resolveStatusPrecedence([...failureCandidates, 'skipped_provider_fence']);
     return {

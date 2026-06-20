@@ -47,6 +47,7 @@ import {
   createLocalIssueBodyResolver,
   createGitHubIssueBodyResolver,
   buildSpecRereadFallbackOutput,
+  mergeSpecRereadFailure,
   resolveLiveHeadSha,
 } from './invoke-reviewer-contract-mapping.js';
 
@@ -690,7 +691,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(result.shouldInvokeCoworker).toBe(false);
   });
 
-  it('reports skipped_provider_fence when private data requires provider redaction', () => {
+  it('allows safe private-data redaction during mapping preflight', () => {
     const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
@@ -700,8 +701,10 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       binding: { explicitIssueNumber: 362 },
       specBodies: [issue],
     });
-    expect(result.status).toBe('skipped_provider_fence');
-    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(result.status).toBe('mapping_pending');
+    expect(result.shouldInvokeCoworker).toBe(true);
+    const scrubbed = scrubForProviderInput(diff, { allowSafeSecretRedaction: true });
+    expect(scrubbed.ok).toBe(true);
   });
 
   it('redacts private data only when safe redaction is explicitly allowlisted', () => {
@@ -784,7 +787,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
 
-  it('reports skipped_provider_fence for unrecognized auth secrets in provider input', () => {
+  it('allows safe secret redaction during mapping preflight', () => {
     const diff = [
       fixture('large.diff'),
       '+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature',
@@ -805,8 +808,9 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         binding: { explicitIssueNumber: 362 },
         specBodies: [issue],
       });
-      expect(result.status).toBe('skipped_provider_fence');
-      expect(result.shouldInvokeCoworker).toBe(false);
+      expect(result.status).toBe('mapping_pending');
+      expect(result.shouldInvokeCoworker).toBe(true);
+      expect(scrubForProviderInput(fixture('large.diff') + probe).ok).toBe(false);
     }
   });
 
@@ -957,7 +961,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(aboveFloor.status).toBe('mapping_pending');
   });
 
-  it('reports skipped_provider_fence for raw connection-string secrets', () => {
+  it('allows safe connection-string redaction during mapping preflight', () => {
     const diff = fixture('large.diff') + '\n+DATABASE_URL=postgres://alice:s3cr3t@db/prod\n';
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
@@ -967,9 +971,76 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       binding: { explicitIssueNumber: 362 },
       specBodies: [issue],
     });
-    expect(result.status).toBe('skipped_provider_fence');
-    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(result.status).toBe('mapping_pending');
+    expect(result.shouldInvokeCoworker).toBe(true);
     expect(scrubForProviderInput(diff).ok).toBe(false);
+    expect(scrubForProviderInput(diff, { allowSafeSecretRedaction: true }).ok).toBe(true);
+  });
+
+
+  it('rejects ledgers that reuse one entry for duplicate acceptance criteria', () => {
+    const duplicateCriterion = 'The helper must redact provider input safely.';
+    const members: ContractSpecMember[] = [
+      {
+        issueNumber: 362,
+        snapshotHash: 'spec-hash',
+        sections: {},
+        acceptanceCriteria: [duplicateCriterion, duplicateCriterion],
+      },
+    ];
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: [
+        {
+          requirementId: '1',
+          specIssueNumber: 362,
+          specSnapshotHash: 'spec-hash',
+          citedRequirementText: duplicateCriterion,
+          mappingStatus: 'satisfied',
+          implementationLocation: 'scripts/example.ts',
+          kind: 'confirmed_observation',
+        },
+        {
+          requirementId: '2',
+          specIssueNumber: 362,
+          specSnapshotHash: 'spec-hash',
+          citedRequirementText: 'Unrelated criterion text',
+          mappingStatus: 'satisfied',
+          implementationLocation: 'scripts/other.ts',
+          kind: 'confirmed_observation',
+        },
+      ],
+    };
+    expect(validateMappingLedger(ledger, members).ok).toBe(false);
+  });
+
+  it('preserves stale_head when spec reread also drifts', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const diff = fixture('small.diff');
+    const staleHeadRecord = buildStructuredStatusRecord({
+      status: 'stale_head',
+      prHeadSha: 'new-head',
+      diffArtifactHash: computeBoundDiffArtifactHash(diff) ?? undefined,
+      members,
+      staleDimensions: { head: true },
+    });
+    const fallback = buildSpecRereadFallbackOutput({
+      status: 'stale_spec',
+      prHeadSha: 'new-head',
+      contractSet: members,
+      diffContent: diff,
+      preflightStatusRecord: staleHeadRecord,
+    });
+    const merged = mergeSpecRereadFailure({
+      status: 'stale_head',
+      statusRecord: staleHeadRecord,
+      ledger: undefined,
+      fallback,
+      specRereadStatus: 'stale_spec',
+    });
+    expect(merged.status).toBe('stale_head');
+    expect(merged.statusRecord.staleDimensions).toEqual({ head: true, spec: true });
+    expect(merged.ledger).toBeUndefined();
   });
 
   it('exposes prompt contract markers for static checks', () => {

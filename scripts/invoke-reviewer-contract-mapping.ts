@@ -9,6 +9,7 @@ import {
   evaluateFinalUsability,
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
+  resolveStatusPrecedence,
   validateMappingLedger,
   sha256Hex,
   type ContractMappingStatus,
@@ -329,6 +330,47 @@ export function invokeCoworkerArgv(argv: string[]): string {
   return execFileSync(command, args, { encoding: 'utf8' });
 }
 
+
+export function mergeSpecRereadFailure(input: {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger?: MappingLedger;
+  fallback: ReturnType<typeof buildSpecRereadFallbackOutput>;
+  specRereadStatus: 'lookup_unavailable' | 'stale_spec';
+}): {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger?: MappingLedger;
+} {
+  const resolvedStatus = resolveStatusPrecedence([input.status, input.fallback.status]);
+  if (resolvedStatus === input.fallback.status) {
+    return {
+      status: input.fallback.status,
+      statusRecord: input.fallback.statusRecord,
+      ledger: input.fallback.ledger,
+    };
+  }
+  if (input.specRereadStatus === 'stale_spec') {
+    return {
+      status: input.status,
+      statusRecord: {
+        ...input.statusRecord,
+        staleDimensions: {
+          ...input.statusRecord.staleDimensions,
+          head: input.statusRecord.staleDimensions?.head ?? input.status === 'stale_head',
+          spec: true,
+        },
+      },
+      ledger: undefined,
+    };
+  }
+  return {
+    status: input.status,
+    statusRecord: input.statusRecord,
+    ledger: input.ledger,
+  };
+}
+
 export function applyMappedOutputFinalUsability(input: {
   status: ContractMappingStatus;
   statusRecord: ContractMappingStatusRecord;
@@ -465,9 +507,16 @@ function main(): void {
         diffContent,
         preflightStatusRecord: statusRecord,
       });
-      status = fallback.status;
-      statusRecord = fallback.statusRecord;
-      ledger = fallback.ledger;
+      const merged = mergeSpecRereadFailure({
+        status,
+        statusRecord,
+        ledger,
+        fallback,
+        specRereadStatus: specReread.status,
+      });
+      status = merged.status;
+      statusRecord = merged.statusRecord;
+      ledger = merged.ledger;
     } else {
       currentSpecHashes = specReread.hashes;
     }
