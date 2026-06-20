@@ -88,10 +88,11 @@ function Get-SubmitReconcileState {
     if ($state.deliveries) {
         $deliveryCount = @($state.deliveries.Keys).Count
     }
-    if ($storedIdentity -and $storedIdentity -ne $identity -and $deliveryCount -eq 0) {
+    if ($storedIdentity -and $storedIdentity -ne $identity) {
+        $reason = if ($deliveryCount -eq 0) { 'wrong_state_root_empty_store' } else { 'wrong_state_root_active_deliveries' }
         $state['_recovery'] = @{
             fenceTrusted = $false
-            reason       = 'wrong_state_root_empty_store'
+            reason       = $reason
             quarantined  = $Path
         }
     }

@@ -1228,7 +1228,7 @@ function findVanishedTrackedDeliveries(tracking, deliveries) {
       continue;
     }
     const terminal = trimString(record?.terminalState);
-    if (terminal === SUBMIT_STATE_ESCALATED || terminal === SUBMIT_STATE_SUBMITTED) {
+    if (terminal === SUBMIT_STATE_ESCALATED || terminal === SUBMIT_STATE_SUBMITTED || terminal === SUBMIT_STATE_NOOP) {
       continue;
     }
     if (visibleIds.has(deliveryId)) {

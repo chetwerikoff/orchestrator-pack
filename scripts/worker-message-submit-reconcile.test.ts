@@ -2012,6 +2012,36 @@ describe('issue #373 vanish and worktree-drift handling', () => {
     expect((tick2.actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId) as Extract<WorkerMessageSubmitAction, { type: 'noop' }> | undefined)?.reason).toBe('proven_worktree_drift');
   });
 
+
+  it('does not re-emit vanished handling for terminal noop deliveries', () => {
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const tick1 = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'waiting_update', linkedSessionId: 'opk-drift', sentFindingCount: 1 }],
+      dispatchJournal: {},
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601000000,
+    });
+    const deliveries = tick1.tracking?.deliveries ?? {};
+    const deliveryId = Object.keys(deliveries)[0];
+    const tick2 = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+      reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
+      dispatchJournal: {},
+      tracking: tick1.tracking,
+      nowMs: 1717602000000,
+    });
+    expect((tick2.actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId) as Extract<WorkerMessageSubmitAction, { type: 'noop' }> | undefined)?.reason).toBe('proven_worktree_drift');
+    const tick3 = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+      reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
+      dispatchJournal: {},
+      tracking: tick2.tracking,
+      nowMs: 1717603000000,
+    });
+    expect(tick3.actions.filter((a: WorkerMessageSubmitAction) => a.deliveryId === deliveryId)).toHaveLength(0);
+  });
+
   it('escalates ambiguous when drift evidence is missing', () => {
     const id = 'opk-drift:review-send:ambiguous';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
@@ -2132,3 +2162,40 @@ describe('ao send transport contract (Issue #373)', () => {
     expect(text).toMatch(/ao send \[options\]/i);
   });
 });
+
+describe('issue #373 state-root identity quarantine', () => {
+  it('fails closed when active deliveries survive a mismatched state root', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-state-root-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      deliveries: {
+        'delivery-1': {
+          deliveryId: 'delivery-1',
+          sessionId: 'opk-test',
+          firstObservedAtMs: 1717601000000,
+        },
+      },
+      audit: [],
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTRUSTED/i);
+  });
+});
+
