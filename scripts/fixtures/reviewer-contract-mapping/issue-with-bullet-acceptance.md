@@ -1,6 +1,6 @@
 ## Goal
 
-Example contract with bullet-style acceptance criteria.
+Example contract with bullet-style acceptance criteria for mapping ledger tests.
 
 ```behavior-kind
 action-producing
@@ -8,16 +8,17 @@ action-producing
 
 ## Binding surface
 
-- Example binding for bullet fixture tests.
+- Bullet-style AC parsing must recognize `-`, `*`, and checkbox list markers.
 
 ## Files in scope
 
 ```denylist
 vendor/**
+packages/core/**
 ```
 
 ```allowed-roots
-scripts/**
+scripts/fixtures/**
 ```
 
 ## Acceptance criteria
@@ -29,7 +30,7 @@ scripts/**
 
 ## Verification
 
-1. Run reviewer contract-mapping fixtures.
+1. Run reviewer contract-mapping bullet AC fixtures.
 
 ```positive-outcome
 asserts: bullet fixture produces candidate ledger entries
