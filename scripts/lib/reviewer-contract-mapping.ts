@@ -623,6 +623,37 @@ export function isBinaryOrNonDiffablePath(path: string): boolean {
   );
 }
 
+
+function parseDiffGitHeader(line: string): { oldPath: string; newPath: string } | null {
+  const match = line.match(/^diff --git a\/(.+?) b\/(.+?)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    oldPath: match[1]!.replace(/\\/g, '/'),
+    newPath: match[2]!.replace(/\\/g, '/'),
+  };
+}
+
+function diffChunkMatchesPath(chunk: string, normalizedPath: string): boolean {
+  const header = parseDiffGitHeader(chunk.split(/\r?\n/, 1)[0] ?? '');
+  if (!header) {
+    return false;
+  }
+  return header.oldPath === normalizedPath || header.newPath === normalizedPath;
+}
+
+function pathAppearsInDiff(diffContent: string, normalizedPath: string): boolean {
+  for (const header of diffContent.matchAll(/^diff --git a\/(.+?) b\/(.+?)$/gm)) {
+    const oldPath = header[1]!.replace(/\\/g, '/');
+    const newPath = header[2]!.replace(/\\/g, '/');
+    if (oldPath === normalizedPath || newPath === normalizedPath) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function classifyChangedTestFiles(
   changedPaths: string[],
   diffContent: string,
@@ -669,9 +700,7 @@ export function classifyChangedTestFiles(
 export function extractChangedFileContentFromDiff(diffContent: string, filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, '/');
   const chunks = diffContent.split(/\r?\n(?=diff --git a\/)/);
-  const chunk = chunks.find((block) =>
-    block.startsWith(`diff --git a/${normalized} b/${normalized}`),
-  );
+  const chunk = chunks.find((block) => diffChunkMatchesPath(block, normalized));
   return chunk?.trim() ?? null;
 }
 
@@ -710,15 +739,14 @@ export function collectIncompleteDiffEvidencePaths(
 ): string[] {
   const changed = new Set(changedPaths.map((rawPath) => rawPath.replace(/\\/g, '/')));
   const diffPaths = new Set<string>();
-  for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\//gm)) {
+  for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\/(.+?)$/gm)) {
     diffPaths.add(match[1]!.replace(/\\/g, '/'));
+    diffPaths.add(match[2]!.replace(/\\/g, '/'));
   }
 
   const incomplete: string[] = [];
   for (const path of changed) {
-    const inDiff =
-      diffContent.includes(`diff --git a/${path}`) ||
-      diffContent.includes(`b/${path}`);
+    const inDiff = pathAppearsInDiff(diffContent, path);
     if (!inDiff || !hasCompleteChangedFileEvidence(diffContent, path)) {
       incomplete.push(path);
     }

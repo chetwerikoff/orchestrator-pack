@@ -52,6 +52,7 @@ import {
   mergeSpecRereadFailure,
   shouldInvokeCoworkerForStatus,
   resolveLiveHeadSha,
+  resolveCoworkerLedgerInput,
 } from './invoke-reviewer-contract-mapping.js';
 
 const fixturesDir = path.join(
@@ -140,6 +141,27 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         { issueNumber: 901, body: child.body },
       ]),
     ).toBe(true);
+  });
+
+
+  it('matches renamed files when extracting diff evidence', () => {
+    const diff = [
+      'diff --git a/tests/old-name.test.ts b/tests/new-name.test.ts',
+      'similarity index 95%',
+      'rename from tests/old-name.test.ts',
+      'rename to tests/new-name.test.ts',
+      'index abc..def 100644',
+      '--- a/tests/old-name.test.ts',
+      '+++ b/tests/new-name.test.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+    expect(extractChangedFileContentFromDiff(diff, 'tests/new-name.test.ts')).toContain(
+      'rename to tests/new-name.test.ts',
+    );
+    expect(hasCompleteChangedFileEvidence(diff, 'tests/new-name.test.ts')).toBe(true);
+    expect(collectIncompleteDiffEvidencePaths(['tests/new-name.test.ts'], diff)).toEqual([]);
   });
 
   it('treats changed text paths missing from the diff as incomplete evidence', () => {
@@ -580,6 +602,60 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       expect(onDisk.length).toBeGreaterThan(0);
       expect(prep.specArtifactHashes[0]?.snapshotHash).toBe(members[0]!.snapshotHash);
     }
+  });
+
+
+  it('preserves malformed status when coworker output is not valid JSON', () => {
+    const resolved = resolveCoworkerLedgerInput({
+      invokeCoworker: true,
+      coworkerArgv: ['coworker', 'ask'],
+      ledgerRaw: null,
+      invokeCoworkerArgvFn: () => 'not-json',
+    });
+    expect(resolved.coworkerInvocationFailed).toBe(false);
+    expect(resolved.ledgerPayload).toBeNull();
+    const preflight = evaluateMappingPreflight({
+      diffLineCount: fixture('small.diff').split(/\r?\n/).length,
+      diffContent: fixture('small.diff'),
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [loadIssue('issue-with-acceptance.md', 362)],
+    });
+    const finalized = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: resolved.ledgerPayload,
+      diffContent: fixture('small.diff'),
+      currentHeadSha: preflight.statusRecord.prHeadSha,
+      coworkerInvocationFailed: resolved.coworkerInvocationFailed,
+    });
+    expect(finalized.status).toBe('malformed');
+  });
+
+  it('reports unavailable only when coworker invocation fails', () => {
+    const resolved = resolveCoworkerLedgerInput({
+      invokeCoworker: true,
+      coworkerArgv: ['coworker', 'ask'],
+      ledgerRaw: null,
+      invokeCoworkerArgvFn: () => {
+        throw new Error('coworker missing');
+      },
+    });
+    expect(resolved.coworkerInvocationFailed).toBe(true);
+    const preflight = evaluateMappingPreflight({
+      diffLineCount: fixture('small.diff').split(/\r?\n/).length,
+      diffContent: fixture('small.diff'),
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [loadIssue('issue-with-acceptance.md', 362)],
+    });
+    const finalized = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: resolved.ledgerPayload,
+      diffContent: fixture('small.diff'),
+      currentHeadSha: preflight.statusRecord.prHeadSha,
+      coworkerInvocationFailed: resolved.coworkerInvocationFailed,
+    });
+    expect(finalized.status).toBe('unavailable');
   });
 
   it('rejects malformed/non-exhaustive ledger responses', () => {

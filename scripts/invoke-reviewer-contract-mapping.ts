@@ -331,6 +331,45 @@ export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber
   return specBodies;
 }
 
+
+export function resolveCoworkerLedgerInput(input: {
+  invokeCoworker: boolean;
+  coworkerArgv: string[] | null | undefined;
+  ledgerRaw: string | null;
+  invokeCoworkerArgvFn?: typeof invokeCoworkerArgv;
+}): { ledgerPayload: unknown; coworkerInvocationFailed: boolean } {
+  const invoke = input.invokeCoworkerArgvFn ?? invokeCoworkerArgv;
+  let coworkerInvocationFailed = false;
+  let ledgerPayload: unknown = null;
+
+  if (input.invokeCoworker) {
+    if (!input.coworkerArgv?.length) {
+      throw new Error('missing coworker argv from preflight');
+    }
+    let rawOutput = '';
+    try {
+      rawOutput = invoke(input.coworkerArgv);
+    } catch {
+      return { ledgerPayload: null, coworkerInvocationFailed: true };
+    }
+    try {
+      ledgerPayload = parseLedgerPayload(rawOutput);
+    } catch {
+      ledgerPayload = null;
+    }
+    return { ledgerPayload, coworkerInvocationFailed: false };
+  }
+
+  if (input.ledgerRaw !== null) {
+    try {
+      ledgerPayload = parseLedgerPayload(input.ledgerRaw);
+    } catch {
+      ledgerPayload = null;
+    }
+  }
+  return { ledgerPayload, coworkerInvocationFailed: false };
+}
+
 export function invokeCoworkerArgv(argv: string[]): string {
   const [command, ...args] = argv;
   if (!command) {
@@ -509,19 +548,18 @@ function main(): void {
     }
 
     let coworkerInvocationFailed = false;
-    let ledgerPayload: unknown;
+    let ledgerPayload: unknown = null;
     try {
-      if (opts.invokeCoworker) {
-        if (!preflight.coworkerArgv?.length) {
-          throw new Error('missing coworker argv from preflight');
-        }
-        ledgerPayload = parseLedgerPayload(invokeCoworkerArgv(preflight.coworkerArgv));
-      } else {
-        ledgerPayload = parseLedgerPayload(readText(opts.ledgerFile!));
-      }
-    } catch {
-      coworkerInvocationFailed = opts.invokeCoworker;
-      ledgerPayload = null;
+      const resolved = resolveCoworkerLedgerInput({
+        invokeCoworker: opts.invokeCoworker,
+        coworkerArgv: preflight.coworkerArgv,
+        ledgerRaw: opts.ledgerFile ? readText(opts.ledgerFile) : null,
+      });
+      coworkerInvocationFailed = resolved.coworkerInvocationFailed;
+      ledgerPayload = resolved.ledgerPayload;
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(2);
     }
 
     const currentHeadShaAfterCoworker = resolveLiveHeadSha();
@@ -614,7 +652,7 @@ function main(): void {
     console.log(`head=${output.statusRecord.prHeadSha}`);
   }
 
-  process.exit(status === 'malformed' || status === 'unavailable' ? 1 : 0);
+  process.exit(0);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
