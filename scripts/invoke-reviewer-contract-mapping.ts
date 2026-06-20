@@ -9,6 +9,8 @@ import {
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
   validateMappingLedger,
+  type ContractMappingStatus,
+  type ContractMappingStatusRecord,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
 
@@ -215,6 +217,48 @@ export function invokeCoworkerArgv(argv: string[]): string {
   return execFileSync(command, args, { encoding: 'utf8' });
 }
 
+export function applyMappedOutputFinalUsability(input: {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger?: MappingLedger;
+  currentHeadSha: string;
+  diffContent: string;
+  currentSpecHashes: Array<{ issueNumber: number; snapshotHash: string }>;
+}): {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger?: MappingLedger;
+} {
+  if (input.status !== 'mapped') {
+    return {
+      status: input.status,
+      statusRecord: input.statusRecord,
+      ledger: input.ledger,
+    };
+  }
+
+  const final = evaluateFinalUsability({
+    prior: input.statusRecord,
+    currentHeadSha: input.currentHeadSha,
+    currentDiffArtifactHash: computeBoundDiffArtifactHash(input.diffContent) ?? undefined,
+    currentSpecHashes: input.currentSpecHashes,
+  });
+
+  if (final.status !== 'mapped') {
+    return {
+      status: final.status,
+      statusRecord: final,
+      ledger: undefined,
+    };
+  }
+
+  return {
+    status: input.status,
+    statusRecord: final,
+    ledger: input.ledger,
+  };
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
@@ -281,17 +325,34 @@ function main(): void {
       ledgerPayload = null;
     }
 
+    const currentHeadShaAfterCoworker = resolveHeadSha(opts.prHeadSha);
     const finalized = finalizeMappingFromLedger({
       preflight,
       ledgerPayload,
       diffContent,
-      currentHeadSha: prHeadSha,
+      currentHeadSha: currentHeadShaAfterCoworker,
       coworkerInvocationFailed,
     });
     status = finalized.status;
     statusRecord = finalized.statusRecord;
     ledger = finalized.ledger;
   }
+
+  const currentHeadSha = resolveHeadSha(opts.prHeadSha);
+  const finalizedOutput = applyMappedOutputFinalUsability({
+    status,
+    statusRecord,
+    ledger,
+    currentHeadSha,
+    diffContent,
+    currentSpecHashes: preflight.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      snapshotHash: member.snapshotHash,
+    })),
+  });
+  status = finalizedOutput.status;
+  statusRecord = finalizedOutput.statusRecord;
+  ledger = finalizedOutput.ledger;
 
   const output = {
     status,
@@ -321,21 +382,6 @@ function main(): void {
   } else {
     console.log(`status=${output.status} invoke=${output.shouldInvokeCoworker}`);
     console.log(`head=${output.statusRecord.prHeadSha}`);
-  }
-
-  if (status === 'mapped') {
-    const final = evaluateFinalUsability({
-      prior: statusRecord,
-      currentHeadSha: resolveHeadSha(opts.prHeadSha),
-      currentDiffArtifactHash: computeBoundDiffArtifactHash(diffContent) ?? undefined,
-      currentSpecHashes: preflight.contractSet.map((member) => ({
-        issueNumber: member.issueNumber,
-        snapshotHash: member.snapshotHash,
-      })),
-    });
-    if (final.status !== status) {
-      process.exit(1);
-    }
   }
 
   process.exit(status === 'malformed' || status === 'unavailable' ? 1 : 0);

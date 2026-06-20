@@ -37,6 +37,7 @@ import {
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
 import {
+  applyMappedOutputFinalUsability,
   loadSpecBodiesFromOptions,
   parseIssueSpecAssignments,
 } from './invoke-reviewer-contract-mapping.js';
@@ -335,6 +336,40 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     });
     expect(stale.status).toBe('stale_head');
     expect(stale.staleDimensions).toEqual({ head: true, spec: true });
+  });
+
+  it('emits reevaluated stale status before returning mapped output', () => {
+    const diff = fixture('small.diff');
+    const prior = buildStructuredStatusRecord({
+      status: 'mapped',
+      prHeadSha: 'bound-head',
+      diffArtifactHash: computeBoundDiffArtifactHash(diff) ?? undefined,
+      members: [memberFromIssue('issue-with-acceptance.md', 362)],
+    });
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: [
+        {
+          requirementId: '1',
+          specIssueNumber: 362,
+          specSnapshotHash: prior.specSet[0]!.snapshotHash,
+          citedRequirementText: 'example',
+          mappingStatus: 'satisfied',
+          kind: 'confirmed_observation',
+        },
+      ],
+    };
+    const stale = applyMappedOutputFinalUsability({
+      status: 'mapped',
+      statusRecord: prior,
+      ledger,
+      currentHeadSha: 'new-head-after-coworker',
+      diffContent: diff,
+      currentSpecHashes: [{ issueNumber: 362, snapshotHash: prior.specSet[0]!.snapshotHash }],
+    });
+    expect(stale.status).toBe('stale_head');
+    expect(stale.statusRecord.usability).toBe('not_usable');
+    expect(stale.ledger).toBeUndefined();
   });
 
   it('reports artifact_prep_failed and binds hashes to finalized files', () => {
