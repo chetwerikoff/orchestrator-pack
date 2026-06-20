@@ -1124,7 +1124,8 @@ function ensureTrackingSeed(prior, surviving, nowMs, busyDispatch, draftIdentity
       trimString(prior?.busyDispatchReason) || trimString(busyDispatch.reason),
     prNumber: Number(prior?.prNumber ?? surviving?.prNumber ?? 0),
     headSha: trimString(prior?.headSha ?? surviving?.headSha),
-    reviewRunId: trimString(prior?.reviewRunId ?? surviving?.sourceKey),
+    reviewRunId: trimString(prior?.reviewRunId ?? surviving?.reviewRunId ?? surviving?.sourceKey),
+    source: trimString(prior?.source ?? surviving?.source),
   };
 }
 
@@ -1257,10 +1258,9 @@ export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, ses
   if (!targetSha || !prNumber || !sessionId) {
     return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
   }
-  const run = toArray(reviewRuns).find((row) => {
-    const runId = trimString(row?.id ?? row?.runId);
-    return (reviewRunId && runId === reviewRunId) || Number(row?.prNumber) === prNumber;
-  });
+  const run = reviewRunId
+    ? toArray(reviewRuns).find((row) => trimString(row?.id ?? row?.runId) === reviewRunId)
+    : toArray(reviewRuns).find((row) => Number(row?.prNumber) === prNumber);
   const runTarget = normalizeSha(run?.targetSha);
   if (!runTarget || runTarget !== targetSha) {
     return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };

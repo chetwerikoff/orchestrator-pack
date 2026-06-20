@@ -1968,6 +1968,49 @@ describe('issue #373 vanish and worktree-drift handling', () => {
     expect((actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id) as Extract<WorkerMessageSubmitAction, { type: 'noop' }> | undefined)?.reason).toBe('proven_worktree_drift');
   });
 
+  it('uses exact reviewRunId when multiple runs exist for the same PR', () => {
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: {
+        source: DISPATCH_SOURCE_REVIEW_SEND,
+        reviewRunId: 'run-old',
+        headSha: targetSha,
+        prNumber: 42,
+        sessionId: 'opk-drift',
+      },
+      reviewRuns: [
+        { id: 'run-new', prNumber: 42, targetSha, status: 'waiting_update', linkedSessionId: 'opk-drift' },
+        { id: 'run-old', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' },
+      ],
+      sessions: [{ sessionId: 'opk-drift', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09' }],
+    });
+    expect(drift.suppress).toBe(true);
+    expect(drift.reason).toBe('proven_worktree_drift');
+  });
+
+  it('persists delivery source from ensureTrackingSeed before vanished drift evaluation', () => {
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const tick1 = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'waiting_update', linkedSessionId: 'opk-drift', sentFindingCount: 1 }],
+      dispatchJournal: {},
+      tracking: { deliveries: {}, audit: [] },
+      nowMs: 1717601000000,
+    });
+    const deliveryId = Object.keys(tick1.tracking.deliveries)[0];
+    expect(deliveryId).toBeTruthy();
+    expect(tick1.tracking.deliveries[deliveryId]?.source).toBe(DISPATCH_SOURCE_REVIEW_SEND);
+    const tick2 = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+      reviewRuns: [{ id: 'run-seed', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
+      dispatchJournal: {},
+      tracking: tick1.tracking,
+      nowMs: 1717602000000,
+    });
+    expect(tick2.actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === deliveryId)).toBeUndefined();
+    expect((tick2.actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === deliveryId) as Extract<WorkerMessageSubmitAction, { type: 'noop' }> | undefined)?.reason).toBe('proven_worktree_drift');
+  });
+
   it('escalates ambiguous when drift evidence is missing', () => {
     const id = 'opk-drift:review-send:ambiguous';
     const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
