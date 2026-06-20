@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractAtJsonPath } from './external-output-shape-guard.mjs';
+import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
 import {
   assertCapturePathConfined,
   compareCaptureManifests,
@@ -28,33 +29,6 @@ function resolveRepoPath(repoRoot, candidate) {
 }
 
 const PRODUCER_EMISSION_PATTERN = /```producer-emission\s*\r?\n([\s\S]*?)```/gi;
-
-/**
- * @param {string} value
- */
-function normalizeLine(value) {
-  return value.trim().replace(/\s+/g, ' ');
-}
-
-/**
- * @param {string} body
- */
-function parseKeyValueBlock(body) {
-  /** @type {Record<string, string>} */
-  const result = {};
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-    const match = trimmed.match(/^([a-z][a-z0-9-]*)\s*:\s*(.+)$/i);
-    if (match) {
-      const key = match[1].toLowerCase().replace(/_/g, '-');
-      result[key] = normalizeLine(match[2]);
-    }
-  }
-  return result;
-}
 
 /**
  * @param {string} markdown

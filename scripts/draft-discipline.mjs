@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
 import { checkContractEvidence } from './contract-evidence.mjs';
 
 const require = createRequire(import.meta.url);
@@ -43,26 +44,6 @@ const REALISTIC_INPUT_VALUES = new Set(['realistic', 'production-representative'
 const EXTERNAL_TOOL_INPUT = 'external-tool-output';
 const VALID_PROVENANCE = new Set(['capture-backed', 'sample-backed']);
 const DEFAULT_ISSUE_REPO = 'chetwerikoff/orchestrator-pack';
-
-function normalizeLine(value) {
-  return value.trim().replace(/\s+/g, ' ');
-}
-
-function parseKeyValueBlock(body) {
-  const result = {};
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-    const match = trimmed.match(/^([a-z][a-z0-9-]*)\s*:\s*(.+)$/i);
-    if (match) {
-      const key = match[1].toLowerCase().replace(/_/g, '-');
-      result[key] = normalizeLine(match[2]);
-    }
-  }
-  return result;
-}
 
 export function extractFencedBlocks(markdown) {
   const blocks = new Map();
