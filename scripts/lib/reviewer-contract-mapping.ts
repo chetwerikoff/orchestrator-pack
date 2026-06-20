@@ -14,6 +14,7 @@ import { ISSUE_LINK_PATTERN } from '../pr-scope-contract.js';
 /** Fixed review-status vocabulary (Issue #362). */
 export const CONTRACT_MAPPING_STATUSES = [
   'mapped',
+  'mapping_pending',
   'skipped_no_spec',
   'skipped_provider_fence',
   'unavailable',
@@ -44,6 +45,7 @@ export const STATUS_PRECEDENCE: readonly ContractMappingStatus[] = [
   'skipped_input_limit',
   'unavailable',
   'malformed',
+  'mapping_pending',
 ] as const;
 
 export const CONTRACT_SECTION_HEADINGS = [
@@ -63,6 +65,12 @@ export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
+  /(?:authorization|auth)\s*:\s*Bearer\s+\S+/gi,
+  /(?:cookie|set-cookie)\s*:\s*[^\n\r]+/gi,
+  /(?:x-api-key|x-auth-token|x-amz-security-token)\s*:\s*\S+/gi,
+  /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\b(?:ASIA|AROA)[0-9A-Z]{16}\b/g,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
   /ghp_[A-Za-z0-9]{20,}/g,
   /gho_[A-Za-z0-9]{20,}/g,
@@ -933,7 +941,7 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
 
   const artifactPaths = [artifactPrep.diffPath, ...artifactPrep.specPaths];
   if (failureCandidates.length > 0) {
-    const status = resolveStatusPrecedence([...failureCandidates, 'mapped']);
+    const status = resolveStatusPrecedence(failureCandidates);
     return {
       status,
       shouldInvokeCoworker: false,
@@ -946,11 +954,11 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     };
   }
   return {
-    status: 'mapped',
+    status: 'mapping_pending',
     shouldInvokeCoworker: true,
     contractSet: resolved.members,
     statusRecord: buildStructuredStatusRecord({
-      status: 'mapped',
+      status: 'mapping_pending',
       prHeadSha,
       members: resolved.members,
     }),
@@ -958,6 +966,57 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     testClassification,
     coworkerQuestion: mappingQuestion,
     coworkerArgv: buildCoworkerInvokeArgv(artifactPaths, mappingQuestion),
+  };
+}
+
+export function finalizeMappingFromLedger(input: {
+  preflight: MappingPreflightResult;
+  ledgerPayload: unknown;
+  diffContent: string;
+  coworkerInvocationFailed?: boolean;
+}): {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger?: MappingLedger;
+} {
+  const prHeadSha = input.preflight.statusRecord.prHeadSha;
+  const members = input.preflight.contractSet;
+
+  if (input.coworkerInvocationFailed) {
+    const status: ContractMappingStatus = 'unavailable';
+    return {
+      status,
+      statusRecord: buildStructuredStatusRecord({ status, prHeadSha, members }),
+    };
+  }
+
+  const ledger = coerceMappingLedger(input.ledgerPayload);
+  if (!ledger) {
+    const status: ContractMappingStatus = 'malformed';
+    return {
+      status,
+      statusRecord: buildStructuredStatusRecord({ status, prHeadSha, members }),
+    };
+  }
+
+  const validation = validateMappingLedger(ledger, members, {
+    ambiguousTestLike: input.preflight.testClassification?.ambiguousTestLike,
+    diffContent: input.diffContent,
+    testFiles: input.preflight.testClassification?.testFiles,
+  });
+  if (!validation.ok) {
+    return {
+      status: validation.status,
+      statusRecord: buildStructuredStatusRecord({ status: validation.status, prHeadSha, members }),
+      ledger,
+    };
+  }
+
+  const status: ContractMappingStatus = 'mapped';
+  return {
+    status,
+    statusRecord: buildStructuredStatusRecord({ status, prHeadSha, members }),
+    ledger,
   };
 }
 

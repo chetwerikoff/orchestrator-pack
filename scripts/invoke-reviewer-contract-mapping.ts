@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import {
   evaluateFinalUsability,
   evaluateMappingPreflight,
+  finalizeMappingFromLedger,
   validateMappingLedger,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
@@ -19,6 +20,8 @@ interface CliOptions {
   explicitIssue: number | null;
   declarationIssue: number | null;
   prHeadSha: string | null;
+  ledgerFile: string | null;
+  invokeCoworker: boolean;
   json: boolean;
   lookupAvailable: boolean;
   coworkerAvailable: boolean;
@@ -48,6 +51,22 @@ export function parseIssueSpecAssignments(
   return specs;
 }
 
+export function parseLedgerPayload(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error('empty coworker ledger payload');
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence?.[1]) {
+      return JSON.parse(fence[1].trim());
+    }
+    throw new Error('coworker ledger payload is not valid JSON');
+  }
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     prBodyFile: null,
@@ -59,6 +78,8 @@ function parseArgs(argv: string[]): CliOptions {
     explicitIssue: null,
     declarationIssue: null,
     prHeadSha: null,
+    ledgerFile: null,
+    invokeCoworker: false,
     json: true,
     lookupAvailable: true,
     coworkerAvailable: true,
@@ -80,6 +101,10 @@ function parseArgs(argv: string[]): CliOptions {
       opts.diffFile = argv[++i] ?? null;
     } else if (arg === '--changed-paths-file') {
       opts.changedPathsFile = argv[++i] ?? null;
+    } else if (arg === '--ledger-file') {
+      opts.ledgerFile = argv[++i] ?? null;
+    } else if (arg === '--invoke-coworker') {
+      opts.invokeCoworker = true;
     } else if (arg === '--explicit-issue') {
       opts.explicitIssue = Number(argv[++i]);
     } else if (arg === '--declaration-issue') {
@@ -113,6 +138,8 @@ Options:
   --issue-spec <n>:<path>       Repeatable issueNumber=path binding (alternative to --issues-file)
   --pr-body-file <path>         PR body for closing-keyword binding
   --changed-paths-file <path>   Newline-delimited changed paths
+  --ledger-file <path>          Coworker mapping JSON to validate and finalize mapped status
+  --invoke-coworker             Run returned coworker argv and finalize mapped status from its JSON output
   --explicit-issue <n>          Authoritative issue from review context
   --declaration-issue <n>       Unique declaration/scope issue
   --pr-head-sha <sha>           PR head SHA for status binding
@@ -178,10 +205,22 @@ export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber
   return specBodies;
 }
 
+export function invokeCoworkerArgv(argv: string[]): string {
+  const [command, ...args] = argv;
+  if (!command) {
+    throw new Error('missing coworker command');
+  }
+  return execFileSync(command, args, { encoding: 'utf8' });
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
     console.error('missing required --diff-file');
+    process.exit(2);
+  }
+  if (opts.ledgerFile && opts.invokeCoworker) {
+    console.error('use only one of --ledger-file or --invoke-coworker');
     process.exit(2);
   }
 
@@ -215,10 +254,47 @@ function main(): void {
   const prHeadSha = resolveHeadSha(opts.prHeadSha);
   preflight.statusRecord.prHeadSha = prHeadSha;
 
+  let status = preflight.status;
+  let statusRecord = preflight.statusRecord;
+  let ledger: MappingLedger | undefined;
+
+  if (opts.ledgerFile || opts.invokeCoworker) {
+    if (!preflight.shouldInvokeCoworker || preflight.status !== 'mapping_pending') {
+      console.error('cannot finalize mapping: preflight did not reach mapping_pending');
+      process.exit(2);
+    }
+
+    let coworkerInvocationFailed = false;
+    let ledgerPayload: unknown;
+    try {
+      if (opts.invokeCoworker) {
+        if (!preflight.coworkerArgv?.length) {
+          throw new Error('missing coworker argv from preflight');
+        }
+        ledgerPayload = parseLedgerPayload(invokeCoworkerArgv(preflight.coworkerArgv));
+      } else {
+        ledgerPayload = parseLedgerPayload(readText(opts.ledgerFile!));
+      }
+    } catch {
+      coworkerInvocationFailed = opts.invokeCoworker;
+      ledgerPayload = null;
+    }
+
+    const finalized = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload,
+      diffContent,
+      coworkerInvocationFailed,
+    });
+    status = finalized.status;
+    statusRecord = finalized.statusRecord;
+    ledger = finalized.ledger;
+  }
+
   const output = {
-    status: preflight.status,
+    status,
     shouldInvokeCoworker: preflight.shouldInvokeCoworker,
-    statusRecord: preflight.statusRecord,
+    statusRecord,
     contractSet: preflight.contractSet.map((member) => ({
       issueNumber: member.issueNumber,
       snapshotHash: member.snapshotHash,
@@ -235,6 +311,7 @@ function main(): void {
         }
       : null,
     coworkerArgv: preflight.coworkerArgv ?? null,
+    ledger: ledger ?? null,
   };
 
   if (opts.json) {
@@ -244,21 +321,21 @@ function main(): void {
     console.log(`head=${output.statusRecord.prHeadSha}`);
   }
 
-  if (preflight.status === 'mapped') {
+  if (status === 'mapped') {
     const final = evaluateFinalUsability({
-      prior: preflight.statusRecord,
+      prior: statusRecord,
       currentHeadSha: prHeadSha,
       currentSpecHashes: preflight.contractSet.map((member) => ({
         issueNumber: member.issueNumber,
         snapshotHash: member.snapshotHash,
       })),
     });
-    if (final.status !== preflight.status) {
+    if (final.status !== status) {
       process.exit(1);
     }
   }
 
-  process.exit(0);
+  process.exit(status === 'malformed' || status === 'unavailable' ? 1 : 0);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

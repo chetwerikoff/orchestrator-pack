@@ -15,6 +15,7 @@ import {
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
   evaluateMappingPreflight,
+  finalizeMappingFromLedger,
   extractChangedFileContentFromDiff,
   hasCompleteChangedFileEvidence,
   extractContractSections,
@@ -141,7 +142,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       specBodies: [issue],
     });
     expect(result.shouldInvokeCoworker).toBe(true);
-    expect(result.status).toBe('mapped');
+    expect(result.status).toBe('mapping_pending');
     expect(result.coworkerArgv?.[0]).toBe('coworker');
     expect(result.coworkerArgv).toContain('--paths');
     expect(result.coworkerArgv).toContain('--question');
@@ -611,6 +612,8 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       explicitIssue: null,
       declarationIssue: null,
       prHeadSha: null,
+      ledgerFile: null,
+      invokeCoworker: false,
       json: true,
       lookupAvailable: true,
       coworkerAvailable: true,
@@ -622,6 +625,81 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       { issueNumber: 900, filePath: 'scripts/a.md' },
       { issueNumber: 901, filePath: 'scripts/b.md' },
     ]);
+  });
+
+
+  it('reports skipped_provider_fence for unrecognized auth secrets in provider input', () => {
+    const diff = [
+      fixture('large.diff'),
+      '+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature',
+      '+Cookie: session=super-secret-session-id',
+      '+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+    ].join('\n');
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    for (const probe of [
+      '+Authorization: Bearer token-value\n',
+      '+Cookie: session=secret\n',
+      '+token: eyJhbGciOiJIUzI1NiJ9.payload.sig\n',
+      '+key=AKIAIOSFODNN7EXAMPLE\n',
+    ]) {
+      const result = evaluateMappingPreflight({
+        diffLineCount: (fixture('large.diff') + probe).split(/\r?\n/).length,
+        diffContent: fixture('large.diff') + probe,
+        changedPaths: ['scripts/example.ts'],
+        binding: { explicitIssueNumber: 362 },
+        specBodies: [issue],
+      });
+      expect(result.status).toBe('skipped_provider_fence');
+      expect(result.shouldInvokeCoworker).toBe(false);
+    }
+  });
+
+  it('finalizes mapped status only after ledger validation succeeds', () => {
+    const diff = fixture('large.diff');
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const preflight = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(preflight.status).toBe('mapping_pending');
+
+    const members = preflight.contractSet;
+    const validLedger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: 'satisfied',
+        kind: 'confirmed_observation',
+      })),
+    };
+    const mapped = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: validLedger,
+      diffContent: diff,
+    });
+    expect(mapped.status).toBe('mapped');
+    expect(mapped.statusRecord.usability).toBe('usable');
+
+    const malformed = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: { entries: [], exhaustive: false },
+      diffContent: diff,
+    });
+    expect(malformed.status).toBe('malformed');
+
+    const unavailable = finalizeMappingFromLedger({
+      preflight,
+      ledgerPayload: null,
+      diffContent: diff,
+      coworkerInvocationFailed: true,
+    });
+    expect(unavailable.status).toBe('unavailable');
   });
 
   it('exposes prompt contract markers for static checks', () => {
