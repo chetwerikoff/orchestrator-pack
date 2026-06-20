@@ -191,16 +191,14 @@ export function fetchIssueBodyFromGitHub(
   issueNumber: number,
   repoRoot: string = process.cwd(),
 ): string {
-  const output = execFileSync(
-    'gh',
-    ['issue', 'view', String(issueNumber), '--json', 'body'],
-    { encoding: 'utf8', cwd: repoRoot },
-  );
-  const parsed = JSON.parse(output) as { body?: string };
-  if (typeof parsed.body !== 'string') {
-    throw new Error(`gh issue view ${issueNumber} did not return a body`);
+  const ghArgs = ['issue', 'view', String(issueNumber), '--json', 'body'];
+  const raw = execFileSync('gh', ghArgs, { encoding: 'utf8', cwd: repoRoot });
+  const payload = JSON.parse(raw) as { body?: string };
+  const body = payload.body;
+  if (typeof body !== 'string') {
+    throw new Error(`Freshness re-fetch: issue #${issueNumber} body unavailable from GitHub`);
   }
-  return parsed.body;
+  return body;
 }
 
 export function createGitHubIssueBodyResolver(repoRoot?: string): IssueBodyResolver {
