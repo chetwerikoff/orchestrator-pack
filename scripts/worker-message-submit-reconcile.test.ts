@@ -588,6 +588,22 @@ describe('surviving delivery selection (review)', () => {
 });
 
 describe('multiple pending deliveries (AC10)', () => {
+  it('does not escalate overwritten delivery already marked noop', () => {
+    const { actions } = planFixture('noop-overwritten-no-escalate.json');
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'escalate' &&
+          a.reason === 'lost_delivery_overwritten' &&
+          a.deliveryId === 'opk-noop-overwrite:1717600900000:pack-send:first',
+      ),
+    ).toBe(false);
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(
+      'opk-noop-overwrite:1717600950000:pack-send:second',
+    );
+  });
+
   it('does not escalate overwritten delivery already marked submitted', () => {
     const { actions } = planFixture('submitted-overwritten-no-escalate.json');
     expect(
@@ -1616,6 +1632,25 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(text).toContain('AreAccessRulesProtected');
     expect(text).toContain("stat -f '%OLp'");
     expect(text).toContain('Get-MechanicalTransportUnixModeString');
+  });
+
+  it('classifies private payload setup failure as send_failed', () => {
+    const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
+    expect(text).toContain('payload_transport_not_private');
+    expect(text).toMatch(/process_not_started\|session_not_found\|arg_rejected\|exception_before_send\|payload_transport_not_private/);
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      $Reason = 'payload_transport_not_private'
+      $ExitCode = 1
+      if ($ExitCode -eq 0) { $outcome = 'dispatched' }
+      elseif ($Reason -match '^(timeout_interrupted|interrupted)$') { $outcome = 'dispatch_unknown' }
+      elseif ($Reason -match '^(process_not_started|session_not_found|arg_rejected|exception_before_send|payload_transport_not_private)$') { $outcome = 'send_failed' }
+      elseif ($ExitCode -ge 64 -and $ExitCode -le 69) { $outcome = 'send_failed' }
+      else { $outcome = 'dispatch_unknown' }
+      if ($outcome -eq 'dispatched') { exit 0 }
+      if ($outcome -eq 'dispatch_unknown') { exit 44 }
+      exit 45
+    `], { encoding: 'utf8' });
+    expect(result.status).toBe(45);
   });
 
   it('fails closed when ao send --file contract is absent', () => {

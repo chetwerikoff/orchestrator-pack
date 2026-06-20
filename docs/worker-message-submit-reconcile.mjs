@@ -1383,7 +1383,8 @@ export function planWorkerMessageSubmitActions(input) {
       const existing = nextDeliveries[failedId] ?? {};
       if (
         existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
+        existing.terminalState === SUBMIT_STATE_SUBMITTED ||
+        existing.terminalState === SUBMIT_STATE_NOOP
       ) {
         continue;
       }
@@ -1438,7 +1439,8 @@ export function planWorkerMessageSubmitActions(input) {
       const existing = nextDeliveries[lostId] ?? {};
       if (
         existing.terminalState === SUBMIT_STATE_ESCALATED ||
-        existing.terminalState === SUBMIT_STATE_SUBMITTED
+        existing.terminalState === SUBMIT_STATE_SUBMITTED ||
+        existing.terminalState === SUBMIT_STATE_NOOP
       ) {
         continue;
       }
@@ -1508,11 +1510,12 @@ export function planWorkerMessageSubmitActions(input) {
     if (
       surviving.corruptObservation &&
       (survivingTerminalState === SUBMIT_STATE_ESCALATED ||
-        survivingTerminalState === SUBMIT_STATE_SUBMITTED)
+        survivingTerminalState === SUBMIT_STATE_SUBMITTED ||
+        survivingTerminalState === SUBMIT_STATE_NOOP)
     ) {
       continue;
     }
-    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED) {
+    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED || survivingTerminalState === SUBMIT_STATE_NOOP) {
       continue;
     }
     const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {
@@ -1521,7 +1524,7 @@ export function planWorkerMessageSubmitActions(input) {
       if (trimString(candidate.dispatchOutcome ?? '') !== DISPATCH_OUTCOME_IN_FLIGHT) return false;
       const candidateRecord = nextDeliveries[candidateId] ?? {};
       const terminalState = trimString(candidateRecord.terminalState);
-      return terminalState !== SUBMIT_STATE_ESCALATED && terminalState !== SUBMIT_STATE_SUBMITTED;
+      return terminalState !== SUBMIT_STATE_ESCALATED && terminalState !== SUBMIT_STATE_SUBMITTED && terminalState !== SUBMIT_STATE_NOOP;
     });
     if (activeCompetingInFlight) {
       audit.push({

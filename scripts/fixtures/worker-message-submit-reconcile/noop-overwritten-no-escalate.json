@@ -1,0 +1,50 @@
+{
+  "description": "Review: do not escalate overwritten delivery already in noop terminal state",
+  "nowMs": 1717601100000,
+  "sessions": [
+    {
+      "sessionId": "opk-noop-overwrite",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "dispatchJournal": {
+    "opk-noop-overwrite:1717600900000:pack-send:first": {
+      "deliveryId": "opk-noop-overwrite:1717600900000:pack-send:first",
+      "sessionId": "opk-noop-overwrite",
+      "deliveredAtMs": 1717600900000,
+      "source": "pack-send",
+      "sourceKey": "first",
+      "deliveryPath": "pending-draft",
+      "dispatchOutcome": "dispatched",
+      "messageShape": { "charLength": 300, "lineCount": 2 }
+    },
+    "opk-noop-overwrite:1717600950000:pack-send:second": {
+      "deliveryId": "opk-noop-overwrite:1717600950000:pack-send:second",
+      "sessionId": "opk-noop-overwrite",
+      "deliveredAtMs": 1717600950000,
+      "source": "pack-send",
+      "sourceKey": "second",
+      "deliveryPath": "pending-draft",
+      "dispatchOutcome": "dispatched",
+      "messageShape": { "charLength": 280, "lineCount": 2 }
+    }
+  },
+  "aoEvents": [],
+  "reviewRuns": [],
+  "tracking": {
+    "deliveries": {
+      "opk-noop-overwrite:1717600900000:pack-send:first": {
+        "deliveryId": "opk-noop-overwrite:1717600900000:pack-send:first",
+        "sessionId": "opk-noop-overwrite",
+        "terminalState": "noop",
+        "vanishedSuppressedAtMs": 1717600920000,
+        "escalationReason": "proven_worktree_drift"
+      }
+    },
+    "audit": []
+  }
+}

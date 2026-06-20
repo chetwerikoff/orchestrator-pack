@@ -87,7 +87,7 @@ function Resolve-AoSendDispatchOutcome {
     if ($Reason -match '^(timeout_interrupted|interrupted)$') {
         return @{ outcome = 'dispatch_unknown'; reason = $Reason }
     }
-    if ($Reason -match '^(process_not_started|session_not_found|arg_rejected|exception_before_send)$') {
+    if ($Reason -match '^(process_not_started|session_not_found|arg_rejected|exception_before_send|payload_transport_not_private)$') {
         return @{ outcome = 'send_failed'; reason = $Reason }
     }
     if ($ExitCode -ge 64 -and $ExitCode -le 69) {
