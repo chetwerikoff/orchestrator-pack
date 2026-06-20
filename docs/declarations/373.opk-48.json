@@ -17,6 +17,7 @@
     "docs/worker-message-submit-reconcile.d.mts",
     "docs/worker-message-submit-reconcile.mjs",
     "scripts/check-ao-send-transport-contract.ps1",
+    "scripts/fixtures/worker-message-submit-reconcile/noop-overwritten-no-escalate.json",
     "scripts/journaled-worker-send.ps1",
     "scripts/mechanical-json-state.Tests.ps1",
     "scripts/orchestrator-message-catalog.json",
