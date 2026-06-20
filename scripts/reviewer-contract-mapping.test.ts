@@ -26,6 +26,7 @@ import {
   extractChangedFileContentFromDiff,
   collectIncompleteDiffEvidencePaths,
   hasCompleteChangedFileEvidence,
+  isBinaryOrNonDiffablePath,
   isResolvedPathInsideDir,
   extractContractSections,
   hasCompleteTestFileCoverage,
@@ -62,6 +63,32 @@ const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'fixtures/reviewer-contract-mapping',
 );
+
+
+function extendLargeDiffHunk(extraBody: string): string {
+  const base = fixture('large.diff');
+  const lines = extraBody
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0 && !line.startsWith('diff --git '));
+  const normalized = lines.map((line) => {
+    if (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')) {
+      return line;
+    }
+    return `+${line}`;
+  });
+  const addOld = normalized.filter((line) => line.startsWith(' ') || line.startsWith('-')).length;
+  const addNew = normalized.filter((line) => line.startsWith(' ') || line.startsWith('+')).length;
+  const match = base.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/m);
+  if (!match) {
+    throw new Error('large.diff missing hunk header');
+  }
+  const oldStart = match[1]!;
+  const oldCount = match[2] ? Number.parseInt(match[2], 10) : 1;
+  const newStart = match[3]!;
+  const newCount = match[4] ? Number.parseInt(match[4], 10) : 1;
+  const header = `@@ -${oldStart},${oldCount + addOld} +${newStart},${newCount + addNew} @@`;
+  return `${base.replace(/^@@ -.* @@/m, header)}\n${normalized.join('\n')}`;
+}
 
 function fixture(name: string): string {
   return readFileSync(path.join(fixturesDir, name), 'utf8');
@@ -258,7 +285,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('fails closed when safe credential redaction precedes decision-bearing secrets', () => {
-    const diff = `${fixture('large.diff')}\ntoken=ghp_1234567890123456789012345678901234\n+const key = "AKIAIOSFODNN7EXAMPLE"`;
+    const diff = extendLargeDiffHunk('token=ghp_1234567890123456789012345678901234\n+const key = "AKIAIOSFODNN7EXAMPLE"');
     expect(scrubForProviderInput(diff, { allowSafeSecretRedaction: true }).ok).toBe(false);
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
@@ -437,7 +464,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('reports skipped_provider_fence on decision-bearing redaction markers', () => {
-    const diff = fixture('large.diff') + '\n\uE000DECISION_CONTEXT_REMOVED\uE001\n';
+    const diff = extendLargeDiffHunk('\uE000DECISION_CONTEXT_REMOVED\uE001');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -451,7 +478,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('does not treat literal decision-marker prose in source as provider-fence redaction', () => {
-    const diff = fixture('large.diff') + '\n+const marker = "[DECISION_CONTEXT_REMOVED]";\n';
+    const diff = extendLargeDiffHunk('+const marker = "[DECISION_CONTEXT_REMOVED]";');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -526,7 +553,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('fails closed on credential assignments in source diffs', () => {
-    const diff = `${fixture('large.diff')}\n+token = process.env.API_TOKEN\n`;
+    const diff = extendLargeDiffHunk('+token = process.env.API_TOKEN');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -972,7 +999,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('fails closed when redaction removes decision-bearing implementation evidence', () => {
-    const diff = `${fixture('large.diff')}\n+  const token = "ghp_1234567890123456789012345678901234";\n`;
+    const diff = extendLargeDiffHunk('+  const token = "ghp_1234567890123456789012345678901234";');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -992,7 +1019,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       'MIIEpAIBAAKCAQEAfakebase64material',
       '-----END RSA PRIVATE KEY-----',
     ].join('\n');
-    const diff = `${fixture('large.diff')}\n+${pem.replace(/\n/g, '\n+')}\n`;
+    const diff = extendLargeDiffHunk(`+${pem.replace(/\n/g, '\n+')}`);
     const scrubbed = scrubForProviderInput(diff, { allowSafeSecretRedaction: true });
     expect(scrubbed.ok).toBe(true);
     if (!scrubbed.ok) {
@@ -1026,7 +1053,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('allows safe private-data redaction during mapping preflight', () => {
-    const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
+    const diff = extendLargeDiffHunk('+customer_name: Jane Customer\n+notify user@customer.example about rollout');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -1042,7 +1069,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('redacts private data only when safe redaction is explicitly allowlisted', () => {
-    const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
+    const diff = extendLargeDiffHunk('+customer_name: Jane Customer\n+notify user@customer.example about rollout');
     const scrubbed = scrubForProviderInput(diff, { allowSafeSecretRedaction: true });
     expect(scrubbed.ok).toBe(true);
     if (!scrubbed.ok) {
@@ -1122,30 +1149,39 @@ describe('reviewer contract-mapping (Issue #362)', () => {
 
 
   it('allows safe secret redaction during mapping preflight', () => {
-    const diff = [
-      fixture('large.diff'),
-      '+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature',
-      '+Cookie: session=super-secret-session-id',
-      '+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
-    ].join('\n');
+    const diff = extendLargeDiffHunk(
+      [
+        '+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature',
+        '+Cookie: session=super-secret-session-id',
+        '+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+      ].join('\n'),
+    );
     const issue = loadIssue('issue-with-acceptance.md', 362);
     for (const probe of [
-      '+Authorization: Bearer token-value\n',
-      '+Cookie: session=secret\n',
-      '+token: eyJhbGciOiJIUzI1NiJ9.payload.sig\n',
-      '+key=AKIAIOSFODNN7EXAMPLE\n',
+      '+Authorization: Bearer token-value',
+      '+Cookie: session=secret',
+      '+token: eyJhbGciOiJIUzI1NiJ9.payload.sig',
+      '+key=AKIAIOSFODNN7EXAMPLE',
     ]) {
+      const probeDiff = extendLargeDiffHunk(probe);
       const result = evaluateMappingPreflight({
-        diffLineCount: (fixture('large.diff') + probe).split(/\r?\n/).length,
-        diffContent: fixture('large.diff') + probe,
+        diffLineCount: probeDiff.split(/\r?\n/).length,
+        diffContent: probeDiff,
         changedPaths: ['scripts/example.ts'],
         binding: { explicitIssueNumber: 362 },
         specBodies: [issue],
       });
       expect(result.status).toBe('mapping_pending');
       expect(result.shouldInvokeCoworker).toBe(true);
-      expect(scrubForProviderInput(fixture('large.diff') + probe).ok).toBe(false);
+      expect(scrubForProviderInput(probeDiff).ok).toBe(false);
     }
+    expect(evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    }).status).toBe('mapping_pending');
   });
 
   it('finalizes mapped status only after ledger validation succeeds', () => {
@@ -1296,7 +1332,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('allows safe connection-string redaction during mapping preflight', () => {
-    const diff = fixture('large.diff') + '\n+DATABASE_URL=postgres://alice:s3cr3t@db/prod\n';
+    const diff = extendLargeDiffHunk('+DATABASE_URL=postgres://alice:s3cr3t@db/prod');
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: countDiffLines(diff),
@@ -1508,7 +1544,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       'diff --git a/scripts/reviewer-contract-mapping.ts b/scripts/reviewer-contract-mapping.ts',
       '--- a/scripts/reviewer-contract-mapping.ts',
       '+++ b/scripts/reviewer-contract-mapping.ts',
-      '@@ -1,3 +1,4 @@',
+      '@@ -0,0 +1,4 @@',
       "+if (chunk.includes('GIT binary patch')) {",
       '+  return false;',
       '+}',
@@ -1576,6 +1612,55 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   it('fails closed on unrecognized private-key PEM headers', () => {
     const pem = '-----BEGIN CUSTOM PRIVATE KEY-----\nsecret\n-----END CUSTOM PRIVATE KEY-----';
     expect(scrubForProviderInput(pem, { allowSafeSecretRedaction: true }).ok).toBe(false);
+  });
+
+
+  it('rejects non-diffable paths even when Git emits a text hunk', () => {
+    const lfsPointerPatch = [
+      'diff --git a/assets/logo.png b/assets/logo.png',
+      'index abc..def 100644',
+      '--- a/assets/logo.png',
+      '+++ b/assets/logo.png',
+      '@@ -1,3 +1,3 @@',
+      ' version https://git-lfs.github.com/spec/v1',
+      '-oid sha256:old',
+      '+oid sha256:new',
+      ' size 12345',
+    ].join('\n');
+    expect(isBinaryOrNonDiffablePath('assets/logo.png')).toBe(true);
+    expect(hasCompleteChangedFileEvidence(lfsPointerPatch, 'assets/logo.png')).toBe(false);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: `${fixture('large.diff')}\n${lfsPointerPatch}`.split(/\r?\n/).length,
+      diffContent: `${fixture('large.diff')}\n${lfsPointerPatch}`,
+      changedPaths: ['assets/logo.png', 'scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('rejects partially truncated file diffs missing later hunks', () => {
+    const truncatedHunk = [
+      '@@ -1,5 +1,8 @@',
+      '+export function example() {',
+      '+  return 1;',
+      '+}',
+    ].join('\n');
+    const truncated = fixture('large.diff').replace(/^@@ -.* @@/m, '@@ -1,5 +1,8 @@').split('\n').slice(0, 8).join('\n');
+    expect(hasCompleteChangedFileEvidence(truncated, 'scripts/example.ts')).toBe(false);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: fixture('large.diff').split(/\r?\n/).length,
+      diffContent: truncated,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(truncatedHunk).toContain('+export function example()');
   });
 
   it('treats opaque GIT binary patches as incomplete evidence', () => {

@@ -792,7 +792,75 @@ function extractDiffChunkMetadata(chunk: string): string {
   return metadataLines.join('\n');
 }
 
+
+function parseUnifiedHunkHeader(line: string): { oldCount: number; newCount: number } | null {
+  const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+  if (!match) {
+    return null;
+  }
+  return {
+    oldCount: match[2] ? Number.parseInt(match[2], 10) : 1,
+    newCount: match[4] ? Number.parseInt(match[4], 10) : 1,
+  };
+}
+
+function isChunkHunkCoverageComplete(chunk: string): boolean {
+  const lines = chunk.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length && !lines[index]!.startsWith('@@')) {
+    index++;
+  }
+  if (index >= lines.length) {
+    return false;
+  }
+
+  let sawHunk = false;
+  while (index < lines.length) {
+    const headerLine = lines[index]!;
+    if (!headerLine.startsWith('@@')) {
+      return false;
+    }
+    const header = parseUnifiedHunkHeader(headerLine);
+    if (!header) {
+      return false;
+    }
+    index++;
+    let oldSeen = 0;
+    let newSeen = 0;
+    while (index < lines.length && !lines[index]!.startsWith('@@')) {
+      const line = lines[index]!;
+      if (line.startsWith('\\')) {
+        index++;
+        continue;
+      }
+      if (line.startsWith(' ')) {
+        oldSeen++;
+        newSeen++;
+      } else if (line.startsWith('-')) {
+        oldSeen++;
+      } else if (line.startsWith('+')) {
+        newSeen++;
+      } else if (line.length === 0) {
+        index++;
+        continue;
+      } else {
+        return false;
+      }
+      index++;
+    }
+    if (oldSeen !== header.oldCount || newSeen !== header.newCount) {
+      return false;
+    }
+    sawHunk = true;
+  }
+  return sawHunk;
+}
+
 export function hasCompleteChangedFileEvidence(diffContent: string, filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  if (isBinaryOrNonDiffablePath(normalized)) {
+    return false;
+  }
   const chunk = extractChangedFileContentFromDiff(diffContent, filePath);
   if (!chunk?.trim()) {
     return false;
@@ -801,13 +869,13 @@ export function hasCompleteChangedFileEvidence(diffContent: string, filePath: st
   if (/^GIT binary patch$/m.test(metadata)) {
     return false;
   }
-  if (/^@@/m.test(chunk)) {
-    return true;
-  }
   if (/^Binary files .+ differ$/m.test(metadata)) {
     return false;
   }
-  return true;
+  if (/^@@/m.test(chunk)) {
+    return isChunkHunkCoverageComplete(chunk);
+  }
+  return false;
 }
 
 export function collectIncompleteDiffEvidencePaths(
