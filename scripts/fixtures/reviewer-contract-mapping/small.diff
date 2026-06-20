@@ -1,0 +1,6 @@
+diff --git a/scripts/tiny.ts b/scripts/tiny.ts
+index 1111111..2222222 100644
+--- a/scripts/tiny.ts
++++ b/scripts/tiny.ts
+@@ -1 +1 @@
++// tiny fixture diff under delegation floor
