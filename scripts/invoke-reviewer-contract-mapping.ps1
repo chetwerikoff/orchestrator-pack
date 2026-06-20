@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)]
     [string]$DiffFile,
     [string]$IssueFile,
+    [string]$IssuesFile,
+    [string[]]$IssueSpec,
     [string]$PrBodyFile,
     [string]$ChangedPathsFile,
     [int]$ExplicitIssue = 0,
@@ -32,6 +34,12 @@ $args = @(
 )
 
 if ($IssueFile) { $args += @('--issue-file', $IssueFile) }
+if ($IssuesFile) { $args += @('--issues-file', $IssuesFile) }
+if ($IssueSpec) {
+    foreach ($spec in $IssueSpec) {
+        $args += @('--issue-spec', $spec)
+    }
+}
 if ($PrBodyFile) { $args += @('--pr-body-file', $PrBodyFile) }
 if ($ChangedPathsFile) { $args += @('--changed-paths-file', $ChangedPathsFile) }
 if ($ExplicitIssue -gt 0) { $args += @('--explicit-issue', [string]$ExplicitIssue) }

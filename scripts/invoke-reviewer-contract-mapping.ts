@@ -12,6 +12,8 @@ import {
 interface CliOptions {
   prBodyFile: string | null;
   issueFile: string | null;
+  issuesFile: string | null;
+  issueSpecs: Array<{ issueNumber: number; filePath: string }>;
   diffFile: string | null;
   changedPathsFile: string | null;
   explicitIssue: number | null;
@@ -23,10 +25,35 @@ interface CliOptions {
   providerInputByteLimit?: number;
 }
 
+export function parseIssueSpecAssignments(
+  lines: string[],
+): Array<{ issueNumber: number; filePath: string }> {
+  const specs: Array<{ issueNumber: number; filePath: string }> = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+    const match = line.match(/^(\d+)\s*[=:]\s*(.+)$/);
+    if (!match) {
+      throw new Error(`invalid issue spec assignment line: ${line}`);
+    }
+    const issueNumber = Number(match[1]);
+    const filePath = match[2]!.trim();
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0 || !filePath) {
+      throw new Error(`invalid issue spec assignment line: ${line}`);
+    }
+    specs.push({ issueNumber, filePath });
+  }
+  return specs;
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     prBodyFile: null,
     issueFile: null,
+    issuesFile: null,
+    issueSpecs: [],
     diffFile: null,
     changedPathsFile: null,
     explicitIssue: null,
@@ -43,6 +70,12 @@ function parseArgs(argv: string[]): CliOptions {
       opts.prBodyFile = argv[++i] ?? null;
     } else if (arg === '--issue-file') {
       opts.issueFile = argv[++i] ?? null;
+    } else if (arg === '--issues-file') {
+      opts.issuesFile = argv[++i] ?? null;
+    } else if (arg === '--issue-spec') {
+      const assignment = argv[++i] ?? '';
+      const specs = parseIssueSpecAssignments([assignment]);
+      opts.issueSpecs.push(...specs);
     } else if (arg === '--diff-file') {
       opts.diffFile = argv[++i] ?? null;
     } else if (arg === '--changed-paths-file') {
@@ -75,7 +108,9 @@ function printHelp(): void {
 
 Options:
   --diff-file <path>            PR diff file (required)
-  --issue-file <path>           Issue/spec body with contract sections
+  --issue-file <path>           Single issue/spec body (legacy; pair with --explicit-issue or --declaration-issue)
+  --issues-file <path>          Newline manifest of issueNumber=path bindings for multi-spec mapping
+  --issue-spec <n>:<path>       Repeatable issueNumber=path binding (alternative to --issues-file)
   --pr-body-file <path>         PR body for closing-keyword binding
   --changed-paths-file <path>   Newline-delimited changed paths
   --explicit-issue <n>          Authoritative issue from review context
@@ -112,6 +147,37 @@ function resolveHeadSha(explicit: string | null): string {
   }
 }
 
+export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber: number; body: string }> {
+  const specBodies: Array<{ issueNumber: number; body: string }> = [];
+  const assignments = [...opts.issueSpecs];
+
+  if (opts.issuesFile) {
+    assignments.push(...parseIssueSpecAssignments(readLines(opts.issuesFile)));
+  }
+
+  if (opts.issueFile) {
+    const issueNumber = opts.explicitIssue ?? opts.declarationIssue ?? 0;
+    if (!issueNumber) {
+      throw new Error('--issue-file requires --explicit-issue or --declaration-issue');
+    }
+    assignments.push({ issueNumber, filePath: opts.issueFile });
+  }
+
+  const seen = new Set<number>();
+  for (const assignment of assignments) {
+    if (seen.has(assignment.issueNumber)) {
+      throw new Error(`duplicate issue spec assignment for #${assignment.issueNumber}`);
+    }
+    seen.add(assignment.issueNumber);
+    specBodies.push({
+      issueNumber: assignment.issueNumber,
+      body: readText(assignment.filePath),
+    });
+  }
+
+  return specBodies;
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
@@ -123,15 +189,12 @@ function main(): void {
   const diffLineCount = diffContent.split(/\r?\n/).length;
   const changedPaths = opts.changedPathsFile ? readLines(opts.changedPathsFile) : [];
 
-  const specBodies = [];
-  if (opts.issueFile) {
-    const body = readText(opts.issueFile);
-    const issueNumber = opts.explicitIssue ?? opts.declarationIssue ?? 0;
-    if (!issueNumber) {
-      console.error('--issue-file requires --explicit-issue or --declaration-issue');
-      process.exit(2);
-    }
-    specBodies.push({ issueNumber, body });
+  let specBodies: Array<{ issueNumber: number; body: string }> = [];
+  try {
+    specBodies = loadSpecBodiesFromOptions(opts);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
   }
 
   const preflight = evaluateMappingPreflight({
@@ -205,6 +268,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export function validateLedgerFromStdin(
   ledger: MappingLedger,
   members: Parameters<typeof validateMappingLedger>[1],
+  context?: Parameters<typeof validateMappingLedger>[2],
 ) {
-  return validateMappingLedger(ledger, members);
+  return validateMappingLedger(ledger, members, context);
 }

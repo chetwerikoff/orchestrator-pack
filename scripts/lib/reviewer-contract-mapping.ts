@@ -387,18 +387,19 @@ export function scrubForProviderInput(
   options?: { allowSafeSecretRedaction?: boolean },
 ): { ok: true; scrubbed: string; decisionBearingRedaction: false } | { ok: false; decisionBearingRedaction: true } {
   let scrubbed = content;
-  let sawSecret = false;
+  let sawRedaction = false;
 
   for (const pattern of SECRET_PATTERNS) {
     const redacted = scrubbed.replace(pattern, '[REDACTED_SECRET]');
     if (redacted !== scrubbed) {
-      sawSecret = true;
+      sawRedaction = true;
       scrubbed = redacted;
     }
   }
 
   const privateScrubbed = scrubPrivateData(scrubbed);
   if (privateScrubbed !== scrubbed) {
+    sawRedaction = true;
     scrubbed = privateScrubbed;
   }
 
@@ -408,9 +409,8 @@ export function scrubForProviderInput(
     }
   }
 
-  if (sawSecret && !options?.allowSafeSecretRedaction) {
-    // Safe non-decision-bearing redaction is allowed when contract signal remains.
-    // Caller validates completeness separately.
+  if (sawRedaction && !options?.allowSafeSecretRedaction) {
+    return { ok: false, decisionBearingRedaction: true };
   }
 
   return { ok: true, scrubbed, decisionBearingRedaction: false };
@@ -706,6 +706,25 @@ export function buildCoworkerInvokeArgv(
 }
 
 
+export function isMissingTestClaim(entry: MappingCandidate): boolean {
+  if (entry.kind === 'missing_validation') {
+    return true;
+  }
+  const haystack = [entry.concreteFailureScenario, entry.testEvidence]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!haystack.trim()) {
+    return false;
+  }
+  return (
+    /\b(missing|absent|without|no)\b.{0,40}\btests?\b/.test(haystack) ||
+    /\btests?\b.{0,40}\b(missing|absent|not found|not present)\b/.test(haystack) ||
+    /\buntested\b/.test(haystack) ||
+    /\bmissing[\s-]tests?\b/.test(haystack)
+  );
+}
+
 export function coerceMappingLedger(payload: unknown): MappingLedger | null {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -715,12 +734,6 @@ export function coerceMappingLedger(payload: unknown): MappingLedger | null {
     return {
       entries: obj.entries as MappingCandidate[],
       exhaustive: obj.exhaustive,
-    };
-  }
-  if (Array.isArray(obj.ledger) && !('entries' in obj)) {
-    return {
-      entries: obj.ledger as MappingCandidate[],
-      exhaustive: true,
     };
   }
   return null;
@@ -768,7 +781,7 @@ export function validateMappingLedger(
       return { ok: false, status: 'malformed' };
     }
 
-    if (entry.kind === 'missing_validation') {
+    if (isMissingTestClaim(entry)) {
       if (context?.ambiguousTestLike?.length) {
         return { ok: false, status: 'incomplete_evidence' };
       }

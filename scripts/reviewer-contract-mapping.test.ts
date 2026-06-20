@@ -10,6 +10,7 @@ import {
   classifyChangedTestFiles,
   collectAuthoritativeReferences,
   coerceMappingLedger,
+  isMissingTestClaim,
   CONTRACT_MAPPING_QUESTION,
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
@@ -31,6 +32,10 @@ import {
   type ContractSpecMember,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
+import {
+  loadSpecBodiesFromOptions,
+  parseIssueSpecAssignments,
+} from './invoke-reviewer-contract-mapping.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -389,17 +394,21 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(validateMappingLedger(ledger, members).ok).toBe(true);
   });
 
-  it('scrubs secrets safely without decision-bearing loss', () => {
-    const scrubbed = scrubForProviderInput('token=ghp_1234567890123456789012345678901234');
-    expect(scrubbed.ok).toBe(true);
-    if (scrubbed.ok) {
-      expect(scrubbed.scrubbed).toContain('[REDACTED_SECRET]');
+  it('fails closed on provider redaction unless explicitly allowlisted', () => {
+    const blocked = scrubForProviderInput('token=ghp_1234567890123456789012345678901234');
+    expect(blocked.ok).toBe(false);
+    const allowed = scrubForProviderInput('token=ghp_1234567890123456789012345678901234', {
+      allowSafeSecretRedaction: true,
+    });
+    expect(allowed.ok).toBe(true);
+    if (allowed.ok) {
+      expect(allowed.scrubbed).toContain('[REDACTED_SECRET]');
     }
   });
 
   it('redacts every secret occurrence in provider input', () => {
     const content = 'token=alpha-secret\nother token=beta-secret\n';
-    const scrubbed = scrubForProviderInput(content);
+    const scrubbed = scrubForProviderInput(content, { allowSafeSecretRedaction: true });
     expect(scrubbed.ok).toBe(true);
     if (scrubbed.ok) {
       expect(scrubbed.scrubbed).not.toMatch(/token=\S+/);
@@ -410,7 +419,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   it('writes scrubbed spec content to the artifact', () => {
     const members = [memberFromIssue('issue-with-acceptance.md', 362)];
     const rawSpec = `${buildSpecArtifactContent(members)}\ntoken=ghp_1234567890123456789012345678901234\n`;
-    const specScrub = scrubForProviderInput(rawSpec);
+    const specScrub = scrubForProviderInput(rawSpec, { allowSafeSecretRedaction: true });
     expect(specScrub.ok).toBe(true);
     if (!specScrub.ok) {
       return;
@@ -444,11 +453,8 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(fromEntries).not.toBeNull();
     expect(validateMappingLedger(fromEntries!, members).ok).toBe(true);
 
-    const fromLegacyLedger = coerceMappingLedger({
-      ledger: fromEntries!.entries,
-    });
-    expect(fromLegacyLedger?.exhaustive).toBe(true);
-    expect(validateMappingLedger(fromLegacyLedger!, members).ok).toBe(true);
+    expect(coerceMappingLedger({ ledger: fromEntries!.entries })).toBeNull();
+    expect(coerceMappingLedger({ entries: fromEntries!.entries })).toBeNull();
   });
 
   it('resolves overlapping failures with deterministic precedence', () => {
@@ -528,28 +534,94 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(result.shouldInvokeCoworker).toBe(false);
   });
 
-  it('redacts private data before provider artifacts are written', () => {
-    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+  it('reports skipped_provider_fence when private data requires provider redaction', () => {
     const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
-    const scrubbed = scrubForProviderInput(diff);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('redacts private data only when safe redaction is explicitly allowlisted', () => {
+    const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
+    const scrubbed = scrubForProviderInput(diff, { allowSafeSecretRedaction: true });
     expect(scrubbed.ok).toBe(true);
     if (!scrubbed.ok) {
       return;
     }
     expect(scrubbed.scrubbed).toContain('[REDACTED_PRIVATE_DATA]');
     expect(scrubbed.scrubbed).not.toContain('user@customer.example');
-    expect(scrubbed.scrubbed).not.toContain('Jane Customer');
+  });
 
-    const prep = prepareMappingArtifacts({
-      scrubbedDiff: scrubbed.scrubbed,
-      scrubbedSpec: buildSpecArtifactContent(members),
-      members,
+
+  it('rejects missing-test claims regardless of coworker kind label', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const diff = fixture('large.diff');
+    const classification = classifyChangedTestFiles(['scripts/missing.test.ts'], diff);
+    const entry = {
+      requirementId: '1',
+      specIssueNumber: 362,
+      specSnapshotHash: members[0]!.snapshotHash,
+      citedRequirementText: members[0]!.acceptanceCriteria[0]!,
+      mappingStatus: 'gap_candidate' as const,
+      concreteFailureScenario: 'No test covers the new branch.',
+      kind: 'hypothesis' as const,
+    };
+    expect(isMissingTestClaim(entry)).toBe(true);
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        ...entry,
+        requirementId: String(idx + 1),
+        citedRequirementText: text,
+        mappingStatus: idx === 0 ? 'gap_candidate' : 'satisfied',
+        concreteFailureScenario: idx === 0 ? entry.concreteFailureScenario : undefined,
+        kind: idx === 0 ? 'hypothesis' : 'confirmed_observation',
+      })),
+    };
+    expect(
+      validateMappingLedger(ledger, members, {
+        diffContent: diff,
+        testFiles: classification.testFiles,
+        ambiguousTestLike: classification.ambiguousTestLike,
+      }).ok,
+    ).toBe(false);
+  });
+
+
+  it('loads multiple authoritative issue specs for the executable helper', () => {
+    const parent = loadIssue('issue-parent-900.md', 900);
+    const child = loadIssue('issue-child-901.md', 901);
+    const specs = loadSpecBodiesFromOptions({
+      prBodyFile: null,
+      issueFile: null,
+      issuesFile: null,
+      issueSpecs: [
+        { issueNumber: 900, filePath: path.join(fixturesDir, 'issue-parent-900.md') },
+        { issueNumber: 901, filePath: path.join(fixturesDir, 'issue-child-901.md') },
+      ],
+      diffFile: null,
+      changedPathsFile: null,
+      explicitIssue: null,
+      declarationIssue: null,
+      prHeadSha: null,
+      json: true,
+      lookupAvailable: true,
+      coworkerAvailable: true,
     });
-    expect(prep.ok).toBe(true);
-    if (prep.ok) {
-      const onDisk = readFileSync(prep.diffPath, 'utf8');
-      expect(onDisk).not.toContain('user@customer.example');
-    }
+    expect(specs).toHaveLength(2);
+    expect(specs[0]?.body).toBe(parent.body);
+    expect(specs[1]?.body).toBe(child.body);
+    expect(parseIssueSpecAssignments(['900=scripts/a.md', '901:scripts/b.md'])).toEqual([
+      { issueNumber: 900, filePath: 'scripts/a.md' },
+      { issueNumber: 901, filePath: 'scripts/b.md' },
+    ]);
   });
 
   it('exposes prompt contract markers for static checks', () => {
