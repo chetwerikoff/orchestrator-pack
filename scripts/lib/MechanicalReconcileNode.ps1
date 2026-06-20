@@ -48,15 +48,19 @@ function Protect-MechanicalTransportPath {
     )
 
     if (-not (Test-Path -LiteralPath $Path)) {
-        return
+        return $false
     }
 
     if ($IsLinux -or $IsMacOS) {
         $mode = if ($Directory) { '700' } else { '600' }
-        if (Get-Command chmod -ErrorAction SilentlyContinue) {
-            & chmod $mode -- $Path 2>$null
+        if (-not (Get-Command chmod -ErrorAction SilentlyContinue)) {
+            return $false
         }
-        return
+        & chmod $mode -- $Path 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+        return (Test-MechanicalTransportPathPrivate -Path $Path -Directory:$Directory)
     }
 
     try {
@@ -80,10 +84,34 @@ function Protect-MechanicalTransportPath {
         )
         $acl.AddAccessRule($rule)
         Set-Acl -LiteralPath $Path -AclObject $acl
+        return $true
     }
     catch {
-        # Best-effort hardening; transport still works if ACL tightening is unavailable.
+        return $false
     }
+}
+
+function Test-MechanicalTransportPathPrivate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [switch]$Directory
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    if ($IsLinux -or $IsMacOS) {
+        if (-not (Get-Command stat -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+        $expected = if ($Directory) { '700' } else { '600' }
+        $mode = (& stat -c '%a' -- $Path 2>$null | Select-Object -First 1).ToString().Trim()
+        return $mode -eq $expected
+    }
+
+    return $true
 }
 
 function Initialize-MechanicalTransportTempRoot {
@@ -95,7 +123,7 @@ function Initialize-MechanicalTransportTempRoot {
     if (-not (Test-Path -LiteralPath $Root)) {
         New-Item -ItemType Directory -Path $Root -Force | Out-Null
     }
-    Protect-MechanicalTransportPath -Path $Root -Directory
+    Protect-MechanicalTransportPath -Path $Root -Directory | Out-Null
 }
 
 function Write-MechanicalTransportPrivateFile {
@@ -107,7 +135,51 @@ function Write-MechanicalTransportPrivateFile {
     )
 
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
-    Protect-MechanicalTransportPath -Path $Path
+    Protect-MechanicalTransportPath -Path $Path | Out-Null
+}
+
+function Write-MechanicalWorkerMessagePayloadFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $root = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        Initialize-MechanicalTransportTempRoot -Root $root
+    }
+    if (-not (Test-MechanicalTransportPathPrivate -Path $root -Directory)) {
+        throw 'mechanical_transport_root_not_private'
+    }
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        $writer = New-Object System.IO.StreamWriter($stream, $encoding)
+        try {
+            $writer.Write($Content)
+        }
+        finally {
+            $writer.Dispose()
+        }
+    }
+    catch [System.IO.IOException] {
+        throw 'mechanical_transport_payload_exists'
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    if (-not (Protect-MechanicalTransportPath -Path $Path)) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw 'mechanical_transport_payload_not_private'
+    }
+    if (-not (Test-MechanicalTransportPathPrivate -Path $Path)) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw 'mechanical_transport_payload_not_private'
+    }
 }
 
 function New-MechanicalTransportTempPaths {
@@ -151,7 +223,7 @@ function Remove-StaleMechanicalTransportFiles {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
 
     $cutoff = (Get-Date).ToUniversalTime().AddSeconds(-1 * $MaxAgeSeconds)
-    foreach ($item in @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue)) {
+    foreach ($item in @(Get-ChildItem -LiteralPath $Root -File -Filter '*.payload' -ErrorAction SilentlyContinue)) {
         if ($item.LastWriteTimeUtc -lt $cutoff) {
             Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue
         }

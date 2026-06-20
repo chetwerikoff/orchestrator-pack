@@ -1777,6 +1777,33 @@ exit 0
     expect(remaining).toHaveLength(0);
   });
 
+  it('does not sweep stale mechanical-node exchange files during payload cleanup', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stale-exchange-'));
+    const transportRoot = path.join(dir, 'mechanical-transport');
+    mkdirSync(transportRoot, { recursive: true });
+    const staleExchange = path.join(transportRoot, 'stale.in.json');
+    writeFileSync(staleExchange, '{"keep":true}');
+    const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(staleExchange, staleTime, staleTime);
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], {
+      input: 'fresh payload',
+      encoding: 'utf8',
+      env: { ...process.env, AO_MECHANICAL_TRANSPORT_TEMP: transportRoot, AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS: '3600' },
+    });
+    expect(result.status).toBe(0);
+    expect(existsSync(staleExchange)).toBe(true);
+    expect(readFileSync(staleExchange, 'utf8')).toContain('keep');
+  });
+
   it('fails closed when post-send outcome update cannot be recorded', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-update-fail-'));
     const fakeAo = path.join(dir, 'ao');
@@ -2302,6 +2329,36 @@ ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTR
         },
       },
       audit: [],
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState;
+    expect(persisted.stateRootIdentity).toBeTruthy();
+    expect(persisted.stateRootIdentity).not.toBe('stale-identity-hash');
+  });
+
+  it('rebinds identity on epoch change when compacted state has no deliveries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-state-root-empty-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      deliveries: {},
+      audit: [],
+      lastTickMs: 1717601000000,
     }));
     const fakeAoDir = writeFakeAoCli(dir);
     const result = spawnSync('pwsh', [

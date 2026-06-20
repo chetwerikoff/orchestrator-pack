@@ -121,22 +121,11 @@ function Get-SubmitReconcileState {
     $identity = Get-SubmitReconcileStateRootIdentity -StatePath $Path -JournalPath $JournalPath
     $storedIdentity = [string]$state.stateRootIdentity
     $activeDeliveryCount = Get-SubmitReconcileActiveDeliveryCount -Deliveries $state.deliveries
-    $totalDeliveryCount = 0
-    if ($state.deliveries) {
-        $totalDeliveryCount = @($state.deliveries.Keys).Count
-    }
     if ($storedIdentity -and $storedIdentity -ne $identity) {
         if ($activeDeliveryCount -gt 0) {
             $state['_recovery'] = @{
                 fenceTrusted = $false
                 reason       = 'wrong_state_root_active_deliveries'
-                quarantined  = $Path
-            }
-        }
-        elseif ($totalDeliveryCount -eq 0) {
-            $state['_recovery'] = @{
-                fenceTrusted = $false
-                reason       = 'wrong_state_root_empty_store'
                 quarantined  = $Path
             }
         }

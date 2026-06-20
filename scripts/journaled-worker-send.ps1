@@ -108,7 +108,12 @@ function Invoke-AoSendViaFile {
     Remove-StaleMechanicalTransportFiles
     $payloadFile = New-MechanicalWorkerMessagePayloadTempPath
     try {
-        Write-MechanicalTransportPrivateFile -Path $payloadFile -Content $Payload
+        try {
+            Write-MechanicalWorkerMessagePayloadFile -Path $payloadFile -Content $Payload
+        }
+        catch {
+            return Resolve-AoSendDispatchOutcome -ExitCode 1 -Reason 'payload_transport_not_private'
+        }
 
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = $AoPath
