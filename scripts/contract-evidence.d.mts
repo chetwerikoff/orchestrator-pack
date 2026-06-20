@@ -20,6 +20,8 @@ export function criterionHasProducerEmission(
   criterionNumber: number,
 ): boolean;
 
+export function canonicalBindingIdProducer(row: Record<string, string>): string;
+
 export function extractRowProducerEmissionExpectation(
   row: Record<string, string>,
 ): {

@@ -67,6 +67,7 @@
     "tests/fixtures/draft-discipline/contract-evidence/new-ac-section-anchored-pass.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-consumer-only-ac.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-external-alias.md",
+    "tests/fixtures/draft-discipline/contract-evidence/new-external-binding-id-mismatch.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-external-gh.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-missing-proof.md",
     "tests/fixtures/draft-discipline/contract-evidence/new-no-ac.md",

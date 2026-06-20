@@ -337,6 +337,19 @@ export function acceptanceCriterionSection(markdown, criterionNumber) {
 /**
  * @param {Record<string, string>} row
  */
+
+/**
+ * @param {Record<string, string>} row
+ */
+export function canonicalBindingIdProducer(row) {
+  const bindingId = row['binding-id'] ?? '';
+  const prefix = bindingId.split(':')[0]?.trim();
+  if (prefix) {
+    return canonicalProducer(prefix);
+  }
+  return canonicalProducer(row.producer ?? '');
+}
+
 export function extractRowProducerEmissionExpectation(row) {
   const producer = canonicalProducer(row.producer ?? '');
   if (row['binding-id']) {
@@ -527,12 +540,23 @@ export function checkContractEvidence(markdown, options = {}) {
     if (newMatch) {
       const acNumber = Number(newMatch[1]);
       const repoOwned = producerRegistry['repo-owned'] ?? producerRegistry.repoOwned ?? [];
-      if (producerRegistry.external?.includes(producer)) {
-        errors.push(`${rowLabel}: NEW evidence cannot target external producer ${producer}`);
+      if (!row['binding-id']) {
+        errors.push(`${rowLabel}: missing required field binding-id`);
         continue;
       }
-      if (!repoOwned.includes(producer)) {
-        errors.push(`${rowLabel}: producer ${producer} is not in the repo-owned registry`);
+      const bindingProducer = canonicalBindingIdProducer(row);
+      if (bindingProducer !== producer) {
+        errors.push(
+          `${rowLabel}: producer ${producer} does not match binding-id producer ${bindingProducer}`,
+        );
+        continue;
+      }
+      if (producerRegistry.external?.includes(bindingProducer)) {
+        errors.push(`${rowLabel}: NEW evidence cannot target external producer ${bindingProducer}`);
+        continue;
+      }
+      if (!repoOwned.includes(bindingProducer)) {
+        errors.push(`${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry`);
         continue;
       }
       const newIdentity = canonicalBindingIdentity(row, 'structured');

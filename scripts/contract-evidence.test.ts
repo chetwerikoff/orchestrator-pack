@@ -118,6 +118,11 @@ describe('checkContractEvidence fixtures', () => {
     expect(result.errors.join(' ')).toMatch(/external producer/i);
   });
 
+  it('rejects NEW rows when binding-id names an external producer but row.producer does not', () => {
+    const result = checkFixture('new-external-binding-id-mismatch.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match binding-id producer|external producer/i);
+  });
+
   it('passes well-formed repo-owned NEW rows', () => {
     checkFixture('new-repo-owned-pass.md', true);
   });
