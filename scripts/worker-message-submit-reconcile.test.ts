@@ -29,6 +29,7 @@ import {
   OPERATOR_ESCALATION_PREFIX,
   evaluateDispatchObservability,
   getFailedDeliveryStatus,
+  evaluateWorktreeDriftVanishSuppression,
   planWorkerMessageSubmitActions,
   resolveBusyDispatchCapability,
   resolveSubmitReconcileConfig,
@@ -1594,8 +1595,8 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(text).toContain('.EnvironmentVariables[');
   });
 
-  it('fails closed when ao send stdin contract is absent', () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-stdin-'));
+  it('fails closed when ao send --file contract is absent', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-file-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send <session> [message...]"; exit 0; fi\nexit 99\n');
@@ -1608,18 +1609,19 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(existsSync(journal)).toBe(false);
   });
 
-  it('sets reentrancy sentinel while probing ao send stdin help', () => {
+  it('sets reentrancy sentinel while probing ao send --file help', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-help-sentinel-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
 if [[ "$1" == "send" && "$2" == "--help" ]]; then
   if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 88; fi
-  echo "Usage: ao send --stdin <session>"
+  echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"
   exit 0
 fi
 if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 89; fi
-cat >/dev/null
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -1635,8 +1637,9 @@ exit 0
     const sentMarker = path.join(dir, 'sent.txt');
     writeFileSync(journal, '{not-json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
-cat >/dev/null
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
 printf sent > '${sentMarker}'
 exit 0
 `);
@@ -1655,8 +1658,9 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
-cat >/dev/null
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -1673,29 +1677,30 @@ exit 0
     expect(new Set(sourceKeys).size).toBe(2);
   });
 
-  it('passes multiline payload through stdin and stores metadata only', () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stdin-'));
+  it('passes multiline option-shaped payload through --file and stores metadata only', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-file-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
-    const stdinCapture = path.join(dir, 'stdin.txt');
+    const fileCapture = path.join(dir, 'payload.txt');
     const argvCapture = path.join(dir, 'argv.txt');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
 printf '%s\n' "$@" > "${argvCapture}"
-cat > "${stdinCapture}"
+if [[ "$3" == "--file" ]]; then cat "$4" > "${fileCapture}"; fi
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
-    const payload = `first line with spaces /tmp/path with spaces\n${'x'.repeat(230)}\nopk_secret_TOKEN_SHOULD_NOT_LEAK`;
+    const payload = `-leading option\n--file embedded flag\nfirst line with spaces /tmp/path with spaces\n${'x'.repeat(230)}\nopk_secret_TOKEN_SHOULD_NOT_LEAK`;
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-SourceKey', 'branch with spaces'], { input: payload, encoding: 'utf8' });
     expect(result.status).toBe(0);
-    expect(readFileSync(stdinCapture, 'utf8')).toBe(payload);
+    expect(readFileSync(fileCapture, 'utf8')).toBe(payload);
     expect(readFileSync(argvCapture, 'utf8')).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
     const journalText = readFileSync(journal, 'utf8');
     expect(journalText).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
     expect(journalText).not.toContain('branch with spaces');
     expect(journalText).toContain('"dispatchOutcome":"dispatched"');
-    expect(journalText).toContain('"lineCount":3');
+    expect(journalText).toContain('"lineCount":5');
   });
 
   it('fails closed when post-send outcome update cannot be recorded', () => {
@@ -1703,8 +1708,9 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
-cat >/dev/null
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
 printf '{"startedAt":"2999-01-01T00:00:00Z"}' > "${journal}.lock"
 exit 0
 `);
@@ -1720,8 +1726,9 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi
-cat >/dev/null
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
 python3 - <<'PY2'
 import sys
 sys.stdout.write('o' * 1048576)
@@ -1788,9 +1795,10 @@ describe('worker-message-send adoption preflight', () => {
     writeFileSync(fakeAo, [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]"; echo "  -f, --file <path>    Send contents of a file instead"; exit 0; fi',
       'if [[ "$1" != "send" ]]; then exit 64; fi',
-      'payload=$(cat)',
+      'if [[ "$3" != "--file" ]]; then exit 65; fi',
+      `payload=$(cat "$4")`,
       `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
       '',
     ].join('\n'));
@@ -1835,7 +1843,7 @@ describe('worker-message-send adoption preflight', () => {
       staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: hash('plain-ao-send:pending-draft'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
       staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: hash('plain-ao-send:self-submitted'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 20, lineCount: 1 } },
     }));
-    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then cat >/dev/null; exit 0; fi\nexit 64\n');
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi; exit 0; fi\nexit 64\n');
     chmodSync(fakeAo, 0o755);
 
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
@@ -1854,9 +1862,10 @@ describe('worker-message-send adoption preflight', () => {
     writeFileSync(fakeAo, [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send --stdin <session>"; exit 0; fi',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]"; echo "  -f, --file <path>    Send contents of a file instead"; exit 0; fi',
       'if [[ "$1" != "send" ]]; then exit 64; fi',
-      'payload=$(cat)',
+      'if [[ "$3" != "--file" ]]; then exit 65; fi',
+      `payload=$(cat "$4")`,
       `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
       '',
     ].join('\n'));
@@ -1890,5 +1899,169 @@ describe('worker-message-send adoption preflight', () => {
     }));
     const current = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml'], { encoding: 'utf8' });
     expect(current.status).toBe(0);
+  });
+});
+
+describe('issue #373 vanish and worktree-drift handling', () => {
+  it('escalates when a tracked non-terminal delivery vanishes from all sources', () => {
+    const id = 'opk-vanish:1717601000000:ao-send:gone';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-vanish', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {},
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-vanish',
+            source: DISPATCH_SOURCE_AO_SEND,
+            firstObservedAtMs: 1717601000000,
+            deliveredAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished');
+  });
+
+  it('suppresses vanish escalation for proven worktree drift on review-send', () => {
+    const id = 'opk-drift:review-send:run-1';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09', reports: [] }],
+      dispatchJournal: {},
+      reviewRuns: [{ id: 'run-1', prNumber: 42, targetSha, status: 'outdated', linkedSessionId: 'opk-drift' }],
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-drift',
+            source: DISPATCH_SOURCE_REVIEW_SEND,
+            reviewRunId: 'run-1',
+            prNumber: 42,
+            headSha: targetSha,
+            firstObservedAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)).toBeUndefined();
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id)?.reason).toBe('proven_worktree_drift');
+  });
+
+  it('escalates ambiguous when drift evidence is missing', () => {
+    const id = 'opk-drift:review-send:ambiguous';
+    const targetSha = 'abc123def4567890abcdef1234567890abcdef12';
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: { source: DISPATCH_SOURCE_REVIEW_SEND, headSha: targetSha, prNumber: 42, sessionId: 'opk-drift' },
+      reviewRuns: [],
+      sessions: [{ sessionId: 'opk-drift', ownedHeadSha: 'fedcba0987654321fedcba0987654321fedcba09' }],
+    });
+    expect(drift.suppress).toBe(false);
+    expect(drift.reason).toBe('ambiguous_missing_drift_evidence');
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-drift', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {},
+      reviewRuns: [],
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-drift',
+            source: DISPATCH_SOURCE_REVIEW_SEND,
+            prNumber: 42,
+            headSha: targetSha,
+            firstObservedAtMs: 1717601000000,
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717602000000,
+    });
+    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished_ambiguous');
+  });
+});
+
+describe('issue #373 supervised adoption preflight', () => {
+  it('escalates wrapper_not_adopted without blocking reconcile', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({}));
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('wrapper_not_adopted');
+    expect(result.stdout).toContain('tick complete');
+    expect(result.stdout).not.toContain('tick blocked');
+    const tracking = JSON.parse(readFileSync(state, 'utf8')) as Record<string, unknown>;
+    expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
+  });
+
+  it('deduplicates adoption escalation per epoch/config while reconcile continues', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-dedupe-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    writeFileSync(journal, JSON.stringify({}));
+    const env = {
+      ...process.env,
+      AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-dedupe',
+      AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/dedupe.yaml',
+    };
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    const escalationMatches = (output: string) => (output.match(/ESCALATION: wrapper_not_adopted/g) ?? []).length;
+    expect(escalationMatches(first.stdout)).toBe(1);
+    expect(escalationMatches(second.stdout)).toBe(0);
+    expect(first.stdout).toContain('tick complete');
+    expect(second.stdout).toContain('tick complete');
+  });
+
+  it('still reconciles review-send deliveries when adoption is red', () => {
+    const id = 'opk-review:1717601000000:review-send:run-1';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ sessionId: 'opk-review', name: 'opk-review', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-review',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_REVIEW_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {},
+        audit: [],
+        adoptionStatus: 'wrapper_not_adopted',
+      },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(submitActions(actions)[0]?.deliveryId).toBe(id);
+  });
+});
+
+describe('ao send transport contract (Issue #373)', () => {
+  it('confirms local ao send exposes --file ingestion', () => {
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/check-ao-send-transport-contract.ps1'], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('[PASS]');
   });
 });

@@ -40,6 +40,19 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Submit-WorkerInputDraft.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+
+function Get-SubmitReconcileStateRootIdentity {
+    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    $parts = @(
+        [string]$binding.ConfigPath
+        [string]$binding.AoEpoch
+        [string]$env:AO_WORKER_MESSAGE_SUBMIT_STATE
+        [string]$env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
+    ) | Where-Object { $_ }
+    return (ConvertTo-WorkerMessageSafeIdComponent -Value ($parts -join '|'))
+}
 
 function Get-SubmitReconcileIntervalSeconds {
     if ($IntervalSeconds -gt 0) { return $IntervalSeconds }
@@ -68,7 +81,96 @@ $Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{
 function Get-SubmitReconcileState {
     param([string]$Path)
 
-    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
+    $state = Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
+    $identity = Get-SubmitReconcileStateRootIdentity
+    $storedIdentity = [string]$state.stateRootIdentity
+    $deliveryCount = 0
+    if ($state.deliveries) {
+        $deliveryCount = @($state.deliveries.Keys).Count
+    }
+    if ($storedIdentity -and $storedIdentity -ne $identity -and $deliveryCount -eq 0) {
+        $state['_recovery'] = @{
+            fenceTrusted = $false
+            reason       = 'wrong_state_root_empty_store'
+            quarantined  = $Path
+        }
+    }
+    elseif (-not $storedIdentity) {
+        $state.stateRootIdentity = $identity
+    }
+    return $state
+}
+
+
+function Merge-SubmitAdoptionTrackingFields {
+    param(
+        [object]$Target,
+        [object]$Source
+    )
+
+    foreach ($name in @('adoptionStatus', 'adoptionEpochHash', 'adoptionConfigPathHash', 'lastAdoptionEscalationKey', 'stateRootIdentity')) {
+        $value = $null
+        if ($Source -is [System.Collections.IDictionary] -and $Source.Contains($name)) {
+            $value = $Source[$name]
+        }
+        elseif ($null -ne $Source -and ($Source.PSObject.Properties.Name -contains $name)) {
+            $value = $Source.$name
+        }
+        if ($null -eq $value -or "$value" -eq '') { continue }
+        if ($Target -is [System.Collections.IDictionary]) {
+            $Target[$name] = $value
+        }
+        else {
+            $Target | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+        }
+    }
+    return $Target
+}
+
+function Invoke-SubmitAdoptionPreflightObservation {
+    param(
+        [string]$JournalPath,
+        [string]$StatePath,
+        [object]$Tracking,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode) {
+        return @{ tracking = $Tracking; escalated = 0 }
+    }
+
+    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    $preflight = Test-WorkerMessageSendAdoptionPreflight `
+        -JournalPath $JournalPath `
+        -AoEpoch $binding.AoEpoch `
+        -ConfigPath $binding.ConfigPath `
+        -PersistState
+
+    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
+    if ($preflight.ok) {
+        $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
+        $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
+        $nextTracking.adoptionStatus = 'adopted'
+        return @{ tracking = $nextTracking; escalated = 0 }
+    }
+
+    $dedupeKey = "$($preflight.aoEpochHash):$($preflight.configPathHash):wrapper_not_adopted"
+    $alreadyEscalated = [string]$nextTracking.lastAdoptionEscalationKey -eq $dedupeKey
+    $escalated = 0
+    if (-not $alreadyEscalated) {
+        Write-SubmitReconcileLog $preflight.diagnosis
+        $nextTracking.lastAdoptionEscalationKey = $dedupeKey
+        $escalated = 1
+    }
+    $nextTracking.adoptionStatus = 'wrapper_not_adopted'
+    $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
+    $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
+
+    return @{
+        tracking  = $nextTracking
+        escalated = $escalated
+        reason    = [string]$preflight.reason
+    }
 }
 
 function Set-SubmitReconcileState {
@@ -326,12 +428,23 @@ try {
         }
         else {
             try {
+                $adoptionObservation = Invoke-SubmitAdoptionPreflightObservation `
+                    -JournalPath $journalPath `
+                    -StatePath $statePath `
+                    -Tracking $state `
+                    -DryRunMode:$DryRun
+                $state = $adoptionObservation.tracking
+                if (-not $DryRun) {
+                    Set-SubmitReconcileState -Path $statePath -State $state
+                }
                 $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath `
                     -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs
+                $result.tracking = Merge-SubmitAdoptionTrackingFields -Target $result.tracking -Source $state
                 if (-not $DryRun) {
                     Set-SubmitReconcileState -Path $statePath -State $result.tracking
                 }
-                Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
+                $totalEscalated = $result.escalated + $adoptionObservation.escalated
+                Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$totalEscalated noop=$($result.noop) adoption=$($adoptionObservation.reason))"
                 Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
             }
             catch {

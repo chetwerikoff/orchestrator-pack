@@ -10,6 +10,7 @@ import {
 } from './review-mechanical-cli.mjs';
 import {
   findSessionById,
+  normalizeSha,
   sessionMatchesIdentifier,
   toArray,
 } from './review-trigger-reconcile.mjs';
@@ -30,6 +31,7 @@ import {
   isDeliveryConsumed,
   isSessionAlive,
   isSessionStreaming,
+  DISPATCH_SOURCE_REVIEW_SEND,
   mergeDeliveryRecords,
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
@@ -1213,6 +1215,70 @@ export function getFailedDeliveryStatus(input) {
 /**
  * @param {object} input
  */
+
+
+function findVanishedTrackedDeliveries(tracking, deliveries) {
+  const visibleIds = new Set(
+    deliveries.map((d) => trimString(d.deliveryId)).filter(Boolean),
+  );
+  const vanished = [];
+  for (const [deliveryId, record] of Object.entries(tracking?.deliveries ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('corrupt-')) {
+      continue;
+    }
+    const terminal = trimString(record?.terminalState);
+    if (terminal === SUBMIT_STATE_ESCALATED || terminal === SUBMIT_STATE_SUBMITTED) {
+      continue;
+    }
+    if (visibleIds.has(deliveryId)) {
+      continue;
+    }
+    if (
+      !Number(record?.firstObservedAtMs ?? 0) &&
+      !Number(record?.deliveredAtMs ?? 0) &&
+      !Number(record?.lastSubmitAtMs ?? 0)
+    ) {
+      continue;
+    }
+    vanished.push({ deliveryId, record });
+  }
+  return vanished;
+}
+
+export function evaluateWorktreeDriftVanishSuppression({ record, reviewRuns, sessions }) {
+  const source = trimString(record?.source);
+  if (source !== DISPATCH_SOURCE_REVIEW_SEND) {
+    return { suppress: false, reason: 'not_review_send' };
+  }
+  const targetSha = normalizeSha(record?.headSha);
+  const prNumber = Number(record?.prNumber ?? 0);
+  const sessionId = trimString(record?.sessionId);
+  const reviewRunId = trimString(record?.reviewRunId);
+  if (!targetSha || !prNumber || !sessionId) {
+    return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
+  }
+  const run = toArray(reviewRuns).find((row) => {
+    const runId = trimString(row?.id ?? row?.runId);
+    return (reviewRunId && runId === reviewRunId) || Number(row?.prNumber) === prNumber;
+  });
+  const runTarget = normalizeSha(run?.targetSha);
+  if (!runTarget || runTarget !== targetSha) {
+    return { suppress: false, reason: 'ambiguous_missing_drift_evidence' };
+  }
+  if (trimString(run?.status) !== 'outdated') {
+    return { suppress: false, reason: 'run_not_outdated' };
+  }
+  const session = findSessionById(toArray(sessions), sessionId);
+  const workerHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (!workerHead) {
+    return { suppress: false, reason: 'ambiguous_missing_worker_head' };
+  }
+  if (workerHead !== targetSha) {
+    return { suppress: true, reason: 'proven_worktree_drift' };
+  }
+  return { suppress: false, reason: 'ambiguous_drift_evidence' };
+}
+
 export function planWorkerMessageSubmitActions(input) {
   const {
     aoEvents,
@@ -1581,6 +1647,62 @@ export function planWorkerMessageSubmitActions(input) {
         lastProgressAtMs: getSessionProgressAnchorMs(session, nextDeliveries[deliveryId]),
       };
     }
+  }
+
+
+  for (const { deliveryId, record } of findVanishedTrackedDeliveries(baseTracking, deliveries)) {
+    const existing = nextDeliveries[deliveryId] ?? record;
+    const terminalState = trimString(existing?.terminalState);
+    if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+      continue;
+    }
+    const drift = evaluateWorktreeDriftVanishSuppression({
+      record: existing,
+      reviewRuns,
+      sessions: sessionList,
+    });
+    if (drift.suppress) {
+      nextDeliveries[deliveryId] = {
+        ...existing,
+        terminalState: SUBMIT_STATE_NOOP,
+        vanishedSuppressedAtMs: nowMs,
+        escalationReason: drift.reason,
+      };
+      audit.push({ deliveryId, action: 'noop', reason: drift.reason });
+      actions.push({
+        type: 'noop',
+        deliveryId,
+        sessionId: trimString(existing?.sessionId),
+        reason: drift.reason,
+      });
+      continue;
+    }
+    const reason = drift.reason.startsWith('ambiguous')
+      ? 'delivery_vanished_ambiguous'
+      : 'delivery_vanished';
+    const escalation = resolveDeliveryTerminalEscalation({
+      delivery: existing,
+      record: existing,
+      nowMs,
+      reason,
+      diagnosis: `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} vanished from all observation sources before confirmed consumption (${drift.reason}).`,
+    });
+    nextDeliveries[deliveryId] = {
+      ...existing,
+      terminalState: escalation.terminalState,
+      escalatedAtMs: escalation.escalatedAtMs,
+      escalationReason: escalation.escalationReason,
+      failedDelivery: escalation.failedDelivery,
+    };
+    updateFailedDeliveryState(nextFailedDeliveries, escalation);
+    actions.push({
+      type: 'escalate',
+      deliveryId,
+      sessionId: trimString(existing?.sessionId),
+      reason,
+      diagnosis: escalation.diagnosis,
+    });
+    audit.push({ deliveryId, action: 'escalate', reason });
   }
 
   const draftTracking = {

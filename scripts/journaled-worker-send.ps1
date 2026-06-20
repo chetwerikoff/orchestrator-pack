@@ -1,14 +1,13 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Metadata-only journaled wrapper for orchestrator -> worker ao send (Issue #281).
+  Metadata-only journaled wrapper for orchestrator -> worker ao send (Issues #281 / #373).
 
 .DESCRIPTION
-  Reads the raw worker message from stdin only, records a metadata-only outbox
-  entry before invoking ao send, then records a dispatch outcome after ao send.
-  The raw payload is never accepted as an argv parameter and is never written to
-  the journal or logs. If the local ao send does not advertise stdin/pipe
-  ingestion, this wrapper fails closed: no argv fallback and no raw temp file.
+  Reads the raw worker message from stdin, records a metadata-only outbox entry before
+  invoking ao send via --file, then records a dispatch outcome after ao send. The raw
+  payload is never written to the journal or logs. If the local ao send does not
+  advertise --file ingestion, this wrapper fails closed.
 #>
 [CmdletBinding()]
 param(
@@ -40,9 +39,9 @@ function Write-JournaledWorkerSendLog {
     Write-Host "[$stamp] journaled-worker-send: $Message"
 }
 
-function Test-AoSendStdinContract {
+function Test-AoSendFileContract {
     param([string]$AoPath = 'ao')
-    if ($env:AO_JOURNALED_SEND_ASSUME_STDIN -eq '1') { return $true }
+    if ($env:AO_JOURNALED_SEND_ASSUME_FILE -eq '1') { return $true }
     $savedSentinel = [System.Environment]::GetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', 'Process')
     try {
         [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', [guid]::NewGuid().ToString('n'), 'Process')
@@ -54,9 +53,8 @@ function Test-AoSendStdinContract {
     finally {
         [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', $savedSentinel, 'Process')
     }
-    return ($help -match '(?im)(--stdin|stdin|standard input|pipe)')
+    return ($help -match '(?im)(--file|\-f,\s*--file)')
 }
-
 
 function Update-JournaledWorkerSendOutcome {
     param(
@@ -75,7 +73,28 @@ function Update-JournaledWorkerSendOutcome {
     return @{ ok = $false; reason = $lastReason }
 }
 
-function Invoke-AoSendViaStdin {
+function Resolve-AoSendDispatchOutcome {
+    param(
+        [int]$ExitCode,
+        [string]$Reason
+    )
+
+    if ($ExitCode -eq 0) {
+        return @{ outcome = 'dispatched'; reason = $Reason }
+    }
+    if ($Reason -match '^(timeout_interrupted|interrupted)$') {
+        return @{ outcome = 'dispatch_unknown'; reason = $Reason }
+    }
+    if ($Reason -match '^(process_not_started|session_not_found|arg_rejected|exception_before_send)$') {
+        return @{ outcome = 'send_failed'; reason = $Reason }
+    }
+    if ($ExitCode -ge 64 -and $ExitCode -le 69) {
+        return @{ outcome = 'send_failed'; reason = $Reason }
+    }
+    return @{ outcome = 'dispatch_unknown'; reason = $Reason }
+}
+
+function Invoke-AoSendViaFile {
     param(
         [string]$AoPath,
         [string]$SessionId,
@@ -84,48 +103,54 @@ function Invoke-AoSendViaStdin {
         [switch]$NoWait
     )
 
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $AoPath
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = [guid]::NewGuid().ToString('n')
-    $aoArgs = @('send', $SessionId, '--stdin')
-    if ($NoWait) { $aoArgs += '--no-wait' }
-    if ($TimeoutSeconds -gt 0) {
-        $aoArgs += '--timeout'
-        $aoArgs += [string]$TimeoutSeconds
-    }
-    $psi.Arguments = Join-QuotedProcessArguments -Arguments $aoArgs
-
-    $proc = [System.Diagnostics.Process]::new()
-    $proc.StartInfo = $psi
+    $payloadFile = [System.IO.Path]::GetTempFileName()
     try {
-        if (-not $proc.Start()) { return @{ outcome = 'send_failed'; reason = 'process_not_started' } }
-        $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
-        $stderrDrain = $proc.StandardError.ReadToEndAsync()
-        $proc.StandardInput.Write($Payload)
-        $proc.StandardInput.Close()
-        $limitMs = [Math]::Max(1, $TimeoutSeconds) * 1000
-        if (-not $proc.WaitForExit($limitMs)) {
-            try { $proc.Kill() } catch { }
-            try { $proc.WaitForExit(1000) | Out-Null } catch { }
-            return @{ outcome = 'dispatch_unknown'; reason = 'timeout_interrupted' }
+        [System.IO.File]::WriteAllText($payloadFile, $Payload)
+
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $AoPath
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = [guid]::NewGuid().ToString('n')
+        $aoArgs = @('send', $SessionId, '--file', $payloadFile)
+        if ($NoWait) { $aoArgs += '--no-wait' }
+        if ($TimeoutSeconds -gt 0) {
+            $aoArgs += '--timeout'
+            $aoArgs += [string]$TimeoutSeconds
         }
-        try { $stdoutDrain.Wait(1000) | Out-Null; $stderrDrain.Wait(1000) | Out-Null } catch { }
-        if ($proc.ExitCode -eq 0) { return @{ outcome = 'dispatched'; reason = 'sent' } }
-        return @{ outcome = 'send_failed'; reason = "exit_$($proc.ExitCode)" }
-    }
-    catch [System.Management.Automation.PipelineStoppedException] {
-        return @{ outcome = 'dispatch_unknown'; reason = 'interrupted' }
-    }
-    catch {
-        return @{ outcome = 'send_failed'; reason = 'exception' }
+        $psi.Arguments = Join-QuotedProcessArguments -Arguments $aoArgs
+
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+        try {
+            if (-not $proc.Start()) {
+                return Resolve-AoSendDispatchOutcome -ExitCode 1 -Reason 'process_not_started'
+            }
+            $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
+            $stderrDrain = $proc.StandardError.ReadToEndAsync()
+            $limitMs = [Math]::Max(1, $TimeoutSeconds) * 1000
+            if (-not $proc.WaitForExit($limitMs)) {
+                try { $proc.Kill() } catch { }
+                try { $proc.WaitForExit(1000) | Out-Null } catch { }
+                return Resolve-AoSendDispatchOutcome -ExitCode 1 -Reason 'timeout_interrupted'
+            }
+            try { $stdoutDrain.Wait(1000) | Out-Null; $stderrDrain.Wait(1000) | Out-Null } catch { }
+            return Resolve-AoSendDispatchOutcome -ExitCode $proc.ExitCode -Reason "exit_$($proc.ExitCode)"
+        }
+        catch [System.Management.Automation.PipelineStoppedException] {
+            return Resolve-AoSendDispatchOutcome -ExitCode 1 -Reason 'interrupted'
+        }
+        catch {
+            return Resolve-AoSendDispatchOutcome -ExitCode 1 -Reason 'exception_before_send'
+        }
+        finally {
+            if ($proc) { $proc.Dispose() }
+        }
     }
     finally {
-        if ($proc) { $proc.Dispose() }
+        Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -169,8 +194,8 @@ if ($DryRun) {
     $effectiveJournalPath = Join-Path $dryRoot 'orchestrator-worker-message-dispatch-journal.json'
 }
 
-if (-not (Test-AoSendStdinContract -AoPath $AoPath)) {
-    Write-JournaledWorkerSendLog 'ao send stdin/pipe contract is unavailable; refusing argv/file payload fallback'
+if (-not (Test-AoSendFileContract -AoPath $AoPath)) {
+    Write-JournaledWorkerSendLog 'ao send --file contract is unavailable; refusing transport'
     exit 42
 }
 
@@ -218,7 +243,7 @@ if ($DryRun) {
     exit 0
 }
 
-$result = Invoke-AoSendViaStdin -AoPath $AoPath -SessionId $SessionId -Payload $payload -TimeoutSeconds $TimeoutSeconds -NoWait:$NoWait
+$result = Invoke-AoSendViaFile -AoPath $AoPath -SessionId $SessionId -Payload $payload -TimeoutSeconds $TimeoutSeconds -NoWait:$NoWait
 $shapeDraftState = if ($register.deliveryPath -eq 'self-submitted') { 'auto_submitted' } elseif ($result.outcome -eq 'dispatched') { 'draft_present' } else { 'unknown' }
 $update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome $result.outcome -DraftState $shapeDraftState -JournalPath $effectiveJournalPath
 if (-not $update.ok) {
