@@ -914,6 +914,71 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
         }
     }
 
+
+    $contractCases = @(
+        @{ Name = 'grounded-pass'; Draft = 'contract-evidence/grounded-pass.md'; ExpectPass = $true },
+        @{ Name = 'explicit-none'; Draft = 'contract-evidence/explicit-none.md'; ExpectPass = $true },
+        @{ Name = 'absent-block'; Draft = 'contract-evidence/absent-block.md'; ExpectPass = $false },
+        @{ Name = 'missing-manifest-entry'; Draft = 'contract-evidence/missing-manifest-entry.md'; ExpectPass = $false },
+        @{ Name = 'producer-mismatch'; Draft = 'contract-evidence/producer-mismatch.md'; ExpectPass = $false },
+        @{ Name = 'new-external-gh'; Draft = 'contract-evidence/new-external-gh.md'; ExpectPass = $false },
+        @{ Name = 'legacy-grandfather'; Draft = 'contract-evidence/legacy-grandfather.md'; ExpectPass = $true }
+    )
+    $fixtureManifest = Join-Path $Root 'tests/fixtures/contract-evidence/capture-manifest.json'
+    $fixtureLegacy = Join-Path $draftDisciplineFixtureDir 'contract-evidence/legacy-list.json'
+    foreach ($case in $contractCases) {
+        $draftPath = Join-Path $draftDisciplineFixtureDir $case.Draft
+        & $draftDisciplineCheck -Command contract-evidence -DraftPath $draftPath -RepoRoot $Root -ManifestPath $fixtureManifest -LegacyListPath $fixtureLegacy
+        $passed = $LASTEXITCODE -eq 0
+        if ($passed -ne $case.ExpectPass) {
+            Write-Check "draft-discipline/contract/$($case.Name)" 'FAIL' "expected pass=$($case.ExpectPass) got pass=$passed"
+            Add-Failure "Draft discipline contract-evidence fixture failed: $($case.Draft)"
+        }
+        else {
+            Write-Check "draft-discipline/contract/$($case.Name)" 'PASS' 'completed'
+        }
+    }
+
+
+    Push-Location $Root
+    try {
+        $contractEvidenceVitestReady = $true
+        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+            & npm ci --include=dev
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'contract-evidence/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+                Add-Failure 'contract-evidence vitest prerequisites failed (Issue #366)'
+                $contractEvidenceVitestReady = $false
+            }
+        }
+        if ($contractEvidenceVitestReady) {
+            & npx vitest run scripts/contract-evidence.test.ts
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'contract-evidence/vitest' 'FAIL' "exit=$LASTEXITCODE"
+                Add-Failure 'contract-evidence vitest suite failed (Issue #366)'
+            }
+            else {
+                Write-Check 'contract-evidence/vitest' 'PASS' 'completed'
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $productionManifest = Join-Path $Root 'tests/external-output-references/capture-manifest.json'
+    node (Join-Path $Root 'scripts/generate-capture-manifest.mjs') --verify $productionManifest 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        node -e "import { verifyCaptureManifestIntegrity } from './scripts/contract-evidence.mjs'; const r = verifyCaptureManifestIntegrity(process.cwd(), 'tests/external-output-references/capture-manifest.json'); if (!r.ok) { console.error(r.errors.join('\n')); process.exit(1); }" 
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'contract-evidence/manifest-integrity' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Capture manifest integrity check failed (Issue #366)'
+    }
+    else {
+        Write-Check 'contract-evidence/manifest-integrity' 'PASS' 'completed'
+    }
+
     & $draftDisciplineCheck -Command surfaces -RepoRoot $Root
     if ($LASTEXITCODE -ne 0) {
         Write-Check 'draft-discipline/surfaces' 'FAIL' "exit=$LASTEXITCODE"

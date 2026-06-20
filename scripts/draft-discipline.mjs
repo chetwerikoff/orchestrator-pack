@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
+import { checkContractEvidence } from './contract-evidence.mjs';
 
 const require = createRequire(import.meta.url);
 const taxonomy = require('./draft-discipline-action-taxonomy.json');
@@ -42,26 +44,6 @@ const REALISTIC_INPUT_VALUES = new Set(['realistic', 'production-representative'
 const EXTERNAL_TOOL_INPUT = 'external-tool-output';
 const VALID_PROVENANCE = new Set(['capture-backed', 'sample-backed']);
 const DEFAULT_ISSUE_REPO = 'chetwerikoff/orchestrator-pack';
-
-function normalizeLine(value) {
-  return value.trim().replace(/\s+/g, ' ');
-}
-
-function parseKeyValueBlock(body) {
-  const result = {};
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-    const match = trimmed.match(/^([a-z][a-z0-9-]*)\s*:\s*(.+)$/i);
-    if (match) {
-      const key = match[1].toLowerCase().replace(/_/g, '-');
-      result[key] = normalizeLine(match[2]);
-    }
-  }
-  return result;
-}
 
 export function extractFencedBlocks(markdown) {
   const blocks = new Map();
@@ -486,7 +468,27 @@ export function runCli(argv) {
     return 0;
   }
 
-  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | surfaces)\n');
+  if (command === 'contract-evidence') {
+    const repoRoot = repoRootFlag >= 0 ? argv[repoRootFlag + 1] : path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const manifestFlag = argv.indexOf('--manifest');
+    const legacyFlag = argv.indexOf('--legacy-list');
+    const result = checkContractEvidence(markdown, {
+      repoRoot,
+      draftPath,
+      manifestPath: manifestFlag >= 0 ? argv[manifestFlag + 1] : undefined,
+      legacyListPath: legacyFlag >= 0 ? argv[legacyFlag + 1] : undefined,
+    });
+    if (!result.ok) {
+      for (const error of result.errors) {
+        process.stderr.write(`draft-discipline: ${error}\n`);
+      }
+      return 1;
+    }
+    process.stdout.write('draft-discipline contract-evidence: PASS\n');
+    return 0;
+  }
+
+  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | surfaces)\n');
   return 2;
 }
 

@@ -50,13 +50,20 @@ unless the fallback conditions in this skill apply.
 Use unless the user explicitly asks for a PR/merge or batch. The draft is a
 working artifact; the issue carries everything the worker needs.
 
-1. Confirm the issue body matches the local draft (re-`gh issue edit` if the
+1. Run the contract-evidence mechanical guard (Issue #366) on the draft; refuse
+   issue sync while it exits non-zero:
+
+   ```powershell
+   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+   ```
+
+2. Confirm the issue body matches the local draft (re-`gh issue edit` if the
    draft changed after the last sync).
-2. Confirm the draft header records `GitHub Issue: #N`.
-3. Confirm the registry row for this draft is defined (draft path → **N**); it will be
+3. Confirm the draft header records `GitHub Issue: #N`.
+4. Confirm the registry row for this draft is defined (draft path → **N**); it will be
    written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
-4. **Stop.** Do not open a PR, do not run `ao-declare`, do not run scope checks.
-5. Report to the user:
+5. **Stop.** Do not open a PR, do not run `ao-declare`, do not run scope checks.
+6. Report to the user:
    - Issue URL and number **N** (open for `ao spawn`).
    - "Draft kept local — not committed. Say *batch* or *publish this draft* to land it in `main`."
 
@@ -141,6 +148,10 @@ row's hunk — never wholesale-stage or reset the file. The architect does NOT p
 post-edit, or restore the index by hand.
 
 Steps:
+0. For each draft file listed above, run the contract-evidence guard (Issue #366;
+   plus positive-outcome / parked-root when the draft declares those blocks). Exit
+   non-zero => STOP; do not sync, commit, or publish:
+   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath <draft path>
 1. In this isolated checkout only: git fetch origin; update the local main base
    (git checkout main && git pull origin main), then create the publish branch:
    git checkout -b architect/draft-<NN>-<slug>.
@@ -233,6 +244,16 @@ pwsh -NoProfile -File scripts/lint-self-architect.ps1 -WithWorkingTree
 pwsh -NoProfile -File scripts/verify.ps1
 pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
+
+**Contract-evidence gate (Issue #366).** Run on **every** draft in the publish
+commit (Mode A re-sync, Modes B and C) before `gh issue create` / `gh issue edit`
+or spec PR commit:
+
+```powershell
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+```
+
+Refuse sync or publish while this exits non-zero.
 
 For each draft in the publish commit that declares `behavior-kind` or
 `parked-root-cause` (parked root tracking), run the mechanical guards (Issue #221) before push:
@@ -329,6 +350,7 @@ touched `agent-orchestrator.yaml.example`, run the adoption scan from
 
 ## Do not
 
+- Sync or publish while `contract-evidence` exits non-zero (Issue #366).
 - Run publish mechanics directly by default — delegate to `opencode run
   --dangerously-skip-permissions --dir .` first; use `AO_PUBLISH_FALLBACK=1`
   only as fallback (opencode unavailable or half-done).

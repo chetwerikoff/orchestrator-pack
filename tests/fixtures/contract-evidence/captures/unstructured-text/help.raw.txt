@@ -1,0 +1,2 @@
+Usage: ao report <state>
+  --note <text>

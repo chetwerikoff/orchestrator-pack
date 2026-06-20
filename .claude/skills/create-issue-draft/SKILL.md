@@ -332,6 +332,69 @@ The follow-up issue MUST exist, be open or intentionally resolved, and its body
 MUST carry the declared `cause` statement. Placeholder/vague causes and generic
 follow-up issues fail `scripts/check-draft-discipline.ps1`.
 
+
+## Contract evidence grounding (Issue #366)
+
+Contract grounding (contract grounding) applies to every upstream binding before sync.
+
+Before sync, every upstream datum the draft binds to in **Binding surface**,
+**Acceptance criteria**, or **Verification** must be grounded in the draft's
+`contract-evidence` block. The block is **mandatory** for every draft not on the
+committed legacy-path list (`scripts/contract-evidence-legacy-drafts.json`). A
+draft with no upstream binding must declare `contract-evidence: none` explicitly.
+
+### Block format
+
+Each row asserts exactly one binding and exactly one evidence form:
+
+```contract-evidence
+binding-id: ao:reportState:fixing_ci
+binding-type: structured
+binding: ao worker report fixing_ci state
+producer: ao
+evidence: capture@ao-worker-report/fixing_ci
+selector: $.reportState
+expected: fixing_ci
+```
+
+- **Capture evidence:** every `capture@` row requires machine-readable `binding-id`
+  and `binding-type` (`structured`, `unstructured`, or `cli-behavior`). Use
+  `binding-type: cli-behavior` when `binding-id` names a `flag`, `command`, or
+  `option` datum; CLI rows require manifest exit status `0` plus behavior-specific
+  output — bare flag text in help output is not sufficient.
+- **Capture evidence (fields):** `evidence: capture@<manifest-entry-id>` plus
+  `selector` + `expected` for structured captures, or `token` for unstructured
+  text captures.
+- **NEW evidence (repo-owned producers only):** `evidence: NEW(produced-by AC#N)`
+  where AC#N carries a machine-readable `producer-emission` fence naming
+  `producer`, `datum`/`selector`, `expected`, and executable proof via
+  `proof-command` or `proof-capture`. External producers (`ao`,
+  `gh`, `codex`, including alias spellings) cannot use `NEW`; they require
+  capture evidence. `NEW` rows are authoring-time obligations recorded in the
+  synced issue body, not existence proofs.
+- **No third option:** belief markers, self-attested coworker verdicts, or
+  consumer-only assertions are not admissible.
+
+### Contract-grounding collection (coworker ask)
+
+Delegate bulk corpus lookup to coworker using a structured ask that:
+
+1. Enumerates candidate bindings appearing in the draft surfaces.
+2. Maps each binding to a producer-corpus location.
+3. Returns `found` / `not_found` plus cited evidence location per binding.
+4. Flags bindings that appear in the draft but have no proposed row.
+
+Coworker output is **non-authoritative**. Independently re-validate every row
+against the cited capture or acceptance criterion before committing it into the
+draft. When coworker is unavailable, read the producer corpus directly.
+
+### Architect re-validation rule
+
+The mechanical check re-derives every capture claim from the committed manifest
+and capture bytes. A row copied from a coworker `found` verdict without a real
+capture still fails sync.
+
+
 ### Pre-sync mechanical checks
 
 Before `gh issue create` / `gh issue edit`:
@@ -339,6 +402,7 @@ Before `gh issue create` / `gh issue edit`:
 ```powershell
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
 ```
 
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
@@ -398,6 +462,10 @@ kill the process early to sync the issue.
   ≠ issue number (read from `ao status` / snapshot filename).
 - `denylist` + `allowed-roots` fence correctness.
 - Cross-draft consistency with `00-architecture-decisions.md` and related drafts.
+- **Contract grounding:** every field / event / state / CLI output the spec binds
+  to exists in its producer; corroborate each `contract-evidence` row against its
+  cited capture; flag unproven bindings or upstream references with no row
+  (completeness is reviewer judgment — the linter only grounds declared rows).
 
 **Preferred invocation (Linux / WSL2 / pwsh 7+):**
 
@@ -501,6 +569,18 @@ GitHub (`gh issue view`).
 > executing agent, so the fallback is the correct path. If a PR head is behind
 > base, run `gh pr update-branch <N>` first.
 
+**Publish-path contract-evidence gate (Issue #366).** Any path that syncs or
+publishes a draft — including the `opencode run` delegate and the manual publish fallback
+below — must run the same mechanical guard as pre-sync:
+
+```powershell
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+```
+
+Refuse `gh issue create` / `gh issue edit` / publish commit while this exits non-zero.
+When delegating to [`publish-issue-draft`](../publish-issue-draft/SKILL.md), include this
+command in the delegate prompt and verify it ran before issue sync or spec PR commit.
+
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
 questions recorded), **delegate publish to deepseek via `opencode run`** using
 the temp-file mechanism below. This is the default: deepseek handles the fixed
@@ -534,6 +614,9 @@ from an isolated scratch checkout. Do NOT run git commands in any other checkout
 The draft is docs/issues_drafts/NN-<slug>.md (substitute the real NN-<slug>). It
 passed Codex review — do NOT edit its task content. Steps:
 
+0. Run contract-evidence (and positive-outcome / parked-root when applicable):
+   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+   Exit non-zero => stop; do not sync or publish.
 1. Create the GitHub Issue (gh CLI, issue-create subcommand):
    - Title = the draft's H1 (first heading line).
    - Body  = the draft body MINUS the H1 line (tail -n +3 of the file).
@@ -610,10 +693,11 @@ The draft must not stay uncommitted on disk. Unless the user opts out
 («только драфт», «без PR», «не мержи»), invoke
 [`publish-issue-draft`](../publish-issue-draft/SKILL.md):
 
-1. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
-2. Open PR (`docs: draft NN — … (#N spec)`).
-3. Merge when CI is green (and manual Codex review if the user expects it).
-4. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
+1. Run `check-draft-discipline.ps1 -Command contract-evidence` on the draft (plus positive-outcome / parked-root when applicable); refuse publish on non-zero exit.
+2. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
+3. Open PR (`docs: draft NN — … (#N spec)`).
+4. Merge when CI is green (and manual Codex review if the user expects it).
+5. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
 
 ## Cross-issue contract changes
 

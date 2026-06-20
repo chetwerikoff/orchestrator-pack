@@ -1,0 +1,6 @@
+{
+  "description": "Legacy draft fixture without contract-evidence block.",
+  "paths": [
+    "tests/fixtures/draft-discipline/contract-evidence/legacy-grandfather.md"
+  ]
+}

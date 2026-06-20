@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "corpusRoot": "tests/fixtures/contract-evidence",
+  "entries": {
+    "ao-worker-report/fixing_ci": {
+      "id": "ao-worker-report/fixing_ci",
+      "producer": "ao",
+      "sourceCommand": "ao report fixing_ci",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/fixing_ci.raw.json",
+      "contentHash": "sha256:95b9de210e17e582d6ae11ef3ab6c6f5080382fa4d3536b866f021ce55f50d58"
+    },
+    "ao-worker-report/wrong_value": {
+      "id": "ao-worker-report/wrong_value",
+      "producer": "ao",
+      "sourceCommand": "ao report working",
+      "kind": "structured",
+      "path": "captures/ao-worker-report/wrong_value.raw.json",
+      "contentHash": "sha256:e2f5239ef91663f340c4979839bc00d57cee1ae16e416855ae90edca6122a328"
+    },
+    "array-json/items": {
+      "id": "array-json/items",
+      "producer": "ao",
+      "sourceCommand": "echo \"[\"a\",\"b\"]\" > capture",
+      "kind": "structured",
+      "path": "captures/array-json/items.raw.json",
+      "contentHash": "sha256:ebe7cd0f0fd38b6e7ba1beb3871633bdfef385a5c5b0d888c7ca252f0ac4e4f4"
+    },
+    "cli-behavior/flag-failed": {
+      "id": "cli-behavior/flag-failed",
+      "producer": "ao",
+      "sourceCommand": "ao report --fake-flag",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/flag-failed.raw.txt",
+      "contentHash": "sha256:2b8f74b3221aba1ea697371f5c163b80bdc361e9ef17e09f34d2cabf7b0694b4",
+      "exitStatus": 1
+    },
+    "cli-behavior/flag-success": {
+      "id": "cli-behavior/flag-success",
+      "producer": "ao",
+      "sourceCommand": "ao report working",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/flag-success.raw.txt",
+      "contentHash": "sha256:6db97b3f06bdbba02d99bc8b80eb7dc1b9bbf2f04588800857ac41764cbacd72",
+      "exitStatus": 0
+    },
+    "cli-behavior/help-only": {
+      "id": "cli-behavior/help-only",
+      "producer": "ao",
+      "sourceCommand": "ao report --help",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/help-only.raw.txt",
+      "contentHash": "sha256:844fb6893696c91d9aedda44767182e6037d798a65ae3772430fb1cc686feb25",
+      "exitStatus": 0
+    },
+    "cli-behavior/help-with-target": {
+      "id": "cli-behavior/help-with-target",
+      "producer": "ao",
+      "sourceCommand": "ao report --note --help",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/help-with-target.raw.txt",
+      "contentHash": "sha256:5657ad3065362a725b486bd805d6c87a46c27c6805c7118f8323f08c1fe52ffe",
+      "exitStatus": 0
+    },
+    "cli-behavior/json-success": {
+      "id": "cli-behavior/json-success",
+      "producer": "ao",
+      "sourceCommand": "ao report --note enabled --json",
+      "kind": "structured",
+      "path": "captures/cli-behavior/json-success.raw.json",
+      "contentHash": "sha256:b87b6894d18aff9e72d58083a6199211fd128f1cd221c55bf44daea73e41eea2",
+      "exitStatus": 0
+    },
+    "gh-pr-open/open": {
+      "id": "gh-pr-open/open",
+      "producer": "gh",
+      "sourceCommand": "gh pr list --json number,headRefOid",
+      "kind": "structured",
+      "path": "captures/gh-pr-open/open.raw.json",
+      "contentHash": "sha256:b29a5b6bb117f5b071dc2547e1fbf87c00a433e03ed700818d05da8c98c25b88"
+    },
+    "path with spaces/sample": {
+      "id": "path with spaces/sample",
+      "producer": "ao",
+      "sourceCommand": "ao status --json",
+      "kind": "structured",
+      "path": "captures/path with spaces/sample.raw.json",
+      "contentHash": "sha256:12b34da73b0c67a0319e6eddbd3582af66e3b558b4d44e4a6860e0cec20d726f"
+    },
+    "scalar-json/value": {
+      "id": "scalar-json/value",
+      "producer": "ao",
+      "sourceCommand": "echo \"\"hello\"\" > capture",
+      "kind": "structured",
+      "path": "captures/scalar-json/value.raw.json",
+      "contentHash": "sha256:79e22651fa8a829718b2905990a4f1edf525a88139957b924004288f5ad08e2a"
+    },
+    "unstructured-text/help": {
+      "id": "unstructured-text/help",
+      "producer": "ao",
+      "sourceCommand": "ao report --help",
+      "kind": "unstructured",
+      "path": "captures/unstructured-text/help.raw.txt",
+      "contentHash": "sha256:1ba737324574aadf1bbf75d8f32a461735afc34a72150c909e80ae0568a81596"
+    }
+  }
+}
