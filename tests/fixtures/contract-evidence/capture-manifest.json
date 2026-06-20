@@ -53,6 +53,15 @@
       "contentHash": "sha256:844fb6893696c91d9aedda44767182e6037d798a65ae3772430fb1cc686feb25",
       "exitStatus": 0
     },
+    "cli-behavior/help-with-target": {
+      "id": "cli-behavior/help-with-target",
+      "producer": "ao",
+      "sourceCommand": "ao report --note --help",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/help-with-target.raw.txt",
+      "contentHash": "sha256:5657ad3065362a725b486bd805d6c87a46c27c6805c7118f8323f08c1fe52ffe",
+      "exitStatus": 0
+    },
     "cli-behavior/json-success": {
       "id": "cli-behavior/json-success",
       "producer": "ao",

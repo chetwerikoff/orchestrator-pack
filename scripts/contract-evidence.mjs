@@ -422,7 +422,11 @@ function escapeRegExp(value) {
  * @param {string} sourceCommand
  */
 export function isHelpOnlyCliSourceCommand(sourceCommand) {
-  return /\b(--help|-h)\b/.test((sourceCommand ?? '').trim());
+  const command = (sourceCommand ?? '').trim();
+  if (!command) {
+    return false;
+  }
+  return /(?:^|\s)(?:--help|-h)(?:\s|=|$)/.test(command);
 }
 
 /**

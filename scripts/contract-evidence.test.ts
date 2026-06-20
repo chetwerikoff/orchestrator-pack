@@ -7,7 +7,9 @@ import {
   canonicalBindingIdentity,
   canonicalProducer,
   checkContractEvidence,
+  cliSourceCommandExercisesTarget,
   extractAuthoritativeContractEvidenceBody,
+  isHelpOnlyCliSourceCommand,
   verifyCaptureManifestIntegrity,
 } from './contract-evidence.mjs';
 
@@ -171,7 +173,12 @@ describe('checkContractEvidence fixtures', () => {
 
   it('rejects CLI behavior rows grounded on help-only capture commands', () => {
     const result = checkFixture('cli-behavior-help-only.md', false);
-    expect(result.errors.join(' ')).toMatch(/help-only capture command|does not exercise binding target/i);
+    expect(result.errors.join(' ')).toMatch(/help-only capture command/i);
+  });
+
+  it('rejects CLI behavior rows when the capture command includes a help flag', () => {
+    const result = checkFixture('cli-behavior-help-with-target.md', false);
+    expect(result.errors.join(' ')).toMatch(/help-only capture command/i);
   });
 
   it('grandfathers legacy drafts without a block', () => {
@@ -202,6 +209,22 @@ describe('checkContractEvidence fixtures', () => {
   it('rejects coworker-found rows without real capture grounding', () => {
     const result = checkFixture('coworker-fake-found.md', false);
     expect(result.errors.join(' ')).toMatch(/does not exist/i);
+  });
+});
+
+describe('CLI help detection', () => {
+  it('detects help flags using token boundaries', () => {
+    expect(isHelpOnlyCliSourceCommand('ao report --help')).toBe(true);
+    expect(isHelpOnlyCliSourceCommand('ao report --note --help')).toBe(true);
+    expect(isHelpOnlyCliSourceCommand('ao report -h')).toBe(true);
+    expect(isHelpOnlyCliSourceCommand('ao report --fake-flag')).toBe(false);
+  });
+
+  it('treats mixed help and target commands as help invocations', () => {
+    expect(
+      cliSourceCommandExercisesTarget('ao report --note --help', '--note'),
+    ).toBe(true);
+    expect(isHelpOnlyCliSourceCommand('ao report --note --help')).toBe(true);
   });
 });
 
