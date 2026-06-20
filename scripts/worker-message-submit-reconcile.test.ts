@@ -2259,6 +2259,34 @@ describe('issue #373 supervised adoption preflight', () => {
     expect(tracking.adoptionStatus).toBe('wrapper_not_adopted');
   });
 
+
+  it('surfaces wrapper_not_adopted through the supervised tick_error channel', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-tick-error-'));
+    const journal = path.join(dir, 'journal.json');
+    const state = path.join(dir, 'state.json');
+    const progressDir = path.join(dir, 'progress');
+    mkdirSync(progressDir);
+    writeFileSync(journal, JSON.stringify({}));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_SIDE_PROCESS_PROGRESS_DIR: progressDir,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-tick-error',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/tick-error.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const progress = JSON.parse(readFileSync(path.join(progressDir, 'worker-message-submit-reconcile.progress.json'), 'utf8')) as Record<string, unknown>;
+    expect(progress.tickOutcome).toBe('error');
+    expect(String(progress.lastError)).toContain('wrapper_not_adopted');
+  });
+
   it('deduplicates adoption escalation per epoch/config while reconcile continues', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-dedupe-'));
     const journal = path.join(dir, 'journal.json');
@@ -2308,6 +2336,32 @@ describe('issue #373 supervised adoption preflight', () => {
     expect(submitActions(actions)[0]?.deliveryId).toBe(id);
   });
 });
+
+
+  it('binds adoption epoch to the AO running.json instance when env override is absent', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'adoption-binding-running-json-'));
+    const runningDir = path.join(dir, 'agent-orchestrator');
+    mkdirSync(runningDir, { recursive: true });
+    const runningPath = path.join(runningDir, 'running.json');
+    writeFileSync(runningPath, JSON.stringify({
+      pid: 424242,
+      configPath: '/cfg/from-running.json',
+      startedAt: '2026-06-20T12:34:56.789Z',
+    }));
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
+      . '${path.resolve('scripts/lib/Get-WorkerMessageAdoptionBinding.ps1').replace(/'/g, "''")}'
+      $env:AO_AGENT_ORCHESTRATOR_STATE_DIR = '${runningDir.replace(/'/g, "''")}'
+      Remove-Item Env:AO_WORKER_MESSAGE_ADOPTION_EPOCH -ErrorAction SilentlyContinue
+      Remove-Item Env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH -ErrorAction SilentlyContinue
+      $binding = Get-WorkerMessageAdoptionBinding -PackRoot '${path.resolve('.').replace(/'/g, "''")}'
+      @{ AoEpoch = $binding.AoEpoch; ConfigPath = $binding.ConfigPath } | ConvertTo-Json -Compress
+    `], { encoding: 'utf8', cwd: process.cwd() });
+    expect(result.status).toBe(0);
+    const binding = JSON.parse(result.stdout.trim()) as { AoEpoch: string; ConfigPath: string };
+    expect(binding.AoEpoch).toBe('2026-06-20T12:34:56.789Z|424242|/cfg/from-running.json');
+    expect(binding.ConfigPath).toBe('/cfg/from-running.json');
+  });
+
 
 describe('ao send transport contract (Issue #373)', () => {
   it('confirms committed capture-backed evidence documents --file ingestion', () => {
@@ -2419,6 +2473,49 @@ ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTR
     const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState;
     expect(persisted.stateRootIdentity).toBeTruthy();
     expect(persisted.stateRootIdentity).not.toBe('stale-identity-hash');
+  });
+
+
+  it('fails closed when a new empty state file abandons anchored active deliveries', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-anchor-abandon-'));
+    const journal = path.join(dir, 'journal.json');
+    const stateA = path.join(dir, 'state-a.json');
+    const stateB = path.join(dir, 'state-b.json');
+    const anchor = path.join(dir, 'worker-message-submit-state-root.anchor.json');
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(stateA, JSON.stringify({
+      stateRootIdentity: 'identity-bound-to-state-a',
+      deliveries: {
+        'delivery-1': {
+          deliveryId: 'delivery-1',
+          sessionId: 'opk-test',
+          firstObservedAtMs: 1717601000000,
+        },
+      },
+      audit: [],
+    }));
+    writeFileSync(anchor, JSON.stringify({
+      stateRootIdentity: 'identity-bound-to-state-a',
+      statePath: stateA,
+      activeDeliveryCount: 1,
+      updatedAtMs: 1717601000000,
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', stateB, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTRUSTED/i);
   });
 
   it('fails closed when effective CLI state path changes under active deliveries', () => {
