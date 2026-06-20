@@ -43,13 +43,46 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 
+$Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
+
+function Get-SubmitReconcileActiveDeliveryCount {
+    param([object]$Deliveries)
+
+    $count = 0
+    if (-not $Deliveries) { return 0 }
+    foreach ($deliveryId in @($Deliveries.Keys)) {
+        $record = $Deliveries[$deliveryId]
+        $terminal = [string]$record.terminalState
+        if ($terminal -and $Script:SubmitReconcileTerminalStates -contains $terminal) { continue }
+        $count++
+    }
+    return $count
+}
+
 function Get-SubmitReconcileStateRootIdentity {
+    param(
+        [string]$StatePath = '',
+        [string]$JournalPath = ''
+    )
+
     $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    $effectiveStatePath = if ($StatePath) {
+        $StatePath
+    }
+    else {
+        Get-SubmitReconcileStatePath -CliPath $StateFile
+    }
+    $effectiveJournalPath = if ($JournalPath) {
+        $JournalPath
+    }
+    else {
+        if ($DispatchJournalPath) { $DispatchJournalPath } else { Get-WorkerMessageDispatchJournalPath }
+    }
     $parts = @(
         [string]$binding.ConfigPath
         [string]$binding.AoEpoch
-        [string]$env:AO_WORKER_MESSAGE_SUBMIT_STATE
-        [string]$env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
+        [string]$effectiveStatePath
+        [string]$effectiveJournalPath
     ) | Where-Object { $_ }
     return (ConvertTo-WorkerMessageSafeIdComponent -Value ($parts -join '|'))
 }
@@ -79,21 +112,36 @@ function Write-SubmitReconcileLog {
 $Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
 
 function Get-SubmitReconcileState {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [string]$JournalPath = ''
+    )
 
     $state = Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:SubmitReconcileDefaultState -ActionTracking
-    $identity = Get-SubmitReconcileStateRootIdentity
+    $identity = Get-SubmitReconcileStateRootIdentity -StatePath $Path -JournalPath $JournalPath
     $storedIdentity = [string]$state.stateRootIdentity
-    $deliveryCount = 0
+    $activeDeliveryCount = Get-SubmitReconcileActiveDeliveryCount -Deliveries $state.deliveries
+    $totalDeliveryCount = 0
     if ($state.deliveries) {
-        $deliveryCount = @($state.deliveries.Keys).Count
+        $totalDeliveryCount = @($state.deliveries.Keys).Count
     }
     if ($storedIdentity -and $storedIdentity -ne $identity) {
-        $reason = if ($deliveryCount -eq 0) { 'wrong_state_root_empty_store' } else { 'wrong_state_root_active_deliveries' }
-        $state['_recovery'] = @{
-            fenceTrusted = $false
-            reason       = $reason
-            quarantined  = $Path
+        if ($activeDeliveryCount -gt 0) {
+            $state['_recovery'] = @{
+                fenceTrusted = $false
+                reason       = 'wrong_state_root_active_deliveries'
+                quarantined  = $Path
+            }
+        }
+        elseif ($totalDeliveryCount -eq 0) {
+            $state['_recovery'] = @{
+                fenceTrusted = $false
+                reason       = 'wrong_state_root_empty_store'
+                quarantined  = $Path
+            }
+        }
+        else {
+            $state.stateRootIdentity = $identity
         }
     }
     elseif (-not $storedIdentity) {
@@ -147,7 +195,7 @@ function Invoke-SubmitAdoptionPreflightObservation {
         -ConfigPath $binding.ConfigPath `
         -PersistState
 
-    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath }
+    $nextTracking = if ($Tracking) { $Tracking } else { Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath }
     if ($preflight.ok) {
         $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
         $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
@@ -237,7 +285,7 @@ function Invoke-SubmitReconcileTick {
                 $dispatchJournal[$prop.Name] = $prop.Value
             }
         }
-        $tracking = if ($fixture.tracking) { $fixture.tracking } else { Get-SubmitReconcileState -Path $StatePath }
+        $tracking = if ($fixture.tracking) { $fixture.tracking } else { Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath }
         $now = if ($fixture.nowMs) { [long]$fixture.nowMs } else { $NowMs }
         $tickConfig = if ($fixture.config) { $fixture.config } else { @{} }
         $reactionMessages = @{}
@@ -261,7 +309,7 @@ function Invoke-SubmitReconcileTick {
         $aoEvents = Get-AoEventsSince -SinceMinutes 30
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
-        $tracking = Get-SubmitReconcileState -Path $StatePath
+        $tracking = Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
@@ -410,7 +458,7 @@ $tickFailed = $false
 try {
     do {
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $state = Get-SubmitReconcileState -Path $statePath
+        $state = Get-SubmitReconcileState -Path $statePath -JournalPath $journalPath
         $lastTickMs = $null
         if ($state.lastTickMs) {
             $lastTickMs = [long]$state.lastTickMs

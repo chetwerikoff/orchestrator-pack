@@ -884,13 +884,20 @@ export function evaluateSubmitDecision({
     if (terminalState === SUBMIT_STATE_ESCALATED) {
       return buildConsumptionAction(deliveryId, sessionId, 'late_consumed_after_terminal');
     }
-    if (terminalState === SUBMIT_STATE_SUBMITTED) {
+    if (
+      terminalState === SUBMIT_STATE_SUBMITTED ||
+      terminalState === SUBMIT_STATE_NOOP
+    ) {
       return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
     }
     return buildConsumptionAction(deliveryId, sessionId, 'consumed');
   }
 
-  if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+  if (
+    terminalState === SUBMIT_STATE_ESCALATED ||
+    terminalState === SUBMIT_STATE_SUBMITTED ||
+    terminalState === SUBMIT_STATE_NOOP
+  ) {
     return { action: 'noop', reason: 'terminal_state', deliveryId, terminalState };
   }
 
@@ -1653,7 +1660,11 @@ export function planWorkerMessageSubmitActions(input) {
   for (const { deliveryId, record } of findVanishedTrackedDeliveries(baseTracking, deliveries)) {
     const existing = nextDeliveries[deliveryId] ?? record;
     const terminalState = trimString(existing?.terminalState);
-    if (terminalState === SUBMIT_STATE_ESCALATED || terminalState === SUBMIT_STATE_SUBMITTED) {
+    if (
+      terminalState === SUBMIT_STATE_ESCALATED ||
+      terminalState === SUBMIT_STATE_SUBMITTED ||
+      terminalState === SUBMIT_STATE_NOOP
+    ) {
       continue;
     }
     const drift = evaluateWorktreeDriftVanishSuppression({
