@@ -213,6 +213,65 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(shouldInvokeCoworkerForStatus(merged.status)).toBe(false);
   });
 
+
+  it('rejects generic Related links as contract co-applicability', () => {
+    const relatedOnly = [
+      '## Goal',
+      '',
+      'Unrelated spec.',
+      '',
+      '## Related',
+      '',
+      '- GitHub #901 — mentioned only in Related',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. Criterion.',
+    ].join('\n');
+    const otherBody = [
+      '## Goal',
+      '',
+      'Second unrelated spec.',
+      '',
+      '## Related',
+      '',
+      '- GitHub #900 — mentioned only in Related',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. Other criterion.',
+    ].join('\n');
+    expect(
+      specsDeclareCoApplicability([
+        { issueNumber: 900, body: relatedOnly },
+        { issueNumber: 901, body: otherBody },
+      ]),
+    ).toBe(false);
+    const resolved = resolveContractSet([900, 901], [
+      { issueNumber: 900, body: relatedOnly },
+      { issueNumber: 901, body: otherBody },
+    ]);
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.status).toBe('ambiguous_spec');
+    }
+  });
+
+  it('fails closed when safe credential redaction precedes decision-bearing secrets', () => {
+    const diff = `${fixture('large.diff')}\ntoken=ghp_1234567890123456789012345678901234\n+const key = "AKIAIOSFODNN7EXAMPLE"`;
+    expect(scrubForProviderInput(diff, { allowSafeSecretRedaction: true }).ok).toBe(false);
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
   it('resolves co-applicable multi-spec sets via prerequisite links', () => {
     const parent = loadIssue('issue-parent-900.md', 900);
     const child = loadIssue('issue-child-901.md', 901);

@@ -177,27 +177,68 @@ function containsDecisionBearingRedactionMarker(content: string): boolean {
   return DECISION_BEARING_REDACTION_MARKERS.some((marker) => content.includes(marker));
 }
 
+interface OriginalRedactionSpan {
+  originalStart: number;
+  originalEnd: number;
+  replacement: string;
+}
+
+function originalIndexForCurrentIndex(
+  spans: readonly OriginalRedactionSpan[],
+  currentIndex: number,
+): number {
+  const sorted = [...spans].sort((a, b) => a.originalStart - b.originalStart);
+  let currentPos = 0;
+  let originalPos = 0;
+  let spanIdx = 0;
+  while (currentPos < currentIndex) {
+    while (spanIdx < sorted.length && sorted[spanIdx]!.originalEnd <= originalPos) {
+      spanIdx++;
+    }
+    const span = sorted[spanIdx];
+    if (span && originalPos === span.originalStart) {
+      currentPos += span.replacement.length;
+      if (currentPos >= currentIndex) {
+        return span.originalStart;
+      }
+      originalPos = span.originalEnd;
+      continue;
+    }
+    currentPos++;
+    originalPos++;
+  }
+  return originalPos;
+}
+
 function applySafeRedactionPattern(
   original: string,
   current: string,
   pattern: RegExp,
   replacement: string,
-): { scrubbed: string; sawRedaction: boolean; decisionBearing: boolean } {
+  priorSpans: readonly OriginalRedactionSpan[] = [],
+): { scrubbed: string; sawRedaction: boolean; decisionBearing: boolean; spans: OriginalRedactionSpan[] } {
   let sawRedaction = false;
   let decisionBearing = false;
+  const spans: OriginalRedactionSpan[] = [];
   if (pattern.global) {
     pattern.lastIndex = 0;
   }
   const scrubbed = current.replace(pattern, (match, ...args) => {
-    const offset = args[args.length - 2] as number;
+    const currentOffset = args[args.length - 2] as number;
+    const originalStart = originalIndexForCurrentIndex(priorSpans, currentOffset);
     sawRedaction = true;
-    if (isDecisionBearingRedactionSite(original, offset)) {
+    if (isDecisionBearingRedactionSite(original, originalStart)) {
       decisionBearing = true;
       return DECISION_BEARING_REDACTION_MARKERS[0]!;
     }
+    spans.push({
+      originalStart,
+      originalEnd: originalStart + match.length,
+      replacement,
+    });
     return replacement;
   });
-  return { scrubbed, sawRedaction, decisionBearing };
+  return { scrubbed, sawRedaction, decisionBearing, spans };
 }
 
 function isAllowlistedEmail(email: string): boolean {
@@ -227,7 +268,7 @@ const DECISION_BEARING_REDACTION_MARKERS = [
 ] as const;
 
 const RELATIONSHIP_SECTION_RE =
-  /^##\s*(?:Prerequisite|Prerequisites|Parent|Child|Related|Depends on)\b/im;
+  /^##\s*(?:Prerequisite|Prerequisites|Parent|Child|Depends on)\b/im;
 
 export interface ContractSpecMember {
   issueNumber: number;
@@ -461,7 +502,7 @@ function escapeRegExp(value: string): string {
 }
 
 function isRelationshipSectionBlock(block: string): boolean {
-  return /^##\s*(?:Prerequisite|Prerequisites|Parent|Child|Related|Depends on)\b/im.test(
+  return /^##\s*(?:Prerequisite|Prerequisites|Parent|Child|Depends on)\b/im.test(
     block.trimStart(),
   );
 }
@@ -559,14 +600,17 @@ export function scrubForProviderInput(
 ): { ok: true; scrubbed: string; decisionBearingRedaction: false } | { ok: false; decisionBearingRedaction: true } {
   let scrubbed = content;
   let sawRedaction = false;
+  const redactionSpans: OriginalRedactionSpan[] = [];
 
   const pemRedaction = applySafeRedactionPattern(
     content,
     scrubbed,
     PEM_PRIVATE_KEY_BLOCK_PATTERN,
     '[REDACTED_SECRET]',
+    redactionSpans,
   );
   scrubbed = pemRedaction.scrubbed;
+  redactionSpans.push(...pemRedaction.spans);
   sawRedaction ||= pemRedaction.sawRedaction;
   if (pemRedaction.decisionBearing || containsDecisionBearingRedactionMarker(scrubbed)) {
     return { ok: false, decisionBearingRedaction: true };
@@ -576,8 +620,15 @@ export function scrubForProviderInput(
   }
 
   for (const pattern of SECRET_PATTERNS) {
-    const redacted = applySafeRedactionPattern(content, scrubbed, pattern, '[REDACTED_SECRET]');
+    const redacted = applySafeRedactionPattern(
+      content,
+      scrubbed,
+      pattern,
+      '[REDACTED_SECRET]',
+      redactionSpans,
+    );
     scrubbed = redacted.scrubbed;
+    redactionSpans.push(...redacted.spans);
     sawRedaction ||= redacted.sawRedaction;
     if (redacted.decisionBearing || containsDecisionBearingRedactionMarker(scrubbed)) {
       return { ok: false, decisionBearingRedaction: true };
@@ -585,13 +636,16 @@ export function scrubForProviderInput(
   }
 
   const privateLines = scrubbed.split(/\r?\n/);
-  const privateRedactedLines = privateLines.map((line) => {
+  const privateRedactedLines = privateLines.map((line, lineIndex) => {
+    const lineStartInCurrent =
+      privateLines.slice(0, lineIndex).join('\n').length + (lineIndex > 0 ? 1 : 0);
     const emailRedacted = line.replace(EMAIL_PATTERN, (email) => {
       if (isAllowlistedEmail(email)) {
         return email;
       }
-      const offset = content.indexOf(line);
-      if (offset >= 0 && isDecisionBearingRedactionSite(content, offset + line.indexOf(email))) {
+      const currentOffset = lineStartInCurrent + line.indexOf(email);
+      const originalOffset = originalIndexForCurrentIndex(redactionSpans, currentOffset);
+      if (isDecisionBearingRedactionSite(content, originalOffset)) {
         return DECISION_BEARING_REDACTION_MARKERS[0]!;
       }
       return '[REDACTED_PRIVATE_DATA]';
@@ -599,8 +653,9 @@ export function scrubForProviderInput(
     let next = emailRedacted;
     for (const pattern of LABELED_PRIVATE_DATA_PATTERNS) {
       next = next.replace(pattern, (match) => {
-        const offset = content.indexOf(line);
-        if (offset >= 0 && isDecisionBearingRedactionSite(content, offset + line.indexOf(match))) {
+        const currentOffset = lineStartInCurrent + line.indexOf(match);
+        const originalOffset = originalIndexForCurrentIndex(redactionSpans, currentOffset);
+        if (isDecisionBearingRedactionSite(content, originalOffset)) {
           return DECISION_BEARING_REDACTION_MARKERS[0]!;
         }
         return '[REDACTED_PRIVATE_DATA]';
