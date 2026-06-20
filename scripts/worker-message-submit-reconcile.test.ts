@@ -1922,7 +1922,7 @@ describe('issue #373 vanish and worktree-drift handling', () => {
       },
       nowMs: 1717602000000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished');
+    expect((actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id) as Extract<WorkerMessageSubmitAction, { type: 'escalate' }> | undefined)?.reason).toBe('delivery_vanished');
   });
 
   it('suppresses vanish escalation for proven worktree drift on review-send', () => {
@@ -1949,7 +1949,7 @@ describe('issue #373 vanish and worktree-drift handling', () => {
       nowMs: 1717602000000,
     });
     expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)).toBeUndefined();
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id)?.reason).toBe('proven_worktree_drift');
+    expect((actions.find((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.deliveryId === id) as Extract<WorkerMessageSubmitAction, { type: 'noop' }> | undefined)?.reason).toBe('proven_worktree_drift');
   });
 
   it('escalates ambiguous when drift evidence is missing', () => {
@@ -1981,7 +1981,7 @@ describe('issue #373 vanish and worktree-drift handling', () => {
       },
       nowMs: 1717602000000,
     });
-    expect(actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id)?.reason).toBe('delivery_vanished_ambiguous');
+    expect((actions.find((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.deliveryId === id) as Extract<WorkerMessageSubmitAction, { type: 'escalate' }> | undefined)?.reason).toBe('delivery_vanished_ambiguous');
   });
 });
 

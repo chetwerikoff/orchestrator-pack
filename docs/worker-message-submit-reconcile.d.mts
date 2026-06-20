@@ -72,8 +72,10 @@ export interface DeliveryTrackingRecord {
   prNumber?: number;
   headSha?: string;
   reviewRunId?: string;
+  source?: string;
   firstFailedAtMs?: number;
   failedDelivery?: FailedDeliveryRecord;
+  vanishedSuppressedAtMs?: number;
 }
 
 export interface SubmitTrackingState {
@@ -81,6 +83,11 @@ export interface SubmitTrackingState {
   failedDeliveries?: Record<string, FailedDeliveryRecord>;
   lastTickMs?: number;
   audit?: Array<Record<string, unknown>>;
+  adoptionStatus?: string;
+  adoptionEpochHash?: string;
+  adoptionConfigPathHash?: string;
+  lastAdoptionEscalationKey?: string;
+  stateRootIdentity?: string;
 }
 
 export interface SubmitDecision {
@@ -262,6 +269,12 @@ export declare function getFailedDeliveryStatus(input: {
   reviewRunId?: string;
   headSha?: string;
 }): { ok: boolean; failClosed: boolean; unresolved: FailedDeliveryRecord[] };
+
+export declare function evaluateWorktreeDriftVanishSuppression(input: {
+  record?: Record<string, unknown>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  sessions?: Array<Record<string, unknown>>;
+}): { suppress: boolean; reason: string };
 
 export declare function planWorkerMessageSubmitActions(input: {
   sessions: Array<AoSession | Record<string, unknown>>;
