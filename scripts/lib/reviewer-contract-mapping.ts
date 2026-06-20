@@ -62,16 +62,17 @@ export const DIFF_DELEGATION_FLOOR_LINES = 200;
 export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 
 const SECRET_PATTERNS: readonly RegExp[] = [
-  /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/i,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
-  /ghp_[A-Za-z0-9]{20,}/,
-  /gho_[A-Za-z0-9]{20,}/,
-  /sk-[A-Za-z0-9]{20,}/,
+  /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+  /ghp_[A-Za-z0-9]{20,}/g,
+  /gho_[A-Za-z0-9]{20,}/g,
+  /sk-[A-Za-z0-9]{20,}/g,
 ];
 
+/** Emitted only by decision-bearing redaction; private-use delimiters avoid false positives in source/diffs. */
 const DECISION_BEARING_REDACTION_MARKERS = [
-  '[REDACTED_DECISION_BEARING]',
-  '[DECISION_CONTEXT_REMOVED]',
+  '\uE000REDACTED_DECISION_BEARING\uE001',
+  '\uE000DECISION_CONTEXT_REMOVED\uE001',
 ] as const;
 
 const RELATIONSHIP_SECTION_RE =
@@ -344,9 +345,10 @@ export function scrubForProviderInput(
   let sawSecret = false;
 
   for (const pattern of SECRET_PATTERNS) {
-    if (pattern.test(scrubbed)) {
+    const redacted = scrubbed.replace(pattern, '[REDACTED_SECRET]');
+    if (redacted !== scrubbed) {
       sawSecret = true;
-      scrubbed = scrubbed.replace(pattern, '[REDACTED_SECRET]');
+      scrubbed = redacted;
     }
   }
 
@@ -471,6 +473,7 @@ function assertFreshRegularFileInDir(filePath: string, artifactDir: string): voi
 
 export function prepareMappingArtifacts(input: {
   scrubbedDiff: string;
+  scrubbedSpec: string;
   members: ContractSpecMember[];
   artifactRoot?: string;
 }): ArtifactPrepResult {
@@ -484,9 +487,8 @@ export function prepareMappingArtifacts(input: {
     writeFileSync(diffPath, input.scrubbedDiff, 'utf8');
     assertFreshRegularFileInDir(diffPath, artifactDir);
 
-    const specContent = buildSpecArtifactContent(input.members);
     const specPath = join(artifactDir, 'contract-spec.md');
-    writeFileSync(specPath, specContent, 'utf8');
+    writeFileSync(specPath, input.scrubbedSpec, 'utf8');
     assertFreshRegularFileInDir(specPath, artifactDir);
 
     const diffOnDisk = readFileSync(diffPath, 'utf8');
@@ -585,7 +587,7 @@ export const CONTRACT_MAPPING_QUESTION = [
   'Do not execute commands, request additional paths, assign severity to candidates, approve/reject the PR, or make a final review verdict.',
   'Return ONLY a JSON object with this schema:',
   '{',
-  '  "ledger": [',
+  '  "entries": [',
   '    {',
   '      "requirementId": "string",',
   '      "specIssueNumber": number,',
@@ -599,7 +601,8 @@ export const CONTRACT_MAPPING_QUESTION = [
   '      "testEvidence": "string or null",',
   '      "kind": "confirmed_observation|hypothesis|missing_validation"',
   '    }',
-  '  ]',
+  '  ],',
+  '  "exhaustive": true',
   '}',
   'Every bound acceptance criterion MUST have exactly one ledger entry.',
   'A missing-test claim requires complete changed content for every test file in the diff.',
@@ -619,6 +622,27 @@ export function buildCoworkerInvokeArgv(artifactPaths: string[]): string[] {
     '--question',
     CONTRACT_MAPPING_QUESTION,
   ];
+}
+
+
+export function coerceMappingLedger(payload: unknown): MappingLedger | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  if (Array.isArray(obj.entries) && typeof obj.exhaustive === 'boolean') {
+    return {
+      entries: obj.entries as MappingCandidate[],
+      exhaustive: obj.exhaustive,
+    };
+  }
+  if (Array.isArray(obj.ledger) && !('entries' in obj)) {
+    return {
+      entries: obj.ledger as MappingCandidate[],
+      exhaustive: true,
+    };
+  }
+  return null;
 }
 
 export function validateMappingLedger(
@@ -757,6 +781,7 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
 
   const artifactPrep = prepareMappingArtifacts({
     scrubbedDiff: diffScrub.scrubbed,
+    scrubbedSpec: specScrub.scrubbed,
     members: resolved.members,
   });
   if (!artifactPrep.ok) {

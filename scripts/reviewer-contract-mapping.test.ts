@@ -8,6 +8,7 @@ import {
   buildStructuredStatusRecord,
   classifyChangedTestFiles,
   collectAuthoritativeReferences,
+  coerceMappingLedger,
   CONTRACT_MAPPING_QUESTION,
   CONTRACT_SECTION_HEADINGS,
   evaluateFinalUsability,
@@ -141,7 +142,8 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       CONTRACT_MAPPING_QUESTION,
     ]);
     expect(CONTRACT_MAPPING_QUESTION).toMatch(/untrusted DATA/i);
-    expect(CONTRACT_MAPPING_QUESTION).toMatch(/assign severity to candidates, approve\/reject/i);
+    expect(CONTRACT_MAPPING_QUESTION).toMatch(/"entries":/);
+    expect(CONTRACT_MAPPING_QUESTION).toMatch(/"exhaustive": true/);
   });
 
   it('continues direct review on skipped_no_spec', () => {
@@ -181,8 +183,8 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(unavailable.shouldInvokeCoworker).toBe(false);
   });
 
-  it('reports skipped_provider_fence on decision-bearing redaction', () => {
-    const diff = fixture('large.diff') + '\n[DECISION_CONTEXT_REMOVED]\n';
+  it('reports skipped_provider_fence on decision-bearing redaction markers', () => {
+    const diff = fixture('large.diff') + '\n\uE000DECISION_CONTEXT_REMOVED\uE001\n';
     const issue = loadIssue('issue-with-acceptance.md', 362);
     const result = evaluateMappingPreflight({
       diffLineCount: diff.split(/\r?\n/).length,
@@ -193,6 +195,20 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     });
     expect(result.status).toBe('skipped_provider_fence');
     expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('does not treat literal decision-marker prose in source as provider-fence redaction', () => {
+    const diff = fixture('large.diff') + '\n+const marker = "[DECISION_CONTEXT_REMOVED]";\n';
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: [],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).not.toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(true);
   });
 
   it('reports skipped_input_limit when preflight exceeds provider boundary', () => {
@@ -275,6 +291,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     const members = [memberFromIssue('issue-with-acceptance.md', 362)];
     const prep = prepareMappingArtifacts({
       scrubbedDiff: fixture('large.diff'),
+      scrubbedSpec: buildSpecArtifactContent(members),
       members,
     });
     expect(prep.ok).toBe(true);
@@ -337,6 +354,60 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     if (scrubbed.ok) {
       expect(scrubbed.scrubbed).toContain('[REDACTED_SECRET]');
     }
+  });
+
+  it('redacts every secret occurrence in provider input', () => {
+    const content = 'token=alpha-secret\nother token=beta-secret\n';
+    const scrubbed = scrubForProviderInput(content);
+    expect(scrubbed.ok).toBe(true);
+    if (scrubbed.ok) {
+      expect(scrubbed.scrubbed).not.toMatch(/token=\S+/);
+      expect(scrubbed.scrubbed.match(/\[REDACTED_SECRET\]/g)?.length).toBe(2);
+    }
+  });
+
+  it('writes scrubbed spec content to the artifact', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const rawSpec = `${buildSpecArtifactContent(members)}\ntoken=ghp_1234567890123456789012345678901234\n`;
+    const specScrub = scrubForProviderInput(rawSpec);
+    expect(specScrub.ok).toBe(true);
+    if (!specScrub.ok) {
+      return;
+    }
+    const prep = prepareMappingArtifacts({
+      scrubbedDiff: fixture('large.diff'),
+      scrubbedSpec: specScrub.scrubbed,
+      members,
+    });
+    expect(prep.ok).toBe(true);
+    if (prep.ok) {
+      const specOnDisk = readFileSync(prep.specPaths[0]!, 'utf8');
+      expect(specOnDisk).toContain('[REDACTED_SECRET]');
+      expect(specOnDisk).not.toContain('ghp_');
+    }
+  });
+
+  it('coerces coworker ledger payloads to the validator shape', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const fromEntries = coerceMappingLedger({
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: 'satisfied',
+        kind: 'confirmed_observation',
+      })),
+      exhaustive: true,
+    });
+    expect(fromEntries).not.toBeNull();
+    expect(validateMappingLedger(fromEntries!, members).ok).toBe(true);
+
+    const fromLegacyLedger = coerceMappingLedger({
+      ledger: fromEntries!.entries,
+    });
+    expect(fromLegacyLedger?.exhaustive).toBe(true);
+    expect(validateMappingLedger(fromLegacyLedger!, members).ok).toBe(true);
   });
 
   it('resolves overlapping failures with deterministic precedence', () => {
