@@ -21,6 +21,7 @@ import {
   evaluateMappingPreflight,
   finalizeMappingFromLedger,
   extractChangedFileContentFromDiff,
+  collectIncompleteDiffEvidencePaths,
   hasCompleteChangedFileEvidence,
   isResolvedPathInsideDir,
   extractContractSections,
@@ -562,7 +563,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
   });
 
   it('redacts every secret occurrence in provider input', () => {
-    const content = 'token=alpha-secret\nother token=beta-secret\n';
+    const content = 'token=alpha-secret\ntoken=beta-secret\n';
     const scrubbed = scrubForProviderInput(content, { allowSafeSecretRedaction: true });
     expect(scrubbed.ok).toBe(true);
     if (scrubbed.ok) {
@@ -668,6 +669,62 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       })),
     };
     expect(validateMappingLedger(ledger, members).ok).toBe(false);
+  });
+
+
+  it('detects extensionless binary files from diff markers', () => {
+    const binarySummary = [
+      'diff --git a/scripts/model.dat b/scripts/model.dat',
+      'Binary files a/scripts/model.dat and b/scripts/model.dat differ',
+    ].join('\n');
+    expect(collectIncompleteDiffEvidencePaths(['scripts/example.ts'], binarySummary)).toEqual([
+      'scripts/model.dat',
+    ]);
+
+    const diff = `${binarySummary}\n${fixture('large.diff')}`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('fails closed when redaction removes decision-bearing implementation evidence', () => {
+    const diff = `${fixture('large.diff')}\n+  const token = "ghp_1234567890123456789012345678901234";\n`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(scrubForProviderInput(diff, { allowSafeSecretRedaction: true }).ok).toBe(false);
+  });
+
+  it('redacts the entire PEM private key block for provider input', () => {
+    const pem = [
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'MIIEpAIBAAKCAQEAfakebase64material',
+      '-----END RSA PRIVATE KEY-----',
+    ].join('\n');
+    const diff = `${fixture('large.diff')}\n+${pem.replace(/\n/g, '\n+')}\n`;
+    const scrubbed = scrubForProviderInput(diff, { allowSafeSecretRedaction: true });
+    expect(scrubbed.ok).toBe(true);
+    if (!scrubbed.ok) {
+      return;
+    }
+    expect(scrubbed.scrubbed).not.toContain('MIIEpAIBAAKCAQEAfakebase64material');
+    expect(scrubbed.scrubbed).not.toContain('BEGIN RSA PRIVATE KEY');
+    expect(scrubbed.scrubbed).not.toContain('END RSA PRIVATE KEY');
+    expect(scrubbed.scrubbed).toContain('[REDACTED_SECRET]');
   });
 
   it('treats binary summary markers as incomplete evidence', () => {

@@ -77,6 +77,9 @@ export const DEFAULT_PROVIDER_INPUT_BYTE_LIMIT = 512_000;
 /** Mapping preflight redacts secrets/private data safely; decision-bearing markers still fail closed. */
 export const MAPPING_PREFLIGHT_SCRUB_OPTIONS = { allowSafeSecretRedaction: true } as const;
 
+const PEM_PRIVATE_KEY_BLOCK_PATTERN =
+  /(?:^|\n)(?:\+ ?)?-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:\+ ?)?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g;
+
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
   /(?:authorization|auth)\s*:\s*Bearer\s+\S+/gi,
@@ -85,7 +88,6 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\b(?:ASIA|AROA)[0-9A-Z]{16}\b/g,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
   /ghp_[A-Za-z0-9]{20,}/g,
   /gho_[A-Za-z0-9]{20,}/g,
   /sk-[A-Za-z0-9]{20,}/g,
@@ -97,6 +99,76 @@ const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const LABELED_PRIVATE_DATA_PATTERNS: readonly RegExp[] = [
   /(?:customer|client|end[_-]?user|contact|recipient|subscriber)(?:_name|[_-]name| name)?\s*[:=]\s*[^\n\r]+/gi,
 ];
+
+
+function lineIndexAtOffset(content: string, offset: number): number {
+  return content.slice(0, offset).split(/\r?\n/).length - 1;
+}
+
+function isStandaloneCredentialFixtureBody(body: string): boolean {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----$/.test(trimmed)) {
+    return true;
+  }
+  if (/^-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----$/.test(trimmed)) {
+    return true;
+  }
+  if (/^[A-Za-z0-9+/=]+$/.test(trimmed)) {
+    return true;
+  }
+  return (
+    /^(?:authorization|auth|cookie|set-cookie|x-api-key|x-auth-token|x-amz-security-token)\s*:/i.test(
+      trimmed,
+    ) ||
+    /^(?:api[_-]?key|secret|token|password|private[_-]?key|database_url|redis_url|[A-Z][A-Z0-9_]*_URL)\s*[:=]/i.test(
+      trimmed,
+    ) ||
+    /^(?:AWS_ACCESS_KEY_ID|DATABASE_URL)\s*=/i.test(trimmed) ||
+    /^(?:customer|client|end[_-]?user|contact|recipient|subscriber)(?:_name|[_-]name| name)?\s*[:=]/i.test(
+      trimmed,
+    ) ||
+    /^notify\s+.+\s+about\s+/i.test(trimmed) ||
+    /^key\s*=\s*(?:AKIA|ASIA|AROA)/i.test(trimmed) ||
+    /^eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/.test(trimmed)
+  );
+}
+
+function isDecisionBearingRedactionSite(content: string, offset: number): boolean {
+  const lines = content.split(/\r?\n/);
+  const line = lines[lineIndexAtOffset(content, offset)] ?? '';
+  const body = line.replace(/^[+-]/, '').trim();
+  if (!body) {
+    return false;
+  }
+  return !isStandaloneCredentialFixtureBody(body);
+}
+
+function containsDecisionBearingRedactionMarker(content: string): boolean {
+  return DECISION_BEARING_REDACTION_MARKERS.some((marker) => content.includes(marker));
+}
+
+function applySafeRedactionPattern(
+  original: string,
+  current: string,
+  pattern: RegExp,
+  replacement: string,
+): { scrubbed: string; sawRedaction: boolean; decisionBearing: boolean } {
+  let sawRedaction = false;
+  let decisionBearing = false;
+  const scrubbed = current.replace(pattern, (match, ...args) => {
+    const offset = args[args.length - 2] as number;
+    sawRedaction = true;
+    if (isDecisionBearingRedactionSite(original, offset)) {
+      decisionBearing = true;
+      return DECISION_BEARING_REDACTION_MARKERS[0]!;
+    }
+    return replacement;
+  });
+  return { scrubbed, sawRedaction, decisionBearing };
+}
 
 function isAllowlistedEmail(email: string): boolean {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
@@ -441,24 +513,58 @@ export function scrubForProviderInput(
   let scrubbed = content;
   let sawRedaction = false;
 
+  const pemRedaction = applySafeRedactionPattern(
+    content,
+    scrubbed,
+    PEM_PRIVATE_KEY_BLOCK_PATTERN,
+    '[REDACTED_SECRET]',
+  );
+  scrubbed = pemRedaction.scrubbed;
+  sawRedaction ||= pemRedaction.sawRedaction;
+  if (pemRedaction.decisionBearing || containsDecisionBearingRedactionMarker(scrubbed)) {
+    return { ok: false, decisionBearingRedaction: true };
+  }
+
   for (const pattern of SECRET_PATTERNS) {
-    const redacted = scrubbed.replace(pattern, '[REDACTED_SECRET]');
-    if (redacted !== scrubbed) {
-      sawRedaction = true;
-      scrubbed = redacted;
+    const redacted = applySafeRedactionPattern(content, scrubbed, pattern, '[REDACTED_SECRET]');
+    scrubbed = redacted.scrubbed;
+    sawRedaction ||= redacted.sawRedaction;
+    if (redacted.decisionBearing || containsDecisionBearingRedactionMarker(scrubbed)) {
+      return { ok: false, decisionBearingRedaction: true };
     }
   }
 
-  const privateScrubbed = scrubPrivateData(scrubbed);
+  const privateLines = scrubbed.split(/\r?\n/);
+  const privateRedactedLines = privateLines.map((line) => {
+    const emailRedacted = line.replace(EMAIL_PATTERN, (email) => {
+      if (isAllowlistedEmail(email)) {
+        return email;
+      }
+      const offset = content.indexOf(line);
+      if (offset >= 0 && isDecisionBearingRedactionSite(content, offset + line.indexOf(email))) {
+        return DECISION_BEARING_REDACTION_MARKERS[0]!;
+      }
+      return '[REDACTED_PRIVATE_DATA]';
+    });
+    let next = emailRedacted;
+    for (const pattern of LABELED_PRIVATE_DATA_PATTERNS) {
+      next = next.replace(pattern, (match) => {
+        const offset = content.indexOf(line);
+        if (offset >= 0 && isDecisionBearingRedactionSite(content, offset + line.indexOf(match))) {
+          return DECISION_BEARING_REDACTION_MARKERS[0]!;
+        }
+        return '[REDACTED_PRIVATE_DATA]';
+      });
+    }
+    return next;
+  });
+  const privateScrubbed = privateRedactedLines.join('\n');
   if (privateScrubbed !== scrubbed) {
     sawRedaction = true;
     scrubbed = privateScrubbed;
   }
-
-  for (const marker of DECISION_BEARING_REDACTION_MARKERS) {
-    if (scrubbed.includes(marker)) {
-      return { ok: false, decisionBearingRedaction: true };
-    }
+  if (containsDecisionBearingRedactionMarker(scrubbed)) {
+    return { ok: false, decisionBearingRedaction: true };
   }
 
   if (sawRedaction && !options?.allowSafeSecretRedaction) {
@@ -556,6 +662,36 @@ export function hasCompleteChangedFileEvidence(diffContent: string, filePath: st
     return false;
   }
   return true;
+}
+
+export function collectIncompleteDiffEvidencePaths(
+  changedPaths: string[],
+  diffContent: string,
+): string[] {
+  const paths = new Set<string>();
+  for (const rawPath of changedPaths) {
+    paths.add(rawPath.replace(/\\/g, '/'));
+  }
+  for (const match of diffContent.matchAll(/^diff --git a\/(.+?) b\//gm)) {
+    paths.add(match[1]!.replace(/\\/g, '/'));
+  }
+
+  const incomplete: string[] = [];
+  for (const path of paths) {
+    const inDiff =
+      diffContent.includes(`diff --git a/${path}`) ||
+      diffContent.includes(`b/${path}`);
+    if (!inDiff) {
+      if (isBinaryOrNonDiffablePath(path)) {
+        incomplete.push(path);
+      }
+      continue;
+    }
+    if (!hasCompleteChangedFileEvidence(diffContent, path)) {
+      incomplete.push(path);
+    }
+  }
+  return incomplete;
 }
 
 export function hasCompleteTestFileCoverage(
@@ -1022,19 +1158,11 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     ambiguousTestLike: testClassification.ambiguousTestLike,
   });
 
-  const binaryPaths = input.changedPaths.filter(isBinaryOrNonDiffablePath);
-  if (binaryPaths.length > 0) {
-    const missingBinaryEvidence = binaryPaths.some((rawPath) => {
-      const normalized = rawPath.replace(/\\/g, '/');
-      const inDiff =
-        input.diffContent.includes(`diff --git a/${normalized}`) ||
-        input.diffContent.includes(`b/${normalized}`);
-      if (!inDiff) {
-        return true;
-      }
-      return !hasCompleteChangedFileEvidence(input.diffContent, normalized);
-    });
-    if (missingBinaryEvidence) {
+  const incompleteEvidencePaths = collectIncompleteDiffEvidencePaths(
+    input.changedPaths,
+    input.diffContent,
+  );
+  if (incompleteEvidencePaths.length > 0) {
       const status = resolveStatusPrecedence([...failureCandidates, 'incomplete_evidence']);
       return {
         status,
@@ -1046,7 +1174,6 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
           members: resolved.members,
         }),
       };
-    }
   }
 
   const diffScrub = scrubForProviderInput(input.diffContent, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
