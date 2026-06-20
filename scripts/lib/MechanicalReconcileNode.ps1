@@ -132,6 +132,40 @@ function Remove-MechanicalTransportTempPaths {
     }
 }
 
+function Get-MechanicalTransportMaxAgeSeconds {
+    $raw = $env:AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS
+    if ($raw -and [int]::TryParse($raw, [ref]$null)) {
+        return [Math]::Max(60, [int]$raw)
+    }
+    return 3600
+}
+
+function Remove-StaleMechanicalTransportFiles {
+    param(
+        [string]$Root = '',
+        [int]$MaxAgeSeconds = 0
+    )
+
+    if (-not $Root) { $Root = Get-MechanicalTransportTempRoot }
+    if ($MaxAgeSeconds -le 0) { $MaxAgeSeconds = Get-MechanicalTransportMaxAgeSeconds }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+
+    $cutoff = (Get-Date).ToUniversalTime().AddSeconds(-1 * $MaxAgeSeconds)
+    foreach ($item in @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue)) {
+        if ($item.LastWriteTimeUtc -lt $cutoff) {
+            Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function New-MechanicalWorkerMessagePayloadTempPath {
+    $root = Get-MechanicalTransportTempRoot
+    Initialize-MechanicalTransportTempRoot -Root $root
+    Remove-StaleMechanicalTransportFiles -Root $root
+    $token = [guid]::NewGuid().ToString('N')
+    return Join-Path $root "${token}.payload"
+}
+
 function Test-MechanicalJsonTextComplete {
     param([string]$Text)
 

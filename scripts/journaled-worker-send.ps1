@@ -6,7 +6,8 @@
 .DESCRIPTION
   Reads the raw worker message from stdin, records a metadata-only outbox entry before
   invoking ao send via --file, then records a dispatch outcome after ao send. The raw
-  payload is never written to the journal or logs. If the local ao send does not
+  payload is never written to the journal or logs; transport uses a user-private
+  mechanical-transport file with stale-artifact recovery. If the local ao send does not
   advertise --file ingestion, this wrapper fails closed.
 #>
 [CmdletBinding()]
@@ -32,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -103,9 +105,10 @@ function Invoke-AoSendViaFile {
         [switch]$NoWait
     )
 
-    $payloadFile = [System.IO.Path]::GetTempFileName()
+    Remove-StaleMechanicalTransportFiles
+    $payloadFile = New-MechanicalWorkerMessagePayloadTempPath
     try {
-        [System.IO.File]::WriteAllText($payloadFile, $Payload)
+        Write-MechanicalTransportPrivateFile -Path $payloadFile -Content $Payload
 
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = $AoPath
@@ -150,7 +153,7 @@ function Invoke-AoSendViaFile {
         }
     }
     finally {
-        Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
+        Remove-MechanicalTransportTempPaths -Paths @($payloadFile)
     }
 }
 

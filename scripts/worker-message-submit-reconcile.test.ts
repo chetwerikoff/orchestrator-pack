@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync, readdirSync, mkdirSync, statSync, utimesSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
@@ -1717,6 +1717,64 @@ exit 0
     expect(journalText).not.toContain('branch with spaces');
     expect(journalText).toContain('"dispatchOutcome":"dispatched"');
     expect(journalText).toContain('"lineCount":5');
+  });
+
+  it('uses user-private mechanical transport files and removes them after send', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-private-transport-'));
+    const transportRoot = path.join(dir, 'mechanical-transport');
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const secret = 'opk_secret_TOKEN_SHOULD_NOT_LEAK';
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], {
+      input: secret,
+      encoding: 'utf8',
+      env: { ...process.env, AO_MECHANICAL_TRANSPORT_TEMP: transportRoot },
+    });
+    expect(result.status).toBe(0);
+    const payloadFiles = existsSync(transportRoot)
+      ? readdirSync(transportRoot).filter((name: string) => name.endsWith('.payload'))
+      : [];
+    expect(payloadFiles).toHaveLength(0);
+    if (process.platform !== 'win32') {
+      const rootMode = statSync(transportRoot).mode & 0o777;
+      expect(rootMode).toBe(0o700);
+    }
+  });
+
+  it('sweeps stale mechanical transport payload files before send', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-stale-transport-'));
+    const transportRoot = path.join(dir, 'mechanical-transport');
+    mkdirSync(transportRoot, { recursive: true });
+    const stalePath = path.join(transportRoot, 'stale.payload');
+    const staleSecret = 'opk_secret_STALE_SHOULD_BE_REMOVED';
+    writeFileSync(stalePath, staleSecret);
+    const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(stalePath, staleTime, staleTime);
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
+  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+exit 0
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], {
+      input: 'fresh payload',
+      encoding: 'utf8',
+      env: { ...process.env, AO_MECHANICAL_TRANSPORT_TEMP: transportRoot, AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS: '3600' },
+    });
+    expect(result.status).toBe(0);
+    expect(existsSync(stalePath)).toBe(false);
+    const remaining = readdirSync(transportRoot).filter((name: string) => name.endsWith('.payload'));
+    expect(remaining).toHaveLength(0);
   });
 
   it('fails closed when post-send outcome update cannot be recorded', () => {
