@@ -1611,6 +1611,13 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(text).toContain('.EnvironmentVariables[');
   });
 
+  it('verifies transport privacy on Windows and uses BSD stat on macOS', () => {
+    const text = readFileSync('scripts/lib/MechanicalReconcileNode.ps1', 'utf8');
+    expect(text).toContain('AreAccessRulesProtected');
+    expect(text).toContain("stat -f '%OLp'");
+    expect(text).toContain('Get-MechanicalTransportUnixModeString');
+  });
+
   it('fails closed when ao send --file contract is absent', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-file-'));
     const fakeAo = path.join(dir, 'ao');

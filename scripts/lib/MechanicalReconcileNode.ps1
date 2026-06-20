@@ -40,6 +40,55 @@ function Get-MechanicalTransportTempRoot {
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-mechanical-transport'
 }
 
+function Test-MechanicalTransportIdentityMatchesCurrentUser {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Principal.IdentityReference]$IdentityReference
+    )
+
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $current = $identity.User.Translate([System.Security.Principal.NTAccount]).Value
+        $other = $IdentityReference.Translate([System.Security.Principal.NTAccount]).Value
+        return $current -eq $other
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-MechanicalTransportUnixModeString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Get-Command stat -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $raw = $null
+    if ($IsMacOS) {
+        $raw = (& stat -f '%OLp' -- $Path 2>$null | Select-Object -First 1).ToString().Trim()
+    }
+    elseif ($IsLinux) {
+        $raw = (& stat -c '%a' -- $Path 2>$null | Select-Object -First 1).ToString().Trim()
+    }
+    else {
+        return $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $null
+    }
+
+    $parsed = 0
+    if (-not [int]::TryParse($raw, [ref]$parsed)) {
+        return $null
+    }
+    return $parsed.ToString()
+}
+
 function Protect-MechanicalTransportPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -84,7 +133,7 @@ function Protect-MechanicalTransportPath {
         )
         $acl.AddAccessRule($rule)
         Set-Acl -LiteralPath $Path -AclObject $acl
-        return $true
+        return (Test-MechanicalTransportPathPrivate -Path $Path -Directory:$Directory)
     }
     catch {
         return $false
@@ -103,15 +152,44 @@ function Test-MechanicalTransportPathPrivate {
     }
 
     if ($IsLinux -or $IsMacOS) {
-        if (-not (Get-Command stat -ErrorAction SilentlyContinue)) {
-            return $false
-        }
         $expected = if ($Directory) { '700' } else { '600' }
-        $mode = (& stat -c '%a' -- $Path 2>$null | Select-Object -First 1).ToString().Trim()
+        $mode = Get-MechanicalTransportUnixModeString -Path $Path
         return $mode -eq $expected
     }
 
-    return $true
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $acl = Get-Acl -LiteralPath $Path
+        if (-not $acl.AreAccessRulesProtected) {
+            return $false
+        }
+        if (-not (Test-MechanicalTransportIdentityMatchesCurrentUser -IdentityReference $acl.Owner)) {
+            return $false
+        }
+
+        $allowRules = @($acl.Access | Where-Object { $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow })
+        if ($allowRules.Count -ne 1) {
+            return $false
+        }
+
+        $rule = $allowRules[0]
+        if (-not (Test-MechanicalTransportIdentityMatchesCurrentUser -IdentityReference $rule.IdentityReference)) {
+            return $false
+        }
+        if (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+            return $false
+        }
+
+        $denyRules = @($acl.Access | Where-Object { $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny })
+        if ($denyRules.Count -gt 0) {
+            return $false
+        }
+
+        return $true
+    }
+    catch {
+        return $false
+    }
 }
 
 function Initialize-MechanicalTransportTempRoot {
@@ -155,21 +233,36 @@ function Write-MechanicalWorkerMessagePayloadFile {
     }
 
     $encoding = [System.Text.UTF8Encoding]::new($false)
-    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-    try {
-        $writer = New-Object System.IO.StreamWriter($stream, $encoding)
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
         try {
-            $writer.Write($Content)
+            $null = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None).Dispose()
+        }
+        catch [System.IO.IOException] {
+            throw 'mechanical_transport_payload_exists'
+        }
+        if (-not (Protect-MechanicalTransportPath -Path $Path)) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+            throw 'mechanical_transport_payload_not_private'
+        }
+        [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+    }
+    else {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $writer = New-Object System.IO.StreamWriter($stream, $encoding)
+            try {
+                $writer.Write($Content)
+            }
+            finally {
+                $writer.Dispose()
+            }
+        }
+        catch [System.IO.IOException] {
+            throw 'mechanical_transport_payload_exists'
         }
         finally {
-            $writer.Dispose()
+            $stream.Dispose()
         }
-    }
-    catch [System.IO.IOException] {
-        throw 'mechanical_transport_payload_exists'
-    }
-    finally {
-        $stream.Dispose()
     }
 
     if (-not (Protect-MechanicalTransportPath -Path $Path)) {
