@@ -144,20 +144,13 @@ A spec that needs ~1000 lines to state its acceptance criteria is almost always
 several specs wearing one issue number — split it before authoring, not after a Codex
 finding or a sync failure.
 
-**Decompose reactively, too — don't let adversarial review inflate a draft into a
-subsystem.** Sometimes the over-scope only surfaces *during* the Codex/GPT review
-loop: a finding demands an enforcement sub-mechanism, you add it, and the next finding
-attacks *that* — a regress of "but that anchor is mutable / who protects the
-protector", a bootstrap chicken-and-egg, or a lifecycle that reaches past this PR's
-surface (into the implementing PR, live GitHub settings, another reviewer). That
-runaway is the decomposition smell arriving late. The fix is to **scope the
-sub-mechanism OUT to a follow-up** — name it in **Files out of scope** with who owns
-it, record the residual honestly, and stop — **not** to keep piling machinery into the
-draft under review. An authoring gate must stay an authoring gate; an enforcement
-subsystem is its own build. (Lesson from #366 / draft 117: the `NEW`-obligation
-CI-enforcement lifecycle and the legacy-list anti-tamper hardening were each scoped out
-after spawning an unresolvable bootstrap regress — and the draft converged once they
-were.)
+**Decompose reactively, too.** When a review finding can only be satisfied by an
+enforcement sub-mechanism that itself spawns an *unresolvable regress* — a bootstrap
+chicken-and-egg, a "who protects the protector" mutable-anchor chain, or a lifecycle
+reaching past this PR's surface — scope that sub-mechanism out to a follow-up (name it
+in **Files out of scope** with its owner) instead of piling machinery into the draft
+under review. **Guard against misuse:** this applies only to that *specific* regress
+signal — it is **not** licence to defer a finding because it is merely hard or unwelcome.
 
 ## Pre-draft design-analysis gate (run before authoring)
 
