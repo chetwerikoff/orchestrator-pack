@@ -1,0 +1,9 @@
+{
+  "description": "Closed producer registry for contract-evidence NEW rows (Issue #366).",
+  "aliases": {
+    "gh-cli": "gh",
+    "codex-cli": "codex"
+  },
+  "external": ["ao", "gh", "codex"],
+  "repoOwned": ["orchestrator-pack", "orchestrator-pack-scripts"]
+}

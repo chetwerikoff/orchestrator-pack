@@ -1,0 +1,471 @@
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { extractAtJsonPath } from './external-output-shape-guard.mjs';
+import {
+  assertCapturePathConfined,
+  compareCaptureManifests,
+  detectCaptureKind,
+  generateCaptureManifest,
+  loadCommittedCaptureManifest,
+} from './generate-capture-manifest.mjs';
+
+const require = createRequire(import.meta.url);
+const producerRegistry = require('./contract-evidence-producer-registry.json');
+
+const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
+const GENERIC_FENCE_PATTERN = /```([^\r\n]*)\r?\n([\s\S]*?)```/g;
+const NEW_EVIDENCE_PATTERN = /^NEW\(produced-by AC#(\d+)\)$/i;
+const CAPTURE_EVIDENCE_PATTERN = /^capture@(.+)$/i;
+
+function resolveRepoPath(repoRoot, candidate) {
+  if (!candidate) {
+    return null;
+  }
+  return path.isAbsolute(candidate) ? candidate : path.join(repoRoot, candidate);
+}
+
+const PRODUCER_EMISSION_PATTERN = /```producer-emission\s*\r?\n([\s\S]*?)```/gi;
+
+/**
+ * @param {string} value
+ */
+function normalizeLine(value) {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * @param {string} body
+ */
+function parseKeyValueBlock(body) {
+  /** @type {Record<string, string>} */
+  const result = {};
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+    const match = trimmed.match(/^([a-z][a-z0-9-]*)\s*:\s*(.+)$/i);
+    if (match) {
+      const key = match[1].toLowerCase().replace(/_/g, '-');
+      result[key] = normalizeLine(match[2]);
+    }
+  }
+  return result;
+}
+
+/**
+ * @param {string} markdown
+ */
+export function extractAuthoritativeContractEvidenceBody(markdown) {
+  const genericFences = [];
+  let match;
+  const pattern = new RegExp(GENERIC_FENCE_PATTERN.source, GENERIC_FENCE_PATTERN.flags);
+  while ((match = pattern.exec(markdown)) !== null) {
+    genericFences.push({ start: match.index, end: match.index + match[0].length, kind: match[1].trim() });
+  }
+
+  const candidates = [];
+  const contractPattern = new RegExp(FENCE_PATTERN.source, FENCE_PATTERN.flags);
+  while ((match = contractPattern.exec(markdown)) !== null) {
+    if (match[1].toLowerCase() !== 'contract-evidence') {
+      continue;
+    }
+    const start = match.index;
+    const lineStart = markdown.lastIndexOf('\n', start) + 1;
+    const linePrefix = markdown.slice(lineStart, start);
+    if (/^\s*>/.test(linePrefix)) {
+      continue;
+    }
+    const insideGeneric = genericFences.some(
+      (fence) => fence.kind !== 'contract-evidence' && start >= fence.start && start < fence.end,
+    );
+    if (insideGeneric) {
+      continue;
+    }
+    const before = markdown.slice(0, start);
+    const recentHeading = before.split('\n').slice(-5).join('\n');
+    if (/^#{1,6}\s+example\b/im.test(recentHeading)) {
+      continue;
+    }
+    candidates.push(match[2].trim());
+  }
+  return candidates[0] ?? null;
+}
+
+/**
+ * @param {string} body
+ */
+export function parseContractEvidenceRows(body) {
+  if (!body) {
+    return { none: false, rows: [], malformed: true };
+  }
+  if (/^none\s*$/i.test(body.trim())) {
+    return { none: true, rows: [], malformed: false };
+  }
+
+  /** @type {Array<Record<string, string>>} */
+  const rows = [];
+  const chunks = body.split(/\n\s*\n+/);
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const fields = parseKeyValueBlock(trimmed);
+    if (Object.keys(fields).length === 0) {
+      return { none: false, rows: [], malformed: true };
+    }
+    rows.push(fields);
+  }
+  return { none: false, rows, malformed: rows.length === 0 };
+}
+
+/**
+ * @param {string} producer
+ */
+export function canonicalProducer(producer) {
+  const normalized = producer.trim().toLowerCase();
+  return producerRegistry.aliases?.[normalized] ?? normalized;
+}
+
+/**
+ * @param {string} selector
+ */
+function normalizeSelector(selector) {
+  return selector.trim().replace(/^\$\.?/, '').replace(/\[(\d+)\]/g, '.$1');
+}
+
+/**
+ * @param {string} token
+ */
+function normalizeToken(token) {
+  return token.trim().toLowerCase();
+}
+
+/**
+ * @param {string} datum
+ * @param {'structured' | 'unstructured'} kind
+ * @param {Record<string, string>} row
+ */
+function normalizeDatumIdentity(datum, kind, row) {
+  if (kind === 'structured') {
+    return normalizeSelector(row.selector ?? datum);
+  }
+  return normalizeToken(row.token ?? row.expected ?? datum);
+}
+
+/**
+ * @param {Record<string, string>} row
+ * @param {'structured' | 'unstructured'} kind
+ */
+export function canonicalBindingIdentity(row, kind) {
+  const producer = canonicalProducer(row.producer ?? '');
+  if (row['binding-id']) {
+    const parts = row['binding-id'].split(':');
+    const datum = parts.slice(1).join(':');
+    if (datum) {
+      return `${producer}:${normalizeDatumIdentity(datum, kind, row)}`;
+    }
+  }
+  const datum = kind === 'structured'
+    ? normalizeSelector(row.selector ?? row.datum ?? '')
+    : normalizeToken(row.token ?? row.expected ?? row.datum ?? '');
+  return `${producer}:${datum}`;
+}
+
+/**
+ * @param {string} markdown
+ */
+export function parseProducerEmissionBlocks(markdown) {
+  /** @type {Array<Record<string, string>>} */
+  const blocks = [];
+  let match;
+  const pattern = new RegExp(PRODUCER_EMISSION_PATTERN.source, PRODUCER_EMISSION_PATTERN.flags);
+  while ((match = pattern.exec(markdown)) !== null) {
+    blocks.push(parseKeyValueBlock(match[1]));
+  }
+  return blocks;
+}
+
+/**
+ * @param {string} markdown
+ * @param {number} criterionNumber
+ */
+export function acceptanceCriterionSection(markdown, criterionNumber) {
+  const pattern = new RegExp(`^${criterionNumber}\\.\\s+(.+)$`, 'im');
+  const match = markdown.match(pattern);
+  if (!match) {
+    return null;
+  }
+  const start = match.index ?? 0;
+  const rest = markdown.slice(start);
+  const next = rest.slice(match[0].length).search(/^\d+\.\s+/m);
+  return next >= 0 ? rest.slice(0, match[0].length + next) : rest;
+}
+
+/**
+ * @param {string} markdown
+ * @param {number} criterionNumber
+ */
+export function criterionHasProducerEmission(markdown, criterionNumber) {
+  const section = acceptanceCriterionSection(markdown, criterionNumber);
+  if (!section) {
+    return false;
+  }
+  const blocks = parseProducerEmissionBlocks(section);
+  return blocks.some((block) => block.producer && (block.datum || block.selector) && block.expected);
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} expected
+ */
+function valuesEqual(value, expected) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value) === expected;
+  }
+  return JSON.stringify(value) === expected;
+}
+
+/**
+ * @param {string} content
+ */
+function redactCaptureContent(content) {
+  const hash = createHash('sha256').update(content).digest('hex').slice(0, 12);
+  return `<redacted capture sha256:${hash}>`;
+}
+
+/**
+ * @param {string} markdown
+ * @param {{ repoRoot?: string, manifestPath?: string, legacyListPath?: string, draftPath?: string }} [options]
+ */
+export function checkContractEvidence(markdown, options = {}) {
+  const repoRoot = options.repoRoot ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const manifestPath = resolveRepoPath(
+    repoRoot,
+    options.manifestPath ?? 'tests/external-output-references/capture-manifest.json',
+  );
+  const legacyListPath = resolveRepoPath(
+    repoRoot,
+    options.legacyListPath ?? 'scripts/contract-evidence-legacy-drafts.json',
+  );
+  const draftPath = options.draftPath ?? '';
+
+  /** @type {string[]} */
+  const errors = [];
+
+  const legacy = JSON.parse(readFileSync(legacyListPath, 'utf8'));
+  const legacyPaths = new Set((legacy.paths ?? []).map((entry) => entry.replace(/\\/g, '/')));
+  let normalizedDraft = draftPath.replace(/\\/g, '/');
+  if (normalizedDraft && path.isAbsolute(normalizedDraft)) {
+    normalizedDraft = path.relative(repoRoot, normalizedDraft).replace(/\\/g, '/');
+  }
+  const isLegacy = normalizedDraft && legacyPaths.has(normalizedDraft);
+  if (isLegacy) {
+    return { ok: true, errors: [], skipped: true };
+  }
+
+  const body = extractAuthoritativeContractEvidenceBody(markdown);
+  if (body === null) {
+    errors.push('contract-evidence block is missing from its canonical location');
+    return { ok: false, errors, skipped: false };
+  }
+
+  const parsed = parseContractEvidenceRows(body);
+  if (parsed.malformed) {
+    errors.push('contract-evidence entry is malformed or missing required fields');
+    return { ok: false, errors, skipped: false };
+  }
+  if (parsed.none) {
+    return { ok: true, errors: [], skipped: false };
+  }
+
+  let committedManifest;
+  try {
+    committedManifest = loadCommittedCaptureManifest(repoRoot, manifestPath ?? '');
+  } catch {
+    errors.push('capture manifest is missing or unreadable');
+    return { ok: false, errors, skipped: false };
+  }
+
+  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot: committedManifest.corpusRoot });
+  errors.push(...compareCaptureManifests(committedManifest, regenerated));
+
+  /** @type {Map<string, Record<string, string>>} */
+  const identities = new Map();
+
+  for (const [index, row] of parsed.rows.entries()) {
+    const rowLabel = `contract-evidence row ${index + 1}`;
+    const required = ['binding', 'producer', 'evidence'];
+    for (const field of required) {
+      if (!row[field]) {
+        errors.push(`${rowLabel}: missing required field ${field}`);
+      }
+    }
+    if (errors.some((error) => error.startsWith(rowLabel))) {
+      continue;
+    }
+
+    const producer = canonicalProducer(row.producer);
+    const evidence = row.evidence;
+    const newMatch = evidence.match(NEW_EVIDENCE_PATTERN);
+    const captureMatch = evidence.match(CAPTURE_EVIDENCE_PATTERN);
+
+    if (newMatch && captureMatch) {
+      errors.push(`${rowLabel}: evidence must be exactly one of capture@ or NEW(...)`);
+      continue;
+    }
+    if (!newMatch && !captureMatch) {
+      errors.push(`${rowLabel}: evidence must be capture@<manifest-id> or NEW(produced-by AC#N)`);
+      continue;
+    }
+
+    if (newMatch) {
+      const acNumber = Number(newMatch[1]);
+      const repoOwned = producerRegistry['repo-owned'] ?? producerRegistry.repoOwned ?? [];
+      if (producerRegistry.external?.includes(producer)) {
+        errors.push(`${rowLabel}: NEW evidence cannot target external producer ${producer}`);
+        continue;
+      }
+      if (!repoOwned.includes(producer)) {
+        errors.push(`${rowLabel}: producer ${producer} is not in the repo-owned registry`);
+        continue;
+      }
+      if (!criterionHasProducerEmission(markdown, acNumber)) {
+        errors.push(
+          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name an acceptance criterion with a producer-emission assertion`,
+        );
+        continue;
+      }
+      const identity = canonicalBindingIdentity(row, 'structured');
+      const prior = identities.get(identity);
+      if (prior && prior.evidence !== evidence) {
+        errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
+      } else {
+        identities.set(identity, row);
+      }
+      continue;
+    }
+
+    const manifestId = captureMatch[1].trim();
+    const entry = committedManifest.entries?.[manifestId];
+    if (!entry) {
+      errors.push(`${rowLabel}: manifest entry ${manifestId} does not exist`);
+      continue;
+    }
+    if (!entry.sourceCommand) {
+      errors.push(`${rowLabel}: manifest entry ${manifestId} lacks capture-generation source command`);
+      continue;
+    }
+    errors.push(
+      ...assertCapturePathConfined(repoRoot, committedManifest.corpusRoot, entry.path).map(
+        (message) => `${rowLabel}: ${message}`,
+      ),
+    );
+    if (canonicalProducer(entry.producer) !== producer) {
+      errors.push(
+        `${rowLabel}: declared producer ${producer} does not match manifest producer ${entry.producer}`,
+      );
+      continue;
+    }
+
+    const referencesRoot = path.join(repoRoot, committedManifest.corpusRoot);
+    const capturePath = path.join(referencesRoot, entry.path);
+    if (!existsSync(capturePath)) {
+      errors.push(`${rowLabel}: capture file ${entry.path} is missing`);
+      continue;
+    }
+    const captureContent = readFileSync(capturePath, 'utf8');
+    const actualHash = `sha256:${createHash('sha256').update(captureContent).digest('hex')}`;
+    if (actualHash !== entry.contentHash) {
+      errors.push(`${rowLabel}: capture hash mismatch for ${entry.path}`);
+      continue;
+    }
+
+    const parsedKind = detectCaptureKind(captureContent);
+    const manifestKind = entry.kind ?? parsedKind;
+    const isCliBehavior = Boolean(row.flag || row.command || row['cli-binding']);
+    if (isCliBehavior) {
+      const expectedExit = row['exit-status'] ?? row['expected-exit-status'] ?? '0';
+      if (entry.exitStatus === undefined) {
+        errors.push(`${rowLabel}: CLI behavior binding requires manifest exit status`);
+        continue;
+      }
+      if (String(entry.exitStatus) !== String(expectedExit)) {
+        errors.push(`${rowLabel}: manifest exit status ${entry.exitStatus} does not match expected ${expectedExit}`);
+        continue;
+      }
+    }
+
+    if (manifestKind === 'structured' || parsedKind === 'structured') {
+      if (row.token) {
+        errors.push(`${rowLabel}: token evidence is not allowed for structured captures`);
+        continue;
+      }
+      if (!row.selector || row.expected === undefined) {
+        errors.push(`${rowLabel}: structured capture evidence requires selector and expected`);
+        continue;
+      }
+      let parsedCapture;
+      try {
+        parsedCapture = JSON.parse(captureContent);
+      } catch {
+        errors.push(`${rowLabel}: structured capture ${entry.path} is not valid JSON (${redactCaptureContent(captureContent)})`);
+        continue;
+      }
+      const matches = extractAtJsonPath(parsedCapture, row.selector);
+      if (matches.length === 0) {
+        errors.push(`${rowLabel}: selector ${row.selector} did not resolve in capture (${redactCaptureContent(captureContent)})`);
+        continue;
+      }
+      const matched = matches.some((item) => valuesEqual(item.value, row.expected));
+      if (!matched) {
+        errors.push(`${rowLabel}: selector ${row.selector} value does not match expected ${row.expected} (${redactCaptureContent(captureContent)})`);
+        continue;
+      }
+      const identity = canonicalBindingIdentity(row, 'structured');
+      const prior = identities.get(identity);
+      if (prior && prior.evidence !== evidence) {
+        errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
+      } else {
+        identities.set(identity, row);
+      }
+      continue;
+    }
+
+    if (!row.token) {
+      errors.push(`${rowLabel}: unstructured capture evidence requires token`);
+      continue;
+    }
+    if (!captureContent.includes(row.token)) {
+      errors.push(`${rowLabel}: token not found in unstructured capture (${redactCaptureContent(captureContent)})`);
+      continue;
+    }
+    const identity = canonicalBindingIdentity(row, 'unstructured');
+    const prior = identities.get(identity);
+    if (prior && prior.evidence !== evidence) {
+      errors.push(`${rowLabel}: conflicting evidence for binding identity ${identity}`);
+    } else {
+      identities.set(identity, row);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, skipped: false };
+}
+
+/**
+ * @param {string} repoRoot
+ * @param {string} manifestPath
+ */
+export function verifyCaptureManifestIntegrity(repoRoot, manifestPath) {
+  const committed = loadCommittedCaptureManifest(repoRoot, manifestPath);
+  const regenerated = generateCaptureManifest(repoRoot, { corpusRoot: committed.corpusRoot });
+  const errors = compareCaptureManifests(committed, regenerated);
+  return { ok: errors.length === 0, errors };
+}

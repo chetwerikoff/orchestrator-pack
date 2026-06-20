@@ -6,11 +6,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('positive-outcome', 'parked-root', 'surfaces')]
+    [ValidateSet('positive-outcome', 'parked-root', 'contract-evidence', 'surfaces')]
     [string]$Command,
 
     [string]$DraftPath,
     [string]$MockIssuesPath,
+    [string]$ManifestPath,
+    [string]$LegacyListPath,
     [string]$RepoRoot
 )
 
@@ -24,6 +26,12 @@ if ($DraftPath) {
 }
 if ($MockIssuesPath) {
     $args += '--mock-issues', (Resolve-Path $MockIssuesPath).Path
+}
+if ($ManifestPath) {
+    $args += '--manifest', (Resolve-Path $ManifestPath).Path
+}
+if ($LegacyListPath) {
+    $args += '--legacy-list', (Resolve-Path $LegacyListPath).Path
 }
 if ($RepoRoot) {
     $args += '--repo-root', $Root

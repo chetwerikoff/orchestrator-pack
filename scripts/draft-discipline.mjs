@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkContractEvidence } from './contract-evidence.mjs';
 
 const require = createRequire(import.meta.url);
 const taxonomy = require('./draft-discipline-action-taxonomy.json');
@@ -486,7 +487,27 @@ export function runCli(argv) {
     return 0;
   }
 
-  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | surfaces)\n');
+  if (command === 'contract-evidence') {
+    const repoRoot = repoRootFlag >= 0 ? argv[repoRootFlag + 1] : path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const manifestFlag = argv.indexOf('--manifest');
+    const legacyFlag = argv.indexOf('--legacy-list');
+    const result = checkContractEvidence(markdown, {
+      repoRoot,
+      draftPath,
+      manifestPath: manifestFlag >= 0 ? argv[manifestFlag + 1] : undefined,
+      legacyListPath: legacyFlag >= 0 ? argv[legacyFlag + 1] : undefined,
+    });
+    if (!result.ok) {
+      for (const error of result.errors) {
+        process.stderr.write(`draft-discipline: ${error}\n`);
+      }
+      return 1;
+    }
+    process.stdout.write('draft-discipline contract-evidence: PASS\n');
+    return 0;
+  }
+
+  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | surfaces)\n');
   return 2;
 }
 

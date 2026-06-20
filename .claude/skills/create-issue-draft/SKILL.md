@@ -332,6 +332,64 @@ The follow-up issue MUST exist, be open or intentionally resolved, and its body
 MUST carry the declared `cause` statement. Placeholder/vague causes and generic
 follow-up issues fail `scripts/check-draft-discipline.ps1`.
 
+
+## Contract evidence grounding (Issue #366)
+
+Contract grounding (contract grounding) applies to every upstream binding before sync.
+
+Before sync, every upstream datum the draft binds to in **Binding surface**,
+**Acceptance criteria**, or **Verification** must be grounded in the draft's
+`contract-evidence` block. The block is **mandatory** for every draft not on the
+committed legacy-path list (`scripts/contract-evidence-legacy-drafts.json`). A
+draft with no upstream binding must declare `contract-evidence: none` explicitly.
+
+### Block format
+
+Each row asserts exactly one binding and exactly one evidence form:
+
+```contract-evidence
+binding-id: ao:reportState:fixing_ci
+binding: ao worker report fixing_ci state
+producer: ao
+evidence: capture@ao-worker-report/fixing_ci
+selector: $.reportState
+expected: fixing_ci
+```
+
+- **Capture evidence:** `evidence: capture@<manifest-entry-id>` plus `selector` +
+  `expected` for structured captures, or `token` for unstructured CLI text only.
+  CLI flag / command behavior bindings require a capture whose manifest entry
+  records the successful `exit-status` plus behavior-specific output — bare flag
+  text in help output is not sufficient.
+- **NEW evidence (repo-owned producers only):** `evidence: NEW(produced-by AC#N)`
+  where AC#N carries a machine-readable `producer-emission` fence naming
+  `producer`, `datum`/`selector`, and `expected`. External producers (`ao`,
+  `gh`, `codex`, including alias spellings) cannot use `NEW`; they require
+  capture evidence. `NEW` rows are authoring-time obligations recorded in the
+  synced issue body, not existence proofs.
+- **No third option:** belief markers, self-attested coworker verdicts, or
+  consumer-only assertions are not admissible.
+
+### Contract-grounding collection (coworker ask)
+
+Delegate bulk corpus lookup to coworker using a structured ask that:
+
+1. Enumerates candidate bindings appearing in the draft surfaces.
+2. Maps each binding to a producer-corpus location.
+3. Returns `found` / `not_found` plus cited evidence location per binding.
+4. Flags bindings that appear in the draft but have no proposed row.
+
+Coworker output is **non-authoritative**. Independently re-validate every row
+against the cited capture or acceptance criterion before committing it into the
+draft. When coworker is unavailable, read the producer corpus directly.
+
+### Architect re-validation rule
+
+The mechanical check re-derives every capture claim from the committed manifest
+and capture bytes. A row copied from a coworker `found` verdict without a real
+capture still fails sync.
+
+
 ### Pre-sync mechanical checks
 
 Before `gh issue create` / `gh issue edit`:
@@ -339,6 +397,7 @@ Before `gh issue create` / `gh issue edit`:
 ```powershell
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
 ```
 
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
@@ -398,6 +457,10 @@ kill the process early to sync the issue.
   ≠ issue number (read from `ao status` / snapshot filename).
 - `denylist` + `allowed-roots` fence correctness.
 - Cross-draft consistency with `00-architecture-decisions.md` and related drafts.
+- **Contract grounding:** every field / event / state / CLI output the spec binds
+  to exists in its producer; corroborate each `contract-evidence` row against its
+  cited capture; flag unproven bindings or upstream references with no row
+  (completeness is reviewer judgment — the linter only grounds declared rows).
 
 **Preferred invocation (Linux / WSL2 / pwsh 7+):**
 
