@@ -1,8 +1,8 @@
-# Local AO / OpenCode config — commit examples only, not operator copies.
+# Local AO config generated from the reusable example.
+# Commit agent-orchestrator.yaml.example, not real target-repo configs.
 agent-orchestrator.yaml
 agent-orchestrator.*.yaml
 !agent-orchestrator.yaml.example
-opencode.json
 
 # Secrets and credentials.
 .env
