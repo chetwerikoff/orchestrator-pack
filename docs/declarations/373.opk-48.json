@@ -18,6 +18,7 @@
     "docs/worker-message-submit-reconcile.mjs",
     "scripts/check-ao-send-transport-contract.ps1",
     "scripts/journaled-worker-send.ps1",
+    "scripts/mechanical-json-state.Tests.ps1",
     "scripts/orchestrator-message-catalog.json",
     "scripts/orchestrator-message-send-helpers.manifest.json",
     "scripts/worker-message-send-adoption-preflight.ps1",
