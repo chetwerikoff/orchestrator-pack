@@ -123,7 +123,7 @@
         "file": "scripts/journaled-worker-send.ps1",
         "function": "Invoke-AoSendViaFile",
         "anchor": "helper-body",
-        "predicateBodyHash": "719611f10c22f31a"
+        "predicateBodyHash": "fdb5b90557826565"
       }
     },
     {

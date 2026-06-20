@@ -11,7 +11,6 @@
   },
   "declared_paths": [
     "docs/ao-send-transport-contract.txt",
-    "docs/declarations/373.opk-48.json",
     "docs/migration_notes.md",
     "docs/orchestrator-message-registry.mjs",
     "docs/orchestrator-recovery-runbook.md",
@@ -19,13 +18,15 @@
     "docs/worker-message-submit-reconcile.mjs",
     "scripts/check-ao-send-transport-contract.ps1",
     "scripts/journaled-worker-send.ps1",
-    "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
-    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/orchestrator-message-catalog.json",
     "scripts/orchestrator-message-send-helpers.manifest.json",
     "scripts/worker-message-send-adoption-preflight.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "docs/declarations/373.opk-48.json",
+    "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
+    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
+    "scripts/lib/MechanicalReconcileNode.ps1"
   ],
   "declared_globs": [],
   "amendments": []
