@@ -184,6 +184,74 @@ export function acceptanceCriterionSection(markdown, criterionNumber) {
  * @param {string} markdown
  * @param {number} criterionNumber
  */
+
+/**
+ * @param {Record<string, string>} row
+ */
+export function extractRowProducerEmissionExpectation(row) {
+  const producer = canonicalProducer(row.producer ?? '');
+  if (row['binding-id']) {
+    const parts = row['binding-id'].split(':');
+    if (parts.length >= 3) {
+      return {
+        producer: canonicalProducer(parts[0]),
+        datum: parts.slice(1, -1).join(':') || parts[1],
+        expected: parts[parts.length - 1],
+      };
+    }
+    if (parts.length === 2) {
+      return {
+        producer: canonicalProducer(parts[0]),
+        datum: parts[1],
+        expected: row.expected ?? '',
+      };
+    }
+  }
+  return {
+    producer,
+    datum: row.datum ?? row.selector ?? '',
+    expected: row.expected ?? '',
+  };
+}
+
+/**
+ * @param {Record<string, string>} block
+ * @param {Record<string, string>} row
+ */
+export function producerEmissionMatchesRow(block, row) {
+  const want = extractRowProducerEmissionExpectation(row);
+  if (!want.producer || !want.datum || want.expected === '') {
+    return false;
+  }
+  const blockProducer = canonicalProducer(block.producer ?? '');
+  const blockDatum = normalizeSelector(block.datum ?? block.selector ?? '');
+  const wantDatum = normalizeSelector(want.datum);
+  return (
+    blockProducer === want.producer
+    && blockDatum === wantDatum
+    && String(block.expected) === String(want.expected)
+  );
+}
+
+/**
+ * @param {Record<string, string>} row
+ * @param {{ exitStatus?: number }} [manifestEntry]
+ */
+export function isCliBehaviorBinding(row, manifestEntry = undefined) {
+  const bindingId = (row['binding-id'] ?? '').toLowerCase();
+  const binding = (row.binding ?? '').toLowerCase();
+  if (/:(flag|command):/.test(bindingId)) {
+    return true;
+  }
+  if (/\bcli\s+(flag|command)\b|command behavior\b/.test(binding)) {
+    return true;
+  }
+  if (manifestEntry?.exitStatus !== undefined) {
+    return true;
+  }
+  return Boolean(row.flag || row.command || row['cli-binding']);
+}
+
 export function criterionHasProducerEmission(markdown, criterionNumber) {
   const section = acceptanceCriterionSection(markdown, criterionNumber);
   if (!section) {
@@ -191,6 +259,19 @@ export function criterionHasProducerEmission(markdown, criterionNumber) {
   }
   const blocks = parseProducerEmissionBlocks(section);
   return blocks.some((block) => block.producer && (block.datum || block.selector) && block.expected);
+}
+
+/**
+ * @param {string} markdown
+ * @param {number} criterionNumber
+ * @param {Record<string, string>} row
+ */
+export function criterionHasMatchingProducerEmission(markdown, criterionNumber, row) {
+  const section = acceptanceCriterionSection(markdown, criterionNumber);
+  if (!section) {
+    return false;
+  }
+  return parseProducerEmissionBlocks(section).some((block) => producerEmissionMatchesRow(block, row));
 }
 
 /**
@@ -311,9 +392,9 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: producer ${producer} is not in the repo-owned registry`);
         continue;
       }
-      if (!criterionHasProducerEmission(markdown, acNumber)) {
+      if (!criterionHasMatchingProducerEmission(markdown, acNumber, row)) {
         errors.push(
-          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name an acceptance criterion with a producer-emission assertion`,
+          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding`,
         );
         continue;
       }
@@ -364,7 +445,7 @@ export function checkContractEvidence(markdown, options = {}) {
 
     const parsedKind = detectCaptureKind(captureContent);
     const manifestKind = entry.kind ?? parsedKind;
-    const isCliBehavior = Boolean(row.flag || row.command || row['cli-binding']);
+    const isCliBehavior = isCliBehaviorBinding(row, entry);
     if (isCliBehavior) {
       const expectedExit = row['exit-status'] ?? row['expected-exit-status'] ?? '0';
       if (entry.exitStatus === undefined) {

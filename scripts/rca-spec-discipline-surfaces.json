@@ -54,7 +54,8 @@
         "contract grounding"
       ],
       "surfaces": [
-        ".claude/skills/create-issue-draft/SKILL.md"
+        ".claude/skills/create-issue-draft/SKILL.md",
+        ".claude/skills/publish-issue-draft/SKILL.md"
       ]
     }
   ],

@@ -95,7 +95,12 @@ describe('checkContractEvidence fixtures', () => {
 
   it('rejects NEW rows that only name consumer assertions', () => {
     const result = checkFixture('new-consumer-only-ac.md', false);
-    expect(result.errors.join(' ')).toMatch(/producer-emission/i);
+    expect(result.errors.join(' ')).toMatch(/producer-emission|matching producer-emission/i);
+  });
+
+  it('rejects NEW rows when producer-emission does not match the binding', () => {
+    const result = checkFixture('new-unmatched-emission-ac.md', false);
+    expect(result.errors.join(' ')).toMatch(/matching producer-emission/i);
   });
 
   it('rejects NEW rows for external gh producer', () => {

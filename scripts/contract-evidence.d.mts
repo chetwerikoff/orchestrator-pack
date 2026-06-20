@@ -19,6 +19,35 @@ export function canonicalBindingIdentity(
 
 export function parseProducerEmissionBlocks(markdown: string): Array<Record<string, string>>;
 
+export function criterionHasProducerEmission(
+  markdown: string,
+  criterionNumber: number,
+): boolean;
+
+export function extractRowProducerEmissionExpectation(
+  row: Record<string, string>,
+): {
+  producer: string;
+  datum: string;
+  expected: string;
+};
+
+export function producerEmissionMatchesRow(
+  block: Record<string, string>,
+  row: Record<string, string>,
+): boolean;
+
+export function criterionHasMatchingProducerEmission(
+  markdown: string,
+  criterionNumber: number,
+  row: Record<string, string>,
+): boolean;
+
+export function isCliBehaviorBinding(
+  row: Record<string, string>,
+  manifestEntry?: { exitStatus?: number },
+): boolean;
+
 export function acceptanceCriterionSection(
   markdown: string,
   criterionNumber: number,

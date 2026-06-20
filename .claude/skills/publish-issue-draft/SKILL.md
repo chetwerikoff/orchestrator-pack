@@ -234,13 +234,18 @@ pwsh -NoProfile -File scripts/verify.ps1
 pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
-For each draft in the publish commit that declares `behavior-kind` or
-`parked-root-cause` (parked root tracking), run the mechanical guards (Issue #221) before push:
+For each draft in the publish commit, run the mechanical guards before push:
 
 ```powershell
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
 ```
+
+`positive-outcome` and `parked-root` apply when the draft declares `behavior-kind` or
+`parked-root-cause` (parked root tracking) respectively (Issue #221). Contract grounding
+(contract grounding) via `contract-evidence` is mandatory for every draft not on
+`scripts/contract-evidence-legacy-drafts.json` (Issue #366).
 
 When a `parked-root-cause` block references `#N`, validate the live issue body
 carries the declared cause (re-run `parked-root` after `gh issue view` sync, or
