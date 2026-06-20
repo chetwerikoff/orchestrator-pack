@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   buildContractMappingQuestion,
+  scrubPathForProviderPrompt,
+  scrubAmbiguousPathsForProviderPrompt,
   buildCoworkerInvokeArgv,
   buildSpecArtifactContent,
   buildStructuredStatusRecord,
@@ -416,6 +418,67 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     });
     expect(result.status).toBe('skipped_input_limit');
     expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+
+  it('scrubs ambiguous paths before embedding them in the coworker question', () => {
+    const sensitivePath = 'src/customer_name=Alice-test.ts';
+    const scrubbedPath = scrubPathForProviderPrompt(sensitivePath);
+    expect(scrubbedPath).not.toContain('Alice');
+    expect(scrubbedPath).toContain('[REDACTED_PRIVATE_DATA]');
+
+    const question = buildContractMappingQuestion({ ambiguousTestLike: [scrubbedPath] });
+    expect(question).not.toContain('Alice');
+    expect(question).toContain('[REDACTED_PRIVATE_DATA]');
+
+    const ambiguousDiffChunks = Array.from({ length: 40 }, (_, index) => {
+      const filePath = `scripts/module-${index}-testy.ts`;
+      return [
+        `diff --git a/${filePath} b/${filePath}`,
+        `--- a/${filePath}`,
+        `+++ b/${filePath}`,
+        '@@ -0,0 +1 @@',
+        '+export const marker = 1;',
+      ].join('\n');
+    }).join('\n');
+    const diff = `${fixture('large.diff')}\n${ambiguousDiffChunks}`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const baseline = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(baseline.status).toBe('mapping_pending');
+    expect(baseline.coworkerQuestion?.length ?? 0).toBeGreaterThan(2_000);
+    const combinedByteSize = baseline.artifactPrep!.combinedByteSize;
+    const questionByteSize = Buffer.byteLength(baseline.coworkerQuestion ?? '', 'utf8');
+    const limited = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+      providerInputByteLimit: combinedByteSize + questionByteSize - 1,
+    });
+    expect(limited.status).toBe('skipped_input_limit');
+    expect(limited.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('fails closed on credential assignments in source diffs', () => {
+    const diff = `${fixture('large.diff')}\n+token = process.env.API_TOKEN\n`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('skipped_provider_fence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+    expect(scrubForProviderInput(diff, { allowSafeSecretRedaction: true }).ok).toBe(false);
   });
 
   it('classifies test evidence and blocks missing-test claims when ambiguous', () => {

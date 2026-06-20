@@ -108,6 +108,23 @@ function lineIndexAtOffset(content: string, offset: number): number {
   return content.slice(0, offset).split(/\r?\n/).length - 1;
 }
 
+function isStandaloneCredentialAssignmentLine(trimmed: string): boolean {
+  const assignment = trimmed.match(
+    /^(?:api[_-]?key|secret|token|password|private[_-]?key|database_url|redis_url|[A-Z][A-Z0-9_]*_URL|AWS_ACCESS_KEY_ID|DATABASE_URL)\s*[:=]\s*(.*)$/i,
+  );
+  if (!assignment) {
+    return false;
+  }
+  const value = assignment[1]!.trim();
+  if (!value) {
+    return true;
+  }
+  if (/process\.env\b|[!(]|=>|\b(?:new|typeof|await)\b|[\w$]+\s*\(/.test(value)) {
+    return false;
+  }
+  return true;
+}
+
 function isStandaloneCredentialFixtureBody(body: string): boolean {
   const trimmed = body.trim();
   if (!trimmed) {
@@ -126,10 +143,7 @@ function isStandaloneCredentialFixtureBody(body: string): boolean {
     /^(?:authorization|auth|cookie|set-cookie|x-api-key|x-auth-token|x-amz-security-token)\s*:/i.test(
       trimmed,
     ) ||
-    /^(?:api[_-]?key|secret|token|password|private[_-]?key|database_url|redis_url|[A-Z][A-Z0-9_]*_URL)\s*[:=]/i.test(
-      trimmed,
-    ) ||
-    /^(?:AWS_ACCESS_KEY_ID|DATABASE_URL)\s*=/i.test(trimmed) ||
+    isStandaloneCredentialAssignmentLine(trimmed) ||
     /^(?:customer|client|end[_-]?user|contact|recipient|subscriber)(?:_name|[_-]name| name)?\s*[:=]/i.test(
       trimmed,
     ) ||
@@ -934,6 +948,28 @@ export function evaluateFinalUsability(input: {
   return input.prior;
 }
 
+export function scrubPathForProviderPrompt(path: string): string {
+  let scrubbed = path.replace(/\\/g, '/');
+  scrubbed = scrubbed.replace(EMAIL_PATTERN, (email) =>
+    isAllowlistedEmail(email) ? email : '[REDACTED_PRIVATE_DATA]',
+  );
+  for (const pattern of LABELED_PRIVATE_DATA_PATTERNS) {
+    if (pattern.global) {
+      pattern.lastIndex = 0;
+    }
+    scrubbed = scrubbed.replace(pattern, '[REDACTED_PRIVATE_DATA]');
+  }
+  const pathScrub = scrubForProviderInput(scrubbed, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
+  if (!pathScrub.ok) {
+    return '[REDACTED_PRIVATE_DATA]';
+  }
+  return pathScrub.scrubbed;
+}
+
+export function scrubAmbiguousPathsForProviderPrompt(paths: string[]): string[] {
+  return paths.map((rawPath) => scrubPathForProviderPrompt(rawPath));
+}
+
 export function buildContractMappingQuestion(input?: {
   ambiguousTestLike?: string[];
 }): string {
@@ -1230,9 +1266,9 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
   }
 
   const testClassification = classifyChangedTestFiles(input.changedPaths, input.diffContent);
-  const mappingQuestion = buildContractMappingQuestion({
-    ambiguousTestLike: testClassification.ambiguousTestLike,
-  });
+  const scrubbedAmbiguousPaths = scrubAmbiguousPathsForProviderPrompt(
+    testClassification.ambiguousTestLike,
+  );
 
   const incompleteEvidencePaths = collectIncompleteDiffEvidencePaths(
     input.changedPaths,
@@ -1302,7 +1338,27 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     };
   }
 
-  if (artifactPrep.combinedByteSize > providerLimit) {
+  const mappingQuestion = buildContractMappingQuestion({
+    ambiguousTestLike: scrubbedAmbiguousPaths,
+  });
+  const questionScrub = scrubForProviderInput(mappingQuestion, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
+  if (!questionScrub.ok) {
+    const status = resolveStatusPrecedence([...failureCandidates, 'skipped_provider_fence']);
+    return {
+      status,
+      shouldInvokeCoworker: false,
+      contractSet: resolved.members,
+      statusRecord: buildStructuredStatusRecord({
+        status,
+        prHeadSha,
+        members: resolved.members,
+      }),
+    };
+  }
+  const safeQuestion = questionScrub.scrubbed;
+  const questionByteSize = Buffer.byteLength(safeQuestion, 'utf8');
+
+  if (artifactPrep.combinedByteSize + questionByteSize > providerLimit) {
     const status = resolveStatusPrecedence([...failureCandidates, 'skipped_input_limit']);
     return {
       status,
@@ -1342,8 +1398,8 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     }),
     artifactPrep,
     testClassification,
-    coworkerQuestion: mappingQuestion,
-    coworkerArgv: buildCoworkerInvokeArgv(artifactPaths, mappingQuestion),
+    coworkerQuestion: safeQuestion,
+    coworkerArgv: buildCoworkerInvokeArgv(artifactPaths, safeQuestion),
   };
 }
 
