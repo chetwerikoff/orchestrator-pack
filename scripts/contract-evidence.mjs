@@ -399,6 +399,50 @@ export function producerEmissionMatchesRow(block, row) {
  * @param {Record<string, string>} row
  * @param {{ exitStatus?: number }} [manifestEntry]
  */
+
+/**
+ * @param {string} bindingId
+ */
+function cliBindingTarget(bindingId) {
+  const parts = bindingId.split(':');
+  if (parts.length < 3) {
+    return '';
+  }
+  return parts.slice(2).join(':');
+}
+
+/**
+ * @param {string} value
+ */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * @param {string} sourceCommand
+ */
+export function isHelpOnlyCliSourceCommand(sourceCommand) {
+  return /\b(--help|-h)\b/.test((sourceCommand ?? '').trim());
+}
+
+/**
+ * @param {string} sourceCommand
+ * @param {string} target
+ */
+export function cliSourceCommandExercisesTarget(sourceCommand, target) {
+  const command = (sourceCommand ?? '').trim();
+  const want = (target ?? '').trim();
+  if (!command || !want) {
+    return false;
+  }
+  if (want.startsWith('-')) {
+    return new RegExp(`(?:^|\\s)${escapeRegExp(want)}(?:\\s|=|$)`).test(command);
+  }
+  const segments = want.split('-').filter(Boolean);
+  return segments.every((segment) => new RegExp(`\\b${escapeRegExp(segment)}\\b`, 'i').test(command));
+}
+
+
 export function isCliBehaviorBinding(row) {
   return row['binding-type']?.trim().toLowerCase() === 'cli-behavior';
 }
@@ -668,6 +712,17 @@ export function checkContractEvidence(markdown, options = {}) {
       if (String(expectedExit) !== '0') {
         errors.push(
           `${rowLabel}: CLI behavior binding must assert successful exit status 0, got ${expectedExit}`,
+        );
+        continue;
+      }
+      if (isHelpOnlyCliSourceCommand(entry.sourceCommand)) {
+        errors.push(`${rowLabel}: CLI behavior evidence cannot use help-only capture command`);
+        continue;
+      }
+      const cliTarget = cliBindingTarget(row['binding-id']);
+      if (!cliSourceCommandExercisesTarget(entry.sourceCommand, cliTarget)) {
+        errors.push(
+          `${rowLabel}: capture source command does not exercise binding target ${cliTarget}`,
         );
         continue;
       }

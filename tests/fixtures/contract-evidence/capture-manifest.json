@@ -44,6 +44,15 @@
       "contentHash": "sha256:6db97b3f06bdbba02d99bc8b80eb7dc1b9bbf2f04588800857ac41764cbacd72",
       "exitStatus": 0
     },
+    "cli-behavior/help-only": {
+      "id": "cli-behavior/help-only",
+      "producer": "ao",
+      "sourceCommand": "ao report --help",
+      "kind": "unstructured",
+      "path": "captures/cli-behavior/help-only.raw.txt",
+      "contentHash": "sha256:844fb6893696c91d9aedda44767182e6037d798a65ae3772430fb1cc686feb25",
+      "exitStatus": 0
+    },
     "cli-behavior/json-success": {
       "id": "cli-behavior/json-success",
       "producer": "ao",

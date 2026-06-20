@@ -169,6 +169,11 @@ describe('checkContractEvidence fixtures', () => {
     expect(result.errors.join(' ')).toMatch(/binding-type cli-behavior|requires binding-type cli-behavior/i);
   });
 
+  it('rejects CLI behavior rows grounded on help-only capture commands', () => {
+    const result = checkFixture('cli-behavior-help-only.md', false);
+    expect(result.errors.join(' ')).toMatch(/help-only capture command|does not exercise binding target/i);
+  });
+
   it('grandfathers legacy drafts without a block', () => {
     const result = checkContractEvidence(loadDraft('legacy-grandfather.md'), {
       repoRoot,

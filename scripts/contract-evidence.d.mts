@@ -47,6 +47,10 @@ export function criterionHasMatchingProducerEmission(
 
 export function isCliBehaviorBinding(row: Record<string, string>): boolean;
 
+export function isHelpOnlyCliSourceCommand(sourceCommand: string): boolean;
+
+export function cliSourceCommandExercisesTarget(sourceCommand: string, target: string): boolean;
+
 export const PRODUCTION_CAPTURE_CORPUS_ROOT: string;
 
 export function acceptanceCriteriaRegion(markdown: string): string | null;
