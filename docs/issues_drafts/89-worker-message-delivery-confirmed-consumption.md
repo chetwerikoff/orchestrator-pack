@@ -1,6 +1,6 @@
 # Source-agnostic worker-message delivery with confirmed consumption
 
-GitHub Issue: #347
+GitHub Issue: #373
 
 ## Prerequisite
 
@@ -15,13 +15,18 @@ GitHub Issue: #347
 ## Goal
 
 Every message the orchestrator sends to a worker **through the journaled send
-path** is reliably submitted to the worker and tracked to **confirmed consumption
-or bounded escalation**, with no manual operator `Enter`. A delivery that is never
-consumed and never escalates (the current silent-loop failure) must become
-impossible. The guarantee is **fail-closed at adoption**: a config-level preflight
-verifies the journaled-routing rule is active and escalates `wrapper_not_adopted`
-when it is not — rather than a blanket claim that silently breaks if the operator
-rule is missing.
+path** is submitted to the worker and tracked to **confirmed consumption or bounded
+operator escalation** — never a silent loop, never a manual `Enter` for the common
+case. `ao send` makes the first submit attempt itself (it pastes and presses
+`Enter`, with its own retry); when that does not land (the draft is left pending and
+the worker goes idle), the arbiter **backstops** it by pressing `Enter` via tmux —
+gated on the existing #216/#232 idle-stable + unconsumed + no-intervening-input
+inference, never blindly. A delivery that is never consumed and never escalates (the
+current silent-loop failure) must become impossible: it either confirms, is
+submitted by a bounded backstop, or escalates to the operator. The guarantee is
+**fail-closed at adoption**: a config-level preflight verifies the journaled-routing
+rule is active and escalates `wrapper_not_adopted` when it is not — rather than a
+blanket claim that silently breaks if the operator rule is missing.
 
 ```behavior-kind
 action-producing
@@ -43,31 +48,102 @@ side-effect and the outcome write leaves the attempt count at zero forever, so
 the per-delivery attempt budget is never reached and the delivery loops
 `submit → stale-claim → submit` without ever escalating to the operator.
 
+**Why this is reopened (the #351 revert), and what the producer-reality check
+found.** A prior build of this spec (PR #351, issue #347) was merged then
+**reverted** (revert merged via PR #364): its transport bound delivery to an
+`ao send` **stdin/pipe** ingestion flag that **no published AO version implements**
+(verified against AO 0.9.2 local, 0.9.5 stable, 0.10.1-nightly). The wrapper
+therefore failed closed permanently, and the fail-closed adoption gate blocked the
+pre-existing #232 submit-reconcile on every tick. This is the binding-bug class:
+the spec bound to a producer interface that does not exist.
+
+Re-grounding the spec against the **real** `ao send` implementation (AO 0.9.2,
+`@aoagents/ao-cli` `commands/send.js`) surfaced two more premises the prior spec
+got wrong:
+- **`ao send` submits the message itself.** After pasting, it presses `Enter`
+  (`tmux send-keys … Enter`) and retries the keypress up to **3×** under its own
+  activity detection. It is **not** a paste-only call whose `Enter` the arbiter
+  owns. So the arbiter is the **conditional backstop** for when that submit does
+  not land — exactly as the shipped #216/#232 path already works: it presses `Enter`
+  by **direct tmux `send-keys`** to the worker pane, gated on the existing
+  **idle-stable + unconsumed + no-intervening-input** inference (AO 0.9.x has no
+  literal "draft-present" field — the idle inference is the proxy, and it is what
+  prevents a duplicate: a draft `ao send` already submitted leaves the worker
+  *active*, so the idle-gate does not fire).
+- **`ao send` spools the raw payload to a world-readable `/tmp/ao-send-<ts>.txt`**
+  for the multiline / >200-char (pending-draft) class — the exact class this issue
+  targets — then unlinks it in a `finally` that **ignores cleanup failure**. The
+  payload's on-disk lifetime is therefore **outside any wrapper's control**, so a
+  wrapper-level "secret-safe transport" guarantee is **unachievable** for that
+  class. Combined with the fact that orchestrator→worker messages carry **no
+  credentials** (they are CI/wake nudges, review findings, submit prompts — see
+  `docs/orchestrator-message-map.md`), the entire **secret-safety surface is
+  dropped** from this spec: no secret-redaction transport, no payload-file
+  lifecycle, no secret-absence acceptance criteria. The spec keeps only **delivery
+  + confirmed consumption + bounded escalation + crash-safe accounting + fail-closed
+  adoption**.
+
+The corrected transport simply **binds to the interface `ao send` actually
+exposes**, captured at authoring time (`ao send --help`, AO 0.9.2:
+`Usage: ao send [options] <session> [message...]`, `-f, --file <path>`). The
+non-transport guarantees (three-phase accounting, adoption preflight, submit-arbiter
+extension, journal, escalation, scenario matrix) are otherwise **unchanged** from
+the pre-revert contract. (How the planner realizes this — reworking the reverted
+implementation or building afresh — is its choice; the spec constrains end-state
+behavior, not the patch strategy.)
+
 ## Binding surface
 
 - **One send path, journaled around the side-effect (transactional outbox).**
   Orchestrator→worker message sends commit an outbox journal entry **before** the
   send and a dispatch-outcome (`dispatched` | `send_failed`) **after** it, so
   every routed delivery is observable with a known dispatch result.
-- **Journal stores metadata only — never the raw payload (security).** The outbox
-  entry records `delivery_id`, source, message **shape** (char length, line
-  count, pending-draft vs short), and dispatch outcome — **not** the message text
-  (worker messages can carry credentials, session URLs, or private data). The
-  journal lives outside the repo working tree (or gitignored), is permission-
-  restricted to its owner, is retention-bounded, uses atomic write with
+- **Journal stores metadata only (observability + size).** The outbox entry records
+  `delivery_id`, source, message **shape** (char length, line count, pending-draft
+  vs short), and dispatch outcome — **not** the message text (it adds no
+  observability value and bloats the journal). The journal lives outside the repo
+  working tree (or gitignored), is retention-bounded, uses atomic write with
   quarantine-on-corruption (the existing mechanical-json-state discipline), and a
   parse failure **escalates** rather than silently misclassifying.
-- **Secret-safe payload transport — stdin/pipe only.** The wrapper hands the
-  message to `ao send` over **stdin/pipe only** — **never** as a command-line
-  argument and **never** via a raw-payload temp file (a temp file could persist
-  the secret across a wrapper crash, AO hang, process kill, or failed delete). The
-  raw payload must not appear in argv, process listings, logs, `-DryRun` output,
-  PowerShell transcripts, exception traces, or the journal. The metadata-only
-  journal is necessary but not sufficient; transport is the other half of the
-  secret guarantee. This presumes `ao send` accepts the payload over stdin/pipe
-  with argument-path semantics — an unverified dependency (see **Open
-  dependencies**); it must be confirmed locally as the first implementation step,
-  not silently assumed.
+- **Transport binds only to the interface `ao send` actually exposes.** The wrapper
+  delivers the message through the real `ao send` ingestion captured at authoring
+  time (`ao send --help`, AO 0.9.2): `Usage: ao send [options] <session>
+  [message...]` with `-f, --file <path>` (*"Send contents of a file instead"*).
+  There is **no `--stdin`/pipe ingestion flag** — binding to one is what made the
+  prior build (#351) fail closed permanently (see **Background**). The planner
+  picks between the positional `[message...]` form and `--file <path>`; both are
+  real (`--file` avoids any argv length ceiling for large payloads). Whichever form
+  is chosen **must deliver option-shaped payloads intact** — a message beginning with
+  `-` or containing tokens like `--file` must **not** be parsed as an `ao send`
+  option. The positional form is admissible **only** with a `--` end-of-options
+  delimiter **proven supported** by the captured real CLI; otherwise the planner uses
+  `--file` (immune, since the payload is file content, not argv). No transport
+  guarantee is made about the payload's on-disk lifetime: `ao send` itself spools
+  the multiline/large payload to a `/tmp/ao-send-<ts>.txt` outside the wrapper's
+  control (see **Background**), and worker messages carry no secrets, so this issue
+  makes **no secret-safety / payload-redaction claim** — only that the chosen
+  transport is an interface `ao send` truly supports and delivers the message
+  intact.
+- **`ao send` makes the first submit; the arbiter backstops via tmux `Enter`.** Per
+  the captured implementation, `ao send` pastes **and** presses `Enter` itself (up to
+  3× under its own activity detection), so the journaled send **is** the primary
+  submit attempt. When it does not land, the arbiter backstops it exactly as the
+  shipped #216/#232 path does: it presses `Enter` by **direct tmux `send-keys` to the
+  worker pane** (not via `ao send`, no payload replay), **fail-closed** when tmux is
+  unavailable or the session address is stale/missing. AO 0.9.x exposes no literal
+  "draft-present" field, so eligibility is the existing **idle-inference**, not a
+  mythical signal: the arbiter presses `Enter` only when the delivery is to the
+  **live-owner** session, is **not** confirmed-consumed, has **no intervening input
+  activity** after the paste (the #232 `stale_input` guard), and the worker has been
+  **idle-stable** for the settle window — i.e. the draft is demonstrably still
+  pending and was not submitted. Crucially, the no-intervening-activity guard is
+  **durable, not recomputed from current idle**: once an `activity.transition→active`
+  is observed **after** the paste, that is recorded as **submission evidence** and
+  **permanently suppresses** any further backstop `Enter` for this delivery — even
+  after the worker finishes processing and returns to idle (the `active → idle, still
+  unconfirmed` sequence must **not** re-arm the Enter, which would land on an empty or
+  newer prompt). So `ao send`'s own submit, once it makes the worker active, durably
+  closes the backstop; a blind `Enter` is never issued.
 - **Reentrancy bypass — the wrapper never wraps its own `ao send`.** The wrapper
   itself invokes `ao send`; if the adopted routing rule matched that internal
   invocation, the wrapper would re-wrap itself (recursive wrapping, duplicate
@@ -101,71 +177,130 @@ the per-delivery attempt budget is never reached and the delivery loops
   reload epoch** (not a one-time pass): the last-validated epoch + config path are
   persisted and compared, so config drift or a restart after an earlier green
   check re-triggers the escalation rather than silently re-opening the gap.
-- **Durable delivery identity — non-sensitive fields only.** Each delivery carries
-  a stable `delivery_id` established **before** dispatch. Attempt accounting,
-  vanish detection, de-duplication, and escalation dedup all key off this exact
-  id. The id and any persisted identity component (source-key, session, path)
-  are **non-sensitive** — opaque or a hash of canonical non-secret identifiers;
-  any free-text / URL / path / branch component is hashed or excluded, **never**
-  stored verbatim, so the metadata-only guarantee covers the id fields, the
-  active-delivery record, dry-run artifacts, and the escalation dedup key too.
-- **Confirmed consumption — fail-closed on ambiguity.** A delivery is `consumed`
-  only on an observable worker signal after its send timestamp, scoped to that
-  worker session (e.g. an `ao report` transition). When correlation to the exact
-  delivery is **ambiguous** — multiple in-flight deliveries for one session and no
-  AO-carried delivery id to disambiguate (AO 0.9.x does not echo one; do **not**
-  assume a field AO never emits) — the delivery stays **unconfirmed** and rides
-  the attempt budget to escalation, rather than being falsely credited by a weaker
-  heuristic. An earlier or unrelated report never confirms.
-- **Enter-eligibility gated on a real paste; single-owner terminal assumption.**
-  Only a delivery whose dispatch outcome is `dispatched` and whose path is a
-  pending draft is `Enter`-eligible. A `send_failed` delivery is
+- **Adoption failure escalates; it does not (and cannot) block plain sends, and
+  never disables the pre-existing reconcile.** When the routing rule is absent or
+  ineffective, plain `ao send` calls **bypass the wrapper entirely** — so the arbiter
+  **cannot suppress** them; it can only make their non-coverage **loud**. The
+  contract is therefore **escalation without suppression**: a red `wrapper_not_adopted`
+  state raises an operator-actionable escalation (adopt the rule) and the plain-send
+  path stays **uncovered** until adopted — the arbiter does not claim to journal or
+  gate sends it never sees. Critically, this is the explicit guard against the #351
+  revert cause (the prior adoption gate blocked the pre-existing #232 reconcile on
+  **every** tick): adoption-red must **never** disable the already-shipped sources —
+  **review-send, reaction-routed, and dispatch-journal** deliveries **continue to
+  reconcile, submit, and escalate normally**. Adoption is a loud signal about *new*
+  coverage, not a kill-switch on the existing arbiter.
+- **Durable delivery identity.** Each delivery carries a stable `delivery_id`
+  established **before** dispatch. Attempt accounting, vanish detection,
+  de-duplication, and escalation dedup all key off this exact id, and it survives a
+  supervisor restart (persisted with the active-delivery record).
+- **Confirmed consumption requires positive causal correlation; otherwise
+  fail-closed.** A delivery is `consumed` only on a worker signal the arbiter can
+  **causally tie to that exact delivery**. AO 0.9.x carries **no** delivery id on
+  any report (do **not** assume a field AO never emits), so a session-scoped report
+  arriving after the send timestamp is **not** sufficient on its own — it may be
+  unrelated (the worker doing something else), and that is true even when only one
+  delivery is in flight. Absent a causally-correlatable signal, the delivery stays
+  **unconfirmed** and rides the budget to **escalation**, never falsely credited by
+  a temporal/session-scope heuristic. Because reliable correlation is the exception
+  under AO 0.9.x, **bounded escalation — not confirmation — is the load-bearing
+  guarantee**; an unconfirmed delivery is surfaced to the operator, never dropped.
+- **Enter-eligibility by inference, not a literal AO field; single-owner terminal
+  assumption.** Only a delivery whose dispatch outcome is `dispatched` and whose
+  path is a pending draft is `Enter`-eligible. A `send_failed` delivery is
   terminal/escalated and **must never** receive an `Enter` (Enter with no draft
-  pasted would submit stale terminal input). The pending-draft-vs-short
-  determination is taken from an **authoritative post-dispatch signal**
-  (AO/wrapper state: `draft_present` / `auto_submitted` / `unknown`), **not** a
-  length/line-count guess: only `draft_present` is `Enter`-eligible,
-  `auto_submitted` waits for consumption, and an **`unknown`** shape is **not**
-  Enter-eligible — it fails closed to bounded escalation rather than risking an
-  Enter into an empty/stale prompt. The design assumes the worker
-  terminal is **single-owner / AO-driven** while a tracked draft is pending (not a
-  human scratchpad). Because pane text is never read, the arbiter cannot detect
-  silent buffer contamination directly; it relies on the existing intervening-
-  input deferral (#232: an AO `activity.transition→active` or send event after the
-  paste marks the delivery `stale_input` and **suppresses** auto-Enter). Residual
-  risk — contamination that emits no AO signal — is an explicit, documented
-  limitation, not a silent assumption.
-- **Crash-safe accounting; the arbiter never replays a payload, only re-`Enter`s a
-  present draft.** Model `claim_acquired`, `dispatch_attempted` (paste handed to
-  `ao send`), and `outcome_observed` as distinct, durably-recorded phases; the
-  attempt **budget is consumed only at `dispatch_attempted`**. Because the wrapper
-  persists **no payload** (security), the arbiter can never re-send a lost
-  message — it can only re-press `Enter` on a draft AO can **observably** confirm
-  is still present, or escalate. Resume policy by crash point:
-  - **before `ao send` is invoked** (no paste landed; payload not recoverable from
+  pasted would submit stale terminal input). AO 0.9.x exposes **no** literal
+  draft-present field, so the pending-vs-submitted determination is the existing
+  **idle-stable + no-intervening-input inference** (#232) — **not** pane text and
+  **not** a length/line-count guess: a delivery is treated as a still-pending draft
+  only while the worker stays **idle-stable** with **no** AO `activity.transition→
+  active` / send event after the paste; an intervening event marks it `stale_input`
+  and **suppresses** the `Enter`; an already-`auto_submitted` delivery (worker went
+  active) waits for consumption; an **indeterminate** state fails closed to bounded
+  escalation rather than risking an Enter into an empty/stale prompt. The design
+  assumes the worker terminal is **single-owner / AO-driven** while a tracked draft
+  is pending (not a human scratchpad). Because pane text is never read, the arbiter
+  cannot detect silent buffer contamination that emits no AO signal — an explicit,
+  documented residual limitation, not a silent assumption.
+- **Crash-safe accounting; the arbiter never replays a payload, only backstops a
+  still-present draft.** Two distinct side effects exist: the one-time **send** (the
+  `ao send` call, which pastes **and** presses `Enter` itself) and any later
+  **backstop `Enter`** the arbiter issues when the send's own `Enter` did not
+  submit. Model `claim_acquired`, the send outcome (`dispatched` | `send_failed`),
+  and per-backstop **`enter_attempted` → `outcome_observed`** as distinct,
+  durably-recorded phases. The send happens **once** — the arbiter never re-sends a
+  payload (it persists none) and never re-runs `ao send`. **A slot is consumed when
+  an `enter_attempted` record is durably finalized — conservatively, at-most-once per
+  slot** (the record is written *immediately before* the keypress; the record→keypress
+  pair cannot be atomic, so a crash in that gap **still spends the slot** even if the
+  physical Enter may not have fired). This is deliberate **at-most-once** accounting:
+  it never under-counts (the original "attempt-count-stays-zero-forever" loop is
+  closed), and it may rarely over-count by one un-fired keypress — acceptable because
+  `max-attempts` still finitely bounds slots and the wall-clock deadline backstops a
+  delivery that thereby never submits. A slot is therefore **never re-pressed**; a lost
+  outcome does not reopen its slot. If the delivery is still unconfirmed and eligible
+  and budget remains, the **next** attempt consumes the **next** slot; when
+  `max-attempts` is exhausted the delivery **escalates** (with `max-attempts = 1`: one
+  slot, then escalate if unconfirmed — never a deadlock, never an unbounded re-press).
+  The only "no slot consumed" case is a crash **before** an `enter_attempted` record is
+  finalized (still the `claim_acquired` phase), which is resumable, bounded by the
+  wall-clock deadline. Because each backstop `Enter` fires only
+  under the **idle-stable + no-intervening-input** inference (worker idle, draft not
+  yet submitted), a duplicate cannot land on an already-submitted draft (a submitted
+  draft makes the worker active, failing the idle-gate); a stray `Enter` on a truly
+  idle empty prompt submits nothing harmful. The budget (`max-attempts`) bounds the
+  number of backstop `Enter`s; the escalation deadline itself is the separate
+  **wall-clock max-pending-age from dispatch** (below), independent of how many (or
+  zero) backstop `Enter`s fire. Resume policy by crash point:
+  - **before `ao send` is invoked** (send not started; payload not recoverable from
     metadata-only state) → **ambiguous escalation** so the source re-sends; never a
     promised replay.
-  - **paste landed, but `Enter`/outcome lost** → re-press `Enter` **only** when an
-    AO-observable signal confirms the pending draft is still present (a redundant
-    `Enter` then cannot submit stale input because it is gated on the real draft);
-    if AO **cannot prove** draft-present → **ambiguous escalation**, never a blind
-    `Enter`.
+  - **`ao send` returned but its outcome was not persisted** → `dispatch_unknown`,
+    reconciled per that state's policy below (idle-inference / consumption evidence
+    resolves it; otherwise bounded ambiguous escalation).
+  - **a backstop `Enter`/outcome lost** → the issued keypress already counts its slot;
+    do **not** re-press the same slot. If the delivery is still unconfirmed and the
+    idle-stable + no-intervening-input inference still holds **and** budget remains, the
+    **next** attempt consumes the **next** slot and presses once more; if budget is
+    exhausted or the inference no longer holds → **escalation**, never a blind `Enter`.
+  - **crash before any keypress was issued** (`enter_attempted` not finalized) → no
+    slot consumed; resume issues the first/next keypress while eligible, bounded by the
+    wall-clock deadline.
   - **`ao send` invoked but interrupted** (killed / timed out / partial paste) →
     **no blind re-attempt** (could duplicate / concatenate); resolve only with
     positive evidence of no-paste or a landed paste, otherwise **ambiguous
     escalation**.
-  A crash after the keypress before the outcome write does not reset the count; no
-  phase consumes budget without submitting yet escalates as if it had;
-  `dispatch_unknown` is never a silent limbo.
+  A crash after the keypress before the outcome write does not reset the count; the
+  at-most-once accounting may spend a slot whose physical Enter never fired (the
+  conservative trade-off above), but a delivery is **never** dropped without reaching
+  consumption or escalation, and `dispatch_unknown` is never a silent limbo.
 - **Confirmed consumption, then bounded escalation — with a concrete bound.** The
-  attempt budget and a **maximum time-to-escalation** are explicit, finite,
-  operator-overridable defaults (the #232 arbiter already defines a max-attempts
-  count and a delivery budget window), so a never-confirmed delivery escalates
-  **within a known wall-clock bound** — never an unbounded "silent for too long".
-  Operator overrides are **validated fail-closed**: a non-finite, disabled,
-  negative, zero, or unreasonably-large bound is rejected and escalated as
-  `config_invalid` **before** any delivery is tracked — an override can never
-  silently remove the bounded-escalation guarantee.
+  escalation deadline is a **wall-clock max-pending-age measured from the earliest
+  durable delivery timestamp** (`claim_acquired` / invocation-start — **not**
+  dispatch-completion, which `dispatch_unknown` deliveries never observe), so even a
+  delivery whose dispatch outcome is never known still has a fixed clock origin and
+  reaches bounded escalation. It is applied to **every** tracked delivery
+  independently of Enter eligibility — so a short/self-submitted delivery that
+  performs **zero** backstop `Enter`s still
+  escalates at the same wall-clock deadline if never confirmed. The backstop
+  `max-attempts` bounds *how many* Enters may fire within that window; it does not
+  define the deadline. Both inherit the **#232 arbiter defaults** as the baseline
+  (the shipped `worker-message-submit-reconcile` constants: a max-pending-age window
+  of `DELIVERY_BACKSTOP_MS` = 30 min and a `MAX_SUBMIT_ATTEMPTS` = 3), so a
+  never-confirmed delivery escalates **within a known wall-clock bound** — never an
+  unbounded "silent for too long".
+  Operator overrides are **validated fail-closed** against an objective predicate:
+  the max-pending-age must be a **finite number in `(0, ageCeiling]`** and max-attempts
+  a **finite integer in `[1, attemptsCeiling]`** (the planner declares each `ceiling`
+  as a constant). An invalid value (non-finite, disabled, ≤ 0, non-integer attempts, or
+  `> ceiling`) is **rejected and escalated as `config_invalid`**, but — exactly like
+  the adoption-failure rule — this **never stops tracking**: reconciliation continues
+  under the **safe bounded built-in defaults** (the shipped #232 constants) so every
+  delivery (new and already-shipped sources) stays tracked and bounded. The invalid
+  override is ignored, not allowed to become a kill-switch. A fixture exercises each
+  rejection class and the accepted boundary, so "valid" is testable
+  without reading Claude's mind — an override can never silently remove the
+  bounded-escalation guarantee.
   When the budget is exhausted without confirmed consumption, the delivery
   **escalates with an operator-visible, idempotent diagnosis** (deduplicated by
   `delivery_id`, no per-tick spam) through the existing supervised escalation
@@ -181,11 +316,17 @@ the per-delivery attempt budget is never reached and the delivery loops
   discipline as the journal (atomic write, permission restriction, quarantine-on-
   corruption, parse-failure escalation) — a truncated or wrong-path tracking state
   must not silently lose the only record of a non-terminal delivery. It also
-  carries a **state-root identity/epoch**: on startup, an active-delivery store
-  whose identity does not match (an **empty alternate root** from a changed cwd /
-  `$HOME` / account / Windows–WSL path) **escalates** rather than treating
-  empty-as-authoritative — an empty record from the wrong root is not "nothing
-  pending".
+  carries a **state-root identity/epoch** anchored to an **independently-discoverable
+  canonical location** — one that does **not** move with cwd / `$HOME` / account /
+  Windows–WSL drift (e.g. derived from the AO config path the adoption preflight
+  already binds to). The expected identity lives at that canonical anchor, separate
+  from the active-delivery store root. On startup the store root's identity is
+  compared against the anchor: a **mismatch or a store root that is empty/absent while
+  the anchor records a prior identity** → **escalates** (the empty root is the *wrong*
+  root, not "nothing pending"); only when the anchor itself records **no** prior
+  identity is an empty store a legitimate **first run** (which then establishes the
+  identity at the anchor). This makes wrong-root drift detectable instead of
+  indistinguishable from a fresh start.
 - **Single-flight per delivery.** Concurrent reconcile ticks or a restarted
   supervisor must not dispatch a duplicate `Enter` for the same `delivery_id`;
   claim acquisition is atomic per delivery.
@@ -211,12 +352,13 @@ the per-delivery attempt budget is never reached and the delivery loops
 
 ## Files in scope
 
-- `scripts/**` — a single journaled send-wrapper entry point `(new)`, an adoption
-  preflight, and the extension of the existing submit arbiter
-  (`worker-message-submit-reconcile.ps1` and its mechanical node filter) to:
-  observe the outbox journal source, gate Enter-eligibility on dispatch outcome,
-  record attempts across the three phases, detect vanish, dedup escalation, and
-  apply the fail-closed worktree-drift exclusion.
+- `scripts/**` (and the `docs/*.mjs` mechanical-filter helpers the arbiter already
+  uses) — a journaled send path `(new)`, an adoption preflight, and the extension of
+  the existing submit arbiter to: observe the outbox journal source, gate
+  Enter-eligibility on dispatch outcome, record attempts across the defined phases,
+  detect vanish, dedup escalation, and apply the fail-closed worktree-drift
+  exclusion. The planner chooses the entry-point count, file names, and filter
+  structure.
 - `docs/**` — operator adoption notes (recovery runbook / migration notes), the
   `orchestratorRules` line to adopt, and a manual live-smoke procedure; do **not**
   edit the gitignored live `agent-orchestrator.yaml`.
@@ -237,7 +379,7 @@ packages/core/**
 ## Acceptance criteria
 
 ```positive-outcome
-asserts: on realistic AO-status + outbox-journal input, the arbiter plans an Enter submit for a journaled, dispatched, pending-draft plain-`ao send` delivery to a live worker (fixture-level; the live-Codex end-to-end path is the manual smoke check below)
+asserts: on realistic AO-status + outbox-journal input where a journaled, dispatched plain-`ao send` delivery left a pending draft STILL present (the send's own Enter did not submit), the arbiter plans a backstop Enter submit for that delivery to a live worker (fixture-level; the live-Codex end-to-end path is the manual smoke check below)
 input: realistic
 ```
 
@@ -246,15 +388,31 @@ input: realistic
 - **Journal is metadata-only and durable.** A fixture asserts the outbox entry
   contains shape metadata + `delivery_id` + dispatch outcome and **no** raw
   payload; a corrupt/partial journal escalates (quarantine), not misclassifies.
-- **`delivery_id` correlation, fail-closed.** Consumption is credited only on a
-  post-send session-scoped signal; with two in-flight deliveries and no echoed id
-  the arbiter does **not** falsely confirm either (stays unconfirmed → escalates).
-- **Three-phase crash safety + side-effect boundary.** Fixtures for crash after
-  (a) `claim_acquired` before keypress → **escalates** (no payload to replay),
-  budget not consumed; (b) `dispatch_attempted` recorded before keypress, keypress
-  not delivered → resume re-presses Enter **iff** AO observably confirms the draft
-  is still present, else **ambiguous escalation** — never a stale submit; (c) after
-  keypress before outcome → counted, not reset; (d) after outcome → terminal.
+- **Consumption requires causal correlation, fail-closed.** Consumption is credited
+  **only** on a worker signal causally tied to that exact `delivery_id`. A post-send
+  session-scoped signal alone is **insufficient** — even with a single in-flight
+  delivery (it may be unrelated). With no AO-echoed delivery id, a fixture proves the
+  arbiter stays **unconfirmed → escalates** rather than falsely confirming (single
+  in-flight and two-in-flight cases).
+- **Crash safety + side-effect boundary (defined phases).** A pre-invocation marker
+  records whether `ao send` invocation **began** (since `ao send` itself pastes then
+  Enters, a started invocation may have landed the paste). Fixtures for crash after
+  (a) `claim_acquired` with the marker showing invocation **not** begun → no send
+  happened → re-source/escalate, budget not consumed; (a′) `claim_acquired` with
+  invocation **begun** but no persisted send outcome → `dispatch_unknown`, reconciled
+  per that state's policy (landed-paste evidence required before any Enter / causal
+  consumption evidence; else bounded ambiguous escalation); (b) `enter_attempted`
+  recorded (slot counted) but outcome lost → the slot stands; the **next** attempt
+  presses once more **iff** the idle-stable + no-intervening-input inference still
+  holds **and** budget remains, else **escalation** — never a same-slot re-press,
+  never a stale submit; (b′) crash **before** any keypress was issued
+  (`enter_attempted` not finalized) → no slot consumed, resume issues a keypress while
+  eligible, bounded by the wall-clock deadline; (c) after keypress before outcome →
+  counted, not reset; (d) after `outcome_observed` → the **attempt/slot** is complete,
+  but the **delivery** is terminal only once **consumed** or **escalated** — an
+  observed Enter outcome alone does not confirm consumption, so an unconfirmed delivery
+  continues to the next attempt (if eligible and budget remains) or rides the deadline
+  to escalation; tracking is never silently dropped after an Enter.
 - **`send_failed` terminal, never Enter.** No Enter is planned for a `send_failed`
   delivery; it escalates.
 - **Idempotent escalation.** Repeated ticks over the same exhausted delivery emit
@@ -262,20 +420,19 @@ input: realistic
   do not touch GitHub Issue state.
 - **Escalate-on-vanish needs the durable record.** A tracked non-terminal delivery
   absent from all current sources escalates across a simulated restart.
-- **Single-flight (no duplicate Enter).** A two-runner / restarted-supervisor
-  fixture proves ≤1 Enter per `delivery_id`.
+- **Single-flight per attempt (no concurrent duplicate Enter).** A two-runner /
+  restarted-supervisor fixture proves no two runners execute the **same**
+  `enter_attempted` concurrently (one claim/lease wins) — bounded sequential backstop
+  Enters up to `max-attempts` are allowed, but the same attempt never double-fires.
 - **Worktree-drift exclusion is fail-closed.** Proven-drift (target SHA + worker
   head captured) → no escalation; missing/ambiguous evidence → ambiguous
   escalation. Two fixtures.
-- **Cross-surface payload fidelity (wrapper → `ao send`).** The wrapper passes a
-  multi-line, >200-char payload (including a path with spaces) to `ao send`
-  without corruption across the pack's PowerShell surfaces (Windows PowerShell,
-  WSL `pwsh`) — this is about the send call, not journal storage.
-- **Secret-safe transport — all named surfaces.** A check proves a secret-shaped
-  token in the payload is **absent** from argv, process listings, logs, `-DryRun`
-  output, PowerShell transcripts, sanitized exception traces, supervisor
-  stdout/stderr, and the journal artifact — across the fake-`ao send`
-  success/failure/timeout/interrupted paths (present only as shape metadata).
+- **Payload fidelity for the selected transport (wrapper → `ao send`).** The wrapper
+  passes a multi-line, >200-char payload (including a path with spaces) to `ao send`
+  without corruption on the pack's execution surface (pwsh 7+ on Linux/WSL2), for
+  **whichever** supported ingestion form the planner chose (positional `[message...]`
+  or `--file`) — the criterion does not assume multiple paths. This is about the send
+  call, not journal storage.
 - **Adoption preflight proves effective routing, not presence.** A
   present-but-ineffective routing rule (malformed / shadowed / wrong-precedence /
   schema-ignored — probe **not** observed in the outbox under the current AO
@@ -285,62 +442,101 @@ input: realistic
   **no** real worker terminal input, **no** active-delivery record, **no** attempt
   budget consumption, and **no** consumption/escalation record — only an outbox
   observation.
-- **`ao send` stdin/pipe contract is a hard gate.** A fixture/spike proves the
-  transport path is blocked (issue gated, not implemented with argv) when the
-  local `ao send` stdin/pipe contract check fails — never an argv-payload fallback.
+- **Transport binds to a real `ao send` interface (captured).** A fixture/contract
+  check proves the wrapper delivers through an ingestion form `ao send` actually
+  supports — the positional `[message...]` or `--file <path>` form per the captured
+  `ao send --help` — and the build fails closed (transport gated) if that local
+  contract check fails. No binding to a nonexistent flag (the #351 `--stdin`
+  regression).
+- **Arbiter never blind-`Enter`s; backstop only under the idle-inference.** A
+  fixture proves that after a `dispatched` send the arbiter presses `Enter` (via
+  direct tmux `send-keys`) **only** while the **idle-stable + unconsumed +
+  no-intervening-input** inference holds, and presses **nothing** when the worker is
+  **active** (the send already submitted) — so an `ao send` that submitted on its own
+  never receives a duplicate/stale `Enter`. A separate fixture proves the `Enter`
+  path is **fail-closed** when tmux is unavailable or the session address is stale.
+- **`active → idle, still unconfirmed` does not re-arm the backstop.** A fixture
+  drives the sequence: paste → worker goes **active** (submission evidence recorded) →
+  worker returns **idle** while consumption stays unconfirmed. It proves the arbiter
+  presses **no** further `Enter` (the durable post-paste activity evidence permanently
+  suppresses the backstop), so a stale Enter never lands on an empty/newer prompt; the
+  delivery rides to consumption or the deadline, not another keypress.
+- **Adoption red escalates without suppression; existing reconcile keeps running.** A
+  fixture with `wrapper_not_adopted` red proves the operator-actionable escalation
+  fires (plain-send coverage reported missing, **not** silently claimed) **and** that
+  review-send, reaction-routed, and dispatch-journal deliveries still reconcile,
+  submit, and escalate on the same tick (the #351 revert cause — adoption blocking the
+  pre-existing #232 reconcile — cannot recur).
 - **No reentrant self-wrap.** A fixture proves the wrapper's own internal `ao send`
   is **not** routed back through the wrapper (sentinel honored): one orchestrator
   send produces exactly one outbox entry and one delivery, never recursion/dupes.
 - **Branch-complete adoption probe.** A fixture proves the probe fails adoption
   when one real routing branch/source/message-shape is unwrapped (a single
   synthetic path passing is insufficient).
-- **Config overrides validated fail-closed.** A fixture where max-attempts /
-  time-to-escalation is set non-finite / zero / negative / huge escalates
-  `config_invalid` before tracking, never silently unbounded.
-- **Authoritative shape, unknown fails closed.** A fixture proves the
-  pending-draft-vs-short label comes from an authoritative signal (not length
-  alone); an `unknown` shape plans **no** Enter and escalates (threshold-drift /
+- **Config overrides validated fail-closed, without a kill-switch.** A fixture where
+  max-attempts or max-pending-age is non-finite / zero / negative / non-integer
+  attempts / above its declared `ceiling` escalates `config_invalid` **and proves
+  reconciliation continues under the safe built-in defaults** (new and already-shipped
+  sources stay tracked and bounded — an invalid override is ignored, never a
+  kill-switch); the accepted boundary value passes — never silently unbounded.
+- **Pending-vs-submitted from the idle-inference, unknown fails closed.** A fixture
+  proves the pending-vs-submitted determination comes from the AO activity / idle
+  inference (worker idle-stable, no intervening input) — **not** a length/line-count
+  guess; an indeterminate state plans **no** Enter and escalates (threshold-drift /
   misclassification covered).
 - **Sentinel cannot become a global bypass.** A fixture where a leaked/inherited
   reentrancy sentinel is present on a **real** orchestrator send proves the send is
   still journaled (no bypass).
 - **`dispatch_unknown` resolution.** Separate fixtures for crash (a) before
-  `ao send` is invoked → **escalates** (payload not recoverable; no replay); (b)
-  after `ao send` returns but before outcome persistence → resolved
-  deterministically (not left in limbo, not falsely escalated).
+  `ao send` invocation began → **escalates** (payload not recoverable; no replay);
+  (b) invocation begun but outcome not persisted → reconciled by the
+  `dispatch_unknown` policy: idle state alone is **not** sufficient to fire a
+  backstop Enter here, because an idle worker is indistinguishable between
+  "paste landed, not yet submitted" and "process died before pasting" — so a
+  backstop Enter requires **positive landed-paste evidence**; absent it, escalate
+  **ambiguous** (no blind keypress). Consumption is credited only on **causal**
+  (`delivery_id`-tied) evidence, **not** a session-scoped post-send transition. When
+  neither is available it fails closed to **bounded ambiguous escalation** (never
+  falsely credited as `dispatched` or `consumed`, never silently looped).
 - **Short / self-submitted deliveries are tracked too (no Enter).** A dispatched
   short (single-line, ≤ threshold) message that AO auto-submits with no pending
   draft is still tracked to **confirmed consumption or bounded escalation** —
   with **no** Enter step — never dropped as untracked silence. Fixture proves a
   short delivery reaches a terminal state without any planned Enter.
-- **Active-record durability + state-root identity.** A corrupt/truncated
-  active-delivery tracking state is quarantined and escalates; and a **wrong-state-
-  root** restart (empty alternate store from a changed cwd / `$HOME` / account /
-  path) escalates on startup instead of treating the empty store as authoritative.
+- **Active-record durability + state-root identity (canonical anchor).** A
+  corrupt/truncated active-delivery tracking state is quarantined and escalates; and a
+  **wrong-state-root** restart (empty/absent store while the **canonical anchor**
+  records a prior identity, from a changed cwd / `$HOME` / account / path) escalates on
+  startup — while a **genuine first run** (anchor has no prior identity) does **not**
+  escalate. Two fixtures prove both arms (the empty store is not blindly treated as
+  authoritative, and a real first run is not falsely escalated).
 - **Intervening-input suppresses Enter.** A fixture where an AO intervening-input
   signal arrives after the paste marks the delivery `stale_input` and plans **no**
   Enter.
 - **Interrupted send never blindly re-pastes.** A fixture where `ao send` was
   invoked then interrupted resolves to ambiguous escalation (or a proven
   no-paste/landed-paste), never a blind second paste.
-- **`ao send` failure mapping.** Fake-`ao send` fixtures for success, non-zero
-  exit, timeout, thrown exception, and interrupted execution each map to the exact
-  dispatch outcome (`dispatched` / `send_failed` / interrupted-unknown) — a
-  failure is never recorded as `dispatched`.
+- **`ao send` failure mapping (only pre-side-effect failures are `send_failed`).**
+  Fake-`ao send` fixtures map by **whether the failure is proven to precede the
+  paste**: success → `dispatched`; a failure **proven to occur before any paste**
+  (e.g. session-not-found / immediate arg rejection) → `send_failed` (terminal, no
+  draft). A non-zero exit / timeout / thrown exception that **could** have occurred
+  *after* `ao send` pasted or pressed Enter is **ambiguous** — it does **not** map to
+  `send_failed` (that would strand a pending draft); it resolves to the separate
+  **`dispatch_unknown`** state and is reconciled by that state's
+  deterministic policy (ambiguous escalation unless paste status is proven), never
+  left in limbo.
 - **Dry-run isolation.** A `-DryRun` run writes only to an isolated/sandbox state
   root (or simulates); a fixture asserts the production journal and active-delivery
   records are **unchanged** after a dry-run (no phantom deliveries, no consumed
   budget).
-- **Bounded time-to-escalation.** A fixture asserts a never-confirmed delivery
-  escalates within the configured finite bound (default max-attempts × budget),
-  not an unbounded wait.
-- **No secrets in any dynamic argument.** A fixture where a secret-shaped token
-  appears in a source-key / session / path / config-path / state-root value proves
-  it is absent (hashed or excluded) from **both** the persisted artifacts
-  (`delivery_id`, journal, active record, dry-run artifact, escalation dedup key)
-  **and** the runtime surfaces (argv, process listings, logs, PowerShell
-  transcripts, exception traces, supervisor stdout/stderr) — every dynamic
-  wrapper/AO argument, not only the raw payload.
+- **Bounded time-to-escalation (wall-clock, Enter-independent).** A fixture asserts
+  a never-confirmed delivery escalates within the configured finite **max-pending-age
+  measured from the earliest durable delivery timestamp** (`claim_acquired` /
+  invocation-start, so a `dispatch_unknown` delivery with no dispatch-completion time
+  still has a clock), not an unbounded wait — and a **short/self-submitted** delivery
+  (zero backstop Enters) escalates at that same wall-clock deadline, proving the
+  deadline does not depend on Enter eligibility.
 - **Unprovable draft-present → no Enter.** A resume fixture where AO cannot confirm
   the pending draft is still present plans **no** Enter and escalates ambiguous
   (never a blind re-Enter); and a pre-invocation-crash fixture escalates (no
@@ -360,10 +556,14 @@ input: realistic
   so the orchestrator merely narrated "journaled-worker-send not adopted" as a
   status line and no nudge was delivered — the escalation must drive adoption, not
   passively report it.)
-- **`ao send` stdin/pipe contract.** A real local contract check confirms `ao send`
-  ingests the payload over stdin/pipe (Windows PowerShell + WSL `pwsh`); if it does
-  not, the secret-safe-transport guarantee is flagged as the parked upstream
-  dependency below, not silently assumed.
+- **`ao send` interface contract (captured, committed).** A real local contract
+  check confirms the chosen transport form is one `ao send` actually supports (per
+  the captured `ao send --help`, AO 0.9.2: positional `[message...]` and
+  `-f, --file <path>`), on pwsh 7+ (Linux/WSL2), and the build commits that
+  capture-backed evidence so the transport binding is provable against producer
+  reality, not assumed. If neither supported form ingests the message, the
+  transport is a hard blocker per **Open dependencies** — never a binding to a
+  nonexistent flag.
 - **Scenario-matrix coverage (fix the class).** Asserted across the matrix below —
   each coherent cell a fixture.
 
@@ -395,8 +595,9 @@ input: realistic
 - No new unsupervised process — extends the #205-supervised arbiter.
 - No unsupported `agent-orchestrator.yaml` schema fields; the only live-config
   change is an `orchestratorRules` send-routing line the operator adopts.
-- **No new repo secrets and no payload persistence** — the journal stores only
-  non-sensitive shape metadata, outside the working tree / gitignored.
+- **No new repo secrets.** The journal stores only shape metadata, outside the
+  working tree / gitignored; it is never committed. This issue makes no
+  secret-safety claim about the message payload (see **Background**).
 - No worker-terminal pane scraping introduced.
 
 ## Verification
@@ -411,21 +612,20 @@ input: realistic
   restart; proven-drift vs ambiguous-drift; two-runner single-flight; ambiguous
   multi-in-flight no-false-confirm; corrupt-journal **and** corrupt active-record
   quarantine-escalation; **wrong-state-root** restart escalation; idempotent-
-  escalation dedup; secret-token absence from argv / process-list / transcript /
-  exception traces / supervisor stdout-stderr / dry-run / logs / journal;
+  escalation dedup; **backstop-only-on-still-present-draft** (no blind/duplicate
+  `Enter` when the send already submitted);
   adoption **effective-routing probe** (present-but-ineffective rule → escalate);
   preflight stale-process / wrong-path; short/self-submitted tracked-without-Enter;
   intervening-input → no-Enter.
-- Cross-surface payload-fidelity fixtures (Windows PowerShell + WSL `pwsh`) for a
-  multi-line, >200-char payload with a spaced path, asserting the value handed to
-  `ao send`.
+- Payload-fidelity fixtures (pwsh 7+ on Linux/WSL2) for a multi-line, >200-char
+  payload (including a path with spaces **and an option-shaped payload** — leading
+  `-`, embedded `--file`) over the selected transport form, asserting the value handed
+  to `ao send` is delivered intact (positional form only with a proven `--`
+  end-of-options delimiter; else `--file`).
 - **Manual live smoke check (documented, not a CI gate):** operator routes one
-  multi-line `ao send` of a **synthetic non-secret** payload through the wrapper to
-  a live Codex worker and confirms auto-submit with no manual Enter — recorded with
-  **sanitized metadata-only** evidence in the runbook (no terminal transcript, no
-  session URL, no raw message body, no worker output), since the synthetic fixtures
-  cannot prove the Codex-TUI paste/Enter integration that caused the original
-  symptom and the runbook is itself a secret surface.
+  multi-line `ao send` through the wrapper to a live Codex worker and confirms the
+  message is submitted (no manual Enter), since the synthetic fixtures cannot prove
+  the live Codex-TUI paste/Enter integration that caused the original symptom.
 - `pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun`
   stays green; the wrapper's `-DryRun`/fixture mode writes only to an isolated
   state root and a fixture asserts the production journal / active-delivery records
@@ -436,18 +636,24 @@ input: realistic
 
 ## Open dependencies / parked risks
 
-- **`ao send` non-argv ingestion (P1 — verify first).** The secret-safe transport
-  assumes `ao send` accepts the payload over stdin/pipe with the same semantics as
-  the argument path. AO upstream is out of scope, so this is an **unverified
-  external dependency**: the first implementation step is a local contract check.
-  If `ao send` lacks non-argv ingestion, that is a **hard blocker** for this
-  issue's secret-safe transport: resolve via upstream `ao send` stdin support, or
-  **split/stop** — land only the non-transport observation / accounting /
-  escalation / vanish parts under a separate scope, behind this gate. There is
-  **no argv payload fallback** and **no payload temp file**: argv exposes the
-  secret, so an "accepted, documented argv-exposure limitation" is still a
-  credential leak, not a parked risk. The non-transport parts hold regardless and
-  may land first behind this gate.
+- **`ao send` interface (grounded at authoring; re-confirmed at build).** The
+  transport binds to a form `ao send` actually exposes in the captured authoring
+  interface (`ao send --help`, AO 0.9.2: positional `[message...]` and
+  `-f, --file <path>`) — replacing the prior build's binding to a **stdin/pipe**
+  flag that no published AO version implements (the binding that forced the #351
+  revert). The residual external dependency is narrow: the **operator's installed
+  AO must still expose one of those forms**, re-confirmed by the build's local
+  contract check. If a future AO drops both, that is a **hard blocker**: resolve via
+  the supported ingestion path, or **split/stop** — land only the non-transport
+  observation / accounting / escalation / vanish parts behind this gate.
+- **AO-owned send behavior (documented, not this issue's to fix).** Two verified
+  `ao send` behaviors are upstream-owned and explicitly out of scope: (1) `ao send`
+  presses `Enter` itself (up to 3×) — the arbiter is a conditional backstop around
+  this, never a blind submitter; (2) `ao send` spools the multiline/large payload to
+  a world-readable `/tmp/ao-send-<ts>.txt` it cleans up best-effort — so payload
+  on-disk lifetime is outside any wrapper's control and **no secret-safety guarantee
+  is made** (worker messages carry no credentials). Changing either would require an
+  AO upstream change (`packages/core`/`vendor` — out of scope).
 
 ## Decisions (GPT adversarial pass)
 
@@ -591,3 +797,56 @@ if this draft is reopened. The trigger half of the same incident (`ci-green-wake
 review-wake-trigger skipping a post-handoff worker on a fresh green head with no
 `ready_for_review`) is **out of scope here** — it is a trigger-eligibility concern
 in a different reconciler, carried in its own draft (see the queue index).
+
+**Post-revert re-grounding (2026-06-20, supersedes the secret-safety decisions of
+Pass 2/3/4/5/7/8/9 and the Pass-10 classification note).** The merged build #351 was
+reverted (PR #364) because its transport bound to an `ao send` **stdin/pipe**
+ingestion flag that no published AO version implements — the spec named a producer
+interface that does not exist (binding-bug class). Re-grounding against the real
+`ao send` (AO 0.9.2, `@aoagents/ao-cli` `commands/send.js`) drove three changes:
+- **Transport** now binds only to a form `ao send` actually exposes (positional
+  `[message...]` or `--file <path>`, per captured `ao send --help`). The earlier
+  stdin-only decisions (Pass 4 "stdin/pipe only, no temp file"; Pass 3/5/8 stdin
+  references) are void.
+- **Secret-safety surface dropped entirely** (supersedes Pass 2 outbox-secret, Pass
+  3/4 transport-secret, Pass 5 `delivery_id`-secret, Pass 7/8 named-surface secret
+  decisions). Verified cause: `ao send` itself spools the multiline/large payload to
+  a world-readable `/tmp/ao-send-<ts>.txt` outside any wrapper's control, so a
+  wrapper-level secret-safe-transport guarantee is **unachievable**; and the actual
+  message classes carry **no credentials** (`docs/orchestrator-message-map.md`). The
+  spec keeps delivery + confirmed consumption + bounded escalation + crash-safe
+  accounting + fail-closed adoption only.
+- **Enter ownership corrected.** Verified that `ao send` presses `Enter` itself (up
+  to 3×). The arbiter is reframed from "owns the submit" to a **conditional
+  backstop** for when that submit does not land. The backstop is **not** new
+  machinery and is **not** parked: it is exactly the shipped #216/#232 path —
+  `Enter` pressed by **direct tmux `send-keys`** (fail-closed on missing tmux/
+  session), gated on the existing **idle-stable + unconsumed + no-intervening-input**
+  inference (AO 0.9.x has no literal draft-present field; the idle inference is the
+  proxy, and it is what prevents a double-submit — a draft `ao send` already
+  submitted leaves the worker active, failing the idle-gate). The attempt budget
+  counts backstop `Enter`s (recorded before the keypress), not the one-time send.
+  (An earlier draft of this re-grounding wrongly concluded the backstop was
+  unbuildable for lack of a literal AO signal; the shipped idle-inference disproves
+  that — corrected here.)
+
+**Codex architect-review convergence (2026-06-20).** Ran the critical-architect Codex
+pass iteratively **to `NO_FINDINGS`** (clean terminal verdict). Findings shrank and
+shifted from design holes to fine-grained lifecycle/accounting edges, and several were
+**substantive catches** folded in: the `active → idle, still-unconfirmed` stale-Enter
+race (durable post-paste submission evidence now permanently suppresses the backstop);
+the at-most-once slot-accounting boundary (record→keypress non-atomic → conservative
+slot consumption); the wall-clock deadline origin for `dispatch_unknown` (earliest
+durable timestamp, not dispatch-completion); **adoption failure escalates without
+suppression and never disables the pre-existing #232 reconcile** (re-proving the #351
+revert cause cannot recur); the same **no-kill-switch** rule extended to invalid config
+overrides (escalate `config_invalid`, keep reconciling under safe defaults); a
+**canonical-anchor** state-root identity (so an empty wrong root is distinguishable
+from a genuine first run); and option-shaped-payload transport safety (`--` delimiter
+proven, else `--file`).
+
+The prior #351 implementation stays in history as a reuse option, but the spec
+mandates end-state behavior, not a patch strategy. Re-grounded against producer
+reality and Codex-reviewed **to convergence (`NO_FINDINGS`)**; **not** re-run through
+the GPT adversarial loop — fold the secret-drop + backstop model into the next
+adversarial pass if the draft is reopened.
