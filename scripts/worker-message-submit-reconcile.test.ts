@@ -81,6 +81,22 @@ function submitActions(actions: WorkerMessageSubmitAction[]) {
   return actions.filter((a) => a.type === 'submit');
 }
 
+function writeFakeAoCli(dir: string): string {
+  const aoPath = path.join(dir, 'ao');
+  writeFileSync(
+    aoPath,
+    `#!/usr/bin/env bash
+if [[ "$1" == "status" ]]; then echo '{"data":[]}'; exit 0; fi
+if [[ "$1" == "events" && "$2" == "list" ]]; then echo '{"events":[]}'; exit 0; fi
+if [[ "$1" == "review" && "$2" == "list" ]]; then echo '{"runs":[]}'; exit 0; fi
+echo "unsupported: $*" >&2; exit 99
+`,
+  );
+  chmodSync(aoPath, 0o755);
+  return dir;
+}
+
+
 describe('classifyDeliveryPath', () => {
   it('pending-draft for multi-line short message', () => {
     expect(classifyDeliveryPath({ charLength: 42, lineCount: 2 })).toBe(
@@ -1991,6 +2007,7 @@ describe('issue #373 supervised adoption preflight', () => {
     const journal = path.join(dir, 'journal.json');
     const state = path.join(dir, 'state.json');
     writeFileSync(journal, JSON.stringify({}));
+    const fakeAoDir = writeFakeAoCli(dir);
     const result = spawnSync('pwsh', [
       '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
       '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal,
@@ -1998,6 +2015,7 @@ describe('issue #373 supervised adoption preflight', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
         AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-live',
         AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/live.yaml',
       },
@@ -2020,9 +2038,11 @@ describe('issue #373 supervised adoption preflight', () => {
       AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-dedupe',
       AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/dedupe.yaml',
     };
-    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    const fakeAoDir = writeFakeAoCli(dir);
+    const envWithAo = { ...env, PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}` };
+    const first = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env: envWithAo });
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
-    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env });
+    const second = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1', '-Once', '-IntervalSeconds', '1', '-StateFile', state, '-DispatchJournalPath', journal], { encoding: 'utf8', env: envWithAo });
     const escalationMatches = (output: string) => (output.match(/ESCALATION: wrapper_not_adopted/g) ?? []).length;
     expect(escalationMatches(first.stdout)).toBe(1);
     expect(escalationMatches(second.stdout)).toBe(0);
