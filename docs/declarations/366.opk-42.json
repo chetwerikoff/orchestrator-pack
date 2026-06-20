@@ -11,6 +11,7 @@
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/publish-issue-draft/SKILL.md",
     "docs/declarations/366.opk-42.json",
     "docs/issue_queue_index.md",
     "docs/issues_drafts/117-spec-contract-evidence-grounding-gate.md",
