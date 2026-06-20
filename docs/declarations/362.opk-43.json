@@ -5,12 +5,11 @@
   "supersedes": null,
   "created_at": "2026-06-20T06:06:20.792Z",
   "baseline": {
-    "commit_sha": "38c8fb4cf6a793880ee1fea44241e250957774d8",
-    "worktree_dirty": false,
-    "active_scope_hash": "sha256:ec52d0336b13f61101bdd6c0df018599877811948d09a70d226bde67a177ac1e"
+    "commit_sha": "bd7815fcb81cbd08b266383a116dd5cb40da4f5a",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:714ec031443c25a5ca8515d82c243bf978e5547130f9e7e1f0eea8c2f3855fb5"
   },
   "declared_paths": [
-    "docs/declarations/362.opk-43.json",
     "docs/issues_drafts/00-architecture-decisions.md",
     "docs/issues_drafts/115-reviewer-coworker-contract-mapping-pass.md",
     "prompts/agent_rules.md",

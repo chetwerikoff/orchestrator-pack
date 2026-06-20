@@ -8,17 +8,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
+$Root = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    Split-Path -Parent $PSScriptRoot
+} else {
+    $RepoRoot
 }
 
 $failures = [System.Collections.Generic.List[string]]::new()
 
-$agentRules = Join-Path $RepoRoot 'prompts/agent_rules.md'
-$codexPrompt = Join-Path $RepoRoot 'prompts/codex_review_prompt.md'
-$helperPs1 = Join-Path $RepoRoot 'scripts/invoke-reviewer-contract-mapping.ps1'
-$helperTs = Join-Path $RepoRoot 'scripts/invoke-reviewer-contract-mapping.ts'
-$library = Join-Path $RepoRoot 'scripts/lib/reviewer-contract-mapping.ts'
+$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$codexPrompt = Join-Path $Root 'prompts/codex_review_prompt.md'
+$helperPs1 = Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ps1'
+$helperTs = Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'
+$library = Join-Path $Root 'scripts/lib/reviewer-contract-mapping.ts'
 
 foreach ($required in @($agentRules, $codexPrompt, $helperPs1, $helperTs, $library)) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -79,12 +81,12 @@ if ($failures.Count -eq 0) {
     }
 }
 
-Push-Location $RepoRoot
+Push-Location $Root
 try {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         $failures.Add('npm required for reviewer-contract-mapping vitest suite')
     }
-    elseif (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
+    elseif (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
         & npm ci --include=dev | Out-Null
         if ($LASTEXITCODE -ne 0) {
             $failures.Add('npm ci failed before reviewer-contract-mapping tests')
@@ -99,8 +101,8 @@ try {
     }
 
     if ($failures.Count -eq 0) {
-        $fixtureDiff = Join-Path $RepoRoot 'scripts/fixtures/reviewer-contract-mapping/large.diff'
-        $fixtureIssue = Join-Path $RepoRoot 'scripts/fixtures/reviewer-contract-mapping/issue-with-acceptance.md'
+        $fixtureDiff = Join-Path $Root 'scripts/fixtures/reviewer-contract-mapping/large.diff'
+        $fixtureIssue = Join-Path $Root 'scripts/fixtures/reviewer-contract-mapping/issue-with-acceptance.md'
         $tempBody = Join-Path ([System.IO.Path]::GetTempPath()) ("op362-prbody-" + [Guid]::NewGuid().ToString('n') + '.md')
         Set-Content -LiteralPath $tempBody -Value "Closes #362`n"
         try {
