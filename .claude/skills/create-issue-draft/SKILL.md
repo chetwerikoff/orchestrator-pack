@@ -564,6 +564,18 @@ GitHub (`gh issue view`).
 > executing agent, so the fallback is the correct path. If a PR head is behind
 > base, run `gh pr update-branch <N>` first.
 
+**Publish-path contract-evidence gate (Issue #366).** Any path that syncs or
+publishes a draft — including the `opencode run` delegate and the manual publish fallback
+below — must run the same mechanical guard as pre-sync:
+
+```powershell
+pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+```
+
+Refuse `gh issue create` / `gh issue edit` / publish commit while this exits non-zero.
+When delegating to [`publish-issue-draft`](../publish-issue-draft/SKILL.md), include this
+command in the delegate prompt and verify it ran before issue sync or spec PR commit.
+
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
 questions recorded), **delegate publish to deepseek via `opencode run`** using
 the temp-file mechanism below. This is the default: deepseek handles the fixed
@@ -597,6 +609,9 @@ from an isolated scratch checkout. Do NOT run git commands in any other checkout
 The draft is docs/issues_drafts/NN-<slug>.md (substitute the real NN-<slug>). It
 passed Codex review — do NOT edit its task content. Steps:
 
+0. Run contract-evidence (and positive-outcome / parked-root when applicable):
+   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+   Exit non-zero => stop; do not sync or publish.
 1. Create the GitHub Issue (gh CLI, issue-create subcommand):
    - Title = the draft's H1 (first heading line).
    - Body  = the draft body MINUS the H1 line (tail -n +3 of the file).
@@ -673,10 +688,11 @@ The draft must not stay uncommitted on disk. Unless the user opts out
 («только драфт», «без PR», «не мержи»), invoke
 [`publish-issue-draft`](../publish-issue-draft/SKILL.md):
 
-1. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
-2. Open PR (`docs: draft NN — … (#N spec)`).
-3. Merge when CI is green (and manual Codex review if the user expects it).
-4. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
+1. Run `check-draft-discipline.ps1 -Command contract-evidence` on the draft (plus positive-outcome / parked-root when applicable); refuse publish on non-zero exit.
+2. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
+3. Open PR (`docs: draft NN — … (#N spec)`).
+4. Merge when CI is green (and manual Codex review if the user expects it).
+5. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
 
 ## Cross-issue contract changes
 
