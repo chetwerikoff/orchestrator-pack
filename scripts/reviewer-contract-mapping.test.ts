@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  buildContractMappingQuestion,
   buildCoworkerInvokeArgv,
   buildSpecArtifactContent,
   buildStructuredStatusRecord,
@@ -14,6 +15,7 @@ import {
   evaluateFinalUsability,
   evaluateMappingPreflight,
   extractChangedFileContentFromDiff,
+  hasCompleteChangedFileEvidence,
   extractContractSections,
   hasCompleteTestFileCoverage,
   hasTestableAcceptanceCriteria,
@@ -62,6 +64,20 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       declarationIssueNumber: 362,
     });
     expect(refs).toEqual([362]);
+  });
+
+  it('collects every closing reference in the PR body', () => {
+    const refs = collectAuthoritativeReferences({
+      prBody: 'Closes #100\n\nCloses #200',
+    });
+    expect(refs).toEqual([100, 200]);
+    const a = loadIssue('issue-with-acceptance.md', 100);
+    const b = loadIssue('issue-with-acceptance.md', 200);
+    const resolved = resolveContractSet(refs, [a, b]);
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.status).toBe('ambiguous_spec');
+    }
   });
 
   it('resolves co-applicable multi-spec sets via prerequisite links', () => {
@@ -235,6 +251,31 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(classification.ambiguousTestLike).toContain('scripts/weird-testy-module.ts');
     expect(hasCompleteTestFileCoverage(diff, ['scripts/example.ts'])).toBe(true);
     expect(hasCompleteTestFileCoverage(diff, ['scripts/missing.test.ts'])).toBe(false);
+
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: 'gap_candidate',
+        concreteFailureScenario: 'No test covers the new branch.',
+        kind: 'missing_validation',
+      })),
+    };
+    expect(
+      validateMappingLedger(ledger, members, {
+        ambiguousTestLike: classification.ambiguousTestLike,
+      }).ok,
+    ).toBe(false);
+
+    const question = buildContractMappingQuestion({
+      ambiguousTestLike: classification.ambiguousTestLike,
+    });
+    expect(question).toContain('scripts/weird-testy-module.ts');
+    expect(question).toMatch(/missing_validation/i);
   });
 
   it('extracts complete changed test file hunks for missing-test eligibility', () => {
@@ -448,6 +489,67 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     const content = buildSpecArtifactContent(members);
     expect(content).toContain('## Acceptance criteria');
     expect(content).toContain('snapshot_hash:');
+  });
+
+  it('rejects ledger entries with stale or missing snapshot hashes', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: 'stale-hash',
+        citedRequirementText: text,
+        mappingStatus: 'satisfied',
+        kind: 'confirmed_observation',
+      })),
+    };
+    expect(validateMappingLedger(ledger, members).ok).toBe(false);
+  });
+
+  it('treats binary summary markers as incomplete evidence', () => {
+    const binarySummary = [
+      'diff --git a/assets/logo.png b/assets/logo.png',
+      'index 111..222 100644',
+      'Binary files a/assets/logo.png and b/assets/logo.png differ',
+    ].join('\n');
+    expect(hasCompleteChangedFileEvidence(binarySummary, 'assets/logo.png')).toBe(false);
+
+    const diff = `${binarySummary}\n${fixture('large.diff')}`;
+    const issue = loadIssue('issue-with-acceptance.md', 362);
+    const result = evaluateMappingPreflight({
+      diffLineCount: diff.split(/\r?\n/).length,
+      diffContent: diff,
+      changedPaths: ['assets/logo.png', 'scripts/example.ts'],
+      binding: { explicitIssueNumber: 362 },
+      specBodies: [issue],
+    });
+    expect(result.status).toBe('incomplete_evidence');
+    expect(result.shouldInvokeCoworker).toBe(false);
+  });
+
+  it('redacts private data before provider artifacts are written', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const diff = `${fixture('large.diff')}\n+customer_name: Jane Customer\n+notify user@customer.example about rollout\n`;
+    const scrubbed = scrubForProviderInput(diff);
+    expect(scrubbed.ok).toBe(true);
+    if (!scrubbed.ok) {
+      return;
+    }
+    expect(scrubbed.scrubbed).toContain('[REDACTED_PRIVATE_DATA]');
+    expect(scrubbed.scrubbed).not.toContain('user@customer.example');
+    expect(scrubbed.scrubbed).not.toContain('Jane Customer');
+
+    const prep = prepareMappingArtifacts({
+      scrubbedDiff: scrubbed.scrubbed,
+      scrubbedSpec: buildSpecArtifactContent(members),
+      members,
+    });
+    expect(prep.ok).toBe(true);
+    if (prep.ok) {
+      const onDisk = readFileSync(prep.diffPath, 'utf8');
+      expect(onDisk).not.toContain('user@customer.example');
+    }
   });
 
   it('exposes prompt contract markers for static checks', () => {
