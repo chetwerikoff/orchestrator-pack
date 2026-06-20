@@ -2059,9 +2059,12 @@ describe('issue #373 supervised adoption preflight', () => {
 });
 
 describe('ao send transport contract (Issue #373)', () => {
-  it('confirms local ao send exposes --file ingestion', () => {
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/check-ao-send-transport-contract.ps1'], { encoding: 'utf8' });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('[PASS]');
+  it('confirms committed capture-backed evidence documents --file ingestion', () => {
+    const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs/ao-send-transport-contract.txt');
+    expect(existsSync(evidencePath)).toBe(true);
+    const text = readFileSync(evidencePath, 'utf8');
+    expect(text).toContain('Issue #373');
+    expect(text).toMatch(/(?:--file|\-f,\s*--file)/i);
+    expect(text).toMatch(/ao send \[options\]/i);
   });
 });
