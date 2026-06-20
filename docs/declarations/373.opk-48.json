@@ -24,6 +24,7 @@
     "scripts/worker-message-send-adoption-preflight.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
     "scripts/worker-message-submit-reconcile.test.ts",
+    "vitest.config.ts",
     "docs/declarations/373.opk-48.json",
     "scripts/lib/Get-WorkerMessageAdoptionBinding.ps1",
     "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
