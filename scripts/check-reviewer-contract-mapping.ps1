@@ -112,9 +112,29 @@ try {
         $tempBody = Join-Path ([System.IO.Path]::GetTempPath()) ("op362-prbody-" + [Guid]::NewGuid().ToString('n') + '.md')
         Set-Content -LiteralPath $tempBody -Value "Closes #362`n"
         try {
-            & $helperPs1 -DiffFile $fixtureDiff -IssueFile $fixtureIssue -PrBodyFile $tempBody -ExplicitIssue 362
+            $integrationOutput = & $helperPs1 -DiffFile $fixtureDiff -IssueFile $fixtureIssue -PrBodyFile $tempBody -ExplicitIssue 362 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) {
                 $failures.Add('invoke-reviewer-contract-mapping.ps1 integration fixture failed')
+            }
+            else {
+                try {
+                    $integration = $integrationOutput | ConvertFrom-Json
+                }
+                catch {
+                    $integration = $null
+                }
+                if (-not $integration) {
+                    $failures.Add('invoke-reviewer-contract-mapping.ps1 integration fixture did not return JSON')
+                }
+                elseif ($integration.status -ne 'mapping_pending') {
+                    $failures.Add("invoke-reviewer-contract-mapping.ps1 integration fixture expected mapping_pending, got $($integration.status)")
+                }
+                elseif (-not $integration.shouldInvokeCoworker) {
+                    $failures.Add('invoke-reviewer-contract-mapping.ps1 integration fixture expected shouldInvokeCoworker=true')
+                }
+                elseif (-not $integration.coworkerArgv -or $integration.coworkerArgv.Count -eq 0) {
+                    $failures.Add('invoke-reviewer-contract-mapping.ps1 integration fixture expected invocable coworkerArgv')
+                }
             }
         }
         finally {

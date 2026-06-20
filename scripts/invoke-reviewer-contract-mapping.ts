@@ -246,6 +246,14 @@ export type SpecRereadOutcome =
   | { ok: true; hashes: Array<{ issueNumber: number; snapshotHash: string }> }
   | { ok: false; status: 'lookup_unavailable' | 'stale_spec' };
 
+export function createSpecFreshnessResolver(opts: CliOptions): IssueBodyResolver {
+  const localBodies = loadSpecBodiesFromOptions(opts);
+  if (localBodies.length > 0) {
+    return createLocalIssueBodyResolver(opts);
+  }
+  return createGitHubIssueBodyResolver();
+}
+
 export function tryRecomputeCurrentSpecHashes(
   opts: CliOptions,
   contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>,
@@ -502,7 +510,11 @@ function main(): void {
     snapshotHash: member.snapshotHash,
   }));
   if (preflight.contractSet.length > 0) {
-    const specReread = tryRecomputeCurrentSpecHashes(opts, preflight.contractSet);
+    const specReread = tryRecomputeCurrentSpecHashes(
+      opts,
+      preflight.contractSet,
+      createSpecFreshnessResolver(opts),
+    );
     if (!specReread.ok) {
       const fallback = buildSpecRereadFallbackOutput({
         status: specReread.status,

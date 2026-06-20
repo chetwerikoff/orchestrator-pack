@@ -656,18 +656,30 @@ export function extractChangedFileContentFromDiff(diffContent: string, filePath:
   return chunk?.trim() ?? null;
 }
 
+function extractDiffChunkMetadata(chunk: string): string {
+  const metadataLines: string[] = [];
+  for (const line of chunk.split(/\r?\n/)) {
+    if (line.startsWith('@@')) {
+      break;
+    }
+    metadataLines.push(line);
+  }
+  return metadataLines.join('\n');
+}
+
 export function hasCompleteChangedFileEvidence(diffContent: string, filePath: string): boolean {
   const chunk = extractChangedFileContentFromDiff(diffContent, filePath);
   if (!chunk?.trim()) {
     return false;
   }
-  if (chunk.includes('GIT binary patch')) {
+  const metadata = extractDiffChunkMetadata(chunk);
+  if (/^GIT binary patch$/m.test(metadata)) {
     return false;
   }
   if (/^@@/m.test(chunk)) {
     return true;
   }
-  if (/Binary files .+ differ$/m.test(chunk)) {
+  if (/^Binary files .+ differ$/m.test(metadata)) {
     return false;
   }
   return true;

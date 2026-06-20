@@ -47,6 +47,7 @@ import {
   tryRecomputeCurrentSpecHashes,
   createLocalIssueBodyResolver,
   createGitHubIssueBodyResolver,
+  createSpecFreshnessResolver,
   buildSpecRereadFallbackOutput,
   mergeSpecRereadFailure,
   shouldInvokeCoworkerForStatus,
@@ -1277,6 +1278,45 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     expect(
       isResolvedPathInsideDir('C:\\tmp\\artifact', 'C:\\tmp\\other\\scrubbed.diff', win32),
     ).toBe(false);
+  });
+
+
+  it('ignores literal binary marker strings inside diff hunks', () => {
+    const diff = [
+      'diff --git a/scripts/reviewer-contract-mapping.ts b/scripts/reviewer-contract-mapping.ts',
+      '--- a/scripts/reviewer-contract-mapping.ts',
+      '+++ b/scripts/reviewer-contract-mapping.ts',
+      '@@ -1,3 +1,4 @@',
+      "+if (chunk.includes('GIT binary patch')) {",
+      '+  return false;',
+      '+}',
+      "+// Binary files a/foo and b/foo differ",
+    ].join('\n');
+    expect(hasCompleteChangedFileEvidence(diff, 'scripts/reviewer-contract-mapping.ts')).toBe(true);
+    expect(hasCompleteChangedFileEvidence(diff, 'scripts/reviewer-contract-mapping.test.ts')).toBe(false);
+  });
+
+  it('uses local issue files for spec freshness when provided', () => {
+    const issuePath = path.join(fixturesDir, 'issue-with-acceptance.md');
+    const opts = {
+      prBodyFile: null,
+      issueFile: issuePath,
+      issuesFile: null,
+      issueSpecs: [],
+      diffFile: null,
+      changedPathsFile: null,
+      explicitIssue: 362,
+      declarationIssue: null,
+      prHeadSha: null,
+      ledgerFile: null,
+      invokeCoworker: false,
+      json: true,
+      lookupAvailable: true,
+      coworkerAvailable: true,
+    };
+    const members = [{ issueNumber: 362, snapshotHash: sha256Hex(fixture('issue-with-acceptance.md')) }];
+    const outcome = tryRecomputeCurrentSpecHashes(opts, members, createSpecFreshnessResolver(opts));
+    expect(outcome.ok).toBe(true);
   });
 
   it('treats opaque GIT binary patches as incomplete evidence', () => {
