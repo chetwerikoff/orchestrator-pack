@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "8647579c8c614914a9b9154d1141833563443c4e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:1ea82180af28b492d15e25cffc711b80ea1d2bce7d46cdfbc7dd1944cb719f88"
+    "active_scope_hash": "sha256:8117229bd01d8f09109535b3e69f0ac1655117ead672f7c49f10b33965063a0b"
   },
   "declared_paths": [
     "docs/ao-send-transport-contract.txt",
     "docs/declarations/373.opk-48.json",
     "docs/migration_notes.md",
+    "docs/orchestrator-message-registry.mjs",
     "docs/orchestrator-recovery-runbook.md",
     "docs/worker-message-submit-reconcile.d.mts",
     "docs/worker-message-submit-reconcile.mjs",
