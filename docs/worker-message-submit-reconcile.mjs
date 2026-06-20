@@ -1515,7 +1515,7 @@ export function planWorkerMessageSubmitActions(input) {
     ) {
       continue;
     }
-    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED || survivingTerminalState === SUBMIT_STATE_NOOP) {
+    if (survivingTerminalState === SUBMIT_STATE_SUBMITTED) {
       continue;
     }
     const activeCompetingInFlight = (paneCompetingBySession.get(sessionId) ?? []).some((candidate) => {
