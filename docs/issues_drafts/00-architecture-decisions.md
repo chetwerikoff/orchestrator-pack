@@ -803,3 +803,31 @@ action is exactly `SEND` or `SUPPRESS`.
    reaction) remains out of scope. The rare at-most-once lost-ping case is acceptable only if
    `report-stale` or a named backstop is verified to surface the idle/uninformed worker;
    otherwise the residual is recorded as not fully bounded.
+
+## V. Reviewer coworker contract-mapping pass (Issue #362)
+
+Decision taken 2026-06-20: extend the restored reviewer bulk-diff coworker recipe
+with a **conditional second contract-mapping ask** when an authoritative task spec
+with testable acceptance criteria is available. This **does not** revive
+#337 (diff-read-directly-not-delegated); summarization stays delegated on large
+diffs and final review judgment stays on the main reviewer.
+
+1. **Two-pass reviewer reads.** Keep the existing >200-line diff summary ask.
+   Add a separate mapping ask only when preflight proves complete scrubbed diff +
+   contract-bearing spec sections fit the provider/input boundary.
+2. **Executable preflight owner.** `scripts/invoke-reviewer-contract-mapping.ps1`
+   (TS library under `scripts/lib/`) owns artifact finalization, finalized-file
+   hashing, structured status assembly, and coworker suppression on preparation
+   failure — not prompt prose alone.
+3. **Candidate evidence only.** Coworker mapping output is an exhaustive per-criterion
+   ledger of **candidate** gaps; severity, approval/rejection, and final verdict
+   remain non-delegable. Artifacts are untrusted data; embedded instructions cannot
+   expand paths or authorize commands.
+4. **Bounded fallback vocabulary.** One status enum per attempt (`mapped`,
+   `skipped_*`, `stale_*`, `ambiguous_spec`, `artifact_prep_failed`, etc.) with
+   deterministic precedence; mapping never blocks review availability.
+5. **Binding.** Task references resolve only from explicit review context, unique
+   closing keyword, or unique declaration/scope issue; ambiguous/conflicting refs
+   yield `ambiguous_spec`. Summary, mapping, direct inspection, and verdict bind
+   to one PR head SHA and spec snapshot hash.
+
