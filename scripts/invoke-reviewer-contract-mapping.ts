@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
+  buildStructuredStatusRecord,
   computeBoundDiffArtifactHash,
   countDiffLines,
   evaluateFinalUsability,
@@ -202,6 +203,54 @@ export function recomputeCurrentSpecHashes(
   });
 }
 
+export type SpecRereadOutcome =
+  | { ok: true; hashes: Array<{ issueNumber: number; snapshotHash: string }> }
+  | { ok: false; status: 'lookup_unavailable' | 'stale_spec' };
+
+export function tryRecomputeCurrentSpecHashes(
+  opts: CliOptions,
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>,
+): SpecRereadOutcome {
+  try {
+    const hashes = recomputeCurrentSpecHashes(opts, contractSet);
+    const hashByIssue = new Map(hashes.map((entry) => [entry.issueNumber, entry.snapshotHash] as const));
+    for (const member of contractSet) {
+      const currentHash = hashByIssue.get(member.issueNumber);
+      if (!currentHash || currentHash !== member.snapshotHash) {
+        return { ok: false, status: 'stale_spec' };
+      }
+    }
+    return { ok: true, hashes };
+  } catch {
+    return { ok: false, status: 'lookup_unavailable' };
+  }
+}
+
+export function buildSpecRereadFallbackOutput(input: {
+  status: 'lookup_unavailable' | 'stale_spec';
+  prHeadSha: string;
+  contractSet: ContractSpecMember[];
+  diffContent: string;
+  preflightStatusRecord: ContractMappingStatusRecord;
+}): {
+  status: ContractMappingStatus;
+  statusRecord: ContractMappingStatusRecord;
+  ledger: undefined;
+} {
+  const statusRecord = buildStructuredStatusRecord({
+    status: input.status,
+    prHeadSha: input.prHeadSha,
+    diffArtifactHash: computeBoundDiffArtifactHash(input.diffContent) ?? undefined,
+    members: input.contractSet,
+    staleDimensions: input.status === 'stale_spec' ? { spec: true } : undefined,
+  });
+  return {
+    status: input.status,
+    statusRecord,
+    ledger: undefined,
+  };
+}
+
 export function loadSpecBodiesFromOptions(opts: CliOptions): Array<{ issueNumber: number; body: string }> {
   const specBodies: Array<{ issueNumber: number; body: string }> = [];
   const assignments = [...opts.issueSpecs];
@@ -368,24 +417,35 @@ function main(): void {
     snapshotHash: member.snapshotHash,
   }));
   if (preflight.contractSet.length > 0) {
-    try {
-      currentSpecHashes = recomputeCurrentSpecHashes(opts, preflight.contractSet);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(2);
+    const specReread = tryRecomputeCurrentSpecHashes(opts, preflight.contractSet);
+    if (!specReread.ok) {
+      const fallback = buildSpecRereadFallbackOutput({
+        status: specReread.status,
+        prHeadSha: currentHeadSha,
+        contractSet: preflight.contractSet,
+        diffContent,
+        preflightStatusRecord: statusRecord,
+      });
+      status = fallback.status;
+      statusRecord = fallback.statusRecord;
+      ledger = fallback.ledger;
+    } else {
+      currentSpecHashes = specReread.hashes;
     }
   }
-  const finalizedOutput = applyMappedOutputFinalUsability({
-    status,
-    statusRecord,
-    ledger,
-    currentHeadSha,
-    diffContent,
-    currentSpecHashes,
-  });
-  status = finalizedOutput.status;
-  statusRecord = finalizedOutput.statusRecord;
-  ledger = finalizedOutput.ledger;
+  if (status !== 'lookup_unavailable' && status !== 'stale_spec') {
+    const finalizedOutput = applyMappedOutputFinalUsability({
+      status,
+      statusRecord,
+      ledger,
+      currentHeadSha,
+      diffContent,
+      currentSpecHashes,
+    });
+    status = finalizedOutput.status;
+    statusRecord = finalizedOutput.statusRecord;
+    ledger = finalizedOutput.ledger;
+  }
 
   const output = {
     status,

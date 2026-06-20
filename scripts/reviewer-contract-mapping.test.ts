@@ -42,6 +42,8 @@ import {
   loadSpecBodiesFromOptions,
   parseIssueSpecAssignments,
   recomputeCurrentSpecHashes,
+  tryRecomputeCurrentSpecHashes,
+  buildSpecRereadFallbackOutput,
   resolveLiveHeadSha,
 } from './invoke-reviewer-contract-mapping.js';
 
@@ -68,6 +70,11 @@ function memberFromIssue(name: string, issueNumber: number): ContractSpecMember 
     acceptanceCriteria: parseAcceptanceCriteria(extracted.sections['Acceptance criteria']),
   };
 }
+
+const satisfiedEvidence = {
+  implementationLocation: 'scripts/lib/reviewer-contract-mapping.ts',
+  testEvidence: 'scripts/reviewer-contract-mapping.test.ts',
+};
 
 describe('reviewer contract-mapping (Issue #362)', () => {
   it('collects authoritative references and ignores weak mentions', () => {
@@ -183,6 +190,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: members[0]!.snapshotHash,
         citedRequirementText: text,
         mappingStatus: idx === 0 ? 'not_found' : 'satisfied',
+        ...(idx === 0 ? {} : satisfiedEvidence),
         kind: idx === 0 ? 'hypothesis' : 'confirmed_observation',
       })),
     };
@@ -456,6 +464,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
           specSnapshotHash: prior.specSet[0]!.snapshotHash,
           citedRequirementText: 'example',
           mappingStatus: 'satisfied',
+          ...satisfiedEvidence,
           kind: 'confirmed_observation',
         },
       ],
@@ -508,6 +517,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
           specSnapshotHash: members[0]!.snapshotHash,
           citedRequirementText: members[0]!.acceptanceCriteria[0]!,
           mappingStatus: 'satisfied',
+          ...satisfiedEvidence,
           kind: 'confirmed_observation',
         },
       ],
@@ -525,6 +535,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: members[0]!.snapshotHash,
         citedRequirementText: text,
         mappingStatus: idx === 0 ? 'gap_candidate' : 'satisfied',
+        ...(idx === 0 ? {} : satisfiedEvidence),
         expectedOwningSurface: 'scripts/reviewer-helper.ts',
         verifiedAbsenceFromDiff: true,
         concreteFailureScenario: 'Required wiring never appears in the PR diff.',
@@ -586,6 +597,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: members[0]!.snapshotHash,
         citedRequirementText: text,
         mappingStatus: 'satisfied',
+        ...satisfiedEvidence,
         kind: 'confirmed_observation',
       })),
       exhaustive: true,
@@ -647,6 +659,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: 'stale-hash',
         citedRequirementText: text,
         mappingStatus: 'satisfied',
+        ...satisfiedEvidence,
         kind: 'confirmed_observation',
       })),
     };
@@ -721,6 +734,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         requirementId: String(idx + 1),
         citedRequirementText: text,
         mappingStatus: idx === 0 ? 'gap_candidate' : 'satisfied',
+        ...(idx === 0 ? {} : satisfiedEvidence),
         concreteFailureScenario: idx === 0 ? entry.concreteFailureScenario : undefined,
         kind: idx === 0 ? 'hypothesis' : 'confirmed_observation',
       })),
@@ -817,6 +831,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: members[0]!.snapshotHash,
         citedRequirementText: text,
         mappingStatus: 'satisfied',
+        ...satisfiedEvidence,
         kind: 'confirmed_observation',
       })),
     };
@@ -868,7 +883,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         entries: [{ ...base, mappingStatus: 'satisfied', kind: 'observation' }],
       }),
     ).toBeNull();
-    expect(isValidMappingCandidate({ ...base, mappingStatus: 'satisfied', kind: 'confirmed_observation' })).toBe(true);
+    expect(isValidMappingCandidate({ ...base, mappingStatus: 'satisfied', ...satisfiedEvidence, kind: 'confirmed_observation' })).toBe(true);
   });
 
   it('returns stale_head when ledger finalization head or diff binding drifts', () => {
@@ -892,6 +907,7 @@ describe('reviewer contract-mapping (Issue #362)', () => {
         specSnapshotHash: members[0]!.snapshotHash,
         citedRequirementText: text,
         mappingStatus: 'satisfied',
+        ...satisfiedEvidence,
         kind: 'confirmed_observation',
       })),
     };
@@ -957,5 +973,87 @@ describe('reviewer contract-mapping (Issue #362)', () => {
     const markers = loadPromptContractMarkers();
     expect(markers.requiredInAgentRules).toContain('candidate evidence');
     expect(markers.forbiddenInPrompts.join(' ')).toMatch(/assign severity/i);
+  });
+
+  it('rejects satisfied ledger entries without implementation or test evidence', () => {
+    const members = [memberFromIssue('issue-with-acceptance.md', 362)];
+    const ledger: MappingLedger = {
+      exhaustive: true,
+      entries: members[0]!.acceptanceCriteria.map((text, idx) => ({
+        requirementId: String(idx + 1),
+        specIssueNumber: 362,
+        specSnapshotHash: members[0]!.snapshotHash,
+        citedRequirementText: text,
+        mappingStatus: 'satisfied',
+        kind: 'confirmed_observation',
+      })),
+    };
+    expect(validateMappingLedger(ledger, members).ok).toBe(false);
+  });
+
+  it('returns lookup_unavailable when bound spec files cannot be reread', () => {
+    const opts = {
+      prBodyFile: null,
+      issueFile: path.join(fixturesDir, 'missing-on-reread.md'),
+      issuesFile: null,
+      issueSpecs: [],
+      diffFile: null,
+      changedPathsFile: null,
+      explicitIssue: 362,
+      declarationIssue: null,
+      prHeadSha: null,
+      ledgerFile: null,
+      invokeCoworker: false,
+      json: true,
+      lookupAvailable: true,
+      coworkerAvailable: true,
+    };
+    const outcome = tryRecomputeCurrentSpecHashes(opts, [
+      { issueNumber: 362, snapshotHash: 'bound-hash' },
+    ]);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.status).toBe('lookup_unavailable');
+    }
+  });
+
+  it('returns stale_spec when reread hash drifts from the bound snapshot', () => {
+    const opts = {
+      prBodyFile: null,
+      issueFile: path.join(fixturesDir, 'issue-with-acceptance.md'),
+      issuesFile: null,
+      issueSpecs: [],
+      diffFile: null,
+      changedPathsFile: null,
+      explicitIssue: 362,
+      declarationIssue: null,
+      prHeadSha: null,
+      ledgerFile: null,
+      invokeCoworker: false,
+      json: true,
+      lookupAvailable: true,
+      coworkerAvailable: true,
+    };
+    const outcome = tryRecomputeCurrentSpecHashes(opts, [
+      { issueNumber: 362, snapshotHash: 'stale-bound-hash' },
+    ]);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.status).toBe('stale_spec');
+    }
+    const fallback = buildSpecRereadFallbackOutput({
+      status: 'stale_spec',
+      prHeadSha: 'head-sha',
+      contractSet: [memberFromIssue('issue-with-acceptance.md', 362)],
+      diffContent: fixture('small.diff'),
+      preflightStatusRecord: buildStructuredStatusRecord({
+        status: 'mapped',
+        prHeadSha: 'head-sha',
+        members: [memberFromIssue('issue-with-acceptance.md', 362)],
+      }),
+    });
+    expect(fallback.status).toBe('stale_spec');
+    expect(fallback.statusRecord.usability).toBe('not_usable');
+    expect(fallback.ledger).toBeUndefined();
   });
 });

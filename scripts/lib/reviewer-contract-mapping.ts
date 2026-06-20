@@ -923,6 +923,13 @@ export function validateMappingLedger(
     ) {
       return { ok: false, status: 'malformed' };
     }
+    if (
+      entry.mappingStatus === 'satisfied' &&
+      !entry.implementationLocation?.trim() &&
+      !entry.testEvidence?.trim()
+    ) {
+      return { ok: false, status: 'malformed' };
+    }
 
     if (isMissingTestClaim(entry)) {
       if (context?.ambiguousTestLike?.length) {
