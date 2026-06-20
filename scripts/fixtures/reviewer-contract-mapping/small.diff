@@ -1,0 +1,10 @@
+diff --git a/scripts/example.ts b/scripts/example.ts
+index 1111111..2222222 100644
+--- a/scripts/example.ts
++++ b/scripts/example.ts
+@@ -1,3 +1,5 @@
++export function example() {
++  return 1;
++}
++// filler line 0
++// filler line 1
