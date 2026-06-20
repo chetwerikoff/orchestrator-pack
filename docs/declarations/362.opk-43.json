@@ -5,8 +5,8 @@
   "supersedes": null,
   "created_at": "2026-06-20T06:06:20.792Z",
   "baseline": {
-    "commit_sha": "bd7815fcb81cbd08b266383a116dd5cb40da4f5a",
-    "worktree_dirty": true,
+    "commit_sha": "5d488379449bd7b86eb094db06d19e1ace4b2762",
+    "worktree_dirty": false,
     "active_scope_hash": "sha256:714ec031443c25a5ca8515d82c243bf978e5547130f9e7e1f0eea8c2f3855fb5"
   },
   "declared_paths": [
