@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-06-21T03:39:42.289Z",
   "baseline": {
-    "commit_sha": "309e702c67ae3045e550099f593b2f56f03a561e",
+    "commit_sha": "e7cb6784a77ea7ebd33507a6d7acadc9aba5613e",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:885f018328db41e616d0d10a35ab09c4acd5a4b66528a16cc2b2b5bedb40fa57"
   },
@@ -13,6 +13,7 @@
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
     "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
+    "scripts/lib/Record-ReviewTriggerReevalWatch.ps1",
     "scripts/check-review-wake-trigger.ps1",
     "docs/orchestrator-wake-filter.mjs",
     "docs/orchestrator-wake-filter.d.mts",
@@ -21,6 +22,8 @@
     "docs/review-handoff-wake-admission.mjs",
     "docs/review-handoff-wake-admission.d.mts",
     "docs/review-handoff-wake-admission.d.ts",
+    "docs/review-trigger-reeval.mjs",
+    "docs/review-trigger-reeval.d.mts",
     "docs/review-trigger-reconcile.d.mts",
     "docs/orchestrator-message-registry.mjs",
     "AGENTS.md",
