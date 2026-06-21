@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-06-21T00:00:00.000Z",
   "baseline": {
-    "commit_sha": "7feef09758cf69613bf9e24d35a5d2d15715a717",
+    "commit_sha": "ae29676466782e9769846d43a754b0c9ba958d9b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ef110014c454f86221ec84b03dfd216bacddf0f65e5be960a894d435bf4f41fd"
+    "active_scope_hash": "sha256:c515e220db7cf7b8b65b95092cedb60bc5396216305a883486490d88ebdb1745"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -40,6 +40,7 @@
     "scripts/orchestrator-message-catalog.json",
     "scripts/review-send-reconcile.ps1",
     "scripts/verify.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worker-nudge-gate-preflight.ps1",
     "scripts/worker-nudge-gate.test.ts",
     "tests/fixtures/worker-nudge-gate/opk-rev-689.json"
