@@ -143,10 +143,10 @@ const EDIT_TOOL_NAMES = new Set([
 const SHELL_TOOL_NAMES = new Set(['Shell', 'shell', 'run_terminal_cmd', 'Bash', 'bash']);
 
 const DIFF_LOG_SHELL_PATTERN =
-  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b)/i;
+  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b)/i;
 
-const SHELL_READ_AROUND_PATTERN =
-  /\b(head|tail|cat|sed|awk|python\d*|perl|grep|wc)\b/i;
+const SHELL_CHUNK_READ_PATTERN = /\b(head|tail|cat|sed|awk|grep|wc)\b/i;
+const SHELL_SCRIPT_READ_PATTERN = /\b(?:open|read|Path)\s*\(/i;
 
 const LOCK_RETRY_MS = 5;
 const LOCK_MAX_ATTEMPTS = 200;
@@ -412,7 +412,13 @@ export function isShellReadAroundCommand(command) {
   if (/\bgit\s+(diff|log|show)\b/i.test(trimmed)) {
     return false;
   }
-  return SHELL_READ_AROUND_PATTERN.test(trimmed);
+  if (SHELL_CHUNK_READ_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (/\b(?:python\d*|perl)\b/i.test(trimmed)) {
+    return SHELL_SCRIPT_READ_PATTERN.test(trimmed);
+  }
+  return false;
 }
 
 /**
@@ -1111,12 +1117,12 @@ export function inferShellReadAroundLines(command, capturedOutput, filePath) {
   }
 
   const trimmed = String(command ?? '').trim();
-  const headTail = trimmed.match(/(?:head|tail)(?:\s+-n)?\s+(\d+)/i);
+  const headTail = trimmed.match(/\b(?:head|tail)\b(?:\s+-n)?\s+(\d+)\b/i);
   if (headTail) {
     return Number(headTail[1]);
   }
 
-  const sedRange = trimmed.match(/sed\s+-n\s+['"]?(\d+),(\d+)p['"]?/i);
+  const sedRange = trimmed.match(/\bsed\s+-n\s+['"]?(\d+),(\d+)p['"]?/i);
   if (sedRange) {
     return Number(sedRange[2]) - Number(sedRange[1]) + 1;
   }
@@ -1126,6 +1132,21 @@ export function inferShellReadAroundLines(command, capturedOutput, filePath) {
   }
 
   return 0;
+}
+
+/**
+ * @param {string} command
+ * @param {string} filePath
+ */
+function inferShellReadAroundReadKind(command, filePath) {
+  const trimmed = String(command ?? '').trim();
+  if (/\btail\b/i.test(trimmed)) {
+    return 'log';
+  }
+  if (/\.log$/i.test(filePath)) {
+    return 'log';
+  }
+  return 'file';
 }
 
 /**
@@ -1144,7 +1165,11 @@ export function inferShellReadAroundRead(command, capturedOutput) {
   if (lines <= 0) {
     return null;
   }
-  return { path: filePath, lines };
+  return {
+    path: filePath,
+    lines,
+    readKind: inferShellReadAroundReadKind(command, filePath),
+  };
 }
 
 /**
@@ -1326,7 +1351,7 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
         inboundRequestId,
         path: readAround.path,
         lines: readAround.lines,
-        readKind: 'file',
+        readKind: readAround.readKind,
       });
     }
     const diffLogLines = measureShellDiffLogLines(command, options.shellOutput);

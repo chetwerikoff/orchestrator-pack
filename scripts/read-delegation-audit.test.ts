@@ -859,17 +859,18 @@ describe('Claude and shell transcript compatibility', () => {
     expect(events.some((event) => event.readKind === 'diff' && event.lines === 250)).toBe(true);
   });
 
-  it('counts non-follow tail log reads from captured shell output', () => {
-    const captured = Array.from({ length: 300 }, (_, index) => `log-line-${index + 1}`).join('\n');
-    expect(measureShellDiffLogLines('tail -n 300 app.log', captured)).toBe(300);
+  it('classifies tail log shell reads as advisory on Cursor', () => {
+    const captured = Array.from({ length: 450 }, (_, index) => `log-line-${index + 1}`).join('\n');
+    expect(measureShellDiffLogLines('tail -n 450 /tmp/app.log', captured)).toBe(0);
 
     const events = toolUseToAuditEvents(
       'Shell',
-      { command: 'tail -n 300 app.log' },
+      { command: 'tail -n 450 /tmp/app.log' },
       'req-tail',
       { shellOutput: captured },
     );
-    expect(events.some((event) => event.readKind === 'diff' && event.lines === 300)).toBe(true);
+    expect(events.some((event) => event.readKind === 'log' && event.lines === 450)).toBe(true);
+    expect(events.some((event) => event.readKind === 'diff')).toBe(false);
 
     const result = evaluateStopAudit({
       surface: 'cursor',
@@ -879,8 +880,9 @@ describe('Claude and shell transcript compatibility', () => {
         workUnitKey: 'unit-tail',
       }))),
     }) as StopAuditResult;
-    expect(result.verdicts[0].trigger.diffLog).toBe(true);
-    expect(result.verdicts[0].flagged).toBe(true);
+    expect(result.verdicts[0].advisory).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(false);
+    expect(result.verdicts[0].shellReadAround).toBe(true);
   });
 
   it('keeps tool_result user messages inside the same work unit', () => {
@@ -1102,6 +1104,27 @@ describe('stop hook transcript population', () => {
     expect(result.summary.advisoryUnits).toBe(1);
   });
 
+  it('uses bounded head -n counts instead of full-file fallback', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-bounded-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const inferred = inferShellReadAroundRead(`head -n 10 ${readPath}`);
+    expect(inferred).toEqual({ path: readPath, lines: 10, readKind: 'file' });
+  });
+
+  it('does not treat ordinary python script execution as a synthetic read', () => {
+    expect(inferShellReadAroundRead('python scripts/read-delegation-audit.test.ts')).toBeNull();
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command: 'python scripts/read-delegation-audit.test.ts' },
+      'req-python-exec',
+    );
+    expect(events.some((event) => event.kind === 'read')).toBe(false);
+  });
+
   it('infers shell read-around reads from head -n without captured output when path exists', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-infer-'));
     const readPath = path.join(dir, 'tracked-draft.md');
@@ -1111,7 +1134,7 @@ describe('stop hook transcript population', () => {
     );
     const command = `head -n 450 ${readPath}`;
     const inferred = inferShellReadAroundRead(command);
-    expect(inferred).toEqual({ path: readPath, lines: 450 });
+    expect(inferred).toEqual({ path: readPath, lines: 450, readKind: 'file' });
     const events = toolUseToAuditEvents('Shell', { command }, 'req-shell-read-around');
     expect(events.some((event) => event.kind === 'read' && event.path === readPath)).toBe(true);
   });

@@ -222,7 +222,7 @@ export declare function inferShellReadAroundLines(
 export declare function inferShellReadAroundRead(
   command: string,
   capturedOutput?: unknown,
-): { path: string; lines: number } | null;
+): { path: string; lines: number; readKind: string } | null;
 export declare function isInboundUserRequest(record: unknown): boolean;
 export declare function buildTranscriptToolResultIndex(
   records: Array<Record<string, unknown>>,
