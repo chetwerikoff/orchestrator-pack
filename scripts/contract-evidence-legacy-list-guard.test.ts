@@ -9,7 +9,10 @@ import {
   loadLegacyPathSet,
 } from './contract-evidence-path.mjs';
 import { checkContractEvidence } from './contract-evidence.mjs';
-import { runLegacyListGuardWorkflowOrderingCheck } from './check-legacy-list-guard-workflow-ordering.mjs';
+import {
+  runLegacyListGuardWorkflowOrderingCheck,
+  validateLegacyListGuardWorkflowOrdering,
+} from './check-legacy-list-guard-workflow-ordering.mjs';
 import {
   AUTHORIZATIONS_REL_PATH,
   GOVERNED_MANIFEST_REL_PATH,
@@ -23,6 +26,8 @@ import {
   loadGovernedManifest,
   validateBaseAndHeadManifestClosure,
   validateManifestClosure,
+  collectEntrypointDependencyClosure,
+  extractLocalModuleSpecs,
 } from './contract-evidence-legacy-list-guard.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -137,7 +142,18 @@ describe('legacy-list guard path canonicalizer', () => {
     ]));
     expect(duplicate.ok).toBe(false);
   });
+
+  it('rejects absolute and escaping paths outside repo-relative form', () => {
+    expect(canonicalLegacyDraftPath('/docs/issues_drafts/x.md')).toBeNull();
+    expect(canonicalLegacyDraftPath('../docs/issues_drafts/x.md')).toBeNull();
+    expect(canonicalLegacyDraftPath('docs/a/../x.md')).toBeNull();
+    const escaping = loadLegacyPathSet(legacyListWithPaths(['docs/a/../x.md']));
+    expect(escaping.ok).toBe(false);
+    const absolute = loadLegacyPathSet(legacyListWithPaths(['/docs/issues_drafts/x.md']));
+    expect(absolute.ok).toBe(false);
+  });
 });
+
 
 describe('legacy-list guard evaluateLegacyListGuard', () => {
   it('AC1 fails unauthorized path addition with actionable message', () => {
@@ -318,6 +334,31 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('AC11 rejects executable PR-head steps before trusted guard completes', () => {
+    const malicious = `name: contract-evidence-legacy-list-guard
+on:
+  pull_request_target:
+    types: [opened]
+jobs:
+  contract-evidence-legacy-list-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+      - name: Checkout trusted legacy list guard (base ref)
+        uses: actions/checkout@v4
+        with:
+          path: trusted-legacy-list-guard
+      - name: Run attacker script from PR head
+        run: node scripts/evil.mjs
+      - name: Run legacy list guard from trusted entrypoint
+        run: node trusted-legacy-list-guard/scripts/run-contract-evidence-legacy-list-guard.mjs
+`;
+    const result = validateLegacyListGuardWorkflowOrdering(malicious);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toMatch(/must not run before trusted guard/);
+  });
+
   it('AC12 rejects stale authorization binding on base SHA', () => {
     const match = findMatchingAuthorization([{
       baseSha: 'other-base',
@@ -479,6 +520,27 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const closure = validateManifestClosure(repoRoot, broken);
     expect(closure.ok).toBe(false);
     expect(closure.errors.join('\n')).toMatch(/entrypoint dependency/);
+  });
+
+  it('collects dynamic import and require dependencies in entrypoint closure', () => {
+    const dir = mkdtempSync(path.join(repoRoot, '.tmp-legacy-list-closure-'));
+    try {
+      mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+      writeFileSync(path.join(dir, 'scripts/helper.mjs'), 'export const helper = 1;\n');
+      writeFileSync(path.join(dir, 'scripts/other.cjs'), 'module.exports = {};\n');
+      writeFileSync(
+        path.join(dir, 'scripts/entry.mjs'),
+        "import('./helper.mjs');\nconst dynamic = import('./helper.mjs');\nrequire('./other.cjs');\n",
+      );
+      expect(extractLocalModuleSpecs(readFileSync(path.join(dir, 'scripts/entry.mjs'), 'utf8'))).toEqual(
+        expect.arrayContaining(['./helper.mjs', './other.cjs']),
+      );
+      const closure = collectEntrypointDependencyClosure(dir, 'scripts/entry.mjs');
+      expect(closure.has('scripts/helper.mjs')).toBe(true);
+      expect(closure.has('scripts/other.cjs')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('validates governed manifest closure on trusted root', () => {

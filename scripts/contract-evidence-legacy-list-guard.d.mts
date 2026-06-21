@@ -42,6 +42,8 @@ export function validateBaseAndHeadManifestClosure(
 
 export function resolveRelativeImport(fromRel: string, spec: string): string;
 
+export function extractLocalModuleSpecs(content: string): string[];
+
 export function collectEntrypointDependencyClosure(
   trustedRoot: string,
   entrypointRel: string,

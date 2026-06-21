@@ -9,6 +9,69 @@ import path from 'node:path';
 export const LEGACY_LIST_GUARD_WORKFLOW_REL_PATH = '.github/workflows/contract-evidence-legacy-list-guard.yml';
 
 /**
+ * @param {string} job
+ * @returns {{ name: string, body: string }[]}
+ */
+export function extractLegacyListGuardJobSteps(job) {
+  const lines = job.split('\n');
+  let stepsLineIndex = -1;
+  let stepsIndent = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^([ \t]+)steps:\s*$/);
+    if (match) {
+      stepsLineIndex = index;
+      stepsIndent = match[1].length;
+      break;
+    }
+  }
+  if (stepsLineIndex < 0) {
+    return [];
+  }
+
+  /** @type {string[]} */
+  const stepLines = [];
+  for (let index = stepsLineIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === '') {
+      stepLines.push(line);
+      continue;
+    }
+    const indent = line.match(/^([ \t]*)/)?.[1].length ?? 0;
+    if (indent <= stepsIndent) {
+      break;
+    }
+    stepLines.push(line);
+  }
+
+  /** @type {{ name: string, body: string }[]} */
+  const steps = [];
+  const block = stepLines.join('\n');
+  const parts = block.split(/\n(?=[ \t]*- name:)/);
+  for (const part of parts) {
+    const nameMatch = part.match(/- name:\s*(.+)/);
+    if (!nameMatch) {
+      continue;
+    }
+    steps.push({ name: nameMatch[1].trim(), body: part });
+  }
+  return steps;
+}
+
+/**
+ * @param {string} stepBody
+ */
+function isTrustedGuardStep(stepBody) {
+  return /run-contract-evidence-legacy-list-guard\.mjs/.test(stepBody);
+}
+
+/**
+ * @param {string} stepBody
+ */
+function isAllowedCheckoutStep(stepBody) {
+  return /uses:\s*actions\/checkout@v4/.test(stepBody) && !/^\s+run:/m.test(stepBody);
+}
+
+/**
  * @param {string} workflowContent
  */
 export function validateLegacyListGuardWorkflowOrdering(workflowContent) {
@@ -25,45 +88,49 @@ export function validateLegacyListGuardWorkflowOrdering(workflowContent) {
     return { ok: false, errors };
   }
   const job = jobMatch[0];
-  const trustedCheckout = /Checkout trusted legacy list guard \(base ref\)/.test(job);
-  const prHeadCheckout = /Checkout PR head/.test(job);
-  const runGuard = /run-contract-evidence-legacy-list-guard\.mjs/.test(job);
-  const trustedPath = /trusted-legacy-list-guard/.test(job);
-  const privilegedBeforeGuard = /LEGACY_LIST_GUARD_AUTH_SECRET[\s\S]*run-contract-evidence-legacy-list-guard/.test(job);
+  const steps = extractLegacyListGuardJobSteps(job);
+  const guardIndex = steps.findIndex((step) => isTrustedGuardStep(step.body));
 
-  if (!prHeadCheckout) {
+  if (!steps.some((step) => /Checkout PR head/.test(step.name))) {
     errors.push('job must checkout PR head');
   }
-  if (!trustedCheckout) {
+  if (!steps.some((step) => /Checkout trusted legacy list guard/.test(step.name))) {
     errors.push('job must checkout trusted base guard before evaluation');
   }
-  if (!runGuard) {
+  if (guardIndex < 0) {
     errors.push('job must invoke pinned run-contract-evidence-legacy-list-guard.mjs entrypoint');
   }
-  if (!trustedPath) {
+  if (!/trusted-legacy-list-guard/.test(job)) {
     errors.push('job must run guard from trusted-legacy-list-guard path');
   }
   if (/LEGACY_LIST_GUARD_BOOTSTRAP/.test(job)) {
     errors.push('job must not expose reusable bootstrap environment override');
   }
-  if (privilegedBeforeGuard) {
+  if (/LEGACY_LIST_GUARD_AUTH_SECRET[\s\S]*run-contract-evidence-legacy-list-guard/.test(job)) {
     errors.push('privileged auth material must not appear before trusted guard step');
   }
   if (/npm run[\s\S]*legacy-list/.test(job)) {
     errors.push('job must not route guard through PR-head npm script indirection');
   }
 
-  const stepLines = job.split('\n');
-  let trustedIndex = -1;
-  let guardIndex = -1;
-  for (let index = 0; index < stepLines.length; index += 1) {
-    if (stepLines[index]?.includes('Checkout trusted legacy list guard')) {
-      trustedIndex = index;
-    }
-    if (stepLines[index]?.includes('run-contract-evidence-legacy-list-guard.mjs')) {
-      guardIndex = index;
+  if (guardIndex >= 0) {
+    for (let index = 0; index < guardIndex; index += 1) {
+      const step = steps[index];
+      if (/^\s+run:/m.test(step.body)) {
+        errors.push(
+          `executable step "${step.name}" must not run before trusted guard completes`,
+        );
+        continue;
+      }
+      if (!isAllowedCheckoutStep(step.body)) {
+        errors.push(
+          `step "${step.name}" before trusted guard must be actions/checkout@v4 only`,
+        );
+      }
     }
   }
+
+  const trustedIndex = steps.findIndex((step) => /Checkout trusted legacy list guard/.test(step.name));
   if (trustedIndex >= 0 && guardIndex >= 0 && trustedIndex > guardIndex) {
     errors.push('trusted base checkout must precede guard invocation');
   }

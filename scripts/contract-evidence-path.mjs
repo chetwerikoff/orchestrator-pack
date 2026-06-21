@@ -16,17 +16,37 @@ export function canonicalLegacyDraftPath(input) {
     return null;
   }
   let normalized = input.replace(/\\/g, '/').trim();
+  if (!normalized || normalized === '.') {
+    return null;
+  }
+  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) {
+    return null;
+  }
   while (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
+  }
+  if (!normalized || normalized === '..' || normalized.startsWith('../')) {
+    return null;
   }
   normalized = normalized.replace(/\/+/g, '/');
   if (normalized.length > 1 && normalized.endsWith('/')) {
     normalized = normalized.replace(/\/+$/, '');
   }
-  if (!normalized || normalized === '.') {
+  /** @type {string[]} */
+  const resolved = [];
+  for (const segment of normalized.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      return null;
+    }
+    resolved.push(segment);
+  }
+  if (resolved.length === 0) {
     return null;
   }
-  return normalized;
+  return resolved.join('/');
 }
 
 /**

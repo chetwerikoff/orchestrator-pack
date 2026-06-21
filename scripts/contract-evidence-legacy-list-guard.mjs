@@ -16,7 +16,32 @@ export const AUTHORIZATIONS_REL_PATH = 'scripts/contract-evidence-legacy-authori
 export const GUARD_MODULE_REL_PATH = 'scripts/contract-evidence-legacy-list-guard.mjs';
 export const VERDICT_BINDING_ID = 'orchestrator-pack:legacy-list-guard-verdict';
 
-const LOCAL_IMPORT_RE = /(?:import|export)\s+(?:[^'";]*?from\s+)?['"](\.\.?\/[^'"]+)['"]/g;
+const LOCAL_MODULE_IMPORT_PATTERNS = [
+  /(?:import|export)\s+(?:[^'";]*?from\s+)?['"](\.\.?\/[^'"]+)['"]/g,
+  /import\s*\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+  /require\s*\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+];
+
+/**
+ * @param {string} content
+ * @returns {string[]}
+ */
+export function extractLocalModuleSpecs(content) {
+  /** @type {string[]} */
+  const specs = [];
+  for (const pattern of LOCAL_MODULE_IMPORT_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match = pattern.exec(content);
+    while (match) {
+      const spec = match[1];
+      if (spec) {
+        specs.push(spec);
+      }
+      match = pattern.exec(content);
+    }
+  }
+  return specs;
+}
 
 /**
  * @param {string} fromRel
@@ -25,7 +50,7 @@ const LOCAL_IMPORT_RE = /(?:import|export)\s+(?:[^'";]*?from\s+)?['"](\.\.?\/[^'
 export function resolveRelativeImport(fromRel, spec) {
   const fromDir = path.posix.dirname(fromRel.replace(/\\/g, '/'));
   let resolved = path.posix.normalize(path.posix.join(fromDir, spec.replace(/\\/g, '/')));
-  if (!resolved.endsWith('.mjs') && !resolved.endsWith('.json') && !resolved.endsWith('.mts')) {
+  if (!/\.(?:mjs|cjs|json|mts)$/.test(resolved)) {
     resolved = `${resolved}.mjs`;
   }
   return resolved;
@@ -52,14 +77,11 @@ export function collectEntrypointDependencyClosure(trustedRoot, entrypointRel) {
     }
     closure.add(rel);
     const content = readFileSync(full, 'utf8');
-    LOCAL_IMPORT_RE.lastIndex = 0;
-    let match = LOCAL_IMPORT_RE.exec(content);
-    while (match) {
-      const resolved = resolveRelativeImport(rel, match[1] ?? '');
+    for (const spec of extractLocalModuleSpecs(content)) {
+      const resolved = resolveRelativeImport(rel, spec);
       if (!closure.has(resolved)) {
         queue.push(resolved);
       }
-      match = LOCAL_IMPORT_RE.exec(content);
     }
   }
 
