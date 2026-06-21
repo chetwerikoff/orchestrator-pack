@@ -110,11 +110,17 @@ function Resolve-TrustedPackRoot {
     )
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
-        return (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
+        return @{
+            Path                  = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
+            DisposableTrustedRoot = $false
+        }
     }
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
-        return (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+        return @{
+            Path                  = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+            DisposableTrustedRoot = $false
+        }
     }
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
@@ -122,7 +128,10 @@ function Resolve-TrustedPackRoot {
     if ($mainWorktree) {
         $checker = Join-Path $mainWorktree $BootstrapCheckerRelativePath
         if ((Test-Path -LiteralPath $checker) -and (Test-TrustedMainWorktreeEligible -MainWorktreePath $mainWorktree -ReviewTargetRoot $resolvedReviewTarget -BaseRef $BaseRef)) {
-            return (Resolve-Path -LiteralPath $mainWorktree).Path
+            return @{
+                Path                  = (Resolve-Path -LiteralPath $mainWorktree).Path
+                DisposableTrustedRoot = $false
+            }
         }
     }
 
@@ -130,7 +139,10 @@ function Resolve-TrustedPackRoot {
     if ($archiveRoot) {
         $checker = Join-Path $archiveRoot $BootstrapCheckerRelativePath
         if (Test-Path -LiteralPath $checker) {
-            return $archiveRoot
+            return @{
+                Path                  = $archiveRoot
+                DisposableTrustedRoot = $true
+            }
         }
         Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -147,13 +159,15 @@ function Resolve-TrustedPackRunner {
         [string]$RunnerRelativePath = 'scripts/invoke-contract-evidence-reverify.ts'
     )
 
-    $trustedRoot = Resolve-TrustedPackRoot -ReviewTargetRoot $ReviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
+    $resolved = Resolve-TrustedPackRoot -ReviewTargetRoot $ReviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
+    $trustedRoot = $resolved.Path
     $runner = Join-Path $trustedRoot $RunnerRelativePath
     if (-not (Test-Path -LiteralPath $runner)) {
         throw "missing trusted runner at $runner"
     }
     return @{
-        TrustedBaseRoot = $trustedRoot
-        RunnerPath      = $runner
+        TrustedBaseRoot         = $trustedRoot
+        RunnerPath              = $runner
+        DisposableTrustedRoot   = [bool]$resolved.DisposableTrustedRoot
     }
 }

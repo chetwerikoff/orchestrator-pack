@@ -16,4 +16,19 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'git rev-parse \$BaseRef'
         $content | Should -Match 'Test-TrustedMainWorktreeEligible -MainWorktreePath'
     }
+
+    It 'marks archive checkout trusted roots as disposable for cleanup' {
+        $content = Get-Content -LiteralPath $script:ResolveTrustedPackRootScript -Raw
+        $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$true'
+        $content | Should -Match 'New-TrustedPackArchiveCheckout'
+        $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$false'
+    }
+
+    It 'invoke wrapper cleans up disposable trusted archive checkouts in finally' {
+        $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
+        $content = Get-Content -LiteralPath $invokeScript -Raw
+        $content | Should -Match 'DisposableTrustedRoot'
+        $content | Should -Match 'Remove-Item -LiteralPath \$trustedBaseRoot -Recurse -Force'
+        $content | Should -Match 'finally'
+    }
 }

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   REVERIFY_REASONS,
@@ -66,7 +67,50 @@ function baseInput(snapshotBody: string, overrides: Record<string, unknown> = {}
   };
 }
 
+
+function shouldExcludeFromArchiveTrustedRootCopy(sourceRoot: string, src: string): boolean {
+  const rel = path.relative(sourceRoot, src);
+  if (!rel) {
+    return false;
+  }
+  if (rel === '.git' || rel.startsWith(`.git${path.sep}`)) {
+    return true;
+  }
+  return rel === 'node_modules' || rel.startsWith(`node_modules${path.sep}`);
+}
+
+function createArchiveTrustedRootFixture(): string {
+  const archiveRoot = mkdtempSync(path.join(tmpdir(), 'reverify-archive-trusted-'));
+  cpSync(packRoot, archiveRoot, {
+    recursive: true,
+    filter: (src) => !shouldExcludeFromArchiveTrustedRootCopy(packRoot, src),
+  });
+  return archiveRoot;
+}
+
 describe('contract-evidence reverify (Issue #376)', () => {
+
+  it('archive trusted root without .git gets live capture verification when sandbox available', () => {
+    if (!prHeadFullSandboxAvailable) {
+      return;
+    }
+    const archiveTrustedRoot = createArchiveTrustedRootFixture();
+    try {
+      expect(existsSync(path.join(archiveTrustedRoot, '.git'))).toBe(false);
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md'), {
+        trustedBaseRoot: archiveTrustedRoot,
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'verified',
+        verificationMode: 'live',
+        producerVerified: true,
+      });
+      expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
+    } finally {
+      rmSync(archiveTrustedRoot, { recursive: true, force: true });
+    }
+  });
+
   it('AC1: live capture row still matching emits verified/live', () => {
     const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md')));
     expect(result.runOutcome).toBe('rows-evaluated');

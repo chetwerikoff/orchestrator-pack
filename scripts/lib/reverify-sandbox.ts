@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -123,8 +123,37 @@ function bwrapAvailable(): boolean {
   return probe.status === 0;
 }
 
+
+function shouldExcludeFromDirectoryCopy(sourceRoot: string, src: string): boolean {
+  const rel = path.relative(sourceRoot, src);
+  if (!rel) {
+    return false;
+  }
+  return rel === '.git' || rel.startsWith(`.git${path.sep}`);
+}
+
+function copyDirectoryTree(sourceRoot: string, dest: string): boolean {
+  try {
+    cpSync(sourceRoot, dest, {
+      recursive: true,
+      filter: (src) => !shouldExcludeFromDirectoryCopy(sourceRoot, src),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function createDisposableWorktreeCopy(cwd: string): string | null {
   const dest = mkdtempSync(path.join(tmpdir(), 'reverify-sandbox-wt-'));
+  if (!existsSync(path.join(cwd, '.git'))) {
+    if (!copyDirectoryTree(cwd, dest)) {
+      rmSync(dest, { recursive: true, force: true });
+      return null;
+    }
+    return dest;
+  }
+
   const archive = spawnSync('git', ['archive', 'HEAD'], {
     cwd,
     shell: false,

@@ -58,6 +58,8 @@ detail: $Detail
 "@ | Write-Output
 }
 
+$trustedBaseRoot = $null
+$disposableTrustedRoot = $false
 try {
     $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
 }
@@ -72,6 +74,7 @@ catch {
 }
 $trustedBaseRoot = $trusted.TrustedBaseRoot
 $runner = $trusted.RunnerPath
+$disposableTrustedRoot = [bool]$trusted.DisposableTrustedRoot
 
 $args = @(
     $runner,
@@ -97,12 +100,19 @@ if ($SimulateCrashAfterRow -ge 0) {
 if ($ForceProducerUnreachable) { $args += '--force-producer-unreachable' }
 if ($Summary -or $Text) { $args += '--summary' }
 
-Push-Location $reviewTargetRoot
 try {
-    $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'invoke-contract-evidence-reverify.ps1'
-    & node --import $tsxImport @args
-    exit $LASTEXITCODE
+    Push-Location $reviewTargetRoot
+    try {
+        $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'invoke-contract-evidence-reverify.ps1'
+        & node --import $tsxImport @args
+        exit $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
 }
 finally {
-    Pop-Location
+    if ($disposableTrustedRoot -and -not [string]::IsNullOrWhiteSpace($trustedBaseRoot)) {
+        Remove-Item -LiteralPath $trustedBaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
