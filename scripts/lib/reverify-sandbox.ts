@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -32,7 +32,7 @@ const SECRET_ENV_PREFIXES = [
   'NODE_AUTH_TOKEN',
 ];
 
-const READONLY_HOST_BINDS = ['/usr', '/bin', '/lib', '/lib64', '/etc/resolv.conf'];
+const READONLY_HOST_BINDS = ['/usr', '/bin', '/lib', '/lib64', '/etc/resolv.conf', '/snap'];
 
 function captureWorktreeFingerprint(cwd: string): string {
   const result = spawnSync('git', ['status', '--porcelain'], {
@@ -60,7 +60,7 @@ function buildIsolatedEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
   const isolatedHome = mkdtempSync(path.join(tmpdir(), 'reverify-home-'));
   const isolatedTmp = mkdtempSync(path.join(tmpdir(), 'reverify-tmp-'));
   const nodeBin = path.dirname(process.execPath);
-  const pathEntries = [nodeBin, '/usr/local/bin', '/usr/bin', '/bin'].filter((entry) => entry);
+  const pathEntries = [nodeBin, '/snap/bin', '/usr/local/bin', '/usr/bin', '/bin'].filter((entry) => entry);
   const env: NodeJS.ProcessEnv = {
     PATH: pathEntries.join(path.delimiter),
     HOME: isolatedHome,
@@ -115,6 +115,28 @@ function bwrapAvailable(): boolean {
   return probe.status === 0;
 }
 
+function createDisposableWorktreeCopy(cwd: string): string | null {
+  const dest = mkdtempSync(path.join(tmpdir(), 'reverify-sandbox-wt-'));
+  const archive = spawnSync('git', ['archive', 'HEAD'], {
+    cwd,
+    shell: false,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (archive.status !== 0 || !archive.stdout || !(archive.stdout as Buffer).length) {
+    rmSync(dest, { recursive: true, force: true });
+    return null;
+  }
+  const extract = spawnSync('tar', ['-x', '-C', dest], {
+    input: archive.stdout as Buffer,
+    shell: false,
+  });
+  if (extract.status !== 0) {
+    rmSync(dest, { recursive: true, force: true });
+    return null;
+  }
+  return dest;
+}
+
 function spawnWithBwrap(
   resolved: ResolvedAllowlistedCommand,
   payload: {
@@ -161,32 +183,21 @@ function spawnWithBwrap(
   return spawnSync('bwrap', args, payload);
 }
 
-function spawnWithNetworkNamespace(
+function remapResolvedCommandForDisposable(
   resolved: ResolvedAllowlistedCommand,
-  payload: {
-    cwd: string;
-    encoding: 'utf8';
-    timeout: number;
-    env: NodeJS.ProcessEnv;
-    shell: false;
-  },
-): SpawnSyncReturns<string> {
-  return spawnSync(
-    'unshare',
-    ['-U', '-n', '-r', resolved.executable, ...resolved.args],
-    payload,
-  );
-}
-
-function networkNamespaceSpawnFailed(result: SpawnSyncReturns<string>): boolean {
-  if (result.error) {
-    return true;
-  }
-  if (result.status !== 0) {
-    return true;
-  }
-  const stderr = result.stderr ?? '';
-  return stderr.includes(NETWORK_SANDBOX_UNAVAILABLE);
+  originalCwd: string,
+  disposableCwd: string,
+): ResolvedAllowlistedCommand {
+  const remappedArgs = resolved.args.map((arg) => {
+    if (path.isAbsolute(arg) && arg.startsWith(originalCwd)) {
+      return path.join(disposableCwd, path.relative(originalCwd, arg));
+    }
+    return arg;
+  });
+  return {
+    ...resolved,
+    args: remappedArgs,
+  };
 }
 
 function spawnPrHeadIsolated(
@@ -197,31 +208,33 @@ function spawnPrHeadIsolated(
     env: NodeJS.ProcessEnv;
   },
 ): SpawnSyncReturns<string> {
+  if (process.platform !== 'linux' || !bwrapAvailable()) {
+    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
+  }
+
+  const disposable = createDisposableWorktreeCopy(options.cwd);
+  if (!disposable) {
+    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
+  }
+
+  const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
   const payload = {
-    cwd: options.cwd,
+    cwd: disposable,
     encoding: 'utf8' as const,
     timeout: options.timeoutMs,
     env: options.env,
     shell: false as const,
   };
 
-  if (process.platform !== 'linux') {
-    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
-  }
-
-  if (bwrapAvailable()) {
-    const isolated = spawnWithBwrap(resolved, payload);
+  try {
+    const isolated = spawnWithBwrap(sandboxResolved, payload);
     if (!isolated.error) {
       return isolated;
     }
+    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
+  } finally {
+    rmSync(disposable, { recursive: true, force: true });
   }
-
-  const namespaced = spawnWithNetworkNamespace(resolved, payload);
-  if (!networkNamespaceSpawnFailed(namespaced)) {
-    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
-  }
-
-  return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
 }
 
 function spawnIsolated(

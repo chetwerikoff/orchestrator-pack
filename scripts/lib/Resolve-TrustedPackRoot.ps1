@@ -14,13 +14,17 @@ function Get-MainPackWorktreePath {
     try {
         $lines = @(git worktree list --porcelain 2>$null)
         for ($i = 0; $i -lt $lines.Count; $i += 1) {
-            if ($lines[$i] -ne 'worktree') {
+            if ($lines[$i] -notmatch '^worktree (.+)$') {
                 continue
             }
-            $worktreePath = $lines[$i + 1].Replace('worktree ', '').Trim()
-            $branchLine = $lines[$i + 2]
-            if ($branchLine -match 'branch refs/heads/main$') {
-                return $worktreePath
+            $worktreePath = $Matches[1].Trim()
+            for ($j = $i + 1; $j -lt $lines.Count; $j += 1) {
+                if ($lines[$j] -match '^worktree ') {
+                    break
+                }
+                if ($lines[$j] -match '^branch refs/heads/main$') {
+                    return $worktreePath
+                }
             }
         }
     }
