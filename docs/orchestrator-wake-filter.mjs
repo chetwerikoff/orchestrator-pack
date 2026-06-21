@@ -228,6 +228,8 @@ export function evaluateHeartbeatTick({
  * @param {object} [admissionContext]
  * @param {string} [admissionContext.supervisedProjectId]
  * @param {string} [admissionContext.supervisedRepoSlug]
+ * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [admissionContext.supervisedSessions]
+ * @param {boolean} [admissionContext.sessionLookupFailed]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [admissionContext.openPrs]
  * @param {boolean} [admissionContext.openPrLookupFailed]
  */
@@ -263,6 +265,8 @@ export function evaluateWakePayload(body, admissionContext = {}) {
       event,
       supervisedProjectId: admissionContext.supervisedProjectId,
       supervisedRepoSlug: admissionContext.supervisedRepoSlug,
+      supervisedSessions: admissionContext.supervisedSessions,
+      sessionLookupFailed: admissionContext.sessionLookupFailed,
       openPrs: admissionContext.openPrs,
       openPrLookupFailed: admissionContext.openPrLookupFailed,
     });

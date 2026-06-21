@@ -37,6 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 $Script:DefaultPort = 17487
 $Script:ListenerProgressPollSeconds = 60
+$Script:HandoffPendingRetryPollSeconds = 10
 $Script:GhPrChecksLogWriter = { param([string]$Message) Write-ListenerLog $Message }
 
 function Get-ListenerPort {
@@ -113,11 +114,29 @@ function Get-SupervisedRepoSlug {
     }
 }
 
+
+function Resolve-SupervisedSessionsForAdmission {
+    param([hashtable]$FixtureSnapshot)
+
+    if ($FixtureSnapshot -and $FixtureSnapshot.sessions) {
+        return @{ sessions = @($FixtureSnapshot.sessions); lookupFailed = $false }
+    }
+    try {
+        $sessions = @(Get-AoStatusSessions)
+        return @{ sessions = $sessions; lookupFailed = $false }
+    }
+    catch {
+        return @{ sessions = @(); lookupFailed = $true }
+    }
+}
+
 function Invoke-WakeFilter {
     param(
         [string]$BodyJson,
         [string]$SupervisedProjectId = '',
         [string]$SupervisedRepoSlug = '',
+        [array]$SupervisedSessions = @(),
+        [bool]$SessionLookupFailed = $false,
         [array]$OpenPrs = @(),
         [bool]$OpenPrLookupFailed = $false
     )
@@ -127,6 +146,8 @@ function Invoke-WakeFilter {
         admissionContext = @{
             supervisedProjectId = $SupervisedProjectId
             supervisedRepoSlug  = $SupervisedRepoSlug
+            supervisedSessions  = @($SupervisedSessions)
+            sessionLookupFailed = $SessionLookupFailed
             openPrs             = @($OpenPrs)
             openPrLookupFailed  = $OpenPrLookupFailed
         }
@@ -222,6 +243,58 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 $script:SupervisedRepoSlug = Get-SupervisedRepoSlug -RepoRoot $Script:OrchestratorWakeRepoRoot
 
+
+function Invoke-ListenerHandoffAdmissionRecovery {
+    param(
+        [string]$StateRoot,
+        [long]$ListenerReadyMs,
+        [switch]$PendingRetriesOnly
+    )
+
+    if (-not $StateRoot) { return }
+
+    $sessionAdmission = Resolve-SupervisedSessionsForAdmission -FixtureSnapshot $fixtureSnapshot
+    Invoke-ReviewHandoffWakeAdmissionRecovery `
+        -StateRoot $StateRoot `
+        -ListenerReadyMs $ListenerReadyMs `
+        -ProjectId $projectId `
+        -RepoRoot $Script:OrchestratorWakeRepoRoot `
+        -ReviewCommand $reviewCommand `
+        -SideEffectLockPath $sideEffectLockPath `
+        -FixtureSnapshot $fixtureSnapshot `
+        -DryRun:$DryRun `
+        -PendingRetriesOnly:$PendingRetriesOnly `
+        -InvokeWakeFilter {
+            param($BodyJson, $OpenPrs, $OpenPrLookupFailed)
+            $sessions = Resolve-SupervisedSessionsForAdmission -FixtureSnapshot $fixtureSnapshot
+            Invoke-WakeFilter -BodyJson $BodyJson `
+                -SupervisedProjectId $projectId `
+                -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                -SupervisedSessions $sessions.sessions `
+                -SessionLookupFailed:$sessions.lookupFailed `
+                -OpenPrs $OpenPrs `
+                -OpenPrLookupFailed:$OpenPrLookupFailed
+        } `
+        -ResolveOpenPrs {
+            Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot
+        } `
+        -InvokeTrigger {
+            param($FilterResult, $WakeReceivedMs)
+            Invoke-HandoffWakeTriggerFromFilter `
+                -FilterResult $FilterResult `
+                -WakeReceivedMs $WakeReceivedMs `
+                -ProjectId $projectId `
+                -RepoRoot $Script:OrchestratorWakeRepoRoot `
+                -ReviewCommand $reviewCommand `
+                -SideEffectLockPath $sideEffectLockPath `
+                -StateRoot $StateRoot `
+                -FixtureSnapshot $fixtureSnapshot `
+                -DryRun:$DryRun `
+                -WakeMessage $FilterResult.wakeMessage | Out-Null
+        } `
+        -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+}
+
 Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, project=$projectId, dedup=${DedupWindowSeconds}s, claimNamespace=$claimNamespace, dryRun=$DryRun, reviewWakeTrigger=on)"
 
 $httpListener = New-Object System.Net.HttpListener
@@ -239,43 +312,10 @@ Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'listening'
 $lastProgressAt = Get-Date
 $listenerHandoffStateRoot = Get-ListenerHandoffStateRoot -StateRoot $SideEffectStateDir -SideEffectLockPath $sideEffectLockPath
 $listenerReadyMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$lastPendingRetryPollAt = Get-Date
 if ($listenerHandoffStateRoot) {
     try {
-        Invoke-ReviewHandoffWakeAdmissionRecovery `
-            -StateRoot $listenerHandoffStateRoot `
-            -ListenerReadyMs $listenerReadyMs `
-            -ProjectId $projectId `
-            -RepoRoot $Script:OrchestratorWakeRepoRoot `
-            -ReviewCommand $reviewCommand `
-            -SideEffectLockPath $sideEffectLockPath `
-            -FixtureSnapshot $fixtureSnapshot `
-            -DryRun:$DryRun `
-            -InvokeWakeFilter {
-                param($BodyJson, $OpenPrs, $OpenPrLookupFailed)
-                Invoke-WakeFilter -BodyJson $BodyJson `
-                    -SupervisedProjectId $projectId `
-                    -SupervisedRepoSlug $script:SupervisedRepoSlug `
-                    -OpenPrs $OpenPrs `
-                    -OpenPrLookupFailed:$OpenPrLookupFailed
-            } `
-            -ResolveOpenPrs {
-                Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot
-            } `
-            -InvokeTrigger {
-                param($FilterResult, $WakeReceivedMs)
-                Invoke-HandoffWakeTriggerFromFilter `
-                    -FilterResult $FilterResult `
-                    -WakeReceivedMs $WakeReceivedMs `
-                    -ProjectId $projectId `
-                    -RepoRoot $Script:OrchestratorWakeRepoRoot `
-                    -ReviewCommand $reviewCommand `
-                    -SideEffectLockPath $sideEffectLockPath `
-                    -StateRoot $listenerHandoffStateRoot `
-                    -FixtureSnapshot $fixtureSnapshot `
-                    -DryRun:$DryRun `
-                    -WakeMessage $FilterResult.wakeMessage | Out-Null
-            } `
-            -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+        Invoke-ListenerHandoffAdmissionRecovery -StateRoot $listenerHandoffStateRoot -ListenerReadyMs $listenerReadyMs
     }
     catch {
         Write-ListenerLog "review-handoff-wake: startup recovery failed ($_)"
@@ -298,6 +338,18 @@ try {
                 if ($lastAcceptedAt -and ((Get-Date) - $lastAcceptedAt).TotalSeconds -ge $quietCheckSeconds) {
                     Write-ListenerLog "quiet-period: no accepted wake events in ${quietCheckSeconds}s (AO may not be POSTing)"
                     $lastAcceptedAt = Get-Date
+                }
+                if ($listenerHandoffStateRoot -and ((Get-Date) - $lastPendingRetryPollAt).TotalSeconds -ge $Script:HandoffPendingRetryPollSeconds) {
+                    $lastPendingRetryPollAt = Get-Date
+                    try {
+                        Invoke-ListenerHandoffAdmissionRecovery `
+                            -StateRoot $listenerHandoffStateRoot `
+                            -ListenerReadyMs $listenerReadyMs `
+                            -PendingRetriesOnly
+                    }
+                    catch {
+                        Write-ListenerLog "review-handoff-wake: pending retry poll failed ($_)"
+                    }
                 }
             }
             if (Test-OrchestratorWakeCancelled) { break }
@@ -334,9 +386,12 @@ try {
                 catch {
                     $openPrLookupFailed = $true
                 }
+                $sessionAdmission = Resolve-SupervisedSessionsForAdmission -FixtureSnapshot $fixtureSnapshot
                 $filterResult = Invoke-WakeFilter -BodyJson $body `
                     -SupervisedProjectId $projectId `
                     -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                    -SupervisedSessions $sessionAdmission.sessions `
+                    -SessionLookupFailed:$sessionAdmission.lookupFailed `
                     -OpenPrs $openPrsForAdmission `
                     -OpenPrLookupFailed:$openPrLookupFailed
 

@@ -294,6 +294,7 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         [scriptblock]$ResolveOpenPrs,
         [scriptblock]$InvokeTrigger,
         [switch]$DryRun,
+        [switch]$PendingRetriesOnly,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
 
@@ -339,12 +340,16 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         }
     }
 
+    if ($PendingRetriesOnly) {
+        return
+    }
+
     $replay = Get-ReviewHandoffWakeAdmissionReplay -StateRoot $StateRoot -ListenerReadyMs $ListenerReadyMs
     foreach ($record in @($replay.replay)) {
         if (-not $record.withinRecoveryBound) { continue }
         $filterResult = New-ReviewHandoffWakeFilterResultFromAdmissionRecord -Record $record -ProjectId $ProjectId
         if (-not $filterResult) { continue }
-        $receivedAtMs = if ($record.receivedAtMs) { [long]$record.receivedAtMs } else { $ListenerReadyMs }
+        $receivedAtMs = if ($record.replayReceivedAtMs) { [long]$record.replayReceivedAtMs } elseif ($record.receivedAtMs) { [long]$record.receivedAtMs } else { $ListenerReadyMs }
         & $LogWriter "review-handoff-wake: replay admission key=$($record.key) pr=#$($record.prNumber)"
         & $InvokeTrigger $filterResult $receivedAtMs
     }

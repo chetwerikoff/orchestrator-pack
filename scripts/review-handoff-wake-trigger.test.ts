@@ -61,6 +61,7 @@ function admissionContext(fixture?: HandoffFixture) {
   return {
     supervisedProjectId: 'orchestrator-pack',
     supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+    supervisedSessions: fixture?.sessions ?? [],
     openPrs: fixture?.openPrs ?? [],
   };
 }
@@ -212,6 +213,31 @@ describe('handoff envelope admission (Issue #381)', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe('foreign_repository');
+    }
+  });
+
+  it('AC8: rejects foreign session not in supervised ao status', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const result = evaluateWakePayload(capture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedSessions: [
+        {
+          name: 'opk-foreign',
+          role: 'worker',
+          prNumber: 999,
+          status: 'working',
+        },
+      ],
+      openPrs: fixture.openPrs,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('foreign_session');
+      expect(result.auditLine).toContain('outcome=filter_reject');
     }
   });
 
@@ -375,9 +401,38 @@ describe('handoff review trigger path', () => {
 
     const stale = selectHandoffAdmissionReplay({
       records: seed.records,
-      listenerReadyMs: listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000,
+      listenerReadyMs,
+      nowMs: listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000,
     }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
     expect(stale.replay[0]?.withinRecoveryBound).toBe(false);
+  });
+
+  it('AC13: listener readiness resets recovery window for retained admissions', () => {
+    const listenerReadyMs = 1_700_000_100_000;
+    const seed = seedHandoffAdmissionRecord({
+      existing: {},
+      admission: {
+        subject: {
+          projectId: 'orchestrator-pack',
+          prNumber: 234,
+          prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/234',
+          sessionId: 'opk-27',
+          priority: 'info',
+          receivedAtMs: listenerReadyMs - 120_000,
+        },
+        admittedHeadSha: 'handoff234',
+        admittedBaseRef: 'main',
+        outcome: 'promoted',
+      },
+      nowMs: listenerReadyMs - 120_000,
+    });
+    const replay = selectHandoffAdmissionReplay({
+      records: seed.records,
+      listenerReadyMs,
+      nowMs: listenerReadyMs + 5_000,
+    }) as { replay: Array<{ withinRecoveryBound?: boolean; replayReceivedAtMs?: number }> };
+    expect(replay.replay[0]?.withinRecoveryBound).toBe(true);
+    expect(replay.replay[0]?.replayReceivedAtMs).toBe(listenerReadyMs);
   });
 
   it('AC14: audit line is greppable for promoted + claim win outcomes', () => {
@@ -541,11 +596,13 @@ describe('identity admission unit', () => {
     const capture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
     );
+    const fixture = loadFixture('green-info-handoff-triggers.json');
     const admission = evaluateHandoffIdentityAdmission({
       event: capture.event,
       supervisedProjectId: 'orchestrator-pack',
       supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
-      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+      supervisedSessions: fixture.sessions,
+      openPrs: fixture.openPrs,
     });
     expect(admission.admitted).toBe(true);
     expect(admission.outcome).toBe('promoted');

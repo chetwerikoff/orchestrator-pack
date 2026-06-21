@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
-import { normalizeSha, toArray } from './review-trigger-reconcile.mjs';
+import { findSessionById, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
 import {
   getNotificationData,
   isRecord,
@@ -108,6 +108,8 @@ export function parsePrNumberFromPrUrl(prUrl) {
  * @param {Record<string, unknown>} input.event
  * @param {string} [input.supervisedProjectId]
  * @param {string} [input.supervisedRepoSlug]
+ * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.supervisedSessions]
+ * @param {boolean} [input.sessionLookupFailed]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {boolean} [input.openPrLookupFailed]
  */
@@ -168,6 +170,30 @@ export function evaluateHandoffIdentityAdmission(input) {
       reason: 'foreign_repository',
       audit: { ...audit, outcome: 'filter_reject', reason: 'foreign_repository' },
     };
+  }
+
+  const sessionMembershipRequired =
+    input.supervisedSessions !== undefined || Boolean(input.sessionLookupFailed);
+  if (sessionMembershipRequired) {
+    if (Boolean(input.sessionLookupFailed)) {
+      return {
+        admitted: false,
+        outcome: 'unknown',
+        reason: 'admission_lookup_unknown',
+        retryable: true,
+        audit: { ...audit, outcome: 'unknown', reason: 'admission_lookup_unknown' },
+      };
+    }
+    const supervisedSessions = toArray(input.supervisedSessions);
+    const matchedSession = findSessionById(supervisedSessions, subject.sessionId);
+    if (!matchedSession) {
+      return {
+        admitted: false,
+        outcome: 'filter_reject',
+        reason: 'foreign_session',
+        audit: { ...audit, outcome: 'filter_reject', reason: 'foreign_session' },
+      };
+    }
   }
 
   if (Boolean(input.openPrLookupFailed)) {
@@ -435,17 +461,18 @@ export function clearPendingAdmissionRetry(input) {
 export function selectHandoffAdmissionReplay(input) {
   const records = isRecord(input.records) ? input.records : {};
   const listenerReadyMs = Number(input.listenerReadyMs ?? input.nowMs ?? Date.now());
+  const nowMs = Number(input.nowMs ?? listenerReadyMs);
   const replay = [];
   for (const record of Object.values(records)) {
     if (!isRecord(record)) continue;
     replay.push({
       ...record,
       replayEligible: true,
-      withinRecoveryBound:
-        listenerReadyMs - Number(record.receivedAtMs ?? listenerReadyMs) <= HANDOFF_LISTENER_RECOVERY_MAX_MS,
+      withinRecoveryBound: nowMs - listenerReadyMs <= HANDOFF_LISTENER_RECOVERY_MAX_MS,
+      replayReceivedAtMs: listenerReadyMs,
     });
   }
-  return { replay, listenerReadyMs };
+  return { replay, listenerReadyMs, nowMs };
 }
 
 export function getHandoffAdmissionStatePath(stateRoot) {
