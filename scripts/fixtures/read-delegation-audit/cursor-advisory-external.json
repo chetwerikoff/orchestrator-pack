@@ -13,10 +13,11 @@
         }
       ],
       "edits": [],
-      "statusText": "inline external read"
+      "statusText": "cursor advisory external fetch without delegation"
     }
   ],
   "expect": {
+    "fixtureNote": "cursor-advisory-external",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

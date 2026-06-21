@@ -22,7 +22,7 @@
         }
       ],
       "edits": [],
-      "statusText": "ordinary bulk read without delegation"
+      "statusText": "ambient marker ordinary bulk read without delegation"
     }
   ],
   "expect": {

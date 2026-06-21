@@ -23,6 +23,7 @@
     }
   ],
   "expect": {
+    "fixtureNote": "cursor-advisory-delegated-satisfied",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

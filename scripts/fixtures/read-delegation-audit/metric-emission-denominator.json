@@ -3,17 +3,17 @@
   "surface": "claude",
   "workUnits": [
     {
-      "key": "unit-delegated",
-      "inboundRequestId": "req-1",
+      "key": "unit-metric-delegated",
+      "inboundRequestId": "req-metric-delegated",
       "reads": [
         {
-          "path": "docs/a.md",
+          "path": "docs/metric-delegated.md",
           "lines": 450,
           "kind": "file"
         }
       ],
       "shellCommands": [
-        "coworker ask --profile code --question q docs/a.md"
+        "coworker ask --profile code --question q docs/metric-delegated.md"
       ]
     },
     {

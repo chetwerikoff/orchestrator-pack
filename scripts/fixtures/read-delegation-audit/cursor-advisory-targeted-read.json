@@ -18,6 +18,7 @@
     }
   ],
   "expect": {
+    "fixtureNote": "cursor-advisory-targeted-read",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

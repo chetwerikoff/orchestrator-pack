@@ -17,7 +17,7 @@
         }
       ],
       "edits": [],
-      "statusText": "ordinary bulk read without delegation"
+      "statusText": "ambient reviewer env ordinary bulk read without delegation"
     }
   ],
   "expect": {

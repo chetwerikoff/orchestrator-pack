@@ -13,10 +13,11 @@
         }
       ],
       "edits": [],
-      "statusText": "inline log read"
+      "statusText": "cursor advisory CI log read without delegation"
     }
   ],
   "expect": {
+    "fixtureNote": "cursor-advisory-log",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

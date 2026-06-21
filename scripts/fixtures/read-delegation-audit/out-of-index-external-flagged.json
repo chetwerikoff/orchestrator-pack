@@ -13,10 +13,11 @@
         }
       ],
       "edits": [],
-      "statusText": "skipped delegation on external fetch"
+      "statusText": "out-of-index external on cursor stays advisory"
     }
   ],
   "expect": {
+    "fixtureNote": "out-of-index-external-flagged",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,
