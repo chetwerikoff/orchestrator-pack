@@ -108,6 +108,14 @@ function parseLeadingEnv(command: string): { env: Record<string, string>; rest: 
   return { env, rest };
 }
 
+
+function scriptPathMatchesAllowlistedPrefix(scriptPath: string, prefix: string): boolean {
+  const normalizedPrefix = normalizePath(prefix).replace(/\/+$/, '');
+  const normalizedScript = normalizePath(scriptPath);
+  return normalizedScript === normalizedPrefix
+    || normalizedScript.startsWith(`${normalizedPrefix}/`);
+}
+
 function argvMatchesPattern(argv: string[], pattern: string[]): boolean {
   if (argv.length !== pattern.length) {
     return false;
@@ -148,8 +156,7 @@ export function resolveAllowlistedCommand(
     if (scriptPath.includes('..')) {
       return null;
     }
-    const matchedPrefix = NODE_PREFIXES.find((prefix) => scriptPath === normalizePath(prefix)
-      || scriptPath.startsWith(`${normalizePath(prefix)}`));
+    const matchedPrefix = NODE_PREFIXES.find((prefix) => scriptPathMatchesAllowlistedPrefix(scriptPath, prefix));
     if (!matchedPrefix) {
       return null;
     }

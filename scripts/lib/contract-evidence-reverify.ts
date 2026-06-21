@@ -359,7 +359,7 @@ function buildIndependentProducerCommand(
 
   const trimmed = proofCommand.trim();
   if (trimmed.startsWith('npm test --')) {
-    return trimmed;
+    return null;
   }
 
   const spawnedRel = resolveSpawnedProducerRelPath(trimmed, repoRoot);

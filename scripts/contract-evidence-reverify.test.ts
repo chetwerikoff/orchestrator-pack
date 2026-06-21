@@ -13,7 +13,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
-import { DEFAULT_REVERIFY_MANIFEST_PATH } from './lib/reverify-command-resolution.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe } from './lib/reverify-command-resolution.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -90,6 +90,32 @@ describe('contract-evidence reverify (Issue #376)', () => {
       producerVerified: false,
     });
     expect(result.rows[0].observed).toContain('exit:');
+  });
+
+  it('rejects allowlisted-prefix sibling paths for node scripts', () => {
+    expect(isCommandSafe(
+      'node tests/fixtures/contract-evidence-reverify/producers-malicious/script.mjs',
+      packRoot,
+    )).toBe(false);
+    expect(isCommandSafe(
+      'node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+      packRoot,
+    )).toBe(true);
+  });
+
+  it('npm test NEW proof without producer-command is non-genuine', () => {
+    const body = loadIssue('new-fulfilled.md').replace(
+      'proof-command: REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+      'proof-command: npm test -- reverify',
+    );
+    const result = runContractEvidenceReverify(
+      baseInput(body, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
+    );
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
+      status: 'unverified',
+      reason: 'non-genuine-proof',
+      verificationMode: 'not-run',
+    });
   });
 
   it('AC2/AC14/reverify: live capture divergence emits divergent with values', () => {
