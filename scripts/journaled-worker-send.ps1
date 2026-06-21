@@ -45,12 +45,16 @@ function Write-JournaledWorkerSendLog {
     Write-Host "[$stamp] journaled-worker-send: $Message"
 }
 
+function New-JournaledWorkerSendInternalCapability {
+    return "journaled-worker-send-internal/v1:$([guid]::NewGuid().ToString('n'))"
+}
+
 function Test-AoSendFileContract {
     param([string]$AoPath = 'ao')
     if ($env:AO_JOURNALED_SEND_ASSUME_FILE -eq '1') { return $true }
     $savedSentinel = [System.Environment]::GetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', 'Process')
     try {
-        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', [guid]::NewGuid().ToString('n'), 'Process')
+        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', (New-JournaledWorkerSendInternalCapability), 'Process')
         $help = (& $AoPath send --help 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
     }
     catch {
@@ -125,7 +129,7 @@ function Invoke-AoSendViaFile {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.CreateNoWindow = $true
-        $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = [guid]::NewGuid().ToString('n')
+        $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = New-JournaledWorkerSendInternalCapability
         $aoArgs = @('send', $SessionId, '--file', $payloadFile)
         if ($NoWait) { $aoArgs += '--no-wait' }
         if ($TimeoutSeconds -gt 0) {

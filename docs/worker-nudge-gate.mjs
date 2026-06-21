@@ -22,6 +22,8 @@ export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
 export const AUTONOMOUS_SURFACE_ENV = 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE';
 export const JOURNALED_SEND_INTERNAL_ENV = 'AO_JOURNALED_SEND_INTERNAL';
+export const JOURNALED_SEND_INTERNAL_CAPABILITY = 'journaled-worker-send-internal/v1';
+export const OPERATOR_ESCALATION_PREFIX = '[worker-nudge-gate] ESCALATION:';
 export const CLASSIFIER_VERSION = 'worker-nudge-intent/v1';
 
 /** @type {readonly string[]} */
@@ -149,6 +151,39 @@ function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPr
 }
 
 /**
+ * @param {string} value
+ */
+export function isValidJournaledSendInternalCapability(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return false;
+  const prefix = `${JOURNALED_SEND_INTERNAL_CAPABILITY}:`;
+  if (!raw.startsWith(prefix)) return false;
+  const nonce = raw.slice(prefix.length).trim();
+  return nonce.length >= 8 && /^[A-Za-z0-9-]+$/.test(nonce);
+}
+
+/**
+ * @param {object} input
+ */
+export function evaluateClaimStoreFailure(input) {
+  const bounds = resolveUnresolvedEscalationBounds(input);
+  const unresolvedCount = Number(input.unresolvedCount ?? 0) + 1;
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const sinceMs = Number(input.unresolvedSinceMs ?? nowMs);
+  const escalate =
+    unresolvedCount >= bounds.count || sinceMs + bounds.ms <= nowMs;
+  return {
+    escalate,
+    unresolvedCount,
+    unresolvedSinceMs: sinceMs,
+    reason: escalate ? 'unresolved_escalate' : 'unresolved_fail_closed',
+    diagnosis: escalate
+      ? `${OPERATOR_ESCALATION_PREFIX} claim store unreadable after ${unresolvedCount} consecutive failure(s) (${input.failureReason ?? 'storage_failure'}); worker nudges fail-closed until operator repairs claim storage.`
+      : null,
+  };
+}
+
+/**
  * @param {object} input
  */
 export function syncPrOwnershipClaimRecord(input) {
@@ -191,7 +226,8 @@ export function syncPrOwnershipClaimRecord(input) {
       },
     };
   }
-  if (worktree && priorWorktree && worktree === priorWorktree) {
+  const resumeLineage = Boolean(input.resumeLineage ?? input.resumeSameLineage);
+  if (resumeLineage) {
     return {
       ok: true,
       changed: priorOwner !== ownerSessionId,
@@ -199,7 +235,7 @@ export function syncPrOwnershipClaimRecord(input) {
       record: {
         ...existing,
         ownerSessionId,
-        worktree,
+        worktree: worktree || priorWorktree,
         updatedAtUtc: nowIso,
       },
     };
@@ -821,6 +857,7 @@ export function evaluateAdoptionGate(input) {
 }
 
 runStdinJsonCli('worker-nudge-gate.mjs', {
+  evaluateClaimStoreFailure: () => evaluateClaimStoreFailure(readStdinJson()),
   evaluateNudgeGate: () => evaluateNudgeGate(readStdinJson()),
   acquireClaim: () => acquireClaim(readStdinJson()),
   finalizeClaim: () => finalizeClaim(readStdinJson()),

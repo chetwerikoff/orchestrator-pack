@@ -5,6 +5,7 @@
 
 $Script:WorkerNudgeGateVersion = 'worker-nudge-gate/v1'
 $Script:AtomicWorkerNudgeClaimCapability = 'worker-nudge-claim-atomic/v1'
+$Script:JournaledWorkerSendInternalCapability = 'journaled-worker-send-internal/v1'
 $Script:WorkerNudgeGateFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/worker-nudge-gate.mjs'
 $Script:AutonomousWorkerNudgeCapabilityInventory = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-worker-nudge-capabilities.json'
 
@@ -39,7 +40,12 @@ function Test-AtomicWorkerNudgeClaimCapabilityPresent {
 }
 
 function Test-JournaledWorkerSendInternalActive {
-    return -not [string]::IsNullOrWhiteSpace([string]$env:AO_JOURNALED_SEND_INTERNAL)
+    $raw = [string]$env:AO_JOURNALED_SEND_INTERNAL
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+    $prefix = "$($Script:JournaledWorkerSendInternalCapability):"
+    if (-not $raw.StartsWith($prefix, [System.StringComparison]::Ordinal)) { return $false }
+    $nonce = $raw.Substring($prefix.Length).Trim()
+    return ($nonce.Length -ge 8) -and ($nonce -match '^[A-Za-z0-9-]+$')
 }
 
 function Test-AutonomousRawWorkerSendDenied {

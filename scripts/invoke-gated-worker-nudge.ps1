@@ -156,15 +156,30 @@ $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -Inten
     -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
     -TupleKey $tupleKey -Surface $Surface -ProjectId $ProjectId
 if (-not $claim.acquired) {
+    $claimReason = [string]$claim.reason
+    if ($claimReason -in @('storage_failure', 'ambiguous_claim')) {
+        $failure = Invoke-WorkerNudgeClaimStoreFailure -Namespace $namespace -FailureReason $claimReason `
+            -PrNumber $PrNumber -CycleKey $cycleKey -Surface $Surface
+        @{
+            sent            = $false
+            reason          = [string]$failure.reason
+            claimSkip       = $true
+            claimStoreFault = $true
+            escalate        = [bool]$failure.escalate
+            unresolvedCount = [int]$failure.unresolvedCount
+            tupleKey        = $tupleKey
+        } | ConvertTo-Json -Compress -Depth 6
+        exit 0
+    }
     Write-WorkerNudgeGateAudit -Record @{
         decision = 'SUPPRESS'
-        reason   = [string]$claim.reason
+        reason   = $claimReason
         tupleKey = $tupleKey
         surface  = $Surface
     } | Out-Null
     @{
         sent       = $false
-        reason     = [string]$claim.reason
+        reason     = $claimReason
         claimSkip  = $true
         tupleKey   = $tupleKey
     } | ConvertTo-Json -Compress -Depth 6

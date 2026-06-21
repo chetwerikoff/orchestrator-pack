@@ -522,6 +522,7 @@ function Resolve-WorkerNudgeClaimAgainstExisting {
     if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $Path -Holder $NewRecord.holder)) {
         return @{ acquired = $false; reason = 'lost_race'; path = $Path; namespace = $Namespace; key = $NewRecord.key }
     }
+    Clear-WorkerNudgeClaimStoreHealth -Namespace $Namespace | Out-Null
     return @{ acquired = $true; recovered = $true; claim = $NewRecord; path = $Path; namespace = $Namespace; key = $NewRecord.key }
 }
 
@@ -589,6 +590,7 @@ function Acquire-WorkerNudgeClaim {
             if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
                 return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $key }
             }
+            Clear-WorkerNudgeClaimStoreHealth -Namespace $resolved | Out-Null
             return @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key }
         }
         catch [System.IO.IOException] {
@@ -656,6 +658,110 @@ function Finalize-WorkerNudgeClaim {
     }
     finally {
         Exit-WorkerNudgeClaimMutex -LockDir $lockDir
+    }
+}
+
+
+function Get-WorkerNudgeClaimStoreHealthPath {
+    param([string]$Namespace)
+    return (Join-Path $Namespace '_health/unresolved-claim-store.json')
+}
+
+function Read-WorkerNudgeClaimStoreHealth {
+    param([string]$Namespace)
+    $path = Get-WorkerNudgeClaimStoreHealthPath -Namespace $Namespace
+    if (-not (Test-Path -LiteralPath $path)) {
+        return @{ ok = $true; unresolvedCount = 0; unresolvedSinceMs = 0 }
+    }
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        return @{
+            ok                = $true
+            unresolvedCount   = [int]($raw.unresolvedCount ?? 0)
+            unresolvedSinceMs = [long]($raw.unresolvedSinceMs ?? 0)
+            lastReason        = [string]($raw.lastReason ?? '')
+        }
+    }
+    catch {
+        return @{ ok = $false; unresolvedCount = 0; unresolvedSinceMs = 0; reason = 'health_unreadable' }
+    }
+}
+
+function Write-WorkerNudgeClaimStoreHealth {
+    param(
+        [string]$Namespace,
+        [int]$UnresolvedCount,
+        [long]$UnresolvedSinceMs,
+        [string]$LastReason = ''
+    )
+    $path = Get-WorkerNudgeClaimStoreHealthPath -Namespace $Namespace
+    $dir = Split-Path -Parent $path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    @{
+        unresolvedCount   = $UnresolvedCount
+        unresolvedSinceMs = $UnresolvedSinceMs
+        lastReason        = $LastReason
+        updatedAtUtc      = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $path -Encoding UTF8
+}
+
+function Clear-WorkerNudgeClaimStoreHealth {
+    param([string]$Namespace)
+    $path = Get-WorkerNudgeClaimStoreHealthPath -Namespace $Namespace
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
+function Invoke-WorkerNudgeClaimStoreFailure {
+    param(
+        [string]$Namespace,
+        [string]$FailureReason,
+        [int]$PrNumber = 0,
+        [string]$CycleKey = '',
+        [string]$Surface = 'unknown'
+    )
+    $libDir = $PSScriptRoot
+    . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
+    . (Join-Path $libDir 'Worker-NudgeAudit.ps1')
+
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $health = Read-WorkerNudgeClaimStoreHealth -Namespace $Namespace
+    $sinceMs = if ([long]$health.unresolvedSinceMs -gt 0) { [long]$health.unresolvedSinceMs } else { $nowMs }
+    $eval = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateClaimStoreFailure' -Payload @{
+        unresolvedCount   = [int]$health.unresolvedCount
+        unresolvedSinceMs = $sinceMs
+        nowMs             = $nowMs
+        failureReason     = $FailureReason
+    }
+    Write-WorkerNudgeClaimStoreHealth -Namespace $Namespace `
+        -UnresolvedCount ([int]$eval.unresolvedCount) `
+        -UnresolvedSinceMs $sinceMs `
+        -LastReason $FailureReason | Out-Null
+
+    $audit = @{
+        kind             = 'claim_store_failure'
+        decision         = 'SUPPRESS'
+        reason           = [string]$eval.reason
+        failureReason    = $FailureReason
+        unresolvedCount  = [int]$eval.unresolvedCount
+        escalate         = [bool]$eval.escalate
+        prNumber         = $PrNumber
+        cycleKey         = $CycleKey
+        surface          = $Surface
+        atUtc            = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    Write-WorkerNudgeGateAudit -Record $audit | Out-Null
+    if ($eval.escalate -and $eval.diagnosis) {
+        [Console]::Error.WriteLine([string]$eval.diagnosis)
+    }
+    return @{
+        escalate        = [bool]$eval.escalate
+        reason          = [string]$eval.reason
+        unresolvedCount = [int]$eval.unresolvedCount
+        diagnosis       = [string]$eval.diagnosis
     }
 }
 

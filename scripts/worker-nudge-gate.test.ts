@@ -16,7 +16,10 @@ import {
   deriveCycleKey,
   evaluateAdoptionGate,
   evaluateBoundary,
+  evaluateClaimStoreFailure,
   evaluateNudgeGate,
+  isValidJournaledSendInternalCapability,
+  JOURNALED_SEND_INTERNAL_CAPABILITY,
   evaluatePreflight,
   finalizeClaim,
   findForbiddenAutonomousWorkerSendInvocations,
@@ -181,6 +184,24 @@ describe('worker nudge gate (#384)', () => {
     expect(gate.failClosed).toBe(true);
   });
 
+  it('escalates claim-store failures after bounded unresolved count', () => {
+    const first = evaluateClaimStoreFailure({ unresolvedCount: 2, unresolvedSinceMs: Date.now(), nowMs: Date.now() });
+    expect(first.escalate).toBe(true);
+    expect(first.reason).toBe('unresolved_escalate');
+    expect(String(first.diagnosis)).toContain('ESCALATION:');
+    const second = evaluateClaimStoreFailure({ unresolvedCount: 0, unresolvedSinceMs: Date.now(), nowMs: Date.now() });
+    expect(second.escalate).toBe(false);
+    expect(second.reason).toBe('unresolved_fail_closed');
+  });
+
+  it('rejects forged journaled internal capability tokens', () => {
+    expect(isValidJournaledSendInternalCapability('1')).toBe(false);
+    expect(isValidJournaledSendInternalCapability('test-sentinel')).toBe(false);
+    expect(
+      isValidJournaledSendInternalCapability(`${JOURNALED_SEND_INTERNAL_CAPABILITY}:0123456789abcdef`),
+    ).toBe(true);
+  });
+
   it('structured audit requires binding fields', () => {
     const complete = buildAuditRecord({
       prNumber: 1,
@@ -328,7 +349,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
     const script = `
       $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-      $env:AO_JOURNALED_SEND_INTERNAL = 'test-sentinel'
+      $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
       . ${psString(guard)}
       $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
       [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
@@ -336,6 +357,20 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const result = JSON.parse(runPwsh(script));
     expect(result.denied).toBe(false);
     expect(result.reason).toBe('journaled_transport_internal');
+  });
+
+  it('rejects forged AO_JOURNALED_SEND_INTERNAL bypass', () => {
+    const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+    const script = `
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_JOURNALED_SEND_INTERNAL = '1'
+      . ${psString(guard)}
+      $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
+      [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.denied).toBe(true);
+    expect(result.reason).toBe('autonomous_raw_worker_send_denied');
   });
 
   it('does not reacquire after terminal SENT claim', () => {
@@ -643,8 +678,38 @@ describe('opk-rev-689 incident fixture', () => {
   });
 });
 
+describe('claim-store failure escalation (#384)', () => {
+  it('escalates persistent claim-store failures from invoke path', () => {
+    const dir = tempClaimDir();
+    const broken = path.join(dir, 'broken.json');
+    writeFileSync(broken, '{not-json', 'utf8');
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        New-Item -ItemType Directory -Path (Join-Path $ns '_health') -Force | Out-Null
+        @{ unresolvedCount = 2; unresolvedSinceMs = 0; lastReason = 'storage_failure' } |
+          ConvertTo-Json -Compress |
+          Set-Content -LiteralPath (Join-Path $ns '_health/unresolved-claim-store.json') -Encoding UTF8
+        $result = Invoke-WorkerNudgeClaimStoreFailure -Namespace $ns -FailureReason 'storage_failure' -PrNumber 380 -CycleKey 'run:test' -Surface 'test'
+        [pscustomobject]@{
+          escalate = [bool]$result.escalate
+          reason = [string]$result.reason
+          unresolvedCount = [int]$result.unresolvedCount
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.escalate).toBe(true);
+      expect(result.reason).toBe('unresolved_escalate');
+      expect(result.unresolvedCount).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('PR-claim worker target resolution (#384)', () => {
-  it('keeps generation for resume under same PR-claim lineage with a new session id', () => {
+  it('keeps generation only when resume lineage is explicitly signaled', () => {
     const worktree = '/tmp/orchestrator-pack/worktrees/opk-1';
     const existing = syncPrOwnershipClaimRecord({
       prNumber: 380,
@@ -662,6 +727,7 @@ describe('PR-claim worker target resolution (#384)', () => {
       prNumber: 380,
       ownerSessionId: 'opk-5',
       worktree,
+      resumeLineage: true,
       existingClaim: existing,
     });
     expect(resumed.reason).toBe('resume_same_lineage');
@@ -676,6 +742,32 @@ describe('PR-claim worker target resolution (#384)', () => {
     expect(target.ok).toBe(true);
     expect(target.workerTarget).toBe('gen1:gen1');
     expect(target.targetResolutionSource).toBe('pr-claim-record');
+  });
+
+  it('bumps generation for replacement on the same worktree', () => {
+    const worktree = '/tmp/orchestrator-pack/worktrees/opk-166';
+    const prior = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      worktree,
+      existingClaim: null,
+    }).record;
+    const replacement = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-166',
+      worktree,
+      existingClaim: prior,
+    });
+    expect(replacement.reason).toBe('replacement_claim');
+    expect((replacement.record as { generation?: string }).generation).toBe('opk-166');
+
+    const target = resolveWorkerTargetFromPrClaim({
+      prNumber: 380,
+      sessionId: 'opk-166',
+      sessions: [{ name: 'opk-166', role: 'worker', prNumber: 380 }],
+      prClaims: [replacement.record],
+    });
+    expect(target.workerTarget).toBe('opk-166:opk-166');
   });
 
   it('bumps generation for replacement claim-pr ownership', () => {
