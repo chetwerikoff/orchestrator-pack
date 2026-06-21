@@ -1,0 +1,6 @@
+{
+  "description": "Consumer fixture legacy list for shared-canonicalizer proof.",
+  "paths": [
+    "tests/fixtures/draft-discipline/contract-evidence/legacy-grandfather.md"
+  ]
+}
