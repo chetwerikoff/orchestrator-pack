@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -43,6 +43,69 @@ function captureWorktreeFingerprint(cwd: string): string {
     shell: false,
   });
   return result.stdout ?? '';
+}
+
+const SANDBOX_FINGERPRINT_SKIP = new Set(['node_modules']);
+
+function captureSandboxDirectoryFingerprint(root: string): string {
+  const parts: string[] = [];
+
+  const walk = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (SANDBOX_FINGERPRINT_SKIP.has(entry.name)) {
+        continue;
+      }
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      try {
+        const st = statSync(full);
+        const rel = path.relative(root, full).replace(/\\/g, '/');
+        parts.push(`${rel}:${st.size}:${Math.trunc(st.mtimeMs)}`);
+      } catch {
+        // ignore races while the producer runs
+      }
+    }
+  };
+
+  walk(root);
+  parts.sort();
+  return parts.join('\n');
+}
+
+function postconditionViolationResult(): SpawnSyncReturns<string> {
+  return {
+    pid: 0,
+    output: ['', 'read-only-postcondition-violated', ''],
+    stdout: '',
+    stderr: 'read-only-postcondition-violated',
+    status: 1,
+    signal: null,
+    error: undefined,
+  };
+}
+
+function guardSandboxPostcondition(
+  disposable: string,
+  beforeFingerprint: string,
+  result: SpawnSyncReturns<string>,
+): SpawnSyncReturns<string> {
+  const afterFingerprint = captureSandboxDirectoryFingerprint(disposable);
+  if (beforeFingerprint !== afterFingerprint) {
+    return postconditionViolationResult();
+  }
+  return result;
 }
 
 function buildIsolatedEnv(
@@ -367,6 +430,8 @@ function spawnTrustedBaseIsolated(
     return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   }
 
+  const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
+
   try {
     const canUseBwrap = process.platform === 'linux'
       && bwrapAvailable()
@@ -387,18 +452,22 @@ function spawnTrustedBaseIsolated(
 
       const isolated = spawnWithBwrap(sandboxResolved, payload);
       if (isSpawnTimeoutError(isolated.error)) {
-        return isolated;
+        return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
       }
       if (!isolated.error && !isBwrapInternalFailure(isolated)) {
-        return isolated;
+        return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
       }
     }
 
-    return spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
-      timeoutMs: options.timeoutMs,
-      env: options.env,
-      dependencyRoot: options.dependencyRoot,
-    });
+    return guardSandboxPostcondition(
+      disposable,
+      beforeSandboxFingerprint,
+      spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
+        timeoutMs: options.timeoutMs,
+        env: options.env,
+        dependencyRoot: options.dependencyRoot,
+      }),
+    );
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }
@@ -423,6 +492,8 @@ function spawnPrHeadIsolated(
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
 
+  const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
+
   // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
   if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot, 'pr-head-new')) {
     rmSync(disposable, { recursive: true, force: true });
@@ -444,12 +515,12 @@ function spawnPrHeadIsolated(
   try {
     const isolated = spawnWithBwrap(sandboxResolved, payload);
     if (isSpawnTimeoutError(isolated.error)) {
-      return isolated;
+      return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
     }
     if (isolated.error || isBwrapInternalFailure(isolated)) {
       return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
     }
-    return isolated;
+    return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }
@@ -527,7 +598,8 @@ export function runSandboxedAllowlistedCommand(
   });
 
   const stderr = result.stderr ?? '';
-  const blockReason = isSandboxBlocked(stderr, networkRestricted);
+  const blockReason = isSandboxBlocked(stderr, networkRestricted)
+    ?? (stderr.includes('read-only-postcondition-violated') ? 'read-only-postcondition-violated' : null);
   if (blockReason) {
     return {
       ok: false,

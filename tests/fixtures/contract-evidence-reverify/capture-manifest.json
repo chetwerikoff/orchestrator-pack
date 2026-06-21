@@ -34,6 +34,14 @@
       "path": "captures/structured/match.raw.json",
       "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
     },
+    "structured/runtime-file-match": {
+      "id": "structured/runtime-file-match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/runtime-file-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/runtime-file-match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
     "unstructured/token-match": {
       "id": "unstructured/token-match",
       "producer": "orchestrator-pack-scripts",

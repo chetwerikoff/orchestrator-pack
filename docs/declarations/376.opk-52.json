@@ -43,6 +43,7 @@
     "tests/fixtures/contract-evidence-reverify/capture-manifest.json",
     "tests/fixtures/contract-evidence-reverify/captures/structured/divergent-record.raw.json",
     "tests/fixtures/contract-evidence-reverify/captures/structured/match.raw.json",
+    "tests/fixtures/contract-evidence-reverify/captures/structured/runtime-file-match.raw.json",
     "tests/fixtures/contract-evidence-reverify/captures/structured/new-fulfilled.raw.json",
     "tests/fixtures/contract-evidence-reverify/captures/unstructured/token-match.raw.txt",
     "tests/fixtures/contract-evidence-reverify/e2e/issue-snapshot.md",
@@ -57,6 +58,7 @@
     "tests/fixtures/contract-evidence-reverify/issues/live-divergent.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-exit-nonzero.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-match.md",
+    "tests/fixtures/contract-evidence-reverify/issues/live-runtime-file.md",
     "tests/fixtures/contract-evidence-reverify/issues/new-fulfilled.md",
     "tests/fixtures/contract-evidence-reverify/issues/new-non-genuine-proof.md",
     "tests/fixtures/contract-evidence-reverify/issues/new-unfulfilled.md",
@@ -68,8 +70,10 @@
     "tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs",
     "tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs",
     "tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+    "tests/fixtures/contract-evidence-reverify/producers/runtime-file-value.mjs",
     "tests/fixtures/contract-evidence-reverify/producers/unreachable.mjs",
-    "tests/fixtures/contract-evidence-reverify/producers/unstructured-token.mjs"
+    "tests/fixtures/contract-evidence-reverify/producers/unstructured-token.mjs",
+    "tests/fixtures/contract-evidence-reverify/runtime-value.txt"
   ],
   "declared_globs": [],
   "amendments": []

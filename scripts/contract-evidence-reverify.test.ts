@@ -15,6 +15,7 @@ import {
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
+import { runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -108,6 +109,51 @@ describe('contract-evidence reverify (Issue #376)', () => {
       expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
     } finally {
       rmSync(archiveTrustedRoot, { recursive: true, force: true });
+    }
+  });
+
+
+  it('detects mutations inside disposable sandbox copy', () => {
+    const resolved = resolveAllowlistedCommand(
+      'REVERIFY_ATTEMPT_MUTATION=1 REVERIFY_VALUE=match node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',
+      { repoRoot: packRoot },
+    );
+    expect(resolved).not.toBeNull();
+    const result = runSandboxedAllowlistedCommand(resolved!, {
+      cwd: packRoot,
+      dependencyRoot: packRoot,
+      timeoutMs: 10_000,
+      sandboxMode: 'trusted-base',
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.blockReason).toBe('read-only-postcondition-violated');
+    expect(existsSync(path.join(packRoot, '.reverify-mutation-marker'))).toBe(false);
+  });
+
+  it('runs capture producers against review target data, not trusted base only', () => {
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const runtimeValuePath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/runtime-value.txt',
+      );
+      writeFileSync(runtimeValuePath, 'divergent\n', 'utf8');
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-runtime-file.md'), {
+        trustedBaseRoot: packRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        prBody: 'Closes #9015\n',
+        explicitIssueNumber: 9015,
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'divergent',
+        verificationMode: 'live',
+        asserted: 'match',
+        observed: 'divergent',
+        producerVerified: false,
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
     }
   });
 

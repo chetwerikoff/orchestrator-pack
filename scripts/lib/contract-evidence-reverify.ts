@@ -230,14 +230,35 @@ function isProducerCommandUntrusted(
   return false;
 }
 
+function remapResolvedCommandToReviewTarget(
+  resolved: import('./reverify-command-resolution.js').ResolvedAllowlistedCommand,
+  trustedBaseRoot: string,
+  reviewTargetRoot: string,
+): import('./reverify-command-resolution.js').ResolvedAllowlistedCommand {
+  const remappedArgs = resolved.args.map((arg) => {
+    const trustedPrefix = `${trustedBaseRoot}${path.sep}`;
+    if (path.isAbsolute(arg) && (arg === trustedBaseRoot || arg.startsWith(trustedPrefix))) {
+      const rel = path.relative(trustedBaseRoot, arg);
+      return path.join(reviewTargetRoot, rel);
+    }
+    return arg;
+  });
+  return {
+    ...resolved,
+    args: remappedArgs,
+  };
+}
+
 function runTrustedCommand(command: string, options: {
   cwd: string;
   dependencyRoot?: string;
+  resolutionRoot?: string;
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
 }): CommandRunResult {
-  const resolved = resolveAllowlistedCommand(command, { repoRoot: options.cwd });
+  const resolutionRoot = options.resolutionRoot ?? options.cwd;
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: resolutionRoot });
   if (!resolved) {
     return {
       ok: false,
@@ -249,7 +270,11 @@ function runTrustedCommand(command: string, options: {
     };
   }
 
-  return runSandboxedAllowlistedCommand(resolved, {
+  const executionResolved = resolutionRoot !== options.cwd
+    ? remapResolvedCommandToReviewTarget(resolved, resolutionRoot, options.cwd)
+    : resolved;
+
+  return runSandboxedAllowlistedCommand(executionResolved, {
     cwd: options.cwd,
     dependencyRoot: options.dependencyRoot ?? options.cwd,
     timeoutMs: options.timeoutMs,
@@ -512,13 +537,17 @@ function evaluateCaptureRow(input: {
 
   if (canRunLive) {
     const run = runTrustedCommand(command, {
-      cwd: trustedBaseRoot,
+      cwd: reviewTargetRoot,
       dependencyRoot: trustedBaseRoot,
+      resolutionRoot: trustedBaseRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
       sandboxMode: 'trusted-base',
     });
     if (run.blocked) {
+      if (run.blockReason === 'read-only-postcondition-violated') {
+        return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
+      }
       return compareToRecordFallback(rowIndex, row, bindingType, captureContent, assertedExpected);
     }
     if (run.timedOut) {

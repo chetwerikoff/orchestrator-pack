@@ -10,7 +10,8 @@
     "REVERIFY_STATUS",
     "REVERIFY_TOKEN",
     "REVERIFY_VALUE",
-    "REVERIFY_FORCE_EXIT_CODE"
+    "REVERIFY_FORCE_EXIT_CODE",
+    "REVERIFY_ATTEMPT_MUTATION"
   ],
   "trustedCommandPrefixes": [
     "node tests/fixtures/contract-evidence-reverify/producers/",
