@@ -123,6 +123,32 @@ function argvMatchesPattern(argv: string[], pattern: string[]): boolean {
   return argv.every((token, index) => token === pattern[index]);
 }
 
+
+function resolveNpmTestAllowlistedCommand(
+  argv: string[],
+  pattern: string[],
+  parsedEnv: { env: Record<string, string> },
+  repoRoot: string,
+): ResolvedAllowlistedCommand | null {
+  if (argv[1] !== 'test' || argv[2] !== '--') {
+    return null;
+  }
+  const filter = argv[3];
+  if (!filter) {
+    return null;
+  }
+  const vitestScript = path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs');
+  if (!existsSync(vitestScript)) {
+    return null;
+  }
+  return {
+    executable: process.execPath,
+    args: [vitestScript, 'run', filter],
+    env: parsedEnv.env,
+    allowlistId: pattern.join(' '),
+  };
+}
+
 export function resolveAllowlistedCommand(
   command: string,
   options: { repoRoot: string },
@@ -177,6 +203,10 @@ export function resolveAllowlistedCommand(
   if (executable === 'npm') {
     for (const pattern of NPM_PATTERNS) {
       if (argvMatchesPattern(argv, pattern)) {
+        const resolvedNpmTest = resolveNpmTestAllowlistedCommand(argv, pattern, parsedEnv, options.repoRoot);
+        if (resolvedNpmTest) {
+          return resolvedNpmTest;
+        }
         return {
           executable: 'npm',
           args: argv.slice(1),

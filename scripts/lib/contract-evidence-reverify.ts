@@ -41,6 +41,7 @@ const allowlist = require('../contract-evidence-reverify-allowlist.json') as {
   mutatingTokenPattern: string;
   trustedCheckerRelativePaths: string[];
   newRowProducerBoundaryScripts?: string[];
+  npmProofIndependentCommands?: Record<string, string>;
   defaultTimeoutMs: number;
   maxObservedLength: number;
 };
@@ -347,6 +348,33 @@ function resolveSpawnedProducerRelPath(proofCommand: string, repoRoot: string): 
   return producerRel;
 }
 
+
+function isNpmTestProofCommand(command: string): boolean {
+  return command.trim().startsWith('npm test --');
+}
+
+function interpolateNpmIndependentTemplate(template: string, block: Record<string, string>): string {
+  const expected = block.expected ?? '';
+  return template.replace(/\{\{expected\}\}/g, expected);
+}
+
+function resolveNpmProofIndependentCommand(
+  proofCommand: string,
+  block: Record<string, string>,
+  repoRoot: string,
+): string | null {
+  const trimmed = proofCommand.trim();
+  if (!isCommandSafe(trimmed, repoRoot)) {
+    return null;
+  }
+  const template = allowlist.npmProofIndependentCommands?.[trimmed];
+  if (!template) {
+    return null;
+  }
+  const command = interpolateNpmIndependentTemplate(template, block);
+  return isCommandSafe(command, repoRoot) ? command : null;
+}
+
 function buildIndependentProducerCommand(
   proofCommand: string,
   block: Record<string, string>,
@@ -359,7 +387,7 @@ function buildIndependentProducerCommand(
 
   const trimmed = proofCommand.trim();
   if (trimmed.startsWith('npm test --')) {
-    return null;
+    return resolveNpmProofIndependentCommand(trimmed, block, repoRoot);
   }
 
   const spawnedRel = resolveSpawnedProducerRelPath(trimmed, repoRoot);
@@ -624,12 +652,13 @@ function evaluateNewRow(input: {
   const datum = block.datum ?? block.selector ?? '';
   const selector = datum.includes(':') ? `$.${datum.split(':').pop()}` : `$.${datum}`;
 
+  const proofSandboxMode = isNpmTestProofCommand(proofCommand) ? 'trusted-base' : 'pr-head-new';
   const run = runTrustedCommand(proofCommand, {
     cwd: reviewTargetRoot,
     dependencyRoot: trustedBaseRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
-    sandboxMode: 'pr-head-new',
+    sandboxMode: proofSandboxMode,
   });
   if (run.blocked) {
     return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
@@ -638,17 +667,6 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
   }
   if (producerRunFailed(run)) {
-    return buildUnverified(rowIndex, row, 'non-genuine-proof');
-  }
-
-  const stdout = run.stdout.trim();
-  if (!stdout) {
-    return buildUnverified(rowIndex, row, 'non-genuine-proof');
-  }
-
-  try {
-    JSON.parse(stdout);
-  } catch {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
@@ -674,6 +692,42 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
+  if (isNpmTestProofCommand(proofCommand)) {
+    const independentComparison = compareStructuredOutput(independentRun.stdout.trim(), selector, expected);
+    if (independentComparison.matched) {
+      return {
+        rowIndex,
+        rowHash: hashRow(row),
+        bindingId: row['binding-id'],
+        status: 'verified',
+        verificationMode: 'live',
+        asserted: boundValue(expected),
+        observed: independentComparison.observed,
+        producerVerified: true,
+      };
+    }
+    return {
+      rowIndex,
+      rowHash: hashRow(row),
+      bindingId: row['binding-id'],
+      status: 'unfulfilled-new',
+      verificationMode: 'live',
+      asserted: boundValue(expected),
+      observed: independentComparison.observed,
+      producerVerified: false,
+    };
+  }
+
+  const stdout = run.stdout.trim();
+  if (!stdout) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
+
+  try {
+    JSON.parse(stdout);
+  } catch {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
   const independentComparison = compareStructuredOutput(independentRun.stdout.trim(), selector, expected);
   const proofComparison = compareStructuredOutput(stdout, selector, expected);
   const producerVerified = independentComparison.matched

@@ -32,12 +32,26 @@ function isLiveE2eEnabled() {
   return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
 }
 
+function summaryRunOutcomeRowsEvaluated(text) {
+  return /run-outcome:\s*rows-evaluated/.test(text);
+}
+
+function summaryHasEvaluatedRowEntries(text) {
+  if (/rows:\s*none/i.test(text)) {
+    return false;
+  }
+  if (/run-outcome:\s*check-error/i.test(text)) {
+    return false;
+  }
+  return /^- #\d+\s+status=/m.test(text);
+}
+
 function isCheckpoint2ReviewerSummary(text) {
   const trimmed = text.trim();
   return trimmed.includes('## Checkpoint-2 contract-evidence re-verification')
-    && trimmed.includes('run-outcome:')
+    && summaryRunOutcomeRowsEvaluated(trimmed)
     && trimmed.includes('never-blocks: true')
-    && trimmed.includes('rows:');
+    && summaryHasEvaluatedRowEntries(trimmed);
 }
 
 function listAoSessions() {
@@ -127,6 +141,7 @@ const output = {
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
   promptContainsInvokeScript: prompt.includes('invoke-contract-evidence-reverify.ps1'),
   summaryIncludesRows: false,
+  summaryRunOutcomeRowsEvaluated: false,
   summaryIncludesNeverBlocks: false,
   reviewerOutputIsCheckpoint2Summary: false,
   summary: '',
@@ -173,13 +188,15 @@ if (!output.viaAoReviewExecute) {
 
 const summary = (aoProc.stdout ?? '').trim();
 output.summary = summary;
-output.summaryIncludesRows = summary.includes('rows:');
+output.summaryRunOutcomeRowsEvaluated = summaryRunOutcomeRowsEvaluated(summary);
+output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
 output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
 output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
 
 const ok =
   output.promptContainsCheckpoint2
   && output.promptContainsInvokeScript
+  && output.summaryRunOutcomeRowsEvaluated
   && output.summaryIncludesRows
   && output.summaryIncludesNeverBlocks
   && output.reviewerOutputIsCheckpoint2Summary

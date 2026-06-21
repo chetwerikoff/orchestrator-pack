@@ -13,7 +13,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
-import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe } from './lib/reverify-command-resolution.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -103,19 +103,27 @@ describe('contract-evidence reverify (Issue #376)', () => {
     )).toBe(true);
   });
 
-  it('npm test NEW proof without producer-command is non-genuine', () => {
+  it('npm test NEW proof outside allowlist is unsafe-or-undeclared', () => {
     const body = loadIssue('new-fulfilled.md').replace(
       'proof-command: REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
-      'proof-command: npm test -- reverify',
+      'proof-command: npm test -- producer-emission-unmapped',
     );
     const result = runContractEvidenceReverify(
       baseInput(body, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
     );
-    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
+    expect(result.rows[0]).toMatchObject({
       status: 'unverified',
-      reason: 'non-genuine-proof',
+      reason: 'unsafe-or-undeclared-command',
       verificationMode: 'not-run',
     });
+  });
+
+  it('npm test -- reverify resolves vitest proof and independent producer mapping', () => {
+    expect(isCommandSafe('npm test -- reverify', packRoot)).toBe(true);
+    const resolved = resolveAllowlistedCommand('npm test -- reverify', { repoRoot: packRoot });
+    expect(resolved?.allowlistId).toBe('npm test -- reverify');
+    expect(resolved?.args?.[0]).toContain('vitest.mjs');
+    expect(resolved?.args?.[2]).toBe('reverify');
   });
 
   it('AC2/AC14/reverify: live capture divergence emits divergent with values', () => {
@@ -455,6 +463,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(payload.skipped).not.toBe(true);
     expect(payload.viaAoReviewExecute).toBe(true);
     expect(payload.promptContainsCheckpoint2).toBe(true);
+    expect(payload.summaryRunOutcomeRowsEvaluated).toBe(true);
     expect(payload.summaryIncludesRows).toBe(true);
     expect(payload.summaryIncludesNeverBlocks).toBe(true);
     expect(payload.reviewerOutputIsCheckpoint2Summary).toBe(true);

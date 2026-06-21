@@ -45,11 +45,21 @@ function captureWorktreeFingerprint(cwd: string): string {
   return result.stdout ?? '';
 }
 
-function buildIsolatedEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
+function buildIsolatedEnv(
+  extraEnv: Record<string, string>,
+  options: { binDirs?: string[] } = {},
+): NodeJS.ProcessEnv {
   const isolatedHome = mkdtempSync(path.join(tmpdir(), 'reverify-home-'));
   const isolatedTmp = mkdtempSync(path.join(tmpdir(), 'reverify-tmp-'));
   const nodeBin = path.dirname(process.execPath);
-  const pathEntries = [nodeBin, '/snap/bin', '/usr/local/bin', '/usr/bin', '/bin'].filter((entry) => entry);
+  const pathEntries = [
+    ...(options.binDirs ?? []),
+    nodeBin,
+    '/snap/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ].filter((entry) => entry);
   const env: NodeJS.ProcessEnv = {
     PATH: pathEntries.join(path.delimiter),
     HOME: isolatedHome,
@@ -142,6 +152,23 @@ function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependen
   }
 }
 
+
+function withSandboxBinDir(
+  env: NodeJS.ProcessEnv,
+  sandboxCwd: string,
+  options: { assumeBoundNodeModules?: boolean } = {},
+): NodeJS.ProcessEnv {
+  const binDir = path.join(sandboxCwd, 'node_modules', '.bin');
+  if (!options.assumeBoundNodeModules && !existsSync(binDir)) {
+    return env;
+  }
+  const currentPath = env.PATH ?? '';
+  return {
+    ...env,
+    PATH: [binDir, currentPath].filter(Boolean).join(path.delimiter),
+  };
+}
+
 function buildBwrapSandboxArgs(
   sandboxCwd: string,
   dependencyRoot: string,
@@ -168,9 +195,8 @@ function buildBwrapSandboxArgs(
     args.push('--ro-bind', nodeDir, nodeDir);
   }
 
-  appendNodeModulesBwrapBind(args, sandboxCwd, dependencyRoot);
-
   args.push('--bind', sandboxCwd, sandboxCwd);
+  appendNodeModulesBwrapBind(args, sandboxCwd, dependencyRoot);
   args.push('--chdir', sandboxCwd);
 
   for (const [key, value] of Object.entries(env)) {
@@ -269,7 +295,7 @@ function spawnTrustedBaseIsolated(
     cwd: disposable,
     encoding: 'utf8' as const,
     timeout: options.timeoutMs,
-    env: options.env,
+    env: withSandboxBinDir(options.env, disposable),
     shell: false as const,
   };
 
@@ -298,8 +324,7 @@ function spawnPrHeadIsolated(
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
 
-  linkNodeModulesIntoDisposable(disposable, options.dependencyRoot);
-
+  // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
   if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot)) {
     rmSync(disposable, { recursive: true, force: true });
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
@@ -310,7 +335,7 @@ function spawnPrHeadIsolated(
     cwd: disposable,
     encoding: 'utf8' as const,
     timeout: options.timeoutMs,
-    env: options.env,
+    env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
     shell: false as const,
     dependencyRoot: options.dependencyRoot,
   };
@@ -382,16 +407,28 @@ export function runSandboxedAllowlistedCommand(
 
   const dependencyRoot = options.dependencyRoot ?? options.cwd;
   const beforeFingerprint = captureWorktreeFingerprint(options.cwd);
-  const env = buildIsolatedEnv(resolved.env);
+  const localBinDir = path.join(dependencyRoot, 'node_modules', '.bin');
+  const binDirs = existsSync(localBinDir) ? [localBinDir] : [];
+  const env = buildIsolatedEnv(resolved.env, { binDirs });
   const networkRestricted = options.sandboxMode === 'pr-head-new';
 
-  const result = spawnIsolated(resolved, {
-    cwd: options.cwd,
-    dependencyRoot,
-    timeoutMs: options.timeoutMs,
-    env,
-    networkRestricted,
-  });
+  const npmProofDirect = resolved.allowlistId.startsWith('npm test --')
+    && options.sandboxMode === 'trusted-base';
+  const result = npmProofDirect
+    ? spawnDirect(resolved, {
+      cwd: options.cwd,
+      encoding: 'utf8',
+      timeout: options.timeoutMs,
+      env: withSandboxBinDir(env, options.cwd, { assumeBoundNodeModules: true }),
+      shell: false,
+    })
+    : spawnIsolated(resolved, {
+      cwd: options.cwd,
+      dependencyRoot,
+      timeoutMs: options.timeoutMs,
+      env,
+      networkRestricted,
+    });
 
   const stderr = result.stderr ?? '';
   const blockReason = isSandboxBlocked(stderr, networkRestricted);
