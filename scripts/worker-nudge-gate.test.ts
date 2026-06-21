@@ -291,6 +291,25 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.status).toBe(46);
   });
 
+  it('rejects ungated journaled send on autonomous surface', () => {
+    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    const result = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        input: 'hello worker',
+        env: {
+          ...process.env,
+          AO_JOURNALED_SEND_ASSUME_FILE: '1',
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+        },
+      },
+    );
+    expect(result.status).toBe(46);
+  });
+
   it('ao shim denies raw worker send on autonomous surface', () => {
     const aoShim = path.join(repoRoot, 'scripts/ao');
     const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {

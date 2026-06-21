@@ -495,8 +495,8 @@ projects:
       ao events list --json shows no prior ao send ping for this pending episode,
       send exactly ONE message via the gated worker-nudge command (never raw ao send):
         Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
-          -SessionId <session> -PrNumber <PR> -HeadSha <head-sha> -IntentClass review-findings `
-          -Surface waiting_worker_review_response
+          -SessionId <session> -PrNumber <PR> -HeadSha <head-sha> -ReviewRunId <review-run-id> `
+          -IntentClass review-findings -Surface waiting_worker_review_response
         Transport chokepoint: scripts/journaled-worker-send.ps1 (claim token required).
         Message file must hold the reminder to check pending AO review findings (ao review list),
         report ao report addressing_reviews, or report terminal failure with a reason.

@@ -162,6 +162,7 @@ Operator adoption after merge:
 
 Safe rollback: disable the LLM nudge surface via adoption/preflight failure (scripts keep running);
 do not restore permissive raw autonomous `ao send` for worker nudges.
+   For `review-findings` / `findings-delivery` intents, pass `-ReviewRunId` (AO review-run id from `ao review list`); head SHA alone is not a cycle key.
 
 ## Autonomous orchestrator spawn/git boundary (Issue #324)
 

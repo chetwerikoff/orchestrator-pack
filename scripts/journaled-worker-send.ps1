@@ -37,6 +37,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -212,6 +213,10 @@ if (-not (Test-AoSendFileContract -AoPath $AoPath)) {
 
 $claimResult = $null
 if (-not $AdoptionProbe -and -not $DryRun) {
+    if ((Test-OrchestratorAutonomousSurfaceActive) -and (-not $GatedNudge -or -not $ClaimToken)) {
+        Write-JournaledWorkerSendLog 'worker nudge rejected: autonomous surface requires gated claim token'
+        exit 46
+    }
     if ($GatedNudge -and -not $ClaimToken) {
         Write-JournaledWorkerSendLog 'worker nudge rejected: missing claim token'
         exit 46
