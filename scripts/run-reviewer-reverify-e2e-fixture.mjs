@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * End-to-end reviewer-flow fixture for checkpoint-2 (Issue #376 AC#13).
- * Exercises the AO review --execute --command path (mechanical fallback in CI).
+ * Requires a real `ao review run --execute --command` path; mechanical-only runs do not pass.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -26,30 +26,48 @@ function isCheckpoint2ReviewerSummary(text) {
     && trimmed.includes('rows:');
 }
 
+function listAoSessions() {
+  const listed = spawnSync('ao', ['session', 'ls'], {
+    cwd: packRoot,
+    encoding: 'utf8',
+  });
+  if (listed.status !== 0) {
+    return [];
+  }
+  return listed.stdout
+    .split('\n')
+    .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
+    .filter(Boolean);
+}
+
+function spawnEphemeralFixtureSession() {
+  const spawned = spawnSync(
+    'ao',
+    ['spawn', '--prompt', 'checkpoint-2 contract-evidence reverify e2e fixture holder'],
+    {
+      cwd: packRoot,
+      encoding: 'utf8',
+    },
+  );
+  if (spawned.status !== 0) {
+    return null;
+  }
+  const match = spawned.stdout.match(/SESSION=(opk-\S+)/);
+  return match?.[1] ?? null;
+}
+
 function resolveAoFixtureSession() {
   const envSession = process.env.OPK_REVERIFY_E2E_SESSION?.trim();
   if (envSession) {
     return envSession;
   }
 
-  const listed = spawnSync('ao', ['session', 'ls'], {
-    cwd: packRoot,
-    encoding: 'utf8',
-  });
-  if (listed.status !== 0) {
-    return null;
-  }
-
-  const knownSessions = listed.stdout
-    .split('\n')
-    .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
-    .filter(Boolean);
-
+  const knownSessions = listAoSessions();
   if (knownSessions.includes(preferredSessionId)) {
     return preferredSessionId;
   }
 
-  return null;
+  return spawnEphemeralFixtureSession();
 }
 
 function runReviewCommand() {
@@ -82,37 +100,56 @@ function runAoReviewExecute(sessionId) {
   );
 }
 
-const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
 const aoAvailable = spawnSync('which', ['ao']).status === 0;
-const sessionId = aoAvailable ? resolveAoFixtureSession() : null;
+const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
 
-let viaAo = false;
-let commandProc = runReviewCommand();
-if (aoAvailable && sessionId && process.env.OPK_REVERIFY_E2E_SKIP_AO !== '1') {
-  const aoProc = runAoReviewExecute(sessionId);
-  if (aoProc.status === 0) {
-    viaAo = true;
-  } else if (commandProc.status !== 0) {
-    commandProc = aoProc;
-  }
-}
-
-const summary = commandProc.stdout.trim();
 const output = {
-  viaAoReviewExecute: viaAo,
-  aoSessionId: sessionId,
-  aoSessionIsDedicatedFixture: sessionId === preferredSessionId
-    || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim()),
+  viaAoReviewExecute: false,
+  aoAvailable,
+  aoSessionId: null,
+  aoSessionIsDedicatedFixture: false,
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
   promptContainsInvokeScript: prompt.includes('invoke-contract-evidence-reverify.ps1'),
-  summaryIncludesRows: summary.includes('rows:'),
-  summaryIncludesNeverBlocks: summary.includes('never-blocks: true'),
-  reviewerOutputIsCheckpoint2Summary: isCheckpoint2ReviewerSummary(summary),
-  summary,
+  summaryIncludesRows: false,
+  summaryIncludesNeverBlocks: false,
+  reviewerOutputIsCheckpoint2Summary: false,
+  summary: '',
+  error: null,
 };
 
-const text = JSON.stringify(output, null, 2);
-process.stdout.write(`${text}\n`);
+if (!aoAvailable) {
+  output.error = 'ao CLI is required for AC#13 end-to-end reviewer-flow fixture';
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(1);
+}
+
+const sessionId = resolveAoFixtureSession();
+output.aoSessionId = sessionId;
+output.aoSessionIsDedicatedFixture = sessionId === preferredSessionId
+  || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim());
+
+if (!sessionId) {
+  output.error = 'unable to resolve or provision an AO fixture session for e2e';
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(1);
+}
+
+const aoProc = runAoReviewExecute(sessionId);
+output.viaAoReviewExecute = aoProc.status === 0;
+
+if (!output.viaAoReviewExecute) {
+  output.error = `ao review run --execute failed (exit ${aoProc.status ?? 'null'})`;
+  output.summary = (aoProc.stdout ?? '').trim();
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(1);
+}
+
+const commandProc = runReviewCommand();
+const summary = commandProc.stdout.trim();
+output.summary = summary;
+output.summaryIncludesRows = summary.includes('rows:');
+output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
+output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
 
 const ok =
   commandProc.status === 0
@@ -123,4 +160,5 @@ const ok =
   && output.reviewerOutputIsCheckpoint2Summary
   && !summary.includes('reverify-e2e-probe');
 
+process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 process.exit(ok ? 0 : 1);

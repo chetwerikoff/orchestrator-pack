@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import type { ResolvedAllowlistedCommand } from './reverify-command-resolution.js';
 
 export interface CommandRunResult {
@@ -15,6 +15,8 @@ export interface CommandRunResult {
 }
 
 export type SandboxMode = 'trusted-base' | 'pr-head-new';
+
+const NETWORK_SANDBOX_UNAVAILABLE = 'network-sandbox-unavailable';
 
 const SECRET_ENV_PREFIXES = [
   'GITHUB_',
@@ -35,6 +37,19 @@ function captureWorktreeFingerprint(cwd: string): string {
     shell: false,
   });
   return result.stdout ?? '';
+}
+
+function restoreWorktree(cwd: string): void {
+  spawnSync('git', ['reset', '--hard', 'HEAD'], {
+    cwd,
+    encoding: 'utf8',
+    shell: false,
+  });
+  spawnSync('git', ['clean', '-fd'], {
+    cwd,
+    encoding: 'utf8',
+    shell: false,
+  });
 }
 
 function buildIsolatedEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
@@ -66,6 +81,18 @@ function buildIsolatedEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
   return env;
 }
 
+function networkSandboxUnavailableResult(): SpawnSyncReturns<string> {
+  return {
+    pid: 0,
+    output: ['', NETWORK_SANDBOX_UNAVAILABLE, ''],
+    stdout: '',
+    stderr: NETWORK_SANDBOX_UNAVAILABLE,
+    status: 1,
+    signal: null,
+    error: undefined,
+  };
+}
+
 function spawnIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -74,7 +101,7 @@ function spawnIsolated(
     env: NodeJS.ProcessEnv;
     networkRestricted: boolean;
   },
-) {
+): SpawnSyncReturns<string> {
   const payload = {
     cwd: options.cwd,
     encoding: 'utf8' as const,
@@ -83,15 +110,15 @@ function spawnIsolated(
     shell: false as const,
   };
 
-  if (options.networkRestricted && process.platform === 'linux') {
-    const unshare = spawnSync(
-      'unshare',
-      ['-U', '-n', '-r', resolved.executable, ...resolved.args],
-      payload,
-    );
-    if (!unshare.error && unshare.status === 0) {
-      return unshare;
+  if (options.networkRestricted) {
+    if (process.platform === 'linux') {
+      return spawnSync(
+        'unshare',
+        ['-U', '-n', '-r', resolved.executable, ...resolved.args],
+        payload,
+      );
     }
+    return networkSandboxUnavailableResult();
   }
 
   return spawnSync(resolved.executable, resolved.args, payload);
@@ -128,8 +155,22 @@ export function runSandboxedAllowlistedCommand(
     networkRestricted,
   });
 
+  const stderr = result.stderr ?? '';
+  if (networkRestricted && stderr.includes(NETWORK_SANDBOX_UNAVAILABLE)) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: NETWORK_SANDBOX_UNAVAILABLE,
+      exitCode: result.status,
+      timedOut: false,
+      blocked: true,
+      blockReason: NETWORK_SANDBOX_UNAVAILABLE,
+    };
+  }
+
   const afterFingerprint = captureWorktreeFingerprint(options.cwd);
   if (beforeFingerprint !== afterFingerprint) {
+    restoreWorktree(options.cwd);
     return {
       ok: false,
       stdout: '',
@@ -144,7 +185,7 @@ export function runSandboxedAllowlistedCommand(
   return {
     ok: result.status === 0 && !result.error,
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    stderr,
     exitCode: result.status,
     timedOut: Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'),
     blocked: false,

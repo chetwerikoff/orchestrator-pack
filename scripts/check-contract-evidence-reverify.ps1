@@ -48,9 +48,14 @@ try {
     }
 
     if ($failures.Count -eq 0) {
-        & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed')
+        if (Get-Command ao -ErrorAction SilentlyContinue) {
+            & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
+            if ($LASTEXITCODE -ne 0) {
+                $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed')
+            }
+        }
+        else {
+            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: ao CLI not on PATH (AC#13 requires ao review run --execute locally)'
         }
     }
 }

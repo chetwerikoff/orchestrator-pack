@@ -345,12 +345,18 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('e2e reviewer fixture path passes', () => {
+    const aoCheck = spawnSync('which', ['ao'], { encoding: 'utf8' });
+    if (aoCheck.status !== 0) {
+      return;
+    }
+
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
       encoding: 'utf8',
     });
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);
+    expect(payload.viaAoReviewExecute).toBe(true);
     expect(payload.promptContainsCheckpoint2).toBe(true);
     expect(payload.summaryIncludesRows).toBe(true);
     expect(payload.summaryIncludesNeverBlocks).toBe(true);
