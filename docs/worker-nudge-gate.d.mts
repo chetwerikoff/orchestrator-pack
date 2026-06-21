@@ -2,7 +2,7 @@ export declare const WORKER_NUDGE_GATE_VERSION: string;
 export declare const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY: string;
 export declare const ORCHESTRATOR_TURN_SURFACE: string;
 export declare const AUTONOMOUS_SURFACE_ENV: string;
-export declare const GATED_WORKER_NUDGE_BYPASS_ENV: string;
+export declare const JOURNALED_SEND_INTERNAL_ENV: string;
 export declare const CLASSIFIER_VERSION: string;
 export declare const INTENT_CLASSES: readonly string[];
 export declare const TERMINAL_CLAIM_PHASES: readonly string[];

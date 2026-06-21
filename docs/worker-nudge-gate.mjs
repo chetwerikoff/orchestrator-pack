@@ -20,7 +20,7 @@ export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
 export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
 export const AUTONOMOUS_SURFACE_ENV = 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE';
-export const GATED_WORKER_NUDGE_BYPASS_ENV = 'AO_GATED_WORKER_NUDGE_BYPASS';
+export const JOURNALED_SEND_INTERNAL_ENV = 'AO_JOURNALED_SEND_INTERNAL';
 export const CLASSIFIER_VERSION = 'worker-nudge-intent/v1';
 
 /** @type {readonly string[]} */
@@ -556,8 +556,8 @@ export function evaluateBoundary(input) {
   if (!input.autonomousSurface) {
     return { allowed: true, reason: 'manual_surface' };
   }
-  if (input.claimedBypass) {
-    return { allowed: true, reason: 'gated_bypass' };
+  if (input.journaledTransportInternal) {
+    return { allowed: true, reason: 'journaled_transport_internal' };
   }
   if (containsRawWorkerSendInvocation(input.commandLine) && !isGatedWorkerNudgeParentCommandLine(input.commandLine)) {
     return { allowed: false, reason: 'autonomous_raw_worker_send_denied' };
@@ -572,7 +572,7 @@ export function findForbiddenAutonomousWorkerSendInvocations(commandLines) {
   return toArray(commandLines)
     .map((commandLine) => ({
       commandLine,
-      verdict: evaluateBoundary({ commandLine, autonomousSurface: true, claimedBypass: false }),
+      verdict: evaluateBoundary({ commandLine, autonomousSurface: true, journaledTransportInternal: false }),
     }))
     .filter((entry) => !entry.verdict.allowed);
 }

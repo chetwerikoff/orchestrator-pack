@@ -231,12 +231,35 @@ function Read-WorkerNudgeClaimRecord {
     }
 }
 
+function ConvertTo-WorkerNudgeClaimRecordHashtable {
+    param([object]$Record)
+
+    if ($Record -is [hashtable]) {
+        return @{} + $Record
+    }
+
+    $ht = @{}
+    foreach ($prop in $Record.PSObject.Properties) {
+        $ht[$prop.Name] = $prop.Value
+    }
+    return $ht
+}
+
 function Write-WorkerNudgeClaimAtomic {
-    param([string]$Path, [object]$Record)
+    param(
+        [string]$Path,
+        [object]$Record,
+        [switch]$AllowOverwrite
+    )
+
     $dir = Split-Path -Parent $Path
     $tmp = Join-Path $dir ".$([guid]::NewGuid().ToString('n')).tmp"
     ($Record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $tmp -Encoding UTF8
     try {
+        if ($AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            [System.IO.File]::Move($tmp, $Path, $true)
+            return
+        }
         [System.IO.File]::Move($tmp, $Path, $false)
     }
     catch [System.Management.Automation.MethodException] {
@@ -245,6 +268,40 @@ function Write-WorkerNudgeClaimAtomic {
         }
         [System.IO.File]::Move($tmp, $Path)
     }
+}
+
+function Find-WorkerNudgeClaimTerminalRecord {
+    param(
+        [string]$Namespace,
+        [string]$Key,
+        [string]$TupleKey = ''
+    )
+
+    $terminalDir = Get-WorkerNudgeClaimTerminalDir -Namespace $Namespace
+    if (-not (Test-Path -LiteralPath $terminalDir)) {
+        return $null
+    }
+
+    foreach ($file in Get-ChildItem -LiteralPath $terminalDir -File -Filter '*.json' | Sort-Object LastWriteTimeUtc -Descending) {
+        try {
+            $record = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+            $phase = if ($record.phase) { [string]$record.phase } else { [string]$record.state }
+            if ($phase -notin @('SENT', 'UNCERTAIN')) {
+                continue
+            }
+            if ([string]$record.key -eq $Key) {
+                return @{ record = $record; path = $file.FullName; phase = $phase }
+            }
+            if ($TupleKey -and [string]$record.tupleKey -eq $TupleKey) {
+                return @{ record = $record; path = $file.FullName; phase = $phase }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $null
 }
 
 function New-WorkerNudgeClaimActiveRecord {
@@ -471,6 +528,20 @@ function Acquire-WorkerNudgeClaim {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
             }
 
+            $terminalHit = Find-WorkerNudgeClaimTerminalRecord -Namespace $resolved -Key $key -TupleKey $TupleKey
+            if ($terminalHit) {
+                return @{
+                    acquired  = $false
+                    reason    = 'already_served'
+                    claim     = $terminalHit.record
+                    path      = $terminalHit.path
+                    namespace = $resolved
+                    key       = $key
+                    terminal  = $true
+                    phase     = $terminalHit.phase
+                }
+            }
+
             Write-WorkerNudgeClaimAtomic -Path $path -Record $record
             if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
                 return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $key }
@@ -502,11 +573,12 @@ function Set-WorkerNudgeClaimSendAttempted {
     if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
         return @{ ok = $false; reason = 'lost_ownership' }
     }
-    $read.record.phase = 'SEND_ATTEMPTED'
-    $read.record.state = 'SEND_ATTEMPTED'
-    $read.record.sendAttemptedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    Write-WorkerNudgeClaimAtomic -Path $ClaimResult.path -Record $read.record
-    $ClaimResult.claim = $read.record
+    $record = ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record
+    $record.phase = 'SEND_ATTEMPTED'
+    $record.state = 'SEND_ATTEMPTED'
+    $record.sendAttemptedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    Write-WorkerNudgeClaimAtomic -Path $ClaimResult.path -Record $record -AllowOverwrite
+    $ClaimResult.claim = $record
     return @{ ok = $true; phase = 'SEND_ATTEMPTED' }
 }
 

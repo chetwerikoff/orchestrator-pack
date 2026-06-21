@@ -38,14 +38,18 @@ function Test-AtomicWorkerNudgeClaimCapabilityPresent {
     return $text -match 'Write-WorkerNudgeClaimAtomic' -and $text -match 'Enter-WorkerNudgeClaimMutex'
 }
 
+function Test-JournaledWorkerSendInternalActive {
+    return -not [string]::IsNullOrWhiteSpace([string]$env:AO_JOURNALED_SEND_INTERNAL)
+}
+
 function Test-AutonomousRawWorkerSendDenied {
     param([string[]]$Argv)
 
     if (-not (Test-OrchestratorAutonomousSurfaceActive)) {
         return @{ denied = $false; reason = 'manual_surface' }
     }
-    if ([string]$env:AO_GATED_WORKER_NUDGE_BYPASS -eq '1') {
-        return @{ denied = $false; reason = 'gated_bypass' }
+    if (Test-JournaledWorkerSendInternalActive) {
+        return @{ denied = $false; reason = 'journaled_transport_internal' }
     }
     $joined = ($Argv -join ' ').Trim()
     if ($joined -match '(?i)^send\s+\S+') {

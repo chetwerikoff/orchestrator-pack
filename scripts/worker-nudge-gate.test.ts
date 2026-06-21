@@ -203,7 +203,7 @@ describe('worker nudge gate (#384)', () => {
     const verdict = evaluateBoundary({
       commandLine: 'ao send opk-worker hello',
       autonomousSurface: true,
-      claimedBypass: false,
+      journaledTransportInternal: false,
     });
     expect(verdict.allowed).toBe(false);
     expect(findForbiddenAutonomousWorkerSendInvocations(['ao send opk-worker ping'])).toHaveLength(1);
@@ -254,24 +254,23 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const dir = tempClaimDir();
     try {
       const script = `
-        . ${psString(helperPath)}
+        $helper = ${psString(helperPath)}
         $ns = ${psString(dir)}
-        $jobs = 1..2 | ForEach-Object {
-          Start-Job -ScriptBlock {
-            param($helper,$ns)
-            . $helper
-            $r = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
-            [pscustomobject]@{ acquired = [bool]$r.acquired; reason = [string]$r.reason }
-          } -ArgumentList ${psString(helperPath)}, $ns
-        }
-        $results = $jobs | Wait-Job | Receive-Job
-        $jobs | Remove-Job -Force
-        $results | ConvertTo-Json -Compress
+        $results = 1..2 | ForEach-Object -Parallel {
+          . $using:helper
+          $r = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $using:ns -Surface 'test'
+          [pscustomobject]@{ acquired = [bool]$r.acquired; reason = [string]$r.reason }
+        } -ThrottleLimit 2
+        [pscustomobject]@{
+          winners = @($results | Where-Object { $_.acquired }).Count
+          losers = @($results | Where-Object { -not $_.acquired }).Count
+          activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-380-*.json').Name).Count
+        } | ConvertTo-Json -Compress
       `;
-      const results = JSON.parse(runPwsh(script));
-      const rows = Array.isArray(results) ? results : [results];
-      expect(rows.filter((r) => r.acquired)).toHaveLength(1);
-      expect(rows.filter((r) => !r.acquired)).toHaveLength(1);
+      const result = JSON.parse(runPwsh(script));
+      expect(result.winners).toBe(1);
+      expect(result.losers).toBe(1);
+      expect(result.activeCount).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -301,6 +300,67 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     });
     expect(result.status).toBe(93);
     expect(result.stderr).toMatch(/autonomous worker nudges paused/i);
+  });
+
+  it('autonomous guard allows journaled transport internal sentinel', () => {
+    const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+    const script = `
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_JOURNALED_SEND_INTERNAL = 'test-sentinel'
+      . ${psString(guard)}
+      $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
+      [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.denied).toBe(false);
+    expect(result.reason).toBe('journaled_transport_internal');
+  });
+
+  it('does not reacquire after terminal SENT claim', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason; terminal = [bool]$retry.terminal }
+          | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(false);
+      expect(result.reason).toBe('already_served');
+      expect(result.terminal).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists SEND_ATTEMPTED on gated claim before transport', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim.acquired = $true
+        $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
+        $read = Read-WorkerNudgeClaimRecord -Path $claim.path
+        [pscustomobject]@{
+          attemptOk = [bool]$attempt.ok
+          phase = [string]$read.record.phase
+          sendAttemptedAtUtc = [string]$read.record.sendAttemptedAtUtc
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.attemptOk).toBe(true);
+      expect(result.phase).toBe('SEND_ATTEMPTED');
+      expect(result.sendAttemptedAtUtc).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
