@@ -300,25 +300,76 @@ export function authorizationBaseShaMatches(authBaseSha, scope) {
  * @param {string} authBaseSha
  * @param {{ headSha: string, baseSha: string, baseParentSha?: string }} scope
  */
-export function authorizationHeadShaMatches(authHeadSha, authBaseSha, scope) {
+export function authorizationHeadShaMatches(authHeadSha, scope) {
   const head = String(authHeadSha ?? '').trim();
   const scopeHead = String(scope.headSha ?? '').trim();
-  const base = String(authBaseSha ?? '').trim();
-  const scopeBase = String(scope.baseSha ?? '').trim();
-  const scopeParent = String(scope.baseParentSha ?? '').trim();
   if (!head || !scopeHead) {
     return false;
   }
-  if (head === scopeHead) {
-    return true;
-  }
-  if (base.length > 0 && scopeParent.length > 0 && base === scopeParent && base !== scopeBase) {
-    return true;
-  }
-  return false;
+  return head === scopeHead;
 }
 
-export function findMatchingAuthorization(authorizations, scope) {
+/**
+ * @param {string} authBaseSha
+ * @param {{ baseSha: string, baseParentSha?: string }} scope
+ */
+export function authorizationStrictBranchParentAdvance(authBaseSha, scope) {
+  const base = String(authBaseSha ?? '').trim();
+  const scopeBase = String(scope.baseSha ?? '').trim();
+  const scopeParent = String(scope.baseParentSha ?? '').trim();
+  return base.length > 0 && scopeParent.length > 0 && base === scopeParent && base !== scopeBase;
+}
+
+/**
+ * @param {Record<string, unknown>} auth
+ * @param {{ headSha: string, baseSha: string, baseParentSha?: string }} scope
+ * @param {(ref: string, relPath: string) => string | null} readAtRef
+ */
+export function compareAuthorizedRevisionContent(auth, scope, readAtRef) {
+  const authBaseSha = String(auth.baseSha ?? '').trim();
+  if (!authorizationStrictBranchParentAdvance(authBaseSha, scope)) {
+    return false;
+  }
+  const authHeadSha = String(auth.headSha ?? '').trim();
+  const scopeHeadSha = String(scope.headSha ?? '').trim();
+  if (!authHeadSha || !scopeHeadSha || authHeadSha === scopeHeadSha) {
+    return false;
+  }
+  const paths = new Set();
+  for (const entry of Array.isArray(auth.addedPaths) ? auth.addedPaths : []) {
+    paths.add(String(entry).replace(/\\/g, '/'));
+  }
+  for (const entry of Array.isArray(auth.changedGovernedFiles) ? auth.changedGovernedFiles : []) {
+    paths.add(String(entry).replace(/\\/g, '/'));
+  }
+  for (const relPath of paths) {
+    const authContent = readAtRef(authHeadSha, relPath);
+    const scopeContent = readAtRef(scopeHeadSha, relPath);
+    if (authContent == null || scopeContent == null || authContent !== scopeContent) {
+      return false;
+    }
+  }
+  return paths.size > 0;
+}
+
+/**
+ * @param {Record<string, unknown>} auth
+ * @param {{ headSha: string, baseSha: string, baseParentSha?: string }} scope
+ * @param {{ verifyAuthorizedRevision?: (auth: Record<string, unknown>, scope: { headSha: string, baseSha: string, baseParentSha?: string }) => boolean }} [options]
+ */
+export function authorizationRevisionAllowed(auth, scope, options = {}) {
+  const authHeadSha = String(auth.headSha ?? '').trim();
+  if (!authHeadSha) {
+    return false;
+  }
+  if (authorizationHeadShaMatches(authHeadSha, scope)) {
+    return true;
+  }
+  const verifyRevision = options.verifyAuthorizedRevision;
+  return typeof verifyRevision === 'function' && verifyRevision(auth, scope);
+}
+
+export function findMatchingAuthorization(authorizations, scope, options = {}) {
   const wantAdded = [...scope.addedPaths].map((entry) => canonicalLegacyDraftPath(entry) ?? entry).sort();
   const wantChanged = [...scope.changedGovernedFiles].sort();
   for (const auth of authorizations) {
@@ -326,8 +377,7 @@ export function findMatchingAuthorization(authorizations, scope) {
     if (!authorizationBaseShaMatches(authBaseSha, scope)) {
       continue;
     }
-    const authHeadSha = String(auth.headSha ?? '').trim();
-    if (!authorizationHeadShaMatches(authHeadSha, authBaseSha, scope)) {
+    if (!authorizationRevisionAllowed(auth, scope, options)) {
       continue;
     }
     const authAdded = [...(Array.isArray(auth.addedPaths) ? auth.addedPaths : [])]
@@ -440,7 +490,9 @@ export function evaluateLegacyListGuard(options) {
       changedGovernedFiles,
     };
     const authorizations = parseAuthorizationStore(options.baseAuthorizations);
-    const match = findMatchingAuthorization(authorizations, scope);
+    const match = findMatchingAuthorization(authorizations, scope, {
+      verifyAuthorizedRevision: options.verifyAuthorizedRevision,
+    });
     if (!match) {
       return {
         ...baseVerdict,
@@ -534,7 +586,9 @@ export function evaluateLegacyListGuard(options) {
     changedGovernedFiles,
   };
   const authorizations = parseAuthorizationStore(options.baseAuthorizations);
-  const match = findMatchingAuthorization(authorizations, scope);
+  const match = findMatchingAuthorization(authorizations, scope, {
+    verifyAuthorizedRevision: options.verifyAuthorizedRevision,
+  });
   if (!match) {
     const reason = added.length > 0
       ? `unauthorized legacy path addition: ${added.join(', ')}`

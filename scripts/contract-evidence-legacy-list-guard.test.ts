@@ -21,6 +21,9 @@ import {
   evaluateLegacyListGuard,
   authorizationBaseShaMatches,
   authorizationHeadShaMatches,
+  authorizationRevisionAllowed,
+  compareAuthorizedRevisionContent,
+  authorizationStrictBranchParentAdvance,
   findMatchingAuthorization,
   governedSurfacePaths,
   isGuardPresentOnBase,
@@ -207,12 +210,10 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     };
     expect(authorizationHeadShaMatches(
       'head1111111111111111111111111111111111111111',
-      'base1111111111111111111111111111111111111111',
       scope,
     )).toBe(false);
     expect(authorizationHeadShaMatches(
       'head2222222222222222222222222222222222222222',
-      'base1111111111111111111111111111111111111111',
       scope,
     )).toBe(true);
   });
@@ -238,25 +239,75 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-parent' });
   });
 
-  it('AC2c accepts authorization after strict branch update with new head SHA', () => {
+  it('AC2c accepts authorization after strict branch update with matching revision content', () => {
     const added = ['docs/issues_drafts/99-new-draft.md'];
     const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
-    const match = findMatchingAuthorization([{
+    const auth = {
       id: 'auth-strict-update',
       baseSha: 'parent000000000000000000000000000000000000',
       headSha: 'head1111111111111111111111111111111111111111',
       addedPaths: added,
       changedGovernedFiles: changedFiles,
       source: { type: 'maintainer', id: 'admin-strict' },
-    }], {
+    };
+    const scope = {
       baseSha: 'base2222222222222222222222222222222222222222',
       baseParentSha: 'parent000000000000000000000000000000000000',
       headSha: 'head3333333333333333333333333333333333333333',
       addedPaths: added,
       changedGovernedFiles: changedFiles,
+    };
+    const content = {
+      'docs/issues_drafts/99-new-draft.md': '# authorized draft\n',
+      'scripts/contract-evidence-legacy-drafts.json': '{"paths":[]}\n',
+    };
+    const readAtRef = (ref: string, relPath: string) => (
+      ref === 'head1111111111111111111111111111111111111111'
+      || ref === 'head3333333333333333333333333333333333333333'
+    ) ? content[relPath] ?? null : null;
+    expect(compareAuthorizedRevisionContent(auth, scope, readAtRef)).toBe(true);
+    const match = findMatchingAuthorization([auth], scope, {
+      verifyAuthorizedRevision: (candidate, candidateScope) => (
+        compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef)
+      ),
     });
     expect(match).not.toBeNull();
     expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-strict' });
+  });
+
+  it('rejects parent-bound authorization when rebased head content diverges', () => {
+    const added = ['docs/issues_drafts/99-new-draft.md'];
+    const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
+    const auth = {
+      baseSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head1111111111111111111111111111111111111111',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+      source: { type: 'maintainer', id: 'admin-strict' },
+    };
+    const scope = {
+      baseSha: 'base2222222222222222222222222222222222222222',
+      baseParentSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head3333333333333333333333333333333333333333',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+    };
+    const readAtRef = (ref: string, relPath: string) => {
+      if (ref === 'head1111111111111111111111111111111111111111') {
+        return '# authorized draft\n';
+      }
+      if (ref === 'head3333333333333333333333333333333333333333' && relPath === added[0]) {
+        return '# malicious draft\n';
+      }
+      return '{"paths":[]}\n';
+    };
+    expect(compareAuthorizedRevisionContent(auth, scope, readAtRef)).toBe(false);
+    const match = findMatchingAuthorization([auth], scope, {
+      verifyAuthorizedRevision: (candidate, candidateScope) => (
+        compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef)
+      ),
+    });
+    expect(match).toBeNull();
   });
 
   it('AC12d rejects stale headSha when merge base matches authorization baseSha', () => {

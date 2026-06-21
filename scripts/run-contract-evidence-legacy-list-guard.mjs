@@ -11,6 +11,7 @@ import { LEGACY_LIST_REL_PATH } from './contract-evidence-path.mjs';
 import {
   AUTHORIZATIONS_REL_PATH,
   GOVERNED_MANIFEST_REL_PATH,
+  compareAuthorizedRevisionContent,
   evaluateLegacyListGuard,
   formatLegacyListGuardVerdict,
   isGuardPresentOnBase,
@@ -209,6 +210,11 @@ function main() {
     }
   }
   const legacyListPath = baseManifest.legacyListPath ?? LEGACY_LIST_REL_PATH;
+  const verifyAuthorizedRevision = (auth, scope) => compareAuthorizedRevisionContent(
+    auth,
+    scope,
+    (ref, relPath) => readGitFile(repoRoot, ref, relPath),
+  );
   const verdict = evaluateLegacyListGuard({
     baseSha,
     headSha,
@@ -224,6 +230,7 @@ function main() {
     manifest: baseManifest,
     headManifest,
     baseParentSha,
+    verifyAuthorizedRevision,
   });
 
   const output = formatLegacyListGuardVerdict(verdict);

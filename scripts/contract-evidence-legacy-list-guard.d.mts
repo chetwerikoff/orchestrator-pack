@@ -70,8 +70,29 @@ export function authorizationBaseShaMatches(
 
 export function authorizationHeadShaMatches(
   authHeadSha: string,
+  scope: { headSha: string },
+): boolean;
+
+export function authorizationStrictBranchParentAdvance(
   authBaseSha: string,
+  scope: { baseSha: string; baseParentSha?: string },
+): boolean;
+
+export function compareAuthorizedRevisionContent(
+  auth: Record<string, unknown>,
   scope: { headSha: string; baseSha: string; baseParentSha?: string },
+  readAtRef: (ref: string, relPath: string) => string | null,
+): boolean;
+
+export function authorizationRevisionAllowed(
+  auth: Record<string, unknown>,
+  scope: { headSha: string; baseSha: string; baseParentSha?: string },
+  options?: {
+    verifyAuthorizedRevision?: (
+      auth: Record<string, unknown>,
+      scope: { headSha: string; baseSha: string; baseParentSha?: string },
+    ) => boolean;
+  },
 ): boolean;
 
 export function findMatchingAuthorization(
