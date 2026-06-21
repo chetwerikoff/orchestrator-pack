@@ -7,7 +7,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bootstrapLegacyNudgedCycle, buildOwnerCycleKey, getOwnerCycleRecord } from './worker-iteration-cycle.mjs';
+import {
+  evaluateAutonomousGatePreflight,
+  loadAutonomousCapabilitiesInventory,
+  validateCapabilityInventory,
+} from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+export { validateCapabilityInventory };
 
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
 export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v1';
@@ -574,76 +580,36 @@ export function findForbiddenAutonomousWorkerSendInvocations(commandLines) {
  * @param {object} input
  */
 export function evaluatePreflight(input) {
-  if (input.loadedGateVersion !== WORKER_NUDGE_GATE_VERSION) {
-    return {
-      ok: false,
-      reason: 'gate_preflight_stale_or_missing',
-      auditShape: 'preflight_refusal',
-      markerState: String(input.loadedGateVersion ?? ''),
-    };
-  }
-  if (input.atomicClaimPresent === false) {
-    return {
-      ok: false,
-      reason: 'atomic_claim_capability_missing',
-      auditShape: 'preflight_refusal',
-      markerState: ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
-    };
-  }
-  for (const capability of toArray(input.liveCapabilities)) {
-    const classification = String(capability?.classification ?? '').toLowerCase();
-    if (!classification || (classification !== 'gated' && classification !== 'unavailable')) {
-      return {
-        ok: false,
-        reason: 'live_capability_unclassified',
-        auditShape: 'preflight_refusal',
-        markerState: String(capability?.id ?? ''),
-      };
-    }
-  }
-  const raw = toArray(input.liveCapabilities).find((row) => row.id === 'ao-worker-send-raw');
-  if (raw && String(raw.classification).toLowerCase() !== 'unavailable') {
-    return {
-      ok: false,
-      reason: 'raw_worker_send_not_unavailable',
-      auditShape: 'preflight_refusal',
-      markerState: 'ao-worker-send-raw',
-    };
-  }
-  return { ok: true, reason: 'gate_preflight_ok', auditShape: 'none' };
+  return evaluateAutonomousGatePreflight(input, {
+    expectedGateVersion: WORKER_NUDGE_GATE_VERSION,
+    atomicClaimCapability: ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
+    rawCapabilityId: 'ao-worker-send-raw',
+    rawNotUnavailableReason: 'raw_worker_send_not_unavailable',
+  });
 }
 
 /**
  * @param {string} [inventoryPath]
  */
 export function loadAutonomousWorkerNudgeCapabilities(inventoryPath) {
-  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const resolved =
-    inventoryPath ?? path.join(repoRoot, 'docs/autonomous-worker-nudge-capabilities.json');
-  return JSON.parse(readFileSync(resolved, 'utf8'));
+  const inventory = loadAutonomousCapabilitiesInventory(
+    inventoryPath,
+    'docs/autonomous-worker-nudge-capabilities.json',
+  );
+  const shared = loadAutonomousCapabilitiesInventory(
+    undefined,
+    'docs/autonomous-shared-capabilities.json',
+  );
+  const byId = new Map();
+  for (const row of [...(shared.capabilities ?? []), ...(inventory.capabilities ?? [])]) {
+    byId.set(String(row.id), row);
+  }
+  return { ...inventory, capabilities: [...byId.values()] };
 }
 
 /**
  * @param {object} input
  */
-export function validateCapabilityInventory(input) {
-  const repoIds = new Set(toArray(input.repoInventory).map((row) => String(row.id)));
-  const violations = [];
-  for (const row of toArray(input.repoInventory)) {
-    const classification = String(row.classification ?? '');
-    if (classification !== 'gated' && classification !== 'unavailable') {
-      violations.push(`unclassified repo capability: ${row.id}`);
-    }
-  }
-  for (const live of toArray(input.liveSurfaces)) {
-    const id = String(live.id ?? '');
-    if (!repoIds.has(id)) {
-      violations.push(`live capability missing from repo inventory: ${id}`);
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-
 /**
  * @param {object} input
  */

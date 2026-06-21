@@ -9,10 +9,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
-}
-$RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+. (Join-Path $PSScriptRoot 'lib/Autonomous-GateCommon.ps1')
+$RepoRoot = Resolve-PackGateRepoRoot -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
 $inventoryPath = if ($InventoryPath) { $InventoryPath } else { Join-Path $RepoRoot 'docs/autonomous-worker-nudge-capabilities.json' }
 $inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
 $violations = [System.Collections.Generic.List[string]]::new()

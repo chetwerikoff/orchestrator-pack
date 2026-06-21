@@ -10,6 +10,7 @@ $Script:AutonomousWorkerNudgeCapabilityInventory = Join-Path (Split-Path -Parent
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousReviewStartGate.ps1')
+. (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
 
 function Get-WorkerNudgeGateVersion {
     return $Script:WorkerNudgeGateVersion
@@ -19,7 +20,15 @@ function Get-AutonomousWorkerNudgeCapabilityInventory {
     if (-not (Test-Path -LiteralPath $Script:AutonomousWorkerNudgeCapabilityInventory)) {
         throw "missing capability inventory: $Script:AutonomousWorkerNudgeCapabilityInventory"
     }
-    return (Get-Content -LiteralPath $Script:AutonomousWorkerNudgeCapabilityInventory -Raw | ConvertFrom-Json)
+    $inventory = Get-Content -LiteralPath $Script:AutonomousWorkerNudgeCapabilityInventory -Raw | ConvertFrom-Json
+    $sharedPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-shared-capabilities.json'
+    if (-not (Test-Path -LiteralPath $sharedPath)) { return $inventory }
+    $shared = Get-Content -LiteralPath $sharedPath -Raw | ConvertFrom-Json
+    $byId = @{}
+    foreach ($row in @($shared.capabilities)) { $byId[[string]$row.id] = $row }
+    foreach ($row in @($inventory.capabilities)) { $byId[[string]$row.id] = $row }
+    $inventory.capabilities = @($byId.Values)
+    return $inventory
 }
 
 function Invoke-WorkerNudgeFilterCli {
@@ -58,16 +67,7 @@ function Get-LiveAutonomousWorkerNudgeCapabilities {
     param([string]$ConfiguredGateVersion = '')
 
     $inventory = Get-AutonomousWorkerNudgeCapabilityInventory
-    $configured = if ($ConfiguredGateVersion) { $ConfiguredGateVersion } else { [string]$inventory.version }
-    return @(
-        foreach ($row in @($inventory.capabilities)) {
-            [pscustomobject]@{
-                id             = [string]$row.id
-                classification = [string]$row.classification
-                gateVersion    = $configured
-            }
-        }
-    )
+    return Get-LiveAutonomousGateCapabilities -Inventory $inventory -ConfiguredGateVersion $ConfiguredGateVersion
 }
 
 function Test-WorkerNudgeGatePreflight {
