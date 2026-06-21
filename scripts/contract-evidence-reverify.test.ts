@@ -79,6 +79,19 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(result.rows[0].reason).toBeUndefined();
   });
 
+  it('structured producer nonzero exit is divergent not producer-verified', () => {
+    const result = runContractEvidenceReverify(baseInput(loadIssue('live-exit-nonzero.md'), {
+      prBody: 'Closes #9012\n',
+      explicitIssueNumber: 9012,
+    }));
+    expect(result.rows[0]).toMatchObject({
+      status: 'divergent',
+      verificationMode: 'live',
+      producerVerified: false,
+    });
+    expect(result.rows[0].observed).toContain('exit:');
+  });
+
   it('AC2/AC14/reverify: live capture divergence emits divergent with values', () => {
     const result = runContractEvidenceReverify(baseInput(loadIssue('live-divergent.md'), {
       prBody: 'Closes #9002\n',

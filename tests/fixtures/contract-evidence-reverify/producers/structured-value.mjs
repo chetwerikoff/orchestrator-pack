@@ -29,4 +29,9 @@ if (process.env.REVERIFY_ATTEMPT_MUTATION === '1') {
   }
 }
 
+const forceExitCode = process.env.REVERIFY_FORCE_EXIT_CODE;
 process.stdout.write(`${formatJsonOutput(raw)}\n`);
+if (forceExitCode !== undefined) {
+  const code = Number(forceExitCode);
+  process.exit(Number.isFinite(code) ? code : 1);
+}

@@ -233,6 +233,7 @@ function isProducerCommandUntrusted(
 
 function runTrustedCommand(command: string, options: {
   cwd: string;
+  dependencyRoot?: string;
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
@@ -251,6 +252,7 @@ function runTrustedCommand(command: string, options: {
 
   return runSandboxedAllowlistedCommand(resolved, {
     cwd: options.cwd,
+    dependencyRoot: options.dependencyRoot ?? options.cwd,
     timeoutMs: options.timeoutMs,
     sandboxMode: options.sandboxMode,
     forceUnreachable: options.forceUnreachable,
@@ -487,6 +489,7 @@ function evaluateCaptureRow(input: {
   if (canRunLive) {
     const run = runTrustedCommand(command, {
       cwd: trustedBaseRoot,
+      dependencyRoot: trustedBaseRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
       sandboxMode: 'trusted-base',
@@ -594,11 +597,12 @@ function evaluateNewRow(input: {
   rowIndex: number;
   row: Record<string, string>;
   markdown: string;
+  trustedBaseRoot: string;
   reviewTargetRoot: string;
   timeoutMs: number;
   forceProducerUnreachable?: boolean;
 }): ReverifyRowResult {
-  const { row, rowIndex, markdown, reviewTargetRoot, timeoutMs, forceProducerUnreachable } = input;
+  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable } = input;
   const evidence = row.evidence ?? '';
   const acMatch = evidence.match(/^NEW\(produced-by AC#(\d+)\)$/i);
   if (!acMatch) {
@@ -623,6 +627,7 @@ function evaluateNewRow(input: {
 
   const run = runTrustedCommand(proofCommand, {
     cwd: reviewTargetRoot,
+    dependencyRoot: trustedBaseRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
@@ -655,6 +660,7 @@ function evaluateNewRow(input: {
 
   const independentRun = runTrustedCommand(independentCommand, {
     cwd: reviewTargetRoot,
+    dependencyRoot: trustedBaseRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
@@ -874,6 +880,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
           rowIndex: index,
           row,
           markdown: input.boundSnapshotBody,
+          trustedBaseRoot: input.trustedBaseRoot,
           reviewTargetRoot,
           timeoutMs,
           forceProducerUnreachable: input.forceProducerUnreachable,

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -33,6 +33,8 @@ const SECRET_ENV_PREFIXES = [
 ];
 
 const READONLY_HOST_BINDS = ['/usr', '/bin', '/lib', '/lib64', '/etc/resolv.conf', '/snap'];
+
+let cachedBwrapSandboxReady: boolean | undefined;
 
 function captureWorktreeFingerprint(cwd: string): string {
   const result = spawnSync('git', ['status', '--porcelain'], {
@@ -124,16 +126,27 @@ function createDisposableWorktreeCopy(cwd: string): string | null {
   return dest;
 }
 
-function spawnWithBwrap(
-  resolved: ResolvedAllowlistedCommand,
-  payload: {
-    cwd: string;
-    encoding: 'utf8';
-    timeout: number;
-    env: NodeJS.ProcessEnv;
-    shell: false;
-  },
-): SpawnSyncReturns<string> {
+function linkNodeModulesIntoDisposable(disposable: string, dependencyRoot: string): void {
+  const hostNodeModules = path.join(dependencyRoot, 'node_modules');
+  const sandboxNodeModules = path.join(disposable, 'node_modules');
+  if (!existsSync(hostNodeModules) || existsSync(sandboxNodeModules)) {
+    return;
+  }
+  symlinkSync(hostNodeModules, sandboxNodeModules, 'dir');
+}
+
+function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependencyRoot: string): void {
+  const hostNodeModules = path.join(dependencyRoot, 'node_modules');
+  if (existsSync(hostNodeModules)) {
+    args.push('--ro-bind', hostNodeModules, path.join(sandboxCwd, 'node_modules'));
+  }
+}
+
+function buildBwrapSandboxArgs(
+  sandboxCwd: string,
+  dependencyRoot: string,
+  env: NodeJS.ProcessEnv,
+): string[] {
   const args: string[] = [
     '--die-with-parent',
     '--unshare-net',
@@ -155,18 +168,66 @@ function spawnWithBwrap(
     args.push('--ro-bind', nodeDir, nodeDir);
   }
 
-  args.push('--bind', payload.cwd, payload.cwd);
-  args.push('--chdir', payload.cwd);
+  appendNodeModulesBwrapBind(args, sandboxCwd, dependencyRoot);
 
-  for (const [key, value] of Object.entries(payload.env)) {
+  args.push('--bind', sandboxCwd, sandboxCwd);
+  args.push('--chdir', sandboxCwd);
+
+  for (const [key, value] of Object.entries(env)) {
     if (value === undefined) {
       continue;
     }
     args.push('--setenv', key, String(value));
   }
 
-  args.push('--', resolved.executable, ...resolved.args);
+  return args;
+}
 
+function isBwrapInternalFailure(result: SpawnSyncReturns<string>): boolean {
+  if (result.status === 0 || result.error) {
+    return false;
+  }
+  const stderr = result.stderr ?? '';
+  return /(^|\n)bwrap:/m.test(stderr)
+    || /Permission denied|Operation not permitted|Can't (bind|mount)|No permissions to creating/i.test(stderr);
+}
+
+function ensureBwrapSandboxReady(sandboxCwd: string, dependencyRoot: string): boolean {
+  if (cachedBwrapSandboxReady !== undefined) {
+    return cachedBwrapSandboxReady;
+  }
+
+  const probeEnv = buildIsolatedEnv({});
+  const args = buildBwrapSandboxArgs(sandboxCwd, dependencyRoot, probeEnv);
+  const truePath = existsSync('/bin/true') ? '/bin/true' : process.execPath;
+  if (truePath === process.execPath) {
+    args.push('--', process.execPath, '-e', 'process.exit(0)');
+  } else {
+    args.push('--', truePath);
+  }
+
+  const probe = spawnSync('bwrap', args, {
+    encoding: 'utf8',
+    timeout: 5000,
+    shell: false,
+  });
+  cachedBwrapSandboxReady = probe.status === 0 && !probe.error && !isBwrapInternalFailure(probe);
+  return cachedBwrapSandboxReady;
+}
+
+function spawnWithBwrap(
+  resolved: ResolvedAllowlistedCommand,
+  payload: {
+    cwd: string;
+    encoding: 'utf8';
+    timeout: number;
+    env: NodeJS.ProcessEnv;
+    shell: false;
+    dependencyRoot: string;
+  },
+): SpawnSyncReturns<string> {
+  const args = buildBwrapSandboxArgs(payload.cwd, payload.dependencyRoot, payload.env);
+  args.push('--', resolved.executable, ...resolved.args);
   return spawnSync('bwrap', args, payload);
 }
 
@@ -191,6 +252,7 @@ function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
     cwd: string;
+    dependencyRoot: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
   },
@@ -199,6 +261,8 @@ function spawnTrustedBaseIsolated(
   if (!disposable) {
     return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   }
+
+  linkNodeModulesIntoDisposable(disposable, options.dependencyRoot);
 
   const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
   const payload = {
@@ -220,6 +284,7 @@ function spawnPrHeadIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
     cwd: string;
+    dependencyRoot: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
   },
@@ -233,6 +298,13 @@ function spawnPrHeadIsolated(
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
 
+  linkNodeModulesIntoDisposable(disposable, options.dependencyRoot);
+
+  if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot)) {
+    rmSync(disposable, { recursive: true, force: true });
+    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
+  }
+
   const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
   const payload = {
     cwd: disposable,
@@ -240,14 +312,15 @@ function spawnPrHeadIsolated(
     timeout: options.timeoutMs,
     env: options.env,
     shell: false as const,
+    dependencyRoot: options.dependencyRoot,
   };
 
   try {
     const isolated = spawnWithBwrap(sandboxResolved, payload);
-    if (!isolated.error) {
-      return isolated;
+    if (isolated.error || isBwrapInternalFailure(isolated)) {
+      return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
     }
-    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
+    return isolated;
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }
@@ -257,6 +330,7 @@ function spawnIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
     cwd: string;
+    dependencyRoot: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
     networkRestricted: boolean;
@@ -289,6 +363,7 @@ export function runSandboxedAllowlistedCommand(
   resolved: ResolvedAllowlistedCommand,
   options: {
     cwd: string;
+    dependencyRoot?: string;
     timeoutMs: number;
     sandboxMode: SandboxMode;
     forceUnreachable?: boolean;
@@ -305,12 +380,14 @@ export function runSandboxedAllowlistedCommand(
     };
   }
 
+  const dependencyRoot = options.dependencyRoot ?? options.cwd;
   const beforeFingerprint = captureWorktreeFingerprint(options.cwd);
   const env = buildIsolatedEnv(resolved.env);
   const networkRestricted = options.sandboxMode === 'pr-head-new';
 
   const result = spawnIsolated(resolved, {
     cwd: options.cwd,
+    dependencyRoot,
     timeoutMs: options.timeoutMs,
     env,
     networkRestricted,
@@ -351,4 +428,8 @@ export function runSandboxedAllowlistedCommand(
     timedOut: Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'),
     blocked: false,
   };
+}
+
+export function resetBwrapSandboxProbeCacheForTests(): void {
+  cachedBwrapSandboxReady = undefined;
 }
