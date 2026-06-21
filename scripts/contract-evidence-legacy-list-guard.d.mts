@@ -25,6 +25,10 @@ export function loadGovernedManifest(
 
 export function governedSurfacePaths(manifest: Record<string, unknown>): Set<string>;
 
+export function unionGovernedSurfacePaths(
+  ...manifests: Array<Record<string, unknown> | undefined>
+): Set<string>;
+
 export function validateManifestClosure(
   trustedRoot: string,
   manifest: Record<string, unknown>,

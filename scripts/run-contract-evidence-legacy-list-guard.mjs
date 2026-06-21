@@ -108,9 +108,11 @@ function main() {
   const bootstrap = !guardOnBase;
 
   /** @type {ReturnType<typeof loadGovernedManifest>} */
-  let manifest;
+  let baseManifest;
+  /** @type {ReturnType<typeof loadGovernedManifest> | undefined} */
+  let headManifest;
   if (bootstrap) {
-    manifest = {
+    baseManifest = {
       legacyListPath: LEGACY_LIST_REL_PATH,
       files: [LEGACY_LIST_REL_PATH],
       fixtureRoots: [],
@@ -118,7 +120,7 @@ function main() {
     };
   } else {
     try {
-      manifest = loadGovernedManifest(trustedRoot);
+      baseManifest = loadGovernedManifest(trustedRoot);
     } catch {
       const verdict = evaluateLegacyListGuard({
         baseSha,
@@ -131,17 +133,17 @@ function main() {
       process.exit(1);
     }
 
-    const closure = validateBaseAndHeadManifestClosure(trustedRoot, repoRoot, manifest);
+    const closure = validateBaseAndHeadManifestClosure(trustedRoot, repoRoot, baseManifest);
     if (!closure.ok) {
       const failed = evaluateLegacyListGuard({
         baseSha,
         headSha,
-        changedFiles: manifest.files ?? [],
+        changedFiles: baseManifest.files ?? [],
         bootstrap: false,
         baseResolvable: true,
-        manifest,
-        baseLegacyListContent: readGitFile(repoRoot, baseSha, manifest.legacyListPath ?? LEGACY_LIST_REL_PATH),
-        headLegacyListContent: readGitFile(repoRoot, headSha, manifest.legacyListPath ?? LEGACY_LIST_REL_PATH),
+        manifest: baseManifest,
+        baseLegacyListContent: readGitFile(repoRoot, baseSha, baseManifest.legacyListPath ?? LEGACY_LIST_REL_PATH),
+        headLegacyListContent: readGitFile(repoRoot, headSha, baseManifest.legacyListPath ?? LEGACY_LIST_REL_PATH),
         baseAuthorizations: JSON.parse(readGitFile(repoRoot, baseSha, AUTHORIZATIONS_REL_PATH) ?? '{"authorizations":[]}'),
       });
       failed.verdict = 'fail';
@@ -150,7 +152,7 @@ function main() {
       console.error(formatLegacyListGuardVerdict(failed));
       process.exit(1);
     }
-    manifest = closure.headManifest ?? manifest;
+    headManifest = closure.headManifest;
   }
 
   let changedFiles = [];
@@ -161,10 +163,17 @@ function main() {
     nameStatus = listNameStatus(repoRoot, baseSha, headSha);
   } catch {
     baseResolvable = false;
-    changedFiles = manifest.files ?? [LEGACY_LIST_REL_PATH];
+    changedFiles = baseManifest.files ?? [LEGACY_LIST_REL_PATH];
   }
 
-  const legacyListPath = manifest.legacyListPath ?? LEGACY_LIST_REL_PATH;
+  if (!bootstrap && !headManifest) {
+    try {
+      headManifest = loadGovernedManifest(repoRoot);
+    } catch {
+      headManifest = baseManifest;
+    }
+  }
+  const legacyListPath = baseManifest.legacyListPath ?? LEGACY_LIST_REL_PATH;
   const verdict = evaluateLegacyListGuard({
     baseSha,
     headSha,
@@ -177,7 +186,8 @@ function main() {
     bootstrap,
     baseResolvable,
     legacyListPath,
-    manifest,
+    manifest: baseManifest,
+    headManifest,
   });
 
   const output = formatLegacyListGuardVerdict(verdict);

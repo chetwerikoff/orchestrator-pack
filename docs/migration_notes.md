@@ -1398,8 +1398,8 @@ Cycle state persists in the existing reconcile state files (`cycleState` key alo
 
 Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml` on `pull_request_target` (merge-base workflow definition), not from PR-head `scope-guard.yml`.
 
-6. **Authorize path additions without a head-SHA cycle.** With strict up-to-date branch protection, do **not** pre-bind `headSha` (rebasing after an authorization merge changes the PR head and breaks that binding). Instead:
-   - Land an **authorization-only** admin commit on `main` whose record sets `baseSha` to **that commit's SHA** (the new merge-base tip) plus the exact `addedPaths` / `changedGovernedFiles` set.
-   - Rebase/update the path-addition PR onto the new `main` tip so its merge base equals the authorized `baseSha`.
-   - The guard matches on exact `baseSha` + path/file sets only; `headSha` is not part of authorization binding.
+6. **Authorize path additions with exact base/head binding.** Records must include `baseSha`, `headSha`, and the exact `addedPaths` / `changedGovernedFiles` set for the evaluated PR revision. Typical flow:
+   - Note the path-addition PR's current merge base `B` and head `H`.
+   - Land an **authorization-only** admin commit on `main` whose record sets `baseSha=B`, `headSha=H`, plus the scoped path/file sets.
+   - Rebase/update the path-addition PR onto the new `main` tip only after updating/re-issuing the authorization so `baseSha` matches the new merge base and `headSha` matches the rebased head (a stale `headSha` is rejected).
 

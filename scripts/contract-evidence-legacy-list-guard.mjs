@@ -94,6 +94,20 @@ export function loadGovernedManifest(repoRoot, manifestRelPath = GOVERNED_MANIFE
 /**
  * @param {ReturnType<typeof loadGovernedManifest>} manifest
  */
+export function unionGovernedSurfacePaths(...manifests) {
+  /** @type {Set<string>} */
+  const paths = new Set();
+  for (const manifest of manifests) {
+    if (!manifest) {
+      continue;
+    }
+    for (const entry of governedSurfacePaths(manifest)) {
+      paths.add(entry);
+    }
+  }
+  return paths;
+}
+
 export function governedSurfacePaths(manifest) {
   /** @type {Set<string>} */
   const paths = new Set();
@@ -251,6 +265,10 @@ export function findMatchingAuthorization(authorizations, scope) {
     if (!authBaseSha || authBaseSha !== scope.baseSha) {
       continue;
     }
+    const authHeadSha = String(auth.headSha ?? '').trim();
+    if (!authHeadSha || authHeadSha !== scope.headSha) {
+      continue;
+    }
     const authAdded = [...(Array.isArray(auth.addedPaths) ? auth.addedPaths : [])]
       .map((entry) => canonicalLegacyDraftPath(String(entry)) ?? String(entry))
       .sort();
@@ -292,6 +310,7 @@ export function findMatchingAuthorization(authorizations, scope) {
  * @param {boolean} [options.baseResolvable]
  * @param {string} [options.legacyListPath]
  * @param {ReturnType<typeof loadGovernedManifest>} [options.manifest]
+ * @param {ReturnType<typeof loadGovernedManifest>} [options.headManifest]
  */
 export function evaluateLegacyListGuard(options) {
   const legacyListPath = (options.legacyListPath ?? LEGACY_LIST_REL_PATH).replace(/\\/g, '/');
@@ -301,7 +320,8 @@ export function evaluateLegacyListGuard(options) {
     fixtureRoots: [],
     pinnedEntrypointDependencies: [],
   };
-  const governed = governedSurfacePaths(manifest);
+  const headManifest = options.headManifest ?? manifest;
+  const governed = unionGovernedSurfacePaths(manifest, headManifest);
   const changedGovernedFiles = computeChangedGovernedFiles(options.changedFiles ?? [], governed);
   const bootstrap = options.bootstrap === true;
   const baseResolvable = options.baseResolvable !== false;

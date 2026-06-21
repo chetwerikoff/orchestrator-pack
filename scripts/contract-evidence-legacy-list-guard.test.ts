@@ -150,7 +150,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/unauthorized legacy path addition/);
   });
 
-  it('AC2 passes authorized path addition bound to base SHA and path set', () => {
+  it('AC2 passes authorized path addition bound to base/head SHA and path set', () => {
     const added = ['docs/issues_drafts/99-new-draft.md'];
     const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
     const verdict = runGuardCase({
@@ -163,6 +163,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
         authorizations: [{
           id: 'auth-1',
           baseSha: 'base1111111111111111111111111111111111111111',
+          headSha: 'head2222222222222222222222222222222222222222',
           addedPaths: added,
           changedGovernedFiles: changedFiles,
           source: { type: 'maintainer', id: 'admin-bootstrap' },
@@ -307,6 +308,47 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
     });
     expect(match).toBeNull();
+  });
+
+  it('AC12c rejects authorization records without headSha', () => {
+    const match = findMatchingAuthorization([{
+      baseSha: 'base1111111111111111111111111111111111111111',
+      addedPaths: ['docs/issues_drafts/99-new-draft.md'],
+      changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
+      source: { type: 'maintainer', id: 'missing-head' },
+    }], {
+      baseSha: 'base1111111111111111111111111111111111111111',
+      headSha: 'head2222222222222222222222222222222222222222',
+      addedPaths: ['docs/issues_drafts/99-new-draft.md'],
+      changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
+    });
+    expect(match).toBeNull();
+  });
+
+  it('treats manifest shrink as governed change via base/head union', () => {
+    const baseManifest = productionManifest;
+    const shrunkFiles = (Array.isArray(baseManifest.files) ? baseManifest.files : [])
+      .map((entry) => String(entry))
+      .filter((entry) => entry !== GOVERNED_MANIFEST_REL_PATH);
+    const headManifest = {
+      ...baseManifest,
+      files: shrunkFiles,
+    };
+    const verdict = evaluateLegacyListGuard({
+      baseSha: 'base1111111111111111111111111111111111111111',
+      headSha: 'head2222222222222222222222222222222222222222',
+      changedFiles: [GOVERNED_MANIFEST_REL_PATH],
+      manifest: baseManifest,
+      headManifest,
+      baseLegacyListContent: baseLegacyFixture,
+      headLegacyListContent: baseLegacyFixture,
+      baseAuthorizations: { authorizations: [] },
+      bootstrap: false,
+      baseResolvable: true,
+    });
+    expect(verdict.changedGovernedFiles).toContain(GOVERNED_MANIFEST_REL_PATH);
+    expect(verdict.verdict).toBe('fail');
+    expect(verdict.reason).toMatch(/unauthorized governed-surface modification/);
   });
 
   it('fails head manifest closure when head adds an ungoverned entrypoint import', () => {
