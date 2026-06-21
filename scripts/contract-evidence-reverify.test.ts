@@ -562,6 +562,40 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
   });
 
+  it('NEW row rejects semantically identical producer-command differing only by env ordering', () => {
+    const proofCommand =
+      'REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs';
+    const body = loadIssue('new-fulfilled.md').replace(
+      `proof-command: ${proofCommand}`,
+      `proof-command: ${proofCommand}\nproducer-command: node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs`,
+    );
+    const result = runContractEvidenceReverify(
+      baseInput(body, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
+    );
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
+      status: 'unverified',
+      reason: 'non-genuine-proof',
+      verificationMode: 'not-run',
+    });
+  });
+
+  it('NEW row rejects semantically identical producer-command with alternate env assignment', () => {
+    const proofCommand =
+      'REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs';
+    const body = loadIssue('new-fulfilled.md').replace(
+      `proof-command: ${proofCommand}`,
+      `proof-command: ${proofCommand}\nproducer-command: REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs`,
+    );
+    const result = runContractEvidenceReverify(
+      baseInput(body, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
+    );
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
+      status: 'unverified',
+      reason: 'non-genuine-proof',
+      verificationMode: 'not-run',
+    });
+  });
+
   it('snapshot-drift flag on rows-evaluated when current issue differs', () => {
     const snapshot = loadIssue('live-match.md');
     const drifted = `${snapshot}\n\nEdited after capture.`;

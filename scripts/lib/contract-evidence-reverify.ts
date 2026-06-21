@@ -399,6 +399,31 @@ function resolveSpawnedProducerRelPath(proofCommand: string, repoRoot: string): 
 }
 
 
+function newRowCommandSemanticKey(command: string, repoRoot: string): string | null {
+  const trimmed = command.trim();
+  if (!trimmed || !isCommandSafe(trimmed, repoRoot)) {
+    return null;
+  }
+  if (trimmed.startsWith('npm test --')) {
+    return `npm:${trimmed}`;
+  }
+  const rels = listAllowlistedNodeScriptRelPaths(trimmed, repoRoot);
+  if (rels.length !== 1) {
+    return null;
+  }
+  return `node:${normalizePath(rels[0]!)}`;
+}
+
+function areNewRowCommandsSemanticallyIdentical(
+  left: string,
+  right: string,
+  repoRoot: string,
+): boolean {
+  const leftKey = newRowCommandSemanticKey(left, repoRoot);
+  const rightKey = newRowCommandSemanticKey(right, repoRoot);
+  return leftKey !== null && leftKey === rightKey;
+}
+
 function isNpmTestProofCommand(command: string): boolean {
   return command.trim().startsWith('npm test --');
 }
@@ -425,7 +450,10 @@ function buildIndependentProducerCommand(
 ): string | null {
   const explicit = (block['producer-command'] ?? '').trim();
   if (explicit) {
-    if (explicit === proofCommand.trim()) {
+    if (
+      explicit === proofCommand.trim()
+      || areNewRowCommandsSemanticallyIdentical(explicit, proofCommand, repoRoot)
+    ) {
       return null;
     }
     if (isCommandSafe(explicit, repoRoot)) {
@@ -714,7 +742,10 @@ function evaluateNewRow(input: {
   }
 
   const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot);
-  if (!independentCommand || independentCommand.trim() === proofCommand.trim()) {
+  if (
+    !independentCommand
+    || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
+  ) {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
