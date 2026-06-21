@@ -22,6 +22,7 @@ import {
 import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
   isCommandSafe,
+  isNodeScriptDependencyClosureEstablishable,
   listAllowlistedNodeScriptRelPaths,
   listNodeScriptDependencyClosureRelPaths,
   resolveAllowlistedCommand,
@@ -210,6 +211,15 @@ function isProducerCommandUntrusted(
   const trimmed = command.trim();
   if (trimmed.startsWith('npm ')) {
     return normalized.has('package.json') || normalized.has('package-lock.json');
+  }
+
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: trustedBaseRoot });
+  if (!resolved || resolved.executable !== process.execPath) {
+    return false;
+  }
+
+  if (!isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot)) {
+    return true;
   }
 
   for (const relPath of listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot)) {

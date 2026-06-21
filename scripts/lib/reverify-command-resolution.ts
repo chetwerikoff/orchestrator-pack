@@ -231,6 +231,34 @@ export function isCommandSafe(command: string, repoRoot: string): boolean {
 
 
 const STATIC_MODULE_IMPORT_RE = /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
+const DYNAMIC_MODULE_IMPORT_LITERAL_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+const UNESTABLISHABLE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(?![\s]*['"])/m;
+const UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE = /\bimport\s*\(\s*`/m;
+
+function collectLocalModuleSpecifiers(content: string): { specifiers: string[]; establishable: boolean } {
+  const specifiers: string[] = [];
+  let establishable = !UNESTABLISHABLE_DYNAMIC_IMPORT_RE.test(content)
+    && !UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE.test(content);
+
+  STATIC_MODULE_IMPORT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STATIC_MODULE_IMPORT_RE.exec(content)) !== null) {
+    const specifier = match[1] ?? match[2];
+    if (specifier) {
+      specifiers.push(specifier);
+    }
+  }
+
+  DYNAMIC_MODULE_IMPORT_LITERAL_RE.lastIndex = 0;
+  while ((match = DYNAMIC_MODULE_IMPORT_LITERAL_RE.exec(content)) !== null) {
+    const specifier = match[1];
+    if (specifier) {
+      specifiers.push(specifier);
+    }
+  }
+
+  return { specifiers, establishable };
+}
 
 function resolveLocalModulePath(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith('.')) {
@@ -252,19 +280,20 @@ function resolveLocalModulePath(fromFile: string, specifier: string): string | n
   return null;
 }
 
-export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
+function resolveNodeScriptDependencyClosure(command: string, repoRoot: string): { relPaths: string[]; establishable: boolean } | null {
   const resolved = resolveAllowlistedCommand(command, { repoRoot });
   if (!resolved || resolved.executable !== process.execPath) {
-    return [];
+    return null;
   }
   const entryScript = resolved.args[0];
   if (!entryScript) {
-    return [];
+    return null;
   }
 
   const repoRootNorm = path.normalize(repoRoot);
   const visited = new Set<string>();
   const relPaths: string[] = [];
+  let establishable = true;
 
   const walk = (absPath: string): void => {
     const normalized = path.normalize(absPath);
@@ -285,13 +314,11 @@ export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoo
       return;
     }
 
-    STATIC_MODULE_IMPORT_RE.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = STATIC_MODULE_IMPORT_RE.exec(content)) !== null) {
-      const specifier = match[1] ?? match[2];
-      if (!specifier) {
-        continue;
-      }
+    const collected = collectLocalModuleSpecifiers(content);
+    if (!collected.establishable) {
+      establishable = false;
+    }
+    for (const specifier of collected.specifiers) {
       const localPath = resolveLocalModulePath(normalized, specifier);
       if (!localPath) {
         continue;
@@ -305,7 +332,16 @@ export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoo
   };
 
   walk(entryScript);
-  return [...new Set(relPaths)];
+  return { relPaths: [...new Set(relPaths)], establishable };
+}
+
+export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
+  return resolveNodeScriptDependencyClosure(command, repoRoot)?.relPaths ?? [];
+}
+
+export function isNodeScriptDependencyClosureEstablishable(command: string, repoRoot: string): boolean {
+  const closure = resolveNodeScriptDependencyClosure(command, repoRoot);
+  return closure?.establishable ?? false;
 }
 
 export function listAllowlistedNodeScriptRelPaths(command: string, repoRoot: string): string[] {

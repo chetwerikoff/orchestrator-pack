@@ -14,7 +14,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
-import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -177,6 +177,58 @@ describe('contract-evidence reverify (Issue #376)', () => {
     } finally {
       rmSync(reviewTargetRoot, { recursive: true, force: true });
     }
+  });
+
+  it('lists dynamic import() literals in producer dependency closure', () => {
+    const command = 'node tests/fixtures/contract-evidence-reverify/producers/importing-dynamic-structured-value.mjs';
+    const closure = listNodeScriptDependencyClosureRelPaths(command, packRoot);
+    expect(closure).toEqual(expect.arrayContaining([
+      'tests/fixtures/contract-evidence-reverify/producers/importing-dynamic-structured-value.mjs',
+      'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+    ]));
+    expect(isNodeScriptDependencyClosureEstablishable(command, packRoot)).toBe(true);
+  });
+
+  it('capture producer trust checks dynamic import closure drift', () => {
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const helperPath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      writeFileSync(helperPath, "export const value = 'pwned';\n", 'utf8');
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-dynamic-import-closure.md'), {
+        trustedBaseRoot: packRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        prBody: 'Closes #9017\n',
+        explicitIssueNumber: 9017,
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'unverified',
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects producers whose dependency closure cannot be established', () => {
+    const command = 'node tests/fixtures/contract-evidence-reverify/producers/importing-unestablishable-dynamic.mjs';
+    expect(isNodeScriptDependencyClosureEstablishable(command, packRoot)).toBe(false);
+    const result = runContractEvidenceReverify(baseInput(loadIssue('live-dynamic-import-closure.md'), {
+      prBody: 'Closes #9017\n',
+      explicitIssueNumber: 9017,
+      prModifiedPaths: [
+        'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
+      ],
+    }));
+    expect(result.rows[0]).toMatchObject({
+      status: 'unverified',
+      reason: 'untrusted-pr-modified',
+      verificationMode: 'not-run',
+    });
   });
 
   it('runs capture producers against review target data, not trusted base only', () => {

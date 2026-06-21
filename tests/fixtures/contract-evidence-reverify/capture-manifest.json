@@ -107,6 +107,14 @@
       "kind": "structured",
       "path": "",
       "contentHash": ""
+    },
+    "dynamic-import-closure/match": {
+      "id": "dynamic-import-closure/match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/importing-dynamic-structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
     }
   }
 }
