@@ -8,6 +8,7 @@ import {
   evaluateHandoffPreClaimRecheck,
   evaluateHandoffReceiptToRunBound,
   formatHandoffWakeAuditLine,
+  HANDOFF_LISTENER_RECOVERY_MAX_MS,
   HANDOFF_RECEIPT_TO_RUN_MAX_MS,
   HANDOFF_WAKE_KIND,
   isReadyForReviewHandoffEnvelope,
@@ -365,6 +366,12 @@ describe('handoff review trigger path', () => {
     }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
     expect(replay.replay).toHaveLength(1);
     expect(replay.replay[0]?.withinRecoveryBound).toBe(true);
+
+    const stale = selectHandoffAdmissionReplay({
+      records: seed.records,
+      listenerReadyMs: listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000,
+    }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
+    expect(stale.replay[0]?.withinRecoveryBound).toBe(false);
   });
 
   it('AC14: audit line is greppable for promoted + claim win outcomes', () => {

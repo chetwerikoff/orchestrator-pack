@@ -43,6 +43,10 @@ if ($listener -notmatch 'review_trigger_failed') {
     Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
     exit 1
 }
+if ($listener -notmatch 'Invoke-ReviewHandoffWakeAdmissionRecovery') {
+    Write-Host 'orchestrator-wake-listener.ps1 must replay durable handoff admissions on startup'
+    exit 1
+}
 if ($listener -notmatch 'Write-OrchestratorSideProcessProgress -ChildId ''listener''') {
     Write-Host 'orchestrator-wake-listener.ps1 must emit supervised progress heartbeats for the listener child'
     exit 1

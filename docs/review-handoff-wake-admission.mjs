@@ -410,7 +410,7 @@ export function selectHandoffAdmissionReplay(input) {
       ...record,
       replayEligible: true,
       withinRecoveryBound:
-        Number(record.receivedAtMs ?? listenerReadyMs) <= listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS,
+        listenerReadyMs - Number(record.receivedAtMs ?? listenerReadyMs) <= HANDOFF_LISTENER_RECOVERY_MAX_MS,
     });
   }
   return { replay, listenerReadyMs };
