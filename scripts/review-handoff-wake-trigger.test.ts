@@ -18,6 +18,7 @@ import {
   seedHandoffAdmissionRecord,
   seedPendingAdmissionRetry,
   selectHandoffAdmissionReplay,
+  parseSupervisedRepoSlugFromGitRemote,
 } from '../docs/review-handoff-wake-admission.mjs';
 import {
   evaluateWakePreRunRecheck,
@@ -345,6 +346,44 @@ describe('handoff envelope admission (Issue #381)', () => {
     expect(seed.key).toBeTruthy();
   });
 
+
+  it('AC16: retains pending retry when recovery trigger is not durable', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-retry-'));
+    const bodyJson = readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8');
+    const seed = seedPendingAdmissionRetry({ existing: {}, bodyJson, nowMs: 1_700_000_000_000 });
+    expect(seed.seeded).toBe(true);
+    writeFileSync(
+      path.join(dir, 'review-handoff-wake-admission.json'),
+      JSON.stringify({ records: {}, pendingRetries: seed.pendingRetries, lastUpdatedMs: 1 }),
+    );
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const stateRoot = dir.replace(/'/g, "''");
+    const script = [
+      `. '${lib.replace(/'/g, "''")}'`,
+      '$filter = [pscustomobject]@{',
+      '  ok = $true',
+      "  wakeKind = 'ready_for_review'",
+      "  sessionId = 'opk-27'",
+      "  projectId = 'orchestrator-pack'",
+      '  prNumber = 234',
+      "  prUrl = 'https://github.com/chetwerikoff/orchestrator-pack/pull/234'",
+      "  wakeMessage = 'wake ready_for_review session=opk-27 pr=#234'",
+      '  handoffAdmission = @{ admittedBaseRef = \'main\'; admittedHeadSha = \'abc123\'; audit = @{} }',
+      '}',
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot}' -ListenerReadyMs 1700000010000 -PendingRetriesOnly \``,
+      '  -InvokeWakeFilter { param($BodyJson,$OpenPrs,$Failed) return $filter } `',
+      '  -ResolveOpenPrs { return @(@{ number = 234; headRefOid = \'abc123\'; baseRefName = \'main\' }) } `',
+      "  -InvokeTrigger { param($FilterResult,$WakeReceivedMs) return @{ triggerResult = @{ triggered = $false; reason = 'handoff_receipt_bound_exceeded' } } } `",
+      '  -LogWriter { param($Message) }',
+      `$state = Get-ReviewHandoffWakeAdmissionState -Path (Join-Path '${stateRoot}' 'review-handoff-wake-admission.json')`,
+      'if ($state.pendingRetries.Count -ne 1) { throw "expected pending retry retained, got $($state.pendingRetries.Count)" }',
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || 'pwsh failed');
+    }
+  });
+
   it('measures handoff receipt-to-run bound through run createdAt', () => {
     const receiptMs = 1_700_000_000_000;
     const runCreatedMs = receiptMs + 2_000;
@@ -371,6 +410,15 @@ describe('handoff envelope admission (Issue #381)', () => {
       expect(result.retryable).toBe(true);
       expect(result.auditLine).toContain('outcome=unknown');
     }
+  });
+});
+
+
+describe('parseSupervisedRepoSlugFromGitRemote', () => {
+  it('preserves dots in repository names and strips optional .git suffix', () => {
+    expect(parseSupervisedRepoSlugFromGitRemote('git@github.com:owner/foo.bar.git')).toBe('owner/foo.bar');
+    expect(parseSupervisedRepoSlugFromGitRemote('https://github.com/owner/foo.bar.git')).toBe('owner/foo.bar');
+    expect(parseSupervisedRepoSlugFromGitRemote('https://github.com/owner/foo.bar')).toBe('owner/foo.bar');
   });
 });
 

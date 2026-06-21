@@ -97,6 +97,21 @@ export function normalizeRepoSlugFromPrUrl(prUrl) {
 /**
  * @param {string | undefined} prUrl
  */
+/**
+ * @param {string | undefined} remoteUrl
+ */
+export function parseSupervisedRepoSlugFromGitRemote(remoteUrl) {
+  const raw = nonEmptyString(remoteUrl);
+  if (!raw) return undefined;
+  const match = raw.match(/github\.com[:/]([^/\s#?]+)\/([^/\s#?]+)/i);
+  if (!match) return undefined;
+  let repo = match[2];
+  if (repo.toLowerCase().endsWith('.git')) {
+    repo = repo.slice(0, -4);
+  }
+  return `${match[1]}/${repo}`.toLowerCase();
+}
+
 export function parsePrNumberFromPrUrl(prUrl) {
   const raw = nonEmptyString(prUrl);
   if (!raw) return undefined;

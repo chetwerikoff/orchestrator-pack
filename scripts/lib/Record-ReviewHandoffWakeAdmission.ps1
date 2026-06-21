@@ -289,6 +289,19 @@ function Test-ReviewHandoffReceiptToRunBound {
     }
 }
 
+function Test-ReviewHandoffTriggerDurable {
+    param([object]$TriggerOutcome)
+
+    if ($null -eq $TriggerOutcome) { return $false }
+    if ($TriggerOutcome -is [hashtable]) {
+        if ($TriggerOutcome.triggerResult) {
+            return [bool]$TriggerOutcome.triggerResult.triggered
+        }
+        return [bool]$TriggerOutcome.triggered
+    }
+    return $false
+}
+
 function Get-ReviewRunCreatedAtMs {
     param([object]$Run)
 
@@ -358,10 +371,18 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
             continue
         }
 
-        Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
         if ($filterResult.wakeKind -eq 'ready_for_review') {
             $receivedAtMs = if ($retry.receivedAtMs) { [long]$retry.receivedAtMs } else { $ListenerReadyMs }
-            & $InvokeTrigger $filterResult $receivedAtMs
+            $triggerOutcome = & $InvokeTrigger $filterResult $receivedAtMs
+            if (Test-ReviewHandoffTriggerDurable -TriggerOutcome $triggerOutcome) {
+                Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
+            }
+            else {
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey retained until durable trigger"
+            }
+        }
+        else {
+            Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
         }
     }
 

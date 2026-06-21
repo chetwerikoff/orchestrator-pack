@@ -31,6 +31,7 @@ export declare function parseHandoffNotificationSubject(event: Record<string, un
 };
 
 export declare function normalizeRepoSlugFromPrUrl(prUrl: string | undefined): string | undefined;
+export declare function parseSupervisedRepoSlugFromGitRemote(remoteUrl: string | undefined): string | undefined;
 export declare function parsePrNumberFromPrUrl(prUrl: string | undefined): number | undefined;
 
 export declare function evaluateHandoffIdentityAdmission(input: {
