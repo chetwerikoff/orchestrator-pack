@@ -24,22 +24,32 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$false'
     }
 
-    It 'invoke wrapper cleans up disposable trusted archive checkouts in finally' {
+    It 'invoke entrypoint delegates to trusted-base implementation via archive' {
         $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
         $content = Get-Content -LiteralPath $invokeScript -Raw
+        $content | Should -Match 'Resolve-TrustedReverifyInvokeScript'
+        $content | Should -Match 'git archive origin/main'
+        $content | Should -Match 'Invoke-ContractEvidenceReverify\.ps1'
+        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Resolve-TrustedPackRoot\.ps1''\)'
+        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Ensure-ReverifyWorkspaceDeps\.ps1''\)'
+        $content | Should -Not -Match 'Import-TrustedReverifyBootstrap\s*-'
+        $content | Should -Not -Match '\. \(Join-Path[^\)]*Import-TrustedReverifyBootstrap'
+    }
+
+    It 'trusted implementation cleans up disposable trusted archive checkouts in finally' {
+        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+        $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'DisposableTrustedRoot'
         $content | Should -Match 'Remove-Item -LiteralPath \$trustedBaseRoot -Recurse -Force'
         $content | Should -Match 'finally'
     }
 
-    It 'invoke wrapper loads bootstrap helpers from trusted base instead of PR checkout' {
-        $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
-        $content = Get-Content -LiteralPath $invokeScript -Raw
-        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Resolve-TrustedPackRoot\.ps1''\)'
-        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Ensure-ReverifyWorkspaceDeps\.ps1''\)'
-        $content | Should -Match 'Import-TrustedReverifyBootstrapModule'
-        $content | Should -Match 'git archive origin/main'
+    It 'trusted implementation loads bootstrap helpers from immutable base' {
+        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+        $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'Import-TrustedReverifyBootstrap'
+        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''Resolve-TrustedPackRoot\.ps1''\)'
+        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''Ensure-ReverifyWorkspaceDeps\.ps1''\)'
     }
 
     It 'bootstrap import module dot-sources helpers from resolved trusted root' {

@@ -1,7 +1,11 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Reviewer checkpoint-2 contract-evidence re-verification owner (Issue #376).
+  Reviewer checkpoint-2 contract-evidence re-verification entrypoint (Issue #376).
+
+  This file is a minimal delegator only. The implementation and bootstrap helpers
+  are loaded from origin/main (or an explicit trusted root), never dot-sourced
+  from the PR checkout.
 #>
 param(
     [string]$RepoRoot,
@@ -27,7 +31,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Import-TrustedReverifyBootstrapModule {
+function Resolve-TrustedReverifyInvokeScript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -35,60 +39,76 @@ function Import-TrustedReverifyBootstrapModule {
         [string]$TrustedBaseRootOverride
     )
 
-    $moduleRelativePath = 'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
+    $implementationRelativePath = 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+    $archiveRelativePaths = @(
+        $implementationRelativePath,
+        'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
-        $bootstrapRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
-        $modulePath = Join-Path $bootstrapRoot $moduleRelativePath
-        if (-not (Test-Path -LiteralPath $modulePath)) {
-            throw "trusted bootstrap unavailable: missing bootstrap module at $modulePath"
+        $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
+        $implementationPath = Join-Path $trustedRoot $implementationRelativePath
+        if (-not (Test-Path -LiteralPath $implementationPath)) {
+            throw "trusted invoke unavailable: missing implementation at $implementationPath"
         }
-        . $modulePath
         return @{
-            BootstrapRoot           = $bootstrapRoot
+            ScriptPath              = $implementationPath
             DisposableBootstrapRoot = $false
+            BootstrapRoot           = $null
         }
     }
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
-        $bootstrapRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
-        $modulePath = Join-Path $bootstrapRoot $moduleRelativePath
-        if (-not (Test-Path -LiteralPath $modulePath)) {
-            throw "trusted bootstrap unavailable: missing bootstrap module at $modulePath"
+        $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+        $implementationPath = Join-Path $trustedRoot $implementationRelativePath
+        if (-not (Test-Path -LiteralPath $implementationPath)) {
+            throw "trusted invoke unavailable: missing implementation at $implementationPath"
         }
-        . $modulePath
         return @{
-            BootstrapRoot           = $bootstrapRoot
+            ScriptPath              = $implementationPath
             DisposableBootstrapRoot = $false
+            BootstrapRoot           = $null
         }
     }
 
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-bootstrap-module-{0}" -f ([Guid]::NewGuid().ToString('N')))
+    $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-invoke-{0}" -f ([Guid]::NewGuid().ToString('N')))
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-    Push-Location $ReviewTargetRoot
+    Push-Location $resolvedReviewTarget
     try {
-        git archive origin/main -- $moduleRelativePath 2>$null | tar -x -C $temp 2>$null
+        git archive origin/main -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
         if ($LASTEXITCODE -ne 0) {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            throw 'trusted bootstrap unavailable: could not extract bootstrap module from origin/main archive'
+            throw 'trusted invoke unavailable: could not extract implementation from origin/main archive'
         }
     }
     finally {
         Pop-Location
     }
 
-    $modulePath = Join-Path $temp $moduleRelativePath
-    if (-not (Test-Path -LiteralPath $modulePath)) {
-        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-        throw "trusted bootstrap unavailable: archive missing bootstrap module at $moduleRelativePath"
+    $implementationPath = Join-Path $temp $implementationRelativePath
+    if (Test-Path -LiteralPath $implementationPath) {
+        return @{
+            ScriptPath              = $implementationPath
+            DisposableBootstrapRoot = $true
+            BootstrapRoot           = $temp
+        }
     }
 
-    . $modulePath
-    return @{
-        BootstrapRoot           = $temp
-        DisposableBootstrapRoot = $true
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+
+    $headImplementationPath = Join-Path $resolvedReviewTarget $implementationRelativePath
+    if (Test-Path -LiteralPath $headImplementationPath) {
+        Write-Warning 'reverify invoke bootstrap: implementation absent on origin/main; using review-target copy (one-time until merge)'
+        return @{
+            ScriptPath              = $headImplementationPath
+            DisposableBootstrapRoot = $false
+            BootstrapRoot           = $null
+        }
     }
+
+    throw "trusted invoke unavailable: archive and review-target are both missing $implementationRelativePath"
 }
 
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
@@ -102,102 +122,18 @@ $reviewTargetRoot = if ([string]::IsNullOrWhiteSpace($ReviewTargetRoot)) {
     $ReviewTargetRoot
 }
 
-function Write-TrustedRunnerUnavailableSummary {
-    param([string]$Detail)
-    @"
-## Checkpoint-2 contract-evidence re-verification (candidate evidence only)
-
-run-outcome: check-error
-issue: n/a
-snapshot-hash: n/a
-snapshot-drift: false
-pr-head-sha: n/a
-never-blocks: true
-
-rows: none
-reason: trusted-runner-unavailable
-detail: $Detail
-"@ | Write-Output
-}
-
-$moduleBootstrap = $null
-$scriptBootstrap = $null
-$trustedBaseRoot = $null
-$disposableTrustedRoot = $false
-$disposableScriptBootstrapRoot = $false
-$disposableModuleBootstrapRoot = $false
+$resolvedInvoke = $null
+$disposableInvokeBootstrapRoot = $false
 
 try {
-    $moduleBootstrap = Import-TrustedReverifyBootstrapModule -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRootOverride $TrustedBaseRoot
-    $disposableModuleBootstrapRoot = [bool]$moduleBootstrap.DisposableBootstrapRoot
+    $resolvedInvoke = Resolve-TrustedReverifyInvokeScript -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRootOverride $TrustedBaseRoot
+    $disposableInvokeBootstrapRoot = [bool]$resolvedInvoke.DisposableBootstrapRoot
 
-    $scriptBootstrap = Import-TrustedReverifyBootstrap -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
-    $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
-    $runnerTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
-        $TrustedBaseRoot
-    } else {
-        $scriptBootstrap.BootstrapRoot
-    }
-
-    try {
-        $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $runnerTrustedBase
-    }
-    catch {
-        if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {
-            if ($Summary -or $Text) {
-                Write-TrustedRunnerUnavailableSummary -Detail $_.Exception.Message
-                exit 0
-            }
-        }
-        throw
-    }
-    $trustedBaseRoot = $trusted.TrustedBaseRoot
-    $runner = $trusted.RunnerPath
-    $disposableTrustedRoot = [bool]$trusted.DisposableTrustedRoot
-
-    $args = @(
-        $runner,
-        '--repo-root', $reviewTargetRoot,
-        '--trusted-base-root', $trustedBaseRoot,
-        '--review-target-root', $reviewTargetRoot,
-        '--snapshot-file', $SnapshotFile
-    )
-
-    if ($ManifestPath) { $args += @('--manifest-path', $ManifestPath) }
-    if ($CurrentIssueFile) { $args += @('--current-issue-file', $CurrentIssueFile) }
-    if ($PrBodyFile) { $args += @('--pr-body-file', $PrBodyFile) }
-    if ($ExplicitIssue -gt 0) { $args += @('--explicit-issue', [string]$ExplicitIssue) }
-    if ($DeclarationIssue -gt 0) { $args += @('--declaration-issue', [string]$DeclarationIssue) }
-    if ($ExpectedIssue -gt 0) { $args += @('--expected-issue', [string]$ExpectedIssue) }
-    if ($PrHeadSha) { $args += @('--pr-head-sha', $PrHeadSha) }
-    if ($ChangedPathsFile) { $args += @('--changed-paths-file', $ChangedPathsFile) }
-    if ($TimeoutMs -gt 0) { $args += @('--timeout-ms', [string]$TimeoutMs) }
-    if ($SimulateCrashBeforeFirstRow) { $args += '--simulate-crash-before-first-row' }
-    if ($SimulateCrashAfterRow -ge 0) {
-        $args += @('--simulate-crash-after-row', [string]$SimulateCrashAfterRow)
-    }
-    if ($ForceProducerUnreachable) { $args += '--force-producer-unreachable' }
-    if ($Summary -or $Text) { $args += '--summary' }
-
-    Push-Location $reviewTargetRoot
-    try {
-        $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'invoke-contract-evidence-reverify.ps1'
-        & node --import $tsxImport @args
-        exit $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
-    }
+    & $resolvedInvoke.ScriptPath @PSBoundParameters
+    exit $LASTEXITCODE
 }
 finally {
-    if ($disposableTrustedRoot -and -not [string]::IsNullOrWhiteSpace($trustedBaseRoot)) {
-        Remove-Item -LiteralPath $trustedBaseRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    elseif ($disposableScriptBootstrapRoot -and $scriptBootstrap -and -not [string]::IsNullOrWhiteSpace($scriptBootstrap.BootstrapRoot)) {
-        Remove-Item -LiteralPath $scriptBootstrap.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    if ($disposableModuleBootstrapRoot -and $moduleBootstrap -and -not [string]::IsNullOrWhiteSpace($moduleBootstrap.BootstrapRoot)) {
-        Remove-Item -LiteralPath $moduleBootstrap.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($disposableInvokeBootstrapRoot -and $resolvedInvoke -and -not [string]::IsNullOrWhiteSpace($resolvedInvoke.BootstrapRoot)) {
+        Remove-Item -LiteralPath $resolvedInvoke.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

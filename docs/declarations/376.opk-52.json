@@ -25,6 +25,7 @@
     "scripts/lib/contract-evidence-reverify.ts",
     "scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1",
     "scripts/lib/Import-TrustedReverifyBootstrap.ps1",
+    "scripts/lib/Invoke-ContractEvidenceReverify.ps1",
     "scripts/lib/reverify-command-resolution.ts",
     "scripts/lib/reverify-sandbox.ts",
     "scripts/lib/Resolve-TrustedPackRoot.ps1",
