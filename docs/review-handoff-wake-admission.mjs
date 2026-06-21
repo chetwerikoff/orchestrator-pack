@@ -70,8 +70,12 @@ export function parseHandoffNotificationSubject(event) {
   const prUrl = nonEmptyString(pr.url);
   const prNumber =
     typeof pr.number === 'number' ? pr.number : parsePrNumberFromPrUrl(prUrl);
+  const subjectSessionId = nonEmptyString(session.id);
+  const envelopeSessionId = nonEmptyString(event.sessionId);
   return {
-    sessionId: nonEmptyString(event.sessionId) ?? nonEmptyString(session.id),
+    sessionId: subjectSessionId ?? envelopeSessionId,
+    subjectSessionId,
+    envelopeSessionId,
     projectId: nonEmptyString(event.projectId) ?? nonEmptyString(session.projectId),
     prNumber,
     prUrl,
@@ -110,6 +114,7 @@ export function parsePrNumberFromPrUrl(prUrl) {
  * @param {string} [input.supervisedRepoSlug]
  * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.supervisedSessions]
  * @param {boolean} [input.sessionLookupFailed]
+ * @param {boolean} [input.supervisedRepoLookupFailed]
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {boolean} [input.openPrLookupFailed]
  */
@@ -135,6 +140,30 @@ export function evaluateHandoffIdentityAdmission(input) {
     };
   }
 
+  const subjectSessionId = nonEmptyString(subject.subjectSessionId);
+  const envelopeSessionId = nonEmptyString(subject.envelopeSessionId);
+  if (subjectSessionId && envelopeSessionId && subjectSessionId !== envelopeSessionId) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'session_identity_mismatch',
+      audit: {
+        ...audit,
+        outcome: 'filter_reject',
+        reason: 'session_identity_mismatch',
+        sessionId: subjectSessionId,
+      },
+    };
+  }
+  if (!subjectSessionId) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'missing_session_identity',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'missing_session_identity' },
+    };
+  }
+
   const supervisedProject = nonEmptyString(input.supervisedProjectId);
   if (supervisedProject && !nonEmptyString(subject.projectId)) {
     return {
@@ -150,6 +179,16 @@ export function evaluateHandoffIdentityAdmission(input) {
       outcome: 'filter_reject',
       reason: 'foreign_project',
       audit: { ...audit, outcome: 'filter_reject', reason: 'foreign_project' },
+    };
+  }
+
+  if (supervisedProject && Boolean(input.supervisedRepoLookupFailed)) {
+    return {
+      admitted: false,
+      outcome: 'unknown',
+      reason: 'admission_lookup_unknown',
+      retryable: true,
+      audit: { ...audit, outcome: 'unknown', reason: 'admission_lookup_unknown' },
     };
   }
 
@@ -185,7 +224,7 @@ export function evaluateHandoffIdentityAdmission(input) {
       };
     }
     const supervisedSessions = toArray(input.supervisedSessions);
-    const matchedSession = findSessionById(supervisedSessions, subject.sessionId);
+    const matchedSession = findSessionById(supervisedSessions, subjectSessionId);
     if (!matchedSession) {
       return {
         admitted: false,
@@ -507,6 +546,11 @@ export function saveHandoffAdmissionState(filePath, state) {
 }
 
 runStdinJsonCli('review-handoff-wake-admission.mjs', {
+  formatAudit: () => {
+    const payload = readStdinJson();
+    const audit = isRecord(payload.audit) ? payload.audit : {};
+    return { auditLine: formatHandoffWakeAuditLine(audit) };
+  },
   identity: () => evaluateHandoffIdentityAdmission(readStdinJson()),
   preClaim: () => evaluateHandoffPreClaimRecheck(readStdinJson()),
   seed: () => seedHandoffAdmissionRecord(readStdinJson()),

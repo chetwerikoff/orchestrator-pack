@@ -115,6 +115,26 @@ function Get-SupervisedRepoSlug {
 }
 
 
+function Resolve-SupervisedRepoForAdmission {
+    param(
+        [hashtable]$FixtureSnapshot,
+        [string]$RepoRoot
+    )
+
+    if ($FixtureSnapshot -and $FixtureSnapshot.supervisedRepoSlug) {
+        return @{
+            repoSlug     = [string]$FixtureSnapshot.supervisedRepoSlug
+            lookupFailed = $false
+        }
+    }
+    $slug = Get-SupervisedRepoSlug -RepoRoot $RepoRoot
+    if ($slug) {
+        return @{ repoSlug = $slug; lookupFailed = $false }
+    }
+    return @{ repoSlug = ''; lookupFailed = $true }
+}
+
+
 function Resolve-SupervisedSessionsForAdmission {
     param([hashtable]$FixtureSnapshot)
 
@@ -135,6 +155,7 @@ function Invoke-WakeFilter {
         [string]$BodyJson,
         [string]$SupervisedProjectId = '',
         [string]$SupervisedRepoSlug = '',
+        [bool]$SupervisedRepoLookupFailed = $false,
         [array]$SupervisedSessions = @(),
         [bool]$SessionLookupFailed = $false,
         [array]$OpenPrs = @(),
@@ -146,6 +167,7 @@ function Invoke-WakeFilter {
         admissionContext = @{
             supervisedProjectId = $SupervisedProjectId
             supervisedRepoSlug  = $SupervisedRepoSlug
+            supervisedRepoLookupFailed = $SupervisedRepoLookupFailed
             supervisedSessions  = @($SupervisedSessions)
             sessionLookupFailed = $SessionLookupFailed
             openPrs             = @($OpenPrs)
@@ -241,7 +263,8 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
     $configYaml = Join-Path $Script:OrchestratorWakeRepoRoot 'agent-orchestrator.yaml.example'
 }
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
-$script:SupervisedRepoSlug = Get-SupervisedRepoSlug -RepoRoot $Script:OrchestratorWakeRepoRoot
+$script:SupervisedRepoAdmission = Resolve-SupervisedRepoForAdmission -FixtureSnapshot $fixtureSnapshot -RepoRoot $Script:OrchestratorWakeRepoRoot
+$script:SupervisedRepoSlug = [string]$script:SupervisedRepoAdmission.repoSlug
 
 
 function Invoke-ListenerHandoffAdmissionRecovery {
@@ -270,6 +293,7 @@ function Invoke-ListenerHandoffAdmissionRecovery {
             Invoke-WakeFilter -BodyJson $BodyJson `
                 -SupervisedProjectId $projectId `
                 -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                -SupervisedRepoLookupFailed:$($script:SupervisedRepoAdmission.lookupFailed) `
                 -SupervisedSessions $sessions.sessions `
                 -SessionLookupFailed:$sessions.lookupFailed `
                 -OpenPrs $OpenPrs `
@@ -390,6 +414,7 @@ try {
                 $filterResult = Invoke-WakeFilter -BodyJson $body `
                     -SupervisedProjectId $projectId `
                     -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                    -SupervisedRepoLookupFailed:$($script:SupervisedRepoAdmission.lookupFailed) `
                     -SupervisedSessions $sessionAdmission.sessions `
                     -SessionLookupFailed:$sessionAdmission.lookupFailed `
                     -OpenPrs $openPrsForAdmission `
@@ -428,9 +453,10 @@ try {
                 if ($filterResult.wakeKind -eq 'merge.ready' -or $filterResult.wakeKind -eq 'ready_for_review') {
                     Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'wake_received'
                     try {
+                        $triggerWakeReceivedMs = if ($filterResult.wakeKind -eq 'ready_for_review') { $wakeReceivedMs } else { 0 }
                         $handoffTrigger = Invoke-HandoffWakeTriggerFromFilter `
                             -FilterResult $filterResult `
-                            -WakeReceivedMs $wakeReceivedMs `
+                            -WakeReceivedMs $triggerWakeReceivedMs `
                             -ProjectId $projectId `
                             -RepoRoot $Script:OrchestratorWakeRepoRoot `
                             -ReviewCommand $reviewCommand `

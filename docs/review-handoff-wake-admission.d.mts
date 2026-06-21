@@ -39,6 +39,7 @@ export declare function evaluateHandoffIdentityAdmission(input: {
   supervisedRepoSlug?: string;
   supervisedSessions?: import('./review-trigger-reconcile.d.mts').AoSession[];
   sessionLookupFailed?: boolean;
+  supervisedRepoLookupFailed?: boolean;
   openPrs?: OpenPr[];
   openPrLookupFailed?: boolean;
 }): {

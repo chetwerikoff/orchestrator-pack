@@ -216,6 +216,44 @@ describe('handoff envelope admission (Issue #381)', () => {
     }
   });
 
+  it('AC8: rejects mismatched envelope and subject session ids', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    capture.event.sessionId = 'opk-supervised';
+    capture.event.data.subject.session.id = 'opk-foreign';
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const result = evaluateWakePayload(capture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedSessions: fixture.sessions,
+      openPrs: fixture.openPrs,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('session_identity_mismatch');
+    }
+  });
+
+  it('AC16: supervised repository lookup failure is retryable unknown', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const result = evaluateWakePayload(capture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: '',
+      supervisedRepoLookupFailed: true,
+      supervisedSessions: fixture.sessions,
+      openPrs: fixture.openPrs,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('admission_lookup_unknown');
+      expect(result.retryable).toBe(true);
+    }
+  });
+
   it('AC8: rejects foreign session not in supervised ao status', () => {
     const capture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),

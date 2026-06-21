@@ -158,6 +158,7 @@ export interface WakeFilterAdmissionContext {
   supervisedRepoSlug?: string;
   supervisedSessions?: import('./review-trigger-reconcile.d.mts').AoSession[];
   sessionLookupFailed?: boolean;
+  supervisedRepoLookupFailed?: boolean;
   openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
   openPrLookupFailed?: boolean;
 }

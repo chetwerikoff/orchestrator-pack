@@ -92,6 +92,31 @@ function New-ReviewHandoffWakeFilterResultFromAdmissionRecord {
     }
 }
 
+
+function Write-ReviewHandoffClaimAudit {
+    param(
+        [Parameter(Mandatory = $true)][string]$Outcome,
+        [Parameter(Mandatory = $true)][string]$ClaimOutcome,
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [string]$SessionId = '',
+        [int]$PrNumber = 0,
+        [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
+    )
+
+    $formatted = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'formatAudit' -Payload @{
+        audit = @{
+            outcome      = $Outcome
+            reason       = $Reason
+            claimOutcome = $ClaimOutcome
+            sessionId    = $SessionId
+            prNumber     = $PrNumber
+        }
+    }
+    if ($formatted.auditLine) {
+        & $LogWriter ([string]$formatted.auditLine)
+    }
+}
+
 function Record-ReviewHandoffWakeAdmission {
     param(
         [string]$StateRoot = '',
