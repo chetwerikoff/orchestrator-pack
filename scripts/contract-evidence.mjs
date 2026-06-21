@@ -4,6 +4,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractAtJsonPath } from './external-output-shape-guard.mjs';
+import {
+  LEGACY_LIST_REL_PATH,
+  canonicalLegacyDraftPath,
+  loadLegacyPathSet,
+} from './contract-evidence-path.mjs';
 import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
 import {
   assertCapturePathConfined,
@@ -508,19 +513,25 @@ export function checkContractEvidence(markdown, options = {}) {
   );
   const legacyListPath = resolveRepoPath(
     repoRoot,
-    options.legacyListPath ?? 'scripts/contract-evidence-legacy-drafts.json',
+    options.legacyListPath ?? LEGACY_LIST_REL_PATH,
   );
   const draftPath = options.draftPath ?? '';
 
   /** @type {string[]} */
   const errors = [];
 
-  const legacy = JSON.parse(readFileSync(legacyListPath, 'utf8'));
-  const legacyPaths = new Set((legacy.paths ?? []).map((entry) => entry.replace(/\\/g, '/')));
+  const legacyContent = readFileSync(legacyListPath, 'utf8');
+  const legacyLoaded = loadLegacyPathSet(legacyContent);
+  if (!legacyLoaded.ok || !legacyLoaded.paths) {
+    errors.push(legacyLoaded.errors[0] ?? 'legacy list is malformed');
+    return { ok: false, errors, skipped: false };
+  }
+  const legacyPaths = legacyLoaded.paths;
   let normalizedDraft = draftPath.replace(/\\/g, '/');
   if (normalizedDraft && path.isAbsolute(normalizedDraft)) {
     normalizedDraft = path.relative(repoRoot, normalizedDraft).replace(/\\/g, '/');
   }
+  normalizedDraft = canonicalLegacyDraftPath(normalizedDraft) ?? '';
   const isLegacy = normalizedDraft && legacyPaths.has(normalizedDraft);
   if (isLegacy) {
     return { ok: true, errors: [], skipped: true };
