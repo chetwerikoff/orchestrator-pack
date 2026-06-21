@@ -31,6 +31,7 @@
     "scripts/run-reviewer-reverify-ao-review-command.ps1",
     "scripts/run-reviewer-reverify-e2e-fixture.mjs",
     "scripts/verify.ps1",
+    "tests/powershell/Resolve-TrustedPackRoot.Tests.ps1",
     "tests/fixtures/contract-evidence-reverify/capture-manifest.json",
     "tests/fixtures/contract-evidence-reverify/captures/structured/divergent-record.raw.json",
     "tests/fixtures/contract-evidence-reverify/captures/structured/match.raw.json",
