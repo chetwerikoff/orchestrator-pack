@@ -198,20 +198,11 @@ auto-blocks or auto-merges. A row is **producer-verified** only when
 are integrity-checked-only. Surface every per-row status (including `unverified`,
 `verification-mode: not-run`, and zero-row `no-rows` runs) in review output.
 Independently validate each candidate against the diff, producer, and cited spec
-snapshot before assigning severity.
-
-```powershell
-pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
-  -ReviewTargetRoot <pr-worktree-path> `
-  -SnapshotFile <bound-issue-snapshot.md> `
-  -CurrentIssueFile <issue-body> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -ChangedPathsFile <changed-paths> `
-  -Summary
-```
-
-(see `scripts/launch-contract-evidence-reverify.ps1` for the canonical parameter set).
+snapshot before assigning severity. For the canonical multi-line invoke example,
+see `prompts/codex_review_prompt.md` (Checkpoint-2 section). Required parameters:
+`-ReviewTargetRoot`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
+`-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
+`scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
