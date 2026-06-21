@@ -155,7 +155,7 @@ if ($DryRun) {
 }
 
 $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
-$payloadText | pwsh -NoProfile -File $journaledScript $SessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -NoWait
+$payloadText | pwsh -NoProfile -File $journaledScript $SessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -GatedNudge -NoWait
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -eq 0) {

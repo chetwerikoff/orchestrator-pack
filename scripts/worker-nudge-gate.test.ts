@@ -281,7 +281,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
     const result = spawnSync(
       'pwsh',
-      ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test'],
+      ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test', '-GatedNudge'],
       {
         cwd: repoRoot,
         encoding: 'utf8',

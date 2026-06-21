@@ -27,6 +27,7 @@ param(
     [string]$ConfigPathHash = '',
     [string]$AdoptionProbeRunIdHash = '',
     [string]$ClaimToken = '',
+    [switch]$GatedNudge,
     [switch]$NoWait
 )
 
@@ -234,25 +235,27 @@ if (-not $register.recorded) {
 
 $claimResult = $null
 if (-not $AdoptionProbe -and -not $DryRun) {
-    if (-not $ClaimToken) {
+    if ($GatedNudge -and -not $ClaimToken) {
         Write-JournaledWorkerSendLog 'worker nudge rejected: missing claim token'
         exit 46
     }
-    $tokenValidation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'send'
-    if (-not $tokenValidation.ok) {
-        Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenValidation.reason)"
-        exit 46
-    }
-    $claimResult = @{
-        acquired  = $true
-        claim     = $tokenValidation.claim
-        path      = $tokenValidation.path
-        namespace = [string]$tokenValidation.token.namespace
-    }
-    $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claimResult
-    if (-not $attempt.ok) {
-        Write-JournaledWorkerSendLog "worker nudge rejected: claim send-attempt failed reason=$($attempt.reason)"
-        exit 46
+    if ($ClaimToken) {
+        $tokenValidation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'send'
+        if (-not $tokenValidation.ok) {
+            Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenValidation.reason)"
+            exit 46
+        }
+        $claimResult = @{
+            acquired  = $true
+            claim     = $tokenValidation.claim
+            path      = $tokenValidation.path
+            namespace = [string]$tokenValidation.token.namespace
+        }
+        $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claimResult
+        if (-not $attempt.ok) {
+            Write-JournaledWorkerSendLog "worker nudge rejected: claim send-attempt failed reason=$($attempt.reason)"
+            exit 46
+        }
     }
 }
 
