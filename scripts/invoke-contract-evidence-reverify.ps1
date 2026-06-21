@@ -40,7 +40,36 @@ $reviewTargetRoot = if ([string]::IsNullOrWhiteSpace($ReviewTargetRoot)) {
     $ReviewTargetRoot
 }
 
-$trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
+function Write-TrustedRunnerUnavailableSummary {
+    param([string]$Detail)
+    @"
+## Checkpoint-2 contract-evidence re-verification (candidate evidence only)
+
+run-outcome: check-error
+issue: n/a
+snapshot-hash: n/a
+snapshot-drift: false
+pr-head-sha: n/a
+never-blocks: true
+
+rows: none
+reason: trusted-runner-unavailable
+detail: $Detail
+"@ | Write-Output
+}
+
+try {
+    $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
+}
+catch {
+    if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {
+        if ($Summary -or $Text) {
+            Write-TrustedRunnerUnavailableSummary -Detail $_.Exception.Message
+            exit 0
+        }
+    }
+    throw
+}
 $trustedBaseRoot = $trusted.TrustedBaseRoot
 $runner = $trusted.RunnerPath
 

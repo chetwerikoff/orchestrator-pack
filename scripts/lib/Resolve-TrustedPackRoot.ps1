@@ -96,12 +96,6 @@ function Resolve-TrustedPackRoot {
         Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    $bootstrapRunner = Join-Path $resolvedReviewTarget $BootstrapCheckerRelativePath
-    if (Test-Path -LiteralPath $bootstrapRunner) {
-        Write-Warning "checkpoint-2 bootstrap: trusted runner not on ${BaseRef} yet; using review-target copy (one-time until merge)"
-        return $resolvedReviewTarget
-    }
-
     throw "trusted runner unavailable: could not resolve trusted pack root from main worktree or ${BaseRef} archive (refusing PR-head fallback)"
 }
 
