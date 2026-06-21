@@ -539,6 +539,49 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
   });
 
+  it('resolves worker target before deriving fallback cycles', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    const targetIdx = invokeText.indexOf('Resolve-WorkerNudgeTargetFromPrClaim');
+    const cycleIdx = invokeText.indexOf("Subcommand 'deriveCycleKey'");
+    expect(targetIdx).toBeGreaterThan(-1);
+    expect(cycleIdx).toBeGreaterThan(targetIdx);
+  });
+
+  it('derives liveness cycle keys after worker target is populated', () => {
+    const headSha = 'c'.repeat(40);
+    const cycleKey = deriveCycleKey('unknown-worker-nudge', {
+      prNumber: 380,
+      headSha,
+      sessionId: 'opk-1',
+      targetId: 'gen1',
+      targetGeneration: 'gen1',
+    });
+    expect(cycleKey).toBe(`head:${headSha}:gen1`);
+  });
+
+  it('preserves live mutex after stale threshold when owner PID is alive', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $lockDir = Join-Path ${psString(dir)} 'mutex-live'
+        New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+        $ownerPath = Join-Path $lockDir 'owner.json'
+        @{
+          pid = $PID
+          acquiredAtUtc = (Get-Date).AddSeconds(-($Script:WorkerNudgeClaimMutexStaleSeconds + 5)).ToUniversalTime().ToString('o')
+        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $ownerPath -Encoding UTF8
+        [pscustomobject]@{
+          abandoned = [bool](Test-WorkerNudgeClaimMutexAbandoned -LockDir $lockDir)
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.abandoned).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('routes gated transport to PR-resolved owner session', () => {
     const invokeText = readFileSync(invokePath, 'utf8');
     expect(invokeText).toMatch(/\$ownerSessionId = \[string\]\$targetResolution\.ownerSessionId/);

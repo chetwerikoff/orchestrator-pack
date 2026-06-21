@@ -73,6 +73,37 @@ $classifyPayload = @{
 $classified = Invoke-WorkerNudgeFilterCli -Subcommand 'classifyIntent' -Payload $classifyPayload
 $resolvedIntent = if ($IntentClass) { $IntentClass } else { [string]$classified.intentClass }
 
+if ($Probe -and -not $HeadSha) {
+    $HeadSha = ('f' * 40)
+}
+
+$resolveParams = @{
+    PrNumber  = $PrNumber
+    SessionId = $SessionId
+    HeadSha   = $HeadSha
+    ProjectId = $ProjectId
+}
+if ($Probe) {
+    $resolveParams.Sessions = @(@{
+        name         = $SessionId
+        role         = 'worker'
+        prNumber     = $PrNumber
+        ownedHeadSha = $HeadSha
+        runtime      = 'alive'
+    })
+}
+$targetResolution = Resolve-WorkerNudgeTargetFromPrClaim @resolveParams
+if (-not $targetResolution.ok) {
+    throw "worker nudge gate could not resolve PR-claim worker target: $($targetResolution.reason)"
+}
+if (-not $TargetId) { $TargetId = [string]$targetResolution.targetId }
+if (-not $TargetGeneration) { $TargetGeneration = [string]$targetResolution.targetGeneration }
+$workerTarget = [string]$targetResolution.workerTarget
+if (-not $workerTarget) { $workerTarget = "$TargetId`:$TargetGeneration" }
+$targetResolutionSource = [string]$targetResolution.targetResolutionSource
+$ownerSessionId = [string]$targetResolution.ownerSessionId
+$sendSessionId = if ($ownerSessionId) { $ownerSessionId } else { $SessionId }
+
 $cyclePayload = @{
     prNumber         = $PrNumber
     headSha          = $HeadSha
@@ -90,18 +121,6 @@ $cycleKey = [string]$cycle.cycleKey
 if (-not $cycleKey) {
     throw 'worker nudge gate could not derive cycle key (fail-closed)'
 }
-
-$targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId -HeadSha $HeadSha -ProjectId $ProjectId
-if (-not $targetResolution.ok) {
-    throw "worker nudge gate could not resolve PR-claim worker target: $($targetResolution.reason)"
-}
-if (-not $TargetId) { $TargetId = [string]$targetResolution.targetId }
-if (-not $TargetGeneration) { $TargetGeneration = [string]$targetResolution.targetGeneration }
-$workerTarget = [string]$targetResolution.workerTarget
-if (-not $workerTarget) { $workerTarget = "$TargetId`:$TargetGeneration" }
-$targetResolutionSource = [string]$targetResolution.targetResolutionSource
-$ownerSessionId = [string]$targetResolution.ownerSessionId
-$sendSessionId = if ($ownerSessionId) { $ownerSessionId } else { $SessionId }
 $tupleKey = "$PrNumber|$cycleKey|$resolvedIntent|$workerTarget"
 $namespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
 $storePath = $namespace

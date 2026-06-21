@@ -203,12 +203,6 @@ function Test-WorkerNudgeClaimMutexAbandoned {
         catch { }
         return $true
     }
-    $acquiredAt = [datetime]::MinValue
-    if ($owner.acquiredAtUtc) {
-        [void][datetime]::TryParse([string]$owner.acquiredAtUtc, [ref]$acquiredAt)
-    }
-    $ageSeconds = ((Get-Date).ToUniversalTime() - $acquiredAt).TotalSeconds
-    if ($ageSeconds -gt $Script:WorkerNudgeClaimMutexStaleSeconds) { return $true }
     return -not (Test-WorkerNudgeClaimProcessAlive -CandidatePid ([int]$owner.pid))
 }
 
