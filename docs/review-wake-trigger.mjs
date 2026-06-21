@@ -140,8 +140,8 @@ export function evaluateWakeReviewTrigger(input) {
   }
 
   const openPrs = toArray(input.openPrs);
-  const headSha = resolveCurrentPrHeadSha(openPrs, prNumber);
-  if (!headSha) {
+  const currentHeadSha = resolveCurrentPrHeadSha(openPrs, prNumber);
+  if (!currentHeadSha) {
     return {
       triggerReviewRun: false,
       reason: 'head_unresolved',
@@ -149,6 +149,33 @@ export function evaluateWakeReviewTrigger(input) {
       processingMs,
       withinLatencyBound,
     };
+  }
+
+  const normalizedCurrentHeadSha = normalizeSha(currentHeadSha);
+  let headSha = normalizedCurrentHeadSha;
+  if (isHandoffWake) {
+    const admittedHeadSha = normalizeSha(String(input.admittedHeadSha ?? ''));
+    if (!admittedHeadSha) {
+      return {
+        triggerReviewRun: false,
+        reason: 'missing_admitted_head',
+        route: 'none',
+        processingMs,
+        withinLatencyBound: withinReceiptBound,
+        withinReceiptBound,
+      };
+    }
+    if (admittedHeadSha !== normalizedCurrentHeadSha) {
+      return {
+        triggerReviewRun: false,
+        reason: 'handoff_head_advanced',
+        route: 'none',
+        processingMs,
+        withinLatencyBound: withinReceiptBound,
+        withinReceiptBound,
+      };
+    }
+    headSha = admittedHeadSha;
   }
 
   const reviewRuns = toArray(input.reviewRuns);

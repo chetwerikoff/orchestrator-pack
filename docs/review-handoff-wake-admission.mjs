@@ -67,11 +67,14 @@ export function parseHandoffNotificationSubject(event) {
   const subject = isRecord(data?.subject) ? data.subject : {};
   const session = isRecord(subject.session) ? subject.session : {};
   const pr = isRecord(subject.pr) ? subject.pr : {};
+  const prUrl = nonEmptyString(pr.url);
+  const prNumber =
+    typeof pr.number === 'number' ? pr.number : parsePrNumberFromPrUrl(prUrl);
   return {
     sessionId: nonEmptyString(event.sessionId) ?? nonEmptyString(session.id),
     projectId: nonEmptyString(event.projectId) ?? nonEmptyString(session.projectId),
-    prNumber: typeof pr.number === 'number' ? pr.number : undefined,
-    prUrl: nonEmptyString(pr.url),
+    prNumber,
+    prUrl,
     priority: nonEmptyString(event.priority),
     receivedAtMs: Number(event.receivedAtMs) || undefined,
   };
@@ -86,6 +89,19 @@ export function normalizeRepoSlugFromPrUrl(prUrl) {
   const match = raw.match(/github\.com\/([^/]+\/[^/]+)\/pull\/\d+/i);
   return match ? match[1].toLowerCase() : undefined;
 }
+
+/**
+ * @param {string | undefined} prUrl
+ */
+export function parsePrNumberFromPrUrl(prUrl) {
+  const raw = nonEmptyString(prUrl);
+  if (!raw) return undefined;
+  const match = raw.match(/\/pull\/(\d+)/i);
+  if (!match) return undefined;
+  const prNumber = Number(match[1]);
+  return Number.isFinite(prNumber) && prNumber > 0 ? prNumber : undefined;
+}
+
 
 /**
  * @param {object} input

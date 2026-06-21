@@ -14,6 +14,7 @@ export interface WakeReviewTriggerPlanned {
   sessionId: string;
   startReason?: string;
   admittedBaseRef?: string;
+  admittedHeadSha?: string;
 }
 
 export interface WakeReviewTriggerResult {
@@ -60,6 +61,7 @@ export declare function evaluateWakeReviewTrigger(input: {
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
   admittedBaseRef?: string;
+  admittedHeadSha?: string;
   cycleState?: Record<string, unknown>;
   repoRoot?: string;
   receiptToRunBoundMs?: number;

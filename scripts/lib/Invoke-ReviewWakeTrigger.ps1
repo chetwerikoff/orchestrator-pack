@@ -202,6 +202,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
     if ($isHandoffWake) {
         $evaluatePayload.admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
+        $evaluatePayload.admittedHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha
         $evaluatePayload.cycleState = if ($snapshot.cycleState) { $snapshot.cycleState } else { @{} }
         $evaluatePayload.repoRoot = [string]$snapshot.repoRoot
     }
@@ -368,11 +369,20 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         else {
             ''
         }
+        $plannedHeadSha = if ($planned.headSha) {
+            [string]$planned.headSha
+        }
+        elseif ($isHandoffWake -and $FilterResult.handoffAdmission) {
+            [string]$FilterResult.handoffAdmission.admittedHeadSha
+        }
+        else {
+            ''
+        }
         $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
             wakeKind = [string]$FilterResult.wakeKind
             planned  = @{
                 prNumber        = $planned.prNumber
-                headSha         = $planned.headSha
+                headSha         = $plannedHeadSha
                 sessionId       = $planned.sessionId
                 startReason     = $plannedStartReason
                 admittedBaseRef = $plannedAdmittedBase

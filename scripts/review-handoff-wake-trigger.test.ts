@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
 import {
   evaluateHandoffIdentityAdmission,
+  parsePrNumberFromPrUrl,
   evaluateHandoffPreClaimRecheck,
   evaluateHandoffReceiptToRunBound,
   formatHandoffWakeAuditLine,
@@ -42,6 +43,7 @@ type HandoffFixture = {
   sessionId?: string;
   prNumber?: number;
   admittedBaseRef?: string;
+  admittedHeadSha?: string;
   openPrs?: OpenPr[];
   reviewRuns?: Array<Record<string, unknown>>;
   sessions?: Array<Record<string, unknown>>;
@@ -65,6 +67,7 @@ function admissionContext(fixture?: HandoffFixture) {
 
 function evaluateHandoffFixture(fixture: HandoffFixture, nowMs = 1_700_000_000_000) {
   const prKey = String(fixture.prNumber);
+  const pr = fixture.openPrs?.find((openPr) => openPr.number === fixture.prNumber);
   return evaluateWakeReviewTrigger({
     wakeKind: fixture.wakeKind ?? HANDOFF_WAKE_KIND,
     sessionId: fixture.sessionId,
@@ -72,6 +75,7 @@ function evaluateHandoffFixture(fixture: HandoffFixture, nowMs = 1_700_000_000_0
     wakeReceivedMs: nowMs,
     nowMs,
     admittedBaseRef: fixture.admittedBaseRef,
+    admittedHeadSha: fixture.admittedHeadSha ?? (pr?.headRefOid ? String(pr.headRefOid) : undefined),
     openPrs: fixture.openPrs,
     reviewRuns: fixture.reviewRuns,
     sessions: fixture.sessions,
@@ -397,6 +401,46 @@ describe('handoff review trigger path', () => {
     expect(claimWin).toContain('claim=win');
   });
 });
+
+
+  it('rejects handoff evaluation when admitted head advanced before snapshot', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: HANDOFF_WAKE_KIND,
+      sessionId: fixture.sessionId,
+      prNumber: fixture.prNumber,
+      wakeReceivedMs: 1_700_000_000_000,
+      nowMs: 1_700_000_000_000,
+      admittedBaseRef: 'main',
+      admittedHeadSha: 'stale-handoff-head',
+      openPrs: fixture.openPrs,
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      requiredCheckNames: fixture.requiredCheckNamesByPr?.[String(fixture.prNumber)],
+    });
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('handoff_head_advanced');
+  });
+
+  it('resolves URL-only handoff PR number for identity admission', () => {
+    expect(parsePrNumberFromPrUrl('https://github.com/chetwerikoff/orchestrator-pack/pull/234')).toBe(234);
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const event = structuredClone(capture.event);
+    if (event.data?.subject?.pr) {
+      delete event.data.subject.pr.number;
+    }
+    const admission = evaluateHandoffIdentityAdmission({
+      event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+    });
+    expect(admission.admitted).toBe(true);
+    expect(admission.subject?.prNumber).toBe(234);
+  });
 
 describe('wake trigger integration', () => {
   it('completion wake keeps 5s processing bound', () => {
