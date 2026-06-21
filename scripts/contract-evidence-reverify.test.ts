@@ -354,6 +354,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(payload.promptContainsCheckpoint2).toBe(true);
     expect(payload.summaryIncludesRows).toBe(true);
     expect(payload.summaryIncludesNeverBlocks).toBe(true);
+    expect(payload.reviewerOutputIsCheckpoint2Summary).toBe(true);
+    expect(payload.summary).not.toContain('reverify-e2e-probe');
   });
 });
 

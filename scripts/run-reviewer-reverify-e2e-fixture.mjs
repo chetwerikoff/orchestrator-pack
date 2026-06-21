@@ -18,6 +18,14 @@ const preferredSessionId = existsSync(fixtureSessionFile)
 
 const reviewCommand = `pwsh -NoProfile -File scripts/run-reviewer-reverify-ao-review-command.ps1 -RepoRoot . -FixtureDir tests/fixtures/contract-evidence-reverify/e2e`;
 
+function isCheckpoint2ReviewerSummary(text) {
+  const trimmed = text.trim();
+  return trimmed.includes('## Checkpoint-2 contract-evidence re-verification')
+    && trimmed.includes('run-outcome:')
+    && trimmed.includes('never-blocks: true')
+    && trimmed.includes('rows:');
+}
+
 function resolveAoFixtureSession() {
   const envSession = process.env.OPK_REVERIFY_E2E_SESSION?.trim();
   if (envSession) {
@@ -32,22 +40,16 @@ function resolveAoFixtureSession() {
     return null;
   }
 
-  const lines = listed.stdout.split('\n');
-  for (const line of lines) {
-    const match = line.match(/^\s+(opk-\S+)/);
-    if (!match) {
-      continue;
-    }
-    const sessionId = match[1];
-    if (sessionId === preferredSessionId) {
-      return sessionId;
-    }
+  const knownSessions = listed.stdout
+    .split('\n')
+    .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
+    .filter(Boolean);
+
+  if (knownSessions.includes(preferredSessionId)) {
+    return preferredSessionId;
   }
 
-  const firstWorker = lines
-    .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
-    .find(Boolean);
-  return firstWorker ?? null;
+  return null;
 }
 
 function runReviewCommand() {
@@ -99,10 +101,13 @@ const summary = commandProc.stdout.trim();
 const output = {
   viaAoReviewExecute: viaAo,
   aoSessionId: sessionId,
+  aoSessionIsDedicatedFixture: sessionId === preferredSessionId
+    || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim()),
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
   promptContainsInvokeScript: prompt.includes('invoke-contract-evidence-reverify.ps1'),
   summaryIncludesRows: summary.includes('rows:'),
   summaryIncludesNeverBlocks: summary.includes('never-blocks: true'),
+  reviewerOutputIsCheckpoint2Summary: isCheckpoint2ReviewerSummary(summary),
   summary,
 };
 
@@ -114,6 +119,8 @@ const ok =
   && output.promptContainsCheckpoint2
   && output.promptContainsInvokeScript
   && output.summaryIncludesRows
-  && output.summaryIncludesNeverBlocks;
+  && output.summaryIncludesNeverBlocks
+  && output.reviewerOutputIsCheckpoint2Summary
+  && !summary.includes('reverify-e2e-probe');
 
 process.exit(ok ? 0 : 1);
