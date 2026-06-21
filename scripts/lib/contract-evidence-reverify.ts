@@ -201,17 +201,6 @@ function runTrustedCommand(command: string, options: {
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
 }): CommandRunResult {
-  if (options.forceUnreachable) {
-    return {
-      ok: false,
-      stdout: '',
-      stderr: 'forced unreachable',
-      exitCode: null,
-      timedOut: true,
-      blocked: false,
-    };
-  }
-
   const resolved = resolveAllowlistedCommand(command, { repoRoot: options.cwd });
   if (!resolved) {
     return {
