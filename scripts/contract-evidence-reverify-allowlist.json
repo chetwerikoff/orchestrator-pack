@@ -1,6 +1,16 @@
 {
   "description": "Trusted command allowlist for checkpoint-2 live re-verification (Issue #376).",
   "externalProducers": ["ao", "gh", "codex"],
+  "allowedEnvVars": [
+    "NODE_ENV",
+    "REVERIFY_BODY",
+    "REVERIFY_DELAY_MS",
+    "REVERIFY_EXIT_CODE",
+    "REVERIFY_EXPECTED",
+    "REVERIFY_STATUS",
+    "REVERIFY_TOKEN",
+    "REVERIFY_VALUE"
+  ],
   "trustedCommandPrefixes": [
     "node tests/fixtures/contract-evidence-reverify/producers/",
     "node scripts/fixtures/contract-evidence-reverify/",

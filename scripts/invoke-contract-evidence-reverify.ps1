@@ -26,25 +26,31 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Resolve-TrustedPackRoot.ps1')
+
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     Split-Path -Parent $PSScriptRoot
 } else {
     $RepoRoot
 }
-$runner = Join-Path $PSScriptRoot 'invoke-contract-evidence-reverify.ts'
-
-if (-not (Test-Path -LiteralPath $runner)) {
-    Write-Error "missing $runner"
+$reviewTargetRoot = if ([string]::IsNullOrWhiteSpace($ReviewTargetRoot)) {
+    $packRoot
+} else {
+    $ReviewTargetRoot
 }
+
+$trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
+$trustedBaseRoot = $trusted.TrustedBaseRoot
+$runner = $trusted.RunnerPath
 
 $args = @(
     $runner,
-    '--repo-root', $packRoot,
+    '--repo-root', $reviewTargetRoot,
+    '--trusted-base-root', $trustedBaseRoot,
+    '--review-target-root', $reviewTargetRoot,
     '--snapshot-file', $SnapshotFile
 )
 
-if ($TrustedBaseRoot) { $args += @('--trusted-base-root', $TrustedBaseRoot) }
-if ($ReviewTargetRoot) { $args += @('--review-target-root', $ReviewTargetRoot) }
 if ($ManifestPath) { $args += @('--manifest-path', $ManifestPath) }
 if ($CurrentIssueFile) { $args += @('--current-issue-file', $CurrentIssueFile) }
 if ($PrBodyFile) { $args += @('--pr-body-file', $PrBodyFile) }
@@ -61,7 +67,7 @@ if ($SimulateCrashAfterRow -ge 0) {
 if ($ForceProducerUnreachable) { $args += '--force-producer-unreachable' }
 if ($Summary -or $Text) { $args += '--summary' }
 
-Push-Location $packRoot
+Push-Location $reviewTargetRoot
 try {
     & node --import tsx @args
     exit $LASTEXITCODE

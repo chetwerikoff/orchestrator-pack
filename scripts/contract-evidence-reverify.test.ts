@@ -12,6 +12,7 @@ import {
   resolveLinkedIssueNumber,
   runContractEvidenceReverify,
 } from './lib/contract-evidence-reverify.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH } from './lib/reverify-command-resolution.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -281,6 +282,26 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(summary).toContain('never-blocks: true');
   });
 
+  it('rejects issue-body command injection via shell metacharacters', () => {
+    const injected = loadIssue('new-fulfilled.md').replace(
+      'proof-command: REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+      'proof-command: node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs; touch .reverify-mutation-marker',
+    );
+    const result = runContractEvidenceReverify(
+      baseInput(injected, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
+    );
+    expect(result.rows[0]).toMatchObject({
+      status: 'unverified',
+      reason: 'unsafe-or-undeclared-command',
+      verificationMode: 'not-run',
+    });
+    expect(existsSync(path.join(packRoot, '.reverify-mutation-marker'))).toBe(false);
+  });
+
+  it('invoke CLI defaults to production capture manifest', () => {
+    expect(DEFAULT_REVERIFY_MANIFEST_PATH).toBe('tests/external-output-references/capture-manifest.json');
+  });
+
   it('invoke CLI emits JSON for divergence fixture (AC14 command path)', () => {
     const snapshotFile = path.join(fixtureRoot, 'issues', 'live-divergent.md');
     const proc = spawnSync(
@@ -297,6 +318,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
         path.join(fixtureRoot, 'issues', 'live-divergent-pr-body.md'),
         '--explicit-issue',
         '9002',
+        '--manifest-path',
+        manifestPath,
       ],
       { encoding: 'utf8', cwd: packRoot },
     );
@@ -329,7 +352,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);
     expect(payload.promptContainsCheckpoint2).toBe(true);
-    expect(payload.reverifyRows.length).toBeGreaterThan(0);
+    expect(payload.summaryIncludesRows).toBe(true);
+    expect(payload.summaryIncludesNeverBlocks).toBe(true);
   });
 });
 

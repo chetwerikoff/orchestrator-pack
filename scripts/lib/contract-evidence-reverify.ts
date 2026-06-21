@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { extractAtJsonPath } from '../external-output-shape-guard.mjs';
@@ -20,6 +19,14 @@ import {
   hashIssueBodySnapshot,
   sha256Hex,
 } from './reviewer-contract-mapping.js';
+import {
+  DEFAULT_REVERIFY_MANIFEST_PATH,
+  isCommandSafe,
+  resolveAllowlistedCommand,
+} from './reverify-command-resolution.js';
+import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
+
+export { DEFAULT_REVERIFY_MANIFEST_PATH };
 
 const require = createRequire(import.meta.url);
 const producerRegistry = require('../contract-evidence-producer-registry.json') as {
@@ -172,29 +179,6 @@ function isExternalProducer(producer: string): boolean {
   return (allowlist.externalProducers ?? producerRegistry.external ?? []).includes(canonical);
 }
 
-function stripEnvAssignments(command: string): string {
-  let rest = command.trim();
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
-    const space = rest.indexOf(' ');
-    if (space < 0) {
-      return rest;
-    }
-    rest = rest.slice(space + 1).trim();
-  }
-  return rest;
-}
-
-function isCommandSafe(command: string): boolean {
-  const normalized = stripEnvAssignments(command).trim();
-  if (!normalized) {
-    return false;
-  }
-  if (new RegExp(allowlist.mutatingTokenPattern, 'i').test(normalized)) {
-    return false;
-  }
-  return allowlist.trustedCommandPrefixes.some((prefix) => normalized.startsWith(prefix));
-}
-
 function isTrustedCheckerModified(prModifiedPaths: string[]): boolean {
   const normalized = new Set(prModifiedPaths.map(normalizePath));
   return allowlist.trustedCheckerRelativePaths.some((rel) => normalized.has(normalizePath(rel)));
@@ -215,6 +199,7 @@ function runTrustedCommand(command: string, options: {
   cwd: string;
   timeoutMs: number;
   forceUnreachable?: boolean;
+  sandboxMode: 'trusted-base' | 'pr-head-new';
 }): CommandRunResult {
   if (options.forceUnreachable) {
     return {
@@ -226,7 +211,9 @@ function runTrustedCommand(command: string, options: {
       blocked: false,
     };
   }
-  if (!isCommandSafe(command)) {
+
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: options.cwd });
+  if (!resolved) {
     return {
       ok: false,
       stdout: '',
@@ -237,26 +224,12 @@ function runTrustedCommand(command: string, options: {
     };
   }
 
-  const result = spawnSync(command, {
+  return runSandboxedAllowlistedCommand(resolved, {
     cwd: options.cwd,
-    shell: true,
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    env: {
-      PATH: process.env.PATH ?? '',
-      HOME: process.env.HOME ?? '',
-      NODE_ENV: process.env.NODE_ENV ?? 'test',
-    },
+    timeoutMs: options.timeoutMs,
+    sandboxMode: options.sandboxMode,
+    forceUnreachable: options.forceUnreachable,
   });
-
-  return {
-    ok: result.status === 0 && !result.error,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    exitCode: result.status,
-    timedOut: Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'),
-    blocked: false,
-  };
 }
 
 function compareStructuredOutput(stdout: string, selector: string, expected: string): {
@@ -393,13 +366,14 @@ function evaluateCaptureRow(input: {
 
   const external = isExternalProducer(entry.producer);
   const command = (entry.sourceCommand ?? '').trim();
-  const canRunLive = !external && command && isCommandSafe(command);
+  const canRunLive = !external && command && isCommandSafe(command, reviewTargetRoot);
 
   if (canRunLive) {
     const run = runTrustedCommand(command, {
       cwd: reviewTargetRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
+      sandboxMode: 'trusted-base',
     });
     if (run.blocked) {
       return compareToRecordFallback(rowIndex, row, bindingType, captureContent, assertedExpected);
@@ -439,7 +413,7 @@ function evaluateCaptureRow(input: {
     return compareToRecord(rowIndex, row, bindingType, captureContent, assertedExpected);
   }
 
-  if (command && !isCommandSafe(command)) {
+  if (command && !isCommandSafe(command, reviewTargetRoot)) {
     if (captureRelPath) {
       return compareToRecord(rowIndex, row, bindingType, captureContent, assertedExpected);
     }
@@ -511,7 +485,7 @@ function evaluateNewRow(input: {
   if (!proofCommand) {
     return buildUnverified(rowIndex, row, 'unsupported-producer');
   }
-  if (!isCommandSafe(proofCommand)) {
+  if (!isCommandSafe(proofCommand, reviewTargetRoot)) {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
   }
 
@@ -519,6 +493,7 @@ function evaluateNewRow(input: {
     cwd: reviewTargetRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
+    sandboxMode: 'pr-head-new',
   });
   if (run.blocked) {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');

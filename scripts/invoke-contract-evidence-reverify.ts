@@ -2,6 +2,7 @@
 import {
   formatReviewerReverifySummary,
   runContractEvidenceReverify,
+  DEFAULT_REVERIFY_MANIFEST_PATH,
 } from './lib/contract-evidence-reverify.js';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
 
@@ -32,7 +33,7 @@ function usage(): string {
 function parseArgs(argv: string[]) {
   const opts: Record<string, string | boolean> = {
     repoRoot: process.cwd(),
-    manifestPath: 'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
+    manifestPath: DEFAULT_REVERIFY_MANIFEST_PATH,
     summary: false,
     json: true,
   };
