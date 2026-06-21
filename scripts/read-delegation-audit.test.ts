@@ -1731,6 +1731,14 @@ describe('Cursor-seat advisory carve-out (Issue #359)', () => {
     expect(result.summary.advisorySatisfiedUnits).toBe(1);
   });
 
+  it('cursor-advisory-partial-targeted-read.json keeps untargeted bulk advisory unsatisfied', () => {
+    const result = evaluateFixture('cursor-advisory-partial-targeted-read.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY);
+    expect(verdict.advisorySatisfied).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(0);
+  });
+
   it('cursor-advisory-targeted-read.json records advisory-satisfied for offset/limit read', () => {
     const result = evaluateFixture('cursor-advisory-targeted-read.json');
     expect(firstVerdict(result).advisoryOutcome).toBe(

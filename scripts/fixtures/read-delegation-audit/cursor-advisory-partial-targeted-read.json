@@ -1,0 +1,35 @@
+{
+  "description": "Separate targeted slice must not satisfy an untargeted bulk advisory read",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-partial-targeted",
+      "inboundRequestId": "req-partial-targeted",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file"
+        },
+        {
+          "path": "docs/other-draft.md",
+          "lines": 10,
+          "kind": "file",
+          "targetedRead": true
+        }
+      ],
+      "edits": [],
+      "statusText": "bulk untargeted read plus separate targeted slice"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-partial-targeted-read",
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory",
+    "advisorySatisfied": false
+  }
+}

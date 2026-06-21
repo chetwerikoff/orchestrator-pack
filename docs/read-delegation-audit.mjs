@@ -449,17 +449,33 @@ function commandReferencesPath(command, filePath) {
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
  * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
  */
-function advisoryRawReads(unit, advisoryReads) {
-  const rawReads = Array.isArray(unit.reads) ? unit.reads : [];
-  const advisoryPaths = new Set(
-    advisoryReads
-      .map((read) => normalizePathForShellMatch(read.path))
-      .filter((filePath) => filePath),
-  );
-  if (advisoryPaths.size === 0) {
-    return [];
-  }
-  return rawReads.filter((read) => advisoryPaths.has(normalizePathForShellMatch(read.path)));
+function rawReadsForAdvisoryClassifications(unit, advisoryReads) {
+  const rawReads = normalizeReads(unit.reads);
+  const used = new Set();
+  return advisoryReads.map((advisoryRead) => {
+    const matchIndex = rawReads.findIndex((raw, index) => {
+      if (used.has(index)) {
+        return false;
+      }
+      if (
+        advisoryRead.readDiscriminator &&
+        raw.readDiscriminator &&
+        raw.readDiscriminator === advisoryRead.readDiscriminator
+      ) {
+        return true;
+      }
+      const pathMatch =
+        normalizePathForShellMatch(raw.path) === normalizePathForShellMatch(advisoryRead.path);
+      const linesMatch = (raw.lines ?? 0) === (advisoryRead.lines ?? 0);
+      const kindMatch = (raw.kind ?? 'file') === (advisoryRead.kind ?? 'file');
+      return pathMatch && linesMatch && kindMatch;
+    });
+    if (matchIndex >= 0) {
+      used.add(matchIndex);
+      return rawReads[matchIndex];
+    }
+    return { ...advisoryRead, targetedRead: false };
+  });
 }
 
 /**
@@ -491,7 +507,11 @@ export function hasShellReadAround(unit, advisoryReads) {
  * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
  */
 export function hasTargetedRead(reads) {
-  return reads.some((read) => read.targetedRead === true);
+  const list = Array.isArray(reads) ? reads : [];
+  if (list.length === 0) {
+    return false;
+  }
+  return list.every((read) => read.targetedRead === true);
 }
 
 /**
@@ -506,7 +526,7 @@ export function resolveCursorAdvisoryOutcome(unit, advisoryReads) {
       shellReadAround: false,
     };
   }
-  if (hasTargetedRead(advisoryRawReads(unit, advisoryReads))) {
+  if (hasTargetedRead(rawReadsForAdvisoryClassifications(unit, advisoryReads))) {
     return {
       advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
       advisorySatisfied: true,

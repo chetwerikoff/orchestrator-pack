@@ -143,6 +143,7 @@ export declare function advisoryReadsFromClassifications(
 ): ReadEntry[];
 export declare function isShellReadAroundCommand(command: string): boolean;
 export declare function hasShellReadAround(unit: WorkUnit, advisoryReads: ReadEntry[]): boolean;
+/** True only when every advisory read in the list is targeted (offset/limit). */
 export declare function hasTargetedRead(reads: ReadEntry[]): boolean;
 export declare function resolveCursorAdvisoryOutcome(
   unit: WorkUnit,
