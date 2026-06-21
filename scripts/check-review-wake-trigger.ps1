@@ -70,6 +70,23 @@ if ($preflightIdx -lt 0 -or $receiptIdx -lt 0 -or $preflightIdx -gt $receiptIdx)
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must recheck handoff receipt bound after workspace preflight and before ao review run'
     exit 1
 }
+
+$ghChecksPath = Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1'
+$ghChecksText = Get-Content -LiteralPath $ghChecksPath -Raw
+if ($ghChecksText -match 'function Invoke-GhOpenPrList' -and $ghChecksText -notmatch 'baseRefName') {
+    Write-Host 'Invoke-GhOpenPrList must request baseRefName for handoff admission snapshots'
+    exit 1
+}
+$claimAuditIdx = 0
+while (($claimIdx = $triggerLibText.IndexOf('Write-ReviewHandoffClaimAudit', $claimAuditIdx)) -ge 0) {
+    $windowStart = [Math]::Max(0, $claimIdx - 160)
+    $window = $triggerLibText.Substring($windowStart, $claimIdx - $windowStart)
+    if ($window -notmatch '\$isHandoffWake') {
+        Write-Host 'Write-ReviewHandoffClaimAudit must be guarded by $isHandoffWake (handoff wakes only)'
+        exit 1
+    }
+    $claimAuditIdx = $claimIdx + 1
+}
 if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight -RepoRoot') {
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
     exit 1

@@ -76,7 +76,7 @@ function evaluateHandoffFixture(fixture: HandoffFixture, nowMs = 1_700_000_000_0
     prNumber: fixture.prNumber,
     wakeReceivedMs: nowMs,
     nowMs,
-    admittedBaseRef: fixture.admittedBaseRef,
+    admittedBaseRef: fixture.admittedBaseRef ?? (pr?.baseRefName ? String(pr.baseRefName) : undefined),
     admittedHeadSha: fixture.admittedHeadSha ?? (pr?.headRefOid ? String(pr.headRefOid) : undefined),
     openPrs: fixture.openPrs,
     reviewRuns: fixture.reviewRuns,
@@ -666,6 +666,27 @@ describe('handoff review trigger path', () => {
     expect(result.reason).toBe('handoff_receipt_bound_exceeded');
   });
 
+
+  it('rejects handoff evaluation when admitted base ref is missing', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const pr = fixture.openPrs?.[0];
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: HANDOFF_WAKE_KIND,
+      sessionId: fixture.sessionId,
+      prNumber: fixture.prNumber,
+      wakeReceivedMs: 1_700_000_000_000,
+      nowMs: 1_700_000_000_000,
+      admittedHeadSha: pr?.headRefOid ? String(pr.headRefOid) : undefined,
+      openPrs: fixture.openPrs,
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      requiredCheckNames: fixture.requiredCheckNamesByPr?.[String(fixture.prNumber)],
+    });
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('missing_admitted_base_ref');
+  });
+
   it('rejects handoff evaluation when admitted head advanced before snapshot', () => {
     const fixture = loadFixture('green-info-handoff-triggers.json');
     const result = evaluateWakeReviewTrigger({
@@ -706,6 +727,50 @@ describe('handoff review trigger path', () => {
   });
 
 describe('wake trigger integration', () => {
+  it('merge.ready completion wake does not emit handoff claim audit lines', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(fixturesDir, '../review-wake-trigger/green-wake-triggers.json'), 'utf8'),
+    );
+    const wakeSha = String(fixture.openPrs?.[0]?.headRefOid ?? 'abc123');
+    const triggerLib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Invoke-ReviewWakeTrigger.ps1');
+    const claimLib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Review-StartClaim.ps1');
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-claim-audit-'));
+    const dirEscaped = dir.replace(/'/g, "''");
+    const claimLibEscaped = claimLib.replace(/'/g, "''");
+    const triggerLibEscaped = triggerLib.replace(/'/g, "''");
+    const script = [
+      `. '${claimLibEscaped}'`,
+      `. '${triggerLibEscaped}'`,
+      `$env:AO_REVIEW_CLAIM_DIR = '${dirEscaped}'`,
+      '$logs = New-Object System.Collections.Generic.List[string]',
+      `function Invoke-GhOpenPrList { param([string]$RepoRoot) @(@{ number = 42; headRefOid = '${wakeSha}'; baseRefName = 'main' }) }`,
+      "function Get-AoStatusSessions { @(@{ name = 'opk-11'; role = 'worker'; prNumber = 42; status = 'idle'; reports = @() }) }",
+      'function Get-GhChecksBundleByPr {',
+      '  param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)',
+      "  @{ ciChecksByPr = @{ '42' = @() }; requiredCheckNamesByPr = @{ '42' = @() }; requiredCheckLookupFailedByPr = @{ '42' = $false } }",
+      '}',
+      'function Get-AoReviewRuns { param([string]$Project) @() }',
+      'function Get-ReviewWakeCycleStateFromReconcile { @{} }',
+      '$null = Invoke-ReviewWakeTriggerOnCompletionWake -FilterResult @{',
+      '  ok = $true',
+      "  wakeKind = 'merge.ready'",
+      '  prNumber = 42',
+      "  sessionId = 'opk-11'",
+      `} -ProjectId 'orchestrator-pack' -ReviewCommand 'echo review' -RepoRoot '.' -StateRoot '${dirEscaped}' -DryRun -LogWriter {`,
+      '  param([string]$Message)',
+      '  $logs.Add([string]$Message) | Out-Null',
+      '}',
+      "$logs -join '\n'",
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8', cwd: path.dirname(fileURLToPath(import.meta.url)) });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || 'pwsh failed');
+    }
+    const joined = result.stdout;
+    expect(joined).not.toMatch(/claim=(win|loss)/);
+    expect(joined).not.toMatch(/outcome=claim_(win|loss)/);
+  });
+
   it('completion wake keeps 5s processing bound', () => {
     const fixture = JSON.parse(
       readFileSync(path.join(fixturesDir, '../review-wake-trigger/green-wake-triggers.json'), 'utf8'),
@@ -748,6 +813,30 @@ describe('wake trigger integration', () => {
     });
     expect(recheck.emitReviewRun).toBe(true);
   });
+
+  it('preRunRecheck rejects handoff when admitted base ref is missing', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const pr = fixture.openPrs?.[0];
+    expect(pr).toBeDefined();
+    const recheck = evaluateWakePreRunRecheck({
+      wakeKind: HANDOFF_WAKE_KIND,
+      planned: {
+        prNumber: Number(fixture.prNumber),
+        headSha: String(pr!.headRefOid),
+        sessionId: String(fixture.sessionId),
+        startReason: 'handoff_wake',
+      },
+      fresh: {
+        openPrs: fixture.openPrs,
+        reviewRuns: fixture.reviewRuns,
+        sessions: fixture.sessions,
+        ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      },
+    });
+    expect(recheck.emitReviewRun).toBe(false);
+    expect(recheck.reason).toBe('missing_admitted_base_ref');
+  });
+
   it('preRunRecheck uses wakeKind when planned startReason is omitted', () => {
     const fixture = loadFixture('green-info-handoff-triggers.json');
     const pr = fixture.openPrs?.[0];
@@ -775,6 +864,28 @@ describe('wake trigger integration', () => {
   });
 
 });
+
+
+  it('refuses to seed admission records without admitted base ref', () => {
+    const seed = seedHandoffAdmissionRecord({
+      existing: {},
+      admission: {
+        subject: {
+          projectId: 'orchestrator-pack',
+          prNumber: 234,
+          prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/234',
+          sessionId: 'opk-27',
+          priority: 'info',
+          receivedAtMs: 1_700_000_000_000,
+        },
+        admittedHeadSha: 'handoff234',
+        outcome: 'promoted',
+      },
+      nowMs: 1_700_000_000_000,
+    });
+    expect(seed.seeded).toBe(false);
+    expect(seed.reason).toBe('missing_admitted_base_ref');
+  });
 
 describe('identity admission unit', () => {
   it('evaluates in-project session + open PR as promoted', () => {

@@ -19,6 +19,7 @@ import {
   HANDOFF_RECEIPT_TO_RUN_MAX_MS,
   HANDOFF_WAKE_KIND,
 } from './review-handoff-wake-admission.mjs';
+import { nonEmptyString } from './orchestrator-wake-filter.mjs';
 import {
   buildReviewRunArgv,
   findSessionById,
@@ -169,6 +170,17 @@ export function evaluateWakeReviewTrigger(input) {
       return {
         triggerReviewRun: false,
         reason: 'handoff_head_advanced',
+        route: 'none',
+        processingMs,
+        withinLatencyBound: withinReceiptBound,
+        withinReceiptBound,
+      };
+    }
+    const admittedBaseRef = nonEmptyString(input.admittedBaseRef);
+    if (!admittedBaseRef) {
+      return {
+        triggerReviewRun: false,
+        reason: 'missing_admitted_base_ref',
         route: 'none',
         processingMs,
         withinLatencyBound: withinReceiptBound,

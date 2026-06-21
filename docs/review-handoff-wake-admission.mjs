@@ -344,9 +344,23 @@ export function evaluateHandoffPreClaimRecheck(input) {
   }
 
   const admittedBase = nonEmptyString(planned.admittedBaseRef);
+  if (!admittedBase) {
+    return {
+      emitReviewRun: false,
+      reason: 'missing_admitted_base_ref',
+      audit: { outcome: 'toctou_reject', reason: 'missing_admitted_base_ref' },
+    };
+  }
   const currentBase =
     nonEmptyString(openPr.baseRefName) ?? nonEmptyString(openPr.baseRef) ?? nonEmptyString(fresh.baseRefName);
-  if (admittedBase && currentBase && admittedBase !== currentBase) {
+  if (!currentBase) {
+    return {
+      emitReviewRun: false,
+      reason: 'missing_current_base_ref',
+      audit: { outcome: 'toctou_reject', reason: 'missing_current_base_ref' },
+    };
+  }
+  if (admittedBase !== currentBase) {
     return {
       emitReviewRun: false,
       reason: 'pre_claim_toctou_base_retargeted',
@@ -384,8 +398,12 @@ export function seedHandoffAdmissionRecord(input) {
   const subject = admission.subject ?? {};
   const prNumber = Number(subject.prNumber);
   const headSha = normalizeSha(String(admission.admittedHeadSha ?? ''));
+  const admittedBaseRef = nonEmptyString(admission.admittedBaseRef);
   if (!prNumber || !headSha) {
     return { seeded: false, reason: 'missing_pr_or_head' };
+  }
+  if (!admittedBaseRef) {
+    return { seeded: false, reason: 'missing_admitted_base_ref' };
   }
   const repoSlug = normalizeRepoSlugFromPrUrl(subject.prUrl);
   const key = handoffAdmissionKey({
@@ -404,7 +422,7 @@ export function seedHandoffAdmissionRecord(input) {
     prNumber,
     headSha,
     sessionId: subject.sessionId,
-    admittedBaseRef: admission.admittedBaseRef ?? prior?.admittedBaseRef,
+    admittedBaseRef: admittedBaseRef,
     priority: subject.priority,
     receivedAtMs: subject.receivedAtMs ?? prior?.receivedAtMs ?? nowMs,
     updatedAtMs: nowMs,
