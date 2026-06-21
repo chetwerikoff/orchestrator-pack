@@ -156,6 +156,8 @@ export declare function evaluateHeartbeatTick(args: {
 export interface WakeFilterAdmissionContext {
   supervisedProjectId?: string;
   supervisedRepoSlug?: string;
+  supervisedSessions?: import('./review-trigger-reconcile.d.mts').AoSession[];
+  sessionLookupFailed?: boolean;
   openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
   openPrLookupFailed?: boolean;
 }
