@@ -12,7 +12,9 @@ function Initialize-ReviewerPolicyCheckRoot {
 }
 
 function New-ReviewerPolicyCheckFailures {
-    return [System.Collections.Generic.List[string]]::new()
+    # Unary comma preserves the empty list; without it PowerShell enumerates the
+    # return value and an empty List[string] becomes $null for the caller.
+    return ,[System.Collections.Generic.List[string]]::new()
 }
 
 function Test-ReviewerPolicyRequiredFiles {
