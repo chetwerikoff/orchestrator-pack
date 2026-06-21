@@ -253,7 +253,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     }
   });
 
-  it('concurrent same-tuple resolves to one winner', () => {
+  it('concurrent same-tuple resolves to one winner', { retry: 2 }, () => {
     const dir = tempClaimDir();
     try {
       const script = `

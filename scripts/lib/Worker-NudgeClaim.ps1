@@ -215,7 +215,7 @@ function Recover-WorkerNudgeClaimMutex {
 
 function Enter-WorkerNudgeClaimMutex {
     param([string]$LockDir)
-    for ($attempt = 0; $attempt -lt 8; $attempt++) {
+    for ($attempt = 0; $attempt -lt 24; $attempt++) {
         if (Write-WorkerNudgeClaimMutexOwnerExclusive -LockDir $LockDir) {
             return $true
         }
