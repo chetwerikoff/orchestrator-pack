@@ -295,6 +295,29 @@ export function authorizationBaseShaMatches(authBaseSha, scope) {
   return parent.length > 0 && normalized === parent;
 }
 
+/**
+ * @param {string} authHeadSha
+ * @param {string} authBaseSha
+ * @param {{ headSha: string, baseSha: string, baseParentSha?: string }} scope
+ */
+export function authorizationHeadShaMatches(authHeadSha, authBaseSha, scope) {
+  const head = String(authHeadSha ?? '').trim();
+  const scopeHead = String(scope.headSha ?? '').trim();
+  const base = String(authBaseSha ?? '').trim();
+  const scopeBase = String(scope.baseSha ?? '').trim();
+  const scopeParent = String(scope.baseParentSha ?? '').trim();
+  if (!head || !scopeHead) {
+    return false;
+  }
+  if (head === scopeHead) {
+    return true;
+  }
+  if (base.length > 0 && scopeParent.length > 0 && base === scopeParent && base !== scopeBase) {
+    return true;
+  }
+  return false;
+}
+
 export function findMatchingAuthorization(authorizations, scope) {
   const wantAdded = [...scope.addedPaths].map((entry) => canonicalLegacyDraftPath(entry) ?? entry).sort();
   const wantChanged = [...scope.changedGovernedFiles].sort();
@@ -304,7 +327,7 @@ export function findMatchingAuthorization(authorizations, scope) {
       continue;
     }
     const authHeadSha = String(auth.headSha ?? '').trim();
-    if (!authHeadSha) {
+    if (!authorizationHeadShaMatches(authHeadSha, authBaseSha, scope)) {
       continue;
     }
     const authAdded = [...(Array.isArray(auth.addedPaths) ? auth.addedPaths : [])]

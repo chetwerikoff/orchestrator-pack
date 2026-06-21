@@ -20,6 +20,7 @@ import {
   computeChangedGovernedFiles,
   evaluateLegacyListGuard,
   authorizationBaseShaMatches,
+  authorizationHeadShaMatches,
   findMatchingAuthorization,
   governedSurfacePaths,
   isGuardPresentOnBase,
@@ -197,6 +198,25 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/admin-authorized/);
   });
 
+
+  it('authorizationHeadShaMatches enforces exact head on direct base binding', () => {
+    const scope = {
+      baseSha: 'base1111111111111111111111111111111111111111',
+      baseParentSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head2222222222222222222222222222222222222222',
+    };
+    expect(authorizationHeadShaMatches(
+      'head1111111111111111111111111111111111111111',
+      'base1111111111111111111111111111111111111111',
+      scope,
+    )).toBe(false);
+    expect(authorizationHeadShaMatches(
+      'head2222222222222222222222222222222222222222',
+      'base1111111111111111111111111111111111111111',
+      scope,
+    )).toBe(true);
+  });
+
   it('AC2b accepts pre-merged authorization bound to merge-base parent SHA', () => {
     const added = ['docs/issues_drafts/99-new-draft.md'];
     const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
@@ -237,6 +257,26 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     });
     expect(match).not.toBeNull();
     expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-strict' });
+  });
+
+  it('AC12d rejects stale headSha when merge base matches authorization baseSha', () => {
+    const added = ['docs/issues_drafts/99-new-draft.md'];
+    const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
+    const match = findMatchingAuthorization([{
+      id: 'auth-stale-head',
+      baseSha: 'base1111111111111111111111111111111111111111',
+      headSha: 'head1111111111111111111111111111111111111111',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+      source: { type: 'maintainer', id: 'admin-stale' },
+    }], {
+      baseSha: 'base1111111111111111111111111111111111111111',
+      baseParentSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head2222222222222222222222222222222222222222',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+    });
+    expect(match).toBeNull();
   });
 
   it('detects consumer resolution module edits as governed-surface changes', () => {

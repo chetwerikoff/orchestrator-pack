@@ -68,6 +68,12 @@ export function authorizationBaseShaMatches(
   scope: { baseSha: string; baseParentSha?: string },
 ): boolean;
 
+export function authorizationHeadShaMatches(
+  authHeadSha: string,
+  authBaseSha: string,
+  scope: { headSha: string; baseSha: string; baseParentSha?: string },
+): boolean;
+
 export function findMatchingAuthorization(
   authorizations: Array<Record<string, unknown>>,
   scope: {
