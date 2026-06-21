@@ -11,6 +11,7 @@ import {
   formatReviewerReverifySummary,
   resolveLinkedIssueNumber,
   runContractEvidenceReverify,
+  type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH } from './lib/reverify-command-resolution.js';
 
@@ -40,8 +41,8 @@ function isPrHeadNetworkSandboxAvailable(): boolean {
 const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
 
 function expectNewRowWhenNetworkSandboxAvailable(
-  row: Record<string, unknown>,
-  whenAvailable: Record<string, unknown>,
+  row: ReverifyRowResult,
+  whenAvailable: Partial<ReverifyRowResult>,
 ) {
   if (!prHeadNetworkSandboxAvailable) {
     expect(row).toMatchObject({
