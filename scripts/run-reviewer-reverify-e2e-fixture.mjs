@@ -95,25 +95,6 @@ function resolveAoFixtureSession() {
   return null;
 }
 
-function runReviewCommand() {
-  return spawnSync(
-    'pwsh',
-    [
-      '-NoProfile',
-      '-File',
-      'scripts/run-reviewer-reverify-ao-review-command.ps1',
-      '-RepoRoot',
-      packRoot,
-      '-FixtureDir',
-      'tests/fixtures/contract-evidence-reverify/e2e',
-    ],
-    {
-      cwd: packRoot,
-      encoding: 'utf8',
-    },
-  );
-}
-
 function runAoReviewExecute(sessionId) {
   return spawnSync(
     'pwsh',
@@ -190,16 +171,14 @@ if (!output.viaAoReviewExecute) {
   process.exit(1);
 }
 
-const commandProc = runReviewCommand();
-const summary = commandProc.stdout.trim();
+const summary = (aoProc.stdout ?? '').trim();
 output.summary = summary;
 output.summaryIncludesRows = summary.includes('rows:');
 output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
 output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
 
 const ok =
-  commandProc.status === 0
-  && output.promptContainsCheckpoint2
+  output.promptContainsCheckpoint2
   && output.promptContainsInvokeScript
   && output.summaryIncludesRows
   && output.summaryIncludesNeverBlocks

@@ -157,11 +157,9 @@ function spawnIsolated(
       if (!networkNamespaceSpawnFailed(isolated)) {
         return isolated;
       }
-      // GHA and some containers cannot provide user namespaces — fall back to
-      // credential-isolated direct spawn (HOME/TMPDIR/PATH still sandboxed).
-    } else {
       return networkSandboxUnavailableResult();
     }
+    return networkSandboxUnavailableResult();
   }
 
   return spawnDirect(resolved, payload);

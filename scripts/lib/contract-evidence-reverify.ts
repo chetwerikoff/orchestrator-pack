@@ -61,6 +61,7 @@ export const REVERIFY_REASONS = [
   'unsupported-producer',
   'non-genuine-proof',
   'untrusted-pr-modified',
+  'network-sandbox-unavailable',
 ] as const;
 export type ReverifyReason = (typeof REVERIFY_REASONS)[number];
 
@@ -135,6 +136,7 @@ interface CommandRunResult {
   exitCode: number | null;
   timedOut: boolean;
   blocked: boolean;
+  blockReason?: string;
 }
 
 function normalizePath(value: string): string {
@@ -270,6 +272,13 @@ function compareCaptureContent(
     observed: boundValue(content.slice(0, 120)),
     asserted: boundValue(token),
   };
+}
+
+function blockedUnverifiedReason(run: CommandRunResult): ReverifyReason {
+  if (run.blockReason === 'network-sandbox-unavailable') {
+    return 'network-sandbox-unavailable';
+  }
+  return 'unsafe-or-undeclared-command';
 }
 
 function buildUnverified(
@@ -485,7 +494,7 @@ function evaluateNewRow(input: {
     sandboxMode: 'pr-head-new',
   });
   if (run.blocked) {
-    return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
+    return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
   }
   if (run.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');

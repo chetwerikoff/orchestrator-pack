@@ -92,7 +92,7 @@ function Resolve-TrustedPackRoot {
         Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    return $resolvedReviewTarget
+    throw "trusted runner unavailable: could not resolve trusted pack root from main worktree or ${BaseRef} archive (refusing PR-head fallback)"
 }
 
 function Resolve-TrustedPackRunner {
