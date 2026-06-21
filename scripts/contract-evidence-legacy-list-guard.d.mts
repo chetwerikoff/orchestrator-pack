@@ -104,6 +104,18 @@ export function findMatchingAuthorization(
     addedPaths: string[];
     changedGovernedFiles: string[];
   },
+  options?: {
+    verifyAuthorizedRevision?: (
+      auth: Record<string, unknown>,
+      scope: {
+        baseSha: string;
+        baseParentSha?: string;
+        headSha: string;
+        addedPaths: string[];
+        changedGovernedFiles: string[];
+      },
+    ) => boolean;
+  },
 ): {
   authorization: { type: string; id: string };
   reason: string;

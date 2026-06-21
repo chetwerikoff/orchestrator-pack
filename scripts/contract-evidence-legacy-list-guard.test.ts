@@ -257,7 +257,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       addedPaths: added,
       changedGovernedFiles: changedFiles,
     };
-    const content = {
+    const content: Record<string, string> = {
       'docs/issues_drafts/99-new-draft.md': '# authorized draft\n',
       'scripts/contract-evidence-legacy-drafts.json': '{"paths":[]}\n',
     };
@@ -267,9 +267,10 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     ) ? content[relPath] ?? null : null;
     expect(compareAuthorizedRevisionContent(auth, scope, readAtRef)).toBe(true);
     const match = findMatchingAuthorization([auth], scope, {
-      verifyAuthorizedRevision: (candidate, candidateScope) => (
-        compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef)
-      ),
+      verifyAuthorizedRevision: (
+        candidate: Record<string, unknown>,
+        candidateScope: typeof scope,
+      ) => compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef),
     });
     expect(match).not.toBeNull();
     expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-strict' });
@@ -303,9 +304,10 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     };
     expect(compareAuthorizedRevisionContent(auth, scope, readAtRef)).toBe(false);
     const match = findMatchingAuthorization([auth], scope, {
-      verifyAuthorizedRevision: (candidate, candidateScope) => (
-        compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef)
-      ),
+      verifyAuthorizedRevision: (
+        candidate: Record<string, unknown>,
+        candidateScope: typeof scope,
+      ) => compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef),
     });
     expect(match).toBeNull();
   });
