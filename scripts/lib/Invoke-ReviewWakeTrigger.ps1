@@ -134,6 +134,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         [hashtable]$FixtureSnapshot,
         [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
+        [long]$WakeReceivedMs = 0,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
 
@@ -157,11 +158,15 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter ([string]$FilterResult.handoffAdmission.auditLine)
     }
 
+    if ($WakeReceivedMs -gt 0) {
+        $wakeReceivedMs = $WakeReceivedMs
+    }
+    else {
+        $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
+
     $snapshot = Get-ReviewWakeTriggerSnapshot -PrNumber $prNumber -Project $ProjectId `
         -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
-
-    # Bound listener-local processing only — exclude gh/ao snapshot latency.
-    $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
     $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
     $evaluatePayload = @{
@@ -201,9 +206,8 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
     }
 
-    if (-not $evaluation.withinLatencyBound) {
-        $boundLabel = if ($isHandoffWake) { 'handoff receipt-to-run' } else { 'wake-to-run decision' }
-        throw "review-wake-trigger exceeded ${boundLabel} bound (${evaluation.processingMs}ms)"
+    if (-not $evaluation.withinLatencyBound -and -not $isHandoffWake) {
+        throw "review-wake-trigger exceeded wake-to-run decision bound (${evaluation.processingMs}ms)"
     }
 
     if ($evaluation.route -eq 'empty_review_trap') {
@@ -219,7 +223,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if (-not $evaluation.triggerReviewRun) {
         & $LogWriter "review-wake-trigger: defer PR #$prNumber ($($evaluation.reason))"
-        if ($resolvedStateRoot -and $evaluation.reason -eq 'uncovered_not_ready') {
+        if ($resolvedStateRoot -and $evaluation.reason -in @('uncovered_not_ready', 'ci_red_defer')) {
             $headShaForWatch = ''
             foreach ($pr in @($snapshot.openPrs)) {
                 if ([int]$pr.number -eq $prNumber) {
@@ -228,12 +232,19 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 }
             }
             if ($headShaForWatch) {
+                $deferReason = [string]$evaluation.reason
+                $deferRecord = if ($deferReason -eq 'ci_red_defer') {
+                    @{ primary = 'ci_red' }
+                }
+                else {
+                    @{ primary = 'no_ready_for_review' }
+                }
                 $watchResult = Record-ReviewTriggerReevalWatchFromWakeDefer -StateRoot $resolvedStateRoot `
                     -PrNumber $prNumber -HeadSha $headShaForWatch -SessionId ([string]$FilterResult.sessionId) `
-                    -DeferReason 'uncovered_not_ready' -DeferRecord @{ primary = 'no_ready_for_review' } `
+                    -DeferReason $deferReason -DeferRecord $deferRecord `
                     -DryRun:$DryRun
                 if ($watchResult.recorded) {
-                    & $LogWriter "review-wake-trigger: deferred-head watch recorded key=$($watchResult.watchKey)"
+                    & $LogWriter "review-wake-trigger: deferred-head watch recorded key=$($watchResult.watchKey) reason=$deferReason"
                 }
             }
         }
@@ -431,6 +442,21 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
+        }
+    }
+
+    if ($isHandoffWake) {
+        $startedRun = @($postRuns) | Where-Object {
+            [int]$_.prNumber -eq [int]$planned.prNumber -and
+            [string]$_.targetSha -eq [string]$planned.headSha
+        } | Select-Object -First 1
+        $runCreatedAtMs = Get-ReviewRunCreatedAtMs -Run $startedRun
+        if (-not $runCreatedAtMs) {
+            $runCreatedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        $receiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $runCreatedAtMs
+        if (-not $receiptBound.withinBound) {
+            throw "review-wake-trigger exceeded handoff receipt-to-run bound ($($receiptBound.receiptToRunMs)ms)"
         }
     }
 

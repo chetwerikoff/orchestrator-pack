@@ -93,6 +93,19 @@ export function isDeferredNotReadySeedEligible(deferReason, deferRecord) {
 }
 
 /**
+ * @param {string | null | undefined} deferReason
+ * @param {{ primary?: string, failedComponents?: string[], branch?: string } | null | undefined} deferRecord
+ */
+export function isDeferredReevalWatchSeedEligible(deferReason, deferRecord) {
+  const reason = String(deferReason ?? '').trim();
+  if (reason === 'ci_red_defer') {
+    const primary = String(deferRecord?.primary ?? '').trim();
+    return primary === 'ci_red' || primary === '';
+  }
+  return isDeferredNotReadySeedEligible(deferReason, deferRecord);
+}
+
+/**
  * @param {object} input
  * @param {number} input.prNumber
  * @param {string} input.headSha
@@ -747,7 +760,7 @@ export function seedWatchFromInProgressSignals(input) {
 export function seedWatchFromWakeDefer(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const deferRecord = input.deferRecord ?? {};
-  if (!isDeferredNotReadySeedEligible(input.deferReason, deferRecord)) {
+  if (!isDeferredReevalWatchSeedEligible(input.deferReason, deferRecord)) {
     return {
       seeded: false,
       reason: 'not_deferred_not_ready_seed',

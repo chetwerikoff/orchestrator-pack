@@ -17,6 +17,7 @@ import {
   evaluateReadyForReviewNotificationCapture,
   findForbiddenReviewReevalCommands,
   isDeferredNotReadySeedEligible,
+  isDeferredReevalWatchSeedEligible,
   isWatchWindowNonConformant,
   mergeWatchState,
   planDeferredWatchTick,
@@ -116,6 +117,11 @@ describe('review-trigger-reeval constants and helpers', () => {
 
   it('watchEntryKey normalizes sha', () => {
     expect(watchEntryKey(235, 'ABC235')).toBe('235:abc235');
+  });
+
+  it('isDeferredReevalWatchSeedEligible accepts ci_red_defer', () => {
+    expect(isDeferredReevalWatchSeedEligible('ci_red_defer', { primary: 'ci_red' })).toBe(true);
+    expect(isDeferredReevalWatchSeedEligible('ci_red_defer', { primary: 'no_ready_for_review' })).toBe(false);
   });
 
   it('isDeferredNotReadySeedEligible accepts no_ready_for_review only', () => {

@@ -149,40 +149,39 @@ export function evaluateHandoffIdentityAdmission(input) {
   }
 
   const openPrs = toArray(input.openPrs);
-  if (openPrs.length > 0) {
-    const prNumber = Number(subject.prNumber);
-    const open = openPrs.find((pr) => Number(pr?.number) === prNumber);
-    if (!open) {
-      return {
-        admitted: false,
-        outcome: 'filter_reject',
-        reason: 'no_open_pr',
-        audit: { ...audit, outcome: 'filter_reject', reason: 'no_open_pr' },
-      };
-    }
-    const baseRefName = nonEmptyString(open.baseRefName) ?? nonEmptyString(open.baseRef);
+  if (openPrs.length === 0) {
     return {
-      admitted: true,
-      outcome: 'promoted',
-      reason: 'handoff_promoted',
-      subject,
-      admittedBaseRef: baseRefName,
-      admittedHeadSha: normalizeSha(String(open.headRefOid ?? '')),
-      audit: {
-        ...audit,
-        outcome: 'promoted',
-        reason: 'handoff_promoted',
-        admittedBaseRef: baseRefName,
-      },
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'no_open_pr',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'no_open_pr' },
     };
   }
 
+  const prNumber = Number(subject.prNumber);
+  const open = openPrs.find((pr) => Number(pr?.number) === prNumber);
+  if (!open) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'no_open_pr',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'no_open_pr' },
+    };
+  }
+  const baseRefName = nonEmptyString(open.baseRefName) ?? nonEmptyString(open.baseRef);
   return {
     admitted: true,
     outcome: 'promoted',
     reason: 'handoff_promoted',
     subject,
-    audit: { ...audit, outcome: 'promoted', reason: 'handoff_promoted' },
+    admittedBaseRef: baseRefName,
+    admittedHeadSha: normalizeSha(String(open.headRefOid ?? '')),
+    audit: {
+      ...audit,
+      outcome: 'promoted',
+      reason: 'handoff_promoted',
+      admittedBaseRef: baseRefName,
+    },
   };
 }
 
@@ -305,6 +304,102 @@ export function seedHandoffAdmissionRecord(input) {
  * @param {number} [input.listenerReadyMs]
  * @param {number} [input.nowMs]
  */
+/**
+ * @param {number} wakeReceivedMs
+ * @param {number} runCreatedAtMs
+ * @param {number} [boundMs]
+ */
+export function evaluateHandoffReceiptToRunBound(
+  wakeReceivedMs,
+  runCreatedAtMs,
+  boundMs = HANDOFF_RECEIPT_TO_RUN_MAX_MS,
+) {
+  const receiptMs = Number(wakeReceivedMs);
+  const createdMs = Number(runCreatedAtMs);
+  if (!Number.isFinite(receiptMs) || !Number.isFinite(createdMs)) {
+    return { withinBound: false, reason: 'missing_timestamps', receiptToRunMs: null, boundMs };
+  }
+  const receiptToRunMs = Math.max(0, createdMs - receiptMs);
+  return {
+    withinBound: receiptToRunMs <= boundMs,
+    receiptToRunMs,
+    boundMs,
+  };
+}
+
+function pendingAdmissionRetryKey(bodyJson) {
+  const raw = nonEmptyString(bodyJson);
+  if (!raw) return '';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return '';
+  }
+  const event = isRecord(parsed?.event) ? parsed.event : isRecord(parsed?.body?.event) ? parsed.body.event : undefined;
+  if (!event) return '';
+  const subject = parseHandoffNotificationSubject(event);
+  return [subject.sessionId ?? '', String(subject.prNumber ?? ''), subject.prUrl ?? ''].join('|');
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.existing]
+ * @param {string} input.bodyJson
+ * @param {number} [input.nowMs]
+ */
+export function seedPendingAdmissionRetry(input) {
+  const bodyJson = nonEmptyString(input.bodyJson);
+  if (!bodyJson) {
+    return { seeded: false, reason: 'missing_body_json' };
+  }
+  const key = pendingAdmissionRetryKey(bodyJson);
+  if (!key || key === '||') {
+    return { seeded: false, reason: 'not_handoff_envelope' };
+  }
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const existing = isRecord(input.existing) ? input.existing : {};
+  const record = {
+    key,
+    bodyJson,
+    reason: 'admission_lookup_unknown',
+    receivedAtMs: nowMs,
+    updatedAtMs: nowMs,
+  };
+  return {
+    seeded: true,
+    key,
+    record,
+    pendingRetries: { ...existing, [key]: record },
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.pendingRetries]
+ */
+export function selectPendingAdmissionRetries(input) {
+  const pendingRetries = isRecord(input.pendingRetries) ? input.pendingRetries : {};
+  return {
+    retries: Object.values(pendingRetries).filter((entry) => isRecord(entry) && nonEmptyString(entry.bodyJson)),
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.existing]
+ * @param {string} input.key
+ */
+export function clearPendingAdmissionRetry(input) {
+  const key = nonEmptyString(input.key);
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
+  if (!key || !existing[key]) {
+    return { cleared: false, reason: 'missing_pending_retry', pendingRetries: existing };
+  }
+  delete existing[key];
+  return { cleared: true, key, pendingRetries: existing };
+}
+
 export function selectHandoffAdmissionReplay(input) {
   const records = isRecord(input.records) ? input.records : {};
   const listenerReadyMs = Number(input.listenerReadyMs ?? input.nowMs ?? Date.now());
@@ -328,18 +423,19 @@ export function getHandoffAdmissionStatePath(stateRoot) {
 export function loadHandoffAdmissionState(filePath) {
   try {
     if (!fs.existsSync(filePath)) {
-      return { records: {}, lastUpdatedMs: null };
+      return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
     }
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     if (!isRecord(parsed)) {
-      return { records: {}, lastUpdatedMs: null };
+      return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
     }
     return {
       records: isRecord(parsed.records) ? parsed.records : {},
+      pendingRetries: isRecord(parsed.pendingRetries) ? parsed.pendingRetries : {},
       lastUpdatedMs: typeof parsed.lastUpdatedMs === 'number' ? parsed.lastUpdatedMs : null,
     };
   } catch {
-    return { records: {}, lastUpdatedMs: null };
+    return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
   }
 }
 
@@ -356,4 +452,15 @@ runStdinJsonCli('review-handoff-wake-admission.mjs', {
   preClaim: () => evaluateHandoffPreClaimRecheck(readStdinJson()),
   seed: () => seedHandoffAdmissionRecord(readStdinJson()),
   replay: () => selectHandoffAdmissionReplay(readStdinJson()),
+  seedPendingRetry: () => seedPendingAdmissionRetry(readStdinJson()),
+  listPendingRetries: () => selectPendingAdmissionRetries(readStdinJson()),
+  clearPendingRetry: () => clearPendingAdmissionRetry(readStdinJson()),
+  receiptBound: () => {
+    const payload = readStdinJson();
+    return evaluateHandoffReceiptToRunBound(
+      payload.wakeReceivedMs,
+      payload.runCreatedAtMs,
+      payload.boundMs,
+    );
+  },
 });

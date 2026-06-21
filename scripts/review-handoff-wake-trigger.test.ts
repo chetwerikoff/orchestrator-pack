@@ -6,11 +6,13 @@ import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
 import {
   evaluateHandoffIdentityAdmission,
   evaluateHandoffPreClaimRecheck,
+  evaluateHandoffReceiptToRunBound,
   formatHandoffWakeAuditLine,
   HANDOFF_RECEIPT_TO_RUN_MAX_MS,
   HANDOFF_WAKE_KIND,
   isReadyForReviewHandoffEnvelope,
   seedHandoffAdmissionRecord,
+  seedPendingAdmissionRetry,
   selectHandoffAdmissionReplay,
 } from '../docs/review-handoff-wake-admission.mjs';
 import {
@@ -20,7 +22,7 @@ import {
   isHandoffReviewTriggerWake,
   WAKE_TO_RUN_DECISION_MAX_MS,
 } from '../docs/review-wake-trigger.mjs';
-import { seedWatchFromWakeDefer } from '../docs/review-trigger-reeval.mjs';
+import { seedWatchFromWakeDefer, isDeferredReevalWatchSeedEligible } from '../docs/review-trigger-reeval.mjs';
 import type { OpenPr } from '../docs/review-trigger-reconcile.d.mts';
 
 const fixturesDir = path.join(
@@ -120,6 +122,11 @@ describe('handoff envelope admission (Issue #381)', () => {
     const actionWake = evaluateWakePayload(actionCapture, ctx);
     expect(infoWake.ok).toBe(true);
     expect(actionWake.ok).toBe(true);
+    if (infoWake.ok && actionWake.ok) {
+      expect(infoWake.handoffAdmission?.admittedHeadSha).toBeTruthy();
+      expect(actionWake.handoffAdmission?.admittedHeadSha).toBeTruthy();
+      expect(actionWake.handoffAdmission?.promotedFromInfoPriority).toBe(false);
+    }
 
     const infoEval = evaluateHandoffFixture(fixture);
     const actionEval = evaluateHandoffFixture({ ...fixture, wakeKind: 'ready_for_review' });
@@ -201,6 +208,59 @@ describe('handoff envelope admission (Issue #381)', () => {
     }
   });
 
+  it('rejects handoffs when open-PR lookup succeeds but list is empty', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const result = evaluateWakePayload(capture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: [],
+      openPrLookupFailed: false,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('no_open_pr');
+    }
+  });
+
+  it('action-priority foreign repository is identity-rejected', () => {
+    const actionCapture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.action-priority.raw.json'), 'utf8'),
+    );
+    actionCapture.event.data.subject.pr.url = 'https://github.com/other/repo/pull/999';
+    const result = evaluateWakePayload(actionCapture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('foreign_repository');
+    }
+  });
+
+  it('retains retryable admission lookup failures for later retry', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const bodyJson = JSON.stringify(capture);
+    const seed = seedPendingAdmissionRetry({ existing: {}, bodyJson, nowMs: 1_700_000_000_000 });
+    expect(seed.seeded).toBe(true);
+    expect(seed.key).toBeTruthy();
+  });
+
+  it('measures handoff receipt-to-run bound through run createdAt', () => {
+    const receiptMs = 1_700_000_000_000;
+    const runCreatedMs = receiptMs + 2_000;
+    const bound = evaluateHandoffReceiptToRunBound(receiptMs, runCreatedMs);
+    expect(bound.withinBound).toBe(true);
+    expect(bound.receiptToRunMs).toBe(2_000);
+
+    const late = evaluateHandoffReceiptToRunBound(receiptMs, receiptMs + HANDOFF_RECEIPT_TO_RUN_MAX_MS + 1);
+    expect(late.withinBound).toBe(false);
+  });
+
   it('AC16: transient open-PR lookup yields retryable unknown', () => {
     const capture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
@@ -220,7 +280,7 @@ describe('handoff envelope admission (Issue #381)', () => {
 });
 
 describe('handoff review trigger path', () => {
-  it('AC3: red/pending CI defers with uncovered_not_ready for reeval seeding', () => {
+  it('AC3: red/pending CI defers with ci_red_defer and seeds reeval watch', () => {
     const fixture = loadFixture('red-ci-defer-seed-reeval.json');
     const result = evaluateHandoffFixture(fixture);
     expect(result.triggerReviewRun).toBe(false);
@@ -228,12 +288,13 @@ describe('handoff review trigger path', () => {
 
     const pr = fixture.openPrs?.[0];
     expect(pr).toBeDefined();
+    expect(isDeferredReevalWatchSeedEligible('ci_red_defer', { primary: 'ci_red' })).toBe(true);
     const seed = seedWatchFromWakeDefer({
       prNumber: Number(fixture.prNumber),
       headSha: String(pr!.headRefOid),
       sessionId: String(fixture.sessionId),
-      deferReason: 'uncovered_not_ready',
-      deferRecord: { primary: 'no_ready_for_review' },
+      deferReason: 'ci_red_defer',
+      deferRecord: { primary: 'ci_red' },
       existingWatches: {},
       nowMs: Date.now(),
     });

@@ -258,10 +258,7 @@ export function evaluateWakePayload(body, admissionContext = {}) {
   const handoffEnvelope = isReadyForReviewHandoffEnvelope(body, event);
   const priority = nonEmptyString(event.priority);
   let handoffAdmission = null;
-  if (priority === 'info' || priority === 'warning') {
-    if (!handoffEnvelope) {
-      return { ok: false, reason: 'info_priority', detail: priority };
-    }
+  if (handoffEnvelope) {
     handoffAdmission = evaluateHandoffIdentityAdmission({
       event,
       supervisedProjectId: admissionContext.supervisedProjectId,
@@ -287,6 +284,8 @@ export function evaluateWakePayload(body, admissionContext = {}) {
         auditLine,
       };
     }
+  } else if (priority === 'info' || priority === 'warning') {
+    return { ok: false, reason: 'info_priority', detail: priority };
   }
 
   const wakeKind = handoffEnvelope ? 'ready_for_review' : resolveWakeKind(event);

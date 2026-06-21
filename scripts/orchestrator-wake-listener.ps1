@@ -53,6 +53,49 @@ function Write-ListenerLog {
     Write-OrchestratorWakeLog -Message $Message
 }
 
+function Get-ListenerHandoffStateRoot {
+    param([string]$StateRoot = '', [string]$SideEffectLockPath = '')
+
+    if ($StateRoot) { return $StateRoot }
+    if ($SideEffectLockPath) { return Split-Path -Parent $SideEffectLockPath }
+    return ''
+}
+
+function Invoke-HandoffWakeTriggerFromFilter {
+    param(
+        [object]$FilterResult,
+        [long]$WakeReceivedMs,
+        [string]$ProjectId,
+        [string]$RepoRoot,
+        [string]$ReviewCommand,
+        [string]$SideEffectLockPath,
+        [string]$StateRoot,
+        [hashtable]$FixtureSnapshot,
+        [switch]$DryRun,
+        [string]$WakeMessage
+    )
+
+    $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
+        -FilterResult $FilterResult `
+        -ProjectId $ProjectId `
+        -RepoRoot $RepoRoot `
+        -ReviewCommand $ReviewCommand `
+        -SideEffectLockPath $SideEffectLockPath `
+        -StateRoot $StateRoot `
+        -FixtureSnapshot $FixtureSnapshot `
+        -WakeReceivedMs $WakeReceivedMs `
+        -DryRun:($DryRun -or [bool]$FixtureSnapshot) `
+        -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+    $resolvedWakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $WakeMessage -MergeEval $triggerResult.mergeEval
+    if ($triggerResult.triggered) {
+        Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
+    }
+    return @{
+        wakeMessage     = $resolvedWakeMessage
+        triggerResult   = $triggerResult
+    }
+}
+
 function Get-SupervisedRepoSlug {
     param([string]$RepoRoot)
 
@@ -194,6 +237,50 @@ catch {
 Write-ListenerLog "listening (loopback only via 127.0.0.1 prefix)"
 Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'listening'
 $lastProgressAt = Get-Date
+$listenerHandoffStateRoot = Get-ListenerHandoffStateRoot -StateRoot $SideEffectStateDir -SideEffectLockPath $sideEffectLockPath
+$listenerReadyMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+if ($listenerHandoffStateRoot) {
+    try {
+        Invoke-ReviewHandoffWakeAdmissionRecovery `
+            -StateRoot $listenerHandoffStateRoot `
+            -ListenerReadyMs $listenerReadyMs `
+            -ProjectId $projectId `
+            -RepoRoot $Script:OrchestratorWakeRepoRoot `
+            -ReviewCommand $reviewCommand `
+            -SideEffectLockPath $sideEffectLockPath `
+            -FixtureSnapshot $fixtureSnapshot `
+            -DryRun:$DryRun `
+            -InvokeWakeFilter {
+                param($BodyJson, $OpenPrs, $OpenPrLookupFailed)
+                Invoke-WakeFilter -BodyJson $BodyJson `
+                    -SupervisedProjectId $projectId `
+                    -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                    -OpenPrs $OpenPrs `
+                    -OpenPrLookupFailed:$OpenPrLookupFailed
+            } `
+            -ResolveOpenPrs {
+                Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot
+            } `
+            -InvokeTrigger {
+                param($FilterResult, $WakeReceivedMs)
+                Invoke-HandoffWakeTriggerFromFilter `
+                    -FilterResult $FilterResult `
+                    -WakeReceivedMs $WakeReceivedMs `
+                    -ProjectId $projectId `
+                    -RepoRoot $Script:OrchestratorWakeRepoRoot `
+                    -ReviewCommand $reviewCommand `
+                    -SideEffectLockPath $sideEffectLockPath `
+                    -StateRoot $listenerHandoffStateRoot `
+                    -FixtureSnapshot $fixtureSnapshot `
+                    -DryRun:$DryRun `
+                    -WakeMessage $FilterResult.wakeMessage | Out-Null
+            } `
+            -LogWriter { param([string]$Message) Write-ListenerLog $Message }
+    }
+    catch {
+        Write-ListenerLog "review-handoff-wake: startup recovery failed ($_)"
+    }
+}
 
 Register-OrchestratorWakeCancelHandler
 
@@ -237,6 +324,7 @@ try {
                 $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
                 $body = $reader.ReadToEnd()
                 $reader.Close()
+                $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
                 $openPrLookupFailed = $false
                 $openPrsForAdmission = @()
@@ -255,11 +343,21 @@ try {
                 if (-not $filterResult.ok) {
                     $reason = $filterResult.reason
                     $detail = $filterResult.detail
+                    if ($filterResult.retryable -and $reason -eq 'admission_lookup_unknown' -and $listenerHandoffStateRoot) {
+                        $retryRecord = Record-ReviewHandoffWakePendingRetry -StateRoot $listenerHandoffStateRoot -BodyJson $body -DryRun:$DryRun
+                        if ($retryRecord.recorded) {
+                            Write-ListenerLog "review-handoff-wake: retained retryable admission_lookup_unknown key=$($retryRecord.key)"
+                        }
+                    }
                     if ($reason -eq 'missing_session_id') {
                         Write-ListenerLog 'rejected: missing session id in payload'
                     }
                     elseif ($reason -eq 'malformed_payload') {
                         Write-ListenerLog "rejected: malformed payload ($detail)"
+                    }
+                    elseif ($filterResult.auditLine) {
+                        Write-ListenerLog ([string]$filterResult.auditLine)
+                        Write-ListenerLog "dropped: $reason$(if ($detail) { " ($detail)" })"
                     }
                     else {
                         Write-ListenerLog "dropped: $reason$(if ($detail) { " ($detail)" })"
@@ -275,20 +373,18 @@ try {
                 if ($filterResult.wakeKind -eq 'merge.ready' -or $filterResult.wakeKind -eq 'ready_for_review') {
                     Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'wake_received'
                     try {
-                        $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `
+                        $handoffTrigger = Invoke-HandoffWakeTriggerFromFilter `
                             -FilterResult $filterResult `
+                            -WakeReceivedMs $wakeReceivedMs `
                             -ProjectId $projectId `
                             -RepoRoot $Script:OrchestratorWakeRepoRoot `
                             -ReviewCommand $reviewCommand `
                             -SideEffectLockPath $sideEffectLockPath `
-                            -StateRoot $SideEffectStateDir `
+                            -StateRoot $listenerHandoffStateRoot `
                             -FixtureSnapshot $fixtureSnapshot `
                             -DryRun:($DryRun -or [bool]$FixturePath) `
-                            -LogWriter { param([string]$Message) Write-ListenerLog $Message }
-                        $wakeMessage = Resolve-ReviewWakeMergeMessage -WakeMessage $wakeMessage -MergeEval $triggerResult.mergeEval
-                        if ($triggerResult.triggered) {
-                            Write-ListenerLog "review-wake-trigger: run started PR #$($triggerResult.planned.prNumber) head=$($triggerResult.planned.headSha)"
-                        }
+                            -WakeMessage $wakeMessage
+                        $wakeMessage = $handoffTrigger.wakeMessage
                     }
                     catch {
                         Write-ListenerLog "review-wake-trigger: failed ($_); forwarding merge wake as non-mergeable"

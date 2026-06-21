@@ -73,10 +73,30 @@ export declare function seedHandoffAdmissionRecord(input: Record<string, unknown
 
 export declare function selectHandoffAdmissionReplay(input: Record<string, unknown>): Record<string, unknown>;
 
+export declare function evaluateHandoffReceiptToRunBound(
+  wakeReceivedMs: number,
+  runCreatedAtMs: number,
+  boundMs?: number,
+): {
+  withinBound: boolean;
+  receiptToRunMs: number | null;
+  boundMs: number;
+  reason?: string;
+};
+
+export declare function seedPendingAdmissionRetry(input: Record<string, unknown>): Record<string, unknown>;
+
+export declare function selectPendingAdmissionRetries(input: Record<string, unknown>): {
+  retries: Array<Record<string, unknown>>;
+};
+
+export declare function clearPendingAdmissionRetry(input: Record<string, unknown>): Record<string, unknown>;
+
 export declare function getHandoffAdmissionStatePath(stateRoot: string): string;
 
 export declare function loadHandoffAdmissionState(filePath: string): {
   records: Record<string, unknown>;
+  pendingRetries: Record<string, unknown>;
   lastUpdatedMs: number | null;
 };
 
