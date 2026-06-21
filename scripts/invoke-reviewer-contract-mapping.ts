@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { readLines, readText } from './lib/reviewer-cli-io.js';
 import {
   buildStructuredStatusRecord,
   computeBoundDiffArtifactHash,
@@ -161,17 +161,6 @@ Options:
   --preflight-only              Stop after mapping preflight (fixture/integration smoke)
   --text                        Human-readable output instead of JSON
 `);
-}
-
-function readText(filePath: string): string {
-  return readFileSync(filePath, 'utf8');
-}
-
-function readLines(filePath: string): string[] {
-  return readText(filePath)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
 }
 
 export function resolveLiveHeadSha(): string {

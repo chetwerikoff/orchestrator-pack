@@ -199,14 +199,9 @@ not-run`, and zero-row `no-rows` runs) in review output. Independently validate
 each candidate against the diff, producer, and cited spec snapshot before
 assigning severity.
 
-```powershell
-pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1 `
-  -SnapshotFile <bound-issue-snapshot.md> `
-  -PrBodyFile <pr-body> `
-  -ExplicitIssue <n> `
-  -ChangedPathsFile <changed-paths> `
-  -Summary
-```
+Invoke with `pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1` using
+`-SnapshotFile`, `-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, and `-Summary`
+(see `scripts/invoke-contract-evidence-reverify.ps1` for the canonical parameter set).
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`

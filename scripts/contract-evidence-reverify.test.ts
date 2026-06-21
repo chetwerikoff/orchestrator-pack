@@ -11,7 +11,7 @@ import {
   formatReviewerReverifySummary,
   resolveLinkedIssueNumber,
   runContractEvidenceReverify,
-} from './lib/contract-evidence-reverify.ts';
+} from './lib/contract-evidence-reverify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -128,18 +128,24 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('AC9: linked-issue ambiguity surfaces run-level states', () => {
-    expect(resolveLinkedIssueNumber({ prBody: 'No issue link' }).runOutcome).toBe(
-      'no-linked-issue',
-    );
-    expect(
-      resolveLinkedIssueNumber({ prBody: 'Closes #1\n\nCloses #2\n' }).runOutcome,
-    ).toBe('multiple-linked-issues');
-    expect(
-      resolveLinkedIssueNumber({
+    const noLinked = resolveLinkedIssueNumber({ prBody: 'No issue link' });
+    expect(noLinked.ok).toBe(false);
+    if (!noLinked.ok) {
+      expect(noLinked.runOutcome).toBe('no-linked-issue');
+    }
+    const multi = resolveLinkedIssueNumber({ prBody: 'Closes #1\n\nCloses #2\n' });
+    expect(multi.ok).toBe(false);
+    if (!multi.ok) {
+      expect(multi.runOutcome).toBe('multiple-linked-issues');
+    }
+    const mismatch = resolveLinkedIssueNumber({
         prBody: 'Closes #9001\n',
         expectedIssueNumber: 42,
-      }).runOutcome,
-    ).toBe('pr-issue-mismatch');
+      });
+    expect(mismatch.ok).toBe(false);
+    if (!mismatch.ok) {
+      expect(mismatch.runOutcome).toBe('pr-issue-mismatch');
+    }
     const unavailable = runContractEvidenceReverify({
       ...baseInput(loadIssue('live-match.md')),
       boundSnapshotBody: null,

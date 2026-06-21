@@ -7,32 +7,22 @@ param(
     [string]$RepoRoot
 )
 
-$ErrorActionPreference = 'Stop'
-$Root = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
-    Split-Path -Parent $PSScriptRoot
-} else {
-    $RepoRoot
-}
+. (Join-Path $PSScriptRoot 'lib/Initialize-ReviewerPolicyCheck.ps1')
+$Root = Initialize-ReviewerPolicyCheckRoot -RepoRoot $RepoRoot -ScriptRoot $PSScriptRoot
+$failures = New-ReviewerPolicyCheckFailures
 
-$failures = [System.Collections.Generic.List[string]]::new()
-
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
-$codexPrompt = Join-Path $Root 'prompts/codex_review_prompt.md'
-$helperPs1 = Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ps1'
-$helperTs = Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ts'
-$library = Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts'
-
-foreach ($required in @($agentRules, $codexPrompt, $helperPs1, $helperTs, $library)) {
-    if (-not (Test-Path -LiteralPath $required)) {
-        $failures.Add("missing required file: $required")
-    }
-}
+$requiredPaths = @(
+    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'prompts/codex_review_prompt.md'),
+    (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ps1'),
+    (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ts'),
+    (Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts')
+)
+Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Failures $failures
 
 if ($failures.Count -eq 0) {
-    $agentText = Get-Content -LiteralPath $agentRules -Raw
-    $codexText = Get-Content -LiteralPath $codexPrompt -Raw
-
-    $requiredAgent = @(
+    $prompts = Get-ReviewerPolicyPromptTexts -Root $Root
+    Test-ReviewerPolicyPromptPhrases -Label 'prompts/agent_rules.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
         'Checkpoint-2 contract-evidence re-verification',
         'candidate evidence only',
         'invoke-contract-evidence-reverify.ps1',
@@ -41,13 +31,7 @@ if ($failures.Count -eq 0) {
         'never auto-blocks',
         'compared-to-record'
     )
-    foreach ($phrase in $requiredAgent) {
-        if ($agentText -notmatch [regex]::Escape($phrase)) {
-            $failures.Add("prompts/agent_rules.md missing phrase: $phrase")
-        }
-    }
-
-    $requiredCodex = @(
+    Test-ReviewerPolicyPromptPhrases -Label 'prompts/codex_review_prompt.md' -Text $prompts.CodexPrompt -Failures $failures -RequiredPhrases @(
         'Checkpoint-2 contract-evidence re-verification',
         'candidate evidence only',
         'invoke-contract-evidence-reverify.ps1',
@@ -55,30 +39,12 @@ if ($failures.Count -eq 0) {
         'independently validate',
         'never auto-blocks'
     )
-    foreach ($phrase in $requiredCodex) {
-        if ($codexText -notmatch [regex]::Escape($phrase)) {
-            $failures.Add("prompts/codex_review_prompt.md missing phrase: $phrase")
-        }
-    }
 }
 
 Push-Location $Root
 try {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        $failures.Add('npm required for contract-evidence-reverify vitest suite')
-    }
-    elseif (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
-        & npm ci --include=dev | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('npm ci failed before contract-evidence-reverify tests')
-        }
-    }
-
     if ($failures.Count -eq 0) {
-        & npx vitest run scripts/contract-evidence-reverify.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('scripts/contract-evidence-reverify.test.ts failed')
-        }
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/contract-evidence-reverify.test.ts' -Failures $failures
     }
 
     if ($failures.Count -eq 0) {
@@ -92,13 +58,4 @@ finally {
     Pop-Location
 }
 
-if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] contract-evidence-reverify checks:'
-    foreach ($failure in $failures) {
-        Write-Host "  - $failure"
-    }
-    exit 1
-}
-
-Write-Host '[PASS] contract-evidence-reverify prompt/policy contracts and fixtures'
-exit 0
+Write-ReviewerPolicyCheckResult -Label 'contract-evidence-reverify' -Failures $failures

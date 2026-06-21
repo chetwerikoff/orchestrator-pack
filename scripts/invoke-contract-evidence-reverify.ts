@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import {
   formatReviewerReverifySummary,
   runContractEvidenceReverify,
-} from './lib/contract-evidence-reverify.ts';
+} from './lib/contract-evidence-reverify.js';
+import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
 
 function usage(): string {
   return [
@@ -28,28 +27,6 @@ function usage(): string {
     '  --summary                     Emit reviewer-facing summary text',
     '  --json                        Emit JSON (default)',
   ].join('\n');
-}
-
-function readText(filePath: string): string {
-  return readFileSync(filePath, 'utf8');
-}
-
-function readLines(filePath: string): string[] {
-  return readText(filePath)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function resolveHeadSha(explicit?: string): string | null {
-  if (explicit) {
-    return explicit;
-  }
-  const result = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout.trim() || null;
 }
 
 function parseArgs(argv: string[]) {
