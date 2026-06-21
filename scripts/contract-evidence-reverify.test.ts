@@ -24,27 +24,24 @@ function loadIssue(name: string): string {
   return readFileSync(path.join(fixtureRoot, 'issues', name), 'utf8');
 }
 
-function isPrHeadNetworkSandboxAvailable(): boolean {
+function isPrHeadFullSandboxAvailable(): boolean {
   if (process.platform !== 'linux') {
     return false;
   }
-  const probe = spawnSync('unshare', ['-U', '-n', '-r', 'true'], {
+  const probe = spawnSync('bwrap', ['--version'], {
     encoding: 'utf8',
     shell: false,
   });
-  if (probe.error || probe.status !== 0) {
-    return false;
-  }
-  return !(probe.stderr ?? '').includes('network-sandbox-unavailable');
+  return probe.status === 0;
 }
 
-const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
+const prHeadFullSandboxAvailable = isPrHeadFullSandboxAvailable();
 
-function expectNewRowWhenNetworkSandboxAvailable(
+function expectNewRowWhenFullSandboxAvailable(
   row: ReverifyRowResult,
   whenAvailable: Partial<ReverifyRowResult>,
 ) {
-  if (!prHeadNetworkSandboxAvailable) {
+  if (!prHeadFullSandboxAvailable) {
     expect(row).toMatchObject({
       status: 'unverified',
       reason: 'network-sandbox-unavailable',
@@ -101,7 +98,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9004\n',
       explicitIssueNumber: 9004,
     }));
-    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
@@ -113,7 +110,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9005\n',
       explicitIssueNumber: 9005,
     }));
-    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
       status: 'unfulfilled-new',
       verificationMode: 'live',
     });
@@ -243,7 +240,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
         explicitIssueNumber: 9006,
       }),
     );
-    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
       status: 'unverified',
       reason: 'non-genuine-proof',
       verificationMode: 'not-run',
@@ -264,6 +261,18 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const result = runContractEvidenceReverify(
       baseInput(loadIssue('live-match.md'), {
         prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/capture-manifest.json'],
+      }),
+    );
+    expect(result.rows[0]).toMatchObject({
+      status: 'unverified',
+      reason: 'untrusted-pr-modified',
+    });
+  });
+
+  it('PR-modified capture producer is not executed live', () => {
+    const result = runContractEvidenceReverify(
+      baseInput(loadIssue('live-match.md'), {
+        prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs'],
       }),
     );
     expect(result.rows[0]).toMatchObject({

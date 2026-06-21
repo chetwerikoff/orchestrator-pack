@@ -22,6 +22,7 @@ import {
 import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
   isCommandSafe,
+  listAllowlistedNodeScriptRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
@@ -197,6 +198,38 @@ function isManifestEntryModified(manifestPath: string, entryPath: string, prModi
   return false;
 }
 
+
+function isProducerCommandUntrusted(
+  command: string,
+  trustedBaseRoot: string,
+  reviewTargetRoot: string,
+  prModifiedPaths: string[],
+): boolean {
+  const normalized = new Set(prModifiedPaths.map(normalizePath));
+  const trimmed = command.trim();
+  if (trimmed.startsWith('npm ')) {
+    return normalized.has('package.json') || normalized.has('package-lock.json');
+  }
+
+  for (const relPath of listAllowlistedNodeScriptRelPaths(command, trustedBaseRoot)) {
+    if (normalized.has(relPath)) {
+      return true;
+    }
+    const trustedPath = path.join(trustedBaseRoot, relPath);
+    const reviewPath = path.join(reviewTargetRoot, relPath);
+    if (!existsSync(trustedPath) || !existsSync(reviewPath)) {
+      return true;
+    }
+    const trustedHash = createHash('sha256').update(readFileSync(trustedPath)).digest('hex');
+    const reviewHash = createHash('sha256').update(readFileSync(reviewPath)).digest('hex');
+    if (trustedHash !== reviewHash) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function runTrustedCommand(command: string, options: {
   cwd: string;
   timeoutMs: number;
@@ -275,7 +308,11 @@ function compareCaptureContent(
 }
 
 function blockedUnverifiedReason(run: CommandRunResult): ReverifyReason {
-  if (run.blockReason === 'network-sandbox-unavailable') {
+  if (
+    run.blockReason === 'network-sandbox-unavailable'
+    || run.blockReason === 'filesystem-sandbox-unavailable'
+    || run.blockReason === 'pr-head-sandbox-unavailable'
+  ) {
     return 'network-sandbox-unavailable';
   }
   return 'unsafe-or-undeclared-command';
@@ -364,11 +401,15 @@ function evaluateCaptureRow(input: {
 
   const external = isExternalProducer(entry.producer);
   const command = (entry.sourceCommand ?? '').trim();
-  const canRunLive = !external && command && isCommandSafe(command, reviewTargetRoot);
+  const canRunLive = !external && command && isCommandSafe(command, trustedBaseRoot);
+
+  if (command && isProducerCommandUntrusted(command, trustedBaseRoot, reviewTargetRoot, prModifiedPaths)) {
+    return buildUnverified(rowIndex, row, 'untrusted-pr-modified');
+  }
 
   if (canRunLive) {
     const run = runTrustedCommand(command, {
-      cwd: reviewTargetRoot,
+      cwd: trustedBaseRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
       sandboxMode: 'trusted-base',

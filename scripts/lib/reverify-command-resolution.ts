@@ -187,3 +187,19 @@ export function resolveAllowlistedCommand(
 export function isCommandSafe(command: string, repoRoot: string): boolean {
   return resolveAllowlistedCommand(command, { repoRoot }) !== null;
 }
+
+export function listAllowlistedNodeScriptRelPaths(command: string, repoRoot: string): string[] {
+  const resolved = resolveAllowlistedCommand(command, { repoRoot });
+  if (!resolved || resolved.executable !== process.execPath) {
+    return [];
+  }
+  const scriptPath = resolved.args[0];
+  if (!scriptPath) {
+    return [];
+  }
+  const rel = normalizePath(path.relative(repoRoot, scriptPath));
+  if (!rel || rel.startsWith('..')) {
+    return [];
+  }
+  return [rel];
+}
