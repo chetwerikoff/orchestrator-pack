@@ -51,6 +51,15 @@
       "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897",
       "exitStatus": 0
     },
+    "cli-behavior/wrong-body": {
+      "id": "cli-behavior/wrong-body",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_EXIT_CODE=0 REVERIFY_BODY={\"ok\":false} node tests/fixtures/contract-evidence-reverify/producers/cli-behavior.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897",
+      "exitStatus": 0
+    },
     "external/gh-open": {
       "id": "external/gh-open",
       "producer": "gh",

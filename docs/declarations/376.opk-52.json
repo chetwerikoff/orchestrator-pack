@@ -42,6 +42,8 @@
     "tests/fixtures/contract-evidence-reverify/issues/compared-to-record.md",
     "tests/fixtures/contract-evidence-reverify/issues/explicit-none.md",
     "tests/fixtures/contract-evidence-reverify/issues/integrity-failed.md",
+    "tests/fixtures/contract-evidence-reverify/issues/live-cli-behavior-match.md",
+    "tests/fixtures/contract-evidence-reverify/issues/live-cli-behavior-wrong-body.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-divergent-pr-body.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-divergent.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-exit-nonzero.md",

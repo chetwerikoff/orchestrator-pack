@@ -92,6 +92,35 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(result.rows[0].observed).toContain('exit:');
   });
 
+  it('cli-behavior live capture row matching exit and stdout emits verified/live', () => {
+    const result = runContractEvidenceReverify(baseInput(loadIssue('live-cli-behavior-match.md'), {
+      prBody: 'Closes #9013\n',
+      explicitIssueNumber: 9013,
+    }));
+    expect(result.rows[0]).toMatchObject({
+      status: 'verified',
+      verificationMode: 'live',
+      producerVerified: true,
+    });
+    expect(result.rows[0].asserted).toContain('0/');
+    expect(result.rows[0].observed).toContain('0/');
+  });
+
+  it('cli-behavior live capture diverges when exit ok but stdout wrong', () => {
+    const result = runContractEvidenceReverify(baseInput(loadIssue('live-cli-behavior-wrong-body.md'), {
+      prBody: 'Closes #9014\n',
+      explicitIssueNumber: 9014,
+    }));
+    expect(result.rows[0]).toMatchObject({
+      status: 'divergent',
+      verificationMode: 'live',
+      producerVerified: false,
+    });
+    expect(result.rows[0].asserted).toContain('0/');
+    expect(result.rows[0].observed).toMatch(/^0\//);
+    expect(result.rows[0].observed).toContain('false');
+  });
+
   it('rejects allowlisted-prefix sibling paths for node scripts', () => {
     expect(isCommandSafe(
       'node tests/fixtures/contract-evidence-reverify/producers-malicious/script.mjs',
@@ -310,6 +339,18 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const result = runContractEvidenceReverify(
       baseInput(loadIssue('live-match.md'), {
         prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/capture-manifest.json'],
+      }),
+    );
+    expect(result.rows[0]).toMatchObject({
+      status: 'unverified',
+      reason: 'untrusted-pr-modified',
+    });
+  });
+
+  it('PR-modified trusted checker marks capture row unverified', () => {
+    const result = runContractEvidenceReverify(
+      baseInput(loadIssue('live-match.md'), {
+        prModifiedPaths: ['scripts/lib/reverify-sandbox.ts'],
       }),
     );
     expect(result.rows[0]).toMatchObject({

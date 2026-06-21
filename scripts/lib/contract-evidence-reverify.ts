@@ -199,7 +199,6 @@ function isManifestEntryModified(manifestPath: string, entryPath: string, prModi
   return false;
 }
 
-
 function isProducerCommandUntrusted(
   command: string,
   trustedBaseRoot: string,
@@ -542,15 +541,17 @@ function evaluateCaptureRow(input: {
     if (bindingType === 'cli-behavior' || isCliBehaviorBinding(row)) {
       const expectedExit = String(entry.exitStatus ?? '0');
       const observedExit = String(run.exitCode ?? 'null');
-      const matched = observedExit === expectedExit;
+      const exitMatched = observedExit === expectedExit;
+      const comparison = compareCaptureContent(run.stdout, row, 'cli-behavior');
+      const matched = exitMatched && comparison.matched;
       return {
         rowIndex,
         rowHash: hashRow(row),
         bindingId: row['binding-id'],
         status: matched ? 'verified' : 'divergent',
         verificationMode: 'live',
-        asserted: boundValue(expectedExit),
-        observed: boundValue(observedExit),
+        asserted: boundValue(`${expectedExit}/${comparison.asserted}`),
+        observed: boundValue(`${observedExit}/${comparison.observed}`),
         producerVerified: matched,
       };
     }

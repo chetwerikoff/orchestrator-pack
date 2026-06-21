@@ -21,6 +21,9 @@
   "mutatingTokenPattern": "\\b(rm\\s|mv\\s|git\\s|tee\\s|>|>>|curl\\s|wget\\s|gh\\s|ao\\s|codex\\s)\\b",
   "trustedCheckerRelativePaths": [
     "scripts/lib/contract-evidence-reverify.ts",
+    "scripts/lib/reverify-command-resolution.ts",
+    "scripts/lib/reverify-sandbox.ts",
+    "scripts/contract-evidence.mjs",
     "scripts/invoke-contract-evidence-reverify.ts",
     "scripts/contract-evidence-reverify-allowlist.json"
   ],
