@@ -16,6 +16,9 @@ import {
   matchesCoworkerAskCommand,
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
+  inferShellReadAroundRead,
+  inferShellReadAroundReads,
+  extractShellCommandPaths,
   isInboundUserRequest,
   loadMetricWindowSummary,
   measureReadToolLines,
@@ -26,6 +29,7 @@ import {
   runStopAudit,
   SURFACES,
   T1_VOLUME_FLOOR,
+  CURSOR_ADVISORY_CLASSIFICATIONS,
   toolUseToAuditEvents,
 } from '../docs/read-delegation-audit.mjs';
 import { classifierManifestHash } from '../docs/read-delegation-classifier.mjs';
@@ -39,6 +43,9 @@ type StopAuditResult = {
     flaggedUnits: number;
     flaggedReadLines: number;
     indexServedExcludedLines?: number;
+    advisoryUnits?: number;
+    advisorySatisfiedUnits?: number;
+    advisoryExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
@@ -68,6 +75,10 @@ type FixtureExpect = {
   codeClass?: boolean;
   allIndexServed?: boolean;
   indexServedExcludedLines?: number;
+  advisory?: boolean;
+  advisoryOutcome?: string;
+  advisorySatisfied?: boolean;
+  shellReadAround?: boolean;
 };
 
 type FixturePayload = {
@@ -84,6 +95,8 @@ type FixturePayload = {
   expectSummary?: {
     delegableTriggerUnits: number;
     flaggedUnits: number;
+    advisoryUnits?: number;
+    advisoryExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
@@ -171,19 +184,9 @@ function createBulkReadFile(dir: string, lines = 450) {
 
 const equivalenceFixtures = [
   'below-floor.json',
-  'edit-same-file.json',
-  'edit-other-file.json',
-  'no-edit-no-reason.json',
-  'no-op-with-evidence.json',
-  'delegated-machine-observed.json',
-  'cumulative-chunks.json',
   'code-class-excluded.json',
   'reviewer-path-excluded.json',
-  'ambient-reviewer-env-ordinary.json',
-  'ambient-review-marker-ordinary.json',
-  'undecidable-review-marker.json',
   'diff-log-below-t1.json',
-  'self-attested-delegation.json',
 ];
 
 describe('threshold constants', () => {
@@ -236,6 +239,18 @@ describe('equivalence-class fixtures', () => {
       if (expectRow.codeClass !== undefined) {
         expect(verdict.codeClass).toBe(expectRow.codeClass);
       }
+      if (expectRow.advisory !== undefined) {
+        expect(verdict.advisory).toBe(expectRow.advisory);
+      }
+      if (expectRow.advisoryOutcome !== undefined) {
+        expect(verdict.advisoryOutcome).toBe(expectRow.advisoryOutcome);
+      }
+      if (expectRow.advisorySatisfied !== undefined) {
+        expect(verdict.advisorySatisfied).toBe(expectRow.advisorySatisfied);
+      }
+      if (expectRow.shellReadAround !== undefined) {
+        expect(verdict.shellReadAround).toBe(expectRow.shellReadAround);
+      }
     });
   }
 });
@@ -270,7 +285,8 @@ describe('work-unit boundary', () => {
     expect(units).toHaveLength(1);
     const verdict = auditWorkUnit(units[0], { surface: 'cursor' });
     expect(verdict.triggerFired).toBe(true);
-    expect(verdict.flagged).toBe(true);
+    expect(verdict.advisory).toBe(true);
+    expect(verdict.flagged).toBe(false);
   });
 
   it('keeps two inbound requests as separate units (fixture-pinned)', () => {
@@ -284,7 +300,7 @@ describe('metric emission', () => {
   it('counts delegated, edit-exempt, and excepted units in denominator', () => {
     const fixture = loadFixture('metric-emission-denominator.json');
     const result = evaluateStopAudit({
-      surface: 'cursor',
+      surface: fixture.surface ?? 'claude',
       workUnits: fixture.workUnits,
     }) as StopAuditResult;
     expect(result.summary.delegableTriggerUnits).toBe(fixture.expectSummary?.delegableTriggerUnits);
@@ -318,9 +334,11 @@ describe('metric emission', () => {
   it('loads the persisted review-hook capability on ordinary live summaries', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-audit-'));
     const artifactPath = path.join(dir, 'metrics.jsonl');
+    const fixture = loadFixture('ambient-reviewer-env-ordinary.json');
     runStopAudit({
-      surface: 'cursor',
-      workUnits: (loadFixture('ambient-reviewer-env-ordinary.json').workUnits ?? []) as WorkUnit[],
+      surface: fixture.surface ?? 'claude',
+      env: fixture.env,
+      workUnits: (fixture.workUnits ?? []) as WorkUnit[],
       artifactPath,
       eventId: 'evt-live-capability',
       nowMs: 1_700_000_000_003,
@@ -389,7 +407,7 @@ describe('metric emission', () => {
       surface: 'cursor',
       verdict: auditWorkUnit(
         { key: 'new', inboundRequestId: 'req-new', reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }] },
-        { surface: 'cursor' },
+        { surface: 'claude' },
       ),
     });
     const summary = loadMetricWindowSummary(artifactPath);
@@ -403,7 +421,7 @@ describe('metric emission', () => {
     const artifactPath = path.join(dir, 'metrics.jsonl');
     const payload = loadFixture('metric-emission-denominator.json');
     const stop = runStopAudit({
-      surface: 'cursor',
+      surface: payload.surface ?? 'claude',
       workUnits: payload.workUnits,
       artifactPath,
       windowId: 'win-test',
@@ -601,10 +619,10 @@ describe('Claude and shell transcript compatibility', () => {
       surface: 'cursor',
       workUnits: extractEventsFromTranscriptRecords(cursorFileRecords).workUnits,
     }) as StopAuditResult;
-    expect(readFileStyle.flags.length).toBe(1);
-    expect(readFileStyle.flags.map((row) => row.flagged)).toEqual(
-      readStyle.flags.map((row) => row.flagged),
-    );
+    expect(readFileStyle.verdicts[0]?.advisory).toBe(true);
+    expect(readFileStyle.verdicts[0]?.flagged).toBe(false);
+    expect(readStyle.verdicts[0]?.advisory).toBe(true);
+    expect(readStyle.verdicts[0]?.flagged).toBe(false);
   });
 
   it('resolves Claude Read file_path inputs for line measurement', () => {
@@ -682,9 +700,10 @@ describe('Claude and shell transcript compatibility', () => {
       workUnits: extractEventsFromTranscriptRecords(records).workUnits,
     }) as StopAuditResult;
     expect(claude.flags.length).toBe(1);
-    expect(claude.flags.map((row) => row.flagged)).toEqual(
-      cursor.flags.map((row) => row.flagged),
-    );
+    expect(claude.flags.length).toBe(1);
+    expect(claude.flags[0]?.flagged).toBe(true);
+    expect(cursor.verdicts[0]?.advisory).toBe(true);
+    expect(cursor.verdicts[0]?.flagged).toBe(false);
   });
 
   it('counts file lines from disk without loading the entire file for limited reads', () => {
@@ -758,7 +777,9 @@ describe('Claude and shell transcript compatibility', () => {
         },
       ],
     }) as StopAuditResult;
-    expect(result.verdicts[0].machineObservedDelegation).toBe(true);
+    expect(result.verdicts[0].advisoryOutcome).toBe(
+      CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+    );
     expect(result.verdicts[0].flagged).toBe(false);
   });
 
@@ -774,9 +795,11 @@ describe('Claude and shell transcript compatibility', () => {
         },
       ],
     }) as StopAuditResult;
-    expect(result.verdicts[0].machineObservedDelegation).toBe(true);
+    expect(result.verdicts[0].advisoryOutcome).toBe(
+      CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+    );
     expect(result.verdicts[0].flagged).toBe(false);
-    expect(result.verdicts[0].inDenominator).toBe(true);
+    expect(result.verdicts[0].inDenominator).toBe(false);
   });
 
   it('recognizes Claude Edit and MultiEdit tools for edit-exempt units', () => {
@@ -838,17 +861,18 @@ describe('Claude and shell transcript compatibility', () => {
     expect(events.some((event) => event.readKind === 'diff' && event.lines === 250)).toBe(true);
   });
 
-  it('counts non-follow tail log reads from captured shell output', () => {
-    const captured = Array.from({ length: 300 }, (_, index) => `log-line-${index + 1}`).join('\n');
-    expect(measureShellDiffLogLines('tail -n 300 app.log', captured)).toBe(300);
+  it('classifies tail log shell reads as advisory on Cursor', () => {
+    const captured = Array.from({ length: 450 }, (_, index) => `log-line-${index + 1}`).join('\n');
+    expect(measureShellDiffLogLines('tail -n 450 /tmp/app.log', captured)).toBe(0);
 
     const events = toolUseToAuditEvents(
       'Shell',
-      { command: 'tail -n 300 app.log' },
+      { command: 'tail -n 450 /tmp/app.log' },
       'req-tail',
       { shellOutput: captured },
     );
-    expect(events.some((event) => event.readKind === 'diff' && event.lines === 300)).toBe(true);
+    expect(events.some((event) => event.readKind === 'log' && event.lines === 450)).toBe(true);
+    expect(events.some((event) => event.readKind === 'diff')).toBe(false);
 
     const result = evaluateStopAudit({
       surface: 'cursor',
@@ -858,8 +882,9 @@ describe('Claude and shell transcript compatibility', () => {
         workUnitKey: 'unit-tail',
       }))),
     }) as StopAuditResult;
-    expect(result.verdicts[0].trigger.diffLog).toBe(true);
-    expect(result.verdicts[0].flagged).toBe(true);
+    expect(result.verdicts[0].advisory).toBe(true);
+    expect(result.verdicts[0].flagged).toBe(false);
+    expect(result.verdicts[0].shellReadAround).toBe(true);
   });
 
   it('keeps tool_result user messages inside the same work unit', () => {
@@ -915,7 +940,7 @@ describe('Claude and shell transcript compatibility', () => {
 describe('work unit resolution', () => {
   it('partitions events when workUnits is an empty array', () => {
     const result = evaluateStopAudit({
-      surface: 'cursor',
+      surface: 'claude',
       workUnits: [],
       events: [
         {
@@ -992,7 +1017,8 @@ describe('stop hook transcript population', () => {
       generation_id: 'gen-test',
       workUnits: extracted.workUnits,
     }) as StopAuditResult;
-    expect(result.flags.length).toBe(1);
+    expect(result.verdicts[0]?.advisory).toBe(true);
+    expect(result.flags.length).toBe(0);
   });
 
   it('populates work units from transcript_path when hook payload is sparse', () => {
@@ -1022,7 +1048,157 @@ describe('stop hook transcript population', () => {
       nowMs: 1_700_000_000_001,
     }) as StopAuditResult;
     expect(result.ok).toBe(true);
-    expect(result.flags.length).toBe(1);
+    expect(result.verdicts[0]?.advisory).toBe(true);
+    expect(result.flags.length).toBe(0);
+  });
+
+  it('captures shell read-arounds from shell-only Cursor transcripts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-read-around-'));
+    const readPath = path.join(dir, 'large-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `draft-line-${index + 1}`).join('\n'),
+    );
+    const captured = fs.readFileSync(readPath, 'utf8');
+    const command = `head -n 450 ${readPath}`;
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'read the draft' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-1',
+              name: 'Shell',
+              input: { command },
+            },
+          ],
+        },
+      },
+      {
+        role: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'shell-1', content: captured }],
+        },
+      },
+    ];
+
+    const extracted = extractEventsFromTranscriptRecords(records);
+    expect(extracted.workUnits).toHaveLength(1);
+    const unit = extracted.workUnits[0];
+    expect(unit.reads?.length).toBe(1);
+    expect(unit.reads?.[0]?.path).toBe(readPath);
+    expect(unit.reads?.[0]?.lines).toBe(450);
+    expect(unit.shellCommands).toEqual([command]);
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extracted.workUnits,
+    }) as StopAuditResult;
+    const verdict = result.verdicts[0];
+    expect(verdict.advisory).toBe(true);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND);
+    expect(verdict.shellReadAround).toBe(true);
+    expect(result.summary.advisoryUnits).toBe(1);
+  });
+
+  it('preserves every path in multi-file shell cat reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-cat-multi-'));
+    const filePaths = ['a.md', 'b.md', 'c.md'].map((name) => path.join(dir, name));
+    const lineCounts = [134, 133, 133];
+    const chunks = filePaths.map((filePath, index) => {
+      const content = Array.from(
+        { length: lineCounts[index] },
+        (_, lineIndex) => `${path.basename(filePath)}-line-${lineIndex + 1}`,
+      ).join('\n');
+      fs.writeFileSync(filePath, content);
+      return content;
+    });
+    const command = `cat ${filePaths.join(' ')}`;
+    const output = `${chunks.join('\n')}\n`;
+    expect(extractShellCommandPaths(command)).toEqual(filePaths);
+    const inferred = inferShellReadAroundReads(command, output);
+    expect(inferred.map((read) => read.path)).toEqual(filePaths);
+    expect(inferred.reduce((sum, read) => sum + read.lines, 0)).toBe(400);
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command },
+      'req-shell-cat-multi',
+      { shellOutput: output },
+    );
+    const readEvents = events.filter((event) => event.kind === 'read');
+    expect(readEvents).toHaveLength(3);
+    expect(new Set(readEvents.map((event) => event.path))).toEqual(new Set(filePaths));
+  });
+
+  it('defaults head without -n to ten lines when output is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-head-default-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const inferred = inferShellReadAroundRead(`head ${readPath}`);
+    expect(inferred).toEqual({ path: readPath, lines: 10, readKind: 'file' });
+  });
+
+  it('declines grep reads when captured output is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-grep-miss-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(readPath, 'only line\n');
+    expect(inferShellReadAroundRead(`grep no-match ${readPath}`)).toBeNull();
+  });
+
+  it('extracts nested python open() paths for shell read-around', () => {
+    const inferred = inferShellReadAroundRead(
+      `python -c "print(open('docs/foo.md').read())"`,
+    );
+    expect(inferred).toBeNull();
+    const withOutput = inferShellReadAroundRead(
+      `python -c "print(open('docs/foo.md').read())"`,
+      'line-1\nline-2\n',
+    );
+    expect(withOutput?.path).toBe('docs/foo.md');
+    expect(withOutput?.lines).toBe(2);
+  });
+
+  it('uses bounded head -n counts instead of full-file fallback', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-bounded-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const inferred = inferShellReadAroundRead(`head -n 10 ${readPath}`);
+    expect(inferred).toEqual({ path: readPath, lines: 10, readKind: 'file' });
+  });
+
+  it('does not treat ordinary python script execution as a synthetic read', () => {
+    expect(inferShellReadAroundRead('python scripts/read-delegation-audit.test.ts')).toBeNull();
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command: 'python scripts/read-delegation-audit.test.ts' },
+      'req-python-exec',
+    );
+    expect(events.some((event) => event.kind === 'read')).toBe(false);
+  });
+
+  it('infers shell read-around reads from head -n without captured output when path exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-infer-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const command = `head -n 450 ${readPath}`;
+    const inferred = inferShellReadAroundRead(command);
+    expect(inferred).toEqual({ path: readPath, lines: 450, readKind: 'file' });
+    const events = toolUseToAuditEvents('Shell', { command }, 'req-shell-read-around');
+    expect(events.some((event) => event.kind === 'read' && event.path === readPath)).toBe(true);
   });
 
   it('reads transcript_path from disk via extractEventsFromTranscript', () => {
@@ -1094,7 +1270,8 @@ describe('stop hook transcript population', () => {
       surface: 'cursor',
       workUnits: extracted.workUnits,
     }) as StopAuditResult;
-    expect(result.flags.length).toBe(1);
+    expect(result.verdicts[0]?.advisory).toBe(true);
+    expect(result.flags.length).toBe(0);
   });
 });
 
@@ -1113,7 +1290,7 @@ describe('concurrency and idempotency', () => {
           inboundRequestId: 'req-1',
           reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
         },
-        { surface: 'cursor' },
+        { surface: 'claude' },
       ),
     };
 
@@ -1148,7 +1325,7 @@ describe('concurrency and idempotency', () => {
         eventId: `evt-${index}`,
         windowId: 'win-1',
         surface: 'cursor',
-        verdict: auditWorkUnit(unit, { surface: 'cursor' }),
+        verdict: auditWorkUnit(unit, { surface: 'claude' }),
       });
     }
 
@@ -1171,7 +1348,7 @@ describe('concurrency and idempotency', () => {
           inboundRequestId: 'req-1',
           reads: [{ path: 'docs/a.md', lines: 450, kind: 'file' }],
         },
-        { surface: 'cursor' },
+        { surface: 'claude' },
       ),
     });
     const child = `
@@ -1246,6 +1423,12 @@ describe('index-served carve-out (Issue #309)', () => {
       if (expectRow.codeClass !== undefined) {
         expect(verdict.codeClass).toBe(expectRow.codeClass);
       }
+      if (expectRow.advisory !== undefined) {
+        expect(verdict.advisory).toBe(expectRow.advisory);
+      }
+      if (expectRow.advisoryOutcome !== undefined) {
+        expect(verdict.advisoryOutcome).toBe(expectRow.advisoryOutcome);
+      }
     });
   }
 
@@ -1273,16 +1456,19 @@ describe('index-served carve-out (Issue #309)', () => {
       surface: 'cursor',
       workUnits: enrichFixtureCaptureMetadata(fixture.workUnits),
     }) as StopAuditResult;
-    expect(result.summary.delegableTriggerUnits).toBe(1);
-    expect(result.summary.residualNonCompliance).toBe(1);
+    expect(result.summary.delegableTriggerUnits).toBe(0);
+    expect(result.summary.advisoryUnits).toBe(1);
+    expect(result.summary.residualNonCompliance).toBe(0);
     expect(result.summary.indexServedExcludedLines).toBe(900);
   });
 
-  it('Claude and Cursor parity on same out-of-index bulk read', () => {
+  it('Cursor advisory vs Claude mandatory on same out-of-index log read', () => {
     const cursor = evaluateFixture('out-of-index-log-flagged.json', 'cursor');
-    const claude = evaluateFixture('out-of-index-log-flagged.json', 'claude');
-    expect(cursor.verdicts[0].flagged).toBe(claude.verdicts[0].flagged);
-    expect(cursor.verdicts[0].inDenominator).toBe(claude.verdicts[0].inDenominator);
+    const claude = evaluateFixture('claude-mandatory-log-flagged.json', 'claude');
+    expect(cursor.verdicts[0].advisory).toBe(true);
+    expect(cursor.verdicts[0].flagged).toBe(false);
+    expect(claude.verdicts[0].flagged).toBe(true);
+    expect(claude.verdicts[0].inDenominator).toBe(true);
   });
 
   it('preflight: reviewer-path fixtures remain green (#264 precondition)', () => {
@@ -1505,7 +1691,7 @@ describe('stop hook CLI', () => {
       {
         cwd: repoRoot,
         input: JSON.stringify({
-          surface: 'cursor',
+          surface: 'claude',
           workUnits: loadFixture('no-edit-no-reason.json').workUnits,
         }),
         encoding: 'utf8',
@@ -1532,6 +1718,96 @@ describe('surface enumeration', () => {
     const units = (loadFixture('no-edit-no-reason.json').workUnits ?? []) as WorkUnit[];
     const cursor = auditWorkUnits(units, { surface: 'cursor' });
     const claude = auditWorkUnits(units, { surface: 'claude' });
-    expect(cursor[0].flagged).toBe(claude[0].flagged);
+    expect(cursor[0].advisory).toBe(true);
+    expect(cursor[0].flagged).toBe(false);
+    expect(claude[0].flagged).toBe(true);
+  });
+});
+
+describe('Cursor-seat advisory carve-out (Issue #359)', () => {
+  const advisoryFixtures = [
+    'cursor-advisory-markdown-capture.json',
+    'cursor-advisory-log.json',
+    'cursor-advisory-external.json',
+  ];
+
+  for (const fixtureName of advisoryFixtures) {
+    it(`${fixtureName} records advisory classification without non-compliance`, () => {
+      const result = evaluateFixture(fixtureName);
+      const verdict = firstVerdict(result);
+      expect(verdict.advisory).toBe(true);
+      expect(verdict.flagged).toBe(false);
+      expect(verdict.excludedFromDenominator).toBe(true);
+      expect(
+        verdict.readClassifications?.some(
+          (row) => row.classification === CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+        ),
+      ).toBe(true);
+    });
+  }
+
+  it('cursor-advisory-delegated-satisfied.json records advisory-satisfied outcome', () => {
+    const result = evaluateFixture('cursor-advisory-delegated-satisfied.json');
+    expect(firstVerdict(result).advisoryOutcome).toBe(
+      CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+    );
+  });
+
+  it('cursor-advisory-delegated-then-shell.json preserves satisfaction when delegation observed', () => {
+    const result = evaluateFixture('cursor-advisory-delegated-then-shell.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED);
+    expect(verdict.advisorySatisfied).toBe(true);
+    expect(verdict.shellReadAround).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(1);
+  });
+
+  it('cursor-advisory-partial-targeted-read.json keeps untargeted bulk advisory unsatisfied', () => {
+    const result = evaluateFixture('cursor-advisory-partial-targeted-read.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY);
+    expect(verdict.advisorySatisfied).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(0);
+  });
+
+  it('cursor-advisory-targeted-read.json records advisory-satisfied for offset/limit read', () => {
+    const result = evaluateFixture('cursor-advisory-targeted-read.json');
+    expect(firstVerdict(result).advisoryOutcome).toBe(
+      CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+    );
+  });
+
+  it('cursor-advisory-shell-read-around.json records shell-read-around, not satisfied', () => {
+    const result = evaluateFixture('cursor-advisory-shell-read-around.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND);
+    expect(verdict.advisorySatisfied).toBe(false);
+    expect(verdict.shellReadAround).toBe(true);
+  });
+
+  it('cursor-advisory-unrelated-shell.json ignores unrelated shell commands', () => {
+    const result = evaluateFixture('cursor-advisory-unrelated-shell.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED);
+    expect(verdict.shellReadAround).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(1);
+  });
+
+  it('cursor-advisory-mixed-mandatory-diff.json counts advisory reads in mandatory units', () => {
+    const result = evaluateFixture('cursor-advisory-mixed-mandatory-diff.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisory).toBe(true);
+    expect(verdict.inDenominator).toBe(true);
+    expect(verdict.flagged).toBe(true);
+    expect(result.summary.advisoryUnits).toBe(1);
+    expect(result.summary.advisoryExcludedLines).toBe(450);
+  });
+
+  it('out-of-index-diff-flagged.json stays mandatory on Cursor (not advisory)', () => {
+    const result = evaluateFixture('out-of-index-diff-flagged.json', 'cursor');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisory).not.toBe(true);
+    expect(verdict.flagged).toBe(true);
+    expect(verdict.inDenominator).toBe(true);
   });
 });

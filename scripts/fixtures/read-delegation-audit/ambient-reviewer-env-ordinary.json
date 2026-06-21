@@ -1,14 +1,23 @@
 {
-  "description": "ordinary trigger-firing session on machine with ambient reviewer env — not reviewer-path and flagged",
-  "surface": "cursor",
-  "env": { "PACK_REVIEWER": "<redacted>", "REVIEW_COMMAND": "<redacted>" },
+  "description": "ordinary trigger-firing session on machine with ambient reviewer env \u2014 not reviewer-path and flagged",
+  "surface": "claude",
+  "env": {
+    "PACK_REVIEWER": "<redacted>",
+    "REVIEW_COMMAND": "<redacted>"
+  },
   "workUnits": [
     {
       "key": "unit-ambient-ordinary",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/flagged-target.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/flagged-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "edits": [],
-      "statusText": "ordinary bulk read without delegation"
+      "statusText": "ambient reviewer env ordinary bulk read without delegation"
     }
   ],
   "expect": {

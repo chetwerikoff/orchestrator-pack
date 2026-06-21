@@ -1,12 +1,22 @@
 {
-  "description": "near-floor read followed by edit of same file — not flagged",
-  "surface": "cursor",
+  "description": "near-floor read followed by edit of same file \u2014 not flagged",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-edit-same",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/same-file-target.md", "lines": 450, "kind": "file" }],
-      "edits": [{ "path": "docs/same-file-target.md" }],
+      "reads": [
+        {
+          "path": "docs/same-file-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "edits": [
+        {
+          "path": "docs/same-file-target.md"
+        }
+      ],
       "statusText": "read-for-edit same file"
     }
   ],

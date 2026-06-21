@@ -1,6 +1,6 @@
 {
   "description": "trigger fired, not delegated, no edit \u2014 flagged",
-  "surface": "cursor",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-flagged",

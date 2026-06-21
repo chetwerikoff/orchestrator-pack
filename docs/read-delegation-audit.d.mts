@@ -12,6 +12,7 @@ export type ReadEntry = {
   readDiscriminator?: string;
   canonicalPath?: string;
   unitKey?: string;
+  targetedRead?: boolean;
 };
 
 export type ReadClassificationResult = {
@@ -104,13 +105,18 @@ export type AuditVerdict = {
   machineObservedDelegation: boolean;
   exceptedReason: boolean;
   editExempt: boolean;
+  advisory?: boolean;
+  advisoryOutcome?: string;
+  advisorySatisfied?: boolean;
+  shellReadAround?: boolean;
+  advisoryExcludedLines?: number;
 };
 
 export declare const T1_VOLUME_FLOOR: 400;
 export declare const DIFF_LOG_FLOOR: 200;
 export declare const T2_MIN_FILES: 3;
 export declare const SURFACES: readonly ['cursor', 'claude'];
-export declare const AUDIT_SCHEMA_VERSION: 3;
+export declare const AUDIT_SCHEMA_VERSION: 4;
 export declare const REVIEW_HOOK_CAPABILITY_RECORD_PATH: string;
 
 export type CapturedReadEntry = ReadEntry;
@@ -127,6 +133,31 @@ export declare function isCodeClassUnit(unit: WorkUnit): boolean;
 export declare function hasExceptedReason(statusText: string | undefined): boolean;
 export declare function hasSelfAttestedDelegation(unit: WorkUnit): boolean;
 export declare function hasMachineObservedDelegation(unit: WorkUnit): boolean;
+export declare function isCursorSeat(surface: string): boolean;
+export declare function applyCursorAdvisoryClassifications(
+  results: ReadClassificationResult[],
+  session: SessionContext,
+): ReadClassificationResult[];
+export declare function advisoryReadsFromClassifications(
+  classifications: ReadClassificationResult[],
+): ReadEntry[];
+export declare function isShellReadAroundCommand(command: string): boolean;
+export declare function hasShellReadAround(unit: WorkUnit, advisoryReads: ReadEntry[]): boolean;
+/** True only when every advisory read in the list is targeted (offset/limit). */
+export declare function hasTargetedRead(reads: ReadEntry[]): boolean;
+export declare function resolveCursorAdvisoryOutcome(
+  unit: WorkUnit,
+  advisoryReads: ReadEntry[],
+): {
+  advisoryOutcome: string;
+  advisorySatisfied: boolean;
+  shellReadAround: boolean;
+};
+export declare const CURSOR_ADVISORY_CLASSIFICATIONS: {
+  readonly ADVISORY: 'advisory';
+  readonly ADVISORY_SATISFIED: 'advisory-satisfied';
+  readonly SHELL_READ_AROUND: 'shell-read-around';
+};
 export declare function hasEditInUnit(unit: WorkUnit): boolean;
 export declare function auditWorkUnit(unit: WorkUnit, session: SessionContext): AuditVerdict;
 export declare function auditWorkUnits(
@@ -142,6 +173,10 @@ export declare function summarizeAuditVerdicts(verdicts: AuditVerdict[]): {
   flaggedUnits: number;
   flaggedReadLines: number;
   indexServedExcludedLines: number;
+  advisoryUnits: number;
+  advisorySatisfiedUnits: number;
+  shellReadAroundUnits: number;
+  advisoryExcludedLines: number;
   residualNonCompliance: number;
   denominatorCause: string;
   denominatorEmptyCause?: string;
@@ -179,6 +214,21 @@ export declare function measureReadToolLines(
 ): number;
 export declare function extractToolResultText(value: unknown): string;
 export declare function measureShellDiffLogLines(command: string, capturedOutput?: unknown): number;
+export declare function extractShellCommandPath(command: string): string | undefined;
+export declare function extractShellCommandPaths(command: string): string[];
+export declare function inferShellReadAroundLines(
+  command: string,
+  capturedOutput?: unknown,
+  filePath?: string,
+): number;
+export declare function inferShellReadAroundReads(
+  command: string,
+  capturedOutput?: unknown,
+): Array<{ path: string; lines: number; readKind: string }>;
+export declare function inferShellReadAroundRead(
+  command: string,
+  capturedOutput?: unknown,
+): { path: string; lines: number; readKind: string } | null;
 export declare function isInboundUserRequest(record: unknown): boolean;
 export declare function buildTranscriptToolResultIndex(
   records: Array<Record<string, unknown>>,

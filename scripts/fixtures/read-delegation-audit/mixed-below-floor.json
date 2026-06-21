@@ -1,5 +1,5 @@
 {
-  "description": "Mixed unit below floor — large index-served source does not inflate delegable total",
+  "description": "Mixed unit below floor \u2014 large index-served source does not inflate delegable total",
   "surface": "cursor",
   "workUnits": [
     {
@@ -24,7 +24,7 @@
   ],
   "expect": {
     "triggerFired": false,
-    "excludedFromDenominator": false,
+    "excludedFromDenominator": true,
     "flagged": false,
     "inDenominator": false,
     "indexServedExcludedLines": 900

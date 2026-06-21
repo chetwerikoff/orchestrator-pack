@@ -1,23 +1,23 @@
 {
-  "description": ">400-line external corpus on Cursor is advisory, not flagged",
+  "description": "Cursor >400-line external corpus is advisory, not flagged",
   "surface": "cursor",
   "workUnits": [
     {
-      "key": "unit-external-flagged",
+      "key": "unit-advisory-external",
       "inboundRequestId": "req-1",
       "reads": [
         {
-          "path": "plugins/looks-like-source.ts",
+          "path": "fetched/page.md",
           "lines": 450,
           "kind": "external"
         }
       ],
       "edits": [],
-      "statusText": "out-of-index external on cursor stays advisory"
+      "statusText": "cursor advisory external fetch without delegation"
     }
   ],
   "expect": {
-    "fixtureNote": "out-of-index-external-flagged",
+    "fixtureNote": "cursor-advisory-external",
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,

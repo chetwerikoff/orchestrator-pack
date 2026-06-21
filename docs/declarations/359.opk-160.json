@@ -1,0 +1,43 @@
+{
+  "issue_number": 359,
+  "iteration_id": "opk-160",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-21T08:50:16.508Z",
+  "baseline": {
+    "commit_sha": "2d88ec79e214b8bcc49e9d3f355190eefb25f483",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d7df3c69bb10befbfc0f0b32acf2a2b60b433b2a8199acfc55ccaac8e5c5db9c"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/read-delegation-audit.mjs",
+    "docs/read-delegation-audit.d.mts",
+    "docs/read-delegation-review-hook-capability.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "scripts/read-delegation-audit.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/read-delegation-audit/**",
+    ".cursor/rules/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:eb9b2d3c5494ad4bb7cf1db97dc550b9954867e3467c279125dd5a726a06f10c",
+      "new_active_scope_hash": "sha256:d7df3c69bb10befbfc0f0b32acf2a2b60b433b2a8199acfc55ccaac8e5c5db9c",
+      "changed": {
+        "added": [
+          "docs/read-delegation-audit.d.mts",
+          "docs/read-delegation-review-hook-capability.json"
+        ],
+        "removed": []
+      },
+      "reason": "add audit d.mts and review-hook capability to scope",
+      "actor": "opk-160",
+      "timestamp": "2026-06-21T09:40:24.304Z",
+      "applied": true
+    }
+  ]
+}

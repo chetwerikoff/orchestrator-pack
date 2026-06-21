@@ -1,0 +1,41 @@
+{
+  "description": "Delegated advisory read stays satisfied even if shell also reads corpus",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-delegated-then-shell",
+      "inboundRequestId": "req-delegated-then-shell",
+      "reads": [
+        {
+          "path": "docs/delegated-shell-followup.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "coworkerEvents": [
+        {
+          "kind": "coworker_ask",
+          "profile": "code",
+          "eventNote": "delegation-before-shell-read"
+        }
+      ],
+      "shellCommands": [
+        "head -n 450 docs/delegated-shell-followup.md"
+      ],
+      "edits": [],
+      "statusText": "coworker ask then redundant shell read on delegated corpus"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-delegated-then-shell",
+    "outcomeReason": "delegation-before-shell",
+    "advisory": true,
+    "advisoryOutcome": "advisory-satisfied",
+    "advisorySatisfied": true,
+    "shellReadAround": false,
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false
+  }
+}
