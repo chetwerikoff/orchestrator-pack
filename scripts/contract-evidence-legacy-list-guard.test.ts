@@ -349,9 +349,12 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
 
   it('fails manifest closure when entrypoint imports an ungoverned helper', () => {
     const manifest = loadGovernedManifest(repoRoot);
+    const deps = Array.isArray(manifest.pinnedEntrypointDependencies)
+      ? manifest.pinnedEntrypointDependencies.map((rel) => String(rel))
+      : [];
     const broken = {
       ...manifest,
-      pinnedEntrypointDependencies: (manifest.pinnedEntrypointDependencies ?? []).filter(
+      pinnedEntrypointDependencies: deps.filter(
         (rel) => rel !== 'scripts/contract-evidence-legacy-list-guard.mjs',
       ),
     };
