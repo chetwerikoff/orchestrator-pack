@@ -468,6 +468,13 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $handoffReceiptAbort = $false
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
+            try {
+                Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            }
+            catch {
+                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
+                throw
+            }
             if ($isHandoffWake) {
                 $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
@@ -478,13 +485,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 }
             }
             if (-not $handoffReceiptAbort) {
-                try {
-                    Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
-                }
-                catch {
-                    Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
-                    throw
-                }
                 & ao @runArgs
                 if ($LASTEXITCODE -ne 0) {
                     $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
