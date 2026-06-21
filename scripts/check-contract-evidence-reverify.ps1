@@ -48,14 +48,18 @@ try {
     }
 
     if ($failures.Count -eq 0) {
-        if (Get-Command ao -ErrorAction SilentlyContinue) {
+        $liveE2e = ($env:OPK_REVERIFY_E2E_LIVE -eq '1') -or (-not [string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION))
+        if (-not $liveE2e) {
+            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION) for live AC#13 e2e'
+        }
+        elseif (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
+            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: ao CLI not on PATH (AC#13 requires AO --execute reviewer path locally)'
+        }
+        else {
             & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
             if ($LASTEXITCODE -ne 0) {
                 $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed')
             }
-        }
-        else {
-            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: ao CLI not on PATH (AC#13 requires AO --execute reviewer path locally)'
         }
     }
 }

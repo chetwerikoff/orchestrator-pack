@@ -2,6 +2,11 @@
 /**
  * End-to-end reviewer-flow fixture for checkpoint-2 (Issue #376 AC#13).
  * Requires the AO --execute reviewer path; mechanical-only runs do not pass.
+ *
+ * Operator gate (prevents verify/vitest from spawning junk workers):
+ *   OPK_REVERIFY_E2E_LIVE=1            — run the live AO path
+ *   OPK_REVERIFY_E2E_SESSION=<id>      — reuse an existing worker (preferred)
+ *   OPK_REVERIFY_E2E_ALLOW_SPAWN=1     — optional: spawn one fixture holder when live
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -16,7 +21,16 @@ const preferredSessionId = existsSync(fixtureSessionFile)
   ? readFileSync(fixtureSessionFile, 'utf8').trim()
   : 'opk-reverify-e2e';
 
-const reviewCommand = `pwsh -NoProfile -File scripts/run-reviewer-reverify-ao-review-command.ps1 -RepoRoot . -FixtureDir tests/fixtures/contract-evidence-reverify/e2e`;
+const FIXTURE_PROMPT = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
+
+function isTruthyEnv(name) {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function isLiveE2eEnabled() {
+  return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
+}
 
 function isCheckpoint2ReviewerSummary(text) {
   const trimmed = text.trim();
@@ -43,7 +57,7 @@ function listAoSessions() {
 function spawnEphemeralFixtureSession() {
   const spawned = spawnSync(
     'ao',
-    ['spawn', '--prompt', 'checkpoint-2 contract-evidence reverify e2e fixture holder'],
+    ['spawn', '--prompt', FIXTURE_PROMPT],
     {
       cwd: packRoot,
       encoding: 'utf8',
@@ -62,12 +76,23 @@ function resolveAoFixtureSession() {
     return envSession;
   }
 
+  if (!isLiveE2eEnabled()) {
+    return null;
+  }
+
   const knownSessions = listAoSessions();
   if (knownSessions.includes(preferredSessionId)) {
     return preferredSessionId;
   }
+  if (knownSessions.length > 0) {
+    return knownSessions[0];
+  }
 
-  return spawnEphemeralFixtureSession();
+  if (isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN')) {
+    return spawnEphemeralFixtureSession();
+  }
+
+  return null;
 }
 
 function runReviewCommand() {
@@ -114,6 +139,7 @@ const aoAvailable = spawnSync('which', ['ao']).status === 0;
 const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
 
 const output = {
+  skipped: false,
   viaAoReviewExecute: false,
   aoAvailable,
   aoSessionId: null,
@@ -133,13 +159,21 @@ if (!aoAvailable) {
   process.exit(1);
 }
 
+if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
+  output.skipped = true;
+  output.error = null;
+  output.summary = 'skipped: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1) for live AC#13 e2e';
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(0);
+}
+
 const sessionId = resolveAoFixtureSession();
 output.aoSessionId = sessionId;
 output.aoSessionIsDedicatedFixture = sessionId === preferredSessionId
   || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim());
 
 if (!sessionId) {
-  output.error = 'unable to resolve or provision an AO fixture session for e2e';
+  output.error = 'unable to resolve AO fixture session: set OPK_REVERIFY_E2E_SESSION, start a live worker, or set OPK_REVERIFY_E2E_ALLOW_SPAWN=1';
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }

@@ -344,7 +344,23 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it('e2e reviewer fixture skips without OPK_REVERIFY_E2E_LIVE', () => {
+    const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
+      cwd: packRoot,
+      encoding: 'utf8',
+      env: { ...process.env, OPK_REVERIFY_E2E_LIVE: '', OPK_REVERIFY_E2E_SESSION: '' },
+    });
+    expect(proc.status).toBe(0);
+    const payload = JSON.parse(proc.stdout);
+    expect(payload.skipped).toBe(true);
+    expect(payload.viaAoReviewExecute).toBe(false);
+  });
+
   it('e2e reviewer fixture path passes', { timeout: 120_000 }, () => {
+    if (process.env.OPK_REVERIFY_E2E_LIVE !== '1' && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
+      return;
+    }
+
     const aoCheck = spawnSync('which', ['ao'], { encoding: 'utf8' });
     if (aoCheck.status !== 0) {
       return;
@@ -356,6 +372,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);
+    expect(payload.skipped).not.toBe(true);
     expect(payload.viaAoReviewExecute).toBe(true);
     expect(payload.promptContainsCheckpoint2).toBe(true);
     expect(payload.summaryIncludesRows).toBe(true);
