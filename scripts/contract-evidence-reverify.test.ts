@@ -593,6 +593,11 @@ describe('contract-evidence reverify (Issue #376)', () => {
     }));
     const summary = formatReviewerReverifySummary(result);
     expect(summary).toContain('never-blocks: true');
+    if (!prHeadNetworkSandboxAvailable) {
+      expect(summary).toContain('status=unverified');
+      expect(summary).toContain('reason=producer-unreachable');
+      return;
+    }
     expect(summary).toContain('status=divergent');
     expect(summary).toContain('verification-mode=live');
     expect(summary).toContain('never-blocks: true');
@@ -641,6 +646,11 @@ describe('contract-evidence reverify (Issue #376)', () => {
     );
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);
+    if (!prHeadNetworkSandboxAvailable) {
+      expect(payload.rows[0].status).toBe('unverified');
+      expect(payload.rows[0].reason).toBe('producer-unreachable');
+      return;
+    }
     expect(payload.rows[0].status).toBe('divergent');
   });
 
@@ -707,6 +717,9 @@ describe('reverify npm test filter (AC14 producer-emission proof)', () => {
         explicitIssueNumber: 9002,
       }),
     );
-    expect(result.rows[0]?.status).toBe('divergent');
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+      status: 'divergent',
+      verificationMode: 'live',
+    });
   });
 });

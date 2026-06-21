@@ -549,7 +549,7 @@ function evaluateCaptureRow(input: {
       if (run.blockReason === 'read-only-postcondition-violated') {
         return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
       }
-      return compareToRecordFallback(rowIndex, row, bindingType, captureContent, assertedExpected);
+      return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
     }
     if (run.timedOut) {
       return buildUnverified(rowIndex, row, 'producer-unreachable');
