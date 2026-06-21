@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -143,6 +143,15 @@ function createDisposableWorktreeCopy(cwd: string): string | null {
     return null;
   }
   return dest;
+}
+
+function linkNodeModulesIntoDisposable(disposable: string, dependencyRoot: string): void {
+  const hostNodeModules = path.join(dependencyRoot, 'node_modules');
+  const sandboxNodeModules = path.join(disposable, 'node_modules');
+  if (!existsSync(hostNodeModules) || existsSync(sandboxNodeModules)) {
+    return;
+  }
+  symlinkSync(hostNodeModules, sandboxNodeModules, 'dir');
 }
 
 function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependencyRoot: string): void {
@@ -293,6 +302,27 @@ function remapResolvedCommandForDisposable(
   };
 }
 
+function spawnTrustedBaseDirect(
+  resolved: ResolvedAllowlistedCommand,
+  disposable: string,
+  originalCwd: string,
+  options: {
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+    dependencyRoot: string;
+  },
+): SpawnSyncReturns<string> {
+  linkNodeModulesIntoDisposable(disposable, options.dependencyRoot);
+  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable);
+  return spawnDirect(sandboxResolved, {
+    cwd: disposable,
+    encoding: 'utf8',
+    timeout: options.timeoutMs,
+    env: withSandboxBinDir(options.env, disposable),
+    shell: false,
+  });
+}
+
 function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -303,42 +333,43 @@ function spawnTrustedBaseIsolated(
     npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
-  if (process.platform !== 'linux' || !bwrapAvailable()) {
-    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
-  }
-
   const disposable = createDisposableWorktreeCopy(options.cwd);
   if (!disposable) {
     return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   }
 
-  // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
-  if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot, 'trusted-base')) {
-    rmSync(disposable, { recursive: true, force: true });
-    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
-  }
-
-  const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
-  const payload = {
-    cwd: disposable,
-    encoding: 'utf8' as const,
-    timeout: options.timeoutMs,
-    env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
-    shell: false as const,
-    dependencyRoot: options.dependencyRoot,
-    npmVitestProof: options.npmVitestProof,
-    mode: 'trusted-base' as const,
-  };
-
   try {
-    const isolated = spawnWithBwrap(sandboxResolved, payload);
-    if (isSpawnTimeoutError(isolated.error)) {
-      return isolated;
+    const canUseBwrap = process.platform === 'linux'
+      && bwrapAvailable()
+      && ensureBwrapSandboxReady(disposable, options.dependencyRoot, 'trusted-base');
+
+    if (canUseBwrap) {
+      const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
+      const payload = {
+        cwd: disposable,
+        encoding: 'utf8' as const,
+        timeout: options.timeoutMs,
+        env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
+        shell: false as const,
+        dependencyRoot: options.dependencyRoot,
+        npmVitestProof: options.npmVitestProof,
+        mode: 'trusted-base' as const,
+      };
+
+      const isolated = spawnWithBwrap(sandboxResolved, payload);
+      if (isSpawnTimeoutError(isolated.error)) {
+        return isolated;
+      }
+      if (!isolated.error && !isBwrapInternalFailure(isolated)) {
+        return isolated;
+      }
     }
-    if (isolated.error || isBwrapInternalFailure(isolated)) {
-      return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
-    }
-    return isolated;
+
+    return spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
+      timeoutMs: options.timeoutMs,
+      env: options.env,
+      dependencyRoot: options.dependencyRoot,
+    });
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }
