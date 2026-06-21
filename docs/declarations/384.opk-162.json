@@ -61,5 +61,6 @@
       "timestamp": "2026-06-21T12:44:10.660Z",
       "applied": true
     }
-  ]
+  ],
+  "commit_sha": "f65c46781d0e24de66d3734ab136d2813efb5fa2"
 }
