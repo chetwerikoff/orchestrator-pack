@@ -352,25 +352,18 @@ function isNpmTestProofCommand(command: string): boolean {
   return command.trim().startsWith('npm test --');
 }
 
-function interpolateNpmIndependentTemplate(template: string, block: Record<string, string>): string {
-  const expected = block.expected ?? '';
-  return template.replace(/\{\{expected\}\}/g, expected);
-}
-
 function resolveNpmProofIndependentCommand(
   proofCommand: string,
-  block: Record<string, string>,
   repoRoot: string,
 ): string | null {
   const trimmed = proofCommand.trim();
   if (!isCommandSafe(trimmed, repoRoot)) {
     return null;
   }
-  const template = allowlist.npmProofIndependentCommands?.[trimmed];
-  if (!template) {
+  const command = allowlist.npmProofIndependentCommands?.[trimmed];
+  if (!command) {
     return null;
   }
-  const command = interpolateNpmIndependentTemplate(template, block);
   return isCommandSafe(command, repoRoot) ? command : null;
 }
 
@@ -386,7 +379,7 @@ function buildIndependentProducerCommand(
 
   const trimmed = proofCommand.trim();
   if (trimmed.startsWith('npm test --')) {
-    return resolveNpmProofIndependentCommand(trimmed, block, repoRoot);
+    return resolveNpmProofIndependentCommand(trimmed, repoRoot);
   }
 
   const spawnedRel = resolveSpawnedProducerRelPath(trimmed, repoRoot);

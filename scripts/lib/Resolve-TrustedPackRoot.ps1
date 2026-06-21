@@ -35,6 +35,45 @@ function Get-MainPackWorktreePath {
     return $null
 }
 
+function Test-TrustedMainWorktreeEligible {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$MainWorktreePath,
+        [Parameter(Mandatory)]
+        [string]$ReviewTargetRoot,
+        [string]$BaseRef = 'origin/main'
+    )
+
+    Push-Location $MainWorktreePath
+    try {
+        $status = @(git status --porcelain 2>$null)
+        if ($status.Count -gt 0) {
+            return $false
+        }
+        $mainHead = (git rev-parse HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mainHead)) {
+            return $false
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Push-Location $ReviewTargetRoot
+    try {
+        $baseSha = (git rev-parse $BaseRef 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseSha)) {
+            return $false
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    return $mainHead -eq $baseSha
+}
+
 function New-TrustedPackArchiveCheckout {
     [CmdletBinding()]
     param(
@@ -82,7 +121,7 @@ function Resolve-TrustedPackRoot {
     $mainWorktree = Get-MainPackWorktreePath -ReviewTargetRoot $resolvedReviewTarget
     if ($mainWorktree) {
         $checker = Join-Path $mainWorktree $BootstrapCheckerRelativePath
-        if (Test-Path -LiteralPath $checker) {
+        if ((Test-Path -LiteralPath $checker) -and (Test-TrustedMainWorktreeEligible -MainWorktreePath $mainWorktree -ReviewTargetRoot $resolvedReviewTarget -BaseRef $BaseRef)) {
             return (Resolve-Path -LiteralPath $mainWorktree).Path
         }
     }

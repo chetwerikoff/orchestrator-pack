@@ -157,6 +157,25 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(resolved?.env?.VITEST_CACHE_DIR).toBe('/tmp/opk-reverify-vitest-cache');
   });
 
+  it('npm independent mapping strings observe producer reality without echoing issue expected', () => {
+    const allowlistPath = path.join(packRoot, 'scripts/contract-evidence-reverify-allowlist.json');
+    const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8')) as {
+      npmProofIndependentCommands?: Record<string, string>;
+    };
+    const mappings = allowlist.npmProofIndependentCommands ?? {};
+    for (const independentCommand of Object.values(mappings)) {
+      expect(independentCommand).not.toContain('{{expected}}');
+      expect(independentCommand).not.toMatch(/REVERIFY_STATUS=/);
+      expect(independentCommand).not.toMatch(/REVERIFY_VALUE=/);
+    }
+    expect(mappings['npm test -- reverify']).toBe(
+      'node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+    );
+    expect(mappings['npm test -- contract-evidence-reverify']).toBe(
+      'node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',
+    );
+  });
+
   it('AC2/AC14/reverify: live capture divergence emits divergent with values', () => {
     const result = runContractEvidenceReverify(baseInput(loadIssue('live-divergent.md'), {
       prBody: 'Closes #9002\n',
