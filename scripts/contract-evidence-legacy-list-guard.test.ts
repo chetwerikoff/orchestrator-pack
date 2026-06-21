@@ -218,6 +218,27 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-parent' });
   });
 
+  it('AC2c accepts authorization after strict branch update with new head SHA', () => {
+    const added = ['docs/issues_drafts/99-new-draft.md'];
+    const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
+    const match = findMatchingAuthorization([{
+      id: 'auth-strict-update',
+      baseSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head1111111111111111111111111111111111111111',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+      source: { type: 'maintainer', id: 'admin-strict' },
+    }], {
+      baseSha: 'base2222222222222222222222222222222222222222',
+      baseParentSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head3333333333333333333333333333333333333333',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+    });
+    expect(match).not.toBeNull();
+    expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-strict' });
+  });
+
   it('detects consumer resolution module edits as governed-surface changes', () => {
     const verdict = runGuardCase({
       changedFiles: ['scripts/contract-evidence.mjs'],

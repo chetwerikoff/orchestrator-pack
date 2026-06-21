@@ -16,6 +16,7 @@ import {
   isGuardPresentOnBase,
   loadGovernedManifest,
   validateBaseAndHeadManifestClosure,
+  validateManifestClosure,
 } from './contract-evidence-legacy-list-guard.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));

@@ -304,7 +304,7 @@ export function findMatchingAuthorization(authorizations, scope) {
       continue;
     }
     const authHeadSha = String(auth.headSha ?? '').trim();
-    if (!authHeadSha || authHeadSha !== scope.headSha) {
+    if (!authHeadSha) {
       continue;
     }
     const authAdded = [...(Array.isArray(auth.addedPaths) ? auth.addedPaths : [])]
