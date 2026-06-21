@@ -47,7 +47,8 @@ function captureWorktreeFingerprint(cwd: string): string {
 
 const SANDBOX_FINGERPRINT_SKIP = new Set(['node_modules']);
 
-function captureSandboxDirectoryFingerprint(root: string): string {
+function captureDirectoryFingerprint(root: string, options: { skipNodeModules?: boolean } = {}): string {
+  const skipNodeModules = options.skipNodeModules !== false;
   const parts: string[] = [];
 
   const walk = (dir: string): void => {
@@ -58,7 +59,7 @@ function captureSandboxDirectoryFingerprint(root: string): string {
       return;
     }
     for (const entry of entries) {
-      if (SANDBOX_FINGERPRINT_SKIP.has(entry.name)) {
+      if (skipNodeModules && SANDBOX_FINGERPRINT_SKIP.has(entry.name)) {
         continue;
       }
       const full = path.join(dir, entry.name);
@@ -94,6 +95,30 @@ function postconditionViolationResult(): SpawnSyncReturns<string> {
     signal: null,
     error: undefined,
   };
+}
+
+function captureSandboxDirectoryFingerprint(root: string): string {
+  return captureDirectoryFingerprint(root, { skipNodeModules: true });
+}
+
+function captureTrustedNodeModulesFingerprint(dependencyRoot: string): string {
+  const nodeModules = path.join(dependencyRoot, 'node_modules');
+  if (!existsSync(nodeModules)) {
+    return '';
+  }
+  return captureDirectoryFingerprint(nodeModules, { skipNodeModules: false });
+}
+
+function guardTrustedDependencyPostcondition(
+  dependencyRoot: string,
+  beforeFingerprint: string,
+  result: SpawnSyncReturns<string>,
+): SpawnSyncReturns<string> {
+  const afterFingerprint = captureTrustedNodeModulesFingerprint(dependencyRoot);
+  if (beforeFingerprint !== afterFingerprint) {
+    return postconditionViolationResult();
+  }
+  return result;
 }
 
 function guardSandboxPostcondition(
@@ -252,16 +277,20 @@ function appendVitestNodeModulesTmpfs(args: string[], sandboxCwd: string): void 
 function withSandboxBinDir(
   env: NodeJS.ProcessEnv,
   sandboxCwd: string,
-  options: { assumeBoundNodeModules?: boolean } = {},
+  options: { assumeBoundNodeModules?: boolean; externalBinDirs?: string[] } = {},
 ): NodeJS.ProcessEnv {
+  const pathEntries: string[] = [...(options.externalBinDirs ?? [])];
   const binDir = path.join(sandboxCwd, 'node_modules', '.bin');
-  if (!options.assumeBoundNodeModules && !existsSync(binDir)) {
+  if (options.assumeBoundNodeModules || existsSync(binDir)) {
+    pathEntries.push(binDir);
+  }
+  if (pathEntries.length === 0) {
     return env;
   }
   const currentPath = env.PATH ?? '';
   return {
     ...env,
-    PATH: [binDir, currentPath].filter(Boolean).join(path.delimiter),
+    PATH: [...pathEntries, currentPath].filter(Boolean).join(path.delimiter),
   };
 }
 
@@ -385,6 +414,28 @@ function remapResolvedCommandForDisposable(
   };
 }
 
+function spawnTrustedBaseDirect(
+  resolved: ResolvedAllowlistedCommand,
+  disposable: string,
+  originalCwd: string,
+  options: {
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+    dependencyRoot: string;
+  },
+): SpawnSyncReturns<string> {
+  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable);
+  const externalBinDir = path.join(options.dependencyRoot, 'node_modules', '.bin');
+  const externalBinDirs = existsSync(externalBinDir) ? [externalBinDir] : [];
+  return spawnDirect(sandboxResolved, {
+    cwd: disposable,
+    encoding: 'utf8',
+    timeout: options.timeoutMs,
+    env: withSandboxBinDir(options.env, disposable, { externalBinDirs }),
+    shell: false,
+  });
+}
+
 function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -429,7 +480,21 @@ function spawnTrustedBaseIsolated(
       }
     }
 
-    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
+    const beforeDependencyFingerprint = captureTrustedNodeModulesFingerprint(options.dependencyRoot);
+    const directResult = spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
+      timeoutMs: options.timeoutMs,
+      env: options.env,
+      dependencyRoot: options.dependencyRoot,
+    });
+    return guardSandboxPostcondition(
+      disposable,
+      beforeSandboxFingerprint,
+      guardTrustedDependencyPostcondition(
+        options.dependencyRoot,
+        beforeDependencyFingerprint,
+        directResult,
+      ),
+    );
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }

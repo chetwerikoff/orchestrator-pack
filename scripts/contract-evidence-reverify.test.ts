@@ -117,8 +117,9 @@ describe('contract-evidence reverify (Issue #376)', () => {
   it('does not expose writable trusted node_modules symlink fallback in sandbox', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
     expect(sandboxSource).not.toContain('linkNodeModulesIntoDisposable');
-    expect(sandboxSource).not.toContain('spawnTrustedBaseDirect');
-    expect(sandboxSource).toContain('FILESYSTEM_SANDBOX_UNAVAILABLE');
+    expect(sandboxSource).not.toContain('symlinkSync');
+    expect(sandboxSource).toContain('captureTrustedNodeModulesFingerprint');
+    expect(sandboxSource).toContain('externalBinDirs');
   });
 
   it('detects mutations inside disposable sandbox copy', () => {
