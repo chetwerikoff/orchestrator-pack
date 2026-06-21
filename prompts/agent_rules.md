@@ -192,8 +192,7 @@ and **before** final verdict. Use
 `scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
 (origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the
 PR checkout) with the bound immutable issue snapshot (not a live re-fetch), PR
-body, and changed paths. The helper emits **candidate evidence only** — never
-auto-blocks or auto-merges. A row is **producer-verified** only when
+body, and changed paths. The helper emits **candidate evidence only** — never auto-blocks or auto-merges. A row is **producer-verified** only when
 `status: verified` **and** `verification-mode: live`; `compared-to-record` rows
 are integrity-checked-only. Surface every per-row status (including `unverified`,
 `verification-mode: not-run`, and zero-row `no-rows` runs) in review output.
