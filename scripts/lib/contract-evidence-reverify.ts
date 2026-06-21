@@ -610,16 +610,6 @@ function evaluateCaptureRow(input: {
   return buildUnverified(rowIndex, row, 'unsupported-producer');
 }
 
-function compareToRecordFallback(
-  rowIndex: number,
-  row: Record<string, string>,
-  bindingType: string,
-  captureContent: string,
-  assertedExpected: string,
-): ReverifyRowResult {
-  return compareToRecord(rowIndex, row, bindingType, captureContent, assertedExpected);
-}
-
 function compareToRecord(
   rowIndex: number,
   row: Record<string, string>,
