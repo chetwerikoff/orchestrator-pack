@@ -130,6 +130,14 @@
       "path": "captures/ao-webhook-notification/ready_for_review.action-priority.raw.json",
       "contentHash": "sha256:13e46a06a40b89828b55f5ce7aebfd131c822830c7234929cc4d92ed1e8cbe83"
     },
+    "ao-webhook-notification/review_pending": {
+      "id": "ao-webhook-notification/review_pending",
+      "producer": "ao",
+      "sourceCommand": "live wire capture via loopback proxy redirect (AO webhook POST /ao-wake, operator capture 2026-06-21)",
+      "kind": "structured",
+      "path": "captures/ao-webhook-notification/review_pending.raw.json",
+      "contentHash": "sha256:00e84ca86507178d8bdee0d628d15a6cba5579f8698ce19701f302223b976522"
+    },
     "ao-worker-report/addressing_reviews": {
       "id": "ao-worker-report/addressing_reviews",
       "producer": "ao",
