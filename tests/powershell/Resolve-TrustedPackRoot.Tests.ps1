@@ -24,16 +24,20 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$false'
     }
 
-    It 'invoke entrypoint delegates to trusted-base implementation via archive' {
+    It 'trusted launcher refuses execution from the PR checkout' {
+        $launcherScript = Join-Path $script:RepoRoot 'scripts/launch-contract-evidence-reverify.ps1'
+        $content = Get-Content -LiteralPath $launcherScript -Raw
+        $content | Should -Match 'Assert-LauncherInvokedOutsideReviewTarget'
+        $content | Should -Match 'refusing PR-checkout launcher'
+        $content | Should -Match 'ReviewTargetRoot'
+    }
+
+    It 'PR-checkout invoke wrapper refuses direct execution' {
         $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
         $content = Get-Content -LiteralPath $invokeScript -Raw
-        $content | Should -Match 'Resolve-TrustedReverifyInvokeScript'
-        $content | Should -Match 'git archive origin/main'
-        $content | Should -Match 'Invoke-ContractEvidenceReverify\.ps1'
-        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Resolve-TrustedPackRoot\.ps1''\)'
-        $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''lib/Ensure-ReverifyWorkspaceDeps\.ps1''\)'
-        $content | Should -Not -Match 'Import-TrustedReverifyBootstrap\s*-'
-        $content | Should -Not -Match '\. \(Join-Path[^\)]*Import-TrustedReverifyBootstrap'
+        $content | Should -Match 'launch-contract-evidence-reverify\.ps1'
+        $content | Should -Match 'exit 2'
+        $content | Should -Not -Match 'Resolve-TrustedReverifyInvokeScript'
     }
 
     It 'trusted implementation cleans up disposable trusted archive checkouts in finally' {

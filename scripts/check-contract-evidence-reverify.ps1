@@ -15,6 +15,7 @@ $requiredPaths = @(
     (Join-Path $Root 'prompts/agent_rules.md'),
     (Join-Path $Root 'prompts/codex_review_prompt.md'),
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ps1'),
+    (Join-Path $Root 'scripts/launch-contract-evidence-reverify.ps1'),
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ts'),
     (Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts')
 )
@@ -25,7 +26,8 @@ if ($failures.Count -eq 0) {
     Test-ReviewerPolicyPromptPhrases -Label 'prompts/agent_rules.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
         'Checkpoint-2 contract-evidence re-verification',
         'candidate evidence only',
-        'invoke-contract-evidence-reverify.ps1',
+        'launch-contract-evidence-reverify.ps1',
+        'ReviewTargetRoot',
         'producer-verified',
         'verification-mode',
         'never auto-blocks',
@@ -34,7 +36,8 @@ if ($failures.Count -eq 0) {
     Test-ReviewerPolicyPromptPhrases -Label 'prompts/codex_review_prompt.md' -Text $prompts.CodexPrompt -Failures $failures -RequiredPhrases @(
         'Checkpoint-2 contract-evidence re-verification',
         'candidate evidence only',
-        'invoke-contract-evidence-reverify.ps1',
+        'launch-contract-evidence-reverify.ps1',
+        'ReviewTargetRoot',
         'producer-verified',
         'independently validate',
         'never auto-blocks'

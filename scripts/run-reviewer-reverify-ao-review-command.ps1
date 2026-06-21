@@ -42,25 +42,106 @@ if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
     }
 }
 
+function Resolve-TrustedReverifyLauncherPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ReviewTargetRoot
+    )
+
+    $launcherRelativePath = 'scripts/launch-contract-evidence-reverify.ps1'
+
+    foreach ($candidateRoot in @($env:AO_TRUSTED_PACK_ROOT, $env:OPK_TRUSTED_PACK_ROOT)) {
+        if ([string]::IsNullOrWhiteSpace($candidateRoot)) {
+            continue
+        }
+        $trustedRoot = (Resolve-Path -LiteralPath $candidateRoot).Path
+        $launcherPath = Join-Path $trustedRoot $launcherRelativePath
+        if (Test-Path -LiteralPath $launcherPath) {
+            return @{
+                LauncherPath            = $launcherPath
+                TrustedBaseRoot         = $trustedRoot
+                DisposableBootstrapRoot = $false
+                BootstrapRoot           = $null
+            }
+        }
+    }
+
+    $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
+    New-Item -ItemType Directory -Path $temp -Force | Out-Null
+
+    Push-Location $resolvedReviewTarget
+    try {
+        git archive origin/main -- $launcherRelativePath 2>$null | tar -x -C $temp 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+            return $null
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $launcherPath = Join-Path $temp $launcherRelativePath
+    if (-not (Test-Path -LiteralPath $launcherPath)) {
+        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $temp -Force | Out-Null
+        Push-Location $resolvedReviewTarget
+        try {
+            git archive HEAD -- $launcherRelativePath 2>$null | tar -x -C $temp 2>$null
+        }
+        finally {
+            Pop-Location
+        }
+        $launcherPath = Join-Path $temp $launcherRelativePath
+        if (-not (Test-Path -LiteralPath $launcherPath)) {
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+            return $null
+        }
+        Write-Warning 'reverify launcher bootstrap: launcher absent on origin/main; using archived review-target copy outside review tree (fixture/e2e only)'
+    }
+
+    return @{
+        LauncherPath            = $launcherPath
+        TrustedBaseRoot         = $temp
+        DisposableBootstrapRoot = $true
+        BootstrapRoot           = $temp
+    }
+}
+
 $fixtureRoot = if ([System.IO.Path]::IsPathRooted($FixtureDir)) {
     $FixtureDir
 } else {
     Join-Path $packRoot $FixtureDir
 }
 
-$invokeScript = Join-Path $PSScriptRoot 'invoke-contract-evidence-reverify.ps1'
-if (-not (Test-Path -LiteralPath $invokeScript)) {
-    Write-Error "missing $invokeScript"
+$resolvedLauncher = $null
+$disposableLauncherBootstrapRoot = $false
+
+try {
+    $resolvedLauncher = Resolve-TrustedReverifyLauncherPath -ReviewTargetRoot $packRoot
+    if (-not $resolvedLauncher) {
+        Write-Error 'trusted reverify launcher unavailable: set AO_TRUSTED_PACK_ROOT or land launch-contract-evidence-reverify.ps1 on origin/main'
+    }
+    $disposableLauncherBootstrapRoot = [bool]$resolvedLauncher.DisposableBootstrapRoot
+
+    & $resolvedLauncher.LauncherPath `
+        -RepoRoot $packRoot `
+        -TrustedBaseRoot $resolvedLauncher.TrustedBaseRoot `
+        -ReviewTargetRoot $packRoot `
+        -ManifestPath $ManifestPath `
+        -SnapshotFile (Join-Path $fixtureRoot 'issue-snapshot.md') `
+        -PrBodyFile (Join-Path $fixtureRoot 'pr-body.md') `
+        -ExplicitIssue $ExplicitIssue `
+        -PrHeadSha 'e2e-fixture-head' `
+        -Summary
+
+    exit $LASTEXITCODE
 }
-
-& $invokeScript `
-    -RepoRoot $packRoot `
-    -ReviewTargetRoot $packRoot `
-    -ManifestPath $ManifestPath `
-    -SnapshotFile (Join-Path $fixtureRoot 'issue-snapshot.md') `
-    -PrBodyFile (Join-Path $fixtureRoot 'pr-body.md') `
-    -ExplicitIssue $ExplicitIssue `
-    -PrHeadSha 'e2e-fixture-head' `
-    -Summary
-
-exit $LASTEXITCODE
+finally {
+    if ($disposableLauncherBootstrapRoot -and $resolvedLauncher -and -not [string]::IsNullOrWhiteSpace($resolvedLauncher.BootstrapRoot)) {
+        Remove-Item -LiteralPath $resolvedLauncher.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

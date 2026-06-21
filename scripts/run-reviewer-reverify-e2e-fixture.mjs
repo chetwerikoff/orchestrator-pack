@@ -139,7 +139,7 @@ const output = {
   aoSessionId: null,
   aoSessionIsDedicatedFixture: false,
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
-  promptContainsInvokeScript: prompt.includes('invoke-contract-evidence-reverify.ps1'),
+  promptContainsInvokeScript: prompt.includes('launch-contract-evidence-reverify.ps1'),
   summaryIncludesRows: false,
   summaryRunOutcomeRowsEvaluated: false,
   summaryIncludesNeverBlocks: false,

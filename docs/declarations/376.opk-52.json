@@ -19,6 +19,7 @@
     "scripts/contract-evidence-reverify.test.ts",
     "scripts/generate-capture-manifest.d.mts",
     "scripts/invoke-contract-evidence-reverify.ps1",
+    "scripts/launch-contract-evidence-reverify.ps1",
     "scripts/invoke-contract-evidence-reverify.ts",
     "scripts/invoke-reviewer-contract-mapping.ts",
     "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",

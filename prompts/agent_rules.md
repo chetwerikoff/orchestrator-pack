@@ -189,19 +189,29 @@ structured status record (enum, PR head SHA, bound spec IDs/hashes, usability).
 **Checkpoint-2 contract-evidence re-verification (reviewers only).** For every PR
 with a linked issue, run checkpoint-2 **after** contract-mapping (when applicable)
 and **before** final verdict. Use
-`scripts/invoke-contract-evidence-reverify.ps1` with the bound immutable issue
-snapshot (not a live re-fetch), PR body, and changed paths. The helper emits
-**candidate evidence only** — never auto-blocks or auto-merges. A row is
-**producer-verified** only when `status: verified` **and**
-`verification-mode: live`; `compared-to-record` rows are integrity-checked-only.
-Surface every per-row status (including `unverified`, `verification-mode:
-not-run`, and zero-row `no-rows` runs) in review output. Independently validate
-each candidate against the diff, producer, and cited spec snapshot before
-assigning severity.
+`scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
+(origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the
+PR checkout) with the bound immutable issue snapshot (not a live re-fetch), PR
+body, and changed paths. The helper emits **candidate evidence only** — never
+auto-blocks or auto-merges. A row is **producer-verified** only when
+`status: verified` **and** `verification-mode: live`; `compared-to-record` rows
+are integrity-checked-only. Surface every per-row status (including `unverified`,
+`verification-mode: not-run`, and zero-row `no-rows` runs) in review output.
+Independently validate each candidate against the diff, producer, and cited spec
+snapshot before assigning severity.
 
-Invoke with `pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1` using
-`-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, and `-Summary`
-(see `scripts/invoke-contract-evidence-reverify.ps1` for the canonical parameter set).
+```powershell
+pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
+  -ReviewTargetRoot <pr-worktree-path> `
+  -SnapshotFile <bound-issue-snapshot.md> `
+  -CurrentIssueFile <issue-body> `
+  -PrBodyFile <pr-body> `
+  -ExplicitIssue <n> `
+  -ChangedPathsFile <changed-paths> `
+  -Summary
+```
+
+(see `scripts/launch-contract-evidence-reverify.ps1` for the canonical parameter set).
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`

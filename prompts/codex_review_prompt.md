@@ -118,11 +118,14 @@ IDs/snapshot hashes when resolved, and current usability.
 
 For every PR with a linked issue, run checkpoint-2 re-verification against the
 **immutable bound issue snapshot** (content-addressed; not a live re-fetch). Use
-`scripts/invoke-contract-evidence-reverify.ps1` — the helper owns row evaluation,
-`verification-mode` / `reason` vocabulary, and reviewer summary formatting.
+`scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
+(origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the
+PR checkout) — the helper owns row evaluation, `verification-mode` / `reason`
+vocabulary, and reviewer summary formatting.
 
 ```powershell
-pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1 `
+pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
+  -ReviewTargetRoot <pr-worktree-path> `
   -SnapshotFile <bound-issue-snapshot.md> `
   -CurrentIssueFile <issue-body> `
   -PrBodyFile <pr-body> `

@@ -114,7 +114,7 @@ try {
 
     Push-Location $reviewTargetRoot
     try {
-        $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'invoke-contract-evidence-reverify.ps1'
+        $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1'
         & node --import $tsxImport @args
         exit $LASTEXITCODE
     }
