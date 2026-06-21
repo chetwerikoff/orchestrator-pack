@@ -114,6 +114,29 @@ vocabulary (`skipped_no_spec`, `skipped_no_acceptance`, `ambiguous_spec`,
 Emit a structured status record in review output: enum, PR head SHA, bound spec
 IDs/snapshot hashes when resolved, and current usability.
 
+## Checkpoint-2 contract-evidence re-verification (reviewers only)
+
+For every PR with a linked issue, run checkpoint-2 re-verification against the
+**immutable bound issue snapshot** (content-addressed; not a live re-fetch). Use
+`scripts/invoke-contract-evidence-reverify.ps1` — the helper owns row evaluation,
+`verification-mode` / `reason` vocabulary, and reviewer summary formatting.
+
+```powershell
+pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1 `
+  -SnapshotFile <bound-issue-snapshot.md> `
+  -PrBodyFile <pr-body> `
+  -ExplicitIssue <n> `
+  -ChangedPathsFile <changed-paths> `
+  -Summary
+```
+
+Output is **candidate evidence only** — do not assign severity, approve, or reject
+from checkpoint-2 alone. A row counts as **producer-verified** only under live
+re-verification (`verification-mode: live`). `compared-to-record` rows prove capture
+integrity only. You MUST still **independently validate** each candidate against
+the diff, producer reality, and cited spec snapshot before promoting it to a
+finding. Checkpoint-2 must **never auto-blocks** review availability.
+
 ## Scope context
 
 {{SCOPE_SECTION}}

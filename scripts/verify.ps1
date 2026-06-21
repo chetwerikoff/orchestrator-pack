@@ -1045,6 +1045,22 @@ else {
     Add-Failure 'Missing reviewer contract-mapping check script (Issue #362)'
 }
 
+$contractEvidenceReverifyCheck = Join-Path $Root 'scripts/check-contract-evidence-reverify.ps1'
+if (Test-Path -LiteralPath $contractEvidenceReverifyCheck -PathType Leaf) {
+    & $contractEvidenceReverifyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-contract-evidence-reverify.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-contract-evidence-reverify.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Contract-evidence reverify prompt/policy check failed (Issue #376)'
+    }
+}
+else {
+    Write-Check 'scripts/check-contract-evidence-reverify.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing contract-evidence reverify check script (Issue #376)'
+}
+
 Write-Host ''
 Write-Host '== Skill pointer drift (Issue #156) =='
 $skillPointerDriftCheck = Join-Path $Root 'scripts/check-skill-pointer-drift.ps1'

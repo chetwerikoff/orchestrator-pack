@@ -1,0 +1,18 @@
+{
+  "description": "Trusted command allowlist for checkpoint-2 live re-verification (Issue #376).",
+  "externalProducers": ["ao", "gh", "codex"],
+  "trustedCommandPrefixes": [
+    "node tests/fixtures/contract-evidence-reverify/producers/",
+    "node scripts/fixtures/contract-evidence-reverify/",
+    "npm test -- reverify",
+    "npm test -- contract-evidence-reverify"
+  ],
+  "mutatingTokenPattern": "\\b(rm\\s|mv\\s|git\\s|tee\\s|>|>>|curl\\s|wget\\s|gh\\s|ao\\s|codex\\s)\\b",
+  "trustedCheckerRelativePaths": [
+    "scripts/lib/contract-evidence-reverify.ts",
+    "scripts/invoke-contract-evidence-reverify.ts",
+    "scripts/contract-evidence-reverify-allowlist.json"
+  ],
+  "defaultTimeoutMs": 8000,
+  "maxObservedLength": 512
+}
