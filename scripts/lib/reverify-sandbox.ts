@@ -89,7 +89,7 @@ function spawnIsolated(
       ['-U', '-n', '-r', resolved.executable, ...resolved.args],
       payload,
     );
-    if (!unshare.error) {
+    if (!unshare.error && unshare.status === 0) {
       return unshare;
     }
   }

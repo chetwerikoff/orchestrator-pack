@@ -160,7 +160,7 @@ export function resolveAllowlistedCommand(
       return null;
     }
     return {
-      executable: 'node',
+      executable: process.execPath,
       args: [absoluteScript],
       env: parsedEnv.env,
       allowlistId: `node ${matchedPrefix}`,
