@@ -17,6 +17,8 @@ import {
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
   inferShellReadAroundRead,
+  inferShellReadAroundReads,
+  extractShellCommandPaths,
   isInboundUserRequest,
   loadMetricWindowSummary,
   measureReadToolLines,
@@ -1102,6 +1104,35 @@ describe('stop hook transcript population', () => {
     expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND);
     expect(verdict.shellReadAround).toBe(true);
     expect(result.summary.advisoryUnits).toBe(1);
+  });
+
+  it('preserves every path in multi-file shell cat reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-cat-multi-'));
+    const filePaths = ['a.md', 'b.md', 'c.md'].map((name) => path.join(dir, name));
+    const lineCounts = [134, 133, 133];
+    const chunks = filePaths.map((filePath, index) => {
+      const content = Array.from(
+        { length: lineCounts[index] },
+        (_, lineIndex) => `${path.basename(filePath)}-line-${lineIndex + 1}`,
+      ).join('\n');
+      fs.writeFileSync(filePath, content);
+      return content;
+    });
+    const command = `cat ${filePaths.join(' ')}`;
+    const output = `${chunks.join('\n')}\n`;
+    expect(extractShellCommandPaths(command)).toEqual(filePaths);
+    const inferred = inferShellReadAroundReads(command, output);
+    expect(inferred.map((read) => read.path)).toEqual(filePaths);
+    expect(inferred.reduce((sum, read) => sum + read.lines, 0)).toBe(400);
+    const events = toolUseToAuditEvents(
+      'Shell',
+      { command },
+      'req-shell-cat-multi',
+      { shellOutput: output },
+    );
+    const readEvents = events.filter((event) => event.kind === 'read');
+    expect(readEvents).toHaveLength(3);
+    expect(new Set(readEvents.map((event) => event.path))).toEqual(new Set(filePaths));
   });
 
   it('defaults head without -n to ten lines when output is missing', () => {

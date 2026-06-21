@@ -215,11 +215,16 @@ export declare function measureReadToolLines(
 export declare function extractToolResultText(value: unknown): string;
 export declare function measureShellDiffLogLines(command: string, capturedOutput?: unknown): number;
 export declare function extractShellCommandPath(command: string): string | undefined;
+export declare function extractShellCommandPaths(command: string): string[];
 export declare function inferShellReadAroundLines(
   command: string,
   capturedOutput?: unknown,
   filePath?: string,
 ): number;
+export declare function inferShellReadAroundReads(
+  command: string,
+  capturedOutput?: unknown,
+): Array<{ path: string; lines: number; readKind: string }>;
 export declare function inferShellReadAroundRead(
   command: string,
   capturedOutput?: unknown,

@@ -1106,26 +1106,47 @@ function extractNestedQuotedPath(candidate) {
   return undefined;
 }
 
-export function extractShellCommandPath(command) {
+/**
+ * @param {string} command
+ */
+function appendShellCommandPath(paths, seen, candidate) {
+  const nestedPath = extractNestedQuotedPath(candidate);
+  if (nestedPath) {
+    const normalized = normalizePathForShellMatch(nestedPath);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      paths.push(nestedPath);
+    }
+    return;
+  }
+  if (!looksLikeShellCommandPath(candidate)) {
+    return;
+  }
+  const normalized = normalizePathForShellMatch(candidate);
+  if (normalized && !seen.has(normalized)) {
+    seen.add(normalized);
+    paths.push(candidate);
+  }
+}
+
+export function extractShellCommandPaths(command) {
   const trimmed = String(command ?? '').trim();
   const nestedFromWhole = extractNestedQuotedPath(trimmed);
   if (nestedFromWhole) {
-    return nestedFromWhole;
+    return [nestedFromWhole];
   }
+
+  /** @type {string[]} */
+  const paths = [];
+  const seen = new Set();
   const quotedMatches = [...trimmed.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]);
   for (const candidate of quotedMatches) {
-    const nestedPath = extractNestedQuotedPath(candidate);
-    if (nestedPath) {
-      return nestedPath;
-    }
-    if (looksLikeShellCommandPath(candidate)) {
-      return candidate;
-    }
+    appendShellCommandPath(paths, seen, candidate);
   }
 
   const tokens = trimmed.split(/\s+/);
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    const token = tokens[index].replace(/^['"]|['"]$/g, '');
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/^['"]|['"]$/g, '');
     if (!token || token.startsWith('-')) {
       continue;
     }
@@ -1135,16 +1156,56 @@ export function extractShellCommandPath(command) {
     if (SHELL_COMMAND_WORDS.has(token.toLowerCase())) {
       continue;
     }
-    const nestedFromToken = extractNestedQuotedPath(token);
-    if (nestedFromToken) {
-      return nestedFromToken;
-    }
-    if (looksLikeShellCommandPath(token)) {
-      return token;
-    }
+    appendShellCommandPath(paths, seen, token);
   }
 
-  return undefined;
+  return paths;
+}
+
+export function extractShellCommandPath(command) {
+  const paths = extractShellCommandPaths(command);
+  return paths.length > 0 ? paths[paths.length - 1] : undefined;
+}
+
+/**
+ * @param {string} filePath
+ */
+function countFileLinesFromDiskSafe(filePath) {
+  try {
+    if (!existsSync(filePath)) {
+      return 0;
+    }
+    return countFileLinesFromDisk(filePath);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @param {string[]} paths
+ * @param {number} totalLines
+ */
+function distributeMultiFileShellLines(paths, totalLines) {
+  const diskLines = paths.map((filePath) => countFileLinesFromDiskSafe(filePath));
+  const diskSum = diskLines.reduce((sum, lines) => sum + lines, 0);
+  if (diskSum > 0) {
+    if (diskSum === totalLines) {
+      return diskLines;
+    }
+    /** @type {number[]} */
+    const scaled = diskLines.map((lines) =>
+      Math.max(0, Math.round((totalLines * lines) / diskSum)),
+    );
+    const scaledSum = scaled.reduce((sum, lines) => sum + lines, 0);
+    if (scaledSum !== totalLines && scaled.length > 0) {
+      scaled[scaled.length - 1] += totalLines - scaledSum;
+    }
+    return scaled;
+  }
+
+  const base = Math.floor(totalLines / paths.length);
+  const remainder = totalLines % paths.length;
+  return paths.map((_, index) => base + (index < remainder ? 1 : 0));
 }
 
 /**
@@ -1196,23 +1257,34 @@ function inferShellReadAroundReadKind(command, filePath) {
  * @param {string} command
  * @param {unknown} [capturedOutput]
  */
-export function inferShellReadAroundRead(command, capturedOutput) {
+export function inferShellReadAroundReads(command, capturedOutput) {
   if (!isShellReadAroundCommand(command)) {
-    return null;
+    return [];
   }
-  const filePath = extractShellCommandPath(command);
-  if (!filePath) {
-    return null;
+  const paths = extractShellCommandPaths(command);
+  if (paths.length === 0) {
+    return [];
   }
-  const lines = inferShellReadAroundLines(command, capturedOutput, filePath);
-  if (lines <= 0) {
-    return null;
+  const totalLines = inferShellReadAroundLines(command, capturedOutput, paths[0]);
+  if (totalLines <= 0) {
+    return [];
   }
-  return {
-    path: filePath,
-    lines,
-    readKind: inferShellReadAroundReadKind(command, filePath),
-  };
+  const perFileLines =
+    paths.length === 1
+      ? [totalLines]
+      : distributeMultiFileShellLines(paths, totalLines);
+  return paths
+    .map((filePath, index) => ({
+      path: filePath,
+      lines: perFileLines[index] ?? 0,
+      readKind: inferShellReadAroundReadKind(command, filePath),
+    }))
+    .filter((read) => read.lines > 0);
+}
+
+export function inferShellReadAroundRead(command, capturedOutput) {
+  const reads = inferShellReadAroundReads(command, capturedOutput);
+  return reads.length > 0 ? reads[0] : null;
 }
 
 /**
@@ -1387,8 +1459,8 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
     if (matchesCoworkerAskCommand(command)) {
       events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
     }
-    const readAround = inferShellReadAroundRead(command, options.shellOutput);
-    if (readAround) {
+    const readArounds = inferShellReadAroundReads(command, options.shellOutput);
+    for (const readAround of readArounds) {
       events.push({
         kind: 'read',
         inboundRequestId,
