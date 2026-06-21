@@ -61,10 +61,16 @@ export function detectLegacyListRelocation(
 
 export function parseAuthorizationStore(store: unknown): Array<Record<string, unknown>>;
 
+export function authorizationBaseShaMatches(
+  authBaseSha: string,
+  scope: { baseSha: string; baseParentSha?: string },
+): boolean;
+
 export function findMatchingAuthorization(
   authorizations: Array<Record<string, unknown>>,
   scope: {
     baseSha: string;
+    baseParentSha?: string;
     headSha: string;
     addedPaths: string[];
     changedGovernedFiles: string[];

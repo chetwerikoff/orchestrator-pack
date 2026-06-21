@@ -6,6 +6,7 @@
   "files": [
     "scripts/contract-evidence-legacy-drafts.json",
     "scripts/contract-evidence-path.mjs",
+    "scripts/contract-evidence.mjs",
     "scripts/contract-evidence-legacy-list-guard.mjs",
     "scripts/contract-evidence-legacy-governed-manifest.json",
     "scripts/contract-evidence-legacy-authorizations.json",

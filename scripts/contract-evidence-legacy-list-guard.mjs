@@ -257,12 +257,28 @@ export function parseAuthorizationStore(store) {
  * @param {Array<Record<string, unknown>>} authorizations
  * @param {{ baseSha: string, headSha: string, addedPaths: string[], changedGovernedFiles: string[] }} scope
  */
+/**
+ * @param {string} authBaseSha
+ * @param {{ baseSha: string, baseParentSha?: string }} scope
+ */
+export function authorizationBaseShaMatches(authBaseSha, scope) {
+  const normalized = String(authBaseSha ?? '').trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === scope.baseSha) {
+    return true;
+  }
+  const parent = String(scope.baseParentSha ?? '').trim();
+  return parent.length > 0 && normalized === parent;
+}
+
 export function findMatchingAuthorization(authorizations, scope) {
   const wantAdded = [...scope.addedPaths].map((entry) => canonicalLegacyDraftPath(entry) ?? entry).sort();
   const wantChanged = [...scope.changedGovernedFiles].sort();
   for (const auth of authorizations) {
     const authBaseSha = String(auth.baseSha ?? '').trim();
-    if (!authBaseSha || authBaseSha !== scope.baseSha) {
+    if (!authorizationBaseShaMatches(authBaseSha, scope)) {
       continue;
     }
     const authHeadSha = String(auth.headSha ?? '').trim();
@@ -310,6 +326,7 @@ export function findMatchingAuthorization(authorizations, scope) {
  * @param {boolean} [options.baseResolvable]
  * @param {string} [options.legacyListPath]
  * @param {ReturnType<typeof loadGovernedManifest>} [options.manifest]
+ * @param {string} [options.baseParentSha]
  * @param {ReturnType<typeof loadGovernedManifest>} [options.headManifest]
  */
 export function evaluateLegacyListGuard(options) {
@@ -372,6 +389,7 @@ export function evaluateLegacyListGuard(options) {
   if (options.nameStatus && detectLegacyListRelocation(options.nameStatus, legacyListPath)) {
     const scope = {
       baseSha: options.baseSha,
+      baseParentSha: options.baseParentSha,
       headSha: options.headSha,
       addedPaths: [],
       changedGovernedFiles,
@@ -465,6 +483,7 @@ export function evaluateLegacyListGuard(options) {
 
   const scope = {
     baseSha: options.baseSha,
+    baseParentSha: options.baseParentSha,
     headSha: options.headSha,
     addedPaths: added,
     changedGovernedFiles,

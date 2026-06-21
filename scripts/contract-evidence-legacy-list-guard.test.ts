@@ -16,6 +16,7 @@ import {
   VERDICT_BINDING_ID,
   computeChangedGovernedFiles,
   evaluateLegacyListGuard,
+  authorizationBaseShaMatches,
   findMatchingAuthorization,
   governedSurfacePaths,
   isGuardPresentOnBase,
@@ -33,6 +34,8 @@ const governedManifestFiles = productionManifest.files as string[];
 
 type GuardCaseOverrides = {
   manifest?: Record<string, unknown>;
+  headManifest?: Record<string, unknown>;
+  baseParentSha?: string;
   changedFiles?: string[];
   nameStatus?: Array<{ path: string; status: string; previousPath?: string }>;
   baseLegacyListContent?: string | null;
@@ -65,6 +68,8 @@ function runGuardCase(overrides: GuardCaseOverrides) {
     bootstrap: overrides.bootstrap,
     baseResolvable: overrides.baseResolvable,
     manifest,
+    headManifest: overrides.headManifest,
+    baseParentSha: overrides.baseParentSha,
   });
 }
 
@@ -174,6 +179,38 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.verdict).toBe('pass');
     expect(verdict.authorization).toEqual({ type: 'maintainer', id: 'admin-bootstrap' });
     expect(verdict.reason).toMatch(/admin-authorized/);
+  });
+
+  it('AC2b accepts pre-merged authorization bound to merge-base parent SHA', () => {
+    const added = ['docs/issues_drafts/99-new-draft.md'];
+    const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
+    const match = findMatchingAuthorization([{
+      id: 'auth-parent',
+      baseSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head2222222222222222222222222222222222222222',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+      source: { type: 'maintainer', id: 'admin-parent' },
+    }], {
+      baseSha: 'base1111111111111111111111111111111111111111',
+      baseParentSha: 'parent000000000000000000000000000000000000',
+      headSha: 'head2222222222222222222222222222222222222222',
+      addedPaths: added,
+      changedGovernedFiles: changedFiles,
+    });
+    expect(match).not.toBeNull();
+    expect(match?.authorization).toEqual({ type: 'maintainer', id: 'admin-parent' });
+  });
+
+  it('detects consumer resolution module edits as governed-surface changes', () => {
+    const verdict = runGuardCase({
+      changedFiles: ['scripts/contract-evidence.mjs'],
+      manifest: productionManifest,
+      headManifest: productionManifest,
+    });
+    expect(verdict.changedGovernedFiles).toContain('scripts/contract-evidence.mjs');
+    expect(verdict.verdict).toBe('fail');
+    expect(verdict.reason).toMatch(/unauthorized governed-surface modification/);
   });
 
   it('AC3 rejects self-authorization in the same diff', () => {

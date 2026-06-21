@@ -111,13 +111,47 @@ function main() {
   let baseManifest;
   /** @type {ReturnType<typeof loadGovernedManifest> | undefined} */
   let headManifest;
+  let baseParentSha = '';
+  try {
+    baseParentSha = execFileSync('git', ['rev-parse', `${baseSha}^`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    baseParentSha = '';
+  }
+
   if (bootstrap) {
-    baseManifest = {
-      legacyListPath: LEGACY_LIST_REL_PATH,
-      files: [LEGACY_LIST_REL_PATH],
-      fixtureRoots: [],
-      pinnedEntrypointDependencies: [],
-    };
+    try {
+      baseManifest = loadGovernedManifest(repoRoot);
+    } catch {
+      const verdict = evaluateLegacyListGuard({
+        baseSha,
+        headSha,
+        changedFiles: [GOVERNED_MANIFEST_REL_PATH],
+        bootstrap: true,
+        baseResolvable: false,
+      });
+      console.error(formatLegacyListGuardVerdict(verdict));
+      process.exit(1);
+    }
+    const bootstrapClosure = validateManifestClosure(repoRoot, baseManifest);
+    if (!bootstrapClosure.ok) {
+      const failed = evaluateLegacyListGuard({
+        baseSha,
+        headSha,
+        changedFiles: baseManifest.files ?? [],
+        bootstrap: true,
+        baseResolvable: true,
+        manifest: baseManifest,
+      });
+      failed.verdict = 'fail';
+      failed.expected = 'fail';
+      failed.reason = `bootstrap governed manifest dependency closure failed: ${bootstrapClosure.errors.join('; ')}`;
+      console.error(formatLegacyListGuardVerdict(failed));
+      process.exit(1);
+    }
+    headManifest = baseManifest;
   } else {
     try {
       baseManifest = loadGovernedManifest(trustedRoot);
@@ -188,6 +222,7 @@ function main() {
     legacyListPath,
     manifest: baseManifest,
     headManifest,
+    baseParentSha,
   });
 
   const output = formatLegacyListGuardVerdict(verdict);
