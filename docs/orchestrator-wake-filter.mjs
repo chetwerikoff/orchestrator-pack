@@ -626,7 +626,24 @@ async function main() {
       return;
     }
     const admissionContext = isRecord(parsed.admissionContext) ? parsed.admissionContext : {};
-    const body = parsed.body ?? parsed;
+    let body;
+    if (typeof parsed.bodyJson === 'string') {
+      try {
+        body = parseWebhookJson(parsed.bodyJson);
+        if (!isRecord(body)) {
+          process.stdout.write(
+            `${JSON.stringify({ ok: false, reason: 'malformed_payload', detail: 'body is not an object' })}\n`,
+          );
+          return;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stdout.write(`${JSON.stringify({ ok: false, reason: 'malformed_payload', detail: message })}\n`);
+        return;
+      }
+    } else {
+      body = parsed.body ?? parsed;
+    }
     const result = evaluateWakePayload(body, admissionContext);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;

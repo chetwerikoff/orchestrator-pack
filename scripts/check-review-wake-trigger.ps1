@@ -43,6 +43,11 @@ if ($listener -notmatch 'review_trigger_failed') {
     Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
     exit 1
 }
+
+if ($listener -match 'Invoke-WakeFilter' -and $listener -match 'body\s*=\s*\(\$BodyJson\s*\|\s*ConvertFrom-Json\)') {
+    Write-Host 'Invoke-WakeFilter must pass raw bodyJson to the Node filter instead of parsing in PowerShell'
+    exit 1
+}
 if ($listener -match 'Invoke-GhOpenPrList' -and $listener -notmatch 'Test-ReadyForReviewHandoffEnvelope') {
     Write-Host 'orchestrator-wake-listener.ps1 must gate gh pr list on hand-off envelope probe'
     exit 1

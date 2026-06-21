@@ -186,7 +186,7 @@ function Invoke-WakeFilter {
     )
 
     $payload = @{
-        body = ($BodyJson | ConvertFrom-Json)
+        bodyJson = $BodyJson
         admissionContext = @{
             supervisedProjectId = $SupervisedProjectId
             supervisedRepoSlug  = $SupervisedRepoSlug
