@@ -1396,5 +1396,10 @@ Cycle state persists in the existing reconcile state files (`cycleState` key alo
    — confirm the check name appears in `required_status_checks.contexts` and `required_status_checks.strict` is `true`.
 5. To authorize a legitimate legacy-path addition: an admin merges a scoped entry into `scripts/contract-evidence-legacy-authorizations.json` on the merge base **before** the ordinary PR that adds the path (same-diff self-authorization is rejected).
 
-Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml` on `pull_request_target` (merge-base workflow definition), not from PR-head `scope-guard.yml`. Authorization records bind `headSha` plus the exact `addedPaths` / `changedGovernedFiles` set; `baseSha` is optional audit metadata because the merge-base SHA is not knowable before the admin commit lands.
+Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml` on `pull_request_target` (merge-base workflow definition), not from PR-head `scope-guard.yml`.
+
+6. **Authorize path additions without a head-SHA cycle.** With strict up-to-date branch protection, do **not** pre-bind `headSha` (rebasing after an authorization merge changes the PR head and breaks that binding). Instead:
+   - Land an **authorization-only** admin commit on `main` whose record sets `baseSha` to **that commit's SHA** (the new merge-base tip) plus the exact `addedPaths` / `changedGovernedFiles` set.
+   - Rebase/update the path-addition PR onto the new `main` tip so its merge base equals the authorized `baseSha`.
+   - The guard matches on exact `baseSha` + path/file sets only; `headSha` is not part of authorization binding.
 

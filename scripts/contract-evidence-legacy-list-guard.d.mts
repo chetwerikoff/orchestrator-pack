@@ -30,6 +30,12 @@ export function validateManifestClosure(
   manifest: Record<string, unknown>,
 ): { ok: boolean; errors: string[] };
 
+export function validateBaseAndHeadManifestClosure(
+  trustedRoot: string,
+  headRoot: string,
+  baseManifest: Record<string, unknown>,
+): { ok: boolean; errors: string[]; headManifest?: Record<string, unknown> };
+
 export function resolveRelativeImport(fromRel: string, spec: string): string;
 
 export function collectEntrypointDependencyClosure(

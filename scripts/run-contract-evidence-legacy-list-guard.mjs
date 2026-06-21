@@ -15,7 +15,7 @@ import {
   formatLegacyListGuardVerdict,
   isGuardPresentOnBase,
   loadGovernedManifest,
-  validateManifestClosure,
+  validateBaseAndHeadManifestClosure,
 } from './contract-evidence-legacy-list-guard.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -131,7 +131,7 @@ function main() {
       process.exit(1);
     }
 
-    const closure = validateManifestClosure(trustedRoot, manifest);
+    const closure = validateBaseAndHeadManifestClosure(trustedRoot, repoRoot, manifest);
     if (!closure.ok) {
       const failed = evaluateLegacyListGuard({
         baseSha,
@@ -150,6 +150,7 @@ function main() {
       console.error(formatLegacyListGuardVerdict(failed));
       process.exit(1);
     }
+    manifest = closure.headManifest ?? manifest;
   }
 
   let changedFiles = [];

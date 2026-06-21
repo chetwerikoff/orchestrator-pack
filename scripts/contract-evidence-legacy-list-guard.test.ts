@@ -20,6 +20,7 @@ import {
   governedSurfacePaths,
   isGuardPresentOnBase,
   loadGovernedManifest,
+  validateBaseAndHeadManifestClosure,
   validateManifestClosure,
 } from './contract-evidence-legacy-list-guard.mjs';
 
@@ -149,7 +150,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/unauthorized legacy path addition/);
   });
 
-  it('AC2 passes authorized path addition bound to head SHA and path set', () => {
+  it('AC2 passes authorized path addition bound to base SHA and path set', () => {
     const added = ['docs/issues_drafts/99-new-draft.md'];
     const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
     const verdict = runGuardCase({
@@ -161,7 +162,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       baseAuthorizations: {
         authorizations: [{
           id: 'auth-1',
-          headSha: 'head2222222222222222222222222222222222222222',
+          baseSha: 'base1111111111111111111111111111111111111111',
           addedPaths: added,
           changedGovernedFiles: changedFiles,
           source: { type: 'maintainer', id: 'admin-bootstrap' },
@@ -279,9 +280,9 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('AC12 rejects stale authorization binding on head SHA', () => {
+  it('AC12 rejects stale authorization binding on base SHA', () => {
     const match = findMatchingAuthorization([{
-      headSha: 'other-head',
+      baseSha: 'other-base',
       addedPaths: ['docs/issues_drafts/99-new-draft.md'],
       changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
       source: { type: 'maintainer', id: 'stale' },
@@ -292,6 +293,44 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
     });
     expect(match).toBeNull();
+  });
+
+  it('AC12b rejects authorization records without baseSha', () => {
+    const match = findMatchingAuthorization([{
+      addedPaths: ['docs/issues_drafts/99-new-draft.md'],
+      changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
+      source: { type: 'maintainer', id: 'missing-base' },
+    }], {
+      baseSha: 'base1111111111111111111111111111111111111111',
+      headSha: 'head2222222222222222222222222222222222222222',
+      addedPaths: ['docs/issues_drafts/99-new-draft.md'],
+      changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
+    });
+    expect(match).toBeNull();
+  });
+
+  it('fails head manifest closure when head adds an ungoverned entrypoint import', () => {
+    const manifest = loadGovernedManifest(repoRoot);
+    const deps = Array.isArray(manifest.pinnedEntrypointDependencies)
+      ? manifest.pinnedEntrypointDependencies.map((rel) => String(rel))
+      : [];
+    const brokenHead = {
+      ...manifest,
+      pinnedEntrypointDependencies: deps.filter(
+        (rel) => rel !== 'scripts/contract-evidence-legacy-list-guard.mjs',
+      ),
+    };
+    const manifestPath = path.join(repoRoot, 'scripts/contract-evidence-legacy-governed-manifest.json');
+    const original = readFileSync(manifestPath, 'utf8');
+    writeFileSync(manifestPath, `${JSON.stringify(brokenHead, null, 2)}
+`);
+    try {
+      const closure = validateBaseAndHeadManifestClosure(repoRoot, repoRoot, productionManifest);
+      expect(closure.ok).toBe(false);
+      expect(closure.errors.join('\n')).toMatch(/head:.*entrypoint dependency/);
+    } finally {
+      writeFileSync(manifestPath, original);
+    }
   });
 
   it('AC13 unrelated PR gets policy-pass', () => {

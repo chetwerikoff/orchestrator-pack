@@ -153,6 +153,33 @@ export function validateManifestClosure(trustedRoot, manifest) {
   return { ok: errors.length === 0, errors };
 }
 
+
+/**
+ * @param {string} trustedRoot
+ * @param {string} headRoot
+ * @param {ReturnType<typeof loadGovernedManifest>} baseManifest
+ */
+export function validateBaseAndHeadManifestClosure(trustedRoot, headRoot, baseManifest) {
+  /** @type {string[]} */
+  const errors = [];
+  const baseClosure = validateManifestClosure(trustedRoot, baseManifest);
+  if (!baseClosure.ok) {
+    errors.push(...baseClosure.errors.map((entry) => `base: ${entry}`));
+  }
+  let headManifest;
+  try {
+    headManifest = loadGovernedManifest(headRoot);
+  } catch {
+    errors.push('head governed manifest unavailable');
+    return { ok: false, errors };
+  }
+  const headClosure = validateManifestClosure(headRoot, headManifest);
+  if (!headClosure.ok) {
+    errors.push(...headClosure.errors.map((entry) => `head: ${entry}`));
+  }
+  return { ok: errors.length === 0, errors, headManifest };
+}
+
 /**
  * @param {string} trustedRoot
  */
@@ -221,10 +248,7 @@ export function findMatchingAuthorization(authorizations, scope) {
   const wantChanged = [...scope.changedGovernedFiles].sort();
   for (const auth of authorizations) {
     const authBaseSha = String(auth.baseSha ?? '').trim();
-    if (authBaseSha && authBaseSha !== scope.baseSha) {
-      continue;
-    }
-    if (String(auth.headSha ?? '') !== scope.headSha) {
+    if (!authBaseSha || authBaseSha !== scope.baseSha) {
       continue;
     }
     const authAdded = [...(Array.isArray(auth.addedPaths) ? auth.addedPaths : [])]
