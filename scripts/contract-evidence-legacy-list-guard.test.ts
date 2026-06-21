@@ -269,7 +269,13 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const match = findMatchingAuthorization([auth], scope, {
       verifyAuthorizedRevision: (
         candidate: Record<string, unknown>,
-        candidateScope: typeof scope,
+        candidateScope: {
+          baseSha: string;
+          baseParentSha?: string;
+          headSha: string;
+          addedPaths: string[];
+          changedGovernedFiles: string[];
+        },
       ) => compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef),
     });
     expect(match).not.toBeNull();
@@ -306,7 +312,13 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     const match = findMatchingAuthorization([auth], scope, {
       verifyAuthorizedRevision: (
         candidate: Record<string, unknown>,
-        candidateScope: typeof scope,
+        candidateScope: {
+          baseSha: string;
+          baseParentSha?: string;
+          headSha: string;
+          addedPaths: string[];
+          changedGovernedFiles: string[];
+        },
       ) => compareAuthorizedRevisionContent(candidate, candidateScope, readAtRef),
     });
     expect(match).toBeNull();
