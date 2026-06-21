@@ -663,7 +663,21 @@ export function runSandboxedAllowlistedCommand(
 }
 
 export function isPrHeadNetworkSandboxAvailable(): boolean {
-  return process.platform === 'linux' && bwrapAvailable();
+  if (process.platform !== 'linux' || !bwrapAvailable()) {
+    return false;
+  }
+
+  const dependencyRoot = process.cwd();
+  const disposable = createDisposableWorktreeCopy(dependencyRoot);
+  if (!disposable) {
+    return false;
+  }
+
+  try {
+    return ensureBwrapSandboxReady(disposable, dependencyRoot, 'pr-head-new');
+  } finally {
+    rmSync(disposable, { recursive: true, force: true });
+  }
 }
 
 export function resetBwrapSandboxProbeCacheForTests(): void {

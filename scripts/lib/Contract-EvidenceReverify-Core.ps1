@@ -61,7 +61,7 @@ detail: $Detail
     }
 
     $scriptBootstrap = $null
-    $trustedBaseRoot = $null
+    $effectiveTrustedBaseRoot = $null
     $disposableTrustedRoot = $false
     $disposableScriptBootstrapRoot = $false
 
@@ -87,14 +87,14 @@ detail: $Detail
             }
             throw
         }
-        $trustedBaseRoot = $trusted.TrustedBaseRoot
+        $effectiveTrustedBaseRoot = $trusted.TrustedBaseRoot
         $runner = $trusted.RunnerPath
         $disposableTrustedRoot = [bool]$trusted.DisposableTrustedRoot
 
         $args = @(
             $runner,
             '--repo-root', $reviewTargetRoot,
-            '--trusted-base-root', $trustedBaseRoot,
+            '--trusted-base-root', $effectiveTrustedBaseRoot,
             '--review-target-root', $reviewTargetRoot,
             '--snapshot-file', $SnapshotFile
         )
@@ -117,7 +117,7 @@ detail: $Detail
 
         Push-Location $reviewTargetRoot
         try {
-            $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $trustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1'
+            $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $effectiveTrustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1'
             & node --import $tsxImport @args
         }
         finally {
@@ -125,8 +125,8 @@ detail: $Detail
         }
     }
     finally {
-        if ($disposableTrustedRoot -and -not [string]::IsNullOrWhiteSpace($trustedBaseRoot)) {
-            Remove-Item -LiteralPath $trustedBaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if ($disposableTrustedRoot -and -not [string]::IsNullOrWhiteSpace($effectiveTrustedBaseRoot)) {
+            Remove-Item -LiteralPath $effectiveTrustedBaseRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
         elseif ($disposableScriptBootstrapRoot -and $scriptBootstrap -and -not [string]::IsNullOrWhiteSpace($scriptBootstrap.BootstrapRoot)) {
             Remove-Item -LiteralPath $scriptBootstrap.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -47,8 +47,9 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'DisposableTrustedRoot'
-        $content | Should -Match 'Remove-Item -LiteralPath \$trustedBaseRoot -Recurse -Force'
+        $content | Should -Match 'Remove-Item -LiteralPath \$effectiveTrustedBaseRoot -Recurse -Force'
         $content | Should -Match 'finally'
+        $content | Should -Not -Match '\$trustedBaseRoot = \$null'
     }
 
     It 'trusted implementation loads bootstrap helpers from immutable base' {
