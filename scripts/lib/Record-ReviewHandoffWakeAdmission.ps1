@@ -34,21 +34,7 @@ function Get-ReviewHandoffWakeAdmissionState {
     param([string]$Path)
 
     $default = @{ records = @{}; pendingRetries = @{}; lastUpdatedMs = $null }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return $default
-    }
-    try {
-        $parsed = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-        if (-not $parsed) { return $default }
-        return @{
-            records        = if ($parsed.records) { @{} + $parsed.records } else { @{} }
-            pendingRetries = if ($parsed.pendingRetries) { @{} + $parsed.pendingRetries } else { @{} }
-            lastUpdatedMs  = $parsed.lastUpdatedMs
-        }
-    }
-    catch {
-        return $default
-    }
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $default -ActionTracking
 }
 
 function Set-ReviewHandoffWakeAdmissionState {

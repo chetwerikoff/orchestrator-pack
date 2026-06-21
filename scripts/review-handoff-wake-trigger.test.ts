@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -439,6 +441,32 @@ describe('wake trigger integration', () => {
     });
     expect(recheck.emitReviewRun).toBe(true);
   });
+  it('preRunRecheck uses wakeKind when planned startReason is omitted', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const pr = fixture.openPrs?.[0];
+    expect(pr).toBeDefined();
+    const retargetedOpenPrs = fixture.openPrs!.map((openPr) =>
+      openPr.number === pr!.number ? { ...openPr, baseRefName: 'release' } : openPr,
+    );
+    const recheck = evaluateWakePreRunRecheck({
+      wakeKind: HANDOFF_WAKE_KIND,
+      planned: {
+        prNumber: Number(fixture.prNumber),
+        headSha: String(pr!.headRefOid),
+        sessionId: String(fixture.sessionId),
+        admittedBaseRef: 'main',
+      },
+      fresh: {
+        openPrs: retargetedOpenPrs,
+        reviewRuns: fixture.reviewRuns,
+        sessions: fixture.sessions,
+        ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      },
+    });
+    expect(recheck.emitReviewRun).toBe(false);
+    expect(recheck.reason).toBe('pre_claim_toctou_base_retargeted');
+  });
+
 });
 
 describe('identity admission unit', () => {
@@ -454,5 +482,72 @@ describe('identity admission unit', () => {
     });
     expect(admission.admitted).toBe(true);
     expect(admission.outcome).toBe('promoted');
+  });
+  it('rejects handoff missing project identity when supervised', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const event = structuredClone(capture.event);
+    delete event.projectId;
+    if (event.data?.subject?.session) {
+      delete event.data.subject.session.projectId;
+    }
+    const admission = evaluateHandoffIdentityAdmission({
+      event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+    });
+    expect(admission.admitted).toBe(false);
+    expect(admission.reason).toBe('missing_project_identity');
+  });
+
+  it('rejects handoff missing repository identity when supervised', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const event = structuredClone(capture.event);
+    if (event.data?.subject?.pr) {
+      delete event.data.subject.pr.url;
+    }
+    const admission = evaluateHandoffIdentityAdmission({
+      event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+    });
+    expect(admission.admitted).toBe(false);
+    expect(admission.reason).toBe('missing_repository_identity');
+  });
+
+});
+describe('handoff admission state persistence', () => {
+  it('loads persisted records without PSCustomObject hashtable merge failure', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-admission-'));
+    const statePath = path.join(dir, 'review-handoff-wake-admission.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        records: {
+          'orchestrator-pack|chetwerikoff/orchestrator-pack|234|abc': {
+            key: 'orchestrator-pack|chetwerikoff/orchestrator-pack|234|abc',
+            prNumber: 234,
+            sessionId: 'opk-27',
+          },
+        },
+        pendingRetries: {},
+        lastUpdatedMs: 1,
+      }),
+    );
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const script = `
+. '${lib.replace(/'/g, "''")}'
+$state = Get-ReviewHandoffWakeAdmissionState -Path '${statePath.replace(/'/g, "''")}'
+if ($state.records.Count -ne 1) { throw "expected 1 record, got $($state.records.Count)" }
+if (-not $state.records.ContainsKey('orchestrator-pack|chetwerikoff/orchestrator-pack|234|abc')) { throw 'missing record key' }
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
   });
 });

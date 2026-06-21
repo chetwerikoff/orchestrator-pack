@@ -37,6 +37,8 @@ export type WakeFilterRejectReason =
   | 'missing_session_id'
   | 'info_priority'
   | 'not_wake_relevant'
+  | 'missing_project_identity'
+  | 'missing_repository_identity'
   | 'foreign_project'
   | 'foreign_repository'
   | 'no_open_pr'

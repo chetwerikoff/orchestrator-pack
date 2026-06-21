@@ -59,6 +59,14 @@ if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorksp
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
     exit 1
 }
+$admissionLib = Join-Path $Root 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1'
+$admissionLibText = Get-Content -LiteralPath $admissionLib -Raw
+$mechanicalLoader = 'Get-Mechanical' + 'JsonStateFile'
+if ($admissionLibText -notmatch [regex]::Escape($mechanicalLoader)) {
+    Write-Host 'Record-ReviewHandoffWakeAdmission.ps1 must load admission state via mechanical JSON state helper'
+    exit 1
+}
+
 if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Test-ReviewWakeTriggerForbiddenCommand') {
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must block merge commands in the wake trigger guard'
     exit 1

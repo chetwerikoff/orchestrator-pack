@@ -118,7 +118,15 @@ export function evaluateHandoffIdentityAdmission(input) {
   }
 
   const supervisedProject = nonEmptyString(input.supervisedProjectId);
-  if (supervisedProject && subject.projectId && supervisedProject !== subject.projectId) {
+  if (supervisedProject && !nonEmptyString(subject.projectId)) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'missing_project_identity',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'missing_project_identity' },
+    };
+  }
+  if (supervisedProject && supervisedProject !== subject.projectId) {
     return {
       admitted: false,
       outcome: 'filter_reject',
@@ -129,6 +137,14 @@ export function evaluateHandoffIdentityAdmission(input) {
 
   const supervisedRepo = nonEmptyString(input.supervisedRepoSlug)?.toLowerCase();
   const notificationRepo = normalizeRepoSlugFromPrUrl(subject.prUrl);
+  if (supervisedRepo && !notificationRepo) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'missing_repository_identity',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'missing_repository_identity' },
+    };
+  }
   if (supervisedRepo && notificationRepo && supervisedRepo !== notificationRepo) {
     return {
       admitted: false,

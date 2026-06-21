@@ -88,6 +88,21 @@ function Get-ReviewWakeTriggerMergeEval {
     }
 }
 
+
+function Get-ReviewWakeReconcileStatePath {
+    if ($env:AO_REVIEW_TRIGGER_RECONCILE_STATE) { return $env:AO_REVIEW_TRIGGER_RECONCILE_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-reconcile-state.json'
+}
+
+function Get-ReviewWakeCycleStateFromReconcile {
+    $defaults = @{ lastTickMs = $null; degradedCi = @{}; cycleState = @{} }
+    $state = Get-MechanicalJsonStateFile -Path (Get-ReviewWakeReconcileStatePath) -DefaultState $defaults -ActionTracking
+    if ($state.cycleState) {
+        return Copy-MechanicalJsonMap -Map $state.cycleState
+    }
+    return @{}
+}
+
 function Get-ReviewWakeTriggerSnapshot {
     param(
         [int]$PrNumber,
@@ -112,6 +127,7 @@ function Get-ReviewWakeTriggerSnapshot {
     } -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as degraded'
 
     $prKey = [string]$PrNumber
+    $cycleState = Get-ReviewWakeCycleStateFromReconcile
     return @{
         openPrs                       = @($openPrs)
         reviewRuns                    = @($reviewRuns)
@@ -120,6 +136,8 @@ function Get-ReviewWakeTriggerSnapshot {
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
         prKey                         = $prKey
+        cycleState                    = $cycleState
+        repoRoot                      = $RepoRoot
     }
 }
 
@@ -184,8 +202,8 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
     if ($isHandoffWake) {
         $evaluatePayload.admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
-        if ($snapshot.cycleState) { $evaluatePayload.cycleState = $snapshot.cycleState }
-        if ($snapshot.repoRoot) { $evaluatePayload.repoRoot = $snapshot.repoRoot }
+        $evaluatePayload.cycleState = if ($snapshot.cycleState) { $snapshot.cycleState } else { @{} }
+        $evaluatePayload.repoRoot = [string]$snapshot.repoRoot
     }
     $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload $evaluatePayload
 
@@ -332,19 +350,40 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
         }
         $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        $plannedStartReason = if ($planned.startReason) {
+            [string]$planned.startReason
+        }
+        elseif ($isHandoffWake) {
+            'handoff_wake'
+        }
+        else {
+            'completion_wake'
+        }
+        $plannedAdmittedBase = if ($planned.admittedBaseRef) {
+            [string]$planned.admittedBaseRef
+        }
+        elseif ($isHandoffWake -and $FilterResult.handoffAdmission) {
+            [string]$FilterResult.handoffAdmission.admittedBaseRef
+        }
+        else {
+            ''
+        }
         $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
-            planned = @{
-                prNumber  = $planned.prNumber
-                headSha   = $planned.headSha
-                sessionId = $planned.sessionId
+            wakeKind = [string]$FilterResult.wakeKind
+            planned  = @{
+                prNumber        = $planned.prNumber
+                headSha         = $planned.headSha
+                sessionId       = $planned.sessionId
+                startReason     = $plannedStartReason
+                admittedBaseRef = $plannedAdmittedBase
             }
-            fresh   = @{
-                openPrs                     = @($fresh.openPrs)
-                reviewRuns                  = @($fresh.reviewRuns)
-                sessions                    = @($fresh.sessions)
-                ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
-                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
-                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+            fresh    = @{
+                openPrs                   = @($fresh.openPrs)
+                reviewRuns                = @($fresh.reviewRuns)
+                sessions                  = @($fresh.sessions)
+                ciChecks                  = @($fresh.ciChecksByPr[$freshPrKey])
+                requiredCheckNames        = @($fresh.requiredCheckNamesByPr[$freshPrKey])
+                requiredCheckLookupFailed = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
             }
         }
     }
