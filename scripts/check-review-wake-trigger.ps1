@@ -59,6 +59,10 @@ if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorksp
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must compose Invoke-ReviewerWorkspacePreflight.ps1'
     exit 1
 }
+if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'handoff receipt bound exceeded before review run') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must enforce handoff receipt bound immediately before ao review run'
+    exit 1
+}
 if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight -RepoRoot') {
     Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
     exit 1

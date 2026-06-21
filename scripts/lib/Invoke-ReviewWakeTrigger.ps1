@@ -465,25 +465,44 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     })
             }
         }
+        $handoffReceiptAbort = $false
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-            try {
-                Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+            if ($isHandoffWake) {
+                $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
+                if (-not $preInvokeReceiptBound.withinBound) {
+                    & $LogWriter "review-wake-trigger: handoff receipt bound exceeded before review run PR #$($planned.prNumber) ($($preInvokeReceiptBound.receiptToRunMs)ms)"
+                    Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = 'handoff_receipt_bound_exceeded' } | Out-Null
+                    $handoffReceiptAbort = $true
+                }
             }
-            catch {
-                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
-                throw
-            }
-            & ao @runArgs
-            if ($LASTEXITCODE -ne 0) {
-                $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
-                $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
-                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
-                throw $failure
+            if (-not $handoffReceiptAbort) {
+                try {
+                    Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
+                }
+                catch {
+                    Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
+                    throw
+                }
+                & ao @runArgs
+                if ($LASTEXITCODE -ne 0) {
+                    $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+                    $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
+                    Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+                    throw $failure
+                }
             }
         }
         finally {
             Exit-ReviewWakeTriggerSideEffectFence -LockPath $lockPath
+        }
+        if ($handoffReceiptAbort) {
+            return @{
+                triggered = $false
+                reason    = 'handoff_receipt_bound_exceeded'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+            }
         }
     }
 
@@ -512,21 +531,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
-        }
-    }
-
-    if ($isHandoffWake) {
-        $startedRun = @($postRuns) | Where-Object {
-            [int]$_.prNumber -eq [int]$planned.prNumber -and
-            [string]$_.targetSha -eq [string]$planned.headSha
-        } | Select-Object -First 1
-        $runCreatedAtMs = Get-ReviewRunCreatedAtMs -Run $startedRun
-        if (-not $runCreatedAtMs) {
-            $runCreatedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
-        $receiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $runCreatedAtMs
-        if (-not $receiptBound.withinBound) {
-            throw "review-wake-trigger exceeded handoff receipt-to-run bound ($($receiptBound.receiptToRunMs)ms)"
         }
     }
 

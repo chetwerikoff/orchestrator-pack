@@ -302,6 +302,49 @@ function Test-ReviewHandoffTriggerDurable {
     return $false
 }
 
+function Test-ReviewHandoffReceiptWindowExpired {
+    param([long]$WakeReceivedMs)
+
+    if ($WakeReceivedMs -le 0) { return $false }
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $bound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $WakeReceivedMs -RunCreatedAtMs $nowMs
+    return -not $bound.withinBound
+}
+
+function Get-ReviewHandoffTriggerFailureReason {
+    param([object]$TriggerOutcome)
+
+    if ($null -eq $TriggerOutcome) { return '' }
+    if ($TriggerOutcome -is [hashtable]) {
+        if ($TriggerOutcome.triggerResult -and $TriggerOutcome.triggerResult.reason) {
+            return [string]$TriggerOutcome.triggerResult.reason
+        }
+        if ($TriggerOutcome.reason) {
+            return [string]$TriggerOutcome.reason
+        }
+    }
+    return ''
+}
+
+function Test-ReviewHandoffPendingRetryRetained {
+    param(
+        [object]$TriggerOutcome,
+        [long]$ReceivedAtMs
+    )
+
+    if (Test-ReviewHandoffTriggerDurable -TriggerOutcome $TriggerOutcome) {
+        return $false
+    }
+    if (Test-ReviewHandoffReceiptWindowExpired -WakeReceivedMs $ReceivedAtMs) {
+        return $false
+    }
+    $reason = Get-ReviewHandoffTriggerFailureReason -TriggerOutcome $TriggerOutcome
+    if ($reason -eq 'handoff_receipt_bound_exceeded') {
+        return $false
+    }
+    return $true
+}
+
 function Get-ReviewRunCreatedAtMs {
     param([object]$Run)
 
@@ -373,12 +416,23 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
 
         if ($filterResult.wakeKind -eq 'ready_for_review') {
             $receivedAtMs = if ($retry.receivedAtMs) { [long]$retry.receivedAtMs } else { $ListenerReadyMs }
+            if (Test-ReviewHandoffReceiptWindowExpired -WakeReceivedMs $receivedAtMs) {
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey dropped (handoff_receipt_bound_exceeded)"
+                Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
+                continue
+            }
             $triggerOutcome = & $InvokeTrigger $filterResult $receivedAtMs
             if (Test-ReviewHandoffTriggerDurable -TriggerOutcome $triggerOutcome) {
                 Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
             }
-            else {
+            elseif (Test-ReviewHandoffPendingRetryRetained -TriggerOutcome $triggerOutcome -ReceivedAtMs $receivedAtMs) {
                 & $LogWriter "review-handoff-wake: pending retry key=$retryKey retained until durable trigger"
+            }
+            else {
+                $failureReason = Get-ReviewHandoffTriggerFailureReason -TriggerOutcome $triggerOutcome
+                if (-not $failureReason) { $failureReason = 'trigger_not_durable' }
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey dropped ($failureReason)"
+                Clear-ReviewHandoffWakePendingRetry -StateRoot $StateRoot -Key $retryKey -DryRun:$DryRun | Out-Null
             }
         }
         else {
