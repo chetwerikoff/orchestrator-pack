@@ -5,10 +5,15 @@ import type { AoSession, OpenPr, ReviewRun } from './review-trigger-reconcile.d.
 
 export type { AoSession, OpenPr, ReviewRun };
 
+export declare const HANDOFF_REVIEW_TRIGGER_WAKE_KINDS: ReadonlySet<string>;
+export declare const EVENT_REVIEW_TRIGGER_WAKE_KINDS: ReadonlySet<string>;
+
 export interface WakeReviewTriggerPlanned {
   prNumber: number;
   headSha: string;
   sessionId: string;
+  startReason?: string;
+  admittedBaseRef?: string;
 }
 
 export interface WakeReviewTriggerResult {
@@ -19,6 +24,10 @@ export interface WakeReviewTriggerResult {
   terminationReason?: string;
   processingMs: number;
   withinLatencyBound: boolean;
+  withinReceiptBound?: boolean;
+  wakeKind?: string;
+  auditLine?: string;
+  cycleBlocked?: boolean;
 }
 
 export interface MergeIntentAfterReviewResult {
@@ -29,6 +38,8 @@ export interface MergeIntentAfterReviewResult {
 }
 
 export declare function isCompletionMergeIntentWake(wakeKind: string | null | undefined): boolean;
+export declare function isHandoffReviewTriggerWake(wakeKind: string | null | undefined): boolean;
+export declare function isEventReviewTriggerWake(wakeKind: string | null | undefined): boolean;
 
 export declare function findFailedOrCancelledRunOnHead(
   reviewRuns: ReviewRun[],
@@ -48,6 +59,10 @@ export declare function evaluateWakeReviewTrigger(input: {
   ciChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }>;
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
+  admittedBaseRef?: string;
+  cycleState?: Record<string, unknown>;
+  repoRoot?: string;
+  receiptToRunBoundMs?: number;
 }): WakeReviewTriggerResult;
 
 export declare function evaluateMergeIntentAfterReviewTrigger(input: {
@@ -65,10 +80,12 @@ export declare function amendMergeWakeMessage(
 export declare function evaluateWakePreRunRecheck(input: {
   planned: WakeReviewTriggerPlanned;
   fresh: Record<string, unknown>;
+  wakeKind?: string;
 }): {
   emitReviewRun: boolean;
   reason: string;
   decision?: Record<string, unknown>;
+  auditLine?: string;
 };
 
 export declare function findForbiddenReviewWakeCommands(

@@ -21,6 +21,7 @@ import {
   WAKE_TO_RUN_DECISION_MAX_MS,
 } from '../docs/review-wake-trigger.mjs';
 import { seedWatchFromWakeDefer } from '../docs/review-trigger-reeval.mjs';
+import type { OpenPr } from '../docs/review-trigger-reconcile.d.mts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,7 +37,7 @@ type HandoffFixture = {
   sessionId?: string;
   prNumber?: number;
   admittedBaseRef?: string;
-  openPrs?: Array<Record<string, unknown>>;
+  openPrs?: OpenPr[];
   reviewRuns?: Array<Record<string, unknown>>;
   sessions?: Array<Record<string, unknown>>;
   ciChecksByPr?: Record<string, Array<{ name: string; state: string }>>;
@@ -226,9 +227,10 @@ describe('handoff review trigger path', () => {
     expect(result.reason).toBe('ci_red_defer');
 
     const pr = fixture.openPrs?.[0];
+    expect(pr).toBeDefined();
     const seed = seedWatchFromWakeDefer({
       prNumber: Number(fixture.prNumber),
-      headSha: String(pr.headRefOid),
+      headSha: String(pr!.headRefOid),
       sessionId: String(fixture.sessionId),
       deferReason: 'uncovered_not_ready',
       deferRecord: { primary: 'no_ready_for_review' },
@@ -299,7 +301,7 @@ describe('handoff review trigger path', () => {
       records: seed.records,
       listenerReadyMs,
       nowMs: listenerReadyMs + 2_000,
-    });
+    }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
     expect(replay.replay).toHaveLength(1);
     expect(replay.replay[0]?.withinRecoveryBound).toBe(true);
   });
@@ -350,11 +352,12 @@ describe('wake trigger integration', () => {
   it('handoff pre-run recheck composes head-ready + TOCTOU guards', () => {
     const fixture = loadFixture('green-info-handoff-triggers.json');
     const pr = fixture.openPrs?.[0];
+    expect(pr).toBeDefined();
     const recheck = evaluateWakePreRunRecheck({
       wakeKind: HANDOFF_WAKE_KIND,
       planned: {
         prNumber: Number(fixture.prNumber),
-        headSha: String(pr.headRefOid),
+        headSha: String(pr!.headRefOid),
         sessionId: String(fixture.sessionId),
         admittedBaseRef: 'main',
         startReason: 'handoff_wake',

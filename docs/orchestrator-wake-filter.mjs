@@ -59,15 +59,15 @@ const SEMANTIC_TYPE_TO_WAKE_KIND = {
   ready_for_review: 'ready_for_review',
 };
 
-function isRecord(value) {
+export function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function nonEmptyString(value) {
+export function nonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function getNotificationData(event) {
+export function getNotificationData(event) {
   const data = event.data;
   if (!isRecord(data)) return null;
   if (data.schemaVersion === 3 && isRecord(data.subject)) return data;

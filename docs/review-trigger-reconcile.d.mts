@@ -40,6 +40,8 @@ export interface OpenPr {
   headCommittedAt?: string | number;
   headCommitCommittedAt?: string | number;
   head_commit_committed_at?: string | number;
+  baseRefName?: string;
+  baseRef?: string;
 }
 
 export interface ReviewRun {

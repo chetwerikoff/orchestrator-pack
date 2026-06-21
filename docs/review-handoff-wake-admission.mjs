@@ -7,6 +7,11 @@ import path from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
 import { normalizeSha, toArray } from './review-trigger-reconcile.mjs';
+import {
+  getNotificationData,
+  isRecord,
+  nonEmptyString,
+} from './orchestrator-wake-filter.mjs';
 
 export const HANDOFF_WAKE_KIND = 'ready_for_review';
 export const HANDOFF_RECEIPT_TO_RUN_MAX_MS = 30_000;
@@ -15,22 +20,6 @@ export const HANDOFF_LISTENER_RECOVERY_MAX_MS = 30_000;
 export const HANDOFF_AUDIT_PREFIX = 'review-handoff-wake';
 
 const NOTIFICATION_ENVELOPE_TYPES = new Set(['notification', 'notification_with_actions']);
-
-function isRecord(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function getNotificationData(event) {
-  const data = event?.data;
-  if (!isRecord(data)) return null;
-  if (data.schemaVersion === 3 && isRecord(data.subject)) return data;
-  return data;
-}
-
 /**
  * @param {unknown} body
  * @param {Record<string, unknown>} [event]
