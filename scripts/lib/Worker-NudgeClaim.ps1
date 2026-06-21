@@ -726,6 +726,23 @@ function Write-WorkerPrOwnershipClaimRecord {
     ($Record | ConvertTo-Json -Compress -Depth 8) | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+
+function Test-WorkerNudgeSessionPrFieldMatches {
+    param(
+        [string]$PrField,
+        [int]$PrNumber
+    )
+
+    $field = [string]$PrField
+    if (-not $field -or $PrNumber -le 0) {
+        return $false
+    }
+    if ($field -match 'pull/(\d+)') {
+        return ([int]$Matches[1] -eq $PrNumber)
+    }
+    return ($field -eq [string]$PrNumber)
+}
+
 function Resolve-WorkerNudgeTargetFromPrClaim {
     param(
         [int]$PrNumber,
@@ -760,7 +777,7 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
         foreach ($session in $Sessions) {
             $name = [string]$session.name
             $prField = [string]$session.pr
-            if ($name -and $prField -match "(?:pull\/|$PrNumber(?:[^0-9]|$))") {
+            if ($name -and (Test-WorkerNudgeSessionPrFieldMatches -PrField $prField -PrNumber $PrNumber)) {
                 $ownerSessionId = $name
                 break
             }
@@ -809,7 +826,10 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
 }
 
 function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
-    param([string]$ClaimToken)
+    param(
+        [string]$ClaimToken,
+        [string]$SendSessionId = ''
+    )
 
     $token = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $ClaimToken
     if (-not $token) {
@@ -827,6 +847,15 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
     $read = Read-WorkerNudgeClaimRecord -Path $path
     if (-not $read.ok) {
         return @{ ok = $false; reason = 'claim_missing' }
+    }
+    if ($SendSessionId) {
+        $expectedSessionId = [string]$token.sessionId
+        if (-not $expectedSessionId) {
+            $expectedSessionId = [string]$read.record.sessionId
+        }
+        if ($expectedSessionId -and $expectedSessionId -ne [string]$SendSessionId) {
+            return @{ ok = $false; reason = 'token_send_session_mismatch' }
+        }
     }
     $lockDir = Get-WorkerNudgeClaimLockDir -Namespace ([string]$token.namespace) `
         -PrNumber ([int]$token.prNumber) -CycleKey ([string]$token.cycleKey) `
@@ -847,6 +876,15 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
         }
         if ([string]$read.record.tokenNonce -and [string]$token.claimId -and [string]$read.record.tokenNonce -ne [string]$token.claimId) {
             return @{ ok = $false; reason = 'token_claim_mismatch' }
+        }
+        if ($SendSessionId) {
+            $expectedSessionId = [string]$read.record.sessionId
+            if (-not $expectedSessionId) {
+                $expectedSessionId = [string]$token.sessionId
+            }
+            if ($expectedSessionId -and $expectedSessionId -ne [string]$SendSessionId) {
+                return @{ ok = $false; reason = 'token_send_session_mismatch' }
+            }
         }
         if ([string]$read.record.phase -ne 'CLAIMED') {
             $reason = if ([string]$read.record.phase -eq 'SEND_ATTEMPTED') { 'token_replayed' } else { 'token_phase_invalid' }

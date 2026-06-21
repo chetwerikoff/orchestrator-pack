@@ -222,7 +222,7 @@ if (-not $AdoptionProbe -and -not $DryRun) {
         exit 46
     }
     if ($ClaimToken) {
-        $tokenConsume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $ClaimToken
+        $tokenConsume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $ClaimToken -SendSessionId $SessionId
         if (-not $tokenConsume.ok) {
             Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenConsume.reason)"
             exit 46

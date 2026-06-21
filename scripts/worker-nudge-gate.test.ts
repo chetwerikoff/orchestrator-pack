@@ -393,8 +393,8 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         $token = New-WorkerNudgeClaimToken -ClaimResult $claim
-        $first = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token
-        $second = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token
+        $first = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-1'
+        $second = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-1'
         [pscustomobject]@{
           firstOk = [bool]$first.ok
           secondOk = [bool]$second.ok
@@ -408,6 +408,44 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('rejects claim token when send session does not match token session', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+        $wrong = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-wrong'
+        [pscustomobject]@{
+          ok = [bool]$wrong.ok
+          reason = [string]$wrong.reason
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('token_send_session_mismatch');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('matches PR ownership fallback only when session pr URL equals requested PR', () => {
+    const script = `
+      . ${psString(helperPath)}
+      [pscustomobject]@{
+        matchRequested = Test-WorkerNudgeSessionPrFieldMatches -PrField 'https://github.com/org/repo/pull/385' -PrNumber 385
+        rejectOtherPr = Test-WorkerNudgeSessionPrFieldMatches -PrField 'https://github.com/org/repo/pull/999' -PrNumber 385
+        matchBare = Test-WorkerNudgeSessionPrFieldMatches -PrField '385' -PrNumber 385
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.matchRequested).toBe(true);
+    expect(result.rejectOtherPr).toBe(false);
+    expect(result.matchBare).toBe(true);
   });
 
   it('recovers CLAIMED records immediately after lease expiry', () => {
