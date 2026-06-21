@@ -36,7 +36,22 @@ export type WakeFilterRejectReason =
   | 'not_notification'
   | 'missing_session_id'
   | 'info_priority'
-  | 'not_wake_relevant';
+  | 'not_wake_relevant'
+  | 'missing_project_identity'
+  | 'missing_repository_identity'
+  | 'foreign_project'
+  | 'foreign_repository'
+  | 'no_open_pr'
+  | 'envelope_mismatch'
+  | 'admission_lookup_unknown';
+
+export interface HandoffWakeAdmissionMeta {
+  promotedFromInfoPriority?: boolean;
+  admittedBaseRef?: string;
+  admittedHeadSha?: string;
+  audit?: Record<string, unknown>;
+  auditLine?: string;
+}
 
 export interface WakeFilterAccept {
   ok: true;
@@ -48,12 +63,16 @@ export interface WakeFilterAccept {
   runId?: string;
   wakeMessage: string;
   dedupeKey: string;
+  handoffAdmission?: HandoffWakeAdmissionMeta;
 }
 
 export interface WakeFilterReject {
   ok: false;
-  reason: WakeFilterRejectReason;
+  reason: WakeFilterRejectReason | string;
   detail?: string;
+  retryable?: boolean;
+  audit?: Record<string, unknown>;
+  auditLine?: string;
 }
 
 export type WakeFilterResult = WakeFilterAccept | WakeFilterReject;
@@ -134,7 +153,22 @@ export declare function evaluateHeartbeatTick(args: {
   dedupWindowMs?: number;
 }): HeartbeatTickResult;
 
-export declare function evaluateWakePayload(body: unknown): WakeFilterResult;
+export interface WakeFilterAdmissionContext {
+  supervisedProjectId?: string;
+  supervisedRepoSlug?: string;
+  supervisedSessions?: import('./review-trigger-reconcile.d.mts').AoSession[];
+  sessionLookupFailed?: boolean;
+  supervisedRepoLookupFailed?: boolean;
+  openPrs?: import('./review-trigger-reconcile.d.mts').OpenPr[];
+  openPrLookupFailed?: boolean;
+}
+
+export declare function probeReadyForReviewHandoffEnvelope(body: unknown): { handoffEnvelope: boolean };
+
+export declare function evaluateWakePayload(
+  body: unknown,
+  admissionContext?: WakeFilterAdmissionContext,
+): WakeFilterResult;
 
 export declare function parseWebhookJson(raw: string): unknown;
 

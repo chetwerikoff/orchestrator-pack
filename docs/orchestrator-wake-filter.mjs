@@ -5,6 +5,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  evaluateHandoffIdentityAdmission,
+  formatHandoffWakeAuditLine,
+  isReadyForReviewHandoffEnvelope,
+} from './review-handoff-wake-admission.mjs';
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
 /** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
@@ -54,15 +59,15 @@ const SEMANTIC_TYPE_TO_WAKE_KIND = {
   ready_for_review: 'ready_for_review',
 };
 
-function isRecord(value) {
+export function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function nonEmptyString(value) {
+export function nonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function getNotificationData(event) {
+export function getNotificationData(event) {
   const data = event.data;
   if (!isRecord(data)) return null;
   if (data.schemaVersion === 3 && isRecord(data.subject)) return data;
@@ -218,7 +223,33 @@ export function evaluateHeartbeatTick({
   };
 }
 
-export function evaluateWakePayload(body) {
+/**
+ * @param {unknown} body
+ * @param {object} [admissionContext]
+ * @param {string} [admissionContext.supervisedProjectId]
+ * @param {string} [admissionContext.supervisedRepoSlug]
+ * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [admissionContext.supervisedSessions]
+ * @param {boolean} [admissionContext.sessionLookupFailed]
+ * @param {boolean} [admissionContext.supervisedRepoLookupFailed]
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [admissionContext.openPrs]
+ * @param {boolean} [admissionContext.openPrLookupFailed]
+ */
+/**
+ * Cheap envelope probe for listener admission lookup gating (no gh/ao I/O).
+ * @param {unknown} body
+ */
+export function probeReadyForReviewHandoffEnvelope(body) {
+  if (!isRecord(body)) {
+    return { handoffEnvelope: false };
+  }
+  const event = body.event;
+  if (!isRecord(event)) {
+    return { handoffEnvelope: false };
+  }
+  return { handoffEnvelope: isReadyForReviewHandoffEnvelope(body, event) };
+}
+
+export function evaluateWakePayload(body, admissionContext = {}) {
   if (!isRecord(body)) {
     return { ok: false, reason: 'malformed_payload', detail: 'body is not an object' };
   }
@@ -242,12 +273,43 @@ export function evaluateWakePayload(body) {
     return { ok: false, reason: 'missing_session_id' };
   }
 
+  const handoffEnvelope = isReadyForReviewHandoffEnvelope(body, event);
   const priority = nonEmptyString(event.priority);
-  if (priority === 'info' || priority === 'warning') {
+  let handoffAdmission = null;
+  if (handoffEnvelope) {
+    handoffAdmission = evaluateHandoffIdentityAdmission({
+      event,
+      supervisedProjectId: admissionContext.supervisedProjectId,
+      supervisedRepoSlug: admissionContext.supervisedRepoSlug,
+      supervisedSessions: admissionContext.supervisedSessions,
+      sessionLookupFailed: admissionContext.sessionLookupFailed,
+      supervisedRepoLookupFailed: admissionContext.supervisedRepoLookupFailed,
+      openPrs: admissionContext.openPrs,
+      openPrLookupFailed: admissionContext.openPrLookupFailed,
+    });
+    if (!handoffAdmission.admitted) {
+      const auditLine = formatHandoffWakeAuditLine(handoffAdmission.audit);
+      if (handoffAdmission.outcome === 'unknown') {
+        return {
+          ok: false,
+          reason: 'admission_lookup_unknown',
+          retryable: true,
+          audit: handoffAdmission.audit,
+          auditLine,
+        };
+      }
+      return {
+        ok: false,
+        reason: handoffAdmission.reason,
+        audit: handoffAdmission.audit,
+        auditLine,
+      };
+    }
+  } else if (priority === 'info' || priority === 'warning') {
     return { ok: false, reason: 'info_priority', detail: priority };
   }
 
-  const wakeKind = resolveWakeKind(event);
+  const wakeKind = handoffEnvelope ? 'ready_for_review' : resolveWakeKind(event);
   if (!wakeKind) {
     return { ok: false, reason: 'not_wake_relevant' };
   }
@@ -266,7 +328,7 @@ export function evaluateWakePayload(body) {
 
   const dedupeKey = [wakeKind, sessionId, String(prNumber ?? ''), runId ?? ''].join('|');
 
-  return {
+  const result = {
     ok: true,
     wakeKind,
     sessionId,
@@ -277,6 +339,16 @@ export function evaluateWakePayload(body) {
     wakeMessage,
     dedupeKey,
   };
+  if (handoffAdmission?.admitted) {
+    result.handoffAdmission = {
+      promotedFromInfoPriority: priority === 'info' || priority === 'warning',
+      admittedBaseRef: handoffAdmission.admittedBaseRef,
+      admittedHeadSha: handoffAdmission.admittedHeadSha,
+      audit: handoffAdmission.audit,
+      auditLine: formatHandoffWakeAuditLine(handoffAdmission.audit),
+    };
+  }
+  return result;
 }
 
 export function parseWebhookJson(raw) {
@@ -513,6 +585,29 @@ async function main() {
     return;
   }
 
+  if (command === 'probe-handoff') {
+    const jsonFlag = args.indexOf('--json');
+    let raw;
+    if (jsonFlag >= 0 && args[jsonFlag + 1]) {
+      raw = args[jsonFlag + 1];
+    } else {
+      raw = await readStdin();
+    }
+    let body;
+    try {
+      body = parseWebhookJson(raw);
+      if (!isRecord(body)) {
+        throw new Error('body is not an object');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stdout.write(`${JSON.stringify({ handoffEnvelope: false, malformed: true, detail: message })}\n`);
+      return;
+    }
+    process.stdout.write(`${JSON.stringify(probeReadyForReviewHandoffEnvelope(body))}\n`);
+    return;
+  }
+
   if (command === 'evaluate') {
     const jsonFlag = args.indexOf('--json');
     let raw;
@@ -530,7 +625,26 @@ async function main() {
       process.exit(0);
       return;
     }
-    const result = evaluateWakePayload(parsed);
+    const admissionContext = isRecord(parsed.admissionContext) ? parsed.admissionContext : {};
+    let body;
+    if (typeof parsed.bodyJson === 'string') {
+      try {
+        body = parseWebhookJson(parsed.bodyJson);
+        if (!isRecord(body)) {
+          process.stdout.write(
+            `${JSON.stringify({ ok: false, reason: 'malformed_payload', detail: 'body is not an object' })}\n`,
+          );
+          return;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stdout.write(`${JSON.stringify({ ok: false, reason: 'malformed_payload', detail: message })}\n`);
+        return;
+      }
+    } else {
+      body = parsed.body ?? parsed;
+    }
+    const result = evaluateWakePayload(body, admissionContext);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }

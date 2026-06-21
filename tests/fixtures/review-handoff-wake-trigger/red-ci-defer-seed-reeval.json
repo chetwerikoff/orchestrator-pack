@@ -1,0 +1,50 @@
+{
+  "description": "Red CI hand-off defers and seeds reeval watch eligibility",
+  "wakeKind": "ready_for_review",
+  "sessionId": "opk-27",
+  "prNumber": 234,
+  "openPrs": [
+    {
+      "number": 234,
+      "headRefOid": "redhand234",
+      "headCommittedAt": "2026-06-05T14:16:00.000Z",
+      "baseRefName": "main"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-27",
+      "role": "worker",
+      "prNumber": 234,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T14:17:58.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "234": [
+      { "name": "Verify orchestrator-pack structure", "state": "FAILURE" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "requiredCheckNamesByPr": {
+    "234": [
+      "Verify orchestrator-pack structure",
+      "PR scope guard",
+      "Run pack contract tests",
+      "Self-architect lint"
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "reason": "ci_red_defer",
+    "seedReeval": true
+  }
+}

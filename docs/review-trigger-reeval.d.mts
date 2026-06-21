@@ -53,6 +53,11 @@ export declare function isDeferredNotReadySeedEligible(
   deferRecord?: { primary?: string; failedComponents?: string[]; branch?: string } | null,
 ): boolean;
 
+export declare function isDeferredReevalWatchSeedEligible(
+  deferReason: string | null | undefined,
+  deferRecord?: { primary?: string; failedComponents?: string[]; branch?: string } | null,
+): boolean;
+
 export declare function createWatchEntry(input: {
   prNumber: number;
   headSha: string;

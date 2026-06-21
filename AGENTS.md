@@ -60,6 +60,7 @@ Do not port Windows PowerShell wrapper internals, `.ai-loop/` layout as a requir
 - `plugins/**`
 - `prompts/**`
 - `scripts/**`
+- `tests/external-output-references/**`
 - `docs/**`
 - `.claude/skills/**`
 - `.cursor/skills/**`
