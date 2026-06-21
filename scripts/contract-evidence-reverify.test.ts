@@ -26,24 +26,18 @@ function loadIssue(name: string): string {
   return readFileSync(path.join(fixtureRoot, 'issues', name), 'utf8');
 }
 
-function isPrHeadFullSandboxAvailable(): boolean {
-  if (process.platform !== 'linux') {
-    return false;
-  }
-  const probe = spawnSync('bwrap', ['--version'], {
-    encoding: 'utf8',
-    shell: false,
-  });
-  return probe.status === 0;
+function canRunPrHeadSandboxProofs(): boolean {
+  // Linux hosts run pr-head proofs via bwrap when available, otherwise the hardened direct fallback.
+  return process.platform === 'linux';
 }
 
-const prHeadFullSandboxAvailable = isPrHeadFullSandboxAvailable();
+const prHeadSandboxProofsAvailable = canRunPrHeadSandboxProofs();
 
 function expectNewRowWhenFullSandboxAvailable(
   row: ReverifyRowResult,
   whenAvailable: Partial<ReverifyRowResult>,
 ) {
-  if (!prHeadFullSandboxAvailable) {
+  if (!prHeadSandboxProofsAvailable) {
     expect(row).toMatchObject({
       status: 'unverified',
       reason: 'producer-unreachable',
@@ -92,7 +86,7 @@ function createArchiveTrustedRootFixture(): string {
 describe('contract-evidence reverify (Issue #376)', () => {
 
   it('archive trusted root without .git gets live capture verification when sandbox available', () => {
-    if (!prHeadFullSandboxAvailable) {
+    if (!prHeadSandboxProofsAvailable) {
       return;
     }
     const archiveTrustedRoot = createArchiveTrustedRootFixture();
