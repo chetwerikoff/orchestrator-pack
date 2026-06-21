@@ -41,6 +41,8 @@ type StopAuditResult = {
     flaggedReadLines: number;
     indexServedExcludedLines?: number;
     advisoryUnits?: number;
+    advisorySatisfiedUnits?: number;
+    advisoryExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
@@ -90,6 +92,8 @@ type FixturePayload = {
   expectSummary?: {
     delegableTriggerUnits: number;
     flaggedUnits: number;
+    advisoryUnits?: number;
+    advisoryExcludedLines?: number;
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
