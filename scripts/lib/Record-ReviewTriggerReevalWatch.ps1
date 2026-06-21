@@ -106,8 +106,8 @@ function Record-ReviewTriggerReevalWatchFromWakeDefer {
         return @{ recorded = $false; reason = 'missing_state_root' }
     }
 
-    if ($DeferReason -ne 'uncovered_not_ready') {
-        return @{ recorded = $false; reason = 'not_uncovered_not_ready' }
+    if ($DeferReason -notin @('uncovered_not_ready', 'ci_red_defer')) {
+        return @{ recorded = $false; reason = 'not_deferred_reeval_seed' }
     }
 
     $path = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
