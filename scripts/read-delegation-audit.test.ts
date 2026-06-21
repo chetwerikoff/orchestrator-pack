@@ -1610,6 +1610,24 @@ describe('Cursor-seat advisory carve-out (Issue #359)', () => {
     expect(verdict.shellReadAround).toBe(true);
   });
 
+  it('cursor-advisory-unrelated-shell.json ignores unrelated shell commands', () => {
+    const result = evaluateFixture('cursor-advisory-unrelated-shell.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED);
+    expect(verdict.shellReadAround).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(1);
+  });
+
+  it('cursor-advisory-mixed-mandatory-diff.json counts advisory reads in mandatory units', () => {
+    const result = evaluateFixture('cursor-advisory-mixed-mandatory-diff.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisory).toBe(true);
+    expect(verdict.inDenominator).toBe(true);
+    expect(verdict.flagged).toBe(true);
+    expect(result.summary.advisoryUnits).toBe(1);
+    expect(result.summary.advisoryExcludedLines).toBe(450);
+  });
+
   it('out-of-index-diff-flagged.json stays mandatory on Cursor (not advisory)', () => {
     const result = evaluateFixture('out-of-index-diff-flagged.json', 'cursor');
     const verdict = firstVerdict(result);

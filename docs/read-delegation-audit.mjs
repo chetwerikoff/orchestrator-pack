@@ -416,11 +416,69 @@ export function isShellReadAroundCommand(command) {
 }
 
 /**
- * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {string | undefined} filePath
  */
-export function hasShellReadAround(unit) {
+function normalizePathForShellMatch(filePath) {
+  return String(filePath ?? '').replace(/\\/g, '/').trim();
+}
+
+/**
+ * @param {string} command
+ * @param {string | undefined} filePath
+ */
+function commandReferencesPath(command, filePath) {
+  const normalizedPath = normalizePathForShellMatch(filePath);
+  if (!normalizedPath) {
+    return false;
+  }
+  const commandText = String(command ?? '');
+  if (commandText.includes(normalizedPath)) {
+    return true;
+  }
+  const baseName = normalizedPath.split('/').pop();
+  return Boolean(baseName && baseName.length > 1 && commandText.includes(baseName));
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+function advisoryRawReads(unit, advisoryReads) {
+  const rawReads = Array.isArray(unit.reads) ? unit.reads : [];
+  const advisoryPaths = new Set(
+    advisoryReads
+      .map((read) => normalizePathForShellMatch(read.path))
+      .filter((filePath) => filePath),
+  );
+  if (advisoryPaths.size === 0) {
+    return [];
+  }
+  return rawReads.filter((read) => advisoryPaths.has(normalizePathForShellMatch(read.path)));
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+export function hasShellReadAround(unit, advisoryReads) {
+  const reads = Array.isArray(advisoryReads) ? advisoryReads : [];
+  if (reads.length === 0) {
+    return false;
+  }
+  const advisoryPaths = reads
+    .map((read) => read.path)
+    .filter((filePath) => typeof filePath === 'string' && filePath.trim());
+  if (advisoryPaths.length === 0) {
+    return false;
+  }
   const commands = Array.isArray(unit.shellCommands) ? unit.shellCommands : [];
-  return commands.some((command) => isShellReadAroundCommand(String(command ?? '')));
+  return commands.some((command) => {
+    const text = String(command ?? '');
+    if (!isShellReadAroundCommand(text)) {
+      return false;
+    }
+    return advisoryPaths.some((filePath) => commandReferencesPath(text, filePath));
+  });
 }
 
 /**
@@ -432,10 +490,10 @@ export function hasTargetedRead(reads) {
 
 /**
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
- * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
  */
-export function resolveCursorAdvisoryOutcome(unit, reads) {
-  const shellReadAround = hasShellReadAround(unit);
+export function resolveCursorAdvisoryOutcome(unit, advisoryReads) {
+  const shellReadAround = hasShellReadAround(unit, advisoryReads);
   if (shellReadAround) {
     return {
       advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
@@ -444,13 +502,30 @@ export function resolveCursorAdvisoryOutcome(unit, reads) {
     };
   }
   const advisorySatisfied =
-    hasMachineObservedDelegation(unit) || hasTargetedRead(reads);
+    hasMachineObservedDelegation(unit) ||
+    hasTargetedRead(advisoryRawReads(unit, advisoryReads));
   return {
     advisoryOutcome: advisorySatisfied
       ? CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED
       : CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
     advisorySatisfied,
     shellReadAround: false,
+  };
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+function buildCursorAdvisoryVerdictFields(unit, advisoryReads) {
+  const advisoryExcludedLines = advisoryReads.reduce(
+    (sum, read) => sum + (read.lines ?? 0),
+    0,
+  );
+  return {
+    advisory: true,
+    advisoryExcludedLines,
+    ...resolveCursorAdvisoryOutcome(unit, advisoryReads),
   };
 }
 
@@ -554,11 +629,6 @@ export function auditWorkUnit(unit, session) {
   if (!trigger.fired || excludedFromDenominator) {
     if (isCursorSeat(session.surface) && advisoryTrigger.fired) {
       const machineObservedDelegation = hasMachineObservedDelegation(unit);
-      const advisoryOutcomeFields = resolveCursorAdvisoryOutcome(unit, reads);
-      const advisoryExcludedLines = advisoryReads.reduce(
-        (sum, read) => sum + (read.lines ?? 0),
-        0,
-      );
       return buildAuditVerdict(unit, session, {
         reads,
         trigger: advisoryTrigger,
@@ -572,10 +642,8 @@ export function auditWorkUnit(unit, session) {
         allIndexServed,
         readClassifications: remappedResults,
         indexServedExcludedLines,
-        advisory: true,
-        advisoryExcludedLines,
         machineObservedDelegation,
-        ...advisoryOutcomeFields,
+        ...buildCursorAdvisoryVerdictFields(unit, advisoryReads),
       });
     }
 
@@ -604,6 +672,10 @@ export function auditWorkUnit(unit, session) {
   const editExempt = hasEditInUnit(unit);
 
   const flagged = !machineObservedDelegation && !editExempt && !exceptedReason;
+  const advisoryFields =
+    isCursorSeat(session.surface) && advisoryTrigger.fired
+      ? buildCursorAdvisoryVerdictFields(unit, advisoryReads)
+      : {};
 
   return buildAuditVerdict(unit, session, {
     reads,
@@ -622,6 +694,7 @@ export function auditWorkUnit(unit, session) {
     machineObservedDelegation,
     exceptedReason,
     editExempt,
+    ...advisoryFields,
   });
 }
 

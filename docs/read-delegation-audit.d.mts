@@ -142,11 +142,11 @@ export declare function advisoryReadsFromClassifications(
   classifications: ReadClassificationResult[],
 ): ReadEntry[];
 export declare function isShellReadAroundCommand(command: string): boolean;
-export declare function hasShellReadAround(unit: WorkUnit): boolean;
+export declare function hasShellReadAround(unit: WorkUnit, advisoryReads: ReadEntry[]): boolean;
 export declare function hasTargetedRead(reads: ReadEntry[]): boolean;
 export declare function resolveCursorAdvisoryOutcome(
   unit: WorkUnit,
-  reads: ReadEntry[],
+  advisoryReads: ReadEntry[],
 ): {
   advisoryOutcome: string;
   advisorySatisfied: boolean;
