@@ -21,13 +21,15 @@
     }
   ],
   "expect": {
+    "fixtureNote": "cursor-advisory-unrelated-shell",
+    "outcomeReason": "targeted-read-preserved",
+    "grepIgnored": true,
     "triggerFired": true,
     "excludedFromDenominator": true,
     "flagged": false,
     "inDenominator": false,
     "advisory": true,
     "advisoryOutcome": "advisory-satisfied",
-    "advisorySatisfied": true,
-    "shellReadAround": false
+    "advisorySatisfied": true
   }
 }

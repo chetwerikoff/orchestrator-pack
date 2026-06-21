@@ -15,7 +15,8 @@
       "coworkerEvents": [
         {
           "kind": "coworker_ask",
-          "profile": "code"
+          "profile": "code",
+          "eventNote": "delegation-only"
         }
       ],
       "edits": [],

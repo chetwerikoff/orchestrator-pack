@@ -7,7 +7,7 @@
       "inboundRequestId": "req-delegated-then-shell",
       "reads": [
         {
-          "path": "docs/large-draft.md",
+          "path": "docs/delegated-shell-followup.md",
           "lines": 450,
           "kind": "file"
         }
@@ -15,24 +15,27 @@
       "coworkerEvents": [
         {
           "kind": "coworker_ask",
-          "profile": "code"
+          "profile": "code",
+          "eventNote": "delegation-before-shell-read"
         }
       ],
       "shellCommands": [
-        "head -n 450 docs/large-draft.md"
+        "head -n 450 docs/delegated-shell-followup.md"
       ],
       "edits": [],
-      "statusText": "coworker ask then redundant shell read on same corpus"
+      "statusText": "coworker ask then redundant shell read on delegated corpus"
     }
   ],
   "expect": {
-    "triggerFired": true,
-    "excludedFromDenominator": true,
-    "flagged": false,
-    "inDenominator": false,
+    "fixtureNote": "cursor-advisory-delegated-then-shell",
+    "outcomeReason": "delegation-before-shell",
     "advisory": true,
     "advisoryOutcome": "advisory-satisfied",
     "advisorySatisfied": true,
-    "shellReadAround": false
+    "shellReadAround": false,
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false
   }
 }
