@@ -96,6 +96,7 @@ function Record-ReviewHandoffWakeAdmission {
     param(
         [string]$StateRoot = '',
         [object]$FilterResult,
+        [long]$WakeReceivedMs = 0,
         [switch]$DryRun
     )
 
@@ -117,7 +118,7 @@ function Record-ReviewHandoffWakeAdmission {
                 prNumber     = [int]$FilterResult.prNumber
                 prUrl        = [string]$FilterResult.prUrl
                 priority     = [string]$FilterResult.handoffAdmission.audit.priority
-                receivedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                receivedAtMs = if ($WakeReceivedMs -gt 0) { $WakeReceivedMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
             }
             admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
             admittedHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha

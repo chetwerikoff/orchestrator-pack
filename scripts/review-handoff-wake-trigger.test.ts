@@ -403,6 +403,29 @@ describe('handoff review trigger path', () => {
 });
 
 
+
+  it('rejects handoff evaluation when receipt-to-run bound is exceeded', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const pr = fixture.openPrs?.[0];
+    const wakeReceivedMs = 1_700_000_000_000;
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: HANDOFF_WAKE_KIND,
+      sessionId: fixture.sessionId,
+      prNumber: fixture.prNumber,
+      wakeReceivedMs,
+      nowMs: wakeReceivedMs + HANDOFF_RECEIPT_TO_RUN_MAX_MS + 1,
+      admittedBaseRef: 'main',
+      admittedHeadSha: pr?.headRefOid ? String(pr.headRefOid) : undefined,
+      openPrs: fixture.openPrs,
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      requiredCheckNames: fixture.requiredCheckNamesByPr?.[String(fixture.prNumber)],
+    });
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('handoff_receipt_bound_exceeded');
+  });
+
   it('rejects handoff evaluation when admitted head advanced before snapshot', () => {
     const fixture = loadFixture('green-info-handoff-triggers.json');
     const result = evaluateWakeReviewTrigger({
@@ -565,6 +588,39 @@ describe('identity admission unit', () => {
   });
 
 });
+
+  it('records admission with listener receipt timestamp instead of write time', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-admission-receipt-'));
+    const stateRoot = dir;
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const listenerReceiptMs = 1_700_000_000_000;
+    const script = `
+. '${lib.replace(/'/g, "''")}'
+$filter = [pscustomobject]@{
+  sessionId = 'opk-27'
+  projectId = 'orchestrator-pack'
+  prNumber = 234
+  prUrl = 'https://github.com/chetwerikoff/orchestrator-pack/pull/234'
+  handoffAdmission = [pscustomobject]@{
+    admittedBaseRef = 'main'
+    admittedHeadSha = 'handoff234'
+    audit = [pscustomobject]@{ priority = 'info' }
+  }
+}
+$result = Record-ReviewHandoffWakeAdmission -StateRoot '${stateRoot.replace(/'/g, "''")}' -FilterResult $filter -WakeReceivedMs ${listenerReceiptMs}
+if (-not $result.recorded) { throw 'expected admission record' }
+$path = Join-Path '${stateRoot.replace(/'/g, "''")}' 'review-handoff-wake-admission.json'
+$state = Get-ReviewHandoffWakeAdmissionState -Path $path
+$record = $state.records.Values | Select-Object -First 1
+if ([long]$record.receivedAtMs -ne ${listenerReceiptMs}) {
+  throw "expected receivedAtMs ${listenerReceiptMs}, got $($record.receivedAtMs)"
+}
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
 describe('handoff admission state persistence', () => {
   it('loads persisted records without PSCustomObject hashtable merge failure', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'handoff-admission-'));

@@ -218,15 +218,28 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         ''
     }
 
+    if ($isHandoffWake) {
+        $preSideEffectNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $receiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preSideEffectNowMs
+        if (-not $receiptBound.withinBound) {
+            & $LogWriter "review-wake-trigger: handoff receipt bound exceeded PR #$prNumber ($($receiptBound.receiptToRunMs)ms)"
+            return @{
+                triggered = $false
+                reason    = 'handoff_receipt_bound_exceeded'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $prNumber -Snapshot $snapshot
+            }
+        }
+    }
+    elseif (-not $evaluation.withinLatencyBound) {
+        throw "review-wake-trigger exceeded wake-to-run decision bound (${evaluation.processingMs}ms)"
+    }
+
     if ($isHandoffWake -and $resolvedStateRoot) {
-        $admissionRecord = Record-ReviewHandoffWakeAdmission -StateRoot $resolvedStateRoot -FilterResult $FilterResult -DryRun:$DryRun
+        $admissionRecord = Record-ReviewHandoffWakeAdmission -StateRoot $resolvedStateRoot -FilterResult $FilterResult `
+            -WakeReceivedMs $wakeReceivedMs -DryRun:$DryRun
         if ($admissionRecord.recorded) {
             & $LogWriter "review-handoff-wake: admission recorded key=$($admissionRecord.key)"
         }
-    }
-
-    if (-not $evaluation.withinLatencyBound -and -not $isHandoffWake) {
-        throw "review-wake-trigger exceeded wake-to-run decision bound (${evaluation.processingMs}ms)"
     }
 
     if ($evaluation.route -eq 'empty_review_trap') {

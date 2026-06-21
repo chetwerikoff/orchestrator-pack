@@ -276,6 +276,16 @@ export function evaluateWakeReviewTrigger(input) {
       };
     }
   }
+  if (isHandoffWake && !withinReceiptBound) {
+    return {
+      triggerReviewRun: false,
+      reason: 'handoff_receipt_bound_exceeded',
+      route: 'none',
+      processingMs,
+      withinLatencyBound: withinReceiptBound,
+      withinReceiptBound,
+    };
+  }
   const planned = {
     prNumber,
     headSha: normalizeSha(headSha),
