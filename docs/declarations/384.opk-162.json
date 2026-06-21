@@ -7,34 +7,48 @@
   "baseline": {
     "commit_sha": "b2239a4",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:pending"
+    "active_scope_hash": "sha256:793c4096de0fb6342aae574ca55a4cd6c11e5e2fec96817472a5834e3fb914c3"
   },
   "declared_paths": [
-    "agent-orchestrator.yaml.example",
-    "docs/autonomous-worker-nudge-capabilities.json",
-    "docs/declarations/384.opk-162.json",
-    "docs/migration_notes.md",
-    "docs/orchestrator-recovery-runbook.md",
-    "docs/worker-nudge-gate.d.mts",
     "docs/worker-nudge-gate.mjs",
-    "scripts/ao-autonomous-guard.ps1",
-    "scripts/check-autonomous-worker-nudge-capabilities-core.ps1",
-    "scripts/check-autonomous-worker-nudge-capabilities.ps1",
-    "scripts/check-worker-nudge-gate-adoption.ps1",
-    "scripts/check-worker-nudge-gate.ps1",
-    "scripts/ci-green-wake-reconcile.ps1",
-    "scripts/invoke-gated-worker-nudge.ps1",
+    "docs/worker-nudge-gate.d.mts",
+    "docs/autonomous-worker-nudge-capabilities.json",
     "scripts/journaled-worker-send.ps1",
+    "scripts/invoke-gated-worker-nudge.ps1",
+    "scripts/worker-nudge-gate-preflight.ps1",
+    "scripts/check-worker-nudge-gate.ps1",
+    "scripts/check-autonomous-worker-nudge-capabilities.ps1",
+    "scripts/check-autonomous-worker-nudge-capabilities-core.ps1",
+    "scripts/check-worker-nudge-gate-adoption.ps1",
+    "scripts/worker-nudge-gate.test.ts",
+    "scripts/lib/Worker-NudgeClaim.ps1",
     "scripts/lib/Worker-AutonomousNudgeGate.ps1",
     "scripts/lib/Worker-NudgeAudit.ps1",
-    "scripts/lib/Worker-NudgeClaim.ps1",
-    "scripts/orchestrator-message-catalog.json",
+    "scripts/ao-autonomous-guard.ps1",
+    "agent-orchestrator.yaml.example",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/migration_notes.md",
+    "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/verify.ps1",
-    "scripts/worker-nudge-gate-preflight.ps1",
-    "scripts/worker-nudge-gate.test.ts",
-    "tests/fixtures/worker-nudge-gate/opk-rev-689.json"
+    "tests/fixtures/worker-nudge-gate/opk-rev-689.json",
+    "docs/declarations/384.opk-162.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:pending",
+      "new_active_scope_hash": "sha256:793c4096de0fb6342aae574ca55a4cd6c11e5e2fec96817472a5834e3fb914c3",
+      "changed": {
+        "added": [],
+        "removed": [
+          "scripts/orchestrator-message-catalog.json"
+        ]
+      },
+      "reason": "refresh baseline hash after implementation commit",
+      "actor": "opk-162",
+      "timestamp": "2026-06-21T12:44:10.660Z",
+      "applied": true
+    }
+  ]
 }
