@@ -652,13 +652,12 @@ function evaluateNewRow(input: {
   const datum = block.datum ?? block.selector ?? '';
   const selector = datum.includes(':') ? `$.${datum.split(':').pop()}` : `$.${datum}`;
 
-  const proofSandboxMode = isNpmTestProofCommand(proofCommand) ? 'trusted-base' : 'pr-head-new';
   const run = runTrustedCommand(proofCommand, {
     cwd: reviewTargetRoot,
     dependencyRoot: trustedBaseRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
-    sandboxMode: proofSandboxMode,
+    sandboxMode: 'pr-head-new',
   });
   if (run.blocked) {
     return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));

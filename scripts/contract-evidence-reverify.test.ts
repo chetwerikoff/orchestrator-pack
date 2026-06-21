@@ -124,6 +124,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(resolved?.allowlistId).toBe('npm test -- reverify');
     expect(resolved?.args?.[0]).toContain('vitest.mjs');
     expect(resolved?.args?.[2]).toBe('reverify');
+    expect(resolved?.env?.TMPDIR).toBe('/tmp');
+    expect(resolved?.env?.VITEST_CACHE_DIR).toBe('/tmp/opk-reverify-vitest-cache');
   });
 
   it('AC2/AC14/reverify: live capture divergence emits divergent with values', () => {

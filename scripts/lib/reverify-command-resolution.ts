@@ -144,7 +144,11 @@ function resolveNpmTestAllowlistedCommand(
   return {
     executable: process.execPath,
     args: [vitestScript, 'run', filter],
-    env: parsedEnv.env,
+    env: {
+      ...parsedEnv.env,
+      TMPDIR: '/tmp',
+      VITEST_CACHE_DIR: '/tmp/opk-reverify-vitest-cache',
+    },
     allowlistId: pattern.join(' '),
   };
 }

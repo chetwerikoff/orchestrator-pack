@@ -152,6 +152,10 @@ function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependen
   }
 }
 
+function appendVitestNodeModulesTmpfs(args: string[], sandboxCwd: string): void {
+  args.push('--tmpfs', path.join(sandboxCwd, 'node_modules', '.vite-temp'));
+  args.push('--tmpfs', path.join(sandboxCwd, 'node_modules', '.vitest'));
+}
 
 function withSandboxBinDir(
   env: NodeJS.ProcessEnv,
@@ -173,6 +177,7 @@ function buildBwrapSandboxArgs(
   sandboxCwd: string,
   dependencyRoot: string,
   env: NodeJS.ProcessEnv,
+  options: { npmVitestProof?: boolean } = {},
 ): string[] {
   const args: string[] = [
     '--die-with-parent',
@@ -197,6 +202,9 @@ function buildBwrapSandboxArgs(
 
   args.push('--bind', sandboxCwd, sandboxCwd);
   appendNodeModulesBwrapBind(args, sandboxCwd, dependencyRoot);
+  if (options.npmVitestProof) {
+    appendVitestNodeModulesTmpfs(args, sandboxCwd);
+  }
   args.push('--chdir', sandboxCwd);
 
   for (const [key, value] of Object.entries(env)) {
@@ -250,9 +258,12 @@ function spawnWithBwrap(
     env: NodeJS.ProcessEnv;
     shell: false;
     dependencyRoot: string;
+    npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
-  const args = buildBwrapSandboxArgs(payload.cwd, payload.dependencyRoot, payload.env);
+  const args = buildBwrapSandboxArgs(payload.cwd, payload.dependencyRoot, payload.env, {
+    npmVitestProof: payload.npmVitestProof,
+  });
   args.push('--', resolved.executable, ...resolved.args);
   return spawnSync('bwrap', args, payload);
 }
@@ -313,6 +324,7 @@ function spawnPrHeadIsolated(
     dependencyRoot: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
+    npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
   if (process.platform !== 'linux' || !bwrapAvailable()) {
@@ -338,6 +350,7 @@ function spawnPrHeadIsolated(
     env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
     shell: false as const,
     dependencyRoot: options.dependencyRoot,
+    npmVitestProof: options.npmVitestProof,
   };
 
   try {
@@ -359,6 +372,7 @@ function spawnIsolated(
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
     networkRestricted: boolean;
+    npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
   if (options.networkRestricted) {
@@ -412,23 +426,15 @@ export function runSandboxedAllowlistedCommand(
   const env = buildIsolatedEnv(resolved.env, { binDirs });
   const networkRestricted = options.sandboxMode === 'pr-head-new';
 
-  const npmProofDirect = resolved.allowlistId.startsWith('npm test --')
-    && options.sandboxMode === 'trusted-base';
-  const result = npmProofDirect
-    ? spawnDirect(resolved, {
-      cwd: options.cwd,
-      encoding: 'utf8',
-      timeout: options.timeoutMs,
-      env: withSandboxBinDir(env, options.cwd, { assumeBoundNodeModules: true }),
-      shell: false,
-    })
-    : spawnIsolated(resolved, {
-      cwd: options.cwd,
-      dependencyRoot,
-      timeoutMs: options.timeoutMs,
-      env,
-      networkRestricted,
-    });
+  const npmVitestProof = resolved.allowlistId.startsWith('npm test --');
+  const result = spawnIsolated(resolved, {
+    cwd: options.cwd,
+    dependencyRoot,
+    timeoutMs: options.timeoutMs,
+    env,
+    networkRestricted,
+    npmVitestProof,
+  });
 
   const stderr = result.stderr ?? '';
   const blockReason = isSandboxBlocked(stderr, networkRestricted);
