@@ -50,7 +50,7 @@ export function extractLocalModuleSpecs(content) {
 export function resolveRelativeImport(fromRel, spec) {
   const fromDir = path.posix.dirname(fromRel.replace(/\\/g, '/'));
   let resolved = path.posix.normalize(path.posix.join(fromDir, spec.replace(/\\/g, '/')));
-  if (!/\.(?:mjs|cjs|json|mts)$/.test(resolved)) {
+  if (!path.posix.extname(resolved)) {
     resolved = `${resolved}.mjs`;
   }
   return resolved;
@@ -374,6 +374,111 @@ export function authorizationRevisionAllowed(auth, scope, options = {}) {
  * @param {string[]} changedGovernedFiles
  * @param {string} legacyListPath
  */
+
+/**
+ * @param {unknown} record
+ */
+function authorizationRecordId(record) {
+  const explicit = String(/** @type {{ id?: string }} */ (record).id ?? '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  const source = /** @type {{ source?: { type?: string, id?: string } }} */ (record).source;
+  const sourceId = String(source?.id ?? '').trim();
+  const sourceType = String(source?.type ?? '').trim();
+  if (sourceType && sourceId) {
+    return `${sourceType}:${sourceId}`;
+  }
+  return '';
+}
+
+/**
+ * @param {Record<string, unknown>} baseStore
+ * @param {string | null | undefined} headAuthorizationsContent
+ */
+export function validateTrustedAuthorizationStoreDelta(baseStore, headAuthorizationsContent) {
+  /** @type {string[]} */
+  const errors = [];
+  if (headAuthorizationsContent == null) {
+    return { ok: false, errors: ['authorization store head content unavailable'] };
+  }
+  let headStore;
+  try {
+    headStore = JSON.parse(headAuthorizationsContent);
+  } catch (error) {
+    return {
+      ok: false,
+      errors: [`authorization store head content is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+  const baseRecords = parseAuthorizationStore(baseStore);
+  const headRecords = parseAuthorizationStore(headStore);
+  const baseById = new Map();
+  for (const record of baseRecords) {
+    const id = authorizationRecordId(record);
+    if (!id) {
+      errors.push('base authorization record missing stable id');
+      continue;
+    }
+    if (baseById.has(id)) {
+      errors.push(`duplicate base authorization id: ${id}`);
+      continue;
+    }
+    baseById.set(id, JSON.stringify(record));
+  }
+  const seenHeadIds = new Set();
+  /** @type {Record<string, unknown>[]} */
+  const addedRecords = [];
+  for (const record of headRecords) {
+    const id = authorizationRecordId(record);
+    if (!id) {
+      errors.push('head authorization record missing stable id');
+      continue;
+    }
+    if (seenHeadIds.has(id)) {
+      errors.push(`duplicate head authorization id: ${id}`);
+      continue;
+    }
+    seenHeadIds.add(id);
+    const baseSnapshot = baseById.get(id);
+    const headSnapshot = JSON.stringify(record);
+    if (baseSnapshot != null) {
+      if (baseSnapshot !== headSnapshot) {
+        errors.push(`authorization record modified without trusted approval: ${id}`);
+      }
+      continue;
+    }
+    addedRecords.push(record);
+  }
+  for (const id of baseById.keys()) {
+    if (!seenHeadIds.has(id)) {
+      errors.push(`authorization record removed without trusted approval: ${id}`);
+    }
+  }
+  for (const record of addedRecords) {
+    const source = record.source && typeof record.source === 'object'
+      ? /** @type {{ type?: string, id?: string }} */ (record.source)
+      : null;
+    const sourceType = String(source?.type ?? '').trim();
+    if (sourceType !== 'maintainer') {
+      errors.push('authorization-store additions require maintainer trusted approval source');
+      continue;
+    }
+    if (!String(source?.id ?? '').trim()) {
+      errors.push('authorization-store additions require maintainer source id');
+      continue;
+    }
+    if (!String(record.baseSha ?? '').trim() || !String(record.headSha ?? '').trim()) {
+      errors.push('authorization-store additions require baseSha and headSha binding');
+      continue;
+    }
+    if (!Array.isArray(record.addedPaths) || !Array.isArray(record.changedGovernedFiles)) {
+      errors.push('authorization-store additions require addedPaths and changedGovernedFiles arrays');
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 export function isAuthorizationOnlyGovernedChange(changedGovernedFiles, legacyListPath) {
   const nonListGovernedChanged = changedGovernedFiles.filter((entry) => entry !== legacyListPath);
   return nonListGovernedChanged.length === 1
@@ -577,13 +682,23 @@ export function evaluateLegacyListGuard(options) {
   }
 
   if (isAuthorizationOnlyGovernedChange(changedGovernedFiles, legacyListPath) && added.length === 0) {
+    const trustedDelta = validateTrustedAuthorizationStoreDelta(
+      options.baseAuthorizations ?? { authorizations: [] },
+      options.headAuthorizationsContent,
+    );
+    if (!trustedDelta.ok) {
+      return {
+        ...baseVerdict,
+        reason: `authorization-store update rejected: ${trustedDelta.errors.join('; ')}`,
+      };
+    }
     return {
       ...baseVerdict,
       verdict: 'pass',
       expected: 'pass',
       addedPaths: added,
       removedPaths: removed,
-      reason: 'authorization-only governed update permitted without pre-existing authorization',
+      reason: 'authorization-store update approved via maintainer trusted-approval delta',
       policyPass: false,
     };
   }

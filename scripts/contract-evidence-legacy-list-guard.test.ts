@@ -33,6 +33,8 @@ import {
   validateManifestClosure,
   collectEntrypointDependencyClosure,
   extractLocalModuleSpecs,
+  resolveRelativeImport,
+  validateTrustedAuthorizationStoreDelta,
 } from './contract-evidence-legacy-list-guard.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -51,6 +53,7 @@ type GuardCaseOverrides = {
   baseLegacyListContent?: string | null;
   headLegacyListContent?: string | null;
   baseAuthorizations?: { authorizations: Array<Record<string, unknown>> };
+  headAuthorizationsContent?: string;
   authFileChanged?: boolean;
   bootstrap?: boolean;
   baseResolvable?: boolean;
@@ -74,6 +77,7 @@ function runGuardCase(overrides: GuardCaseOverrides) {
     baseLegacyListContent: overrides.baseLegacyListContent ?? baseLegacyFixture,
     headLegacyListContent: overrides.headLegacyListContent ?? baseLegacyFixture,
     baseAuthorizations: overrides.baseAuthorizations ?? { authorizations: [] },
+    headAuthorizationsContent: overrides.headAuthorizationsContent,
     authFileChanged: overrides.authFileChanged,
     bootstrap: overrides.bootstrap,
     baseResolvable: overrides.baseResolvable,
@@ -202,18 +206,53 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/admin-authorized/);
   });
 
-  it('AC2d passes authorization-only governed update from empty store', () => {
+  it('AC2d passes authorization-only governed update from empty store with maintainer trusted approval', () => {
+    const headAuthorizationsContent = JSON.stringify({
+      authorizations: [{
+        id: 'auth-bootstrap',
+        baseSha: 'base1111111111111111111111111111111111111111',
+        headSha: 'head2222222222222222222222222222222222222222',
+        addedPaths: [],
+        changedGovernedFiles: [AUTHORIZATIONS_REL_PATH],
+        source: { type: 'maintainer', id: 'admin-bootstrap' },
+        reason: 'bootstrap authorization store',
+      }],
+    });
     const verdict = runGuardCase({
       changedFiles: [AUTHORIZATIONS_REL_PATH],
       baseAuthorizations: { authorizations: [] },
+      headAuthorizationsContent,
       authFileChanged: true,
     });
     expect(verdict.verdict).toBe('pass');
-    expect(verdict.reason).toMatch(/authorization-only governed update/);
+    expect(verdict.reason).toMatch(/maintainer trusted-approval delta/);
     expect(isAuthorizationOnlyGovernedChange(
       [AUTHORIZATIONS_REL_PATH],
       'scripts/contract-evidence-legacy-drafts.json',
     )).toBe(true);
+  });
+
+  it('rejects authorization-only update forged with pr-sourced records', () => {
+    const headAuthorizationsContent = JSON.stringify({
+      authorizations: [{
+        id: 'forged',
+        baseSha: 'base1111111111111111111111111111111111111111',
+        headSha: 'head2222222222222222222222222222222222222222',
+        addedPaths: ['docs/issues_drafts/99-new-draft.md'],
+        changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
+        source: { type: 'pr', id: '379' },
+        reason: 'self-forged authorization',
+      }],
+    });
+    const verdict = runGuardCase({
+      changedFiles: [AUTHORIZATIONS_REL_PATH],
+      baseAuthorizations: { authorizations: [] },
+      headAuthorizationsContent,
+      authFileChanged: true,
+    });
+    expect(verdict.verdict).toBe('fail');
+    expect(verdict.reason).toMatch(/authorization-store update rejected/);
+    expect(verdict.reason).toMatch(/maintainer trusted approval/);
   });
 
   it('authorizationHeadShaMatches enforces exact head on direct base binding', () => {
@@ -646,6 +685,33 @@ jobs:
     expect(verdict.bindingId).toBe('orchestrator-pack:legacy-list-guard-verdict');
   });
 
+  it('resolveRelativeImport preserves explicit .js extension', () => {
+    expect(resolveRelativeImport('scripts/foo.mjs', './helper.js')).toBe('scripts/helper.js');
+    expect(resolveRelativeImport('scripts/foo.mjs', './helper')).toBe('scripts/helper.mjs');
+  });
+
+  it('validateTrustedAuthorizationStoreDelta rejects tampering with existing records', () => {
+    const baseStore = {
+      authorizations: [{
+        id: 'auth-1',
+        baseSha: 'base1111111111111111111111111111111111111111',
+        headSha: 'head2222222222222222222222222222222222222222',
+        addedPaths: [],
+        changedGovernedFiles: [AUTHORIZATIONS_REL_PATH],
+        source: { type: 'maintainer', id: 'admin-bootstrap' },
+      }],
+    };
+    const headStore = JSON.stringify({
+      authorizations: [{
+        ...baseStore.authorizations[0],
+        reason: 'tampered',
+      }],
+    });
+    const result = validateTrustedAuthorizationStoreDelta(baseStore, headStore);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('; ')).toMatch(/modified without trusted approval/);
+  });
+
   it('fails manifest closure when entrypoint imports an ungoverned helper', () => {
     const manifest = loadGovernedManifest(repoRoot);
     const deps = Array.isArray(manifest.pinnedEntrypointDependencies)
@@ -678,6 +744,22 @@ jobs:
       const closure = collectEntrypointDependencyClosure(dir, 'scripts/entry.mjs');
       expect(closure.has('scripts/helper.mjs')).toBe(true);
       expect(closure.has('scripts/other.cjs')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('collects explicit .js import dependencies in entrypoint closure', () => {
+    const dir = mkdtempSync(path.join(repoRoot, '.tmp-legacy-list-closure-js-'));
+    try {
+      mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+      writeFileSync(path.join(dir, 'scripts/helper.js'), 'export const helper = 1;\n');
+      writeFileSync(
+        path.join(dir, 'scripts/entry.mjs'),
+        "import './helper.js';\n",
+      );
+      const closure = collectEntrypointDependencyClosure(dir, 'scripts/entry.mjs');
+      expect(closure.has('scripts/helper.js')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -95,6 +95,11 @@ export function authorizationRevisionAllowed(
   },
 ): boolean;
 
+export function validateTrustedAuthorizationStoreDelta(
+  baseStore: Record<string, unknown>,
+  headAuthorizationsContent: string | null | undefined,
+): { ok: boolean; errors: string[] };
+
 export function isAuthorizationOnlyGovernedChange(
   changedGovernedFiles: string[],
   legacyListPath: string,
