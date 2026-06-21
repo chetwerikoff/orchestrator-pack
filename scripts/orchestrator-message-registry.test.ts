@@ -38,7 +38,22 @@ const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-r
 const checkScript = path.join(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
 
 function removeTempDir(dir: string) {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      return;
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err
+        ? (err as NodeJS.ErrnoException).code
+        : undefined;
+      if (code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM') {
+        continue;
+      }
+      throw err;
+    }
+  }
+  execFileSync('rm', ['-rf', dir], { stdio: 'ignore' });
 }
 
 function writeJson(root: string, rel: string, value: unknown) {

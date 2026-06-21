@@ -57,7 +57,7 @@ function Assert-LauncherInvokedOutsideReviewTarget {
     }
 }
 
-function Resolve-TrustedReverifyImplementationScript {
+function Resolve-TrustedReverifyCoreScript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -65,20 +65,23 @@ function Resolve-TrustedReverifyImplementationScript {
         [string]$TrustedBaseRootOverride
     )
 
-    $implementationRelativePath = 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+    $coreRelativePath = 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
     $archiveRelativePaths = @(
-        $implementationRelativePath,
-        'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
+        $coreRelativePath,
+        'scripts/lib/Import-TrustedReverifyBootstrap.ps1',
+        'scripts/lib/TrustedPackRoot-Common.ps1',
+        'scripts/lib/Resolve-TrustedPackRoot.ps1',
+        'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
     )
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
-        $implementationPath = Join-Path $trustedRoot $implementationRelativePath
-        if (-not (Test-Path -LiteralPath $implementationPath)) {
-            throw "trusted reverify unavailable: missing implementation at $implementationPath"
+        $corePath = Join-Path $trustedRoot $coreRelativePath
+        if (-not (Test-Path -LiteralPath $corePath)) {
+            throw "trusted reverify unavailable: missing core implementation at $corePath"
         }
         return @{
-            ScriptPath              = $implementationPath
+            CoreScriptPath          = $corePath
             DisposableBootstrapRoot = $false
             BootstrapRoot           = $null
         }
@@ -86,12 +89,12 @@ function Resolve-TrustedReverifyImplementationScript {
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
-        $implementationPath = Join-Path $trustedRoot $implementationRelativePath
-        if (-not (Test-Path -LiteralPath $implementationPath)) {
-            throw "trusted reverify unavailable: missing implementation at $implementationPath"
+        $corePath = Join-Path $trustedRoot $coreRelativePath
+        if (-not (Test-Path -LiteralPath $corePath)) {
+            throw "trusted reverify unavailable: missing core implementation at $corePath"
         }
         return @{
-            ScriptPath              = $implementationPath
+            CoreScriptPath          = $corePath
             DisposableBootstrapRoot = $false
             BootstrapRoot           = $null
         }
@@ -113,17 +116,17 @@ function Resolve-TrustedReverifyImplementationScript {
         Pop-Location
     }
 
-    $implementationPath = Join-Path $temp $implementationRelativePath
-    if (Test-Path -LiteralPath $implementationPath) {
+    $corePath = Join-Path $temp $coreRelativePath
+    if (Test-Path -LiteralPath $corePath) {
         return @{
-            ScriptPath              = $implementationPath
+            CoreScriptPath          = $corePath
             DisposableBootstrapRoot = $true
             BootstrapRoot           = $temp
         }
     }
 
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    throw "trusted reverify unavailable: origin/main archive missing $implementationRelativePath"
+    throw "trusted reverify unavailable: origin/main archive missing $coreRelativePath"
 }
 
 $reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
@@ -146,12 +149,13 @@ $launcherTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) 
 }
 
 try {
-    $resolvedImplementation = Resolve-TrustedReverifyImplementationScript `
+    $resolvedImplementation = Resolve-TrustedReverifyCoreScript `
         -ReviewTargetRoot $reviewTargetRoot `
         -TrustedBaseRootOverride $launcherTrustedBase
     $disposableImplementationBootstrapRoot = [bool]$resolvedImplementation.DisposableBootstrapRoot
 
-    & $resolvedImplementation.ScriptPath @PSBoundParameters
+    . $resolvedImplementation.CoreScriptPath
+    Invoke-ContractEvidenceReverifyCore @PSBoundParameters
     exit $LASTEXITCODE
 }
 finally {

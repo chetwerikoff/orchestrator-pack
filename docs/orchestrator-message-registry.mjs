@@ -866,8 +866,22 @@ function listGitTreeDeclarationSnapshots(repoRoot, gitRef = 'HEAD') {
   return [...paths];
 }
 
-function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
+function declarationSnapshotExistsAtRef(repoRoot, relPath, gitRef = 'HEAD') {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${gitRef}:${relPath}`], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
+function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD', options = {}) {
   const normalized = String(relPath).replace(/\\/g, '/');
+  const preferCommittedOverDisk = options.preferCommittedOverDisk === true;
   try {
     const out = execFileSync('git', ['show', `${gitRef}:${normalized}`], {
       cwd: repoRoot,
@@ -876,6 +890,9 @@ function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
     return JSON.parse(out);
   }
   catch {
+    if (preferCommittedOverDisk && declarationSnapshotExistsAtRef(repoRoot, normalized, gitRef)) {
+      return null;
+    }
     // fall through to working tree for uncommitted local declaration edits
   }
   const diskPath = path.join(repoRoot, relPath);
@@ -933,7 +950,9 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
 
   const linked = new Set();
   for (const relPath of snapshotPaths) {
-    const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef);
+    const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef, {
+      preferCommittedOverDisk: true,
+    });
     const issue = issueLinksFromValidatedDeclarationSnapshot(relPath, snapshot, changed);
     if (issue !== null) linked.add(issue);
   }

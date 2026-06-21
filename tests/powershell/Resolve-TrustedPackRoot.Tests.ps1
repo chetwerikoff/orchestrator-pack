@@ -10,17 +10,20 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
 
     It 'requires clean main worktree at BaseRef before using the main-worktree shortcut' {
         $content = Get-Content -LiteralPath $script:ResolveTrustedPackRootScript -Raw
-        $content | Should -Match 'function Test-TrustedMainWorktreeEligible'
-        $content | Should -Match 'git status --porcelain'
-        $content | Should -Match 'git rev-parse HEAD'
-        $content | Should -Match 'git rev-parse \$BaseRef'
+        $commonScript = Join-Path $script:RepoRoot 'scripts/lib/TrustedPackRoot-Common.ps1'
+        $commonContent = Get-Content -LiteralPath $commonScript -Raw
+        $content | Should -Match 'TrustedPackRoot-Common\.ps1'
+        $commonContent | Should -Match 'function Test-TrustedMainWorktreeEligible'
+        $commonContent | Should -Match 'git status --porcelain'
+        $commonContent | Should -Match 'git rev-parse HEAD'
+        $commonContent | Should -Match 'git rev-parse \$BaseRef'
         $content | Should -Match 'Test-TrustedMainWorktreeEligible -MainWorktreePath'
     }
 
     It 'marks archive checkout trusted roots as disposable for cleanup' {
         $content = Get-Content -LiteralPath $script:ResolveTrustedPackRootScript -Raw
         $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$true'
-        $content | Should -Match 'New-TrustedPackArchiveCheckout'
+        $content | Should -Match 'New-TrustedOriginMainArchiveCheckout'
         $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$false'
     }
 
@@ -41,7 +44,7 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
     }
 
     It 'trusted implementation cleans up disposable trusted archive checkouts in finally' {
-        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'DisposableTrustedRoot'
         $content | Should -Match 'Remove-Item -LiteralPath \$trustedBaseRoot -Recurse -Force'
@@ -49,11 +52,18 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
     }
 
     It 'trusted implementation loads bootstrap helpers from immutable base' {
-        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Invoke-ContractEvidenceReverify.ps1'
+        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'Import-TrustedReverifyBootstrap'
         $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''Resolve-TrustedPackRoot\.ps1''\)'
         $content | Should -Not -Match '\. \(Join-Path \$PSScriptRoot ''Ensure-ReverifyWorkspaceDeps\.ps1''\)'
+    }
+
+    It 'trusted launcher invokes shared core directly' {
+        $launcherScript = Join-Path $script:RepoRoot 'scripts/launch-contract-evidence-reverify.ps1'
+        $content = Get-Content -LiteralPath $launcherScript -Raw
+        $content | Should -Match 'Contract-EvidenceReverify-Core\.ps1'
+        $content | Should -Match 'Invoke-ContractEvidenceReverifyCore @PSBoundParameters'
     }
 
     It 'bootstrap import module dot-sources helpers from resolved trusted root' {
@@ -62,6 +72,6 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'function Import-TrustedReverifyBootstrap'
         $content | Should -Match 'scripts/lib/Resolve-TrustedPackRoot\.ps1'
         $content | Should -Match 'scripts/lib/Ensure-ReverifyWorkspaceDeps\.ps1'
-        $content | Should -Not -Match '\$PSScriptRoot'
+        $content | Should -Not -Match "\. \(Join-Path \`$PSScriptRoot 'Resolve-TrustedPackRoot\.ps1'\)"
     }
 }

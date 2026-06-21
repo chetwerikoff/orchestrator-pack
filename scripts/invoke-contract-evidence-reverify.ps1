@@ -5,26 +5,7 @@
 
   Reviewers must not execute this file. Use the trusted-base launcher instead.
 #>
-param(
-    [string]$RepoRoot,
-    [string]$TrustedBaseRoot,
-    [string]$ReviewTargetRoot,
-    [string]$ManifestPath,
-    [string]$SnapshotFile,
-    [string]$CurrentIssueFile,
-    [string]$PrBodyFile,
-    [int]$ExplicitIssue = 0,
-    [int]$DeclarationIssue = 0,
-    [int]$ExpectedIssue = 0,
-    [string]$PrHeadSha,
-    [string]$ChangedPathsFile,
-    [int]$TimeoutMs = 0,
-    [switch]$SimulateCrashBeforeFirstRow,
-    [int]$SimulateCrashAfterRow = -1,
-    [switch]$ForceProducerUnreachable,
-    [switch]$Summary,
-    [switch]$Text
-)
+param()
 
 $ErrorActionPreference = 'Stop'
 
