@@ -154,6 +154,25 @@ function Resolve-SupervisedSessionsForAdmission {
     }
 }
 
+function Test-ReadyForReviewHandoffEnvelope {
+    param([string]$BodyJson)
+
+    if (-not $BodyJson) { return $false }
+    Push-Location $Script:OrchestratorWakeRepoRoot
+    try {
+        $output = $BodyJson | node $Script:OrchestratorWakeFilterCli probe-handoff 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $result = ($output | Out-String).Trim() | ConvertFrom-Json
+        return [bool]$result.handoffEnvelope
+    }
+    catch {
+        return $false
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-WakeFilter {
     param(
         [string]$BodyJson,
@@ -406,15 +425,19 @@ try {
                 $reader.Close()
                 $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
+                $needsHandoffAdmissionLookups = Test-ReadyForReviewHandoffEnvelope -BodyJson $body
                 $openPrLookupFailed = $false
                 $openPrsForAdmission = @()
-                try {
-                    $openPrsForAdmission = @(Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot)
+                $sessionAdmission = @{ sessions = @(); lookupFailed = $false }
+                if ($needsHandoffAdmissionLookups) {
+                    try {
+                        $openPrsForAdmission = @(Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot)
+                    }
+                    catch {
+                        $openPrLookupFailed = $true
+                    }
+                    $sessionAdmission = Resolve-SupervisedSessionsForAdmission -FixtureSnapshot $fixtureSnapshot
                 }
-                catch {
-                    $openPrLookupFailed = $true
-                }
-                $sessionAdmission = Resolve-SupervisedSessionsForAdmission -FixtureSnapshot $fixtureSnapshot
                 $filterResult = Invoke-WakeFilter -BodyJson $body `
                     -SupervisedProjectId $projectId `
                     -SupervisedRepoSlug $script:SupervisedRepoSlug `

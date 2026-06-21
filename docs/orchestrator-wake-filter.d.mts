@@ -163,6 +163,8 @@ export interface WakeFilterAdmissionContext {
   openPrLookupFailed?: boolean;
 }
 
+export declare function probeReadyForReviewHandoffEnvelope(body: unknown): { handoffEnvelope: boolean };
+
 export declare function evaluateWakePayload(
   body: unknown,
   admissionContext?: WakeFilterAdmissionContext,

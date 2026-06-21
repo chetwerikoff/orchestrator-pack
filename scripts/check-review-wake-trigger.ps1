@@ -43,6 +43,10 @@ if ($listener -notmatch 'review_trigger_failed') {
     Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
     exit 1
 }
+if ($listener -match 'Invoke-GhOpenPrList' -and $listener -notmatch 'Test-ReadyForReviewHandoffEnvelope') {
+    Write-Host 'orchestrator-wake-listener.ps1 must gate gh pr list on hand-off envelope probe'
+    exit 1
+}
 if ($listener -notmatch 'Invoke-ReviewHandoffWakeAdmissionRecovery') {
     Write-Host 'orchestrator-wake-listener.ps1 must replay durable handoff admissions on startup'
     exit 1

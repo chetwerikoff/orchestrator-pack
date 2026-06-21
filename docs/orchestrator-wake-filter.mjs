@@ -234,6 +234,21 @@ export function evaluateHeartbeatTick({
  * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [admissionContext.openPrs]
  * @param {boolean} [admissionContext.openPrLookupFailed]
  */
+/**
+ * Cheap envelope probe for listener admission lookup gating (no gh/ao I/O).
+ * @param {unknown} body
+ */
+export function probeReadyForReviewHandoffEnvelope(body) {
+  if (!isRecord(body)) {
+    return { handoffEnvelope: false };
+  }
+  const event = body.event;
+  if (!isRecord(event)) {
+    return { handoffEnvelope: false };
+  }
+  return { handoffEnvelope: isReadyForReviewHandoffEnvelope(body, event) };
+}
+
 export function evaluateWakePayload(body, admissionContext = {}) {
   if (!isRecord(body)) {
     return { ok: false, reason: 'malformed_payload', detail: 'body is not an object' };
@@ -567,6 +582,29 @@ async function main() {
       nowMs,
     });
     process.stdout.write(`${JSON.stringify(decision)}\n`);
+    return;
+  }
+
+  if (command === 'probe-handoff') {
+    const jsonFlag = args.indexOf('--json');
+    let raw;
+    if (jsonFlag >= 0 && args[jsonFlag + 1]) {
+      raw = args[jsonFlag + 1];
+    } else {
+      raw = await readStdin();
+    }
+    let body;
+    try {
+      body = parseWebhookJson(raw);
+      if (!isRecord(body)) {
+        throw new Error('body is not an object');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stdout.write(`${JSON.stringify({ handoffEnvelope: false, malformed: true, detail: message })}\n`);
+      return;
+    }
+    process.stdout.write(`${JSON.stringify(probeReadyForReviewHandoffEnvelope(body))}\n`);
     return;
   }
 

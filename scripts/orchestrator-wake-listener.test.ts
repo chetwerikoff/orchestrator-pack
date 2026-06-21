@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWakeMessage,
   evaluateWakePayload,
+  probeReadyForReviewHandoffEnvelope,
   isCompletionMergeIntentWake,
   type AoWebhookBody,
 } from '../docs/orchestrator-wake-filter.mjs';
@@ -182,6 +183,32 @@ describe('evaluateWakePayload', () => {
       }),
     );
     expect(result).toEqual({ ok: false, reason: 'info_priority', detail: 'info' });
+  });
+});
+
+
+describe('probeReadyForReviewHandoffEnvelope', () => {
+  it('identifies ready_for_review hand-off envelopes without admission I/O', () => {
+    const handoff = notificationEvent({
+      type: 'session.working',
+      priority: 'info',
+      sessionId: 'op-worker-2',
+      projectId: 'orchestrator-pack',
+      data: {
+        schemaVersion: 3,
+        semanticType: 'ready_for_review',
+        subject: {
+          session: { id: 'op-worker-2', projectId: 'orchestrator-pack' },
+          pr: {
+            number: 42,
+            url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/42',
+          },
+        },
+      },
+    });
+    expect(probeReadyForReviewHandoffEnvelope(handoff)).toEqual({ handoffEnvelope: true });
+    expect(probeReadyForReviewHandoffEnvelope(notificationEvent())).toEqual({ handoffEnvelope: false });
+    expect(probeReadyForReviewHandoffEnvelope(null)).toEqual({ handoffEnvelope: false });
   });
 });
 
