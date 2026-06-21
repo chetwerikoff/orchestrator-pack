@@ -23,6 +23,37 @@ function loadIssue(name: string): string {
   return readFileSync(path.join(fixtureRoot, 'issues', name), 'utf8');
 }
 
+function isPrHeadNetworkSandboxAvailable(): boolean {
+  if (process.platform !== 'linux') {
+    return false;
+  }
+  const probe = spawnSync('unshare', ['-U', '-n', '-r', 'true'], {
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (probe.error || probe.status !== 0) {
+    return false;
+  }
+  return !(probe.stderr ?? '').includes('network-sandbox-unavailable');
+}
+
+const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
+
+function expectNewRowWhenNetworkSandboxAvailable(
+  row: Record<string, unknown>,
+  whenAvailable: Record<string, unknown>,
+) {
+  if (!prHeadNetworkSandboxAvailable) {
+    expect(row).toMatchObject({
+      status: 'unverified',
+      reason: 'network-sandbox-unavailable',
+      verificationMode: 'not-run',
+    });
+    return;
+  }
+  expect(row).toMatchObject(whenAvailable);
+}
+
 function baseInput(snapshotBody: string, overrides: Record<string, unknown> = {}) {
   return {
     repoRoot: packRoot,
@@ -69,7 +100,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9004\n',
       explicitIssueNumber: 9004,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
@@ -81,7 +112,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9005\n',
       explicitIssueNumber: 9005,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
       status: 'unfulfilled-new',
       verificationMode: 'live',
     });
@@ -211,7 +242,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
         explicitIssueNumber: 9006,
       }),
     );
-    expect(result.rows[0]).toMatchObject({
+    expectNewRowWhenNetworkSandboxAvailable(result.rows[0], {
       status: 'unverified',
       reason: 'non-genuine-proof',
       verificationMode: 'not-run',
