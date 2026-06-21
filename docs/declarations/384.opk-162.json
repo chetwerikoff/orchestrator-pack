@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b2239a4",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:793c4096de0fb6342aae574ca55a4cd6c11e5e2fec96817472a5834e3fb914c3"
+    "active_scope_hash": "sha256:27e6e0f22a12895fcc0e5ecc99da2b9cc50e127fd141f9bfc4440aaefb17c5e2"
   },
   "declared_paths": [
     "docs/worker-nudge-gate.mjs",
@@ -30,6 +30,7 @@
     "docs/migration_notes.md",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
+    "scripts/orchestrator-message-catalog.json",
     "scripts/verify.ps1",
     "tests/fixtures/worker-nudge-gate/opk-rev-689.json",
     "docs/declarations/384.opk-162.json"
@@ -38,12 +39,12 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:793c4096de0fb6342aae574ca55a4cd6c11e5e2fec96817472a5834e3fb914c3",
+      "new_active_scope_hash": "sha256:27e6e0f22a12895fcc0e5ecc99da2b9cc50e127fd141f9bfc4440aaefb17c5e2",
       "changed": {
-        "added": [],
-        "removed": [
+        "added": [
           "scripts/orchestrator-message-catalog.json"
-        ]
+        ],
+        "removed": []
       },
       "reason": "refresh baseline hash after implementation commit",
       "actor": "opk-162",
