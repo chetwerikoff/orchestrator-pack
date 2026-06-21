@@ -369,6 +369,17 @@ export function authorizationRevisionAllowed(auth, scope, options = {}) {
   return typeof verifyRevision === 'function' && verifyRevision(auth, scope);
 }
 
+
+/**
+ * @param {string[]} changedGovernedFiles
+ * @param {string} legacyListPath
+ */
+export function isAuthorizationOnlyGovernedChange(changedGovernedFiles, legacyListPath) {
+  const nonListGovernedChanged = changedGovernedFiles.filter((entry) => entry !== legacyListPath);
+  return nonListGovernedChanged.length === 1
+    && nonListGovernedChanged[0] === AUTHORIZATIONS_REL_PATH;
+}
+
 export function findMatchingAuthorization(authorizations, scope, options = {}) {
   const wantAdded = [...scope.addedPaths].map((entry) => canonicalLegacyDraftPath(entry) ?? entry).sort();
   const wantChanged = [...scope.changedGovernedFiles].sort();
@@ -561,6 +572,18 @@ export function evaluateLegacyListGuard(options) {
       reason: removed.length > 0
         ? 'path removal from legacy list is permitted without owner authorization'
         : 'legacy list reorder/reformat with identical normalized path set',
+      policyPass: false,
+    };
+  }
+
+  if (isAuthorizationOnlyGovernedChange(changedGovernedFiles, legacyListPath) && added.length === 0) {
+    return {
+      ...baseVerdict,
+      verdict: 'pass',
+      expected: 'pass',
+      addedPaths: added,
+      removedPaths: removed,
+      reason: 'authorization-only governed update permitted without pre-existing authorization',
       policyPass: false,
     };
   }

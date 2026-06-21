@@ -95,6 +95,11 @@ export function authorizationRevisionAllowed(
   },
 ): boolean;
 
+export function isAuthorizationOnlyGovernedChange(
+  changedGovernedFiles: string[],
+  legacyListPath: string,
+): boolean;
+
 export function findMatchingAuthorization(
   authorizations: Array<Record<string, unknown>>,
   scope: {

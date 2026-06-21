@@ -25,6 +25,7 @@ import {
   compareAuthorizedRevisionContent,
   authorizationStrictBranchParentAdvance,
   findMatchingAuthorization,
+  isAuthorizationOnlyGovernedChange,
   governedSurfacePaths,
   isGuardPresentOnBase,
   loadGovernedManifest,
@@ -201,6 +202,19 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/admin-authorized/);
   });
 
+  it('AC2d passes authorization-only governed update from empty store', () => {
+    const verdict = runGuardCase({
+      changedFiles: [AUTHORIZATIONS_REL_PATH],
+      baseAuthorizations: { authorizations: [] },
+      authFileChanged: true,
+    });
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.reason).toMatch(/authorization-only governed update/);
+    expect(isAuthorizationOnlyGovernedChange(
+      [AUTHORIZATIONS_REL_PATH],
+      'scripts/contract-evidence-legacy-drafts.json',
+    )).toBe(true);
+  });
 
   it('authorizationHeadShaMatches enforces exact head on direct base binding', () => {
     const scope = {
