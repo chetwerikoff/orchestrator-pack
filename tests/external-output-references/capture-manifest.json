@@ -189,10 +189,10 @@
     "gh-pr-open/open": {
       "id": "gh-pr-open/open",
       "producer": "gh",
-      "sourceCommand": "gh pr list --state open --json number,headRefOid,commits --limit 200",
+      "sourceCommand": "gh pr list --state open --json number,headRefOid,baseRefName --limit 200",
       "kind": "structured",
       "path": "captures/gh-pr-open/open.raw.json",
-      "contentHash": "sha256:190ae89f3773084ac603b90ba608aa9c4f689f36010376700f822dd0e15cb9ac"
+      "contentHash": "sha256:f8523a313d522ca149bb777731e13da43e3790950f3306b90bdb6683e32e7d0a"
     }
   }
 }

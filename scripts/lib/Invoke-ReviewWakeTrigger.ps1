@@ -325,8 +325,10 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
         & $LogWriter "review-wake-trigger: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
-        Write-ReviewHandoffClaimAudit -Outcome 'claim_loss' -ClaimOutcome 'loss' -Reason ([string]$claim.reason) `
-            -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+        if ($isHandoffWake) {
+            Write-ReviewHandoffClaimAudit -Outcome 'claim_loss' -ClaimOutcome 'loss' -Reason ([string]$claim.reason) `
+                -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+        }
         $mergeSnapshot = if ($claim.reason -eq 'covered_by_run') {
             if ($ResolveFreshSnapshot) {
                 & $ResolveFreshSnapshot $planned
@@ -357,8 +359,10 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     if ($claim.recovered) {
         & $LogWriter "review-wake-trigger: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
-    Write-ReviewHandoffClaimAudit -Outcome 'claim_win' -ClaimOutcome 'win' -Reason 'head_ready_for_review' `
-        -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+    if ($isHandoffWake) {
+        Write-ReviewHandoffClaimAudit -Outcome 'claim_win' -ClaimOutcome 'win' -Reason 'head_ready_for_review' `
+            -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+    }
 
     try {
         $fresh = if ($FixtureSnapshot) {

@@ -279,6 +279,30 @@ describe('handoff envelope admission (Issue #381)', () => {
     }
   });
 
+  it('rejects handoffs when open PR snapshot omits base ref', () => {
+    const capture = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
+    );
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const openPrs = fixture.openPrs!.map((openPr) => {
+      const { baseRefName: _baseRefName, baseRef: _baseRef, ...rest } = openPr as {
+        baseRefName?: string;
+        baseRef?: string;
+      } & typeof openPr;
+      return rest;
+    });
+    const result = evaluateWakePayload(capture, {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedSessions: fixture.sessions,
+      openPrs,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('missing_base_ref');
+    }
+  });
+
   it('rejects handoffs when open-PR lookup succeeds but list is empty', () => {
     const capture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),

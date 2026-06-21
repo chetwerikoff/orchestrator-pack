@@ -266,6 +266,14 @@ export function evaluateHandoffIdentityAdmission(input) {
     };
   }
   const baseRefName = nonEmptyString(open.baseRefName) ?? nonEmptyString(open.baseRef);
+  if (!baseRefName) {
+    return {
+      admitted: false,
+      outcome: 'filter_reject',
+      reason: 'missing_base_ref',
+      audit: { ...audit, outcome: 'filter_reject', reason: 'missing_base_ref' },
+    };
+  }
   return {
     admitted: true,
     outcome: 'promoted',

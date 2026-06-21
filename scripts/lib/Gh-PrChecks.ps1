@@ -40,7 +40,7 @@ function Invoke-GhOpenPrList {
         # PRs, whose static GraphQL cost exceeds GitHub's 500k node limit and
         # fails the whole query. The head commit's committed date is resolved
         # per-PR below via a single-commit REST lookup instead.
-        $raw = gh pr list --state open --json number,headRefOid --limit 200 2>&1
+        $raw = gh pr list --state open --json number,headRefOid,baseRefName --limit 200 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "gh pr list failed (exit $LASTEXITCODE): $raw"
         }
