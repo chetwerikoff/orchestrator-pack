@@ -1,5 +1,5 @@
 {
-  "description": ">400 combined lines of fetched external corpus flagged",
+  "description": ">400-line external corpus on Cursor is advisory, not flagged",
   "surface": "cursor",
   "workUnits": [
     {
@@ -18,8 +18,9 @@
   ],
   "expect": {
     "triggerFired": true,
-    "excludedFromDenominator": false,
-    "flagged": true,
-    "inDenominator": true
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true
   }
 }

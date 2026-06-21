@@ -1,0 +1,25 @@
+{
+  "issue_number": 359,
+  "iteration_id": "opk-160",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-21T08:50:16.508Z",
+  "baseline": {
+    "commit_sha": "2d88ec79e214b8bcc49e9d3f355190eefb25f483",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:eb9b2d3c5494ad4bb7cf1db97dc550b9954867e3467c279125dd5a726a06f10c"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/read-delegation-audit.mjs",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "scripts/read-delegation-audit.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/read-delegation-audit/**",
+    ".cursor/rules/**"
+  ],
+  "amendments": []
+}

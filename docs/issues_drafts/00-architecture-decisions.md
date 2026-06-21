@@ -677,6 +677,21 @@ Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only 
    The #255 residual-non-compliance metric excludes `index-served` units like other non-delegable
    classes; mixed sessions stay measurable (depends on #264 reviewer-path denominator repair).
 
+6. **Cursor-seat advisory floor (Issue #359).** Amended 2026-06-21: on the Cursor seat only,
+   read-delegation for out-of-index corpus not already exempt by #309 (tracked non-code bulk,
+   logs, external fetches, vendored/generated dumps) is **advisory (SHOULD), not a mandatory
+   floor (MUST)**. Diffs keep the #337 direct-read carve-out and are not folded into advisory.
+   Claude and Codex retain the mandatory floor unchanged. **Rationale:** empirical evidence
+   (2026-06-19) on the weak Cursor seat (composer-2.5) shows the mandatory obligation yields
+   evasion (`head`, chunked shell reads, coworker-as-`cat`) rather than cheap-model offload;
+   mandating on this seat buys latency and workarounds, not compliance. The stop-time audit
+   (#255/#309) records advisory Cursor reads under a distinct observable classification
+   (not silently discarded like `index-served`), suppresses only the non-compliance finding,
+   excludes them from the mandatory-delegable residual denominator, and tallies them under a
+   separate advisory count. A **SHOULD** delegation ladder (`coworker ask`, then targeted
+   `Read` with `offset`/`limit`) steers cost without re-mandating; shell read-arounds are
+   recorded separately and do not register as ladder-satisfied.
+
 See `docs/issues_drafts/53-delegation-policy-global-fanout.md` (GitHub #149) and
 `docs/issues_drafts/52-coworker-cli-delegation-policy.md` (GitHub #148).
 

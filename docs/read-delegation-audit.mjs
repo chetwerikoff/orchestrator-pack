@@ -23,6 +23,7 @@ import {
   classifyUnitReads,
   delegableReadsFromClassifications,
   indexServedExcludedVolume,
+  isKnownCursorSurface,
   loadClassifierManifest,
   READ_CLASSIFICATIONS,
 } from './read-delegation-classifier.mjs';
@@ -38,7 +39,14 @@ export const T2_MIN_FILES = 3;
 
 export const SURFACES = ['cursor', 'claude'];
 
-export const AUDIT_SCHEMA_VERSION = 3;
+export const AUDIT_SCHEMA_VERSION = 4;
+
+/** Cursor-seat advisory classifications (Issue #359). */
+export const CURSOR_ADVISORY_CLASSIFICATIONS = {
+  ADVISORY: 'advisory',
+  ADVISORY_SATISFIED: 'advisory-satisfied',
+  SHELL_READ_AROUND: 'shell-read-around',
+};
 export const REVIEW_HOOK_CAPTURE_BRANCHES = {
   WORLD_A_NO_REVIEW_HOOK: 'world-a-no-review-hook',
   WORLD_B_HOOK_PRESENT: 'world-b-hook-present',
@@ -137,6 +145,9 @@ const SHELL_TOOL_NAMES = new Set(['Shell', 'shell', 'run_terminal_cmd', 'Bash', 
 const DIFF_LOG_SHELL_PATTERN =
   /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b)/i;
 
+const SHELL_READ_AROUND_PATTERN =
+  /\b(head|tail|cat|sed|awk|python\d*|perl|grep|wc)\b/i;
+
 const LOCK_RETRY_MS = 5;
 const LOCK_MAX_ATTEMPTS = 200;
 
@@ -171,6 +182,7 @@ export function normalizeReads(value) {
       readDiscriminator:
         typeof row.readDiscriminator === 'string' ? row.readDiscriminator : undefined,
       canonicalPath: typeof row.canonicalPath === 'string' ? row.canonicalPath : undefined,
+      targetedRead: row.targetedRead === true,
     };
   });
 }
@@ -341,6 +353,107 @@ export function hasMachineObservedDelegation(unit) {
   return commands.some((command) => matchesCoworkerAskCommand(String(command ?? '')));
 }
 
+
+
+/**
+ * @param {string} surface
+ */
+export function isCursorSeat(surface) {
+  const { manifest } = loadClassifierManifest();
+  return isKnownCursorSurface(surface, manifest);
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadClassificationResult[]} results
+ * @param {import('./read-delegation-audit.d.mts').SessionContext} session
+ */
+export function applyCursorAdvisoryClassifications(results, session) {
+  if (!isCursorSeat(session.surface)) {
+    return results;
+  }
+  return results.map((row) => {
+    if (
+      row.classification === READ_CLASSIFICATIONS.OUT_OF_INDEX &&
+      row.read.kind !== 'diff'
+    ) {
+      return {
+        ...row,
+        classification: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+        delegable: false,
+        excludedFromDenominator: true,
+        exclusionRecord: {
+          ...(row.exclusionRecord ?? {}),
+          advisoryCarveOut: true,
+          priorClassification: READ_CLASSIFICATIONS.OUT_OF_INDEX,
+        },
+      };
+    }
+    return row;
+  });
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadClassificationResult[]} classifications
+ */
+export function advisoryReadsFromClassifications(classifications) {
+  return classifications
+    .filter((row) => row.classification === CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY)
+    .map((row) => row.read);
+}
+
+/**
+ * @param {string} command
+ */
+export function isShellReadAroundCommand(command) {
+  const trimmed = String(command ?? '').trim();
+  if (!trimmed || matchesCoworkerAskCommand(trimmed)) {
+    return false;
+  }
+  if (/\bgit\s+(diff|log|show)\b/i.test(trimmed)) {
+    return false;
+  }
+  return SHELL_READ_AROUND_PATTERN.test(trimmed);
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ */
+export function hasShellReadAround(unit) {
+  const commands = Array.isArray(unit.shellCommands) ? unit.shellCommands : [];
+  return commands.some((command) => isShellReadAroundCommand(String(command ?? '')));
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
+ */
+export function hasTargetedRead(reads) {
+  return reads.some((read) => read.targetedRead === true);
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
+ */
+export function resolveCursorAdvisoryOutcome(unit, reads) {
+  const shellReadAround = hasShellReadAround(unit);
+  if (shellReadAround) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
+      advisorySatisfied: false,
+      shellReadAround: true,
+    };
+  }
+  const advisorySatisfied =
+    hasMachineObservedDelegation(unit) || hasTargetedRead(reads);
+  return {
+    advisoryOutcome: advisorySatisfied
+      ? CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED
+      : CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+    advisorySatisfied,
+    shellReadAround: false,
+  };
+}
+
 /**
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
  */
@@ -416,27 +529,63 @@ export function auditWorkUnit(unit, session) {
     });
   }
 
-  const delegableReads = delegableReadsFromClassifications(classification.results);
+  const remappedResults = applyCursorAdvisoryClassifications(
+    classification.results,
+    session,
+  );
+  const delegableReads = delegableReadsFromClassifications(remappedResults);
+  const advisoryReads = advisoryReadsFromClassifications(remappedResults);
   const trigger = didAskTriggerFire(delegableReads);
+  const advisoryTrigger = didAskTriggerFire(advisoryReads);
   const rawTrigger = didAskTriggerFire(reads);
-  const indexServedExcludedLines = indexServedExcludedVolume(classification.results);
+  const indexServedExcludedLines = indexServedExcludedVolume(remappedResults);
   const allReadsExcluded =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.excludedFromDenominator);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.excludedFromDenominator);
   const codeClass =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.CODE_CLASS);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.classification === READ_CLASSIFICATIONS.CODE_CLASS);
   const allIndexServed =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.INDEX_SERVED);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.classification === READ_CLASSIFICATIONS.INDEX_SERVED);
   const excludedFromDenominator =
     allReadsExcluded && rawTrigger.rawFired && !trigger.fired;
 
   if (!trigger.fired || excludedFromDenominator) {
+    if (isCursorSeat(session.surface) && advisoryTrigger.fired) {
+      const machineObservedDelegation = hasMachineObservedDelegation(unit);
+      const advisoryOutcomeFields = resolveCursorAdvisoryOutcome(unit, reads);
+      const advisoryExcludedLines = advisoryReads.reduce(
+        (sum, read) => sum + (read.lines ?? 0),
+        0,
+      );
+      return buildAuditVerdict(unit, session, {
+        reads,
+        trigger: advisoryTrigger,
+        triggerFired: advisoryTrigger.fired,
+        excludedFromDenominator: true,
+        inDenominator: false,
+        flagged: false,
+        reviewerPath: false,
+        reviewSignalState,
+        codeClass,
+        allIndexServed,
+        readClassifications: remappedResults,
+        indexServedExcludedLines,
+        advisory: true,
+        advisoryExcludedLines,
+        machineObservedDelegation,
+        ...advisoryOutcomeFields,
+      });
+    }
+
     return buildAuditVerdict(unit, session, {
       reads,
       trigger,
-      triggerFired: excludedFromDenominator ? rawTrigger.rawFired : trigger.fired,
+      triggerFired:
+        advisoryTrigger.fired ||
+        trigger.fired ||
+        (allIndexServed && rawTrigger.rawFired),
       excludedFromDenominator,
       inDenominator: false,
       flagged: false,
@@ -444,7 +593,7 @@ export function auditWorkUnit(unit, session) {
       reviewSignalState,
       codeClass,
       allIndexServed,
-      readClassifications: classification.results,
+      readClassifications: remappedResults,
       indexServedExcludedLines,
     });
   }
@@ -467,7 +616,7 @@ export function auditWorkUnit(unit, session) {
     reviewSignalState,
     codeClass,
     allIndexServed,
-    readClassifications: classification.results,
+    readClassifications: remappedResults,
     indexServedExcludedLines,
     selfAttestedDelegation,
     machineObservedDelegation,
@@ -503,6 +652,11 @@ function buildAuditVerdict(unit, session, fields) {
     machineObservedDelegation: fields.machineObservedDelegation ?? false,
     exceptedReason: fields.exceptedReason ?? false,
     editExempt: fields.editExempt ?? false,
+    advisory: fields.advisory === true,
+    advisoryOutcome: fields.advisoryOutcome,
+    advisorySatisfied: fields.advisorySatisfied === true,
+    shellReadAround: fields.shellReadAround === true,
+    advisoryExcludedLines: fields.advisoryExcludedLines ?? 0,
     blockingFailure: fields.blockingFailure,
   };
 }
@@ -606,6 +760,19 @@ export function summarizeAuditVerdicts(verdicts) {
     (sum, verdict) => sum + (verdict.indexServedExcludedLines ?? 0),
     0,
   );
+  const advisoryUnits = verdicts.filter((verdict) => verdict.advisory === true);
+  const advisorySatisfiedUnits = advisoryUnits.filter(
+    (verdict) =>
+      verdict.advisoryOutcome === CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+  );
+  const shellReadAroundUnits = advisoryUnits.filter(
+    (verdict) =>
+      verdict.advisoryOutcome === CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
+  );
+  const advisoryExcludedLines = advisoryUnits.reduce(
+    (sum, verdict) => sum + (verdict.advisoryExcludedLines ?? 0),
+    0,
+  );
 
   const denominatorCause = computeDenominatorCause(verdicts);
 
@@ -614,6 +781,10 @@ export function summarizeAuditVerdicts(verdicts) {
     flaggedUnits: flagged.length,
     flaggedReadLines,
     indexServedExcludedLines,
+    advisoryUnits: advisoryUnits.length,
+    advisorySatisfiedUnits: advisorySatisfiedUnits.length,
+    shellReadAroundUnits: shellReadAroundUnits.length,
+    advisoryExcludedLines,
     residualNonCompliance:
       denominator.length === 0 ? 0 : flagged.length / denominator.length,
     denominatorCause,
@@ -936,12 +1107,14 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
 
   if (READ_TOOL_NAMES.has(name)) {
     const path = resolveReadToolPath(input);
+    const targetedRead = input.offset !== undefined || input.limit !== undefined;
     events.push({
       kind: 'read',
       inboundRequestId,
       path,
       lines: measureReadToolLines(input, options.toolOutput),
       readKind: 'file',
+      targetedRead,
     });
   }
 
@@ -1327,6 +1500,11 @@ export function loadMetricWindowSummary(artifactPath, options = {}) {
       delegableTriggerUnits: 0,
       flaggedUnits: 0,
       flaggedReadLines: 0,
+      indexServedExcludedLines: 0,
+      advisoryUnits: 0,
+      advisorySatisfiedUnits: 0,
+      shellReadAroundUnits: 0,
+      advisoryExcludedLines: 0,
       residualNonCompliance: 0,
       auditErrors: 0,
       missingWindows: 0,

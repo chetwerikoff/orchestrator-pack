@@ -223,7 +223,9 @@ editable declared scope under this fence. `coworker write --target` is an edit: 
 When **at least one** ask trigger below holds **and** the corpus can be made
 fence-clean **and** the work is not an excepted reasoning step (below), you **MUST**
 route the read through `coworker ask --profile code` rather than inline it on the
-reasoning model. Read delegation is a **floor**, not a ceiling: triggers bound when
+reasoning model — on the **Claude and Codex surfaces**. On the **Cursor seat**, the
+same corpus is **advisory** (recommended, not mandatory) — see the carve-out below.
+Read delegation is a **floor** on Claude/Codex, not a ceiling: triggers bound when
 delegation becomes mandatory; they are not permission to decline for convenience.
 This MUST is a **prompt-level obligation** with **no pre-read hard block** in Phase 1 —
 backstops are visible delegation outcome (below), the **stop-time read-delegation audit**
@@ -258,6 +260,25 @@ URLs/docs, vendored or generated dumps, and **tracked non-code bulk** (markdown/
 — coworker's cheap-text delegable corpus). The provider-input fence (#52) is unchanged:
 secret or private-data corpus is never sent to coworker and never a delegation
 obligation, indexed or not.
+
+**Cursor-seat advisory floor (Issue #359).** On the **Cursor seat** (identified by
+the same committed surface-spelling manifest as Issue #309), when an ask trigger
+fires for corpus **not** already exempt above — tracked non-code bulk
+(markdown/JSON/data), CI/job logs, external fetches, vendored/generated dumps, and
+other out-of-index material — read delegation is **recommended (SHOULD), not
+mandatory (MUST)**. Diffs remain read directly per Issue #337 and are **not** part of
+this advisory category. The mandatory floor on Claude and Codex is unchanged.
+
+**Recommended delegation ladder (Cursor seat, advisory corpus only).** Preferred
+order as **guidance**, not a mandated sequence (planner freedom preserved):
+
+1. `coworker ask --profile code --paths …` — cheap-model offload when fence-clean.
+2. A targeted `Read` with `offset`/`limit` — when only a slice is needed.
+
+Shell read-arounds (`head`, chunked `sed`/`grep`, python chunking) do not satisfy
+this ladder; the stop-time audit records them separately. Inline full-file reads on
+the reasoning model are permitted when advisory, but the ladder above is the cost
+intent.
 
 ### Write delegation (`coworker write`)
 
@@ -312,8 +333,10 @@ and inline all 900 lines — the reasoning exception does not cover the reading.
   real work stays in-session for the same reason; that heuristic **cannot override** a
   fired ask trigger.
 - When an ask trigger **is** met and the corpus is fence-clean and the work is not an
-  excepted reasoning step, delegation is **mandatory** — do not inline the read on the
-  reasoning model.
+  excepted reasoning step: on **Claude and Codex**, delegation is **mandatory** — do
+  not inline the read on the reasoning model; on the **Cursor seat** for advisory
+  corpus (out-of-index / tracked non-code bulk, not #309- or #337-exempt), follow the
+  **SHOULD** ladder above — delegation is recommended, not required.
 - Your final status **states the delegation outcome**: either that `coworker` was used
   for the bulk repo/log read, or the closed-list reason it was not (below the floor /
   excepted reasoning step / corpus not fence-cleanable / `coworker` missing,

@@ -1,19 +1,19 @@
 {
-  "description": ">200-line log on Cursor is advisory, not flagged",
+  "description": "Cursor >400-line external corpus is advisory, not flagged",
   "surface": "cursor",
   "workUnits": [
     {
-      "key": "unit-log-flagged",
+      "key": "unit-advisory-external",
       "inboundRequestId": "req-1",
       "reads": [
         {
-          "path": "ci-output.log",
-          "lines": 250,
-          "kind": "log"
+          "path": "fetched/page.md",
+          "lines": 450,
+          "kind": "external"
         }
       ],
       "edits": [],
-      "statusText": "skipped delegation on CI log"
+      "statusText": "inline external read"
     }
   ],
   "expect": {

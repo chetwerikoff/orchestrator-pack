@@ -1,13 +1,26 @@
 {
-  "description": "ordinary session with an ambient-sourced marker-shaped value — not reviewer-path",
-  "surface": "cursor",
-  "reviewSignal": { "present": true, "source": "ambient-env", "kind": "review-execution" },
-  "env": { "PACK_REVIEWER": "<redacted>", "REVIEW_COMMAND": "<redacted>" },
+  "description": "ordinary session with an ambient-sourced marker-shaped value \u2014 not reviewer-path",
+  "surface": "claude",
+  "reviewSignal": {
+    "present": true,
+    "source": "ambient-env",
+    "kind": "review-execution"
+  },
+  "env": {
+    "PACK_REVIEWER": "<redacted>",
+    "REVIEW_COMMAND": "<redacted>"
+  },
   "workUnits": [
     {
       "key": "unit-ambient-marker",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/flagged-target.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/flagged-target.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "edits": [],
       "statusText": "ordinary bulk read without delegation"
     }

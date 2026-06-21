@@ -1,29 +1,59 @@
 {
   "description": "delegated, edit-exempt, and excepted units all count in denominator",
-  "surface": "cursor",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-delegated",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
-      "shellCommands": ["coworker ask --profile code --question q docs/a.md"]
+      "reads": [
+        {
+          "path": "docs/a.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "shellCommands": [
+        "coworker ask --profile code --question q docs/a.md"
+      ]
     },
     {
       "key": "unit-edit",
       "inboundRequestId": "req-2",
-      "reads": [{ "path": "docs/b.md", "lines": 450, "kind": "file" }],
-      "edits": [{ "path": "docs/b.md" }]
+      "reads": [
+        {
+          "path": "docs/b.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "edits": [
+        {
+          "path": "docs/b.md"
+        }
+      ]
     },
     {
       "key": "unit-excepted",
       "inboundRequestId": "req-3",
-      "reads": [{ "path": "docs/c.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/c.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "statusText": "Below the floor for a follow-up read; this unit still fired on aggregate."
     },
     {
       "key": "unit-flagged",
       "inboundRequestId": "req-4",
-      "reads": [{ "path": "docs/d.md", "lines": 450, "kind": "file" }]
+      "reads": [
+        {
+          "path": "docs/d.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ]
     }
   ],
   "expectSummary": {

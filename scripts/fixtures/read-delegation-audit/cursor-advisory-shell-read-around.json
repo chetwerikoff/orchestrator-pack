@@ -1,0 +1,32 @@
+{
+  "description": "Shell read-around on advisory corpus is shell-read-around, not satisfied",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-shell",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "shellCommands": [
+        "head -n 450 docs/large-draft.md"
+      ],
+      "edits": [],
+      "statusText": "shell read-around"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "shell-read-around",
+    "shellReadAround": true,
+    "advisorySatisfied": false
+  }
+}

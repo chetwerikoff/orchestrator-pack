@@ -1,12 +1,22 @@
 {
-  "description": "near-floor read followed by edit of other file in unit — not flagged",
-  "surface": "cursor",
+  "description": "near-floor read followed by edit of other file in unit \u2014 not flagged",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-edit-other",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/read-prep.md", "lines": 450, "kind": "file" }],
-      "edits": [{ "path": "scripts/edit-target.ps1" }],
+      "reads": [
+        {
+          "path": "docs/read-prep.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "edits": [
+        {
+          "path": "scripts/edit-target.ps1"
+        }
+      ],
       "statusText": "read-for-edit cross file"
     }
   ],

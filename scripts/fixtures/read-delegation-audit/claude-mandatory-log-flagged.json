@@ -1,9 +1,9 @@
 {
-  "description": ">200-line log on Cursor is advisory, not flagged",
-  "surface": "cursor",
+  "description": "Claude >200-line log stays mandatory and flagged",
+  "surface": "claude",
   "workUnits": [
     {
-      "key": "unit-log-flagged",
+      "key": "unit-claude-log",
       "inboundRequestId": "req-1",
       "reads": [
         {
@@ -18,9 +18,8 @@
   ],
   "expect": {
     "triggerFired": true,
-    "excludedFromDenominator": true,
-    "flagged": false,
-    "inDenominator": false,
-    "advisory": true
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
   }
 }
