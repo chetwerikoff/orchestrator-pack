@@ -197,10 +197,22 @@ function Invoke-PlannedFirstReviewSend {
 
     $cycleKey = "run:$([string]$Action.runId)"
     $sessionId = [string]$Action.sessionId
-    $workerTarget = "$sessionId`:$sessionId"
+    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber ([int]$Action.prNumber) -SessionId $sessionId `
+        -HeadSha ([string]$Action.targetSha) -ProjectId $Project
+    if (-not $targetResolution.ok) {
+        Write-ReviewSendLog "send suppressed (PR-claim target unresolved) run=$($Action.runId): $($targetResolution.reason)"
+        return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
+    }
+    $targetId = [string]$targetResolution.targetId
+    $targetGeneration = [string]$targetResolution.targetGeneration
+    $workerTarget = [string]$targetResolution.workerTarget
+    if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
+    $sendSessionId = [string]$targetResolution.ownerSessionId
+    if (-not $sendSessionId) { $sendSessionId = $sessionId }
     $tupleKey = "$([int]$Action.prNumber)|$cycleKey|findings-delivery|$workerTarget"
     $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'findings-delivery' `
-        -WorkerTarget $workerTarget -SessionId $sessionId -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project
+        -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
+        -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project
     if (-not $claim.acquired) {
         Write-ReviewSendLog "send suppressed by claim gate run=$($Action.runId): $($claim.reason)"
         return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
@@ -213,7 +225,7 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $false; reason = [string]$sendAttempt.reason }
     }
 
-    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$sessionId"
+    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$sendSessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'
     $sendFailed = $false

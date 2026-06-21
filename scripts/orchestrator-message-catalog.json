@@ -55,7 +55,7 @@
         "file": "scripts/ci-green-wake-reconcile.ps1",
         "function": "Invoke-PlannedCiGreenWakeSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "39299c910e7c74f9"
+        "predicateBodyHash": "6a153ec320896beb"
       }
     },
     {
@@ -176,7 +176,7 @@
         "file": "scripts/review-send-reconcile.ps1",
         "function": "Invoke-PlannedFirstReviewSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "52518727bf6d5706"
+        "predicateBodyHash": "b38612c34ed2111e"
       }
     },
     {

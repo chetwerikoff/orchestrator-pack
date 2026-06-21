@@ -464,6 +464,31 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(invokeText).not.toMatch(/File \$journaledScript \$SessionId -Source/);
   });
 
+
+  it('resolves reconcile script tuples from PR ownership claim', () => {
+    const ciGreen = readFileSync(
+      path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+      'utf8',
+    );
+    const reviewSend = readFileSync(
+      path.join(repoRoot, 'scripts/review-send-reconcile.ps1'),
+      'utf8',
+    );
+    for (const script of [ciGreen, reviewSend]) {
+      expect(script).toMatch(/Resolve-WorkerNudgeTargetFromPrClaim/);
+      expect(script).not.toMatch(/\$workerTarget = "\$sessionId`:\$sessionId"/);
+      expect(script).toMatch(/-TargetId \$targetId -TargetGeneration \$targetGeneration/);
+    }
+  });
+
+  it('passes GatedNudge marker from ci-green wake journaled send', () => {
+    const ciGreen = readFileSync(
+      path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+      'utf8',
+    );
+    expect(ciGreen).toMatch(/-ClaimToken \$claimToken -GatedNudge -NoWait/);
+  });
+
 describe('opk-rev-689 incident fixture', () => {
   it('loads capture-backed fixture and collapses duplicate review-findings nudges', () => {
     const fixturePath = path.join(fixturesDir, 'opk-rev-689.json');
