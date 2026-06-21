@@ -223,7 +223,6 @@ function main() {
     baseLegacyListContent: readGitFile(repoRoot, baseSha, legacyListPath),
     headLegacyListContent: readGitFile(repoRoot, headSha, legacyListPath),
     baseAuthorizations: JSON.parse(readGitFile(repoRoot, baseSha, AUTHORIZATIONS_REL_PATH) ?? '{"authorizations":[]}'),
-    headAuthorizationsContent: readGitFile(repoRoot, headSha, AUTHORIZATIONS_REL_PATH),
     authFileChanged: changedFiles.includes(AUTHORIZATIONS_REL_PATH),
     bootstrap,
     baseResolvable,

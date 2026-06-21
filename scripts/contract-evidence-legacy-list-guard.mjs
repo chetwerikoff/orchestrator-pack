@@ -396,6 +396,7 @@ function authorizationRecordId(record) {
  * @param {Record<string, unknown>} baseStore
  * @param {string | null | undefined} headAuthorizationsContent
  */
+/** Shape validator for admin/trusted-path authorization-store deltas (not PR auto-pass). */
 export function validateTrustedAuthorizationStoreDelta(baseStore, headAuthorizationsContent) {
   /** @type {string[]} */
   const errors = [];
@@ -682,23 +683,13 @@ export function evaluateLegacyListGuard(options) {
   }
 
   if (isAuthorizationOnlyGovernedChange(changedGovernedFiles, legacyListPath) && added.length === 0) {
-    const trustedDelta = validateTrustedAuthorizationStoreDelta(
-      options.baseAuthorizations ?? { authorizations: [] },
-      options.headAuthorizationsContent,
-    );
-    if (!trustedDelta.ok) {
-      return {
-        ...baseVerdict,
-        reason: `authorization-store update rejected: ${trustedDelta.errors.join('; ')}`,
-      };
-    }
     return {
       ...baseVerdict,
-      verdict: 'pass',
-      expected: 'pass',
+      verdict: 'fail',
+      expected: 'fail',
       addedPaths: added,
       removedPaths: removed,
-      reason: 'authorization-store update approved via maintainer trusted-approval delta',
+      reason: 'authorization-store updates must use a maintainer-owned path outside ordinary PRs; records must pre-exist on merge base',
       policyPass: false,
     };
   }

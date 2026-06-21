@@ -53,7 +53,6 @@ type GuardCaseOverrides = {
   baseLegacyListContent?: string | null;
   headLegacyListContent?: string | null;
   baseAuthorizations?: { authorizations: Array<Record<string, unknown>> };
-  headAuthorizationsContent?: string;
   authFileChanged?: boolean;
   bootstrap?: boolean;
   baseResolvable?: boolean;
@@ -77,7 +76,6 @@ function runGuardCase(overrides: GuardCaseOverrides) {
     baseLegacyListContent: overrides.baseLegacyListContent ?? baseLegacyFixture,
     headLegacyListContent: overrides.headLegacyListContent ?? baseLegacyFixture,
     baseAuthorizations: overrides.baseAuthorizations ?? { authorizations: [] },
-    headAuthorizationsContent: overrides.headAuthorizationsContent,
     authFileChanged: overrides.authFileChanged,
     bootstrap: overrides.bootstrap,
     baseResolvable: overrides.baseResolvable,
@@ -206,53 +204,29 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/admin-authorized/);
   });
 
-  it('AC2d passes authorization-only governed update from empty store with maintainer trusted approval', () => {
-    const headAuthorizationsContent = JSON.stringify({
-      authorizations: [{
-        id: 'auth-bootstrap',
-        baseSha: 'base1111111111111111111111111111111111111111',
-        headSha: 'head2222222222222222222222222222222222222222',
-        addedPaths: [],
-        changedGovernedFiles: [AUTHORIZATIONS_REL_PATH],
-        source: { type: 'maintainer', id: 'admin-bootstrap' },
-        reason: 'bootstrap authorization store',
-      }],
-    });
+  it('AC2d rejects authorization-only governed update via ordinary PR (non-PR-controlled trust root)', () => {
     const verdict = runGuardCase({
       changedFiles: [AUTHORIZATIONS_REL_PATH],
       baseAuthorizations: { authorizations: [] },
-      headAuthorizationsContent,
       authFileChanged: true,
     });
-    expect(verdict.verdict).toBe('pass');
-    expect(verdict.reason).toMatch(/maintainer trusted-approval delta/);
+    expect(verdict.verdict).toBe('fail');
+    expect(verdict.expected).toBe('fail');
+    expect(verdict.reason).toMatch(/maintainer-owned path outside ordinary PRs/);
     expect(isAuthorizationOnlyGovernedChange(
       [AUTHORIZATIONS_REL_PATH],
       'scripts/contract-evidence-legacy-drafts.json',
     )).toBe(true);
   });
 
-  it('rejects authorization-only update forged with pr-sourced records', () => {
-    const headAuthorizationsContent = JSON.stringify({
-      authorizations: [{
-        id: 'forged',
-        baseSha: 'base1111111111111111111111111111111111111111',
-        headSha: 'head2222222222222222222222222222222222222222',
-        addedPaths: ['docs/issues_drafts/99-new-draft.md'],
-        changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
-        source: { type: 'pr', id: '379' },
-        reason: 'self-forged authorization',
-      }],
-    });
+  it('rejects authorization-only update even when forged with maintainer source metadata', () => {
     const verdict = runGuardCase({
       changedFiles: [AUTHORIZATIONS_REL_PATH],
       baseAuthorizations: { authorizations: [] },
-      headAuthorizationsContent,
       authFileChanged: true,
     });
     expect(verdict.verdict).toBe('fail');
-    expect(verdict.reason).toMatch(/authorization-store update rejected/);
-    expect(verdict.reason).toMatch(/maintainer trusted approval/);
+    expect(verdict.reason).toMatch(/maintainer-owned path outside ordinary PRs/);
   });
 
   it('authorizationHeadShaMatches enforces exact head on direct base binding', () => {
