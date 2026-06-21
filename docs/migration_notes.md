@@ -1396,3 +1396,5 @@ Cycle state persists in the existing reconcile state files (`cycleState` key alo
    — confirm the check name appears in `required_status_checks.contexts` and `required_status_checks.strict` is `true`.
 5. To authorize a legitimate legacy-path addition: an admin merges a scoped entry into `scripts/contract-evidence-legacy-authorizations.json` on the merge base **before** the ordinary PR that adds the path (same-diff self-authorization is rejected).
 
+Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml` on `pull_request_target` (merge-base workflow definition), not from PR-head `scope-guard.yml`. Authorization records bind `headSha` plus the exact `addedPaths` / `changedGovernedFiles` set; `baseSha` is optional audit metadata because the merge-base SHA is not knowable before the admin commit lands.
+

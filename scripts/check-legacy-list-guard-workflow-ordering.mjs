@@ -6,14 +6,19 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+export const LEGACY_LIST_GUARD_WORKFLOW_REL_PATH = '.github/workflows/contract-evidence-legacy-list-guard.yml';
+
 /**
  * @param {string} workflowContent
  */
 export function validateLegacyListGuardWorkflowOrdering(workflowContent) {
   /** @type {string[]} */
   const errors = [];
+  if (!/pull_request_target:/.test(workflowContent)) {
+    errors.push('workflow must trigger on pull_request_target so PRs cannot neuter job steps');
+  }
   const jobMatch = workflowContent.match(
-    /contract-evidence-legacy-list-guard:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|$)/,
+    /contract-evidence-legacy-list-guard:[\s\S]*?(?=\n[a-zA-Z0-9_-]+:|$)/,
   );
   if (!jobMatch) {
     errors.push('missing contract-evidence-legacy-list-guard job');
@@ -37,6 +42,9 @@ export function validateLegacyListGuardWorkflowOrdering(workflowContent) {
   }
   if (!trustedPath) {
     errors.push('job must run guard from trusted-legacy-list-guard path');
+  }
+  if (/LEGACY_LIST_GUARD_BOOTSTRAP/.test(job)) {
+    errors.push('job must not expose reusable bootstrap environment override');
   }
   if (privilegedBeforeGuard) {
     errors.push('privileged auth material must not appear before trusted guard step');
@@ -67,7 +75,7 @@ export function validateLegacyListGuardWorkflowOrdering(workflowContent) {
  * @param {string} repoRoot
  */
 export function runLegacyListGuardWorkflowOrderingCheck(repoRoot) {
-  const workflowPath = path.join(repoRoot, '.github/workflows/scope-guard.yml');
+  const workflowPath = path.join(repoRoot, LEGACY_LIST_GUARD_WORKFLOW_REL_PATH);
   const content = readFileSync(workflowPath, 'utf8');
   return validateLegacyListGuardWorkflowOrdering(content);
 }

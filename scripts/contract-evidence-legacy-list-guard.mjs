@@ -16,6 +16,56 @@ export const AUTHORIZATIONS_REL_PATH = 'scripts/contract-evidence-legacy-authori
 export const GUARD_MODULE_REL_PATH = 'scripts/contract-evidence-legacy-list-guard.mjs';
 export const VERDICT_BINDING_ID = 'orchestrator-pack:legacy-list-guard-verdict';
 
+const LOCAL_IMPORT_RE = /(?:import|export)\s+(?:[^'";]*?from\s+)?['"](\.\.?\/[^'"]+)['"]/g;
+
+/**
+ * @param {string} fromRel
+ * @param {string} spec
+ */
+export function resolveRelativeImport(fromRel, spec) {
+  const fromDir = path.posix.dirname(fromRel.replace(/\\/g, '/'));
+  let resolved = path.posix.normalize(path.posix.join(fromDir, spec.replace(/\\/g, '/')));
+  if (!resolved.endsWith('.mjs') && !resolved.endsWith('.json') && !resolved.endsWith('.mts')) {
+    resolved = `${resolved}.mjs`;
+  }
+  return resolved;
+}
+
+/**
+ * @param {string} trustedRoot
+ * @param {string} entrypointRel
+ */
+export function collectEntrypointDependencyClosure(trustedRoot, entrypointRel) {
+  /** @type {Set<string>} */
+  const closure = new Set();
+  /** @type {string[]} */
+  const queue = [entrypointRel.replace(/\\/g, '/')];
+
+  while (queue.length > 0) {
+    const rel = queue.pop();
+    if (!rel || closure.has(rel)) {
+      continue;
+    }
+    const full = path.join(trustedRoot, rel);
+    if (!existsSync(full)) {
+      continue;
+    }
+    closure.add(rel);
+    const content = readFileSync(full, 'utf8');
+    LOCAL_IMPORT_RE.lastIndex = 0;
+    let match = LOCAL_IMPORT_RE.exec(content);
+    while (match) {
+      const resolved = resolveRelativeImport(rel, match[1] ?? '');
+      if (!closure.has(resolved)) {
+        queue.push(resolved);
+      }
+      match = LOCAL_IMPORT_RE.exec(content);
+    }
+  }
+
+  return closure;
+}
+
 /**
  * @typedef {Object} LegacyListGuardVerdict
  * @property {'pass' | 'fail'} verdict
@@ -83,6 +133,22 @@ export function validateManifestClosure(trustedRoot, manifest) {
   const entrypoint = String(manifest.pinnedEntrypoint ?? '').replace(/\\/g, '/');
   if (entrypoint && !governed.has(entrypoint)) {
     errors.push(`pinned entrypoint is not listed in governed files: ${entrypoint}`);
+  }
+  if (entrypoint) {
+    const actualClosure = collectEntrypointDependencyClosure(trustedRoot, entrypoint);
+    for (const rel of actualClosure) {
+      if (!governed.has(rel)) {
+        errors.push(`entrypoint dependency is not listed in governed files: ${rel}`);
+      }
+    }
+    const declaredDeps = new Set(
+      (manifest.pinnedEntrypointDependencies ?? []).map((rel) => String(rel).replace(/\\/g, '/')),
+    );
+    for (const rel of actualClosure) {
+      if (rel !== entrypoint && !declaredDeps.has(rel)) {
+        errors.push(`entrypoint dependency missing from pinnedEntrypointDependencies: ${rel}`);
+      }
+    }
   }
   return { ok: errors.length === 0, errors };
 }
@@ -154,7 +220,8 @@ export function findMatchingAuthorization(authorizations, scope) {
   const wantAdded = [...scope.addedPaths].map((entry) => canonicalLegacyDraftPath(entry) ?? entry).sort();
   const wantChanged = [...scope.changedGovernedFiles].sort();
   for (const auth of authorizations) {
-    if (String(auth.baseSha ?? '') !== scope.baseSha) {
+    const authBaseSha = String(auth.baseSha ?? '').trim();
+    if (authBaseSha && authBaseSha !== scope.baseSha) {
       continue;
     }
     if (String(auth.headSha ?? '') !== scope.headSha) {

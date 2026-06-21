@@ -92,8 +92,6 @@ function main() {
   const repoRoot = process.env.LEGACY_LIST_GUARD_REPO_ROOT ?? path.dirname(trustedRoot);
   const baseSha = process.env.LEGACY_LIST_GUARD_BASE_SHA ?? '';
   const headSha = process.env.LEGACY_LIST_GUARD_HEAD_SHA ?? '';
-  const forcedBootstrap = process.env.LEGACY_LIST_GUARD_BOOTSTRAP === '1';
-
   if (!baseSha || !headSha) {
     const verdict = evaluateLegacyListGuard({
       baseSha: baseSha || 'missing',
@@ -107,7 +105,7 @@ function main() {
   }
 
   const guardOnBase = isGuardPresentOnBase(trustedRoot);
-  const bootstrap = forcedBootstrap || !guardOnBase;
+  const bootstrap = !guardOnBase;
 
   /** @type {ReturnType<typeof loadGovernedManifest>} */
   let manifest;

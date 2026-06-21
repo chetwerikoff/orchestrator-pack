@@ -12,7 +12,7 @@
     "scripts/run-contract-evidence-legacy-list-guard.mjs",
     "scripts/contract-evidence-legacy-list-guard.test.ts",
     "scripts/check-legacy-list-guard-workflow-ordering.mjs",
-    ".github/workflows/scope-guard.yml"
+    ".github/workflows/contract-evidence-legacy-list-guard.yml"
   ],
   "fixtureRoots": [
     "tests/fixtures/legacy-list-guard"

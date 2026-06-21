@@ -149,7 +149,7 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.reason).toMatch(/unauthorized legacy path addition/);
   });
 
-  it('AC2 passes authorized path addition bound to base/head SHA', () => {
+  it('AC2 passes authorized path addition bound to head SHA and path set', () => {
     const added = ['docs/issues_drafts/99-new-draft.md'];
     const changedFiles = ['scripts/contract-evidence-legacy-drafts.json'];
     const verdict = runGuardCase({
@@ -161,7 +161,6 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
       baseAuthorizations: {
         authorizations: [{
           id: 'auth-1',
-          baseSha: 'base1111111111111111111111111111111111111111',
           headSha: 'head2222222222222222222222222222222222222222',
           addedPaths: added,
           changedGovernedFiles: changedFiles,
@@ -274,16 +273,15 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(changed).toContain('scripts/contract-evidence-legacy-list-guard.mjs');
   });
 
-  it('AC11 workflow ordering check passes for scope-guard wiring', () => {
+  it('AC11 workflow ordering check passes for trusted workflow wiring', () => {
     const result = runLegacyListGuardWorkflowOrderingCheck(repoRoot);
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
   });
 
-  it('AC12 rejects stale authorization binding', () => {
+  it('AC12 rejects stale authorization binding on head SHA', () => {
     const match = findMatchingAuthorization([{
-      baseSha: 'other-base',
-      headSha: 'head2222222222222222222222222222222222222222',
+      headSha: 'other-head',
       addedPaths: ['docs/issues_drafts/99-new-draft.md'],
       changedGovernedFiles: ['scripts/contract-evidence-legacy-drafts.json'],
       source: { type: 'maintainer', id: 'stale' },
@@ -347,6 +345,19 @@ describe('legacy-list guard evaluateLegacyListGuard', () => {
     expect(verdict.verdict).toBe('fail');
     expect(verdict.expected).toBe('fail');
     expect(verdict.bindingId).toBe('orchestrator-pack:legacy-list-guard-verdict');
+  });
+
+  it('fails manifest closure when entrypoint imports an ungoverned helper', () => {
+    const manifest = loadGovernedManifest(repoRoot);
+    const broken = {
+      ...manifest,
+      pinnedEntrypointDependencies: (manifest.pinnedEntrypointDependencies ?? []).filter(
+        (rel) => rel !== 'scripts/contract-evidence-legacy-list-guard.mjs',
+      ),
+    };
+    const closure = validateManifestClosure(repoRoot, broken);
+    expect(closure.ok).toBe(false);
+    expect(closure.errors.join('\n')).toMatch(/entrypoint dependency/);
   });
 
   it('validates governed manifest closure on trusted root', () => {
