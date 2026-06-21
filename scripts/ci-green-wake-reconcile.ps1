@@ -311,8 +311,12 @@ function Invoke-PlannedCiGreenWakeSend {
 
     $cycleKey = "transition:$([string]$Action.transitionId)"
     $sessionId = [string]$Action.sessionId
+    $openPrs = @()
+    if ($FreshPayload -and $FreshPayload.openPrs) {
+        $openPrs = @($FreshPayload.openPrs)
+    }
     $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber ([int]$Action.prNumber) -SessionId $sessionId `
-        -HeadSha ([string]$Action.headSha) -ProjectId $ProjectId
+        -HeadSha ([string]$Action.headSha) -ProjectId $ProjectId -OpenPrs $openPrs
     if (-not $targetResolution.ok) {
         Write-CiGreenWakeLog "nudge suppressed (PR-claim target unresolved) PR #$($Action.prNumber): $($targetResolution.reason)"
         return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
@@ -351,37 +355,11 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
-    $deliveredAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $dispatchResult = Register-WorkerMessageDispatch -SessionId $sendSessionId -Message $Action.message `
-        -Source 'pack-send' -SourceKey "ci-green:$($Action.transitionId)" `
-        -DeliveredAtMs $deliveredAtMs
-    $outcome = Resolve-DispatchJournalSendOutcome -DispatchResult $dispatchResult
-    if ($outcome.journalRecorded) {
-        return @{
-            sent            = $true
-            delivered       = $true
-            journalRecorded = $true
-            reason          = 'sent'
-        }
-    }
-
-    $dispatchReason = if ($outcome.journalFailureReason) {
-        [string]$outcome.journalFailureReason
-    }
-    else {
-        [string]$outcome.reason
-    }
-    Write-CiGreenWakeLog "dispatch journal record failed PR #$($Action.prNumber): $dispatchReason (ao send delivered; journal pending retry)"
     return @{
-        sent                 = $false
-        delivered            = $true
-        journalRecorded      = $false
-        journalFailureReason = $dispatchReason
-        reason               = 'journal_record_failed'
-        sessionId            = [string]$Action.sessionId
-        message              = [string]$Action.message
-        transitionId         = [string]$Action.transitionId
-        deliveredAtMs        = $deliveredAtMs
+        sent            = $true
+        delivered       = $true
+        journalRecorded = $true
+        reason          = 'sent'
     }
 }
 

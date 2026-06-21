@@ -224,6 +224,35 @@ export function syncPrOwnershipClaimRecord(input) {
 /**
  * @param {object} input
  */
+/**
+ * @param {object} input
+ */
+export function resolvePrOwnerSessionForNudge(input) {
+  const prNumber = Number(input.prNumber);
+  const sessionId = String(input.sessionId ?? '').trim();
+  const headSha = normalizeHeadSha(input.headSha ?? '');
+  const sessions = toArray(input.sessions);
+  const openPrs = toArray(input.openPrs);
+
+  const ownerSessionId = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+  if (!ownerSessionId) {
+    return { ok: false, reason: 'pr_owner_unresolved' };
+  }
+  if (sessionId && headSha && ownerSessionId !== sessionId) {
+    return { ok: false, reason: 'head_owner_mismatch' };
+  }
+  if (sessionId && !headSha) {
+    const sessionOk = sessions.some(
+      (session) => getSessionIdentifier(session) === sessionId && sessionMatchesPr(session, prNumber),
+    );
+    if (!sessionOk) {
+      return { ok: false, reason: 'pr_session_mismatch' };
+    }
+    return { ok: true, ownerSessionId: sessionId };
+  }
+  return { ok: true, ownerSessionId };
+}
+
 export function resolveWorkerTargetFromPrClaim(input) {
   const prNumber = Number(input.prNumber);
   const sessionId = String(input.sessionId ?? '').trim();
@@ -818,4 +847,5 @@ runStdinJsonCli('worker-nudge-gate.mjs', {
   remapLegacy332: () => remapLegacy332Record(readStdinJson()),
   syncPrOwnershipClaim: () => syncPrOwnershipClaimRecord(readStdinJson()),
   resolveWorkerTarget: () => resolveWorkerTargetFromPrClaim(readStdinJson()),
+  resolvePrOwnerSession: () => resolvePrOwnerSessionForNudge(readStdinJson()),
 });

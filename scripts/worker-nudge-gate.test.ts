@@ -21,6 +21,7 @@ import {
   finalizeClaim,
   findForbiddenAutonomousWorkerSendInvocations,
   remapLegacy332Record,
+  resolvePrOwnerSessionForNudge,
   resolveWorkerTargetFromPrClaim,
   syncPrOwnershipClaimRecord,
 } from '../docs/worker-nudge-gate.mjs';
@@ -433,6 +434,50 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     }
   });
 
+  it('resolves head owner when multiple PR sessions exist', () => {
+    const headSha = 'a'.repeat(40);
+    const result = resolvePrOwnerSessionForNudge({
+      prNumber: 380,
+      sessionId: 'opk-owner',
+      headSha,
+      sessions: [
+        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        {
+          name: 'opk-owner',
+          role: 'worker',
+          prNumber: 380,
+          ownedHeadSha: headSha,
+          runtime: 'alive',
+        },
+      ],
+      openPrs: [{ number: 380, headRefOid: headSha }],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ownerSessionId).toBe('opk-owner');
+  });
+
+  it('rejects supplied session when it does not own head', () => {
+    const headSha = 'b'.repeat(40);
+    const result = resolvePrOwnerSessionForNudge({
+      prNumber: 380,
+      sessionId: 'opk-stale',
+      headSha,
+      sessions: [
+        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        {
+          name: 'opk-owner',
+          role: 'worker',
+          prNumber: 380,
+          ownedHeadSha: headSha,
+          runtime: 'alive',
+        },
+      ],
+      openPrs: [{ number: 380, headRefOid: headSha }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('head_owner_mismatch');
+  });
+
   it('matches PR ownership fallback only when session pr URL equals requested PR', () => {
     const script = `
       . ${psString(helperPath)}
@@ -517,6 +562,17 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       expect(script).not.toMatch(/\$workerTarget = "\$sessionId`:\$sessionId"/);
       expect(script).toMatch(/-TargetId \$targetId -TargetGeneration \$targetGeneration/);
     }
+  });
+
+  it('does not register dispatch journal twice after journaled CI-green send', () => {
+    const ciGreen = readFileSync(
+      path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+      'utf8',
+    );
+    expect(ciGreen).toMatch(/journaled-worker-send\.ps1/);
+    expect(ciGreen).not.toMatch(
+      /Register-WorkerMessageDispatch -SessionId \$sendSessionId -Message \$Action\.message/,
+    );
   });
 
   it('passes GatedNudge marker from ci-green wake journaled send', () => {

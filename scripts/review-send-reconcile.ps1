@@ -197,8 +197,12 @@ function Invoke-PlannedFirstReviewSend {
 
     $cycleKey = "run:$([string]$Action.runId)"
     $sessionId = [string]$Action.sessionId
+    $openPrs = @()
+    if ($FreshPayload -and $FreshPayload.openPrs) {
+        $openPrs = @($FreshPayload.openPrs)
+    }
     $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber ([int]$Action.prNumber) -SessionId $sessionId `
-        -HeadSha ([string]$Action.targetSha) -ProjectId $Project
+        -HeadSha ([string]$Action.targetSha) -ProjectId $Project -OpenPrs $openPrs
     if (-not $targetResolution.ok) {
         Write-ReviewSendLog "send suppressed (PR-claim target unresolved) run=$($Action.runId): $($targetResolution.reason)"
         return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }

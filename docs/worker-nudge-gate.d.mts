@@ -12,6 +12,7 @@ export declare function normalizeHeadSha(sha: string | undefined | null): string
 export declare function canonicalizeStorePath(storePath: string): string;
 export declare function canonicalStoreId(storePath: string): string;
 export declare function syncPrOwnershipClaimRecord(input: Record<string, unknown>): Record<string, unknown>;
+export declare function resolvePrOwnerSessionForNudge(input: Record<string, unknown>): Record<string, unknown>;
 export declare function resolveWorkerTargetFromPrClaim(input: Record<string, unknown>): Record<string, unknown>;
 export declare function buildWorkerTarget(input: Record<string, unknown>): {
   workerTarget: string;

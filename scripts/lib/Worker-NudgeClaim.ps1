@@ -750,6 +750,7 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
         [string]$HeadSha = '',
         [string]$ProjectId = 'orchestrator-pack',
         [object[]]$Sessions = @(),
+        [object[]]$OpenPrs = @(),
         [string]$SessionsDir = ''
     )
 
@@ -764,25 +765,17 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
         $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId
     }
 
-    $ownerSessionId = $null
-    foreach ($session in $Sessions) {
-        $name = [string]$session.name
-        $sessionPr = [int]$session.prNumber
-        if ($sessionPr -eq $PrNumber -and $name) {
-            $ownerSessionId = $name
-            break
-        }
+    $ownerResolve = Invoke-WorkerNudgeFilterCli -Subcommand 'resolvePrOwnerSession' -Payload @{
+        prNumber  = $PrNumber
+        sessionId = $SessionId
+        headSha   = $HeadSha
+        sessions  = @($Sessions)
+        openPrs   = @($OpenPrs)
     }
-    if (-not $ownerSessionId) {
-        foreach ($session in $Sessions) {
-            $name = [string]$session.name
-            $prField = [string]$session.pr
-            if ($name -and (Test-WorkerNudgeSessionPrFieldMatches -PrField $prField -PrNumber $PrNumber)) {
-                $ownerSessionId = $name
-                break
-            }
-        }
+    if (-not $ownerResolve.ok) {
+        return @{ ok = $false; reason = [string]$ownerResolve.reason }
     }
+    $ownerSessionId = [string]$ownerResolve.ownerSessionId
     if (-not $ownerSessionId) {
         return @{ ok = $false; reason = 'pr_owner_unresolved' }
     }
