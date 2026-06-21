@@ -1,0 +1,17 @@
+{
+  "issue_number": 388,
+  "iteration_id": "opk-167",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-21T14:58:42.352Z",
+  "baseline": {
+    "commit_sha": "5a56de5e2c1b3cc80cce65af6aa1ec5f36a9aec9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:59f03f1d0e6191cb83e44a9da8653ee0ea6683487669443999e192f306fa5d20"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}
