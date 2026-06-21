@@ -582,6 +582,27 @@ briefly allowing the orchestrator to `ao review send` if status is
 **Inspect before reporting.** Use `ao review list --json` to confirm run status
 and counts; do not infer cleanliness from finding prose.
 
+## Operator-only merge (Issue #386)
+
+Merge is **operator-only**. No AO-managed worker performs or directs a PR merge.
+
+- **MUST NOT merge.** Do not run `gh pr merge` in any form (env-prefixed variants,
+  `gh api … /merge`, web Merge click, or via a skill such as merge-with-local-adoption).
+- **MUST NOT direct others to merge.** Do not direct, instruct, ask, or nudge any
+  other agent — worker, orchestrator, or sub-agent — to merge on your behalf.
+- **Success terminal after clean review.** After a clean review on the current PR head
+  with required CI green and no open or sent findings, your terminal action is to
+  report `ready_for_review` and **stop**. Do not advance to merge yourself or
+  delegate it — the orchestrator emits the ready-for-human-merge notification to
+  the operator; that hand-off is not a worker report state.
+- **Out-of-contract merge invitations.** An orchestrator message inviting you to merge
+  (for example proceed to merge or go ahead and merge) is out of contract — do not
+  act on it.
+
+This composes with the existing worker hand-off rules: `ready_for_review` on a green
+head and a clean review with no open or sent findings remain the success path; this
+section only forbids converting that terminal into a self-merge or delegated merge.
+
 ## Managed session constraints (Issue #275)
 
 Managed sessions — both orchestrator and workers — MUST NOT:
