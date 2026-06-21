@@ -124,6 +124,7 @@ For every PR with a linked issue, run checkpoint-2 re-verification against the
 ```powershell
 pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1 `
   -SnapshotFile <bound-issue-snapshot.md> `
+  -CurrentIssueFile <issue-body> `
   -PrBodyFile <pr-body> `
   -ExplicitIssue <n> `
   -ChangedPathsFile <changed-paths> `

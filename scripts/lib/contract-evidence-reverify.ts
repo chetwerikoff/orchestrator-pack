@@ -63,7 +63,6 @@ export const REVERIFY_REASONS = [
   'unsupported-producer',
   'non-genuine-proof',
   'untrusted-pr-modified',
-  'network-sandbox-unavailable',
 ] as const;
 export type ReverifyReason = (typeof REVERIFY_REASONS)[number];
 
@@ -392,7 +391,7 @@ function blockedUnverifiedReason(run: CommandRunResult): ReverifyReason {
     || run.blockReason === 'filesystem-sandbox-unavailable'
     || run.blockReason === 'pr-head-sandbox-unavailable'
   ) {
-    return 'network-sandbox-unavailable';
+    return 'producer-unreachable';
   }
   return 'unsafe-or-undeclared-command';
 }

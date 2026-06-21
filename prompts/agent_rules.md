@@ -200,7 +200,7 @@ each candidate against the diff, producer, and cited spec snapshot before
 assigning severity.
 
 Invoke with `pwsh -NoProfile -File scripts/invoke-contract-evidence-reverify.ps1` using
-`-SnapshotFile`, `-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, and `-Summary`
+`-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, and `-Summary`
 (see `scripts/invoke-contract-evidence-reverify.ps1` for the canonical parameter set).
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for

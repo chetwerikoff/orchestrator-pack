@@ -44,7 +44,7 @@ function expectNewRowWhenFullSandboxAvailable(
   if (!prHeadFullSandboxAvailable) {
     expect(row).toMatchObject({
       status: 'unverified',
-      reason: 'network-sandbox-unavailable',
+      reason: 'producer-unreachable',
       verificationMode: 'not-run',
     });
     return;
