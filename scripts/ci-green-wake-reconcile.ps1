@@ -45,6 +45,8 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -307,16 +309,32 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $true; reason = 'dry_run' }
     }
 
-    Write-CiGreenWakeLog "nudging worker: PR #$($Action.prNumber) head=$($Action.headSha) session=$($Action.sessionId) transition=$($Action.transitionId)"
+    $cycleKey = "transition:$([string]$Action.transitionId)"
+    $sessionId = [string]$Action.sessionId
+    $workerTarget = "$sessionId`:$sessionId"
+    $tupleKey = "$([int]$Action.prNumber)|$cycleKey|ci-green-handoff|$workerTarget"
+    $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'ci-green-handoff' `
+        -WorkerTarget $workerTarget -SessionId $sessionId -TupleKey $tupleKey -Surface 'ci-green-wake-reconcile' -ProjectId $ProjectId
+    if (-not $claim.acquired) {
+        Write-CiGreenWakeLog "nudge suppressed by claim gate PR #$($Action.prNumber): $($claim.reason)"
+        return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
+    }
+    $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
+
+    Write-CiGreenWakeLog "nudging worker: PR #$($Action.prNumber) head=$($Action.headSha) session=$sessionId transition=$($Action.transitionId)"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'ci-green-wake-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'side_effect'
+    $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        & ao @sendArgs
+        [string]$Action.message | pwsh -NoProfile -File $journaledScript $sessionId `
+            -Source 'pack-send' -SourceKey "ci-green:$([string]$Action.transitionId)" `
+            -ClaimToken $claimToken -NoWait
         if ($LASTEXITCODE -ne 0) {
-            throw "ao send failed (exit $LASTEXITCODE) for PR #$($Action.prNumber)"
+            throw "journaled worker send failed (exit $LASTEXITCODE) for PR #$($Action.prNumber)"
         }
     }
     if (-not $fenced.ok) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
         Write-CiGreenWakeLog "nudge skipped (side-effect busy) PR #$($Action.prNumber)"
         return @{ sent = $false; reason = 'side_effect_busy' }
     }

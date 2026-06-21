@@ -49,6 +49,8 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -193,19 +195,34 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $true; reason = 'dry_run' }
     }
 
-    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$($Action.sessionId)"
+    $cycleKey = "run:$([string]$Action.runId)"
+    $sessionId = [string]$Action.sessionId
+    $workerTarget = "$sessionId`:$sessionId"
+    $tupleKey = "$([int]$Action.prNumber)|$cycleKey|findings-delivery|$workerTarget"
+    $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'findings-delivery' `
+        -WorkerTarget $workerTarget -SessionId $sessionId -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project
+    if (-not $claim.acquired) {
+        Write-ReviewSendLog "send suppressed by claim gate run=$($Action.runId): $($claim.reason)"
+        return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
+    }
+
+    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$sessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'
+    $sendFailed = $false
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         & ao @sendArgs
         if ($LASTEXITCODE -ne 0) {
+            $script:sendFailed = $true
             throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
         }
     }
     if (-not $fenced.ok) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
         Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
+    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
 
     $post = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
     $verify = Invoke-ReviewSendFilterCli -Subcommand 'verify-sent' -Payload @{

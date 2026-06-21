@@ -26,6 +26,7 @@ param(
     [string]$AoEpochHash = '',
     [string]$ConfigPathHash = '',
     [string]$AdoptionProbeRunIdHash = '',
+    [string]$ClaimToken = '',
     [switch]$NoWait
 )
 
@@ -34,6 +35,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -230,6 +232,30 @@ if (-not $register.recorded) {
     exit 43
 }
 
+$claimResult = $null
+if (-not $AdoptionProbe -and -not $DryRun) {
+    if (-not $ClaimToken) {
+        Write-JournaledWorkerSendLog 'worker nudge rejected: missing claim token'
+        exit 46
+    }
+    $tokenValidation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'send'
+    if (-not $tokenValidation.ok) {
+        Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenValidation.reason)"
+        exit 46
+    }
+    $claimResult = @{
+        acquired  = $true
+        claim     = $tokenValidation.claim
+        path      = $tokenValidation.path
+        namespace = [string]$tokenValidation.token.namespace
+    }
+    $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claimResult
+    if (-not $attempt.ok) {
+        Write-JournaledWorkerSendLog "worker nudge rejected: claim send-attempt failed reason=$($attempt.reason)"
+        exit 46
+    }
+}
+
 if ($AdoptionProbe) {
     $update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'dispatched' -DraftState 'auto_submitted' -JournalPath $effectiveJournalPath
     if (-not $update.ok) {
@@ -259,6 +285,17 @@ if (-not $update.ok) {
     exit 47
 }
 Write-JournaledWorkerSendLog "dispatch outcome recorded: delivery=$($register.deliveryId) outcome=$($result.outcome) reason=$($result.reason)"
+if ($claimResult) {
+    if ($result.outcome -eq 'dispatched') {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'SENT' | Out-Null
+    }
+    elseif ($result.outcome -eq 'dispatch_unknown') {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'UNCERTAIN' | Out-Null
+    }
+    else {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' -Extra @{ dispatchReason = $result.reason } | Out-Null
+    }
+}
 if ($result.outcome -eq 'dispatched') { exit 0 }
 if ($result.outcome -eq 'dispatch_unknown') { exit 44 }
 exit 45
