@@ -488,7 +488,7 @@ describe('PR-claim worker target resolution (#384)', () => {
       existingClaim: existing,
     });
     expect(resumed.reason).toBe('resume_same_lineage');
-    expect(resumed.record.generation).toBe('gen1');
+    expect((resumed.record as { generation?: string }).generation).toBe('gen1');
 
     const target = resolveWorkerTargetFromPrClaim({
       prNumber: 380,
@@ -515,7 +515,7 @@ describe('PR-claim worker target resolution (#384)', () => {
       existingClaim: prior,
     });
     expect(replacement.reason).toBe('replacement_claim');
-    expect(replacement.record.generation).toBe('opk-2');
+    expect((replacement.record as { generation?: string }).generation).toBe('opk-2');
 
     const target = resolveWorkerTargetFromPrClaim({
       prNumber: 380,
