@@ -1,0 +1,38 @@
+{
+  "description": "Delegated advisory read stays satisfied even if shell also reads corpus",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-delegated-then-shell",
+      "inboundRequestId": "req-delegated-then-shell",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "coworkerEvents": [
+        {
+          "kind": "coworker_ask",
+          "profile": "code"
+        }
+      ],
+      "shellCommands": [
+        "head -n 450 docs/large-draft.md"
+      ],
+      "edits": [],
+      "statusText": "coworker ask then redundant shell read on same corpus"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory-satisfied",
+    "advisorySatisfied": true,
+    "shellReadAround": false
+  }
+}

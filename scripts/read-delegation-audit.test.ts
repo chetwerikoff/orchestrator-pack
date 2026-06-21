@@ -1599,6 +1599,15 @@ describe('Cursor-seat advisory carve-out (Issue #359)', () => {
     );
   });
 
+  it('cursor-advisory-delegated-then-shell.json preserves satisfaction when delegation observed', () => {
+    const result = evaluateFixture('cursor-advisory-delegated-then-shell.json');
+    const verdict = firstVerdict(result);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED);
+    expect(verdict.advisorySatisfied).toBe(true);
+    expect(verdict.shellReadAround).toBe(false);
+    expect(result.summary.advisorySatisfiedUnits).toBe(1);
+  });
+
   it('cursor-advisory-targeted-read.json records advisory-satisfied for offset/limit read', () => {
     const result = evaluateFixture('cursor-advisory-targeted-read.json');
     expect(firstVerdict(result).advisoryOutcome).toBe(

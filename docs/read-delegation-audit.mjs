@@ -493,22 +493,30 @@ export function hasTargetedRead(reads) {
  * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
  */
 export function resolveCursorAdvisoryOutcome(unit, advisoryReads) {
-  const shellReadAround = hasShellReadAround(unit, advisoryReads);
-  if (shellReadAround) {
+  if (hasMachineObservedDelegation(unit)) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+      advisorySatisfied: true,
+      shellReadAround: false,
+    };
+  }
+  if (hasTargetedRead(advisoryRawReads(unit, advisoryReads))) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+      advisorySatisfied: true,
+      shellReadAround: false,
+    };
+  }
+  if (hasShellReadAround(unit, advisoryReads)) {
     return {
       advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
       advisorySatisfied: false,
       shellReadAround: true,
     };
   }
-  const advisorySatisfied =
-    hasMachineObservedDelegation(unit) ||
-    hasTargetedRead(advisoryRawReads(unit, advisoryReads));
   return {
-    advisoryOutcome: advisorySatisfied
-      ? CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED
-      : CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
-    advisorySatisfied,
+    advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+    advisorySatisfied: false,
     shellReadAround: false,
   };
 }
