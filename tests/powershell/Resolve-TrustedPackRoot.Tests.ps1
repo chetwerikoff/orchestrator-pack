@@ -35,6 +35,28 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'ReviewTargetRoot'
     }
 
+    It 'shared trusted-root helpers reject overrides inside the review target' {
+        $commonScript = Join-Path $script:RepoRoot 'scripts/lib/TrustedPackRoot-Common.ps1'
+        $content = Get-Content -LiteralPath $commonScript -Raw
+        $content | Should -Match 'function Test-PathInsideReviewTarget'
+        $content | Should -Match 'function Assert-TrustedRootOverrideEligible'
+        $content | Should -Match 'refusing trusted-root override'
+        $content | Should -Match 'git rev-parse HEAD'
+        $content | Should -Match 'git rev-parse \$BaseRef'
+
+        $launcherScript = Join-Path $script:RepoRoot 'scripts/launch-contract-evidence-reverify.ps1'
+        $launcherContent = Get-Content -LiteralPath $launcherScript -Raw
+        $launcherContent | Should -Match 'Assert-TrustedRootOverrideEligible'
+
+        $resolveScript = Join-Path $script:RepoRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1'
+        $resolveContent = Get-Content -LiteralPath $resolveScript -Raw
+        $resolveContent | Should -Match 'Assert-TrustedRootOverrideEligible'
+
+        $bootstrapScript = Join-Path $script:RepoRoot 'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
+        $bootstrapContent = Get-Content -LiteralPath $bootstrapScript -Raw
+        $bootstrapContent | Should -Match 'Assert-TrustedRootOverrideEligible'
+    }
+
     It 'PR-checkout invoke wrapper refuses direct execution' {
         $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
         $content = Get-Content -LiteralPath $invokeScript -Raw

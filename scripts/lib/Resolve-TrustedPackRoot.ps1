@@ -16,15 +16,19 @@ function Resolve-TrustedPackRoot {
     )
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
+        $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
         return @{
-            Path                  = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
+            Path                  = $trustedRoot
             DisposableTrustedRoot = $false
         }
     }
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
+        $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
         return @{
-            Path                  = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+            Path                  = $trustedRoot
             DisposableTrustedRoot = $false
         }
     }

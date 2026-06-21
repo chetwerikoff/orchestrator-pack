@@ -3,6 +3,83 @@
 .SYNOPSIS
   Shared trusted-pack root helpers for checkpoint-2 reverify (Issue #376).
 #>
+function Test-PathInsideReviewTarget {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CandidatePath,
+        [Parameter(Mandatory)]
+        [string]$ReviewTargetRoot
+    )
+
+    $candidate = [IO.Path]::GetFullPath($CandidatePath).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $reviewTarget = [IO.Path]::GetFullPath($ReviewTargetRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+
+    if ($candidate.Equals($reviewTarget, [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+
+    $reviewPrefix = $reviewTarget + [IO.Path]::DirectorySeparatorChar
+    return $candidate.StartsWith($reviewPrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-TrustedRootOverrideEligible {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$TrustedRoot,
+        [Parameter(Mandatory)]
+        [string]$ReviewTargetRoot,
+        [string]$BaseRef = 'origin/main'
+    )
+
+    if (Test-PathInsideReviewTarget -CandidatePath $TrustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+        throw 'refusing trusted-root override: trusted base equals or lies inside review target'
+    }
+
+    Push-Location $ReviewTargetRoot
+    try {
+        $baseSha = (git rev-parse $BaseRef 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseSha)) {
+            throw "refusing trusted-root override: could not resolve ${BaseRef} from review target"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Push-Location $TrustedRoot
+    try {
+        $gitDir = Join-Path (Get-Location) '.git'
+        if (-not (Test-Path -LiteralPath $gitDir)) {
+            throw 'refusing trusted-root override: path is not a clean git checkout at BaseRef'
+        }
+
+        $status = @(git status --porcelain 2>$null)
+        if ($status.Count -gt 0) {
+            throw 'refusing trusted-root override: trusted checkout has uncommitted changes'
+        }
+
+        $trustedHead = (git rev-parse HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($trustedHead)) {
+            throw 'refusing trusted-root override: could not resolve trusted checkout HEAD'
+        }
+
+        if ($trustedHead -ne $baseSha) {
+            throw "refusing trusted-root override: trusted checkout HEAD does not match ${BaseRef}"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-MainPackWorktreePath {
     [CmdletBinding()]
     param(

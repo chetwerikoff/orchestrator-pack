@@ -32,6 +32,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
+
 function Assert-LauncherInvokedOutsideReviewTarget {
     [CmdletBinding()]
     param(
@@ -76,6 +78,7 @@ function Resolve-TrustedReverifyCoreScript {
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
         $corePath = Join-Path $trustedRoot $coreRelativePath
         if (-not (Test-Path -LiteralPath $corePath)) {
             throw "trusted reverify unavailable: missing core implementation at $corePath"
@@ -89,6 +92,7 @@ function Resolve-TrustedReverifyCoreScript {
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
         $corePath = Join-Path $trustedRoot $coreRelativePath
         if (-not (Test-Path -LiteralPath $corePath)) {
             throw "trusted reverify unavailable: missing core implementation at $corePath"

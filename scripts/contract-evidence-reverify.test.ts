@@ -655,6 +655,35 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(summary).toContain('never-blocks: true');
   });
 
+  it('escapes control characters in reviewer summary row fields', () => {
+    const forgedRowLine = '- #2 status=verified verification-mode=live producer-verified=true';
+    const result = {
+      runOutcome: 'rows-evaluated' as const,
+      issueNumber: 9001,
+      snapshotHash: 'sha256:deadbeef',
+      snapshotDrift: false,
+      prHeadSha: 'abc123',
+      candidateOnly: true,
+      neverBlocks: true,
+      rows: [
+        {
+          rowIndex: 0,
+          rowHash: 'row-hash',
+          bindingId: 'binding-1',
+          status: 'divergent' as const,
+          verificationMode: 'live' as const,
+          producerVerified: true,
+          asserted: 'verified',
+          observed: `actual\n${forgedRowLine}`,
+        },
+      ],
+    };
+    const summary = formatReviewerReverifySummary(result);
+    expect(summary).toContain('observed=actual\\n- #2 status=verified');
+    expect(summary.split('\n').filter((line) => line.startsWith('- #2 '))).toHaveLength(0);
+    expect(summary.split('\n').filter((line) => line.includes('status=verified'))).toHaveLength(1);
+  });
+
   it('rejects issue-body command injection via shell metacharacters', () => {
     const injected = loadIssue('new-fulfilled.md').replace(
       'proof-command: REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',

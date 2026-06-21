@@ -21,6 +21,7 @@ function Get-TrustedBootstrapScriptRoot {
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
         $resolved = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $resolved -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
         foreach ($relativePath in $bootstrapHelperPaths) {
             $candidate = Join-Path $resolved $relativePath
             if (-not (Test-Path -LiteralPath $candidate)) {
@@ -35,6 +36,7 @@ function Get-TrustedBootstrapScriptRoot {
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $resolved = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
+        Assert-TrustedRootOverrideEligible -TrustedRoot $resolved -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
         foreach ($relativePath in $bootstrapHelperPaths) {
             $candidate = Join-Path $resolved $relativePath
             if (-not (Test-Path -LiteralPath $candidate)) {

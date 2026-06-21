@@ -157,9 +157,24 @@ function hashRow(row: Record<string, string>): string {
   return `sha256:${sha256Hex(canonical)}`;
 }
 
+function sanitizeReviewerEvidenceText(text: string): string {
+  return text.replace(/[\u0000-\u001F\u007F]/g, (character) => {
+    switch (character) {
+      case '\n':
+        return '\\n';
+      case '\r':
+        return '\\r';
+      case '\t':
+        return '\\t';
+      default:
+        return `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
+    }
+  });
+}
+
 function boundValue(value: unknown, max = allowlist.maxObservedLength): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  const redacted = text
+  const redacted = sanitizeReviewerEvidenceText(text)
     .replace(/ghp_[A-Za-z0-9]{20,}/g, 'ghp_[REDACTED]')
     .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]')
     .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
@@ -842,13 +857,13 @@ export function formatReviewerReverifySummary(result: ReverifyRunResult): string
       `producer-verified=${row.producerVerified}`,
     ];
     if (row.reason) {
-      parts.push(`reason=${row.reason}`);
+      parts.push(`reason=${sanitizeReviewerEvidenceText(row.reason)}`);
     }
     if (row.asserted !== undefined) {
-      parts.push(`asserted=${row.asserted}`);
+      parts.push(`asserted=${sanitizeReviewerEvidenceText(row.asserted)}`);
     }
     if (row.observed !== undefined) {
-      parts.push(`observed=${row.observed}`);
+      parts.push(`observed=${sanitizeReviewerEvidenceText(row.observed)}`);
     }
     lines.push(`- ${parts.join(' ')}`);
   }
