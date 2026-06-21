@@ -24,6 +24,7 @@ import {
 import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
+  loadMergedAutonomousCapabilitiesInventory,
   validateCapabilityInventory,
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
@@ -545,10 +546,7 @@ export function coalesceDenialAudit(existing, incoming) {
  * @param {string} [inventoryPath]
  */
 export function loadAutonomousReviewStartCapabilities(inventoryPath) {
-  return loadAutonomousCapabilitiesInventory(
-    inventoryPath,
-    'docs/autonomous-review-start-capabilities.json',
-  );
+  return loadMergedAutonomousCapabilitiesInventory(inventoryPath, 'docs/autonomous-review-start-capabilities.json');
 }
 
 /**

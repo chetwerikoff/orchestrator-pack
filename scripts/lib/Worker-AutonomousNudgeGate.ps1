@@ -17,18 +17,9 @@ function Get-WorkerNudgeGateVersion {
 }
 
 function Get-AutonomousWorkerNudgeCapabilityInventory {
-    if (-not (Test-Path -LiteralPath $Script:AutonomousWorkerNudgeCapabilityInventory)) {
-        throw "missing capability inventory: $Script:AutonomousWorkerNudgeCapabilityInventory"
-    }
-    $inventory = Get-Content -LiteralPath $Script:AutonomousWorkerNudgeCapabilityInventory -Raw | ConvertFrom-Json
-    $sharedPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/autonomous-shared-capabilities.json'
-    if (-not (Test-Path -LiteralPath $sharedPath)) { return $inventory }
-    $shared = Get-Content -LiteralPath $sharedPath -Raw | ConvertFrom-Json
-    $byId = @{}
-    foreach ($row in @($shared.capabilities)) { $byId[[string]$row.id] = $row }
-    foreach ($row in @($inventory.capabilities)) { $byId[[string]$row.id] = $row }
-    $inventory.capabilities = @($byId.Values)
-    return $inventory
+    return Get-MergedAutonomousCapabilityInventory `
+        -InventoryPath $Script:AutonomousWorkerNudgeCapabilityInventory `
+        -PackRoot (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 }
 
 function Invoke-WorkerNudgeFilterCli {

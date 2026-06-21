@@ -7,15 +7,17 @@
   "baseline": {
     "commit_sha": "b2239a4",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:100bef9716b1a1c797a14b40b3be009df3a7d53ab4529291dd206f9cdb9856bd"
+    "active_scope_hash": "sha256:ef110014c454f86221ec84b03dfd216bacddf0f65e5be960a894d435bf4f41fd"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
     "docs/autonomous-gate-preflight.mjs",
+    "docs/autonomous-review-start-capabilities.json",
     "docs/autonomous-shared-capabilities.json",
     "docs/autonomous-worker-nudge-capabilities.json",
     "docs/declarations/384.opk-162.json",
     "docs/migration_notes.md",
+    "docs/orchestrator-claimed-review-run.mjs",
     "docs/orchestrator-message-registry.mjs",
     "docs/orchestrator-recovery-runbook.md",
     "docs/worker-nudge-gate.d.mts",
@@ -30,6 +32,7 @@
     "scripts/invoke-gated-worker-nudge.ps1",
     "scripts/journaled-worker-send.ps1",
     "scripts/lib/Autonomous-GateCommon.ps1",
+    "scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1",
     "scripts/lib/Test-WorkerNudgeGateWiring.ps1",
     "scripts/lib/Worker-AutonomousNudgeGate.ps1",
     "scripts/lib/Worker-NudgeAudit.ps1",

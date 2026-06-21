@@ -15,6 +15,35 @@ function Resolve-PackGateRepoRoot {
     return (Resolve-Path -LiteralPath $RepoRoot).Path
 }
 
+function Merge-AutonomousSharedCapabilities {
+    param(
+        [object]$Inventory,
+        [string]$SharedPath
+    )
+
+    if (-not (Test-Path -LiteralPath $SharedPath)) { return $Inventory }
+    $shared = Get-Content -LiteralPath $SharedPath -Raw | ConvertFrom-Json
+    $byId = @{}
+    foreach ($row in @($shared.capabilities)) { $byId[[string]$row.id] = $row }
+    foreach ($row in @($Inventory.capabilities)) { $byId[[string]$row.id] = $row }
+    $Inventory.capabilities = @($byId.Values)
+    return $Inventory
+}
+
+function Get-MergedAutonomousCapabilityInventory {
+    param(
+        [string]$InventoryPath,
+        [string]$PackRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $InventoryPath)) {
+        throw "missing capability inventory: $InventoryPath"
+    }
+    $inventory = Get-Content -LiteralPath $InventoryPath -Raw | ConvertFrom-Json
+    $sharedPath = Join-Path $PackRoot 'docs/autonomous-shared-capabilities.json'
+    return Merge-AutonomousSharedCapabilities -Inventory $inventory -SharedPath $sharedPath
+}
+
 function Get-LiveAutonomousGateCapabilities {
     param(
         [object]$Inventory,

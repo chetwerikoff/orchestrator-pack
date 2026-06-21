@@ -103,3 +103,28 @@ export function loadAutonomousCapabilitiesInventory(inventoryPath, defaultRelati
   const resolved = inventoryPath ?? path.join(repoRoot, defaultRelativePath);
   return JSON.parse(readFileSync(resolved, 'utf8'));
 }
+
+/**
+ * @param {object} inventory
+ * @param {object} shared
+ */
+export function mergeAutonomousCapabilitiesInventory(inventory, shared) {
+  const byId = new Map();
+  for (const row of [...(shared?.capabilities ?? []), ...(inventory?.capabilities ?? [])]) {
+    byId.set(String(row.id), row);
+  }
+  return { ...inventory, capabilities: [...byId.values()] };
+}
+
+/**
+ * @param {string} [inventoryPath]
+ * @param {string} defaultRelativePath
+ */
+export function loadMergedAutonomousCapabilitiesInventory(inventoryPath, defaultRelativePath) {
+  const inventory = loadAutonomousCapabilitiesInventory(inventoryPath, defaultRelativePath);
+  const shared = loadAutonomousCapabilitiesInventory(
+    undefined,
+    'docs/autonomous-shared-capabilities.json',
+  );
+  return mergeAutonomousCapabilitiesInventory(inventory, shared);
+}

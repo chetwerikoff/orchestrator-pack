@@ -25,10 +25,9 @@ function Get-OrchestratorClaimedReviewRunGateVersion {
 }
 
 function Get-AutonomousReviewStartCapabilityInventory {
-    if (-not (Test-Path -LiteralPath $Script:AutonomousCapabilityInventory)) {
-        throw "missing capability inventory: $Script:AutonomousCapabilityInventory"
-    }
-    return (Get-Content -LiteralPath $Script:AutonomousCapabilityInventory -Raw | ConvertFrom-Json)
+    return Get-MergedAutonomousCapabilityInventory `
+        -InventoryPath $Script:AutonomousCapabilityInventory `
+        -PackRoot (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 }
 
 function Invoke-OrchestratorClaimedReviewRunFilterCli {

@@ -10,6 +10,7 @@ import { bootstrapLegacyNudgedCycle, buildOwnerCycleKey, getOwnerCycleRecord } f
 import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
+  loadMergedAutonomousCapabilitiesInventory,
   validateCapabilityInventory,
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
@@ -592,19 +593,7 @@ export function evaluatePreflight(input) {
  * @param {string} [inventoryPath]
  */
 export function loadAutonomousWorkerNudgeCapabilities(inventoryPath) {
-  const inventory = loadAutonomousCapabilitiesInventory(
-    inventoryPath,
-    'docs/autonomous-worker-nudge-capabilities.json',
-  );
-  const shared = loadAutonomousCapabilitiesInventory(
-    undefined,
-    'docs/autonomous-shared-capabilities.json',
-  );
-  const byId = new Map();
-  for (const row of [...(shared.capabilities ?? []), ...(inventory.capabilities ?? [])]) {
-    byId.set(String(row.id), row);
-  }
-  return { ...inventory, capabilities: [...byId.values()] };
+  return loadMergedAutonomousCapabilitiesInventory(inventoryPath, 'docs/autonomous-worker-nudge-capabilities.json');
 }
 
 /**
