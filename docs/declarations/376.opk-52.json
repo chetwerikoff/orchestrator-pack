@@ -44,6 +44,7 @@
     "tests/fixtures/contract-evidence-reverify/issues/integrity-failed.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-divergent-pr-body.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-divergent.md",
+    "tests/fixtures/contract-evidence-reverify/issues/live-exit-nonzero.md",
     "tests/fixtures/contract-evidence-reverify/issues/live-match.md",
     "tests/fixtures/contract-evidence-reverify/issues/new-fulfilled.md",
     "tests/fixtures/contract-evidence-reverify/issues/new-non-genuine-proof.md",
