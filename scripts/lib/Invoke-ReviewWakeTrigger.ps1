@@ -9,6 +9,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
+. (Join-Path $PSScriptRoot 'Record-ReviewHandoffWakeAdmission.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
@@ -140,14 +141,20 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         return @{ triggered = $false; reason = 'filter_not_ok' }
     }
 
-    if ($FilterResult.wakeKind -ne 'merge.ready') {
-        return @{ triggered = $false; reason = 'not_completion_wake' }
+    $isCompletionWake = $FilterResult.wakeKind -eq 'merge.ready'
+    $isHandoffWake = $FilterResult.wakeKind -eq 'ready_for_review'
+    if (-not $isCompletionWake -and -not $isHandoffWake) {
+        return @{ triggered = $false; reason = 'not_event_wake' }
     }
 
     $prNumber = [int]$FilterResult.prNumber
     if ($prNumber -le 0) {
         & $LogWriter 'review-wake-trigger: skip (no pr number on completion wake)'
         return @{ triggered = $false; reason = 'missing_pr_number' }
+    }
+
+    if ($isHandoffWake -and $FilterResult.handoffAdmission.auditLine) {
+        & $LogWriter ([string]$FilterResult.handoffAdmission.auditLine)
     }
 
     $snapshot = Get-ReviewWakeTriggerSnapshot -PrNumber $prNumber -Project $ProjectId `
@@ -157,22 +164,46 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
     $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
-    $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload @{
-        wakeKind                    = $FilterResult.wakeKind
-        sessionId                   = [string]$FilterResult.sessionId
-        prNumber                    = $prNumber
-        wakeReceivedMs              = $wakeReceivedMs
-        nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        openPrs                     = @($snapshot.openPrs)
-        reviewRuns                  = @($snapshot.reviewRuns)
-        sessions                    = @($snapshot.sessions)
-        ciChecks                    = @($snapshot.ciChecksByPr[$prKey])
-        requiredCheckNames          = @($snapshot.requiredCheckNamesByPr[$prKey])
-        requiredCheckLookupFailed   = [bool]$snapshot.requiredCheckLookupFailedByPr[$prKey]
+    $evaluatePayload = @{
+        wakeKind                  = $FilterResult.wakeKind
+        sessionId                 = [string]$FilterResult.sessionId
+        prNumber                  = $prNumber
+        wakeReceivedMs            = $wakeReceivedMs
+        nowMs                     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        openPrs                   = @($snapshot.openPrs)
+        reviewRuns                = @($snapshot.reviewRuns)
+        sessions                  = @($snapshot.sessions)
+        ciChecks                  = @($snapshot.ciChecksByPr[$prKey])
+        requiredCheckNames        = @($snapshot.requiredCheckNamesByPr[$prKey])
+        requiredCheckLookupFailed = [bool]$snapshot.requiredCheckLookupFailedByPr[$prKey]
+    }
+    if ($isHandoffWake) {
+        $evaluatePayload.admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
+        if ($snapshot.cycleState) { $evaluatePayload.cycleState = $snapshot.cycleState }
+        if ($snapshot.repoRoot) { $evaluatePayload.repoRoot = $snapshot.repoRoot }
+    }
+    $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload $evaluatePayload
+
+    $resolvedStateRoot = if ($StateRoot) {
+        $StateRoot
+    }
+    elseif ($SideEffectLockPath) {
+        Split-Path -Parent $SideEffectLockPath
+    }
+    else {
+        ''
+    }
+
+    if ($isHandoffWake -and $resolvedStateRoot) {
+        $admissionRecord = Record-ReviewHandoffWakeAdmission -StateRoot $resolvedStateRoot -FilterResult $FilterResult -DryRun:$DryRun
+        if ($admissionRecord.recorded) {
+            & $LogWriter "review-handoff-wake: admission recorded key=$($admissionRecord.key)"
+        }
     }
 
     if (-not $evaluation.withinLatencyBound) {
-        throw "review-wake-trigger exceeded wake-to-run decision bound (${evaluation.processingMs}ms)"
+        $boundLabel = if ($isHandoffWake) { 'handoff receipt-to-run' } else { 'wake-to-run decision' }
+        throw "review-wake-trigger exceeded ${boundLabel} bound (${evaluation.processingMs}ms)"
     }
 
     if ($evaluation.route -eq 'empty_review_trap') {
@@ -188,15 +219,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if (-not $evaluation.triggerReviewRun) {
         & $LogWriter "review-wake-trigger: defer PR #$prNumber ($($evaluation.reason))"
-        $resolvedStateRoot = if ($StateRoot) {
-            $StateRoot
-        }
-        elseif ($SideEffectLockPath) {
-            Split-Path -Parent $SideEffectLockPath
-        }
-        else {
-            ''
-        }
         if ($resolvedStateRoot -and $evaluation.reason -eq 'uncovered_not_ready') {
             $headShaForWatch = ''
             foreach ($pr in @($snapshot.openPrs)) {
@@ -247,7 +269,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $ProjectId) }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
             -Surface 'review-wake-trigger' -ReviewRuns $claimRuns -ProjectId $ProjectId `
-            -StartReason 'completion_wake' -LogWriter $LogWriter
+            -StartReason $(if ($isHandoffWake) { 'handoff_wake' } else { 'completion_wake' }) -LogWriter $LogWriter
     }
     if (-not $claim.acquired) {
         if ($claim.escalation) {

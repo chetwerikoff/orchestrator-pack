@@ -25,6 +25,10 @@ if ($listener -notmatch 'Invoke-ReviewWakeTriggerOnCompletionWake') {
     Write-Host 'orchestrator-wake-listener.ps1 must invoke review wake trigger on completion wakes'
     exit 1
 }
+if ($listener -notmatch 'ready_for_review') {
+    Write-Host 'orchestrator-wake-listener.ps1 must handle ready_for_review hand-off wakes'
+    exit 1
+}
 if ($listener -notmatch 'merge\.ready') {
     Write-Host 'orchestrator-wake-listener.ps1 must handle merge.ready completion wakes'
     exit 1

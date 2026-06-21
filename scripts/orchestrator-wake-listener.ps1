@@ -32,6 +32,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewWakeTrigger.ps1')
+. (Join-Path $PSScriptRoot 'lib/Record-ReviewHandoffWakeAdmission.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
 $Script:DefaultPort = 17487
@@ -52,12 +53,45 @@ function Write-ListenerLog {
     Write-OrchestratorWakeLog -Message $Message
 }
 
+function Get-SupervisedRepoSlug {
+    param([string]$RepoRoot)
+
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $remote = git remote get-url origin 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $remote) { return '' }
+        if ($remote -match 'github\.com[:/](?<slug>[^/]+/[^/.]+)') {
+            return $Matches['slug'].ToLower()
+        }
+        return ''
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-WakeFilter {
-    param([string]$BodyJson)
+    param(
+        [string]$BodyJson,
+        [string]$SupervisedProjectId = '',
+        [string]$SupervisedRepoSlug = '',
+        [array]$OpenPrs = @(),
+        [bool]$OpenPrLookupFailed = $false
+    )
+
+    $payload = @{
+        body = ($BodyJson | ConvertFrom-Json)
+        admissionContext = @{
+            supervisedProjectId = $SupervisedProjectId
+            supervisedRepoSlug  = $SupervisedRepoSlug
+            openPrs             = @($OpenPrs)
+            openPrLookupFailed  = $OpenPrLookupFailed
+        }
+    } | ConvertTo-Json -Depth 30 -Compress
 
     Push-Location $Script:OrchestratorWakeRepoRoot
     try {
-        $output = $BodyJson | node $Script:OrchestratorWakeFilterCli evaluate 2>&1
+        $output = $payload | node $Script:OrchestratorWakeFilterCli evaluate 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "wake filter exited ${LASTEXITCODE}: $output"
         }
@@ -143,6 +177,7 @@ if (-not (Test-Path -LiteralPath $configYaml -PathType Leaf)) {
     $configYaml = Join-Path $Script:OrchestratorWakeRepoRoot 'agent-orchestrator.yaml.example'
 }
 $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
+$script:SupervisedRepoSlug = Get-SupervisedRepoSlug -RepoRoot $Script:OrchestratorWakeRepoRoot
 
 Write-ListenerLog "orchestrator-wake-listener starting on $prefix (path $normalizedPath, orchestrator=$orchestratorId, project=$projectId, dedup=${DedupWindowSeconds}s, claimNamespace=$claimNamespace, dryRun=$DryRun, reviewWakeTrigger=on)"
 
@@ -203,7 +238,19 @@ try {
                 $body = $reader.ReadToEnd()
                 $reader.Close()
 
-                $filterResult = Invoke-WakeFilter -BodyJson $body
+                $openPrLookupFailed = $false
+                $openPrsForAdmission = @()
+                try {
+                    $openPrsForAdmission = @(Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot)
+                }
+                catch {
+                    $openPrLookupFailed = $true
+                }
+                $filterResult = Invoke-WakeFilter -BodyJson $body `
+                    -SupervisedProjectId $projectId `
+                    -SupervisedRepoSlug $script:SupervisedRepoSlug `
+                    -OpenPrs $openPrsForAdmission `
+                    -OpenPrLookupFailed:$openPrLookupFailed
 
                 if (-not $filterResult.ok) {
                     $reason = $filterResult.reason
@@ -225,7 +272,7 @@ try {
                 # Event-driven review trigger must run before wake dedup so burst
                 # handoffs within the dedup window still start the first review run.
                 $wakeMessage = $filterResult.wakeMessage
-                if ($filterResult.wakeKind -eq 'merge.ready') {
+                if ($filterResult.wakeKind -eq 'merge.ready' -or $filterResult.wakeKind -eq 'ready_for_review') {
                     Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'wake_received'
                     try {
                         $triggerResult = Invoke-ReviewWakeTriggerOnCompletionWake `

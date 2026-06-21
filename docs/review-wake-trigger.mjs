@@ -14,6 +14,12 @@ import {
   resolveCurrentPrHeadSha,
 } from './review-head-ready.mjs';
 import {
+  evaluateHandoffPreClaimRecheck,
+  formatHandoffWakeAuditLine,
+  HANDOFF_RECEIPT_TO_RUN_MAX_MS,
+  HANDOFF_WAKE_KIND,
+} from './review-handoff-wake-admission.mjs';
+import {
   buildReviewRunArgv,
   findSessionById,
   hasFailedOrCancelledOnHead,
@@ -26,9 +32,19 @@ import {
   resolveHeadOwningWorkerSessionId,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import { evaluateWorkerIterationCycleForPr } from './worker-iteration-cycle.mjs';
 
 /** Completion-time AO wake that may carry merge intent (approved-and-green → merge.ready). */
 export const COMPLETION_MERGE_INTENT_WAKE_KINDS = new Set(['merge.ready']);
+
+/** Hand-off semantic wakes that may start the first review run (Issue #381). */
+export const HANDOFF_REVIEW_TRIGGER_WAKE_KINDS = new Set([HANDOFF_WAKE_KIND]);
+
+/** Event-driven review trigger wakes (completion + hand-off). */
+export const EVENT_REVIEW_TRIGGER_WAKE_KINDS = new Set([
+  ...COMPLETION_MERGE_INTENT_WAKE_KINDS,
+  ...HANDOFF_REVIEW_TRIGGER_WAKE_KINDS,
+]);
 
 /**
  * Upper bound for listener-local processing from wake receipt to run decision (ms).
@@ -41,6 +57,20 @@ export const WAKE_TO_RUN_DECISION_MAX_MS = 5_000;
  */
 export function isCompletionMergeIntentWake(wakeKind) {
   return COMPLETION_MERGE_INTENT_WAKE_KINDS.has(String(wakeKind ?? '').trim());
+}
+
+/**
+ * @param {string | null | undefined} wakeKind
+ */
+export function isHandoffReviewTriggerWake(wakeKind) {
+  return HANDOFF_REVIEW_TRIGGER_WAKE_KINDS.has(String(wakeKind ?? '').trim());
+}
+
+/**
+ * @param {string | null | undefined} wakeKind
+ */
+export function isEventReviewTriggerWake(wakeKind) {
+  return EVENT_REVIEW_TRIGGER_WAKE_KINDS.has(String(wakeKind ?? '').trim());
 }
 
 /**
@@ -83,15 +113,20 @@ export function evaluateWakeReviewTrigger(input) {
   const withinLatencyBound = processingMs <= WAKE_TO_RUN_DECISION_MAX_MS;
 
   const wakeKind = String(input.wakeKind ?? '');
-  if (!isCompletionMergeIntentWake(wakeKind)) {
+  const isHandoffWake = isHandoffReviewTriggerWake(wakeKind);
+  if (!isEventReviewTriggerWake(wakeKind)) {
     return {
       triggerReviewRun: false,
-      reason: 'not_completion_wake',
+      reason: 'not_event_wake',
       route: 'none',
       processingMs,
       withinLatencyBound,
     };
   }
+  const receiptToRunBoundMs = isHandoffWake
+    ? Number(input.receiptToRunBoundMs ?? HANDOFF_RECEIPT_TO_RUN_MAX_MS)
+    : WAKE_TO_RUN_DECISION_MAX_MS;
+  const withinReceiptBound = processingMs <= receiptToRunBoundMs;
 
   const prNumber = Number(input.prNumber);
   if (!prNumber) {
@@ -187,17 +222,59 @@ export function evaluateWakeReviewTrigger(input) {
     };
   }
 
+
+  if (isHandoffWake && input.cycleState != null) {
+    const cycleEval = evaluateWorkerIterationCycleForPr({
+      cycleState: input.cycleState ?? {},
+      repoRoot: input.repoRoot ?? '',
+      prNumber,
+      headSha: normalizeSha(headSha),
+      ownerSessionId: sessionId,
+      reviewRuns,
+      session,
+      nowMs,
+      headCommittedAtMs: resolveHeadCommittedAtMs(openPrs, prNumber),
+      handoffAccepted: true,
+      handoffReportedAtMs: wakeReceivedMs,
+    });
+    if (!cycleEval.reviewGate.allow) {
+      return {
+        triggerReviewRun: false,
+        reason: cycleEval.reviewGate.deferReason ?? 'already_reviewed_this_cycle',
+        route: 'none',
+        processingMs,
+        withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
+        withinReceiptBound,
+        cycleBlocked: true,
+      };
+    }
+  }
+  const planned = {
+    prNumber,
+    headSha: normalizeSha(headSha),
+    sessionId,
+    startReason: isHandoffWake ? 'handoff_wake' : 'completion_wake',
+    admittedBaseRef: input.admittedBaseRef,
+  };
+  const auditLine = isHandoffWake
+    ? formatHandoffWakeAuditLine({
+        outcome: 'readiness_start',
+        reason: 'head_ready_for_review',
+        wakeKind,
+        sessionId,
+        prNumber,
+      })
+    : undefined;
   return {
     triggerReviewRun: true,
     reason: 'head_ready_for_review',
     route: 'start_review',
-    planned: {
-      prNumber,
-      headSha: normalizeSha(headSha),
-      sessionId,
-    },
+    planned,
     processingMs,
-    withinLatencyBound,
+    withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
+    withinReceiptBound,
+    wakeKind,
+    auditLine,
   };
 }
 
@@ -316,7 +393,24 @@ export function amendMergeWakeMessage(wakeMessage, mergeEval) {
  * @param {object} input.fresh
  */
 export function evaluateWakePreRunRecheck(input) {
-  return preRunHeadReadyRecheck(input.planned, input.fresh);
+  const planned = input.planned ?? {};
+  const fresh = input.fresh ?? {};
+  const base = preRunHeadReadyRecheck(planned, fresh);
+  if (!base.emitReviewRun) {
+    return base;
+  }
+  if (planned.startReason === 'handoff_wake' || isHandoffReviewTriggerWake(input.wakeKind)) {
+    const handoff = evaluateHandoffPreClaimRecheck({ planned, fresh });
+    if (!handoff.emitReviewRun) {
+      return {
+        ...base,
+        emitReviewRun: false,
+        reason: handoff.reason,
+        auditLine: formatHandoffWakeAuditLine(handoff.audit),
+      };
+    }
+  }
+  return base;
 }
 
 /**

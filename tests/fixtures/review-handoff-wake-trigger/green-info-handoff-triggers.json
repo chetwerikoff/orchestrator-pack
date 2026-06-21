@@ -1,0 +1,43 @@
+{
+  "description": "Info-priority ready_for_review hand-off on green head starts first review",
+  "wakeKind": "ready_for_review",
+  "sessionId": "opk-27",
+  "prNumber": 234,
+  "admittedBaseRef": "main",
+  "openPrs": [
+    {
+      "number": 234,
+      "headRefOid": "handoff234",
+      "headCommittedAt": "2026-06-05T14:16:00.000Z",
+      "baseRefName": "main"
+    }
+  ],
+  "reviewRuns": [],
+  "sessions": [
+    {
+      "name": "opk-27",
+      "role": "worker",
+      "prNumber": 234,
+      "status": "ready_for_review",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-05T14:17:58.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "234": [
+      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" },
+      { "name": "Run pack contract tests", "state": "SUCCESS" },
+      { "name": "Self-architect lint", "state": "SUCCESS" }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": true,
+    "sessionId": "opk-27",
+    "headSha": "handoff234"
+  }
+}

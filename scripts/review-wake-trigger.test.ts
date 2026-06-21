@@ -92,7 +92,7 @@ describe('evaluateWakeReviewTrigger', () => {
       ciChecks: fixture.ciChecksByPr?.['204'],
     });
     expect(result.triggerReviewRun).toBe(false);
-    expect(result.reason).toBe('not_completion_wake');
+    expect(result.reason).toBe('not_event_wake');
   });
 
   it('Issue #207 (2): pending CI eligible when wake arrives', () => {

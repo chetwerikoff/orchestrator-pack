@@ -5,6 +5,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  evaluateHandoffIdentityAdmission,
+  formatHandoffWakeAuditLine,
+  isReadyForReviewHandoffEnvelope,
+} from './review-handoff-wake-admission.mjs';
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
 /** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
@@ -218,7 +223,15 @@ export function evaluateHeartbeatTick({
   };
 }
 
-export function evaluateWakePayload(body) {
+/**
+ * @param {unknown} body
+ * @param {object} [admissionContext]
+ * @param {string} [admissionContext.supervisedProjectId]
+ * @param {string} [admissionContext.supervisedRepoSlug]
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [admissionContext.openPrs]
+ * @param {boolean} [admissionContext.openPrLookupFailed]
+ */
+export function evaluateWakePayload(body, admissionContext = {}) {
   if (!isRecord(body)) {
     return { ok: false, reason: 'malformed_payload', detail: 'body is not an object' };
   }
@@ -242,12 +255,41 @@ export function evaluateWakePayload(body) {
     return { ok: false, reason: 'missing_session_id' };
   }
 
+  const handoffEnvelope = isReadyForReviewHandoffEnvelope(body, event);
   const priority = nonEmptyString(event.priority);
+  let handoffAdmission = null;
   if (priority === 'info' || priority === 'warning') {
-    return { ok: false, reason: 'info_priority', detail: priority };
+    if (!handoffEnvelope) {
+      return { ok: false, reason: 'info_priority', detail: priority };
+    }
+    handoffAdmission = evaluateHandoffIdentityAdmission({
+      event,
+      supervisedProjectId: admissionContext.supervisedProjectId,
+      supervisedRepoSlug: admissionContext.supervisedRepoSlug,
+      openPrs: admissionContext.openPrs,
+      openPrLookupFailed: admissionContext.openPrLookupFailed,
+    });
+    if (!handoffAdmission.admitted) {
+      const auditLine = formatHandoffWakeAuditLine(handoffAdmission.audit);
+      if (handoffAdmission.outcome === 'unknown') {
+        return {
+          ok: false,
+          reason: 'admission_lookup_unknown',
+          retryable: true,
+          audit: handoffAdmission.audit,
+          auditLine,
+        };
+      }
+      return {
+        ok: false,
+        reason: handoffAdmission.reason,
+        audit: handoffAdmission.audit,
+        auditLine,
+      };
+    }
   }
 
-  const wakeKind = resolveWakeKind(event);
+  const wakeKind = handoffEnvelope ? 'ready_for_review' : resolveWakeKind(event);
   if (!wakeKind) {
     return { ok: false, reason: 'not_wake_relevant' };
   }
@@ -266,7 +308,7 @@ export function evaluateWakePayload(body) {
 
   const dedupeKey = [wakeKind, sessionId, String(prNumber ?? ''), runId ?? ''].join('|');
 
-  return {
+  const result = {
     ok: true,
     wakeKind,
     sessionId,
@@ -277,6 +319,16 @@ export function evaluateWakePayload(body) {
     wakeMessage,
     dedupeKey,
   };
+  if (handoffAdmission?.admitted) {
+    result.handoffAdmission = {
+      promotedFromInfoPriority: priority === 'info' || priority === 'warning',
+      admittedBaseRef: handoffAdmission.admittedBaseRef,
+      admittedHeadSha: handoffAdmission.admittedHeadSha,
+      audit: handoffAdmission.audit,
+      auditLine: formatHandoffWakeAuditLine(handoffAdmission.audit),
+    };
+  }
+  return result;
 }
 
 export function parseWebhookJson(raw) {
@@ -530,7 +582,9 @@ async function main() {
       process.exit(0);
       return;
     }
-    const result = evaluateWakePayload(parsed);
+    const admissionContext = isRecord(parsed.admissionContext) ? parsed.admissionContext : {};
+    const body = parsed.body ?? parsed;
+    const result = evaluateWakePayload(body, admissionContext);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
