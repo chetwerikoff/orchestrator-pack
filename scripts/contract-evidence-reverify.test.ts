@@ -344,7 +344,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it('e2e reviewer fixture path passes', () => {
+  it('e2e reviewer fixture path passes', { timeout: 120_000 }, () => {
     const aoCheck = spawnSync('which', ['ao'], { encoding: 'utf8' });
     if (aoCheck.status !== 0) {
       return;

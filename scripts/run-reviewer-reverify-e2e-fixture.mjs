@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * End-to-end reviewer-flow fixture for checkpoint-2 (Issue #376 AC#13).
- * Requires a real `ao review run --execute --command` path; mechanical-only runs do not pass.
+ * Requires the AO --execute reviewer path; mechanical-only runs do not pass.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -91,8 +91,18 @@ function runReviewCommand() {
 
 function runAoReviewExecute(sessionId) {
   return spawnSync(
-    'ao',
-    ['review', 'run', sessionId, '--execute', '--command', reviewCommand],
+    'pwsh',
+    [
+      '-NoProfile',
+      '-File',
+      'scripts/run-reviewer-reverify-ao-review-command.ps1',
+      '-RepoRoot',
+      packRoot,
+      '-FixtureDir',
+      'tests/fixtures/contract-evidence-reverify/e2e',
+      '-AoSessionId',
+      sessionId,
+    ],
     {
       cwd: packRoot,
       encoding: 'utf8',
@@ -138,7 +148,7 @@ const aoProc = runAoReviewExecute(sessionId);
 output.viaAoReviewExecute = aoProc.status === 0;
 
 if (!output.viaAoReviewExecute) {
-  output.error = `ao review run --execute failed (exit ${aoProc.status ?? 'null'})`;
+  output.error = `AO --execute reviewer path failed (exit ${aoProc.status ?? 'null'})`;
   output.summary = (aoProc.stdout ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);

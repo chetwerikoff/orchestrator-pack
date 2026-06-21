@@ -55,7 +55,7 @@ try {
             }
         }
         else {
-            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: ao CLI not on PATH (AC#13 requires ao review run --execute locally)'
+            Write-Host 'SKIP run-reviewer-reverify-e2e-fixture.mjs: ao CLI not on PATH (AC#13 requires AO --execute reviewer path locally)'
         }
     }
 }
