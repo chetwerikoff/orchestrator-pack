@@ -1104,6 +1104,37 @@ describe('stop hook transcript population', () => {
     expect(result.summary.advisoryUnits).toBe(1);
   });
 
+  it('defaults head without -n to ten lines when output is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-head-default-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const inferred = inferShellReadAroundRead(`head ${readPath}`);
+    expect(inferred).toEqual({ path: readPath, lines: 10, readKind: 'file' });
+  });
+
+  it('declines grep reads when captured output is missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-grep-miss-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(readPath, 'only line\n');
+    expect(inferShellReadAroundRead(`grep no-match ${readPath}`)).toBeNull();
+  });
+
+  it('extracts nested python open() paths for shell read-around', () => {
+    const inferred = inferShellReadAroundRead(
+      `python -c "print(open('docs/foo.md').read())"`,
+    );
+    expect(inferred).toBeNull();
+    const withOutput = inferShellReadAroundRead(
+      `python -c "print(open('docs/foo.md').read())"`,
+      'line-1\nline-2\n',
+    );
+    expect(withOutput?.path).toBe('docs/foo.md');
+    expect(withOutput?.lines).toBe(2);
+  });
+
   it('uses bounded head -n counts instead of full-file fallback', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-bounded-'));
     const readPath = path.join(dir, 'tracked-draft.md');

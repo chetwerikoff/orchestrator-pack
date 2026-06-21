@@ -1074,10 +1074,30 @@ function looksLikeShellCommandPath(token) {
 /**
  * @param {string} command
  */
+function extractNestedQuotedPath(candidate) {
+  const openMatch = String(candidate ?? '').match(/\bopen\s*\(\s*['"]([^'"]+)['"]/);
+  if (openMatch && looksLikeShellCommandPath(openMatch[1])) {
+    return openMatch[1];
+  }
+  const pathMatch = String(candidate ?? '').match(/\bPath\s*\(\s*['"]([^'"]+)['"]/);
+  if (pathMatch && looksLikeShellCommandPath(pathMatch[1])) {
+    return pathMatch[1];
+  }
+  return undefined;
+}
+
 export function extractShellCommandPath(command) {
   const trimmed = String(command ?? '').trim();
+  const nestedFromWhole = extractNestedQuotedPath(trimmed);
+  if (nestedFromWhole) {
+    return nestedFromWhole;
+  }
   const quotedMatches = [...trimmed.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]);
   for (const candidate of quotedMatches) {
+    const nestedPath = extractNestedQuotedPath(candidate);
+    if (nestedPath) {
+      return nestedPath;
+    }
     if (looksLikeShellCommandPath(candidate)) {
       return candidate;
     }
@@ -1094,6 +1114,10 @@ export function extractShellCommandPath(command) {
     }
     if (SHELL_COMMAND_WORDS.has(token.toLowerCase())) {
       continue;
+    }
+    const nestedFromToken = extractNestedQuotedPath(token);
+    if (nestedFromToken) {
+      return nestedFromToken;
     }
     if (looksLikeShellCommandPath(token)) {
       return token;
@@ -1117,18 +1141,17 @@ export function inferShellReadAroundLines(command, capturedOutput, filePath) {
   }
 
   const trimmed = String(command ?? '').trim();
-  const headTail = trimmed.match(/\b(?:head|tail)\b(?:\s+-n)?\s+(\d+)\b/i);
-  if (headTail) {
-    return Number(headTail[1]);
+  const headTailExplicit = trimmed.match(/\b(head|tail)\b\s+-n\s+(\d+)\b/i);
+  if (headTailExplicit) {
+    return Number(headTailExplicit[2]);
+  }
+  if (/\b(?:head|tail)\b/i.test(trimmed)) {
+    return 10;
   }
 
   const sedRange = trimmed.match(/\bsed\s+-n\s+['"]?(\d+),(\d+)p['"]?/i);
   if (sedRange) {
     return Number(sedRange[2]) - Number(sedRange[1]) + 1;
-  }
-
-  if (filePath && existsSync(filePath)) {
-    return countFileLinesFromDisk(filePath);
   }
 
   return 0;
