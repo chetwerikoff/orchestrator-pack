@@ -15,7 +15,7 @@ import {
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
-import { runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
+import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -26,18 +26,13 @@ function loadIssue(name: string): string {
   return readFileSync(path.join(fixtureRoot, 'issues', name), 'utf8');
 }
 
-function canRunPrHeadSandboxProofs(): boolean {
-  // Linux hosts run pr-head proofs via bwrap when available, otherwise the hardened direct fallback.
-  return process.platform === 'linux';
-}
+const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
 
-const prHeadSandboxProofsAvailable = canRunPrHeadSandboxProofs();
-
-function expectNewRowWhenFullSandboxAvailable(
+function expectPrHeadRowWhenSandboxAvailable(
   row: ReverifyRowResult,
   whenAvailable: Partial<ReverifyRowResult>,
 ) {
-  if (!prHeadSandboxProofsAvailable) {
+  if (!prHeadNetworkSandboxAvailable) {
     expect(row).toMatchObject({
       status: 'unverified',
       reason: 'producer-unreachable',
@@ -46,6 +41,13 @@ function expectNewRowWhenFullSandboxAvailable(
     return;
   }
   expect(row).toMatchObject(whenAvailable);
+}
+
+function expectNewRowWhenFullSandboxAvailable(
+  row: ReverifyRowResult,
+  whenAvailable: Partial<ReverifyRowResult>,
+) {
+  expectPrHeadRowWhenSandboxAvailable(row, whenAvailable);
 }
 
 function baseInput(snapshotBody: string, overrides: Record<string, unknown> = {}) {
@@ -86,7 +88,7 @@ function createArchiveTrustedRootFixture(): string {
 describe('contract-evidence reverify (Issue #376)', () => {
 
   it('archive trusted root without .git gets live capture verification when sandbox available', () => {
-    if (!prHeadSandboxProofsAvailable) {
+    if (!prHeadNetworkSandboxAvailable) {
       return;
     }
     const archiveTrustedRoot = createArchiveTrustedRootFixture();
@@ -95,18 +97,27 @@ describe('contract-evidence reverify (Issue #376)', () => {
       const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md'), {
         trustedBaseRoot: archiveTrustedRoot,
       }));
-      expect(result.rows[0]).toMatchObject({
+      expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
         status: 'verified',
         verificationMode: 'live',
         producerVerified: true,
       });
-      expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
+      if (prHeadNetworkSandboxAvailable) {
+        expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
+      }
     } finally {
       rmSync(archiveTrustedRoot, { recursive: true, force: true });
     }
   });
 
 
+
+  it('fails closed for pr-head proofs when bubblewrap network sandbox is unavailable', () => {
+    const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
+    expect(sandboxSource).not.toContain('function spawnPrHeadDirect');
+    expect(sandboxSource).toContain('sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE)');
+    expect(sandboxSource).toContain('export function isPrHeadNetworkSandboxAvailable');
+  });
 
   it('does not expose writable trusted node_modules symlink fallback in sandbox', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
@@ -183,7 +194,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
         prBody: 'Closes #9015\n',
         explicitIssueNumber: 9015,
       }));
-      expect(result.rows[0]).toMatchObject({
+      expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
         status: 'divergent',
         verificationMode: 'live',
         asserted: 'match',
@@ -199,12 +210,14 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md')));
     expect(result.runOutcome).toBe('rows-evaluated');
     expect(result.rows).toHaveLength(1);
-    expect(result.rows[0]).toMatchObject({
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
     });
-    expect(result.rows[0].reason).toBeUndefined();
+    if (prHeadNetworkSandboxAvailable) {
+      expect(result.rows[0].reason).toBeUndefined();
+    }
   });
 
   it('structured producer nonzero exit is divergent not producer-verified', () => {
@@ -212,12 +225,14 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9012\n',
       explicitIssueNumber: 9012,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
     });
-    expect(result.rows[0].observed).toContain('exit:');
+    if (prHeadNetworkSandboxAvailable) {
+      expect(result.rows[0].observed).toContain('exit:');
+    }
   });
 
   it('cli-behavior live capture row matching exit and stdout emits verified/live', () => {
@@ -225,13 +240,15 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9013\n',
       explicitIssueNumber: 9013,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
     });
-    expect(result.rows[0].asserted).toContain('0/');
-    expect(result.rows[0].observed).toContain('0/');
+    if (prHeadNetworkSandboxAvailable) {
+      expect(result.rows[0].asserted).toContain('0/');
+      expect(result.rows[0].observed).toContain('0/');
+    }
   });
 
   it('cli-behavior live capture diverges when exit ok but stdout wrong', () => {
@@ -239,14 +256,16 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9014\n',
       explicitIssueNumber: 9014,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
     });
-    expect(result.rows[0].asserted).toContain('0/');
-    expect(result.rows[0].observed).toMatch(/^0\//);
-    expect(result.rows[0].observed).toContain('false');
+    if (prHeadNetworkSandboxAvailable) {
+      expect(result.rows[0].asserted).toContain('0/');
+      expect(result.rows[0].observed).toMatch(/^0\//);
+      expect(result.rows[0].observed).toContain('false');
+    }
   });
 
   it('rejects allowlisted-prefix sibling paths for node scripts', () => {
@@ -309,13 +328,15 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9002\n',
       explicitIssueNumber: 9002,
     }));
-    expect(result.rows[0]).toMatchObject({
+    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
     });
-    expect(result.rows[0].asserted).toContain('expected');
-    expect(result.rows[0].observed).toContain('divergent');
+    if (prHeadNetworkSandboxAvailable) {
+      expect(result.rows[0].asserted).toContain('expected');
+      expect(result.rows[0].observed).toContain('divergent');
+    }
   });
 
   it('AC3: fulfilled NEW row emits verified/live', () => {

@@ -500,43 +500,6 @@ function spawnTrustedBaseIsolated(
   }
 }
 
-function spawnPrHeadDirect(
-  resolved: ResolvedAllowlistedCommand,
-  options: {
-    cwd: string;
-    dependencyRoot: string;
-    timeoutMs: number;
-    env: NodeJS.ProcessEnv;
-  },
-): SpawnSyncReturns<string> {
-  const disposable = createDisposableWorktreeCopy(options.cwd);
-  if (!disposable) {
-    return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
-  }
-
-  const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
-  const beforeDependencyFingerprint = captureTrustedNodeModulesFingerprint(options.dependencyRoot);
-
-  try {
-    const directResult = spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
-      timeoutMs: options.timeoutMs,
-      env: options.env,
-      dependencyRoot: options.dependencyRoot,
-    });
-    return guardSandboxPostcondition(
-      disposable,
-      beforeSandboxFingerprint,
-      guardTrustedDependencyPostcondition(
-        options.dependencyRoot,
-        beforeDependencyFingerprint,
-        directResult,
-      ),
-    );
-  } finally {
-    rmSync(disposable, { recursive: true, force: true });
-  }
-}
-
 function spawnPrHeadIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -548,7 +511,7 @@ function spawnPrHeadIsolated(
   },
 ): SpawnSyncReturns<string> {
   if (process.platform !== 'linux' || !bwrapAvailable()) {
-    return spawnPrHeadDirect(resolved, options);
+    return sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE);
   }
 
   const disposable = createDisposableWorktreeCopy(options.cwd);
@@ -561,7 +524,7 @@ function spawnPrHeadIsolated(
   // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
   if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot, 'pr-head-new')) {
     rmSync(disposable, { recursive: true, force: true });
-    return spawnPrHeadDirect(resolved, options);
+    return sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE);
   }
 
   const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
@@ -582,7 +545,7 @@ function spawnPrHeadIsolated(
       return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
     }
     if (isolated.error || isBwrapInternalFailure(isolated)) {
-      return spawnPrHeadDirect(resolved, options);
+      return sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE);
     }
     return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
   } finally {
@@ -697,6 +660,10 @@ export function runSandboxedAllowlistedCommand(
     timedOut: Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'),
     blocked: false,
   };
+}
+
+export function isPrHeadNetworkSandboxAvailable(): boolean {
+  return process.platform === 'linux' && bwrapAvailable();
 }
 
 export function resetBwrapSandboxProbeCacheForTests(): void {
