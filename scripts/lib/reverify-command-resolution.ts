@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -227,6 +227,85 @@ export function resolveAllowlistedCommand(
 
 export function isCommandSafe(command: string, repoRoot: string): boolean {
   return resolveAllowlistedCommand(command, { repoRoot }) !== null;
+}
+
+
+const STATIC_MODULE_IMPORT_RE = /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+function resolveLocalModulePath(fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith('.')) {
+    return null;
+  }
+  const base = path.resolve(path.dirname(fromFile), specifier);
+  const candidates = [
+    base,
+    `${base}.mjs`,
+    `${base}.js`,
+    path.join(base, 'index.mjs'),
+    path.join(base, 'index.js'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
+  const resolved = resolveAllowlistedCommand(command, { repoRoot });
+  if (!resolved || resolved.executable !== process.execPath) {
+    return [];
+  }
+  const entryScript = resolved.args[0];
+  if (!entryScript) {
+    return [];
+  }
+
+  const repoRootNorm = path.normalize(repoRoot);
+  const visited = new Set<string>();
+  const relPaths: string[] = [];
+
+  const walk = (absPath: string): void => {
+    const normalized = path.normalize(absPath);
+    if (visited.has(normalized)) {
+      return;
+    }
+    visited.add(normalized);
+    const rel = normalizePath(path.relative(repoRootNorm, normalized));
+    if (!rel || rel.startsWith('..')) {
+      return;
+    }
+    relPaths.push(rel);
+
+    let content = '';
+    try {
+      content = readFileSync(normalized, 'utf8');
+    } catch {
+      return;
+    }
+
+    STATIC_MODULE_IMPORT_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = STATIC_MODULE_IMPORT_RE.exec(content)) !== null) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier) {
+        continue;
+      }
+      const localPath = resolveLocalModulePath(normalized, specifier);
+      if (!localPath) {
+        continue;
+      }
+      const localNorm = path.normalize(localPath);
+      if (localNorm === normalized || !localNorm.startsWith(`${repoRootNorm}${path.sep}`)) {
+        continue;
+      }
+      walk(localNorm);
+    }
+  };
+
+  walk(entryScript);
+  return [...new Set(relPaths)];
 }
 
 export function listAllowlistedNodeScriptRelPaths(command: string, repoRoot: string): string[] {

@@ -23,6 +23,7 @@ import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
   isCommandSafe,
   listAllowlistedNodeScriptRelPaths,
+  listNodeScriptDependencyClosureRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
@@ -211,7 +212,7 @@ function isProducerCommandUntrusted(
     return normalized.has('package.json') || normalized.has('package-lock.json');
   }
 
-  for (const relPath of listAllowlistedNodeScriptRelPaths(command, trustedBaseRoot)) {
+  for (const relPath of listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot)) {
     if (normalized.has(relPath)) {
       return true;
     }
@@ -542,7 +543,7 @@ function evaluateCaptureRow(input: {
       resolutionRoot: trustedBaseRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
-      sandboxMode: 'trusted-base',
+      sandboxMode: 'pr-head-new',
     });
     if (run.blocked) {
       if (run.blockReason === 'read-only-postcondition-violated') {

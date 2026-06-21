@@ -14,7 +14,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
-import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 import { runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -137,6 +137,41 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(result.blocked).toBe(true);
     expect(result.blockReason).toBe('read-only-postcondition-violated');
     expect(existsSync(path.join(packRoot, '.reverify-mutation-marker'))).toBe(false);
+  });
+
+
+  it('lists static import closure for allowlisted node producers', () => {
+    const command = 'node tests/fixtures/contract-evidence-reverify/producers/importing-structured-value.mjs';
+    const closure = listNodeScriptDependencyClosureRelPaths(command, packRoot);
+    expect(closure).toEqual(expect.arrayContaining([
+      'tests/fixtures/contract-evidence-reverify/producers/importing-structured-value.mjs',
+      'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+    ]));
+  });
+
+  it('capture producer trust checks import closure drift, not entrypoint only', () => {
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const helperPath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      writeFileSync(helperPath, "export const value = 'pwned';\n", 'utf8');
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-import-closure.md'), {
+        trustedBaseRoot: packRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        prBody: 'Closes #9016\n',
+        explicitIssueNumber: 9016,
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'unverified',
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
   });
 
   it('runs capture producers against review target data, not trusted base only', () => {
