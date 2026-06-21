@@ -27,6 +27,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Resolve-TrustedPackRoot.ps1')
+. (Join-Path $PSScriptRoot 'lib/Install-PackReviewDependencies.ps1')
 
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     Split-Path -Parent $PSScriptRoot
@@ -69,6 +70,7 @@ if ($Summary -or $Text) { $args += '--summary' }
 
 Push-Location $reviewTargetRoot
 try {
+    Install-PackReviewDependencies -WrapperName 'invoke-contract-evidence-reverify.ps1'
     & node --import tsx @args
     exit $LASTEXITCODE
 }
