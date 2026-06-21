@@ -7,10 +7,12 @@
   "baseline": {
     "commit_sha": "69e46f53406d77eefdbbdfbfb1c7413d0bef5c24",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:758974e909066b4886f90f0752050faab4b8915ef9b542ebc084986d6e19f35c"
+    "active_scope_hash": "sha256:b8e1f4f09539d283c5124df7444e3f4fc7083cec2483062ca09cf9c694a1fc96"
   },
   "declared_paths": [
+    ".github/workflows/contract-evidence-legacy-list-guard.yml",
     ".github/workflows/scope-guard.yml",
+    "docs/declarations/377.opk-53.json",
     "docs/migration_notes.md",
     "scripts/check-legacy-list-guard-workflow-ordering.d.mts",
     "scripts/check-legacy-list-guard-workflow-ordering.mjs",
@@ -27,5 +29,21 @@
     "tests/fixtures/legacy-list-guard/consumer-legacy-list.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:758974e909066b4886f90f0752050faab4b8915ef9b542ebc084986d6e19f35c",
+      "new_active_scope_hash": "sha256:b8e1f4f09539d283c5124df7444e3f4fc7083cec2483062ca09cf9c694a1fc96",
+      "changed": {
+        "added": [
+          ".github/workflows/contract-evidence-legacy-list-guard.yml",
+          "docs/declarations/377.opk-53.json"
+        ],
+        "removed": []
+      },
+      "reason": "add trusted workflow file to scope",
+      "actor": "opk-53",
+      "timestamp": "2026-06-21T02:37:07.095Z",
+      "applied": true
+    }
+  ]
 }
