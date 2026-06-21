@@ -1,0 +1,7 @@
+{
+  "description": "Fixture legacy list baseline for captured-diff cases.",
+  "paths": [
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "docs/issues_drafts/01-ao-task-declaration-impl.md"
+  ]
+}

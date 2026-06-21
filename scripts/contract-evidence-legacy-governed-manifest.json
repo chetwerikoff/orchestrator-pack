@@ -1,0 +1,26 @@
+{
+  "description": "Governed surface for contract-evidence legacy list anti-tamper guard (Issue #377).",
+  "legacyListPath": "scripts/contract-evidence-legacy-drafts.json",
+  "legacyListResolutionModule": "scripts/contract-evidence-path.mjs",
+  "pinnedEntrypoint": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+  "files": [
+    "scripts/contract-evidence-legacy-drafts.json",
+    "scripts/contract-evidence-path.mjs",
+    "scripts/contract-evidence-legacy-list-guard.mjs",
+    "scripts/contract-evidence-legacy-governed-manifest.json",
+    "scripts/contract-evidence-legacy-authorizations.json",
+    "scripts/run-contract-evidence-legacy-list-guard.mjs",
+    "scripts/contract-evidence-legacy-list-guard.test.ts",
+    "scripts/check-legacy-list-guard-workflow-ordering.mjs",
+    ".github/workflows/scope-guard.yml"
+  ],
+  "fixtureRoots": [
+    "tests/fixtures/legacy-list-guard"
+  ],
+  "pinnedEntrypointDependencies": [
+    "scripts/contract-evidence-legacy-list-guard.mjs",
+    "scripts/contract-evidence-path.mjs",
+    "scripts/contract-evidence-legacy-governed-manifest.json",
+    "scripts/contract-evidence-legacy-authorizations.json"
+  ]
+}

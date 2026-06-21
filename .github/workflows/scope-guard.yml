@@ -90,6 +90,42 @@ jobs:
         shell: pwsh
         run: ./scripts/check-reusable.ps1
 
+  contract-evidence-legacy-list-guard:
+    name: Contract evidence legacy list guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout trusted legacy list guard (base ref)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-legacy-list-guard
+
+      - name: Run legacy list guard from trusted entrypoint
+        shell: bash
+        env:
+          LEGACY_LIST_GUARD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LEGACY_LIST_GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEGACY_LIST_GUARD_REPO_ROOT: ${{ github.workspace }}
+          LEGACY_LIST_GUARD_TRUSTED_ROOT: ${{ github.workspace }}/trusted-legacy-list-guard
+        run: |
+          set -euo pipefail
+          TRUSTED_ROOT="$LEGACY_LIST_GUARD_TRUSTED_ROOT"
+          ENTRY="$TRUSTED_ROOT/scripts/run-contract-evidence-legacy-list-guard.mjs"
+          if [ ! -f "$ENTRY" ]; then
+            echo "legacy-list guard bootstrap: trusted entrypoint absent on base; using fixture/e2e head copy"
+            export LEGACY_LIST_GUARD_BOOTSTRAP=1
+            ENTRY="$LEGACY_LIST_GUARD_REPO_ROOT/scripts/run-contract-evidence-legacy-list-guard.mjs"
+          fi
+          node "$ENTRY"
+
   pr-scope-guard:
     name: PR scope guard
     if: github.event_name == 'pull_request'

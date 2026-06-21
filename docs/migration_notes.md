@@ -1383,3 +1383,16 @@ and enforce nudge-before-fallback precedence for lost-handoff cycles.
 
 Cycle state persists in the existing reconcile state files (`cycleState` key alongside
 `degradedCi` / `nudged`); no new env vars required.
+
+## Issue #377 — Contract evidence legacy list anti-tamper guard
+
+**Operator adoption** — after the guard-introducing PR is merged (admin lands it first):
+
+1. Open **Settings → Branches → branch protection** for `main` (or the integration branch named in the issue).
+2. Under **Require status checks to pass before merging**, add **Contract evidence legacy list guard**.
+3. Enable **Require branches to be up to date before merging** (`strict` = true).
+4. Verify adoption:
+   `gh api repos/chetwerikoff/orchestrator-pack/branches/main/protection`
+   — confirm the check name appears in `required_status_checks.contexts` and `required_status_checks.strict` is `true`.
+5. To authorize a legitimate legacy-path addition: an admin merges a scoped entry into `scripts/contract-evidence-legacy-authorizations.json` on the merge base **before** the ordinary PR that adds the path (same-diff self-authorization is rejected).
+

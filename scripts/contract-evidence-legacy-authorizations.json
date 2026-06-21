@@ -1,0 +1,4 @@
+{
+  "description": "Pre-merged owner authorizations for legacy-list governed changes. Maintained by repo admins; must exist on the merge base before an ordinary PR can add grandfathered paths.",
+  "authorizations": []
+}
