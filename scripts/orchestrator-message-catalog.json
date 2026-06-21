@@ -176,7 +176,7 @@
         "file": "scripts/review-send-reconcile.ps1",
         "function": "Invoke-PlannedFirstReviewSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "4acc2e0b667990fa"
+        "predicateBodyHash": "52518727bf6d5706"
       }
     },
     {

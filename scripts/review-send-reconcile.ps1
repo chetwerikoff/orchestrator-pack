@@ -206,6 +206,13 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
     }
 
+    $sendAttempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
+    if (-not $sendAttempt.ok) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$sendAttempt.reason } | Out-Null
+        Write-ReviewSendLog "send aborted (claim send-attempt failed) run=$($Action.runId): $($sendAttempt.reason)"
+        return @{ sent = $false; reason = [string]$sendAttempt.reason }
+    }
+
     Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$sessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'

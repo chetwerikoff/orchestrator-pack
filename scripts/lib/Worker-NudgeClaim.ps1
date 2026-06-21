@@ -120,6 +120,41 @@ function New-WorkerNudgeClaimHolder {
     }
 }
 
+
+function Write-WorkerNudgeClaimMutexOwnerExclusive {
+    param([string]$LockDir)
+    if (-not (Test-Path -LiteralPath $LockDir)) {
+        try {
+            New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+        }
+        catch {
+            if (-not (Test-Path -LiteralPath $LockDir)) { return $false }
+        }
+    }
+    $ownerPath = Get-WorkerNudgeClaimMutexOwnerPath -LockDir $LockDir
+    $record = @{
+        pid           = $PID
+        acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $json = ($record | ConvertTo-Json -Compress -Depth 5)
+    try {
+        $stream = [System.IO.File]::Open($ownerPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            $stream.Write($bytes, 0, $bytes.Length)
+        }
+        finally {
+            $stream.Dispose()
+        }
+        return $true
+    }
+    catch [System.IO.IOException] {
+        $existing = Read-WorkerNudgeClaimMutexOwner -LockDir $LockDir
+        if ($existing -and [int]$existing.pid -eq $PID) { return $true }
+        return $false
+    }
+}
+
 function Write-WorkerNudgeClaimMutexOwner {
     param([string]$LockDir, [object]$Record)
     if (-not (Test-Path -LiteralPath $LockDir)) {
@@ -155,8 +190,19 @@ function Test-WorkerNudgeClaimProcessAlive {
 
 function Test-WorkerNudgeClaimMutexAbandoned {
     param([string]$LockDir)
+    if (-not (Test-Path -LiteralPath $LockDir)) { return $false }
     $owner = Read-WorkerNudgeClaimMutexOwner -LockDir $LockDir
-    if (-not $owner) { return $true }
+    if (-not $owner) {
+        try {
+            $dirInfo = Get-Item -LiteralPath $LockDir -Force
+            $ageSeconds = ((Get-Date).ToUniversalTime() - $dirInfo.CreationTimeUtc).TotalSeconds
+            if ($ageSeconds -lt $Script:WorkerNudgeClaimMutexStaleSeconds) {
+                return $false
+            }
+        }
+        catch { }
+        return $true
+    }
     $acquiredAt = [datetime]::MinValue
     if ($owner.acquiredAtUtc) {
         [void][datetime]::TryParse([string]$owner.acquiredAtUtc, [ref]$acquiredAt)
@@ -176,21 +222,14 @@ function Recover-WorkerNudgeClaimMutex {
 function Enter-WorkerNudgeClaimMutex {
     param([string]$LockDir)
     for ($attempt = 0; $attempt -lt 8; $attempt++) {
-        try {
-            New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
-            Write-WorkerNudgeClaimMutexOwner -LockDir $LockDir -Record @{
-                pid           = $PID
-                acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-            }
+        if (Write-WorkerNudgeClaimMutexOwnerExclusive -LockDir $LockDir) {
             return $true
         }
-        catch {
-            if (Test-WorkerNudgeClaimMutexAbandoned -LockDir $LockDir) {
-                Recover-WorkerNudgeClaimMutex -LockDir $LockDir
-                continue
-            }
-            Start-Sleep -Milliseconds (50 * ($attempt + 1))
+        if (Test-WorkerNudgeClaimMutexAbandoned -LockDir $LockDir) {
+            Recover-WorkerNudgeClaimMutex -LockDir $LockDir
+            continue
         }
+        Start-Sleep -Milliseconds (50 * ($attempt + 1))
     }
     return $false
 }
