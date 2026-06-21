@@ -135,13 +135,12 @@ function runAoReviewExecute(sessionId) {
   );
 }
 
-const aoAvailable = spawnSync('which', ['ao']).status === 0;
 const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
 
 const output = {
   skipped: false,
   viaAoReviewExecute: false,
-  aoAvailable,
+  aoAvailable: false,
   aoSessionId: null,
   aoSessionIsDedicatedFixture: false,
   promptContainsCheckpoint2: prompt.includes('Checkpoint-2 contract-evidence re-verification'),
@@ -153,18 +152,21 @@ const output = {
   error: null,
 };
 
-if (!aoAvailable) {
-  output.error = 'ao CLI is required for AC#13 end-to-end reviewer-flow fixture';
-  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-  process.exit(1);
-}
-
 if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
   output.skipped = true;
   output.error = null;
   output.summary = 'skipped: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1) for live AC#13 e2e';
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(0);
+}
+
+const aoAvailable = spawnSync('which', ['ao']).status === 0;
+output.aoAvailable = aoAvailable;
+
+if (!aoAvailable) {
+  output.error = 'ao CLI is required for AC#13 end-to-end reviewer-flow fixture';
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(1);
 }
 
 const sessionId = resolveAoFixtureSession();

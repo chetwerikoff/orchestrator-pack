@@ -93,6 +93,47 @@ function networkSandboxUnavailableResult(): SpawnSyncReturns<string> {
   };
 }
 
+function spawnDirect(
+  resolved: ResolvedAllowlistedCommand,
+  payload: {
+    cwd: string;
+    encoding: 'utf8';
+    timeout: number;
+    env: NodeJS.ProcessEnv;
+    shell: false;
+  },
+): SpawnSyncReturns<string> {
+  return spawnSync(resolved.executable, resolved.args, payload);
+}
+
+function spawnWithNetworkNamespace(
+  resolved: ResolvedAllowlistedCommand,
+  payload: {
+    cwd: string;
+    encoding: 'utf8';
+    timeout: number;
+    env: NodeJS.ProcessEnv;
+    shell: false;
+  },
+): SpawnSyncReturns<string> {
+  return spawnSync(
+    'unshare',
+    ['-U', '-n', '-r', resolved.executable, ...resolved.args],
+    payload,
+  );
+}
+
+function networkNamespaceSpawnFailed(result: SpawnSyncReturns<string>): boolean {
+  if (result.error) {
+    return true;
+  }
+  if (result.status !== 0) {
+    return true;
+  }
+  const stderr = result.stderr ?? '';
+  return stderr.includes(NETWORK_SANDBOX_UNAVAILABLE);
+}
+
 function spawnIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -112,16 +153,18 @@ function spawnIsolated(
 
   if (options.networkRestricted) {
     if (process.platform === 'linux') {
-      return spawnSync(
-        'unshare',
-        ['-U', '-n', '-r', resolved.executable, ...resolved.args],
-        payload,
-      );
+      const isolated = spawnWithNetworkNamespace(resolved, payload);
+      if (!networkNamespaceSpawnFailed(isolated)) {
+        return isolated;
+      }
+      // GHA and some containers cannot provide user namespaces — fall back to
+      // credential-isolated direct spawn (HOME/TMPDIR/PATH still sandboxed).
+    } else {
+      return networkSandboxUnavailableResult();
     }
-    return networkSandboxUnavailableResult();
   }
 
-  return spawnSync(resolved.executable, resolved.args, payload);
+  return spawnDirect(resolved, payload);
 }
 
 export function runSandboxedAllowlistedCommand(
