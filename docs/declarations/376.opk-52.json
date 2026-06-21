@@ -11,6 +11,7 @@
   },
   "declared_paths": [
     "docs/declarations/376.opk-52.json",
+    "docs/orchestrator-message-registry.mjs",
     "prompts/agent_rules.md",
     "prompts/codex_review_prompt.md",
     "scripts/check-contract-evidence-reverify.ps1",
@@ -33,6 +34,7 @@
     "scripts/lib/reverify-sandbox.ts",
     "scripts/lib/Resolve-TrustedPackRoot.ps1",
     "scripts/lib/reviewer-cli-io.ts",
+    "scripts/orchestrator-message-registry.test.ts",
     "scripts/run-reviewer-reverify-ao-review-command.ps1",
     "scripts/run-reviewer-reverify-e2e-fixture.mjs",
     "scripts/verify.ps1",
