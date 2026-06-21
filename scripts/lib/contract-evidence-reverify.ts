@@ -40,6 +40,7 @@ const allowlist = require('../contract-evidence-reverify-allowlist.json') as {
   trustedCommandPrefixes: string[];
   mutatingTokenPattern: string;
   trustedCheckerRelativePaths: string[];
+  newRowProducerBoundaryScripts?: string[];
   defaultTimeoutMs: number;
   maxObservedLength: number;
 };
@@ -307,6 +308,82 @@ function compareCaptureContent(
   };
 }
 
+
+function isKnownNewRowProducerBoundaryScript(relPath: string): boolean {
+  const normalized = normalizePath(relPath);
+  return (allowlist.newRowProducerBoundaryScripts ?? []).some(
+    (entry) => normalizePath(entry) === normalized,
+  );
+}
+
+function resolveSpawnedProducerRelPath(proofCommand: string, repoRoot: string): string | null {
+  const rels = listAllowlistedNodeScriptRelPaths(proofCommand, repoRoot);
+  if (rels.length !== 1) {
+    return null;
+  }
+  const proofRel = rels[0]!;
+  const proofPath = path.join(repoRoot, proofRel);
+  if (!existsSync(proofPath)) {
+    return null;
+  }
+  const source = readFileSync(proofPath, 'utf8');
+  if (!/\bspawnSync\s*\(/.test(source)) {
+    return null;
+  }
+  const joinMatch = source.match(/path\.join\(\s*here\s*,\s*['"]([^'"]+)['"]\s*\)/);
+  if (!joinMatch) {
+    return null;
+  }
+  const producerAbs = path.join(path.dirname(proofPath), joinMatch[1]!);
+  const producerRel = normalizePath(path.relative(repoRoot, producerAbs));
+  if (producerRel.startsWith('..')) {
+    return null;
+  }
+  const probe = `node ${producerRel}`;
+  if (!isCommandSafe(probe, repoRoot)) {
+    return null;
+  }
+  return producerRel;
+}
+
+function buildIndependentProducerCommand(
+  proofCommand: string,
+  block: Record<string, string>,
+  repoRoot: string,
+): string | null {
+  const explicit = (block['producer-command'] ?? '').trim();
+  if (explicit && isCommandSafe(explicit, repoRoot)) {
+    return explicit;
+  }
+
+  const trimmed = proofCommand.trim();
+  if (trimmed.startsWith('npm test --')) {
+    return trimmed;
+  }
+
+  const spawnedRel = resolveSpawnedProducerRelPath(trimmed, repoRoot);
+  if (spawnedRel) {
+    const resolved = resolveAllowlistedCommand(trimmed, { repoRoot });
+    if (!resolved) {
+      return null;
+    }
+    const envPrefix = Object.entries(resolved.env)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+    return envPrefix ? `${envPrefix} node ${spawnedRel}` : `node ${spawnedRel}`;
+  }
+
+  const proofRel = listAllowlistedNodeScriptRelPaths(trimmed, repoRoot)[0];
+  if (!proofRel || !isKnownNewRowProducerBoundaryScript(proofRel)) {
+    return null;
+  }
+  return isCommandSafe(trimmed, repoRoot) ? trimmed : null;
+}
+
+function producerRunFailed(run: CommandRunResult): boolean {
+  return !run.ok || (run.exitCode !== null && run.exitCode !== 0);
+}
+
 function blockedUnverifiedReason(run: CommandRunResult): ReverifyReason {
   if (
     run.blockReason === 'network-sandbox-unavailable'
@@ -420,6 +497,18 @@ function evaluateCaptureRow(input: {
     if (run.timedOut) {
       return buildUnverified(rowIndex, row, 'producer-unreachable');
     }
+    if (producerRunFailed(run) && bindingType !== 'cli-behavior' && !isCliBehaviorBinding(row)) {
+      return {
+        rowIndex,
+        rowHash: hashRow(row),
+        bindingId: row['binding-id'],
+        status: 'divergent',
+        verificationMode: 'live',
+        asserted: boundValue(assertedExpected),
+        observed: boundValue(`exit:${run.exitCode ?? 'null'}`),
+        producerVerified: false,
+      };
+    }
     if (bindingType === 'cli-behavior' || isCliBehaviorBinding(row)) {
       const expectedExit = String(entry.exitStatus ?? '0');
       const observedExit = String(run.exitCode ?? 'null');
@@ -528,6 +617,10 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
   }
 
+  const expected = block.expected ?? '';
+  const datum = block.datum ?? block.selector ?? '';
+  const selector = datum.includes(':') ? `$.${datum.split(':').pop()}` : `$.${datum}`;
+
   const run = runTrustedCommand(proofCommand, {
     cwd: reviewTargetRoot,
     timeoutMs,
@@ -540,30 +633,49 @@ function evaluateNewRow(input: {
   if (run.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
   }
+  if (producerRunFailed(run)) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
 
-  const expected = block.expected ?? '';
-  const datum = block.datum ?? block.selector ?? '';
-  const selector = datum.includes(':') ? `$.${datum.split(':').pop()}` : `$.${datum}`;
   const stdout = run.stdout.trim();
   if (!stdout) {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
-  let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(stdout) as Record<string, unknown>;
+    JSON.parse(stdout);
   } catch {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
-  if (proofCommand.includes('echo-expected') || parsed.invokedProducerPath !== true) {
-    if (!parsed.invokedProducerPath) {
-      return buildUnverified(rowIndex, row, 'non-genuine-proof');
-    }
+  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot);
+  if (!independentCommand) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
-  const comparison = compareStructuredOutput(stdout, selector, expected);
-  if (comparison.matched) {
+  const independentRun = runTrustedCommand(independentCommand, {
+    cwd: reviewTargetRoot,
+    timeoutMs,
+    forceUnreachable: forceProducerUnreachable,
+    sandboxMode: 'pr-head-new',
+  });
+  if (independentRun.blocked) {
+    return buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun));
+  }
+  if (independentRun.timedOut) {
+    return buildUnverified(rowIndex, row, 'producer-unreachable');
+  }
+  if (producerRunFailed(independentRun)) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
+
+  const independentComparison = compareStructuredOutput(independentRun.stdout.trim(), selector, expected);
+  const proofComparison = compareStructuredOutput(stdout, selector, expected);
+  const producerVerified = independentComparison.matched
+    && proofComparison.matched
+    && proofComparison.observed === independentComparison.observed;
+
+  if (proofComparison.matched && producerVerified) {
     return {
       rowIndex,
       rowHash: hashRow(row),
@@ -571,9 +683,13 @@ function evaluateNewRow(input: {
       status: 'verified',
       verificationMode: 'live',
       asserted: boundValue(expected),
-      observed: comparison.observed,
+      observed: proofComparison.observed,
       producerVerified: true,
     };
+  }
+
+  if (proofComparison.matched && !producerVerified) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
   return {
@@ -583,7 +699,7 @@ function evaluateNewRow(input: {
     status: 'unfulfilled-new',
     verificationMode: 'live',
     asserted: boundValue(expected),
-    observed: comparison.observed,
+    observed: proofComparison.observed,
     producerVerified: false,
   };
 }

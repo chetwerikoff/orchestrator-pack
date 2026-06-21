@@ -23,6 +23,9 @@
     "scripts/invoke-contract-evidence-reverify.ts",
     "scripts/contract-evidence-reverify-allowlist.json"
   ],
+  "newRowProducerBoundaryScripts": [
+    "tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs"
+  ],
   "defaultTimeoutMs": 8000,
   "maxObservedLength": 512
 }

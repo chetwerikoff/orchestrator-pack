@@ -43,19 +43,6 @@ function captureWorktreeFingerprint(cwd: string): string {
   return result.stdout ?? '';
 }
 
-function restoreWorktree(cwd: string): void {
-  spawnSync('git', ['reset', '--hard', 'HEAD'], {
-    cwd,
-    encoding: 'utf8',
-    shell: false,
-  });
-  spawnSync('git', ['clean', '-fd'], {
-    cwd,
-    encoding: 'utf8',
-    shell: false,
-  });
-}
-
 function buildIsolatedEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
   const isolatedHome = mkdtempSync(path.join(tmpdir(), 'reverify-home-'));
   const isolatedTmp = mkdtempSync(path.join(tmpdir(), 'reverify-tmp-'));
@@ -200,6 +187,35 @@ function remapResolvedCommandForDisposable(
   };
 }
 
+function spawnTrustedBaseIsolated(
+  resolved: ResolvedAllowlistedCommand,
+  options: {
+    cwd: string;
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+  },
+): SpawnSyncReturns<string> {
+  const disposable = createDisposableWorktreeCopy(options.cwd);
+  if (!disposable) {
+    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
+  }
+
+  const sandboxResolved = remapResolvedCommandForDisposable(resolved, options.cwd, disposable);
+  const payload = {
+    cwd: disposable,
+    encoding: 'utf8' as const,
+    timeout: options.timeoutMs,
+    env: options.env,
+    shell: false as const,
+  };
+
+  try {
+    return spawnDirect(sandboxResolved, payload);
+  } finally {
+    rmSync(disposable, { recursive: true, force: true });
+  }
+}
+
 function spawnPrHeadIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -250,13 +266,7 @@ function spawnIsolated(
     return spawnPrHeadIsolated(resolved, options);
   }
 
-  return spawnDirect(resolved, {
-    cwd: options.cwd,
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    env: options.env,
-    shell: false,
-  });
+  return spawnTrustedBaseIsolated(resolved, options);
 }
 
 function isSandboxBlocked(stderr: string, networkRestricted: boolean): string | null {
@@ -322,7 +332,6 @@ export function runSandboxedAllowlistedCommand(
 
   const afterFingerprint = captureWorktreeFingerprint(options.cwd);
   if (beforeFingerprint !== afterFingerprint) {
-    restoreWorktree(options.cwd);
     return {
       ok: false,
       stdout: '',
