@@ -663,8 +663,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
       snapshotHash: 'sha256:deadbeef',
       snapshotDrift: false,
       prHeadSha: 'abc123',
-      candidateOnly: true,
-      neverBlocks: true,
+      candidateOnly: true as const,
+      neverBlocks: true as const,
       rows: [
         {
           rowIndex: 0,
