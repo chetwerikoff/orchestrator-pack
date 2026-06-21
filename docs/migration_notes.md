@@ -1383,3 +1383,23 @@ and enforce nudge-before-fallback precedence for lost-handoff cycles.
 
 Cycle state persists in the existing reconcile state files (`cycleState` key alongside
 `degradedCi` / `nudged`); no new env vars required.
+
+## Issue #377 — Contract evidence legacy list anti-tamper guard
+
+**Operator adoption** — after the guard-introducing PR is merged (admin lands it first):
+
+1. Open **Settings → Branches → branch protection** for `main` (or the integration branch named in the issue).
+2. Under **Require status checks to pass before merging**, add **Contract evidence legacy list guard**.
+3. Enable **Require branches to be up to date before merging** (`strict` = true).
+4. Verify adoption:
+   `gh api repos/chetwerikoff/orchestrator-pack/branches/main/protection`
+   — confirm the check name appears in `required_status_checks.contexts` and `required_status_checks.strict` is `true`.
+5. To authorize a legitimate legacy-path addition: an admin merges a scoped entry into `scripts/contract-evidence-legacy-authorizations.json` on the merge base **before** the ordinary PR that adds the path (same-diff self-authorization is rejected).
+
+Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml` on `pull_request_target` (merge-base workflow definition), not from PR-head `scope-guard.yml`.
+
+6. **Authorize path additions with exact base/head binding.** Records must include `baseSha`, `headSha`, and the exact `addedPaths` / `changedGovernedFiles` set for the evaluated PR revision. Typical flow:
+   - Note the path-addition PR's current merge base `B`, head `H`, and `B`'s parent `P` (`git rev-parse B^`).
+   - Land an **authorization-only** admin commit on `main` whose record sets `baseSha=P` (the pre-land main tip — knowable before the auth commit) **or** `baseSha=B` after the land, plus `headSha=H` and the scoped path/file sets.
+   - Rebase/update the path-addition PR onto the new `main` tip only after updating/re-issuing the authorization so `baseSha` still matches the merge base or its parent binding and `headSha` matches the rebased head.
+
