@@ -1043,6 +1043,110 @@ export function measureShellDiffLogLines(command, capturedOutput) {
   return text === '' ? 0 : countTextLines(text);
 }
 
+const SHELL_COMMAND_WORDS = new Set([
+  'head',
+  'tail',
+  'cat',
+  'sed',
+  'awk',
+  'grep',
+  'wc',
+  'python',
+  'python3',
+  'perl',
+  '-n',
+  '-c',
+]);
+
+/**
+ * @param {string} token
+ */
+function looksLikeShellCommandPath(token) {
+  return token.includes('/') || /\.[a-z0-9]{1,8}$/i.test(token);
+}
+
+/**
+ * @param {string} command
+ */
+export function extractShellCommandPath(command) {
+  const trimmed = String(command ?? '').trim();
+  const quotedMatches = [...trimmed.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]);
+  for (const candidate of quotedMatches) {
+    if (looksLikeShellCommandPath(candidate)) {
+      return candidate;
+    }
+  }
+
+  const tokens = trimmed.split(/\s+/);
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index].replace(/^['"]|['"]$/g, '');
+    if (!token || token.startsWith('-')) {
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      continue;
+    }
+    if (SHELL_COMMAND_WORDS.has(token.toLowerCase())) {
+      continue;
+    }
+    if (looksLikeShellCommandPath(token)) {
+      return token;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * @param {string} command
+ * @param {unknown} [capturedOutput]
+ * @param {string} [filePath]
+ */
+export function inferShellReadAroundLines(command, capturedOutput, filePath) {
+  if (capturedOutput !== undefined && capturedOutput !== null) {
+    const text = extractToolResultText(capturedOutput);
+    if (text !== '') {
+      return countTextLines(text);
+    }
+  }
+
+  const trimmed = String(command ?? '').trim();
+  const headTail = trimmed.match(/(?:head|tail)(?:\s+-n)?\s+(\d+)/i);
+  if (headTail) {
+    return Number(headTail[1]);
+  }
+
+  const sedRange = trimmed.match(/sed\s+-n\s+['"]?(\d+),(\d+)p['"]?/i);
+  if (sedRange) {
+    return Number(sedRange[2]) - Number(sedRange[1]) + 1;
+  }
+
+  if (filePath && existsSync(filePath)) {
+    return countFileLinesFromDisk(filePath);
+  }
+
+  return 0;
+}
+
+/**
+ * @param {string} command
+ * @param {unknown} [capturedOutput]
+ */
+export function inferShellReadAroundRead(command, capturedOutput) {
+  if (!isShellReadAroundCommand(command)) {
+    return null;
+  }
+  const filePath = extractShellCommandPath(command);
+  if (!filePath) {
+    return null;
+  }
+  const lines = inferShellReadAroundLines(command, capturedOutput, filePath);
+  if (lines <= 0) {
+    return null;
+  }
+  return { path: filePath, lines };
+}
+
 /**
  * @param {string} transcriptPath
  */
@@ -1214,6 +1318,16 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
     events.push({ kind: 'shell', inboundRequestId, command });
     if (matchesCoworkerAskCommand(command)) {
       events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
+    }
+    const readAround = inferShellReadAroundRead(command, options.shellOutput);
+    if (readAround) {
+      events.push({
+        kind: 'read',
+        inboundRequestId,
+        path: readAround.path,
+        lines: readAround.lines,
+        readKind: 'file',
+      });
     }
     const diffLogLines = measureShellDiffLogLines(command, options.shellOutput);
     if (diffLogLines > 0) {

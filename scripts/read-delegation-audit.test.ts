@@ -16,6 +16,7 @@ import {
   matchesCoworkerAskCommand,
   extractEventsFromTranscript,
   extractEventsFromTranscriptRecords,
+  inferShellReadAroundRead,
   isInboundUserRequest,
   loadMetricWindowSummary,
   measureReadToolLines,
@@ -1045,6 +1046,74 @@ describe('stop hook transcript population', () => {
     expect(result.ok).toBe(true);
     expect(result.verdicts[0]?.advisory).toBe(true);
     expect(result.flags.length).toBe(0);
+  });
+
+  it('captures shell read-arounds from shell-only Cursor transcripts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-read-around-'));
+    const readPath = path.join(dir, 'large-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `draft-line-${index + 1}`).join('\n'),
+    );
+    const captured = fs.readFileSync(readPath, 'utf8');
+    const command = `head -n 450 ${readPath}`;
+    const records = [
+      {
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'read the draft' }] },
+      },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-1',
+              name: 'Shell',
+              input: { command },
+            },
+          ],
+        },
+      },
+      {
+        role: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'shell-1', content: captured }],
+        },
+      },
+    ];
+
+    const extracted = extractEventsFromTranscriptRecords(records);
+    expect(extracted.workUnits).toHaveLength(1);
+    const unit = extracted.workUnits[0];
+    expect(unit.reads?.length).toBe(1);
+    expect(unit.reads?.[0]?.path).toBe(readPath);
+    expect(unit.reads?.[0]?.lines).toBe(450);
+    expect(unit.shellCommands).toEqual([command]);
+
+    const result = evaluateStopAudit({
+      surface: 'cursor',
+      workUnits: extracted.workUnits,
+    }) as StopAuditResult;
+    const verdict = result.verdicts[0];
+    expect(verdict.advisory).toBe(true);
+    expect(verdict.advisoryOutcome).toBe(CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND);
+    expect(verdict.shellReadAround).toBe(true);
+    expect(result.summary.advisoryUnits).toBe(1);
+  });
+
+  it('infers shell read-around reads from head -n without captured output when path exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-shell-infer-'));
+    const readPath = path.join(dir, 'tracked-draft.md');
+    fs.writeFileSync(
+      readPath,
+      Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join('\n'),
+    );
+    const command = `head -n 450 ${readPath}`;
+    const inferred = inferShellReadAroundRead(command);
+    expect(inferred).toEqual({ path: readPath, lines: 450 });
+    const events = toolUseToAuditEvents('Shell', { command }, 'req-shell-read-around');
+    expect(events.some((event) => event.kind === 'read' && event.path === readPath)).toBe(true);
   });
 
   it('reads transcript_path from disk via extractEventsFromTranscript', () => {
