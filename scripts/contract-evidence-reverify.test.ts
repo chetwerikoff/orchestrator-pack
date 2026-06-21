@@ -113,6 +113,14 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
 
+
+  it('does not expose writable trusted node_modules symlink fallback in sandbox', () => {
+    const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
+    expect(sandboxSource).not.toContain('linkNodeModulesIntoDisposable');
+    expect(sandboxSource).not.toContain('spawnTrustedBaseDirect');
+    expect(sandboxSource).toContain('FILESYSTEM_SANDBOX_UNAVAILABLE');
+  });
+
   it('detects mutations inside disposable sandbox copy', () => {
     const resolved = resolveAllowlistedCommand(
       'REVERIFY_ATTEMPT_MUTATION=1 REVERIFY_VALUE=match node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',

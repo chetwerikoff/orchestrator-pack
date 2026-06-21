@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -237,15 +237,6 @@ function createDisposableWorktreeCopy(cwd: string): string | null {
   return dest;
 }
 
-function linkNodeModulesIntoDisposable(disposable: string, dependencyRoot: string): void {
-  const hostNodeModules = path.join(dependencyRoot, 'node_modules');
-  const sandboxNodeModules = path.join(disposable, 'node_modules');
-  if (!existsSync(hostNodeModules) || existsSync(sandboxNodeModules)) {
-    return;
-  }
-  symlinkSync(hostNodeModules, sandboxNodeModules, 'dir');
-}
-
 function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependencyRoot: string): void {
   const hostNodeModules = path.join(dependencyRoot, 'node_modules');
   if (existsSync(hostNodeModules)) {
@@ -394,27 +385,6 @@ function remapResolvedCommandForDisposable(
   };
 }
 
-function spawnTrustedBaseDirect(
-  resolved: ResolvedAllowlistedCommand,
-  disposable: string,
-  originalCwd: string,
-  options: {
-    timeoutMs: number;
-    env: NodeJS.ProcessEnv;
-    dependencyRoot: string;
-  },
-): SpawnSyncReturns<string> {
-  linkNodeModulesIntoDisposable(disposable, options.dependencyRoot);
-  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable);
-  return spawnDirect(sandboxResolved, {
-    cwd: disposable,
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    env: withSandboxBinDir(options.env, disposable),
-    shell: false,
-  });
-}
-
 function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -459,15 +429,7 @@ function spawnTrustedBaseIsolated(
       }
     }
 
-    return guardSandboxPostcondition(
-      disposable,
-      beforeSandboxFingerprint,
-      spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
-        timeoutMs: options.timeoutMs,
-        env: options.env,
-        dependencyRoot: options.dependencyRoot,
-      }),
-    );
+    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }

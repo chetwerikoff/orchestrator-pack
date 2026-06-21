@@ -50,6 +50,15 @@ function Resolve-TrustedReverifyLauncherPath {
     )
 
     $launcherRelativePath = 'scripts/launch-contract-evidence-reverify.ps1'
+    $bootstrapArchivePaths = @(
+        $launcherRelativePath,
+        'scripts/lib/Contract-EvidenceReverify-Core.ps1',
+        'scripts/lib/Import-TrustedReverifyBootstrap.ps1',
+        'scripts/lib/TrustedPackRoot-Common.ps1',
+        'scripts/lib/Resolve-TrustedPackRoot.ps1',
+        'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
+    )
+    $coreRelativePath = 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
 
     foreach ($candidateRoot in @($env:AO_TRUSTED_PACK_ROOT, $env:OPK_TRUSTED_PACK_ROOT)) {
         if ([string]::IsNullOrWhiteSpace($candidateRoot)) {
@@ -68,39 +77,57 @@ function Resolve-TrustedReverifyLauncherPath {
     }
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
-    New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-    Push-Location $resolvedReviewTarget
-    try {
-        git archive origin/main -- $launcherRelativePath 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
+    function New-TrustedReverifyBootstrapArchive {
+        param(
+            [Parameter(Mandatory)]
+            [string]$GitRef,
+            [Parameter(Mandatory)]
+            [string]$TempPrefix
+        )
+
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("${TempPrefix}-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $temp -Force | Out-Null
+
+        Push-Location $resolvedReviewTarget
+        try {
+            git archive $GitRef -- @bootstrapArchivePaths 2>$null | tar -x -C $temp 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+                return $null
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $corePath = Join-Path $temp $coreRelativePath
+        if (-not (Test-Path -LiteralPath $corePath)) {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
             return $null
         }
+
+        return $temp
     }
-    finally {
-        Pop-Location
+
+    $temp = New-TrustedReverifyBootstrapArchive -GitRef 'origin/main' -TempPrefix 'opk-trusted-launcher'
+    if (-not $temp) {
+        return $null
     }
 
     $launcherPath = Join-Path $temp $launcherRelativePath
     if (-not (Test-Path -LiteralPath $launcherPath)) {
         Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-        $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
-        New-Item -ItemType Directory -Path $temp -Force | Out-Null
-        Push-Location $resolvedReviewTarget
-        try {
-            git archive HEAD -- $launcherRelativePath 2>$null | tar -x -C $temp 2>$null
-        }
-        finally {
-            Pop-Location
+        $temp = New-TrustedReverifyBootstrapArchive -GitRef 'HEAD' -TempPrefix 'opk-trusted-launcher'
+        if (-not $temp) {
+            return $null
         }
         $launcherPath = Join-Path $temp $launcherRelativePath
         if (-not (Test-Path -LiteralPath $launcherPath)) {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
             return $null
         }
-        Write-Warning 'reverify launcher bootstrap: launcher absent on origin/main; using archived review-target copy outside review tree (fixture/e2e only)'
+        Write-Warning 'reverify launcher bootstrap: launcher absent on origin/main; using archived review-target bootstrap copy outside review tree (fixture/e2e only)'
     }
 
     return @{

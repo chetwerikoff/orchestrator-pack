@@ -66,6 +66,15 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'Invoke-ContractEvidenceReverifyCore @PSBoundParameters'
     }
 
+    It 'ao review command bootstrap archives launcher and core helpers together' {
+        $aoReviewCommand = Join-Path $script:RepoRoot 'scripts/run-reviewer-reverify-ao-review-command.ps1'
+        $content = Get-Content -LiteralPath $aoReviewCommand -Raw
+        $content | Should -Match 'bootstrapArchivePaths'
+        $content | Should -Match 'Contract-EvidenceReverify-Core\.ps1'
+        $content | Should -Match 'Import-TrustedReverifyBootstrap\.ps1'
+        $content | Should -Match 'git archive \$GitRef -- @bootstrapArchivePaths'
+    }
+
     It 'bootstrap import module dot-sources helpers from resolved trusted root' {
         $bootstrapScript = Join-Path $script:RepoRoot 'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
         $content = Get-Content -LiteralPath $bootstrapScript -Raw
