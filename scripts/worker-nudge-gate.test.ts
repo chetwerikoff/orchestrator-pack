@@ -21,6 +21,8 @@ import {
   finalizeClaim,
   findForbiddenAutonomousWorkerSendInvocations,
   remapLegacy332Record,
+  resolveWorkerTargetFromPrClaim,
+  syncPrOwnershipClaimRecord,
 } from '../docs/worker-nudge-gate.mjs';
 
 const helperPath = path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1');
@@ -381,6 +383,70 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('rejects replayed claim tokens after send begins', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+        $first = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token
+        $second = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token
+        [pscustomobject]@{
+          firstOk = [bool]$first.ok
+          secondOk = [bool]$second.ok
+          secondReason = [string]$second.reason
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.firstOk).toBe(true);
+      expect(result.secondOk).toBe(false);
+      expect(result.secondReason).toBe('token_replayed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers CLAIMED records immediately after lease expiry', () => {
+    const dir = tempClaimDir();
+    const prevLease = process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS;
+    const prevStale = process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES;
+    process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS = '1';
+    process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES = '30';
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        Start-Sleep -Milliseconds 5
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-2' -Namespace $ns -Surface 'test'
+        [pscustomobject]@{
+          acquired = [bool]$retry.acquired
+          recovered = [bool]$retry.recovered
+          reason = [string]$retry.reason
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(true);
+    } finally {
+      if (prevLease === undefined) {
+        delete process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS;
+      } else {
+        process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS = prevLease;
+      }
+      if (prevStale === undefined) {
+        delete process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES;
+      } else {
+        process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES = prevStale;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('opk-rev-689 incident fixture', () => {
@@ -399,3 +465,111 @@ describe('opk-rev-689 incident fixture', () => {
     expect(acquireClaim({ ...fixture.tuple, surface: 'orchestrator-turn', storePath: fixture.storePath, claims: fixture.priorClaims }).acquired).toBe(false);
   });
 });
+
+describe('PR-claim worker target resolution (#384)', () => {
+  it('keeps generation for resume under same PR-claim lineage with a new session id', () => {
+    const worktree = '/tmp/orchestrator-pack/worktrees/opk-1';
+    const existing = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      worktree,
+      existingClaim: {
+        prNumber: 380,
+        ownerSessionId: 'opk-1',
+        generation: 'gen1',
+        lineageId: 'gen1',
+        worktree,
+      },
+    }).record;
+    const resumed = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-5',
+      worktree,
+      existingClaim: existing,
+    });
+    expect(resumed.reason).toBe('resume_same_lineage');
+    expect(resumed.record.generation).toBe('gen1');
+
+    const target = resolveWorkerTargetFromPrClaim({
+      prNumber: 380,
+      sessionId: 'opk-5',
+      sessions: [{ name: 'opk-5', role: 'worker', prNumber: 380 }],
+      prClaims: [resumed.record],
+    });
+    expect(target.ok).toBe(true);
+    expect(target.workerTarget).toBe('gen1:gen1');
+    expect(target.targetResolutionSource).toBe('pr-claim-record');
+  });
+
+  it('bumps generation for replacement claim-pr ownership', () => {
+    const prior = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-1',
+      existingClaim: null,
+    }).record;
+    const replacement = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-2',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-2',
+      existingClaim: prior,
+    });
+    expect(replacement.reason).toBe('replacement_claim');
+    expect(replacement.record.generation).toBe('opk-2');
+
+    const target = resolveWorkerTargetFromPrClaim({
+      prNumber: 380,
+      sessionId: 'opk-2',
+      sessions: [{ name: 'opk-2', role: 'worker', prNumber: 380 }],
+      prClaims: [replacement.record],
+    });
+    expect(target.workerTarget).toBe('opk-2:opk-2');
+  });
+
+  it('does not suppress replacement generation after prior tuple was served', () => {
+    const prior = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-1',
+      existingClaim: null,
+    }).record;
+    const replacement = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-2',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-2',
+      existingClaim: prior,
+    }).record;
+    const priorTarget = resolveWorkerTargetFromPrClaim({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      sessions: [{ name: 'opk-1', role: 'worker', prNumber: 380 }],
+      prClaims: [prior],
+    });
+    const replacementTarget = resolveWorkerTargetFromPrClaim({
+      prNumber: 380,
+      sessionId: 'opk-2',
+      sessions: [{ name: 'opk-2', role: 'worker', prNumber: 380 }],
+      prClaims: [replacement],
+    });
+    const gate = evaluateNudgeGate({
+      prNumber: 380,
+      headSha,
+      sessionId: 'opk-2',
+      intentClass: 'review-findings',
+      reviewRunId: 'opk-rev-689',
+      targetId: replacementTarget.targetId,
+      targetGeneration: replacementTarget.targetGeneration,
+      surface: 'orchestrator-turn',
+      storePath: '/tmp/unused',
+      claims: [
+        {
+          tupleKey: `380|run:opk-rev-689|review-findings|${priorTarget.workerTarget}`,
+          phase: 'SENT',
+          intentClass: 'review-findings',
+        },
+      ],
+    });
+    expect(gate.allow).toBe(true);
+  });
+});
+

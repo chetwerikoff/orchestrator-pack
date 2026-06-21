@@ -222,17 +222,12 @@ if (-not $AdoptionProbe -and -not $DryRun) {
         exit 46
     }
     if ($ClaimToken) {
-        $tokenValidation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'send'
-        if (-not $tokenValidation.ok) {
-            Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenValidation.reason)"
+        $tokenConsume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $ClaimToken
+        if (-not $tokenConsume.ok) {
+            Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenConsume.reason)"
             exit 46
         }
-        $claimResult = @{
-            acquired  = $true
-            claim     = $tokenValidation.claim
-            path      = $tokenValidation.path
-            namespace = [string]$tokenValidation.token.namespace
-        }
+        $claimResult = $tokenConsume.claimResult
     }
 }
 
@@ -260,11 +255,7 @@ if (-not $register.recorded) {
 }
 
 if ($claimResult) {
-    $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claimResult
-    if (-not $attempt.ok) {
-        Write-JournaledWorkerSendLog "worker nudge rejected: claim send-attempt failed reason=$($attempt.reason)"
-        exit 46
-    }
+  # SEND_ATTEMPTED is recorded atomically during token consumption.
 }
 
 if ($AdoptionProbe) {

@@ -476,7 +476,11 @@ function Test-ValidateWorkerNudgeClaimToken {
     if ([string]$read.record.tupleKey -ne [string]$token.tupleKey) {
         return @{ ok = $false; reason = 'token_tuple_mismatch' }
     }
-    if ($Stage -eq 'send' -and [string]$read.record.phase -notin @('CLAIMED', 'SEND_ATTEMPTED')) {
+    if ($Stage -eq 'send' -and [string]$read.record.phase -ne 'CLAIMED') {
+        $reason = if ([string]$read.record.phase -eq 'SEND_ATTEMPTED') { 'token_replayed' } else { 'token_phase_invalid' }
+        return @{ ok = $false; reason = $reason }
+    }
+    if ($Stage -eq 'finalize' -and [string]$read.record.phase -notin @('CLAIMED', 'SEND_ATTEMPTED')) {
         return @{ ok = $false; reason = 'token_phase_invalid' }
     }
     return @{ ok = $true; token = $token; claim = $read.record; path = $path }
@@ -498,7 +502,8 @@ function Resolve-WorkerNudgeClaimAgainstExisting {
     }
 
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    if ($phase -eq 'CLAIMED' -and [long]$Existing.record.claimLeaseExpiresAtMs -gt $nowMs) {
+    $leaseExpired = ($phase -eq 'CLAIMED' -and [long]$Existing.record.claimLeaseExpiresAtMs -le $nowMs)
+    if ($phase -eq 'CLAIMED' -and -not $leaseExpired) {
         return @{ acquired = $false; reason = 'claimed'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
     }
 
@@ -508,7 +513,7 @@ function Resolve-WorkerNudgeClaimAgainstExisting {
     }
 
     $age = ((Get-Date).ToUniversalTime() - $Existing.acquiredAtUtc).TotalMinutes
-    if ($age -lt $StaleMinutes -and $phase -eq 'CLAIMED') {
+    if (-not $leaseExpired -and $age -lt $StaleMinutes -and $phase -eq 'CLAIMED') {
         return @{ acquired = $false; reason = 'claimed'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
     }
 
@@ -673,6 +678,194 @@ function Get-WorkerNudgeClaimRecordsForGate {
         }
     }
     return $records
+}
+
+
+
+function Get-WorkerPrOwnershipClaimStorePath {
+    param(
+        [string]$ProjectId = 'orchestrator-pack',
+        [int]$PrNumber
+    )
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'pr-ownership-claims'
+    return (Join-Path $dir "pr-$PrNumber.json")
+}
+
+function Get-WorkerPrOwnershipSessionsDir {
+    param([string]$ProjectId = 'orchestrator-pack')
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    return (Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'sessions')
+}
+
+function Read-WorkerPrOwnershipClaimRecord {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-WorkerPrOwnershipClaimRecord {
+    param(
+        [string]$Path,
+        [object]$Record
+    )
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    ($Record | ConvertTo-Json -Compress -Depth 8) | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Resolve-WorkerNudgeTargetFromPrClaim {
+    param(
+        [int]$PrNumber,
+        [string]$SessionId,
+        [string]$HeadSha = '',
+        [string]$ProjectId = 'orchestrator-pack',
+        [object[]]$Sessions = @(),
+        [string]$SessionsDir = ''
+    )
+
+    $libDir = $PSScriptRoot
+    . (Join-Path $libDir 'Invoke-AoCliJson.ps1')
+    . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
+
+    if (-not $Sessions -or $Sessions.Count -eq 0) {
+        $Sessions = @(Get-AoStatusSessions)
+    }
+    if (-not $SessionsDir) {
+        $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId
+    }
+
+    $ownerSessionId = $null
+    foreach ($session in $Sessions) {
+        $name = [string]$session.name
+        $sessionPr = [int]$session.prNumber
+        if ($sessionPr -eq $PrNumber -and $name) {
+            $ownerSessionId = $name
+            break
+        }
+    }
+    if (-not $ownerSessionId) {
+        foreach ($session in $Sessions) {
+            $name = [string]$session.name
+            $prField = [string]$session.pr
+            if ($name -and $prField -match "(?:pull\/|$PrNumber(?:[^0-9]|$))") {
+                $ownerSessionId = $name
+                break
+            }
+        }
+    }
+    if (-not $ownerSessionId) {
+        return @{ ok = $false; reason = 'pr_owner_unresolved' }
+    }
+
+    $worktree = ''
+    $metaPath = Join-Path $SessionsDir "$ownerSessionId.json"
+    if (Test-Path -LiteralPath $metaPath) {
+        try {
+            $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+            $worktree = [string]$meta.worktree
+            if (-not $worktree -and $meta.runtimeHandle -and $meta.runtimeHandle.data) {
+                $worktree = [string]$meta.runtimeHandle.data.workspacePath
+            }
+        }
+        catch { }
+    }
+
+    $storePath = Get-WorkerPrOwnershipClaimStorePath -ProjectId $ProjectId -PrNumber $PrNumber
+    $existing = Read-WorkerPrOwnershipClaimRecord -Path $storePath
+    $sync = Invoke-WorkerNudgeFilterCli -Subcommand 'syncPrOwnershipClaim' -Payload @{
+        prNumber        = $PrNumber
+        ownerSessionId  = $ownerSessionId
+        worktree        = $worktree
+        existingClaim   = $existing
+    }
+    if (-not $sync.ok) {
+        return @{ ok = $false; reason = [string]$sync.reason }
+    }
+    if ($sync.changed) {
+        Write-WorkerPrOwnershipClaimRecord -Path $storePath -Record $sync.record
+    }
+
+    return Invoke-WorkerNudgeFilterCli -Subcommand 'resolveWorkerTarget' -Payload @{
+        prNumber   = $PrNumber
+        sessionId  = $SessionId
+        headSha    = $HeadSha
+        sessions   = @($Sessions)
+        prClaims   = @($sync.record)
+        claimRecord = $sync.record
+    }
+}
+
+function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
+    param([string]$ClaimToken)
+
+    $token = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $ClaimToken
+    if (-not $token) {
+        return @{ ok = $false; reason = 'token_malformed' }
+    }
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if ($nowMs -gt [long]$token.claimLeaseExpiresAtMs) {
+        return @{ ok = $false; reason = 'token_expired' }
+    }
+    $path = [string]$token.path
+    if (-not $path) {
+        return @{ ok = $false; reason = 'token_missing_path' }
+    }
+
+    $read = Read-WorkerNudgeClaimRecord -Path $path
+    if (-not $read.ok) {
+        return @{ ok = $false; reason = 'claim_missing' }
+    }
+    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace ([string]$token.namespace) `
+        -PrNumber ([int]$token.prNumber) -CycleKey ([string]$token.cycleKey) `
+        -IntentClass ([string]$token.intentClass) -WorkerTarget ([string]$token.workerTarget)
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'mutex_contended' }
+    }
+    try {
+        $read = Read-WorkerNudgeClaimRecord -Path $path
+        if (-not $read.ok) {
+            return @{ ok = $false; reason = 'claim_missing' }
+        }
+        if ([string]$read.record.holder.processGuid -ne [string]$token.processGuid) {
+            return @{ ok = $false; reason = 'token_holder_mismatch' }
+        }
+        if ([string]$read.record.tupleKey -ne [string]$token.tupleKey) {
+            return @{ ok = $false; reason = 'token_tuple_mismatch' }
+        }
+        if ([string]$read.record.tokenNonce -and [string]$token.claimId -and [string]$read.record.tokenNonce -ne [string]$token.claimId) {
+            return @{ ok = $false; reason = 'token_claim_mismatch' }
+        }
+        if ([string]$read.record.phase -ne 'CLAIMED') {
+            $reason = if ([string]$read.record.phase -eq 'SEND_ATTEMPTED') { 'token_replayed' } else { 'token_phase_invalid' }
+            return @{ ok = $false; reason = $reason }
+        }
+        $record = ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record
+        $record.phase = 'SEND_ATTEMPTED'
+        $record.state = 'SEND_ATTEMPTED'
+        $record.sendAttemptedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Write-WorkerNudgeClaimAtomic -Path $path -Record $record -AllowOverwrite
+        if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
+            return @{ ok = $false; reason = 'lost_race' }
+        }
+        $claimResult = @{
+            acquired  = $true
+            claim     = $record
+            path      = $path
+            namespace = [string]$token.namespace
+        }
+        return @{ ok = $true; token = $token; claim = $record; path = $path; claimResult = $claimResult }
+    }
+    finally {
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
+    }
 }
 
 function Resolve-WorkerNudgeClaimTokenFromPayload {

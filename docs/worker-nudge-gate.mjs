@@ -14,6 +14,7 @@ import {
   validateCapabilityInventory,
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from './review-trigger-reconcile.mjs';
 export { validateCapabilityInventory };
 
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
@@ -96,6 +97,175 @@ export function canonicalStoreId(storePath) {
 /**
  * @param {object} input
  */
+
+/**
+ * @param {Record<string, unknown> | null | undefined} session
+ */
+function getSessionIdentifier(session) {
+  for (const key of ['name', 'sessionId', 'id']) {
+    const value = String(session?.[key] ?? '').trim();
+    if (value) {
+      return value;
+    }
+  }
+  return '';
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} session
+ */
+function deriveTargetGeneration(session) {
+  for (const key of ['targetGeneration', 'sessionGeneration', 'generation']) {
+    const value = String(session?.[key] ?? '').trim();
+    if (value) {
+      return value;
+    }
+  }
+  return getSessionIdentifier(session);
+}
+
+/**
+ * @param {unknown[]} sessions
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {unknown[]} openPrs
+ */
+function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPrs = []) {
+  if (headSha) {
+    const owned = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+    if (owned) {
+      return owned;
+    }
+  }
+  const matches = toArray(sessions).filter((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+  });
+  if (matches.length === 0) {
+    return null;
+  }
+  matches.sort((a, b) => getSessionIdentifier(a).localeCompare(getSessionIdentifier(b)));
+  return getSessionIdentifier(matches[0]);
+}
+
+/**
+ * @param {object} input
+ */
+export function syncPrOwnershipClaimRecord(input) {
+  const prNumber = Number(input.prNumber);
+  const ownerSessionId = String(input.ownerSessionId ?? '').trim();
+  const worktree = canonicalizeStorePath(String(input.worktree ?? input.workspacePath ?? ''));
+  const existing = input.existingClaim ?? null;
+  const nowIso = new Date().toISOString();
+  if (!prNumber || !ownerSessionId) {
+    return { ok: false, reason: 'missing_owner' };
+  }
+  if (!existing || !existing.generation) {
+    return {
+      ok: true,
+      changed: true,
+      reason: 'initialized',
+      record: {
+        prNumber,
+        ownerSessionId,
+        generation: ownerSessionId,
+        lineageId: ownerSessionId,
+        worktree,
+        claimedAtUtc: nowIso,
+        updatedAtUtc: nowIso,
+      },
+    };
+  }
+  const priorOwner = String(existing.ownerSessionId ?? '').trim();
+  const priorWorktree = canonicalizeStorePath(String(existing.worktree ?? ''));
+  if (priorOwner === ownerSessionId) {
+    return {
+      ok: true,
+      changed: false,
+      reason: 'same_owner',
+      record: {
+        ...existing,
+        ownerSessionId,
+        worktree: worktree || priorWorktree,
+        updatedAtUtc: nowIso,
+      },
+    };
+  }
+  if (worktree && priorWorktree && worktree === priorWorktree) {
+    return {
+      ok: true,
+      changed: priorOwner !== ownerSessionId,
+      reason: 'resume_same_lineage',
+      record: {
+        ...existing,
+        ownerSessionId,
+        worktree,
+        updatedAtUtc: nowIso,
+      },
+    };
+  }
+  return {
+    ok: true,
+    changed: true,
+    reason: 'replacement_claim',
+    record: {
+      prNumber,
+      ownerSessionId,
+      generation: ownerSessionId,
+      lineageId: ownerSessionId,
+      worktree,
+      claimedAtUtc: nowIso,
+      updatedAtUtc: nowIso,
+      replacedOwnerSessionId: priorOwner || null,
+    },
+  };
+}
+
+/**
+ * @param {object} input
+ */
+export function resolveWorkerTargetFromPrClaim(input) {
+  const prNumber = Number(input.prNumber);
+  const sessionId = String(input.sessionId ?? '').trim();
+  const sessions = toArray(input.sessions);
+  const prClaims = toArray(input.prClaims);
+  const headSha = normalizeHeadSha(input.headSha ?? '');
+  if (!prNumber || !sessionId) {
+    return { ok: false, reason: 'missing_pr_or_session', verifiable: false };
+  }
+  const claimRecord =
+    prClaims.find((row) => Number(row?.prNumber) === prNumber) ?? input.claimRecord ?? null;
+  const ownerSessionId =
+    String(claimRecord?.ownerSessionId ?? '').trim() ||
+    resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, input.openPrs);
+  if (!ownerSessionId) {
+    return { ok: false, reason: 'pr_owner_unresolved', verifiable: false };
+  }
+  if (!claimRecord?.generation) {
+    return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };
+  }
+  const targetGeneration = String(claimRecord.generation).trim();
+  const targetId = String(
+    claimRecord.logicalWorkerId ?? claimRecord.lineageId ?? targetGeneration,
+  ).trim();
+  if (!targetId || !targetGeneration) {
+    return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };
+  }
+  return {
+    ok: true,
+    verifiable: true,
+    targetId,
+    targetGeneration,
+    workerTarget: `${targetId}:${targetGeneration}`,
+    logicalWorkerId: targetId,
+    sessionGeneration: targetGeneration,
+    rawSessionId: sessionId,
+    ownerSessionId,
+    lineageId: String(claimRecord.lineageId ?? targetGeneration),
+    targetResolutionSource: prClaims.length ? 'pr-claim-record' : 'ao-pr-ownership-claim',
+  };
+}
+
 export function buildWorkerTarget(input) {
   const targetId = String(input.targetId ?? input.sessionId ?? input.workerSessionId ?? '').trim();
   const targetGeneration = String(
@@ -646,4 +816,6 @@ runStdinJsonCli('worker-nudge-gate.mjs', {
     };
   },
   remapLegacy332: () => remapLegacy332Record(readStdinJson()),
+  syncPrOwnershipClaim: () => syncPrOwnershipClaimRecord(readStdinJson()),
+  resolveWorkerTarget: () => resolveWorkerTargetFromPrClaim(readStdinJson()),
 });
