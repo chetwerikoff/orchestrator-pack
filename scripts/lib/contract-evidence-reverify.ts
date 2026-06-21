@@ -373,8 +373,13 @@ function buildIndependentProducerCommand(
   repoRoot: string,
 ): string | null {
   const explicit = (block['producer-command'] ?? '').trim();
-  if (explicit && isCommandSafe(explicit, repoRoot)) {
-    return explicit;
+  if (explicit) {
+    if (explicit === proofCommand.trim()) {
+      return null;
+    }
+    if (isCommandSafe(explicit, repoRoot)) {
+      return explicit;
+    }
   }
 
   const trimmed = proofCommand.trim();
@@ -664,7 +669,7 @@ function evaluateNewRow(input: {
   }
 
   const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot);
-  if (!independentCommand) {
+  if (!independentCommand || independentCommand.trim() === proofCommand.trim()) {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
