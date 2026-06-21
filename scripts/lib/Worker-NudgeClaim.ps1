@@ -292,20 +292,25 @@ function Write-WorkerNudgeClaimAtomic {
     )
 
     $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
     $tmp = Join-Path $dir ".$([guid]::NewGuid().ToString('n')).tmp"
     ($Record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $tmp -Encoding UTF8
     try {
         if ($AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            [System.IO.File]::Move($tmp, $Path, $true)
-            return
-        }
-        [System.IO.File]::Move($tmp, $Path, $false)
-    }
-    catch [System.Management.Automation.MethodException] {
-        if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            throw [System.IO.IOException]::new("claim already exists: $Path")
+            Remove-Item -LiteralPath $Path -Force
         }
         [System.IO.File]::Move($tmp, $Path)
+    }
+    catch {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw [System.IO.IOException]::new("claim already exists: $Path")
+        }
+        throw
     }
 }
 

@@ -449,6 +449,21 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   });
 });
 
+
+  it('uses PS 5.1-compatible claim overwrite without File.Move(source, dest, overwrite)', () => {
+    const claimText = readFileSync(helperPath, 'utf8');
+    expect(claimText).not.toMatch(/File\]::Move\(\$tmp, \$Path, \$/);
+    expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
+  });
+
+  it('routes gated transport to PR-resolved owner session', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    expect(invokeText).toMatch(/\$ownerSessionId = \[string\]\$targetResolution\.ownerSessionId/);
+    expect(invokeText).toMatch(/\$sendSessionId = if \(\$ownerSessionId\) \{ \$ownerSessionId \} else \{ \$SessionId \}/);
+    expect(invokeText).toMatch(/File \$journaledScript \$sendSessionId/);
+    expect(invokeText).not.toMatch(/File \$journaledScript \$SessionId -Source/);
+  });
+
 describe('opk-rev-689 incident fixture', () => {
   it('loads capture-backed fixture and collapses duplicate review-findings nudges', () => {
     const fixturePath = path.join(fixturesDir, 'opk-rev-689.json');

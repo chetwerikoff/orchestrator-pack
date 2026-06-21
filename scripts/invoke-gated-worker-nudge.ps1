@@ -100,6 +100,8 @@ if (-not $TargetGeneration) { $TargetGeneration = [string]$targetResolution.targ
 $workerTarget = [string]$targetResolution.workerTarget
 if (-not $workerTarget) { $workerTarget = "$TargetId`:$TargetGeneration" }
 $targetResolutionSource = [string]$targetResolution.targetResolutionSource
+$ownerSessionId = [string]$targetResolution.ownerSessionId
+$sendSessionId = if ($ownerSessionId) { $ownerSessionId } else { $SessionId }
 $tupleKey = "$PrNumber|$cycleKey|$resolvedIntent|$workerTarget"
 $namespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
 $storePath = $namespace
@@ -108,6 +110,7 @@ $gatePayload = @{
     prNumber               = $PrNumber
     headSha                = $HeadSha
     sessionId              = $SessionId
+    sendTarget             = $sendSessionId
     intentClass            = $resolvedIntent
     cycleKey               = $cycleKey
     targetId               = $TargetId
@@ -131,7 +134,7 @@ if (-not $gate.allow) {
 }
 
 $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $resolvedIntent `
-    -WorkerTarget $workerTarget -SessionId $SessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
+    -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
     -TupleKey $tupleKey -Surface $Surface -ProjectId $ProjectId
 if (-not $claim.acquired) {
     Write-WorkerNudgeGateAudit -Record @{
@@ -162,7 +165,7 @@ if ($DryRun) {
 }
 
 $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
-$payloadText | pwsh -NoProfile -File $journaledScript $SessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -GatedNudge -NoWait
+$payloadText | pwsh -NoProfile -File $journaledScript $sendSessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -GatedNudge -NoWait
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -eq 0) {
