@@ -1,0 +1,21 @@
+{
+  "issue_number": 390,
+  "iteration_id": "opk-168",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-22T04:07:34.445Z",
+  "baseline": {
+    "commit_sha": "ea7fae632df7fd4411b2fbc10ba5ba42f6f4f69f",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:ce9242bee4be4a195fb815fb4885598d633da1c6d952da9c3a5287c73537a8d9"
+  },
+  "declared_paths": [
+    "docs/review-handoff-wake-admission.mjs",
+    "docs/review-handoff-wake-admission.d.mts",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/orchestrator-wake-listener.test.ts",
+    "scripts/review-handoff-wake-trigger.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

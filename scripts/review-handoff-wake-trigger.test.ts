@@ -55,6 +55,61 @@ type HandoffFixture = {
   expect?: Record<string, unknown>;
 };
 
+
+const reviewPendingGreenFixture: HandoffFixture = {
+  wakeKind: 'ready_for_review',
+  sessionId: 'opk-167',
+  prNumber: 389,
+  admittedBaseRef: 'main',
+  openPrs: [
+    {
+      number: 389,
+      headRefOid: 'pending389',
+      headCommittedAt: '2026-06-21T15:40:00.000Z',
+      baseRefName: 'main',
+    },
+  ],
+  reviewRuns: [],
+  sessions: [
+    {
+      name: 'opk-167',
+      role: 'worker',
+      prNumber: 389,
+      status: 'ready_for_review',
+      reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-21T15:46:00.000Z' }],
+    },
+  ],
+  ciChecksByPr: {
+    '389': [
+      { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+      { name: 'PR scope guard', state: 'SUCCESS' },
+      { name: 'Run pack contract tests', state: 'SUCCESS' },
+      { name: 'Self-architect lint', state: 'SUCCESS' },
+    ],
+  },
+  requiredCheckNamesByPr: {
+    '389': [
+      'Verify orchestrator-pack structure',
+      'PR scope guard',
+      'Run pack contract tests',
+      'Self-architect lint',
+    ],
+  },
+};
+
+const reviewPendingNotReadyFixture: HandoffFixture = {
+  ...reviewPendingGreenFixture,
+  sessions: [
+    {
+      name: 'opk-167',
+      role: 'worker',
+      prNumber: 389,
+      status: 'working',
+      reports: [{ reportState: 'working', reportedAt: '2026-06-21T15:46:00.000Z' }],
+    },
+  ],
+};
+
 function loadFixture(name: string): HandoffFixture {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as HandoffFixture;
 }
@@ -518,7 +573,7 @@ describe('review.pending info handoff admission (Issue #390)', () => {
 
   it('live envelope admission promotes info review.pending through handoff evaluate', () => {
     const capture = loadReviewPendingCapture();
-    const fixture = loadFixture('review-pending-info-handoff-triggers.json');
+    const fixture = reviewPendingGreenFixture;
     const wake = evaluateWakePayload(capture, reviewPendingAdmissionContext(fixture));
     expect(wake.ok).toBe(true);
     if (wake.ok) {
@@ -530,7 +585,7 @@ describe('review.pending info handoff admission (Issue #390)', () => {
   });
 
   it('#195-ready recurrence reaches handoff_wake within receipt bound', () => {
-    const fixture = loadFixture('review-pending-info-handoff-triggers.json');
+    const fixture = reviewPendingGreenFixture;
     const receiptMs = 1_700_000_000_000;
     const runCreatedMs = receiptMs + 2_000;
     const result = evaluateHandoffFixture(fixture, runCreatedMs);
@@ -541,7 +596,7 @@ describe('review.pending info handoff admission (Issue #390)', () => {
 
   it('#195-not-ready defer is auditable and not info_priority drop', () => {
     const capture = loadReviewPendingCapture();
-    const fixture = loadFixture('review-pending-not-ready-defer.json');
+    const fixture = reviewPendingNotReadyFixture;
     const wake = evaluateWakePayload(capture, reviewPendingAdmissionContext(fixture));
     expect(wake.ok).toBe(true);
     if (wake.ok) {
