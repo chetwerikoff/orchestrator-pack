@@ -71,6 +71,12 @@ function isCheckpoint2ReviewerSummary(text) {
     && summaryHasEvaluatedRowEntries(trimmed);
 }
 
+function summaryIncludesLiveReverifyRows(text) {
+  return /status=verified\s+verification-mode=live\s+producer-verified=true/.test(text)
+    && /status=divergent\s+verification-mode=live/.test(text)
+    && !/reason=untrusted-pr-modified/.test(text);
+}
+
 function listAoSessions() {
   const listed = spawnSync('ao', ['session', 'ls'], {
     cwd: packRoot,
@@ -212,6 +218,7 @@ function finalizeReviewerSummary(output, summary) {
   output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
   output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
   output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
+  output.summaryIncludesLiveReverifyRows = summaryIncludesLiveReverifyRows(summary);
 
   const ok =
     output.promptContainsCheckpoint2
@@ -220,6 +227,7 @@ function finalizeReviewerSummary(output, summary) {
     && output.summaryIncludesRows
     && output.summaryIncludesNeverBlocks
     && output.reviewerOutputIsCheckpoint2Summary
+    && output.summaryIncludesLiveReverifyRows
     && !summary.includes('reverify-e2e-probe');
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -241,6 +249,7 @@ const output = {
   summaryRunOutcomeRowsEvaluated: false,
   summaryIncludesNeverBlocks: false,
   reviewerOutputIsCheckpoint2Summary: false,
+  summaryIncludesLiveReverifyRows: false,
   summary: '',
   error: null,
 };

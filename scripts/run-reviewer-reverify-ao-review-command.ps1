@@ -59,7 +59,8 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSnapshotFile))
 }
 
 $changedPathsFile = Join-Path ([IO.Path]::GetTempPath()) ("opk-e2e-changed-paths-{0}.txt" -f ([Guid]::NewGuid().ToString('N')))
-[System.IO.File]::WriteAllLines($changedPathsFile, @('scripts/lib/contract-evidence-reverify.ts'))
+# Simulate an implementation-only PR diff; must not list trusted checker or capture paths.
+[System.IO.File]::WriteAllLines($changedPathsFile, @('docs/migration_notes.md'))
 
 if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
     . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
