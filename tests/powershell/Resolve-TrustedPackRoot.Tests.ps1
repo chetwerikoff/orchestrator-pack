@@ -35,6 +35,16 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'ReviewTargetRoot'
     }
 
+    It 'trusted launcher validates location before dot-sourcing checkout helpers' {
+        $launcherScript = Join-Path $script:RepoRoot 'scripts/launch-contract-evidence-reverify.ps1'
+        $content = Get-Content -LiteralPath $launcherScript -Raw
+        $assertIndex = $content.IndexOf('Assert-LauncherInvokedOutsideReviewTarget -LauncherPath $PSCommandPath')
+        $dotSourceIndex = $content.IndexOf(". (Join-Path `$PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')")
+        $assertIndex | Should -BeGreaterThan -1
+        $dotSourceIndex | Should -BeGreaterThan -1
+        $assertIndex | Should -BeLessThan $dotSourceIndex
+    }
+
     It 'shared trusted-root helpers reject overrides inside the review target' {
         $commonScript = Join-Path $script:RepoRoot 'scripts/lib/TrustedPackRoot-Common.ps1'
         $content = Get-Content -LiteralPath $commonScript -Raw

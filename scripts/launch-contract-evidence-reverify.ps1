@@ -36,8 +36,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
-
 function Assert-LauncherInvokedOutsideReviewTarget {
     [CmdletBinding()]
     param(
@@ -62,6 +60,11 @@ function Assert-LauncherInvokedOutsideReviewTarget {
         throw 'refusing PR-checkout launcher: invoke launch-contract-evidence-reverify.ps1 from trusted pack root (origin/main worktree, AO_TRUSTED_PACK_ROOT, or origin/main archive), not from the review target'
     }
 }
+
+$reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
+Assert-LauncherInvokedOutsideReviewTarget -LauncherPath $PSCommandPath -ReviewTargetRoot $reviewTargetRoot
+
+. (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
 
 function Resolve-TrustedReverifyCoreScript {
     [CmdletBinding()]
@@ -164,9 +167,6 @@ function Resolve-TrustedReverifyCoreScript {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
     throw "trusted reverify unavailable: origin/main archive missing $coreRelativePath"
 }
-
-$reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
-Assert-LauncherInvokedOutsideReviewTarget -LauncherPath $PSCommandPath -ReviewTargetRoot $reviewTargetRoot
 
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $reviewTargetRoot
