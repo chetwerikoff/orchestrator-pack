@@ -97,6 +97,57 @@ export function canonicalStoreId(storePath) {
 }
 
 /**
+ * @param {string} message
+ */
+export function hashNudgeMessageContent(message) {
+  const normalized = String(message ?? '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return '';
+  }
+  return createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
+/**
+ * @param {object} input
+ */
+export function inferResumeLineageFromOwnershipChange(input) {
+  const existing = input.existingClaim ?? null;
+  const ownerSessionId = String(input.ownerSessionId ?? '').trim();
+  if (!existing || !ownerSessionId) {
+    return { resumeLineage: false, reason: 'missing_context' };
+  }
+  const priorOwner = String(existing.ownerSessionId ?? '').trim();
+  if (!priorOwner || priorOwner === ownerSessionId) {
+    return { resumeLineage: false, reason: 'same_owner' };
+  }
+  const worktree = canonicalizeStorePath(String(input.worktree ?? ''));
+  const priorWorktree = canonicalizeStorePath(String(existing.worktree ?? ''));
+  if (!worktree || !priorWorktree || worktree !== priorWorktree) {
+    return { resumeLineage: false, reason: 'worktree_changed' };
+  }
+  const meta = input.sessionMeta ?? {};
+  const restoredAt = String(meta.restoredAt ?? meta.resumedAt ?? '').trim();
+  const parentSessionId = String(meta.parentSessionId ?? meta.parent_session_id ?? '').trim();
+  const resumedFrom = String(meta.resumedFromSessionId ?? meta.resumedFrom ?? '').trim();
+  if (restoredAt || parentSessionId === priorOwner || resumedFrom === priorOwner) {
+    return { resumeLineage: true, reason: 'same_worktree_resume_signal' };
+  }
+  return { resumeLineage: false, reason: 'replacement_without_resume_signal' };
+}
+
+/**
+ * @param {object} terminal
+ * @param {object} input
+ */
+function isMateriallyNewServedContent(terminal, input) {
+  const incomingHash = hashNudgeMessageContent(input.message ?? '');
+  const servedHash = String(
+    terminal?.messageContentHash ?? terminal?.contentHash ?? '',
+  ).trim();
+  return Boolean(incomingHash && servedHash && incomingHash !== servedHash);
+}
+
+/**
  * @param {object} input
  */
 
@@ -595,6 +646,36 @@ export function evaluateNudgeGate(input) {
   if (terminal) {
     const phase = String(terminal.phase ?? terminal.state ?? 'SENT');
     if (phase === 'SENT' || phase === 'UNCERTAIN') {
+      if (isMateriallyNewServedContent(terminal, input)) {
+        return {
+          allow: true,
+          decision: 'SEND',
+          reason: 'materially_new_content',
+          escalate: true,
+          priorPhase: phase,
+          diagnosis: `${OPERATOR_ESCALATION_PREFIX} tuple ${tuple.tupleKey} was already ${phase} but incoming message content differs; allowing resend instead of silent drop.`,
+          tuple,
+          audit: buildAuditRecord({
+            prNumber: tuple.prNumber,
+            logicalWorkerId: tuple.targetId,
+            sessionGeneration: tuple.targetGeneration,
+            rawSessionId: input.sessionId ?? tuple.targetId,
+            targetResolutionSource: input.targetResolutionSource ?? 'session',
+            surface: input.surface ?? input.source ?? 'unknown',
+            cycleKey: tuple.cycleKey,
+            intentClass: tuple.intentClass,
+            storeId,
+            decision: 'SEND',
+            reason: 'materially_new_content',
+            claimPhase: phase,
+            sendTarget: input.sessionId ?? tuple.targetId,
+            messageContentHash: hashNudgeMessageContent(input.message ?? ''),
+            priorMessageContentHash: String(
+              terminal.messageContentHash ?? terminal.contentHash ?? '',
+            ).trim(),
+          }),
+        };
+      }
       return suppress('already_served', tuple, input, storeId, phase);
     }
   }
@@ -885,4 +966,10 @@ runStdinJsonCli('worker-nudge-gate.mjs', {
   syncPrOwnershipClaim: () => syncPrOwnershipClaimRecord(readStdinJson()),
   resolveWorkerTarget: () => resolveWorkerTargetFromPrClaim(readStdinJson()),
   resolvePrOwnerSession: () => resolvePrOwnerSessionForNudge(readStdinJson()),
+  hashMessageContent: () => {
+    const input = readStdinJson();
+    const messageContentHash = hashNudgeMessageContent(input.message ?? '');
+    return { messageContentHash };
+  },
+  inferResumeLineage: () => inferResumeLineageFromOwnershipChange(readStdinJson()),
 });

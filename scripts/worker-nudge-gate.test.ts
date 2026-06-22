@@ -18,6 +18,8 @@ import {
   evaluateBoundary,
   evaluateClaimStoreFailure,
   evaluateNudgeGate,
+  hashNudgeMessageContent,
+  inferResumeLineageFromOwnershipChange,
   isValidJournaledSendInternalCapability,
   JOURNALED_SEND_INTERNAL_CAPABILITY,
   evaluatePreflight,
@@ -59,6 +61,50 @@ describe('worker nudge gate (#384)', () => {
     expect(classifyIntent({ message: '???', source: 'orchestrator-turn' })).toBe(
       'unknown-worker-nudge',
     );
+  });
+
+
+  it('allows materially new message content for an already-served tuple with escalation', () => {
+    const tuple = buildTupleKey({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+    });
+    expect(tuple.ok).toBe(true);
+    const servedHash = hashNudgeMessageContent('first findings body');
+    const gate = evaluateNudgeGate({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+      message: 'updated findings body with new items',
+      surface: 'orchestrator-turn',
+      source: 'orchestrator-turn',
+      storePath: '/tmp/gate-state',
+      claims: [
+        {
+          tupleKey: tuple.tupleKey,
+          phase: 'SENT',
+          intentClass: 'review-findings',
+          messageContentHash: servedHash,
+        },
+      ],
+    });
+    expect(gate.allow).toBe(true);
+    expect(gate.reason).toBe('materially_new_content');
+    expect(gate.escalate).toBe(true);
+    expect(String(gate.diagnosis ?? '')).toContain('ESCALATION');
+  });
+
+  it('normalizes invalid explicit intent hints to unknown-worker-nudge via classifier', () => {
+    expect(
+      classifyIntent({
+        intentClass: 'review-findngs-typo',
+        message: '???',
+        source: 'orchestrator-turn',
+      }),
+    ).toBe('unknown-worker-nudge');
   });
 
   it('derives same cycle keys for review-findings from two callers', () => {
@@ -752,6 +798,48 @@ describe('claim-store failure escalation (#384)', () => {
 });
 
 describe('PR-claim worker target resolution (#384)', () => {
+
+  it('infers resume lineage from same worktree plus restoredAt signal', () => {
+    const existing = {
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      generation: 'gen1',
+      lineageId: 'gen1',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-1',
+    };
+    const signal = inferResumeLineageFromOwnershipChange({
+      ownerSessionId: 'opk-5',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-1',
+      existingClaim: existing,
+      sessionMeta: { restoredAt: '2026-06-22T00:26:43.284Z' },
+    });
+    expect(signal.resumeLineage).toBe(true);
+    const synced = syncPrOwnershipClaimRecord({
+      prNumber: 380,
+      ownerSessionId: 'opk-5',
+      worktree: existing.worktree,
+      resumeLineage: true,
+      existingClaim: existing,
+    });
+    expect(synced.reason).toBe('resume_same_lineage');
+  });
+
+  it('does not infer resume lineage for same-worktree replacement without resume signal', () => {
+    const existing = {
+      prNumber: 380,
+      ownerSessionId: 'opk-1',
+      generation: 'opk-1',
+      lineageId: 'opk-1',
+      worktree: '/tmp/orchestrator-pack/worktrees/opk-166',
+    };
+    const signal = inferResumeLineageFromOwnershipChange({
+      ownerSessionId: 'opk-166',
+      worktree: existing.worktree,
+      existingClaim: existing,
+      sessionMeta: {},
+    });
+    expect(signal.resumeLineage).toBe(false);
+  });
   it('keeps generation only when resume lineage is explicitly signaled', () => {
     const worktree = '/tmp/orchestrator-pack/worktrees/opk-1';
     const existing = syncPrOwnershipClaimRecord({

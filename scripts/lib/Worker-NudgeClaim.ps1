@@ -573,7 +573,7 @@ function Acquire-WorkerNudgeClaim {
             }
 
             $terminalHit = Find-WorkerNudgeClaimTerminalRecord -Namespace $resolved -Key $key -TupleKey $TupleKey
-            if ($terminalHit) {
+            if ($terminalHit -and -not (Test-WorkerNudgeTerminalAllowsResend -Namespace $resolved -TerminalHit $terminalHit -Message $Message)) {
                 return @{
                     acquired  = $false
                     reason    = 'already_served'
@@ -647,6 +647,56 @@ function Set-WorkerNudgeClaimSendAttempted {
     finally {
         Exit-WorkerNudgeClaimMutex -LockDir $lockDir
     }
+}
+
+
+function Release-WorkerNudgeActiveClaim {
+    param([hashtable]$ClaimResult)
+
+    if (-not $ClaimResult -or -not $ClaimResult.path) {
+        return @{ ok = $false; reason = 'no_claim' }
+    }
+    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace -PrNumber ([int]$ClaimResult.claim.prNumber) `
+        -CycleKey ([string]$ClaimResult.claim.cycleKey) -IntentClass ([string]$ClaimResult.claim.intentClass) `
+        -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'busy' }
+    }
+    try {
+        $read = Read-WorkerNudgeClaimRecord -Path $ClaimResult.path
+        if (-not $read.ok) {
+            return @{ ok = $true; reason = 'already_released' }
+        }
+        if ($ClaimResult.claim -and [string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
+            return @{ ok = $false; reason = 'lost_ownership' }
+        }
+        if (Test-Path -LiteralPath $ClaimResult.path) {
+            Remove-Item -LiteralPath $ClaimResult.path -Force
+        }
+        return @{ ok = $true; reason = 'released' }
+    }
+    finally {
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
+    }
+}
+
+function Test-WorkerNudgeTerminalAllowsResend {
+    param(
+        [string]$Namespace,
+        [hashtable]$TerminalHit,
+        [string]$Message = ''
+    )
+
+    if (-not $TerminalHit -or -not $Message) {
+        return $false
+    }
+    $record = $TerminalHit.record
+    if (-not $record) { return $false }
+    $hashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $Message }
+    $incomingHash = [string]$hashResult.messageContentHash
+    $servedHash = [string]$record.messageContentHash
+    if (-not $incomingHash -or -not $servedHash) { return $false }
+    return ($incomingHash -ne $servedHash)
 }
 
 function Finalize-WorkerNudgeClaim {
@@ -903,6 +953,7 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
     }
 
     $worktree = ''
+    $sessionMeta = @{}
     $metaPath = Join-Path $SessionsDir "$ownerSessionId.json"
     if (Test-Path -LiteralPath $metaPath) {
         try {
@@ -911,18 +962,38 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
             if (-not $worktree -and $meta.runtimeHandle -and $meta.runtimeHandle.data) {
                 $worktree = [string]$meta.runtimeHandle.data.workspacePath
             }
+            if ($meta.restoredAt) { $sessionMeta.restoredAt = [string]$meta.restoredAt }
+            if ($meta.resumedAt) { $sessionMeta.resumedAt = [string]$meta.resumedAt }
+            if ($meta.parentSessionId) { $sessionMeta.parentSessionId = [string]$meta.parentSessionId }
+            if ($meta.parent_session_id) { $sessionMeta.parent_session_id = [string]$meta.parent_session_id }
+            if ($meta.resumedFromSessionId) { $sessionMeta.resumedFromSessionId = [string]$meta.resumedFromSessionId }
+            if ($meta.resumedFrom) { $sessionMeta.resumedFrom = [string]$meta.resumedFrom }
         }
         catch { }
     }
 
     $storePath = Get-WorkerPrOwnershipClaimStorePath -ProjectId $ProjectId -PrNumber $PrNumber
     $existing = Read-WorkerPrOwnershipClaimRecord -Path $storePath
-    $sync = Invoke-WorkerNudgeFilterCli -Subcommand 'syncPrOwnershipClaim' -Payload @{
+    $resumeLineage = $false
+    if ($existing) {
+        $resumeEval = Invoke-WorkerNudgeFilterCli -Subcommand 'inferResumeLineage' -Payload @{
+            ownerSessionId = $ownerSessionId
+            worktree       = $worktree
+            existingClaim  = $existing
+            sessionMeta    = $sessionMeta
+        }
+        $resumeLineage = [bool]$resumeEval.resumeLineage
+    }
+    $syncPayload = @{
         prNumber        = $PrNumber
         ownerSessionId  = $ownerSessionId
         worktree        = $worktree
         existingClaim   = $existing
     }
+    if ($resumeLineage) {
+        $syncPayload.resumeLineage = $true
+    }
+    $sync = Invoke-WorkerNudgeFilterCli -Subcommand 'syncPrOwnershipClaim' -Payload $syncPayload
     if (-not $sync.ok) {
         return @{ ok = $false; reason = [string]$sync.reason }
     }

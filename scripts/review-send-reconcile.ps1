@@ -214,9 +214,10 @@ function Invoke-PlannedFirstReviewSend {
     $sendSessionId = [string]$targetResolution.ownerSessionId
     if (-not $sendSessionId) { $sendSessionId = $sessionId }
     $tupleKey = "$([int]$Action.prNumber)|$cycleKey|findings-delivery|$workerTarget"
+    $reviewMessage = 'Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')'
     $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'findings-delivery' `
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
-        -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project
+        -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project -Message $reviewMessage
     if (-not $claim.acquired) {
         Write-ReviewSendLog "send suppressed by claim gate run=$($Action.runId): $($claim.reason)"
         return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
@@ -260,12 +261,17 @@ function Invoke-PlannedFirstReviewSend {
         runId      = [string]$Action.runId
         targetSha  = [string]$Action.targetSha
     }
+    $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $reviewMessage }
+    $messageContentHash = [string]$messageHashResult.messageContentHash
     if (-not $verify.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$verify.reason } | Out-Null
-        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason)"
-        return @{ sent = $false; reason = $verify.reason }
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' -Extra @{
+            reason             = [string]$verify.reason
+            messageContentHash = $messageContentHash
+        } | Out-Null
+        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason) (claim UNCERTAIN; non-retryable)"
+        return @{ sent = $false; reason = $verify.reason; uncertain = $true }
     }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
+    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
 
     $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `

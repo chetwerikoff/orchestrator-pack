@@ -71,7 +71,7 @@ $classifyPayload = @{
     targetGeneration = $TargetGeneration
 }
 $classified = Invoke-WorkerNudgeFilterCli -Subcommand 'classifyIntent' -Payload $classifyPayload
-$resolvedIntent = if ($IntentClass) { $IntentClass } else { [string]$classified.intentClass }
+$resolvedIntent = [string]$classified.intentClass
 
 if ($Probe -and -not $HeadSha) {
     $HeadSha = ('f' * 40)
@@ -136,6 +136,7 @@ $gatePayload = @{
     targetGeneration       = $TargetGeneration
     source                 = $Source
     surface                = $Surface
+    message                = $payloadText
     storePath              = $storePath
     targetResolutionSource = $(if ($targetResolutionSource) { $targetResolutionSource } else { 'orchestrator-turn' })
     claims                 = @(Get-WorkerNudgeClaimRecordsForGate -Namespace $namespace)
@@ -154,7 +155,7 @@ if (-not $gate.allow) {
 
 $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $resolvedIntent `
     -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
-    -TupleKey $tupleKey -Surface $Surface -ProjectId $ProjectId
+    -TupleKey $tupleKey -Surface $Surface -ProjectId $ProjectId -Message $payloadText
 if (-not $claim.acquired) {
     $claimReason = [string]$claim.reason
     if ($claimReason -in @('storage_failure', 'ambiguous_claim')) {
@@ -188,9 +189,9 @@ if (-not $claim.acquired) {
 
 $token = New-WorkerNudgeClaimToken -ClaimResult $claim
 if ($DryRun) {
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ dryRun = $true } | Out-Null
+    Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
     @{
-        sent     = $true
+        sent     = $false
         reason   = 'dry_run'
         tupleKey = $tupleKey
         token    = 'redacted'
@@ -202,8 +203,11 @@ $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
 $payloadText | pwsh -NoProfile -File $journaledScript $sendSessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -GatedNudge -NoWait
 $exitCode = $LASTEXITCODE
 
+$messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $payloadText }
+$messageContentHash = [string]$messageHashResult.messageContentHash
+
 if ($exitCode -eq 0) {
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
+    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
     Write-WorkerNudgeGateAudit -Record $gate.audit | Out-Null
     @{ sent = $true; reason = 'sent'; tupleKey = $tupleKey } | ConvertTo-Json -Compress
     exit 0

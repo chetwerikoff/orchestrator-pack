@@ -13,6 +13,8 @@ export declare const ACTIVE_CLAIM_PHASES: readonly string[];
 export declare function normalizeHeadSha(sha: string | undefined | null): string;
 export declare function canonicalizeStorePath(storePath: string): string;
 export declare function canonicalStoreId(storePath: string): string;
+export declare function hashNudgeMessageContent(message: string): string;
+export declare function inferResumeLineageFromOwnershipChange(input: Record<string, unknown>): Record<string, unknown>;
 export declare function isValidJournaledSendInternalCapability(value: string | undefined | null): boolean;
 export declare function evaluateClaimStoreFailure(input: Record<string, unknown>): Record<string, unknown>;
 export declare function syncPrOwnershipClaimRecord(input: Record<string, unknown>): Record<string, unknown>;
