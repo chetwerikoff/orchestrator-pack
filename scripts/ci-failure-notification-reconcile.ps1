@@ -34,6 +34,8 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-CiFailureReactionEvents {
     return @(Get-AoEventsSince -SinceMinutes 120 | Where-Object {
@@ -213,17 +215,71 @@ function Test-CiFailureDispatchJournalDelivered {
 
 function Invoke-PlannedCiFailureReconcileSend {
     param(
-        [string]$TargetId,
+        [object]$Episode,
         [string]$Message,
-        [string]$IdempotencyKey
+        [string]$IdempotencyKey,
+        [string]$ProjectId = 'orchestrator-pack',
+        [hashtable]$SendSnapshot = $null
     )
 
-    Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
-    $sendArgs = @('send', $TargetId, $Message)
-    & ao @sendArgs | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao send failed session=$TargetId exit=$LASTEXITCODE"
+    $prNumber = [int]$Episode.prNumber
+    $headSha = [string]$Episode.headSha
+    $sessionId = [string]$Episode.targetId
+    $redPeriod = [string]$Episode.redPeriod
+    if (-not $redPeriod) {
+        throw 'ci-failure episode missing redPeriod'
     }
+    $cycleKey = "episode:$redPeriod"
+
+    $openPrs = @()
+    if ($SendSnapshot -and $SendSnapshot.openPrs) {
+        $openPrs = @($SendSnapshot.openPrs)
+    }
+
+    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $prNumber -SessionId $sessionId `
+        -HeadSha $headSha -ProjectId $ProjectId -OpenPrs $openPrs
+    if (-not $targetResolution.ok) {
+        throw "PR-claim target unresolved: $($targetResolution.reason)"
+    }
+    $targetId = [string]$targetResolution.targetId
+    $targetGeneration = [string]$targetResolution.targetGeneration
+    $workerTarget = [string]$targetResolution.workerTarget
+    if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
+    $sendSessionId = [string]$targetResolution.ownerSessionId
+    if (-not $sendSessionId) { $sendSessionId = $sessionId }
+    $tupleKey = "$prNumber|$cycleKey|ci-failure|$workerTarget"
+
+    $claim = Acquire-WorkerNudgeClaim -PrNumber $prNumber -CycleKey $cycleKey -IntentClass 'ci-failure' `
+        -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
+        -TupleKey $tupleKey -Surface 'ci-failure-notification-reconcile' -ProjectId $ProjectId -Message $Message
+    if (-not $claim.acquired) {
+        return @{
+            ok           = $false
+            reason       = [string]$claim.reason
+            claimSkipped = $true
+            escalate     = [bool]$claim.escalate
+            diagnosis    = [string]$claim.diagnosis
+        }
+    }
+
+    $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $Message }
+    $messageContentHash = [string]$messageHashResult.messageContentHash
+    $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
+    if (-not $hashPersist.ok) {
+        return @{ ok = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason }
+    }
+
+    $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
+    Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
+    $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
+    $sourceKey = if ($IdempotencyKey) { $IdempotencyKey } else { "ci-failure:$redPeriod" }
+    $Message | pwsh -NoProfile -File $journaledScript $sendSessionId `
+        -Source 'ci-failure-notification-reconcile' -SourceKey $sourceKey `
+        -ClaimToken $claimToken -GatedNudge -NoWait
+    if ($LASTEXITCODE -ne 0) {
+        throw "journaled worker send failed session=$sendSessionId exit=$LASTEXITCODE"
+    }
+    return @{ ok = $true; reason = 'sent' }
 }
 
 function Test-CiFailurePreflightOutcome {
@@ -357,8 +413,27 @@ function Invoke-CiFailureEpisodeDelivery {
         }
 
         try {
-            Invoke-PlannedCiFailureReconcileSend -TargetId $targetId -Message $message `
-                -IdempotencyKey $idempotencyKey
+            $sendResult = Invoke-PlannedCiFailureReconcileSend -Episode $Episode -Message $message `
+                -IdempotencyKey $idempotencyKey -ProjectId $ProjectId -SendSnapshot $sendSnapshot
+            if (-not $sendResult.ok) {
+                if ($sendResult.claimSkipped) {
+                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "nudge suppressed by claim gate session=$targetId digest=$Digest reason=$($sendResult.reason)"
+                }
+                else {
+                    throw "planned ci-failure send failed digest=$Digest reason=$($sendResult.reason) detail=$($sendResult.detail)"
+                }
+                try {
+                    $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
+                    if (-not $update.updated) {
+                        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest delivery=$dispatchDeliveryId"
+                    }
+                }
+                catch {
+                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
+                }
+                $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+                return $false
+            }
         }
         catch {
             Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "planned worker ping failed session=$targetId digest=$Digest error=$($_.Exception.Message) (releasing submit intent for bounded retry)"

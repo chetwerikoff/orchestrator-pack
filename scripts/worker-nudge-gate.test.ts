@@ -1049,3 +1049,34 @@ describe('PR-claim worker target resolution (#384)', () => {
   });
 });
 
+describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
+  it('passes Test-WorkerNudgeGateWiring for every sender surface', () => {
+    const wiring = path.join(repoRoot, 'scripts/lib/Test-WorkerNudgeGateWiring.ps1');
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', wiring], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/\[PASS\] worker nudge gate wiring/);
+  });
+
+  it('requires claim gating on all worker-observable senders', () => {
+    const senderPaths = [
+      'scripts/invoke-gated-worker-nudge.ps1',
+      'scripts/ci-green-wake-reconcile.ps1',
+      'scripts/review-send-reconcile.ps1',
+      'scripts/ci-failure-notification-reconcile.ps1',
+      'scripts/review-finding-delivery-confirm.ps1',
+    ];
+    for (const rel of senderPaths) {
+      const body = readFileSync(path.join(repoRoot, rel), 'utf8');
+      expect(body, rel).toMatch(/Acquire-WorkerNudgeClaim/);
+    }
+    const ciFailure = readFileSync(
+      path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
+      'utf8',
+    );
+    expect(ciFailure).not.toMatch(/^\s*& ao @sendArgs/m);
+  });
+});
+

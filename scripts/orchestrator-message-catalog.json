@@ -89,7 +89,7 @@
         "file": "scripts/ci-failure-notification-reconcile.ps1",
         "function": "Invoke-PlannedCiFailureReconcileSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "4e666655a6f3a502"
+        "predicateBodyHash": "d10301801d99cece"
       }
     },
     {
@@ -195,7 +195,7 @@
         "file": "scripts/review-finding-delivery-confirm.ps1",
         "function": "Invoke-PlannedReviewSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "a99ed05a1d45842b"
+        "predicateBodyHash": "5e35588847c1fd16"
       }
     },
     {

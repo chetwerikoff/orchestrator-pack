@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "728f9bd414ccf0f7c9a91e6e74e6cdb88e235771",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714"
+    "active_scope_hash": "sha256:5fd5bca4983f00d1ca44cbf4f56f4932ebe0596c8494a15808e69874849a19b7"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -28,6 +28,7 @@
     "scripts/check-orchestrator-claimed-review-run.ps1",
     "scripts/check-worker-nudge-gate-adoption.ps1",
     "scripts/check-worker-nudge-gate.ps1",
+    "scripts/ci-failure-notification-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/invoke-gated-worker-nudge.ps1",
     "scripts/journaled-worker-send.ps1",
@@ -39,6 +40,7 @@
     "scripts/lib/Worker-NudgeAudit.ps1",
     "scripts/lib/Worker-NudgeClaim.ps1",
     "scripts/orchestrator-message-catalog.json",
+    "scripts/review-finding-delivery-confirm.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/verify.ps1",
     "scripts/worker-message-submit-reconcile.test.ts",
@@ -61,6 +63,21 @@
       "reason": "refresh baseline hash after implementation commit",
       "actor": "opk-162",
       "timestamp": "2026-06-21T12:44:10.660Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714",
+      "new_active_scope_hash": "sha256:5fd5bca4983f00d1ca44cbf4f56f4932ebe0596c8494a15808e69874849a19b7",
+      "changed": {
+        "added": [
+          "scripts/ci-failure-notification-reconcile.ps1",
+          "scripts/review-finding-delivery-confirm.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "opk-rev-765: gate ci-failure and review redelivery senders",
+      "actor": "opk-166",
+      "timestamp": "2026-06-22T03:53:16.469Z",
       "applied": true
     }
   ],
