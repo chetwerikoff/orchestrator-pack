@@ -84,6 +84,18 @@ if (-not (Test-Path -LiteralPath $reactionConfigCli -PathType Leaf)) {
     Write-Host 'Missing docs/reaction-config-messages.mjs'
     exit 1
 }
+$reactionGetter = Join-Path $Root 'scripts/lib/Get-ReactionMessagesFromYaml.ps1'
+$reactionGetterText = Get-Content -LiteralPath $reactionGetter -Raw
+if ($reactionGetterText -match 'Resolve-PackOrchestratorYamlPath') {
+    Write-Host 'Get-ReactionMessagesFromYaml must not fall back to agent-orchestrator.yaml.example (Issue #402)'
+    exit 1
+}
+. $reactionGetter
+$exampleConfig = Get-ReactionMessagesFromYaml -PackRoot $Root -YamlPath $example
+if ($exampleConfig.ok) {
+    Write-Host 'Get-ReactionMessagesFromYaml must reject agent-orchestrator.yaml.example as runtime config'
+    exit 1
+}
 $shapeJson = & node $reactionConfigCli shape --path $example --reaction-key report-stale 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "reaction-config shape guard failed: $shapeJson"

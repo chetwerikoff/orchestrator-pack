@@ -89,6 +89,33 @@ function parseReactionEntry(blockText) {
  * @param {string} indicator
  * @param {string[]} bodyLines
  */
+function foldFoldedScalarBody(bodyLines, chompTrailing) {
+  /** @type {string[]} */
+  const paragraphs = [];
+  /** @type {string[]} */
+  let current = [];
+  const flushCurrent = () => {
+    if (current.length === 0) {
+      return;
+    }
+    paragraphs.push(current.join(' ').replace(/\s+/g, ' ').trim());
+    current = [];
+  };
+  for (const line of bodyLines) {
+    if (String(line).trim() === '') {
+      flushCurrent();
+      continue;
+    }
+    current.push(String(line).trim());
+  }
+  flushCurrent();
+  let result = paragraphs.join('\n\n');
+  if (chompTrailing) {
+    result = result.replace(/\n+$/, '');
+  }
+  return result;
+}
+
 function foldScalarBlock(indicator, bodyLines) {
   const joined = bodyLines.join('\n');
   if (indicator === '|-') {
@@ -97,7 +124,7 @@ function foldScalarBlock(indicator, bodyLines) {
   if (indicator === '|') {
     return joined.endsWith('\n') ? joined : `${joined}\n`;
   }
-  return joined.replace(/\s+/g, ' ').trim();
+  return foldFoldedScalarBody(bodyLines, indicator === '>-');
 }
 
 /**

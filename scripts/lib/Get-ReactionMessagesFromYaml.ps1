@@ -3,7 +3,17 @@
 .SYNOPSIS
   Resolve static send-to-agent reaction messages from live operator YAML (Issue #402).
 #>
-. (Join-Path $PSScriptRoot 'Get-PackReviewCommand.ps1')
+
+function Test-ReactionConfigLiveOperatorYamlPath {
+    param(
+        [string]$YamlPath,
+        [string]$PackRoot
+    )
+
+    $examplePath = [System.IO.Path]::GetFullPath((Join-Path $PackRoot 'agent-orchestrator.yaml.example'))
+    $resolvedPath = [System.IO.Path]::GetFullPath($YamlPath)
+    return $resolvedPath -ne $examplePath
+}
 
 function Get-ReactionMessagesFromYaml {
     param(
@@ -16,7 +26,7 @@ function Get-ReactionMessagesFromYaml {
     }
 
     if (-not $YamlPath) {
-        $YamlPath = Resolve-PackOrchestratorYamlPath -PackRoot $PackRoot
+        $YamlPath = Join-Path $PackRoot 'agent-orchestrator.yaml'
     }
 
     $cli = Join-Path $PackRoot 'scripts/reaction-config-messages.mjs'
@@ -33,7 +43,16 @@ function Get-ReactionMessagesFromYaml {
         return @{
             ok       = $false
             reason   = 'reaction_config_unavailable'
-            error    = 'missing_yaml_path'
+            error    = 'missing_live_operator_yaml'
+            messages = @{}
+        }
+    }
+
+    if (-not (Test-ReactionConfigLiveOperatorYamlPath -YamlPath $YamlPath -PackRoot $PackRoot)) {
+        return @{
+            ok       = $false
+            reason   = 'reaction_config_unavailable'
+            error    = 'example_yaml_not_runtime_truth'
             messages = @{}
         }
     }

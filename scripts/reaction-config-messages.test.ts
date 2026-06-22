@@ -158,6 +158,23 @@ describe('reaction-config-messages (Issue #402)', () => {
     ].join('\n');
     const result = parseReactionMessagesFromYaml(yaml);
     expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('paragraph one paragraph two');
+    expect(result.messages?.['report-stale']).toBe('paragraph one\n\nparagraph two');
+    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
+      DELIVERY_PATH_PENDING_DRAFT,
+    );
+  });
+
+  it('folds single-paragraph folded scalars without interior blank lines', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: >-',
+      '      line one continues',
+      '      on the next line',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('line one continues on the next line');
   });
 });
