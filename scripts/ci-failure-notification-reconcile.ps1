@@ -266,6 +266,7 @@ function Invoke-PlannedCiFailureReconcileSend {
     $messageContentHash = [string]$messageHashResult.messageContentHash
     $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
     if (-not $hashPersist.ok) {
+        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
         return @{ ok = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason }
     }
 

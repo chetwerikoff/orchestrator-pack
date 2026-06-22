@@ -55,6 +55,27 @@ function New-JournaledWorkerSendInternalCapability {
     return [string]$registered.capability
 }
 
+function Invoke-FinalizeWorkerNudgeClaimFromToken {
+    param(
+        [string]$ClaimToken,
+        [hashtable]$Extra = @{}
+    )
+
+    if (-not $ClaimToken) { return }
+    $validation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'preflight'
+    if (-not $validation.ok) { return }
+    $token = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $ClaimToken
+    $read = Read-WorkerNudgeClaimRecord -Path ([string]$token.path)
+    if (-not $read.ok) { return }
+    $claimResult = @{
+        acquired  = $true
+        claim     = (ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record)
+        path      = [string]$token.path
+        namespace = [string]$token.namespace
+    }
+    Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' -Extra $Extra | Out-Null
+}
+
 function Test-AoSendFileContract {
     param([string]$AoPath = 'ao')
     if ($env:AO_JOURNALED_SEND_ASSUME_FILE -eq '1') { return $true }
@@ -223,6 +244,10 @@ if ($DryRun) {
 
 if (-not (Test-AoSendFileContract -AoPath $AoPath)) {
     Write-JournaledWorkerSendLog 'ao send --file contract is unavailable; refusing transport'
+    if ($ClaimToken) {
+        Invoke-FinalizeWorkerNudgeClaimFromToken -ClaimToken $ClaimToken `
+            -Extra @{ reason = 'transport_preflight_failed'; detail = 'ao_send_file_unavailable' }
+    }
     exit 42
 }
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -655,6 +655,73 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       expect(result.reason).toBe('token_send_session_mismatch');
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('releases active claim when message hash persistence fails', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
+        $activeExists = Test-Path -LiteralPath $claim.path
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        [pscustomobject]@{ activeExists = $activeExists; reacquired = [bool]$retry.acquired } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.activeExists).toBe(false);
+      expect(result.reacquired).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('invoke-gated-worker-nudge releases claim on message hash persist failure', () => {
+    const text = readFileSync(invokePath, 'utf8');
+    expect(text).toMatch(/if\s*\(\s*-not\s+\$hashPersist\.ok\s*\)[\s\S]*?Release-WorkerNudgeActiveClaim/);
+  });
+
+  it('finalizes gated claim when transport preflight fails', () => {
+    const dir = tempClaimDir();
+    const fakeAoDir = mkdtempSync(path.join(tmpdir(), 'fake-ao-'));
+    const fakeAo = path.join(fakeAoDir, 'ao');
+    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    writeFileSync(
+      fakeAo,
+      `#!/usr/bin/env bash\nif [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send <session>"; exit 0; fi\nexit 99\n`,
+    );
+    chmodSync(fakeAo, 0o755);
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        Initialize-WorkerNudgeClaimNamespace -Namespace $ns
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
+        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+        'hello' | pwsh -NoProfile -File ${psString(journaled)} 'opk-1' -AoPath ${psString(fakeAo)} -ClaimToken $token -GatedNudge -Source 'test'
+        $exitCode = $LASTEXITCODE
+        $activeExists = Test-Path -LiteralPath $claim.path
+        $terminalDir = Join-Path $ns 'terminal'
+        $terminalCount = if (Test-Path -LiteralPath $terminalDir) { @(Get-ChildItem -LiteralPath $terminalDir -File).Count } else { 0 }
+        [pscustomobject]@{ exitCode = $exitCode; activeExists = $activeExists; terminalCount = $terminalCount } | ConvertTo-Json -Compress
+      `;
+      const raw = runPwsh(script);
+      const jsonLine = raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{'))
+        .pop();
+      const result = JSON.parse(jsonLine ?? '{}');
+      expect(result.exitCode).toBe(42);
+      expect(result.activeExists).toBe(false);
+      expect(result.terminalCount).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(fakeAoDir, { recursive: true, force: true });
     }
   });
 

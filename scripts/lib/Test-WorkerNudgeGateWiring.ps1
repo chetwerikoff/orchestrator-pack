@@ -70,6 +70,10 @@ foreach ($rel in $workerObservableSenders) {
             Write-Host "worker-observable sender missing message hash persistence: $rel"
             exit 1
         }
+        if ($body -notmatch '(?s)if\s*\(\s*-not\s+\$hashPersist\.ok\s*\)\s*\{.*?Release-WorkerNudgeActiveClaim') {
+            Write-Host "worker-observable sender missing claim release on hash persist failure: $rel"
+            exit 1
+        }
     }
     if ($rel -eq 'scripts/ci-failure-notification-reconcile.ps1') {
         if ($body -match '(?m)^\s*& ao @sendArgs') {

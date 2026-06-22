@@ -207,8 +207,9 @@ $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent
 $messageContentHash = [string]$messageHashResult.messageContentHash
 $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
 if (-not $hashPersist.ok) {
-  @{ sent = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason; tupleKey = $tupleKey } | ConvertTo-Json -Compress
-  exit 0
+    Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
+    @{ sent = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason; tupleKey = $tupleKey } | ConvertTo-Json -Compress
+    exit 0
 }
 
 $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'

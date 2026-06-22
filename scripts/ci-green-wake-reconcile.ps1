@@ -379,6 +379,7 @@ function Invoke-PlannedCiGreenWakeSend {
     $messageContentHash = [string]$messageHashResult.messageContentHash
     $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
     if (-not $hashPersist.ok) {
+        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
         Write-CiGreenWakeLog "message hash persist failed PR #$($Action.prNumber): $($hashPersist.reason)"
         return @{ sent = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason }
     }
