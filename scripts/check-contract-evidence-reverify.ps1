@@ -170,7 +170,39 @@ function Ensure-GhAuthForReverifyE2e {
     }
 }
 
+function Test-DedicatedReverifyFixtureHolderBranch {
+    param(
+        [string]$Branch
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Branch)) {
+        return $false
+    }
+
+    return ($Branch -match '^session/opk-\d+$') -or ($Branch -match '^feat/opk-\d+-reverify-e2e-holder(?:-[\w-]+)?$')
+}
+
+function Get-ReverifyAoSessionRecords {
+    $raw = & ao session ls --json 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return @()
+    }
+
+    try {
+        $payload = $raw | ConvertFrom-Json
+        return @($payload.data | Where-Object { $_.id -like 'opk-*' })
+    }
+    catch {
+        return @()
+    }
+}
+
 function Resolve-ReverifyCiFixtureSession {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
     if (-not [string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION)) {
         return $env:OPK_REVERIFY_E2E_SESSION.Trim()
     }
@@ -178,24 +210,31 @@ function Resolve-ReverifyCiFixtureSession {
         return $null
     }
 
-    $listed = & ao session ls 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
+    $preferredSessionId = 'opk-reverify-e2e'
+    $fixtureSessionFile = Join-Path $Root 'tests/fixtures/contract-evidence-reverify/e2e/fixture-session-id.txt'
+    if (Test-Path -LiteralPath $fixtureSessionFile) {
+        $preferredSessionId = (Get-Content -LiteralPath $fixtureSessionFile -Raw).Trim()
     }
 
-    $preferredSessionId = 'opk-reverify-e2e'
-    foreach ($line in $listed) {
-        if ($line -match '^\s+(opk-\S+)') {
-            $sessionId = $Matches[1]
-            if ($sessionId -eq $preferredSessionId) {
-                return $sessionId
-            }
+    $sessions = Get-ReverifyAoSessionRecords
+    foreach ($session in $sessions) {
+        if ($session.id -eq $preferredSessionId) {
+            return $session.id
         }
     }
-    foreach ($line in $listed) {
-        if ($line -match '^\s+(opk-\S+)') {
-            return $Matches[1]
+
+    $dedicated = @($sessions | Where-Object { Test-DedicatedReverifyFixtureHolderBranch $_.branch })
+    if ($dedicated.Count -gt 0) {
+        $sessionBranchHolder = @($dedicated | Where-Object { $_.branch -match '^session/opk-\d+$' } | Select-Object -First 1)
+        if ($sessionBranchHolder) {
+            return $sessionBranchHolder.id
         }
+        return $dedicated[0].id
+    }
+
+    $allowSpawn = $env:OPK_REVERIFY_E2E_ALLOW_SPAWN -eq '1' -or $env:OPK_REVERIFY_E2E_ALLOW_SPAWN -eq 'true'
+    if (-not $allowSpawn) {
+        return $null
     }
 
     $spawned = & ao spawn --prompt 'checkpoint-2 contract-evidence reverify e2e fixture holder' 2>&1
@@ -319,7 +358,7 @@ function Initialize-ReverifyCiAoFixtureEnvironment {
     Ensure-GhAuthForReverifyE2e | Out-Null
     Write-ReverifyCiAgentOrchestratorYaml -Root $Root
     Ensure-AoDaemonForReverifyE2e -Root $Root | Out-Null
-    $fixtureSession = Resolve-ReverifyCiFixtureSession
+    $fixtureSession = Resolve-ReverifyCiFixtureSession -Root $Root
     if (-not [string]::IsNullOrWhiteSpace($fixtureSession)) {
         $env:OPK_REVERIFY_E2E_SESSION = $fixtureSession
     }
