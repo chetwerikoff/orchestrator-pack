@@ -231,6 +231,14 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
       merged[key] = entry;
       continue;
     }
+    if (
+      String(prior.status ?? '').trim() === 'expired' &&
+      String(entry.status ?? 'watching').trim() === 'watching' &&
+      String(entry.seedSource ?? '') === 'report_state_poll'
+    ) {
+      merged[key] = entry;
+      continue;
+    }
     const mergedStatus = resolveMergedWatchStatus(prior.status, entry.status);
     const reactivated =
       String(prior.status ?? '').trim() === 'expired' && mergedStatus === 'watching';
@@ -836,8 +844,16 @@ export function seedWatchFromReportStatePoll(input) {
     seededKeys.push(String(candidate?.dedupeKey ?? key));
   }
 
+  const existing = { ...(input.existingWatches ?? {}) };
+  for (const key of Object.keys(seeded)) {
+    const prior = existing[key];
+    if (prior && String(prior.status ?? '').trim() === 'expired') {
+      delete existing[key];
+    }
+  }
+
   return {
-    watchEntries: mergeWatchState(input.existingWatches ?? {}, seeded, nowMs),
+    watchEntries: mergeWatchState(existing, seeded, nowMs),
     seededKeys,
   };
 }

@@ -18,6 +18,7 @@ import {
   resolveInitialTipFirstObservedMs,
   isPersistedReportStateSeedBlocking,
 } from '../docs/review-ready-report-state-seed.mjs';
+import { isTerminalHandoffAdmissionRecord } from '../docs/review-handoff-wake-admission.mjs';
 import {
   evaluateDeferredWatchEntry,
   planDeferredWatchTick,
@@ -210,13 +211,13 @@ describe('Issue #391 acceptance criteria', () => {
     ).toBe(false);
   });
 
-  it('reactivates expired watch entry on report-state reseed', () => {
+  it('replaces expired watch entry on report-state reseed', () => {
     const repoSlug = 'chetwerikoff/orchestrator-pack';
     const headSha = '2847a9ddeadbeef1234567890abcdef12345678';
     const watchKey = reportStateWatchEntryKey(repoSlug, 380, headSha);
     const priorNow = 1_700_000_000_000;
     const reseedNow = priorNow + 600_000;
-    const expired = seedWatchFromReportStatePoll({
+    const first = seedWatchFromReportStatePoll({
       candidates: [{
         prNumber: 380,
         headSha,
@@ -226,6 +227,7 @@ describe('Issue #391 acceptance criteria', () => {
       }],
       nowMs: priorNow,
     }).watchEntries[watchKey] as Record<string, unknown>;
+    expect(first?.status).toBe('watching');
     const reseed = seedWatchFromReportStatePoll({
       candidates: [{
         prNumber: 380,
@@ -234,7 +236,7 @@ describe('Issue #391 acceptance criteria', () => {
         sessionId: 'opk-165',
         dedupeKey: 'reseed',
       }],
-      existingWatches: { [watchKey]: { ...expired, status: 'expired' } },
+      existingWatches: { [watchKey]: { ...first, status: 'expired' } },
       nowMs: reseedNow,
     });
     const reactivated = reseed.watchEntries[watchKey] as Record<string, unknown>;
@@ -267,6 +269,25 @@ describe('Issue #391 acceptance criteria', () => {
     expect(Object.keys(second.watchEntries)).toHaveLength(2);
     expect(second.watchEntries[reportStateWatchEntryKey('org/a', 1, headSha)]).toBeDefined();
     expect(second.watchEntries[reportStateWatchEntryKey('org/b', 1, headSha)]).toBeDefined();
+  });
+
+  it('promoted handoff admission alone does not block report-state seed', () => {
+    const fixture = loadFixture('webhook-defer-then-report-seed.json');
+    const plan = planFromFixture(fixture);
+    expect(plan.candidates).toHaveLength(1);
+    const key = 'orchestrator-pack|chetwerikoff/orchestrator-pack|380|2847a9ddeadbeef1234567890abcdef12345678';
+    expect(
+      isTerminalHandoffAdmissionRecord((fixture.handoffRecords ?? {})[key] as Record<string, unknown>),
+    ).toBe(false);
+    expect(
+      hasTerminalHandoffOutcome({
+        supervisedProject: 'orchestrator-pack',
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 380,
+        headSha: String(fixture.headSha),
+        handoffRecords: fixture.handoffRecords,
+      }).terminal,
+    ).toBe(false);
   });
 
   it('terminal handoff receipt blocks seed', () => {

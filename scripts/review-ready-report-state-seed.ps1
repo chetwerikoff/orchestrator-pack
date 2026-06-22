@@ -30,6 +30,7 @@ if (-not $RepoRoot) {
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewReadyReportStateSeed.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewReadyReportStateSeed.ps1')
 
@@ -60,7 +61,15 @@ function Get-FixtureReviewReadyReportStateSeedPayload {
             'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand'
         )) {
         if ($null -ne $fixture.$name) {
-            $payload[$name] = $fixture.$name
+            if ($name -in @(
+                    'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
+                    'bindingByKey', 'handoffRecords', 'watchEntries'
+                )) {
+                $payload[$name] = ConvertTo-MechanicalJsonMap -Value $fixture.$name
+            }
+            else {
+                $payload[$name] = $fixture.$name
+            }
         }
     }
     return $payload

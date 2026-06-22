@@ -33,7 +33,8 @@
   "handoffRecords": {
     "orchestrator-pack|chetwerikoff/orchestrator-pack|77|cccccccccccccccccccccccccccccccccccccccc": {
       "prNumber": 77,
-      "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+      "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+      "outcome": "claim_win"
     }
   },
   "terminalClaimKeys": [],

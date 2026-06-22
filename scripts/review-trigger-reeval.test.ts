@@ -607,3 +607,35 @@ describe('Issue #391 report-state seed integration', () => {
     expect(resolveStartReasonForWatchEntry(entry)).toBe(REPORT_STATE_SEED_START_REASON);
   });
 });
+
+
+describe('report-state watch reseed', () => {
+  it('replaces expired report-state watch on reseed', () => {
+    const key = reportStateWatchEntryKey('owner/repo', 12, 'abc');
+    const expired = {
+      ...createWatchEntry({
+        prNumber: 12,
+        headSha: 'abc',
+        sessionId: 'opk-12',
+        nowMs: 1_000,
+        seedSource: 'report_state_poll',
+      }),
+      repoSlug: 'owner/repo',
+      status: 'expired',
+    };
+    const seeded = seedWatchFromReportStatePoll({
+      candidates: [{
+        prNumber: 12,
+        headSha: 'abc',
+        repoSlug: 'owner/repo',
+        sessionId: 'opk-12',
+        dedupeKey: 'k',
+      }],
+      existingWatches: { [key]: expired },
+      nowMs: 2_000,
+    });
+    const reactivated = seeded.watchEntries[key] as Record<string, unknown>;
+    expect(reactivated?.status).toBe('watching');
+    expect(Number(reactivated?.windowExpiresMs)).toBeGreaterThan(2_000);
+  });
+});

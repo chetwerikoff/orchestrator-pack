@@ -5,6 +5,7 @@
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
   handoffAdmissionKey,
+  isTerminalHandoffAdmissionRecord,
   normalizeRepoSlugFromPrUrl,
   parsePrNumberFromPrUrl,
 } from './review-handoff-wake-admission.mjs';
@@ -338,7 +339,8 @@ export function hasTerminalHandoffOutcome(input) {
     headSha,
   });
   const handoffRecords = input.handoffRecords ?? {};
-  if (handoffRecords[handoffKey]) {
+  const handoffRecord = handoffRecords[handoffKey];
+  if (isTerminalHandoffAdmissionRecord(handoffRecord)) {
     return { terminal: true, reason: 'handoff_receipt' };
   }
 
