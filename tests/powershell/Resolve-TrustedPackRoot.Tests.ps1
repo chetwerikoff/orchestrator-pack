@@ -69,9 +69,10 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
         $content | Should -Match 'if \(\$disposableScriptBootstrapRoot\)'
-        $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$true'
-        $content | Should -Match 'scripts/invoke-contract-evidence-reverify\.ts'
+        $content | Should -Match 'Resolve-TrustedPackRunner -ReviewTargetRoot \$reviewTargetRoot'
+        $content | Should -Match '\$disposableTrustedRoot = \[bool\]\$trusted\.DisposableTrustedRoot'
         $content | Should -Not -Match 'Resolve-TrustedPackRunner -ReviewTargetRoot \$reviewTargetRoot -TrustedBaseRoot \$scriptBootstrap\.BootstrapRoot'
+        $content | Should -Not -Match 'Assert-TrustedRootOverrideEligible -TrustedRoot \$scriptBootstrap\.BootstrapRoot'
     }
 
     It 'trusted implementation cleans up disposable trusted archive checkouts in finally' {
@@ -98,14 +99,15 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'Invoke-ContractEvidenceReverifyCore @PSBoundParameters'
     }
 
-    It 'ao review command bootstrap archives launcher and core helpers from origin/main only' {
+    It 'ao review command bootstrap archives launcher helpers from origin/main before HEAD fallback' {
         $aoReviewCommand = Join-Path $script:RepoRoot 'scripts/run-reviewer-reverify-ao-review-command.ps1'
         $content = Get-Content -LiteralPath $aoReviewCommand -Raw
         $content | Should -Match 'bootstrapArchivePaths'
         $content | Should -Match 'Contract-EvidenceReverify-Core\.ps1'
         $content | Should -Match 'Import-TrustedReverifyBootstrap\.ps1'
-        $content | Should -Match 'git archive origin/main -- @bootstrapArchivePaths'
-        $content | Should -Not -Match "GitRef 'HEAD'"
+        $content | Should -Match '\$archiveRefs = @\(''origin/main'', ''HEAD''\)'
+        $content | Should -Match 'git archive \$archiveRef -- @bootstrapArchivePaths'
+        $content | Should -Match 'Test-PathInsideReviewTarget'
         $content | Should -Not -Match 'git worktree add --detach'
     }
 
