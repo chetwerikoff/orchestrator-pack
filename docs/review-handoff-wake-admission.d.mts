@@ -114,3 +114,6 @@ export declare function saveHandoffAdmissionState(
   filePath: string,
   state: { records: Record<string, unknown>; lastUpdatedMs: number | null },
 ): void;
+
+export declare function isTerminalHandoffAdmissionRecord(record: Record<string, unknown> | null | undefined): boolean;
+export declare function handoffAdmissionKey(input: Record<string, unknown>): string;

@@ -119,6 +119,19 @@
         "pendingRetries"
       ],
       "actionTracking": true
+    },
+    {
+      "id": "review-ready-report-state-seed",
+      "stateFile": "review-ready-report-state-seed-state.json",
+      "callerScripts": [
+        "scripts/lib/Record-ReviewReadyReportStateSeed.ps1"
+      ],
+      "mapFields": [
+        "bindingByKey",
+        "seededKeys",
+        "deferredScanKeys"
+      ],
+      "actionTracking": true
     }
   ]
 }

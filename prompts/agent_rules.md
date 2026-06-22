@@ -466,6 +466,15 @@ turn. After delivery, report `ao report addressing_reviews` — do not stay idle
   `review-finding-delivery-confirm.ps1` (#171).
 - It does **not** recover dead sessions (#98) — use `--claim-pr` / respawn discipline.
 
+## Report-state review-start seed (Issue #391)
+
+**Co-primary with #390** when AO accepts `ready_for_review` but no webhook handoff fires.
+`scripts/review-ready-report-state-seed.ps1` polls `ao status --json --reports full
+--include-terminated`, binds accepted reports to the current resolved head per the poll
+invariant, seeds scoped #235 watches, and may start review with
+`startReason=report_state_seed` — not `handoff_wake`, `completion_wake`, or
+`periodic=reconcile`.
+
 ## CI-green orchestrator nudge (fast path; Issue #191)
 
 **Self-drive is primary;** the orchestrator CI-green nudge is recovery when you have gone

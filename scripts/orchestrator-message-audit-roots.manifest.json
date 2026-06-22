@@ -12,6 +12,7 @@
     "scripts/review-send-reconcile.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
+    "scripts/review-ready-report-state-seed.ps1",
     "scripts/worker-message-submit-reconcile.ps1"
   ],
   "supervisorEntrypoints": [
