@@ -126,6 +126,12 @@ function Invoke-Ac13ReviewerFlowE2e {
     }
 
     if ($env:GITHUB_ACTIONS -eq 'true') {
+        $aoCli = Get-Command ao -ErrorAction SilentlyContinue
+        if (-not $aoCli) {
+            Write-Warning 'AC13 live ao review --execute skipped in CI (ao CLI unavailable); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
+            return
+        }
+
         $env:OPK_REVERIFY_E2E_LIVE = '1'
         if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_ALLOW_SPAWN)) {
             $env:OPK_REVERIFY_E2E_ALLOW_SPAWN = '1'
