@@ -201,7 +201,7 @@ are integrity-checked-only. Surface every per-row status (including `unverified`
 Independently validate each candidate against the diff, producer, and cited spec
 snapshot before assigning severity. For the canonical multi-line invoke example,
 see `prompts/codex_review_prompt.md` (Checkpoint-2 section). Required parameters:
-`-ReviewTargetRoot`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
+`-ReviewTargetRoot`, `-PrNumber`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
 `-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
 `scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
 

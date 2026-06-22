@@ -1,9 +1,14 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import {
   formatReviewerReverifySummary,
   runContractEvidenceReverify,
   DEFAULT_REVERIFY_MANIFEST_PATH,
 } from './lib/contract-evidence-reverify.js';
+import {
+  loadValidatedBoundSnapshotBody,
+  resolveDefaultAoProjectId,
+} from './lib/reverify-bound-issue-snapshot.js';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
 import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
 
@@ -14,14 +19,17 @@ function usage(): string {
     '  --trusted-base-root <path>',
     '  --review-target-root <path>',
     '  --manifest-path <path>',
-    '  --snapshot-file <path>        Bound immutable issue snapshot body',
+    '  --snapshot-file <path>        Resolver-validated bound snapshot artifact path',
+    '  --bound-snapshot-pr-number <n> PR number for snapshot provenance (required)',
+    '  --bound-snapshot-issue-number <n> Linked issue number (or --explicit-issue/--expected-issue)',
+    '  --project-id <id>             AO project id (default: AO_PROJECT_ID or orchestrator-pack)',
     '  --current-issue-file <path>   Optional live issue body for drift detection',
     '  --pr-body-file <path>',
     '  --explicit-issue <n>',
     '  --declaration-issue <n>',
     '  --expected-issue <n>',
     '  --pr-head-sha <sha>',
-    '  --changed-paths-file <path>   Newline-separated PR-modified paths',
+    '  --changed-paths-file <path>   Newline-separated PR-modified paths (required)',
     '  --timeout-ms <n>',
     '  --simulate-crash-before-first-row',
     '  --simulate-crash-after-row <n>',
@@ -37,6 +45,7 @@ function parseArgs(argv: string[]) {
     manifestPath: DEFAULT_REVERIFY_MANIFEST_PATH,
     summary: false,
     json: true,
+    projectId: resolveDefaultAoProjectId(),
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -56,6 +65,15 @@ function parseArgs(argv: string[]) {
         break;
       case '--snapshot-file':
         opts.snapshotFile = argv[++i] ?? '';
+        break;
+      case '--bound-snapshot-pr-number':
+        opts.boundSnapshotPrNumber = argv[++i] ?? '';
+        break;
+      case '--bound-snapshot-issue-number':
+        opts.boundSnapshotIssueNumber = argv[++i] ?? '';
+        break;
+      case '--project-id':
+        opts.projectId = argv[++i] ?? String(opts.projectId);
         break;
       case '--current-issue-file':
         opts.currentIssueFile = argv[++i] ?? '';
@@ -111,6 +129,19 @@ function parseArgs(argv: string[]) {
   return opts;
 }
 
+function resolveBoundSnapshotIssueNumber(opts: Record<string, string | boolean>): number {
+  if (opts.boundSnapshotIssueNumber) {
+    return Number(opts.boundSnapshotIssueNumber);
+  }
+  if (opts.expectedIssue) {
+    return Number(opts.expectedIssue);
+  }
+  if (opts.explicitIssue) {
+    return Number(opts.explicitIssue);
+  }
+  return 0;
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const repoRoot = String(opts.repoRoot);
@@ -122,22 +153,57 @@ function main() {
     process.exit(2);
   }
 
-  const prModifiedPaths = opts.changedPathsFile
-    ? readLines(String(opts.changedPathsFile))
-    : [];
+  const changedPathsFile = String(opts.changedPathsFile ?? '');
+  if (!changedPathsFile) {
+    console.error('missing required --changed-paths-file');
+    process.exit(2);
+  }
+  if (!existsSync(changedPathsFile)) {
+    console.error(`changed paths file not found: ${changedPathsFile}`);
+    process.exit(2);
+  }
+
+  const boundSnapshotPrNumber = Number(opts.boundSnapshotPrNumber ?? 0);
+  if (!Number.isInteger(boundSnapshotPrNumber) || boundSnapshotPrNumber <= 0) {
+    console.error('missing required --bound-snapshot-pr-number');
+    process.exit(2);
+  }
+
+  const boundSnapshotIssueNumber = resolveBoundSnapshotIssueNumber(opts);
+  if (!Number.isInteger(boundSnapshotIssueNumber) || boundSnapshotIssueNumber <= 0) {
+    console.error('missing bound snapshot issue: --bound-snapshot-issue-number or --explicit-issue/--expected-issue');
+    process.exit(2);
+  }
+
+  const prHeadSha = resolveHeadSha(opts.prHeadSha ? String(opts.prHeadSha) : undefined);
+  let boundSnapshotBody: string;
+  try {
+    ({ body: boundSnapshotBody } = loadValidatedBoundSnapshotBody({
+      projectId: String(opts.projectId),
+      prNumber: boundSnapshotPrNumber,
+      prHeadSha,
+      issueNumber: boundSnapshotIssueNumber,
+      snapshotFilePath: snapshotFile,
+    }));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+
+  const prModifiedPaths = readLines(changedPathsFile);
 
   const result = runContractEvidenceReverify({
     repoRoot,
     trustedBaseRoot,
     reviewTargetRoot,
     manifestPath: String(opts.manifestPath),
-    boundSnapshotBody: readText(snapshotFile),
+    boundSnapshotBody,
     currentIssueBody: opts.currentIssueFile ? readText(String(opts.currentIssueFile)) : null,
     prBody: opts.prBodyFile ? readText(String(opts.prBodyFile)) : null,
     explicitIssueNumber: opts.explicitIssue ? Number(opts.explicitIssue) : null,
     declarationIssueNumber: opts.declarationIssue ? Number(opts.declarationIssue) : null,
     expectedIssueNumber: opts.expectedIssue ? Number(opts.expectedIssue) : null,
-    prHeadSha: resolveHeadSha(opts.prHeadSha ? String(opts.prHeadSha) : undefined),
+    prHeadSha,
     prModifiedPaths,
     timeoutMs: opts.timeoutMs ? Number(opts.timeoutMs) : undefined,
     simulateCrashBeforeFirstRow: Boolean(opts.simulateCrashBeforeFirstRow),

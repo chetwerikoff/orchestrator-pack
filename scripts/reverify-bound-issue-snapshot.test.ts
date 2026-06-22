@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   captureBoundIssueSnapshot,
   captureBoundIssueSnapshotsFromPreflight,
+  loadValidatedBoundSnapshotBody,
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.js';
 import { hashIssueBodySnapshot } from './lib/reviewer-contract-mapping.js';
@@ -158,8 +159,70 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
   it('defers bound issue snapshot capture until validated spec statuses', () => {
     expect(shouldPersistBoundIssueSnapshots('mapping_pending')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('mapped')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('incomplete_evidence')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('skipped_input_limit')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('stale_spec')).toBe(false);
     expect(shouldPersistBoundIssueSnapshots('lookup_unavailable')).toBe(false);
+  });
+
+  it('captures bound snapshots for mapping fallback statuses with validated contract set', () => {
+    withStoreDir();
+    const body = '# Issue body\n\ncontract-evidence:\n- datum: sample\n';
+    const members = [{ issueNumber: 376, snapshotHash: hashIssueBodySnapshot(body) }];
+    const captures = captureValidatedBoundIssueSnapshots({
+      opts: {
+        prBodyFile: null,
+        issueFile: null,
+        issuesFile: null,
+        issueSpecs: [],
+        diffFile: null,
+        changedPathsFile: null,
+        explicitIssue: 376,
+        declarationIssue: null,
+        prHeadSha: 'abc1234',
+        ledgerFile: null,
+        invokeCoworker: false,
+        json: true,
+        lookupAvailable: true,
+        coworkerAvailable: true,
+        prNumber: 380,
+        projectId: 'orchestrator-pack',
+      },
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      contractSet: members,
+      status: 'incomplete_evidence',
+      specBodies: [{ issueNumber: 376, body }],
+    });
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.created).toBe(true);
+  });
+
+  it('rejects snapshot files that do not match resolver-validated artifact path', () => {
+    withStoreDir();
+    const body = '# Issue body\n\ncontract-evidence:\n- datum: sample\n';
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      issueBody: body,
+    });
+    expect(() => loadValidatedBoundSnapshotBody({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      snapshotFilePath: join(tmpdir(), 'not-the-bound-snapshot.md'),
+    })).toThrow(/does not match resolver-validated/);
+    const loaded = loadValidatedBoundSnapshotBody({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      snapshotFilePath: captured.snapshotPath,
+    });
+    expect(loaded.body).toBe(body);
+    expect(loaded.snapshotHash).toBe(captured.snapshotHash);
   });
 
   it('does not capture bound issue snapshots when supplied spec drifts from contract set', () => {

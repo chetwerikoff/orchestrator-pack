@@ -18,6 +18,46 @@ $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $RepoRoot
 }
 
+$e2ePrNumber = 9380
+$e2eHeadSha = 'e2e00000000000000000000000000000000000001'
+$e2eIssueNumber = $ExplicitIssue
+$fixtureRoot = if ([System.IO.Path]::IsPathRooted($FixtureDir)) {
+    $FixtureDir
+} else {
+    Join-Path $packRoot $FixtureDir
+}
+$issueBodyFile = Join-Path $fixtureRoot 'issue-snapshot.md'
+$boundSnapshotStore = Join-Path ([IO.Path]::GetTempPath()) ("opk-e2e-bound-snapshot-{0}" -f ([Guid]::NewGuid().ToString('N')))
+New-Item -ItemType Directory -Path $boundSnapshotStore -Force | Out-Null
+$env:OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = $boundSnapshotStore
+
+Push-Location $packRoot
+try {
+    & node --import tsx (Join-Path $packRoot 'scripts/bound-issue-snapshot-cli.ts') capture `
+        --pr-number $e2ePrNumber `
+        --pr-head-sha $e2eHeadSha `
+        --issue-number $e2eIssueNumber `
+        --issue-body-file $issueBodyFile | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'failed to capture e2e bound issue snapshot'
+    }
+}
+finally {
+    Pop-Location
+}
+
+$resolvedSnapshotFile = & pwsh -NoProfile -File (Join-Path $packRoot 'scripts/resolve-bound-issue-snapshot.ps1') `
+    -PrNumber $e2ePrNumber `
+    -PrHeadSha $e2eHeadSha `
+    -IssueNumber $e2eIssueNumber `
+    -Require
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSnapshotFile)) {
+    Write-Error 'failed to resolve e2e bound issue snapshot'
+}
+
+$changedPathsFile = Join-Path ([IO.Path]::GetTempPath()) ("opk-e2e-changed-paths-{0}.txt" -f ([Guid]::NewGuid().ToString('N')))
+[System.IO.File]::WriteAllLines($changedPathsFile, @('scripts/lib/contract-evidence-reverify.ts'))
+
 if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
     . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
     $mechanicalCommand = @(
@@ -107,12 +147,6 @@ function Resolve-TrustedReverifyLauncherPath {
     }
 }
 
-$fixtureRoot = if ([System.IO.Path]::IsPathRooted($FixtureDir)) {
-    $FixtureDir
-} else {
-    Join-Path $packRoot $FixtureDir
-}
-
 $resolvedLauncher = $null
 $disposableLauncherBootstrapRoot = $false
 
@@ -127,10 +161,12 @@ try {
         -RepoRoot $packRoot `
         -ReviewTargetRoot $packRoot `
         -ManifestPath $ManifestPath `
-        -SnapshotFile (Join-Path $fixtureRoot 'issue-snapshot.md') `
+        -PrNumber $e2ePrNumber `
+        -SnapshotFile $resolvedSnapshotFile.Trim() `
         -PrBodyFile (Join-Path $fixtureRoot 'pr-body.md') `
         -ExplicitIssue $ExplicitIssue `
-        -PrHeadSha 'e2e-fixture-head' `
+        -PrHeadSha $e2eHeadSha `
+        -ChangedPathsFile $changedPathsFile `
         -Summary
 
     exit $LASTEXITCODE

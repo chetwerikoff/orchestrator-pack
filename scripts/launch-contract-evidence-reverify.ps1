@@ -14,6 +14,9 @@ param(
     [string]$ReviewTargetRoot,
     [string]$ManifestPath,
     [Parameter(Mandatory)]
+    [int]$PrNumber,
+    [string]$ProjectId,
+    [Parameter(Mandatory)]
     [string]$SnapshotFile,
     [string]$CurrentIssueFile,
     [string]$PrBodyFile,
@@ -21,6 +24,7 @@ param(
     [int]$DeclarationIssue = 0,
     [int]$ExpectedIssue = 0,
     [string]$PrHeadSha,
+    [Parameter(Mandatory)]
     [string]$ChangedPathsFile,
     [int]$TimeoutMs = 0,
     [switch]$SimulateCrashBeforeFirstRow,

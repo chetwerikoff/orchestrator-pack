@@ -15,6 +15,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
+import { captureBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, isNpmTestDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, listNpmTestDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './lib/reverify-allowlist-config.js';
 import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
@@ -936,29 +937,59 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('invoke CLI emits JSON for divergence fixture (AC14 command path)', () => {
-    const snapshotFile = path.join(fixtureRoot, 'issues', 'live-divergent.md');
-    const proc = spawnSync(
-      'node',
-      [
-        '--import',
-        'tsx',
-        path.join(packRoot, 'scripts/invoke-contract-evidence-reverify.ts'),
-        '--repo-root',
-        packRoot,
-        '--snapshot-file',
-        snapshotFile,
-        '--pr-body-file',
-        path.join(fixtureRoot, 'issues', 'live-divergent-pr-body.md'),
-        '--explicit-issue',
-        '9002',
-        '--manifest-path',
-        manifestPath,
-      ],
-      { encoding: 'utf8', cwd: packRoot },
-    );
-    expect(proc.status).toBe(0);
-    const payload = JSON.parse(proc.stdout);
-    expect(payload.rows[0].status).toBe('divergent');
+    const issueBody = loadIssue('live-divergent.md');
+    const storeDir = mkdtempSync(path.join(tmpdir(), 'opk-cli-bound-snapshot-'));
+    const priorStore = process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR;
+    process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = storeDir;
+    const prHeadSha = 'ac14deadbeef00000000000000000000000001';
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 9381,
+      prHeadSha,
+      issueNumber: 9002,
+      issueBody,
+    });
+    const changedPathsFile = path.join(storeDir, 'changed-paths.txt');
+    writeFileSync(changedPathsFile, 'docs/issue_queue_index.md\n', 'utf8');
+    try {
+      const proc = spawnSync(
+        'node',
+        [
+          '--import',
+          'tsx',
+          path.join(packRoot, 'scripts/invoke-contract-evidence-reverify.ts'),
+          '--repo-root',
+          packRoot,
+          '--snapshot-file',
+          captured.snapshotPath,
+          '--bound-snapshot-pr-number',
+          '9381',
+          '--bound-snapshot-issue-number',
+          '9002',
+          '--pr-head-sha',
+          prHeadSha,
+          '--changed-paths-file',
+          changedPathsFile,
+          '--pr-body-file',
+          path.join(fixtureRoot, 'issues', 'live-divergent-pr-body.md'),
+          '--explicit-issue',
+          '9002',
+          '--manifest-path',
+          manifestPath,
+        ],
+        { encoding: 'utf8', cwd: packRoot },
+      );
+      expect(proc.status).toBe(0);
+      const payload = JSON.parse(proc.stdout);
+      expect(payload.rows[0].status).toBe('divergent');
+    } finally {
+      if (priorStore === undefined) {
+        delete process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR;
+      } else {
+        process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = priorStore;
+      }
+      rmSync(storeDir, { recursive: true, force: true });
+    }
   });
 
   it('run-level vocabulary covers fixed outcomes', () => {

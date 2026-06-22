@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { getAoProjectDir } from '../../docs/review-run-recovery.mjs';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.js';
 
@@ -245,6 +245,45 @@ export function captureBoundIssueSnapshotsFromPreflight(input: {
     aoBaseDir: input.aoBaseDir,
     storeDirOverride: input.storeDirOverride,
   }));
+}
+
+export function loadValidatedBoundSnapshotBody(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  snapshotFilePath: string;
+  aoBaseDir?: string;
+  storeDirOverride?: string | null;
+}): { body: string; snapshotHash: string; snapshotPath: string } {
+  const resolved = resolveBoundIssueSnapshot({
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha: input.prHeadSha,
+    issueNumber: input.issueNumber,
+    aoBaseDir: input.aoBaseDir,
+    storeDirOverride: input.storeDirOverride,
+  });
+
+  if (resolved.status !== 'found' || !resolved.snapshotPath || !resolved.snapshotHash) {
+    throw new Error(
+      `bound issue snapshot ${resolved.status} for PR #${input.prNumber} head ${input.prHeadSha} issue #${input.issueNumber}`,
+    );
+  }
+
+  const normalizedProvided = resolve(input.snapshotFilePath);
+  const normalizedResolved = resolve(resolved.snapshotPath);
+  if (normalizedProvided !== normalizedResolved) {
+    throw new Error(
+      'snapshot file path does not match resolver-validated bound snapshot artifact',
+    );
+  }
+
+  return {
+    body: readFileSync(resolved.snapshotPath, 'utf8'),
+    snapshotHash: resolved.snapshotHash,
+    snapshotPath: resolved.snapshotPath,
+  };
 }
 
 export function resolveBoundIssueSnapshot(input: {

@@ -491,7 +491,16 @@ export function serializeBoundIssueSnapshotCapture(
 
 
 export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus): boolean {
-  return status === 'mapped' || status === 'mapping_pending';
+  const excluded = new Set<ContractMappingStatus>([
+    'stale_head',
+    'stale_spec',
+    'lookup_unavailable',
+    'ambiguous_spec',
+    'skipped_no_spec',
+    'skipped_no_acceptance',
+    'malformed',
+  ]);
+  return !excluded.has(status);
 }
 
 export function specBodiesMatchContractSet(

@@ -11,6 +11,9 @@ function Invoke-ContractEvidenceReverifyCore {
         [string]$ReviewTargetRoot,
         [string]$ManifestPath,
         [Parameter(Mandatory)]
+        [int]$PrNumber,
+        [string]$ProjectId,
+        [Parameter(Mandatory)]
         [string]$SnapshotFile,
         [string]$CurrentIssueFile,
         [string]$PrBodyFile,
@@ -18,6 +21,7 @@ function Invoke-ContractEvidenceReverifyCore {
         [int]$DeclarationIssue = 0,
         [int]$ExpectedIssue = 0,
         [string]$PrHeadSha,
+        [Parameter(Mandatory)]
         [string]$ChangedPathsFile,
         [int]$TimeoutMs = 0,
         [switch]$SimulateCrashBeforeFirstRow,
@@ -110,22 +114,37 @@ detail: $Detail
         $runner = $trusted.RunnerPath
         $disposableTrustedRoot = [bool]$trusted.DisposableTrustedRoot
 
+        if (-not (Test-Path -LiteralPath $ChangedPathsFile)) {
+            throw "missing changed paths file: $ChangedPathsFile"
+        }
+
+        $boundIssueNumber = if ($ExpectedIssue -gt 0) {
+            $ExpectedIssue
+        } elseif ($ExplicitIssue -gt 0) {
+            $ExplicitIssue
+        } else {
+            throw 'missing linked issue for bound snapshot validation: pass -ExplicitIssue or -ExpectedIssue'
+        }
+
         $args = @(
             $runner,
             '--repo-root', $reviewTargetRoot,
             '--trusted-base-root', $effectiveTrustedBaseRoot,
             '--review-target-root', $reviewTargetRoot,
-            '--snapshot-file', $SnapshotFile
+            '--snapshot-file', $SnapshotFile,
+            '--bound-snapshot-pr-number', [string]$PrNumber,
+            '--bound-snapshot-issue-number', [string]$boundIssueNumber,
+            '--changed-paths-file', $ChangedPathsFile
         )
 
         if ($ManifestPath) { $args += @('--manifest-path', $ManifestPath) }
+        if ($ProjectId) { $args += @('--project-id', $ProjectId) }
         if ($CurrentIssueFile) { $args += @('--current-issue-file', $CurrentIssueFile) }
         if ($PrBodyFile) { $args += @('--pr-body-file', $PrBodyFile) }
         if ($ExplicitIssue -gt 0) { $args += @('--explicit-issue', [string]$ExplicitIssue) }
         if ($DeclarationIssue -gt 0) { $args += @('--declaration-issue', [string]$DeclarationIssue) }
         if ($ExpectedIssue -gt 0) { $args += @('--expected-issue', [string]$ExpectedIssue) }
         if ($PrHeadSha) { $args += @('--pr-head-sha', $PrHeadSha) }
-        if ($ChangedPathsFile) { $args += @('--changed-paths-file', $ChangedPathsFile) }
         if ($TimeoutMs -gt 0) { $args += @('--timeout-ms', [string]$TimeoutMs) }
         if ($SimulateCrashBeforeFirstRow) { $args += '--simulate-crash-before-first-row' }
         if ($SimulateCrashAfterRow -ge 0) {

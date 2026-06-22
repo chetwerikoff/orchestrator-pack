@@ -142,6 +142,7 @@ $SnapshotFile = pwsh -NoProfile -File <trusted-pack-root>/scripts/resolve-bound-
 
 pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
   -ReviewTargetRoot <pr-worktree-path> `
+  -PrNumber <n> `
   -SnapshotFile $SnapshotFile `
   -CurrentIssueFile <issue-body> `
   -PrBodyFile <pr-body> `
