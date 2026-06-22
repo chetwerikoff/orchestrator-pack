@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-06-21T00:00:00.000Z",
   "baseline": {
-    "commit_sha": "8ca70b55249aafc659c2dc2c4006572173bb186c",
+    "commit_sha": "728f9bd414ccf0f7c9a91e6e74e6cdb88e235771",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714"
   },
@@ -64,5 +64,5 @@
       "applied": true
     }
   ],
-  "commit_sha": "8ca70b55249aafc659c2dc2c4006572173bb186c"
+  "commit_sha": "728f9bd414ccf0f7c9a91e6e74e6cdb88e235771"
 }
