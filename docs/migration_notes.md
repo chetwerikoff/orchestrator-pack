@@ -115,7 +115,7 @@ Operator adoption after merge:
    `agent-orchestrator.yaml` (including `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` and
    orchestrator-only `PATH` prepend of pack `scripts/` before `/usr/bin` and `/bin` (system dirs
    must trail scripts/ so shim shebangs resolve; set `BASH_ENV` to
-   `scripts/autonomous-bash-env.sh` for bash-turn absolute-git interposition)
+   `scripts/autonomous-orchestrator-surface-bootstrap.sh` (sources `scripts/autonomous-bash-env.sh`) for bash-turn interposition)
 3. `ao stop` then `ao start` from the operator terminal (not from a managed session).
 4. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
 5. Run boundary inventory check:
@@ -181,6 +181,34 @@ Operator adoption: follow the Issue #318 section above (shared marker + PATH shi
 
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
+
+
+## Autonomous bash-env interposer durability (Issue #406)
+
+Orchestrator bash turns arm through **tracked** wiring instead of operator-only
+`coworker.env` logic:
+
+1. Point `BASH_ENV` at `scripts/autonomous-orchestrator-surface-bootstrap.sh`
+   (thin bootstrap — maps live `AO_TMUX_NAME` `*orchestrator*` →
+   `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`, prepends pack `scripts/`, sources
+   `scripts/autonomous-bash-env.sh`).
+2. Keep pack `scripts/` first on `PATH` in orchestrator `agentConfig` (same as
+   Issue #324).
+3. In operator `coworker.env` (or equivalent `BASH_ENV` chain), replace the
+   inlined interposer block with a one-line source of the tracked bootstrap, e.g.
+   `. /path/to/orchestrator-pack/scripts/autonomous-orchestrator-surface-bootstrap.sh`
+   — transition may keep both until verified; collapse to the one-liner after
+   adoption.
+4. Verify:
+   `npm test -- scripts/autonomous-orchestrator-interposer.test.ts` and
+   `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1 -Boundary`.
+
+Fail-closed: if the tracked interposer file is missing, the bootstrap still keeps
+deny-shims on `PATH` with the surface marker — protected ops remain denied.
+
+Safe rollback: revert to prior `coworker.env` wiring or disable orchestrator
+`BASH_ENV` bootstrap (do not leave autonomous turns with permissive real-binary
+bypasses).
 
 ## Correct terminology
 
