@@ -561,6 +561,34 @@ describe('Issue #391 acceptance criteria', () => {
     expect(findLatestAcceptedReadyForReviewAcrossSessions([session]).report).toBe(skewedReports[0]);
   });
 
+  it('selects the newest accepted ready_for_review across matching sessions', () => {
+    const staleSession = {
+      name: 'opk-88-stale',
+      role: 'worker',
+      status: 'terminated',
+      prNumber: 88,
+      reports: [{
+        timestamp: '2026-06-22T02:19:00.000Z',
+        reportState: 'ready_for_review',
+        accepted: true,
+      }],
+    };
+    const freshSession = {
+      name: 'opk-88-fresh',
+      role: 'worker',
+      status: 'working',
+      prNumber: 88,
+      reports: [{
+        timestamp: '2026-06-22T02:21:00.000Z',
+        reportState: 'ready_for_review',
+        accepted: true,
+      }],
+    };
+    const result = findLatestAcceptedReadyForReviewAcrossSessions([staleSession, freshSession]);
+    expect(result.session).toBe(freshSession);
+    expect(result.report).toBe(freshSession.reports[0]);
+  });
+
   it('reverts optimistic triggered marks for unexecuted deferred-watch actions', () => {
     const deferredKey = '50:cccccccccccccccccccccccccccccccccccccccc';
     const seedKey = '99:dddddddddddddddddddddddddddddddddddddddd';

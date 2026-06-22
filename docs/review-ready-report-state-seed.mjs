@@ -434,14 +434,26 @@ export function findLatestAcceptedReadyForReviewReport(session) {
  * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
  */
 export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
+  /** @type {Record<string, unknown> | null} */
+  let latestReport = null;
+  /** @type {import('./review-trigger-reconcile.mjs').AoSession | null} */
+  let latestSession = null;
+  let latestMs = -1;
+
   for (const session of toArray(sessions)) {
-    for (const report of toArray(session?.reports)) {
-      if (isAcceptedReadyForReviewReport(report)) {
-        return { report, session };
-      }
+    const report = findLatestAcceptedReadyForReviewReport(session);
+    if (!report) {
+      continue;
+    }
+    const ts = getReportTimestampMs(report);
+    if (ts >= latestMs) {
+      latestMs = ts;
+      latestReport = report;
+      latestSession = session;
     }
   }
-  return { report: null, session: null };
+
+  return { report: latestReport, session: latestSession };
 }
 
 /**
