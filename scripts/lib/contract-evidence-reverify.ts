@@ -319,11 +319,29 @@ function compareStructuredOutput(stdout: string, selector: string, expected: str
   };
 }
 
+function hasRequiredCaptureRowBindingFields(
+  row: Record<string, string>,
+  bindingType: string,
+): boolean {
+  const normalized = bindingType.trim().toLowerCase();
+  if (normalized === 'structured' || normalized === 'cli-behavior') {
+    const selector = row.selector?.trim() ?? '';
+    return selector.length > 0 && row.expected !== undefined;
+  }
+  if (normalized === 'unstructured') {
+    return Boolean(row.token?.trim());
+  }
+  return false;
+}
+
 function compareCaptureContent(
   content: string,
   row: Record<string, string>,
   bindingType: string,
 ): { matched: boolean; observed?: string; asserted?: string } {
+  if (!hasRequiredCaptureRowBindingFields(row, bindingType)) {
+    return { matched: false };
+  }
   if (bindingType === 'structured' || bindingType === 'cli-behavior') {
     const selector = row.selector ?? '';
     const expected = row.expected ?? '';
@@ -340,7 +358,7 @@ function compareCaptureContent(
       asserted: boundValue(expected),
     };
   }
-  const token = row.token ?? '';
+  const token = row.token!.trim();
   return {
     matched: content.includes(token),
     observed: boundValue(content.slice(0, 120)),
@@ -529,6 +547,9 @@ function evaluateCaptureRow(input: {
     forceProducerUnreachable,
   } = input;
   const bindingType = (row['binding-type'] ?? 'structured').trim().toLowerCase();
+  if (!hasRequiredCaptureRowBindingFields(row, bindingType)) {
+    return buildUnverified(rowIndex, row, 'unsupported-producer');
+  }
   const captureRelPath = entry.path ?? '';
   const capturePath = captureRelPath
     ? path.join(trustedBaseRoot, corpusRoot, captureRelPath)

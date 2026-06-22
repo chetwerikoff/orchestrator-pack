@@ -1088,4 +1088,44 @@ describe('reverify npm test filter (AC14 producer-emission proof)', () => {
       verificationMode: 'live',
     });
   });
+  it('rejects unstructured capture rows missing token before comparing captures', () => {
+    const body = `# Reverify fixture: malformed unstructured row
+
+GitHub Issue: #9001
+
+## Goal
+
+Missing token must not verify via empty-string substring match.
+
+\`\`\`behavior-kind
+action-producing
+\`\`\`
+
+## Contract evidence
+
+\`\`\`contract-evidence
+binding-id: unstructured:token:missing
+binding: unstructured row without token
+producer: orchestrator-pack-scripts
+binding-type: unstructured
+evidence: capture@unstructured/token-match
+\`\`\`
+
+## Acceptance criteria
+
+1. Malformed row stays unverified.
+`;
+    const result = runContractEvidenceReverify(baseInput(body));
+    expect(result.runOutcome).toBe('rows-evaluated');
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      status: 'unverified',
+      verificationMode: 'not-run',
+      reason: 'unsupported-producer',
+      producerVerified: false,
+    });
+    expect(result.rows[0].status).not.toBe('verified');
+  });
+
+
 });
