@@ -484,6 +484,47 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.reason).toBe('registration_denied');
   });
 
+
+  it('rejects capability registration from a forged journaled-worker-send script path', () => {
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+    const forgeDir = mkdtempSync(path.join(tmpdir(), 'journaled-worker-send-forge-'));
+    const forgeScript = path.join(forgeDir, 'journaled-worker-send.ps1');
+    writeFileSync(
+      forgeScript,
+      `function New-JournaledWorkerSendInternalCapability {\n` +
+        `  . ${capabilityLib.replace(/'/g, "''")}\n` +
+        `  return Register-JournaledWorkerSendInternalCapability\n` +
+        `}\n`,
+      'utf8',
+    );
+    try {
+      const script = `
+        . ${psString(forgeScript)}
+        $registered = New-JournaledWorkerSendInternalCapability
+        [pscustomobject]@{ ok = [bool]$registered.ok; reason = [string]$registered.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('registration_denied');
+    } finally {
+      rmSync(forgeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves trusted journaled-worker-send path to the pack script', () => {
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+    const trusted = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    const script = `
+      . ${psString(capabilityLib)}
+      [pscustomobject]@{
+        trusted = (Get-TrustedJournaledWorkerSendScriptPath)
+        matches = (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath ${psString(trusted)})
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.matches).toBe(true);
+    expect(result.trusted).toBe(trusted);
+  });
   it('rejects well-formed but unregistered journaled internal capability tokens', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
     const script = `

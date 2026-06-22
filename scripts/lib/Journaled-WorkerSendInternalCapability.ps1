@@ -12,6 +12,48 @@ $Script:JournaledWorkerSendInternalCapabilityTtlSeconds = 120
 
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousBoundary.ps1')
 
+
+function Get-TrustedJournaledWorkerSendScriptPath {
+    $packRoot = Get-PackRootFromBoundaryLib
+    return (Resolve-Path -LiteralPath (Join-Path $packRoot 'scripts/journaled-worker-send.ps1')).Path
+}
+
+function Test-TrustedJournaledWorkerSendScriptPath {
+    param([string]$CandidatePath)
+
+    if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return $false }
+    try {
+        $resolved = (Resolve-Path -LiteralPath $CandidatePath -ErrorAction Stop).Path
+    }
+    catch {
+        return $false
+    }
+    $trusted = Get-TrustedJournaledWorkerSendScriptPath
+    $comparison = if ($IsWindows) {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+    else {
+        [System.StringComparison]::Ordinal
+    }
+    return $resolved.Equals($trusted, $comparison)
+}
+
+function Get-ScriptPathsFromProcessCommandLine {
+    param([string]$CommandLine)
+
+    $paths = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+        return @()
+    }
+    $tokens = @(Split-ProcessCommandLineTokens -CommandLine $CommandLine)
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        if ($tokens[$index] -in @('-File', '-f') -and ($index + 1) -lt $tokens.Count) {
+            $paths.Add([string]$tokens[$index + 1]) | Out-Null
+        }
+    }
+    return @($paths)
+}
+
 function Get-JournaledWorkerSendInternalCapabilityDir {
     param([string]$ProjectId = 'orchestrator-pack')
 
@@ -61,9 +103,10 @@ function Test-ProcessIsDescendantOf {
 
 function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
     if ($env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
+    $allowedCommands = @('Invoke-AoSendViaFile', 'Test-AoSendFileContract', 'New-JournaledWorkerSendInternalCapability')
     foreach ($frame in Get-PSCallStack) {
-        if ($frame.ScriptName -match 'journaled-worker-send\.ps1$' -and
-            $frame.Command -in @('Invoke-AoSendViaFile', 'Test-AoSendFileContract', 'New-JournaledWorkerSendInternalCapability')) {
+        if ($frame.Command -notin $allowedCommands) { continue }
+        if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath ([string]$frame.ScriptName)) {
             return $true
         }
     }
@@ -72,9 +115,12 @@ function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
 
 function Test-JournaledWorkerSendParentChainTrusted {
     if ($env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
-    $chain = Get-ProcessParentChainCommandLines
-    foreach ($line in $chain) {
-        if ($line -match 'journaled-worker-send\.ps1') { return $true }
+    foreach ($line in @(Get-ProcessParentChainCommandLines)) {
+        foreach ($scriptPath in @(Get-ScriptPathsFromProcessCommandLine -CommandLine $line)) {
+            if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath $scriptPath) {
+                return $true
+            }
+        }
     }
     return $false
 }
