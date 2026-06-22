@@ -40,7 +40,7 @@ export interface HeadReviewTriggerDecision {
 }
 
 export type ReevalWatchAction =
-  | { type: 'start_review'; prNumber: number; headSha: string; sessionId: string; reason?: string }
+  | { type: 'start_review'; prNumber: number; headSha: string; sessionId: string; startReason?: string; reason?: string; processingMs?: number; withinLatencyBound?: boolean; watchKey?: string }
   | { type: 'retain_watch'; prNumber: number; headSha: string; reason: string }
   | { type: 'hand_to_backstop'; prNumber: number; headSha: string; reason: string }
   | { type: 'empty_review_trap'; prNumber: number; headSha: string; terminationReason?: string }

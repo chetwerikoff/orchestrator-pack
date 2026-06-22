@@ -51,6 +51,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
         [string]$ReviewCommand = '',
         [string]$SupervisedRepoSlug = '',
         [hashtable]$FixturePayload,
+        [string]$SupervisedRepoSlug = '',
         [switch]$DryRun,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )

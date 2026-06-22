@@ -4,9 +4,9 @@
   "iteration_id_source": "ao_session",
   "created_at": "2026-06-22T05:30:00.000Z",
   "baseline": {
-    "commit_sha": "319fdaa0cd1a157330795e1413c7378ba3fce593",
-    "worktree_dirty": true,
-    "active_scope_hash": "pending"
+    "commit_sha": "cd3816888545df3b1fed41b8f23fa4f91de2124c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:78717a066d5a01208eec3d8c459283c0ea03e7e671597d5ef8320b6608335e64"
   },
   "declared_paths": [
     "docs/review-ready-report-state-seed.mjs",
@@ -36,5 +36,6 @@
     "tests/fixtures/review-ready-report-state-seed"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [],
+  "supersedes": null
 }

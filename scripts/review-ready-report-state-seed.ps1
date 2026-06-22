@@ -16,7 +16,8 @@ param(
     [int]$PollSeconds = 5,
     [switch]$DryRun,
     [switch]$Once,
-    [string]$FixturePath = ''
+    [string]$FixturePath = '',
+    [string]$SupervisedRepoSlug = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,7 +83,7 @@ if ($FixturePath) {
         $reviewCommand = $payload.reviewCommand
     }
     $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
-        -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -FixturePayload $payload -DryRun:$DryRun `
+        -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -FixturePayload $payload -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
         -LogWriter { param([string]$Message) Write-ReviewReadyReportStateSeedLog $Message }
     Write-ReviewReadyReportStateSeedLog "fixture tick complete (started=$($result.started), seeded=$($result.seeded))"
     exit 0
@@ -97,7 +98,7 @@ try {
         Write-OrchestratorSideProcessProgress -ChildId 'review-ready-report-state-seed' -Phase 'poll'
         try {
             $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
-                -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -DryRun:$DryRun `
+                -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
                 -LogWriter { param([string]$Message) Write-ReviewReadyReportStateSeedLog $Message }
             Write-ReviewReadyReportStateSeedLog "tick complete (started=$($result.started), seeded=$($result.seeded), candidates=$($result.candidates))"
             Write-OrchestratorSideProcessTickSuccess -ChildId 'review-ready-report-state-seed'

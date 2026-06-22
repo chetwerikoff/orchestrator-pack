@@ -31,6 +31,16 @@ const captureDir = path.join(
   '../tests/external-output-references/captures/ao-status-sessions',
 );
 
+type PlanResult = {
+  pollClass: string;
+  bindingByKey: Record<string, Record<string, unknown>>;
+  candidates: Array<Record<string, unknown>>;
+  skips: Array<Record<string, unknown>>;
+  deferredScanKeys: string[];
+  seededKeys: string[];
+  nowMs: number;
+};
+
 type SeedFixture = {
   description?: string;
   nowMs?: number;
@@ -55,7 +65,7 @@ function loadFixture(name: string): SeedFixture {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as SeedFixture;
 }
 
-function planFromFixture(fixture: SeedFixture, overrides: Record<string, unknown> = {}) {
+function planFromFixture(fixture: SeedFixture, overrides: Record<string, unknown> = {}): PlanResult {
   return planReportStatePollTick({
     sessions: fixture.sessions ?? [],
     openPrs: fixture.openPrs ?? [],
@@ -70,7 +80,7 @@ function planFromFixture(fixture: SeedFixture, overrides: Record<string, unknown
     deferredScanKeys: fixture.deferredScanKeys ?? [],
     tickCapacity: fixture.tickCapacity,
     ...overrides,
-  });
+  }) as PlanResult;
 }
 
 function evaluateReadyFixture(fixture: SeedFixture) {
@@ -167,7 +177,7 @@ describe('Issue #391 acceptance criteria', () => {
     const plan = planFromFixture(fixture);
     expect(plan.candidates).toHaveLength(0);
     const binding = evaluatePollReportBinding({
-      report: fixture.sessions?.[0]?.reports?.[0],
+      report: (fixture.sessions?.[0]?.reports as Array<Record<string, unknown>> | undefined)?.[0],
       currentHeadSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       tipFirstObservedMs: 1719019900000,
       reportEventId: 'opk-55|55|1719019800000|ready_for_review',
@@ -265,7 +275,7 @@ describe('Issue #391 acceptance criteria', () => {
       nowMs: 1_700_000_000_100,
     });
     expect(Object.keys(second.watchEntries)).toHaveLength(1);
-    expect(resolveStartReasonForWatchEntry(second.watchEntries['99:9999999999999999999999999999999999999999']))
+    expect(resolveStartReasonForWatchEntry(second.watchEntries['99:9999999999999999999999999999999999999999'] as Record<string, unknown>))
       .toBe('report_state_seed');
   });
 
@@ -299,6 +309,6 @@ describe('Issue #391 acceptance criteria', () => {
       sessionId: 'opk-12',
     });
     expect(second.binds).toBe(false);
-    expect(second.bindingByKey[key]?.boundHeadSha).not.toBe('headbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    expect((second.bindingByKey as Record<string, Record<string, unknown>>)[key]?.boundHeadSha).not.toBe('headbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
   });
 });

@@ -594,7 +594,7 @@ describe('Issue #391 report-state seed integration', () => {
       candidates: [{ prNumber: 12, headSha: 'abc', sessionId: 'opk-12' }],
       nowMs: 1_700_000_000_000,
     });
-    const entry = seeded.watchEntries['12:abc'];
+    const entry = seeded.watchEntries['12:abc'] as Record<string, unknown>;
     expect(entry?.seedSource).toBe('report_state_poll');
     expect(resolveStartReasonForWatchEntry(entry)).toBe(REPORT_STATE_SEED_START_REASON);
   });
