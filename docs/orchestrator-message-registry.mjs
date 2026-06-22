@@ -830,6 +830,16 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'docs/review-wake-trigger.mjs',
     'docs/review-handoff-wake-admission.mjs',
   ],
+  384: [
+    'scripts/ci-green-wake-reconcile.ps1',
+    'scripts/ci-failure-notification-reconcile.ps1',
+    'scripts/review-send-reconcile.ps1',
+    'scripts/review-finding-delivery-confirm.ps1',
+    'scripts/journaled-worker-send.ps1',
+    'scripts/lib/Worker-NudgeClaim.ps1',
+    'scripts/lib/Worker-AutonomousNudgeGate.ps1',
+    'scripts/lib/Worker-NudgeAudit.ps1',
+  ],
 };
 
 /**

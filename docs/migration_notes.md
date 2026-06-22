@@ -137,6 +137,33 @@ remains the accepted unobservable residual.
 Supervisor child logs are rotated to `*.previous-*` before child start; the previous generation
 remains readable after restart for incident reconstruction.
 
+
+
+## LLM-orchestrator gated worker nudge gate (Issue #384)
+
+Autonomous orchestrator turns must deliver worker nudges only through
+`scripts/invoke-gated-worker-nudge.ps1`, which acquires the same
+`(PR, worker-cycle, intent-class, worker-target)` claim as deterministic reconcile scripts
+(#332 ci-green / review-send). Raw `ao send <worker>` from the autonomous surface is denied at
+the process boundary via `scripts/ao` when `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`.
+Transport uses `scripts/journaled-worker-send.ps1` with a single-use claim token
+(`worker-nudge-gate/v1`).
+
+Operator adoption after merge:
+
+1. Merge the `agent-orchestrator.yaml.example` worker-nudge orchestratorRules clause into live
+   `agent-orchestrator.yaml` (gated command + never raw `ao send` for worker nudges).
+2. `ao stop` then `ao start`.
+3. Run preflight: `pwsh -NoProfile -File scripts/worker-nudge-gate-preflight.ps1` — must pass.
+4. Run wiring check: `pwsh -NoProfile -File scripts/check-worker-nudge-gate.ps1` — must pass.
+5. Run adoption probe (live YAML): `pwsh -NoProfile -File scripts/check-worker-nudge-gate-adoption.ps1`
+   — when live YAML is not yet adopted, `ao start` still succeeds but the LLM nudge surface stays
+   degraded until the gated command is present (mirrors Issue #342 degraded-not-refuse).
+
+Safe rollback: disable the LLM nudge surface via adoption/preflight failure (scripts keep running);
+do not restore permissive raw autonomous `ao send` for worker nudges.
+   For `review-findings` / `findings-delivery` intents, pass `-ReviewRunId` (AO review-run id from `ao review list`); head SHA alone is not a cycle key.
+
 ## Autonomous orchestrator spawn/git boundary (Issue #324)
 
 Under `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`, the orchestrator turn cannot invoke `ao spawn`

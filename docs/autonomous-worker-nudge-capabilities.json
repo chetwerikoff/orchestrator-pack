@@ -1,0 +1,44 @@
+{
+  "version": "worker-nudge-gate/v1",
+  "boundaryVersion": "autonomous-orchestrator-boundary/v1",
+  "atomicClaimCapability": "worker-nudge-claim-atomic/v1",
+  "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
+  "capabilities": [
+    {
+      "id": "invoke-gated-worker-nudge",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/invoke-gated-worker-nudge.ps1"
+    },
+    {
+      "id": "journaled-worker-send-gated",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/journaled-worker-send.ps1"
+    },
+    {
+      "id": "ao-worker-send-raw",
+      "classification": "unavailable",
+      "surface": "shell",
+      "path": "ao send"
+    },
+    {
+      "id": "worker-nudge-gate-preflight",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/worker-nudge-gate-preflight.ps1"
+    },
+    {
+      "id": "ci-green-wake-reconcile",
+      "classification": "gated",
+      "surface": "process-parent",
+      "path": "scripts/ci-green-wake-reconcile.ps1"
+    },
+    {
+      "id": "review-send-reconcile",
+      "classification": "gated",
+      "surface": "process-parent",
+      "path": "scripts/review-send-reconcile.ps1"
+    }
+  ]
+}

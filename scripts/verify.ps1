@@ -1183,6 +1183,56 @@ else {
     Add-Failure 'Missing orchestrator review-start gate preflight (Issue #318)'
 }
 
+
+Write-Host '== worker nudge gate (Issue #384) =='
+$workerNudgeGateCheck = Join-Path $Root 'scripts/check-worker-nudge-gate.ps1'
+if (Test-Path -LiteralPath $workerNudgeGateCheck -PathType Leaf) {
+    & $workerNudgeGateCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-worker-nudge-gate.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-worker-nudge-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Worker nudge gate wiring failed (Issue #384)'
+    }
+}
+else {
+    Write-Check 'scripts/check-worker-nudge-gate.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing worker nudge gate check (Issue #384)'
+}
+
+$workerNudgeCapabilityCheck = Join-Path $Root 'scripts/check-autonomous-worker-nudge-capabilities.ps1'
+if (Test-Path -LiteralPath $workerNudgeCapabilityCheck -PathType Leaf) {
+    & $workerNudgeCapabilityCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-worker-nudge-capabilities.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-worker-nudge-capabilities.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous worker-nudge capability inventory drift (Issue #384)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-worker-nudge-capabilities.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous worker-nudge capability check (Issue #384)'
+}
+
+$workerNudgePreflight = Join-Path $Root 'scripts/worker-nudge-gate-preflight.ps1'
+if (Test-Path -LiteralPath $workerNudgePreflight -PathType Leaf) {
+    & $workerNudgePreflight -FixtureMode
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/worker-nudge-gate-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/worker-nudge-gate-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Worker nudge gate preflight failed (Issue #384)'
+    }
+}
+else {
+    Write-Check 'scripts/worker-nudge-gate-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing worker nudge gate preflight (Issue #384)'
+}
+
 Write-Host ''
 Write-Host '== Reusable repository policy =='
 $reusableCheck = Join-Path $Root 'scripts/check-reusable.ps1'

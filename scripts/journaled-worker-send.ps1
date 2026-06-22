@@ -26,7 +26,11 @@ param(
     [string]$AoEpochHash = '',
     [string]$ConfigPathHash = '',
     [string]$AdoptionProbeRunIdHash = '',
-    [switch]$NoWait
+    [string]$ClaimToken = '',
+    [switch]$GatedNudge,
+    [switch]$NoWait,
+    [string]$DeliveryId = '',
+    [switch]$RegisterCapabilityOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +38,9 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Journaled-WorkerSendInternalCapability.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -41,12 +48,40 @@ function Write-JournaledWorkerSendLog {
     Write-Host "[$stamp] journaled-worker-send: $Message"
 }
 
+function New-JournaledWorkerSendInternalCapability {
+    $registered = Register-JournaledWorkerSendInternalCapability
+    if (-not $registered.ok) {
+        throw "journaled-worker-send: failed to register internal capability: $($registered.reason)"
+    }
+    return [string]$registered.capability
+}
+
+function Invoke-FinalizeWorkerNudgeClaimFromToken {
+    param(
+        [string]$ClaimToken,
+        [hashtable]$Extra = @{}
+    )
+
+    if (-not $ClaimToken) { return }
+    $validation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'preflight'
+    if (-not $validation.ok) { return }
+    $read = Read-WorkerNudgeClaimRecord -Path ([string]$validation.path)
+    if (-not $read.ok) { return }
+    $claimResult = @{
+        acquired  = $true
+        claim     = (ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record)
+        path      = [string]$validation.path
+        namespace = [string]$validation.namespace
+    }
+    Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' -Extra $Extra | Out-Null
+}
+
 function Test-AoSendFileContract {
     param([string]$AoPath = 'ao')
     if ($env:AO_JOURNALED_SEND_ASSUME_FILE -eq '1') { return $true }
     $savedSentinel = [System.Environment]::GetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', 'Process')
     try {
-        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', [guid]::NewGuid().ToString('n'), 'Process')
+        [System.Environment]::SetEnvironmentVariable('AO_JOURNALED_SEND_INTERNAL', (New-JournaledWorkerSendInternalCapability), 'Process')
         $help = (& $AoPath send --help 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
     }
     catch {
@@ -121,7 +156,7 @@ function Invoke-AoSendViaFile {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.CreateNoWindow = $true
-        $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = [guid]::NewGuid().ToString('n')
+        $psi.EnvironmentVariables['AO_JOURNALED_SEND_INTERNAL'] = New-JournaledWorkerSendInternalCapability
         $aoArgs = @('send', $SessionId, '--file', $payloadFile)
         if ($NoWait) { $aoArgs += '--no-wait' }
         if ($TimeoutSeconds -gt 0) {
@@ -160,6 +195,11 @@ function Invoke-AoSendViaFile {
     finally {
         Remove-MechanicalTransportTempPaths -Paths @($payloadFile)
     }
+}
+
+if ($RegisterCapabilityOnly) {
+    Write-Output (New-JournaledWorkerSendInternalCapability)
+    exit 0
 }
 
 $payload = [Console]::In.ReadToEnd()
@@ -204,30 +244,72 @@ if ($DryRun) {
 
 if (-not (Test-AoSendFileContract -AoPath $AoPath)) {
     Write-JournaledWorkerSendLog 'ao send --file contract is unavailable; refusing transport'
+    if ($ClaimToken) {
+        Invoke-FinalizeWorkerNudgeClaimFromToken -ClaimToken $ClaimToken `
+            -Extra @{ reason = 'transport_preflight_failed'; detail = 'ao_send_file_unavailable' }
+    }
     exit 42
+}
+
+$claimResult = $null
+if (-not $AdoptionProbe -and -not $DryRun) {
+    if ((Test-OrchestratorAutonomousSurfaceActive) -and (-not $GatedNudge -or -not $ClaimToken)) {
+        Write-JournaledWorkerSendLog 'worker nudge rejected: autonomous surface requires gated claim token'
+        exit 46
+    }
+    if ($GatedNudge -and -not $ClaimToken) {
+        Write-JournaledWorkerSendLog 'worker nudge rejected: missing claim token'
+        exit 46
+    }
+    if ($ClaimToken) {
+        $tokenConsume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $ClaimToken -SendSessionId $SessionId
+        if (-not $tokenConsume.ok) {
+            Write-JournaledWorkerSendLog "worker nudge rejected: invalid claim token reason=$($tokenConsume.reason)"
+            exit 46
+        }
+        $claimResult = $tokenConsume.claimResult
+    }
 }
 
 $draftState = 'unknown'
 $dispatchOutcome = 'dispatch_in_flight'
-$register = Register-WorkerMessageDispatch `
-    -SessionId $SessionId `
-    -Message $payload `
-    -Source $Source `
-    -SourceKey $SourceKey `
-    -JournalPath $effectiveJournalPath `
-    -DispatchOutcome $dispatchOutcome `
-    -DraftState $draftState `
-    -HashIdentity `
-    -AdoptionProbe:$AdoptionProbe `
-    -AoEpoch $AoEpoch `
-    -ConfigPath $ConfigPath `
-    -AoEpochHash $AoEpochHash `
-    -ConfigPathHash $ConfigPathHash `
-    -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
+if ($DeliveryId.Trim()) {
+    $register = @{
+        recorded     = $true
+        deliveryId   = $DeliveryId.Trim()
+        deliveryPath = 'pending-draft'
+        reason       = 'reused_delivery_id'
+    }
+}
+else {
+    $register = Register-WorkerMessageDispatch `
+        -SessionId $SessionId `
+        -Message $payload `
+        -Source $Source `
+        -SourceKey $SourceKey `
+        -JournalPath $effectiveJournalPath `
+        -DispatchOutcome $dispatchOutcome `
+        -DraftState $draftState `
+        -HashIdentity `
+        -AdoptionProbe:$AdoptionProbe `
+        -AoEpoch $AoEpoch `
+        -ConfigPath $ConfigPath `
+        -AoEpochHash $AoEpochHash `
+        -ConfigPathHash $ConfigPathHash `
+        -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
+}
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"
+    if ($claimResult) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' `
+            -Extra @{ reason = 'journal_register_failed'; detail = [string]$register.reason } | Out-Null
+    }
     exit 43
+}
+
+if ($claimResult) {
+  # SEND_ATTEMPTED is recorded atomically during token consumption.
 }
 
 if ($AdoptionProbe) {
@@ -259,6 +341,17 @@ if (-not $update.ok) {
     exit 47
 }
 Write-JournaledWorkerSendLog "dispatch outcome recorded: delivery=$($register.deliveryId) outcome=$($result.outcome) reason=$($result.reason)"
+if ($claimResult) {
+    if ($result.outcome -eq 'dispatched') {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'SENT' | Out-Null
+    }
+    elseif ($result.outcome -eq 'dispatch_unknown') {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'UNCERTAIN' | Out-Null
+    }
+    else {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' -Extra @{ dispatchReason = $result.reason } | Out-Null
+    }
+}
 if ($result.outcome -eq 'dispatched') { exit 0 }
 if ($result.outcome -eq 'dispatch_unknown') { exit 44 }
 exit 45

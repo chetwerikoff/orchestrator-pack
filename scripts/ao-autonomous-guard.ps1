@@ -7,6 +7,7 @@
 # -ProgressAction and -PipelineVariable as common parameters.
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 $spawnDeny = Test-AutonomousSpawnDenied -Argv $args
 if ($spawnDeny.denied) {
@@ -17,6 +18,12 @@ if ($spawnDeny.denied) {
 $deny = Test-AutonomousRawReviewRunDenied -Argv $args
 if ($deny.denied) {
     [Console]::Error.WriteLine("autonomous review-starts paused by gate preflight: $($deny.reason). Use scripts/invoke-orchestrator-claimed-review-run.ps1")
+    exit 93
+}
+
+$sendDeny = Test-AutonomousRawWorkerSendDenied -Argv $args
+if ($sendDeny.denied) {
+    [Console]::Error.WriteLine("autonomous worker nudges paused by gate preflight: $($sendDeny.reason). Use scripts/invoke-gated-worker-nudge.ps1")
     exit 93
 }
 
