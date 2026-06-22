@@ -126,13 +126,22 @@ function Copy-ImplementingPrScriptsBootstrap {
     )
 
     $resolvedSource = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
+    $scriptsRoot = Join-Path $resolvedSource 'scripts'
+    if (-not (Test-Path -LiteralPath $scriptsRoot)) {
+        return $false
+    }
+
     if (Test-Path -LiteralPath $DestinationRoot) {
         Remove-Item -LiteralPath $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
 
-    Get-ChildItem -LiteralPath $resolvedSource -Force | Where-Object { $_.Name -ne '.git' } | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $DestinationRoot $_.Name) -Recurse -Force
+    Copy-Item -LiteralPath $scriptsRoot -Destination (Join-Path $DestinationRoot 'scripts') -Recurse -Force
+    foreach ($rootFile in @('package.json', 'package-lock.json', 'tsconfig.base.json')) {
+        $sourceFile = Join-Path $resolvedSource $rootFile
+        if (Test-Path -LiteralPath $sourceFile) {
+            Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $DestinationRoot $rootFile) -Force
+        }
     }
 
     return Test-Path -LiteralPath (Join-Path $DestinationRoot 'scripts/launch-contract-evidence-reverify.ps1')
