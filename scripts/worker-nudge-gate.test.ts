@@ -41,6 +41,18 @@ function tempClaimDir() {
   return mkdtempSync(path.join(tmpdir(), 'worker-nudge-claim-'));
 }
 
+function withClaimStoreEnv(dir: string, script: string) {
+  return `
+    $prevClaimDir = $env:AO_WORKER_NUDGE_CLAIM_DIR
+    $env:AO_WORKER_NUDGE_CLAIM_DIR = ${psString(dir)}
+    try {
+      ${script}
+    } finally {
+      if ($prevClaimDir) { $env:AO_WORKER_NUDGE_CLAIM_DIR = $prevClaimDir } else { Remove-Item Env:AO_WORKER_NUDGE_CLAIM_DIR -ErrorAction SilentlyContinue }
+    }
+  `;
+}
+
 describe('worker nudge gate (#384)', () => {
   it('exports stable gate capability markers', () => {
     expect(WORKER_NUDGE_GATE_VERSION).toBe('worker-nudge-gate/v1');
@@ -192,15 +204,14 @@ describe('worker nudge gate (#384)', () => {
   it('allows redelivery claim after first findings-delivery tuple is terminal SENT', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $first = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-781' -IntentClass 'findings-delivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'review-send-reconcile'
+        $first = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-781' -IntentClass 'findings-delivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'review-send-reconcile'
         if (-not $first.acquired) { throw 'expected first acquire' }
         Finalize-WorkerNudgeClaim -ClaimResult $first -Outcome 'SENT' | Out-Null
-        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'redelivery:opk-rev-781:1' -IntentClass 'review-findings-redelivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'review-finding-delivery-confirm'
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'redelivery:opk-rev-781:1' -IntentClass 'review-findings-redelivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'review-finding-delivery-confirm'
         [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.acquired).toBe(true);
     } finally {
@@ -477,17 +488,20 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('never leaves two active claim records for one tuple under overlap', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
+        . ${psString(helperPath)}
+        $ns = Resolve-WorkerNudgeClaimNamespace
         $helper = ${psString(helperPath)}
-        $ns = ${psString(dir)}
+        $claimDir = ${psString(dir)}
         $null = 1..6 | ForEach-Object -Parallel {
+          $env:AO_WORKER_NUDGE_CLAIM_DIR = $using:claimDir
           . $using:helper
-          Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $using:ns | Out-Null
+          Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' | Out-Null
         } -ThrottleLimit 6
         [pscustomobject]@{
           activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-380-*.json').Name).Count
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.activeCount).toBe(1);
     } finally {
@@ -498,12 +512,15 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('concurrent same-tuple resolves to one winner', { retry: 2 }, () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
+        . ${psString(helperPath)}
+        $ns = Resolve-WorkerNudgeClaimNamespace
         $helper = ${psString(helperPath)}
-        $ns = ${psString(dir)}
+        $claimDir = ${psString(dir)}
         $results = 1..2 | ForEach-Object -Parallel {
+          $env:AO_WORKER_NUDGE_CLAIM_DIR = $using:claimDir
           . $using:helper
-          $r = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $using:ns -Surface 'test'
+          $r = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
           [pscustomobject]@{ acquired = [bool]$r.acquired; reason = [string]$r.reason }
         } -ThrottleLimit 2
         [pscustomobject]@{
@@ -511,7 +528,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
           losers = @($results | Where-Object { -not $_.acquired }).Count
           activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-380-*.json').Name).Count
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.winners).toBe(1);
       expect(result.losers).toBe(1);
@@ -675,11 +692,11 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const dir = tempClaimDir();
     const hash = hashNudgeMessageContent('review findings payload');
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
+        $ns = Resolve-WorkerNudgeClaimNamespace
         Initialize-WorkerNudgeClaimNamespace -Namespace $ns
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
         $persist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash '${hash}'
         if (-not $persist.ok) { throw "persist failed: $($persist.reason)" }
@@ -687,7 +704,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         if (-not $terminal.ok) { throw "finalize failed: $($terminal.reason)" }
         $raw = Get-Content -LiteralPath $terminal.terminalPath -Raw | ConvertFrom-Json
         Write-Output $raw.messageContentHash
-      `;
+      `);
       expect(runPwsh(script).trim()).toBe(hash);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -697,16 +714,15 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('reacquires after terminal FAILED_DEFINITIVE claim', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' | Out-Null
-        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason }
           | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.acquired).toBe(true);
     } finally {
@@ -717,16 +733,15 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('does not reacquire after terminal SENT claim', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
-        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason; terminal = [bool]$retry.terminal }
           | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.acquired).toBe(false);
       expect(result.reason).toBe('already_served');
@@ -739,10 +754,9 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('persists SEND_ATTEMPTED on gated claim before transport', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         $claim.acquired = $true
         $attempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
         $read = Read-WorkerNudgeClaimRecord -Path $claim.path
@@ -751,7 +765,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
           phase = [string]$read.record.phase
           sendAttemptedAtUtc = [string]$read.record.sendAttemptedAtUtc
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.attemptOk).toBe(true);
       expect(result.phase).toBe('SEND_ATTEMPTED');
@@ -761,13 +775,40 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     }
   });
 
+  it('rejects forged claim tokens bound to writable paths outside the canonical store', () => {
+    const dir = tempClaimDir();
+    const forgeDir = mkdtempSync(path.join(tmpdir(), 'worker-nudge-claim-forge-'));
+    try {
+      const script = withClaimStoreEnv(dir, `
+        . ${psString(helperPath)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-789' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+        $decoded = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $token
+        $forgedPath = Join-Path ${psString(forgeDir)} 'forged-claim.json'
+        Copy-Item -LiteralPath $claim.path -Destination $forgedPath -Force
+        $decoded | Add-Member -NotePropertyName path -NotePropertyValue $forgedPath -Force
+        $decoded | Add-Member -NotePropertyName namespace -NotePropertyValue ${psString(forgeDir)} -Force
+        $forgedJson = $decoded | ConvertTo-Json -Compress -Depth 10
+        $forgedToken = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($forgedJson))
+        $consume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $forgedToken -SendSessionId 'opk-1'
+        [pscustomobject]@{ ok = [bool]$consume.ok; reason = [string]$consume.reason } | ConvertTo-Json -Compress
+      `);
+      const result = JSON.parse(runPwsh(script));
+      expect(result.ok).toBe(false);
+      expect(['token_path_unbound', 'token_namespace_unbound']).toContain(result.reason);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(forgeDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects replayed claim tokens after send begins', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         $token = New-WorkerNudgeClaimToken -ClaimResult $claim
         $first = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-1'
@@ -777,7 +818,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
           secondOk = [bool]$second.ok
           secondReason = [string]$second.reason
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.firstOk).toBe(true);
       expect(result.secondOk).toBe(false);
@@ -790,10 +831,9 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('rejects claim token when send session does not match token session', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         $token = New-WorkerNudgeClaimToken -ClaimResult $claim
         $wrong = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-wrong'
@@ -801,7 +841,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
           ok = [bool]$wrong.ok
           reason = [string]$wrong.reason
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.ok).toBe(false);
       expect(result.reason).toBe('token_send_session_mismatch');
@@ -813,16 +853,15 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('releases active claim when message hash persistence fails', () => {
     const dir = tempClaimDir();
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
         $activeExists = Test-Path -LiteralPath $claim.path
-        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         [pscustomobject]@{ activeExists = $activeExists; reacquired = [bool]$retry.acquired } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.activeExists).toBe(false);
       expect(result.reacquired).toBe(true);
@@ -847,11 +886,11 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     );
     chmodSync(fakeAo, 0o755);
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
+        $ns = Resolve-WorkerNudgeClaimNamespace
         Initialize-WorkerNudgeClaimNamespace -Namespace $ns
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
         $token = New-WorkerNudgeClaimToken -ClaimResult $claim
         'hello' | pwsh -NoProfile -File ${psString(journaled)} 'opk-1' -AoPath ${psString(fakeAo)} -ClaimToken $token -GatedNudge -Source 'test'
@@ -860,7 +899,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         $terminalDir = Join-Path $ns 'terminal'
         $terminalCount = if (Test-Path -LiteralPath $terminalDir) { @(Get-ChildItem -LiteralPath $terminalDir -File).Count } else { 0 }
         [pscustomobject]@{ exitCode = $exitCode; activeExists = $activeExists; terminalCount = $terminalCount } | ConvertTo-Json -Compress
-      `;
+      `);
       const raw = runPwsh(script);
       const jsonLine = raw
         .split('\n')
@@ -943,19 +982,18 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     process.env.AO_WORKER_NUDGE_CLAIM_LEASE_MS = '1';
     process.env.AO_WORKER_NUDGE_CLAIM_STALE_MINUTES = '30';
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
         if (-not $claim.acquired) { throw 'expected initial acquire' }
         Start-Sleep -Milliseconds 5
-        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-2' -Namespace $ns -Surface 'test'
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-2' -Surface 'test'
         [pscustomobject]@{
           acquired = [bool]$retry.acquired
           recovered = [bool]$retry.recovered
           reason = [string]$retry.reason
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.acquired).toBe(true);
       expect(result.recovered).toBe(true);
@@ -1109,9 +1147,9 @@ describe('claim-store failure escalation (#384)', () => {
     const broken = path.join(dir, 'broken.json');
     writeFileSync(broken, '{not-json', 'utf8');
     try {
-      const script = `
+      const script = withClaimStoreEnv(dir, `
         . ${psString(helperPath)}
-        $ns = ${psString(dir)}
+        $ns = Resolve-WorkerNudgeClaimNamespace
         New-Item -ItemType Directory -Path (Join-Path $ns '_health') -Force | Out-Null
         @{ unresolvedCount = 2; unresolvedSinceMs = 0; lastReason = 'storage_failure' } |
           ConvertTo-Json -Compress |
@@ -1122,7 +1160,7 @@ describe('claim-store failure escalation (#384)', () => {
           reason = [string]$result.reason
           unresolvedCount = [int]$result.unresolvedCount
         } | ConvertTo-Json -Compress
-      `;
+      `);
       const result = JSON.parse(runPwsh(script));
       expect(result.escalate).toBe(true);
       expect(result.reason).toBe('unresolved_escalate');
@@ -1351,6 +1389,13 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(ciFailure).toMatch(/-DeliveryId', \$DeliveryId/);
     expect(ciFailure).toMatch(/Register-WorkerMessageDispatch -SessionId \$journalSessionId/);
     expect(journaled).toMatch(/reused_delivery_id/);
+  });
+
+  it('binds claim tokens to the canonical claim store', () => {
+    const body = readFileSync(path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1'), 'utf8');
+    expect(body).toMatch(/function Resolve-WorkerNudgeClaimTokenBinding/);
+    expect(body).toMatch(/token_path_unbound/);
+    expect(body).not.toMatch(/namespace\s+=\s+\[string\]\$ClaimResult\.namespace[\s\S]{0,80}path\s+=\s+\[string\]\$ClaimResult\.path/);
   });
 
   it('requires claim gating on all worker-observable senders', () => {

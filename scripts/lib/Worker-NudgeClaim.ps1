@@ -145,6 +145,101 @@ function Get-WorkerNudgeClaimTerminalDir {
     return (Join-Path $Namespace 'terminal')
 }
 
+function Get-WorkerNudgeClaimStorePathCanonical {
+    param([string]$Path)
+
+    if (-not $Path) { return '' }
+    $resolved = [string]$Path
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+        }
+    }
+    catch { }
+    $libDir = $PSScriptRoot
+    . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
+    $canonical = Invoke-WorkerNudgeFilterCli -Subcommand 'canonicalizeStorePath' -Payload @{ storePath = $resolved }
+    return [string]$canonical.canonicalPath
+}
+
+function Test-WorkerNudgeClaimTokenIdentityFields {
+    param([object]$Token)
+
+    if (-not $Token) { return $false }
+    $prNumber = 0
+    if (-not [int]::TryParse([string]$Token.prNumber, [ref]$prNumber) -or $prNumber -le 0) { return $false }
+    foreach ($field in @('cycleKey', 'intentClass', 'workerTarget', 'tupleKey', 'processGuid', 'claimId')) {
+        if (-not [string]$Token.$field) { return $false }
+    }
+    if ([long]$Token.claimLeaseExpiresAtMs -le 0) { return $false }
+    return $true
+}
+
+function Resolve-WorkerNudgeClaimTokenBinding {
+    param(
+        [object]$Token,
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    if (-not (Test-WorkerNudgeClaimTokenIdentityFields -Token $Token)) {
+        return @{ ok = $false; reason = 'token_identity_incomplete' }
+    }
+
+    $canonicalNamespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
+    $canonicalPath = Get-WorkerNudgeClaimPath -Namespace $canonicalNamespace `
+        -PrNumber ([int]$Token.prNumber) -CycleKey ([string]$Token.cycleKey) `
+        -IntentClass ([string]$Token.intentClass) -WorkerTarget ([string]$Token.workerTarget)
+
+    $canonicalNamespacePath = Get-WorkerNudgeClaimStorePathCanonical -Path $canonicalNamespace
+    $expectedClaimPath = Get-WorkerNudgeClaimStorePathCanonical -Path $canonicalPath
+    if ($Token.PSObject.Properties.Name -contains 'namespace') {
+        $tokenNamespace = [string]$Token.namespace
+        if ($tokenNamespace) {
+            $tokenNamespacePath = Get-WorkerNudgeClaimStorePathCanonical -Path $tokenNamespace
+            if ($tokenNamespacePath -ne $canonicalNamespacePath) {
+                return @{ ok = $false; reason = 'token_namespace_unbound' }
+            }
+        }
+    }
+    if ($Token.PSObject.Properties.Name -contains 'path') {
+        $tokenClaimPathRaw = [string]$Token.path
+        if ($tokenClaimPathRaw) {
+            $tokenClaimPath = Get-WorkerNudgeClaimStorePathCanonical -Path $tokenClaimPathRaw
+            if ($tokenClaimPath -ne $expectedClaimPath) {
+                return @{ ok = $false; reason = 'token_path_unbound' }
+            }
+        }
+    }
+
+    return @{
+        ok        = $true
+        namespace = $canonicalNamespace
+        path      = $canonicalPath
+    }
+}
+
+function Test-WorkerNudgeClaimTokenMatchesRecord {
+    param(
+        [object]$Token,
+        [object]$Record
+    )
+
+    if ([int]$Record.prNumber -ne [int]$Token.prNumber) { return 'token_pr_mismatch' }
+    if ([string]$Record.cycleKey -ne [string]$Token.cycleKey) { return 'token_cycle_mismatch' }
+    if ([string]$Record.intentClass -ne [string]$Token.intentClass) { return 'token_intent_mismatch' }
+    if ([string]$Record.workerTarget -ne [string]$Token.workerTarget) { return 'token_worker_target_mismatch' }
+    if ([string]$Record.tupleKey -ne [string]$Token.tupleKey) { return 'token_tuple_mismatch' }
+    if ([string]$Record.holder.processGuid -ne [string]$Token.processGuid) { return 'token_holder_mismatch' }
+    if ([string]$Record.tokenNonce -and [string]$Token.claimId -and [string]$Record.tokenNonce -ne [string]$Token.claimId) {
+        return 'token_claim_mismatch'
+    }
+    if ([long]$Record.claimLeaseExpiresAtMs -ne [long]$Token.claimLeaseExpiresAtMs) {
+        return 'token_lease_mismatch'
+    }
+    return $null
+}
+
+
 function Get-WorkerNudgeClaimMutexOwnerPath {
     param([string]$LockDir)
     return (Join-Path $LockDir 'owner.json')
@@ -468,8 +563,6 @@ function New-WorkerNudgeClaimToken {
         phase                 = [string]$claim.phase
         processGuid           = [string]$claim.holder.processGuid
         claimLeaseExpiresAtMs = [long]$claim.claimLeaseExpiresAtMs
-        namespace             = [string]$ClaimResult.namespace
-        path                  = [string]$ClaimResult.path
     }
     $json = $payload | ConvertTo-Json -Compress -Depth 10
     return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($json))
@@ -502,19 +595,18 @@ function Test-ValidateWorkerNudgeClaimToken {
     if ($nowMs -gt [long]$token.claimLeaseExpiresAtMs) {
         return @{ ok = $false; reason = 'token_expired' }
     }
-    $path = [string]$token.path
-    if (-not $path) {
-        return @{ ok = $false; reason = 'token_missing_path' }
+    $binding = Resolve-WorkerNudgeClaimTokenBinding -Token $token
+    if (-not $binding.ok) {
+        return @{ ok = $false; reason = [string]$binding.reason }
     }
+    $path = [string]$binding.path
     $read = Read-WorkerNudgeClaimRecord -Path $path
     if (-not $read.ok) {
         return @{ ok = $false; reason = 'claim_missing' }
     }
-    if ([string]$read.record.holder.processGuid -ne [string]$token.processGuid) {
-        return @{ ok = $false; reason = 'token_holder_mismatch' }
-    }
-    if ([string]$read.record.tupleKey -ne [string]$token.tupleKey) {
-        return @{ ok = $false; reason = 'token_tuple_mismatch' }
+    $recordMismatch = Test-WorkerNudgeClaimTokenMatchesRecord -Token $token -Record $read.record
+    if ($recordMismatch) {
+        return @{ ok = $false; reason = $recordMismatch }
     }
     if ($Stage -eq 'send' -and [string]$read.record.phase -ne 'CLAIMED') {
         $reason = if ([string]$read.record.phase -eq 'SEND_ATTEMPTED') { 'token_replayed' } else { 'token_phase_invalid' }
@@ -523,7 +615,13 @@ function Test-ValidateWorkerNudgeClaimToken {
     if ($Stage -eq 'finalize' -and [string]$read.record.phase -notin @('CLAIMED', 'SEND_ATTEMPTED')) {
         return @{ ok = $false; reason = 'token_phase_invalid' }
     }
-    return @{ ok = $true; token = $token; claim = $read.record; path = $path }
+    return @{
+        ok        = $true
+        token     = $token
+        claim     = $read.record
+        path      = $path
+        namespace = [string]$binding.namespace
+    }
 }
 
 function Resolve-WorkerNudgeClaimAgainstExisting {
@@ -1122,25 +1220,31 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
     if ($nowMs -gt [long]$token.claimLeaseExpiresAtMs) {
         return @{ ok = $false; reason = 'token_expired' }
     }
-    $path = [string]$token.path
-    if (-not $path) {
-        return @{ ok = $false; reason = 'token_missing_path' }
+    $binding = Resolve-WorkerNudgeClaimTokenBinding -Token $token
+    if (-not $binding.ok) {
+        return @{ ok = $false; reason = [string]$binding.reason }
     }
+    $path = [string]$binding.path
+    $namespace = [string]$binding.namespace
 
     $read = Read-WorkerNudgeClaimRecord -Path $path
     if (-not $read.ok) {
         return @{ ok = $false; reason = 'claim_missing' }
     }
+    $recordMismatch = Test-WorkerNudgeClaimTokenMatchesRecord -Token $token -Record $read.record
+    if ($recordMismatch) {
+        return @{ ok = $false; reason = $recordMismatch }
+    }
     if ($SendSessionId) {
-        $expectedSessionId = [string]$token.sessionId
+        $expectedSessionId = [string]$read.record.sessionId
         if (-not $expectedSessionId) {
-            $expectedSessionId = [string]$read.record.sessionId
+            $expectedSessionId = [string]$token.sessionId
         }
         if ($expectedSessionId -and $expectedSessionId -ne [string]$SendSessionId) {
             return @{ ok = $false; reason = 'token_send_session_mismatch' }
         }
     }
-    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace ([string]$token.namespace) `
+    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $namespace `
         -PrNumber ([int]$token.prNumber) -CycleKey ([string]$token.cycleKey) `
         -IntentClass ([string]$token.intentClass) -WorkerTarget ([string]$token.workerTarget)
     if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
@@ -1151,14 +1255,9 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
         if (-not $read.ok) {
             return @{ ok = $false; reason = 'claim_missing' }
         }
-        if ([string]$read.record.holder.processGuid -ne [string]$token.processGuid) {
-            return @{ ok = $false; reason = 'token_holder_mismatch' }
-        }
-        if ([string]$read.record.tupleKey -ne [string]$token.tupleKey) {
-            return @{ ok = $false; reason = 'token_tuple_mismatch' }
-        }
-        if ([string]$read.record.tokenNonce -and [string]$token.claimId -and [string]$read.record.tokenNonce -ne [string]$token.claimId) {
-            return @{ ok = $false; reason = 'token_claim_mismatch' }
+        $recordMismatch = Test-WorkerNudgeClaimTokenMatchesRecord -Token $token -Record $read.record
+        if ($recordMismatch) {
+            return @{ ok = $false; reason = $recordMismatch }
         }
         if ($SendSessionId) {
             $expectedSessionId = [string]$read.record.sessionId
@@ -1185,7 +1284,7 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
             acquired  = $true
             claim     = $record
             path      = $path
-            namespace = [string]$token.namespace
+            namespace = $namespace
         }
         return @{ ok = $true; token = $token; claim = $record; path = $path; claimResult = $claimResult }
     }

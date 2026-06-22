@@ -65,14 +65,13 @@ function Invoke-FinalizeWorkerNudgeClaimFromToken {
     if (-not $ClaimToken) { return }
     $validation = Test-ValidateWorkerNudgeClaimToken -ClaimToken $ClaimToken -Stage 'preflight'
     if (-not $validation.ok) { return }
-    $token = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $ClaimToken
-    $read = Read-WorkerNudgeClaimRecord -Path ([string]$token.path)
+    $read = Read-WorkerNudgeClaimRecord -Path ([string]$validation.path)
     if (-not $read.ok) { return }
     $claimResult = @{
         acquired  = $true
         claim     = (ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record)
-        path      = [string]$token.path
-        namespace = [string]$token.namespace
+        path      = [string]$validation.path
+        namespace = [string]$validation.namespace
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' -Extra $Extra | Out-Null
 }
