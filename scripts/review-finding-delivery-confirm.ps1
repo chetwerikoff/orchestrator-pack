@@ -259,12 +259,12 @@ function Invoke-PlannedReviewSend {
     }
 
     $intentClass = 'review-findings-redelivery'
-    $cycleKey = "redelivery:$RunId:$Attempt"
+    $cycleKey = "redelivery:${RunId}:${Attempt}"
     $openPrs = @(Get-OpenPrList)
     $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
         -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
     if (-not $targetResolution.ok) {
-        Write-DeliveryLog "redelivery suppressed (PR-claim target unresolved) run=$RunId: $($targetResolution.reason)"
+        Write-DeliveryLog "redelivery suppressed (PR-claim target unresolved) run=${RunId}: $($targetResolution.reason)"
         return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
     }
     $targetId = [string]$targetResolution.targetId
@@ -280,7 +280,7 @@ function Invoke-PlannedReviewSend {
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
         -TupleKey $tupleKey -Surface 'review-finding-delivery-confirm' -ProjectId $ProjectId -Message $reviewMessage
     if (-not $claim.acquired) {
-        Write-DeliveryLog "redelivery suppressed by claim gate run=$RunId: $($claim.reason)"
+        Write-DeliveryLog "redelivery suppressed by claim gate run=${RunId}: $($claim.reason)"
         return @{
             sent         = $false
             reason       = [string]$claim.reason
@@ -293,7 +293,7 @@ function Invoke-PlannedReviewSend {
     $sendAttempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
     if (-not $sendAttempt.ok) {
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$sendAttempt.reason } | Out-Null
-        Write-DeliveryLog "redelivery aborted (claim send-attempt failed) run=$RunId: $($sendAttempt.reason)"
+        Write-DeliveryLog "redelivery aborted (claim send-attempt failed) run=${RunId}: $($sendAttempt.reason)"
         return @{ sent = $false; reason = [string]$sendAttempt.reason }
     }
 
@@ -316,7 +316,7 @@ function Invoke-PlannedReviewSend {
     catch {
         $sendError = [string]$_.Exception.Message
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'send_failed'; detail = $sendError } | Out-Null
-        Write-DeliveryLog "redelivery failed run=$RunId: $sendError"
+        Write-DeliveryLog "redelivery failed run=${RunId}: $sendError"
         return @{ sent = $false; reason = 'send_failed'; detail = $sendError }
     }
 
@@ -333,7 +333,7 @@ function Invoke-PlannedReviewSend {
             reason             = [string]$verify.reason
             messageContentHash = $messageContentHash
         } | Out-Null
-        Write-DeliveryLog "post-send verify failed run=$RunId: $($verify.reason) (claim UNCERTAIN; non-retryable)"
+        Write-DeliveryLog "post-send verify failed run=${RunId}: $($verify.reason) (claim UNCERTAIN; non-retryable)"
         return @{ sent = $false; reason = $verify.reason; uncertain = $true }
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
