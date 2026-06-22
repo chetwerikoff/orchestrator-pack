@@ -40,6 +40,7 @@
     "scripts/lib/reverify-e2e-fixture-session.ts",
     "scripts/lib/reverify-sandbox.ts",
     "scripts/lib/reviewer-cli-io.ts",
+    "scripts/lib/reviewer-contract-mapping.ts",
     "scripts/lib/reviewer-ts-cli.ts",
     "scripts/orchestrator-message-registry.test.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
