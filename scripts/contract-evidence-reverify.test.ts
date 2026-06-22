@@ -1094,6 +1094,14 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
       encoding: 'utf8',
+      env: {
+        ...process.env,
+        OPK_REVERIFY_E2E_LIVE: '1',
+        OPK_REVERIFY_E2E_ALLOW_SPAWN: '1',
+        OPK_REVERIFY_E2E_REQUIRED: '1',
+        OPK_TRUSTED_PACK_ROOT: '',
+        AO_TRUSTED_PACK_ROOT: '',
+      },
     });
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);

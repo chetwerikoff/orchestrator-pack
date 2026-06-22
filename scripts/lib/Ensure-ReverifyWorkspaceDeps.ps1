@@ -13,9 +13,14 @@ function Ensure-ReverifyWorkspaceDeps {
         $TrustedBaseRoot
     }
 
-    $tsxPackage = Join-Path $trustedRoot 'node_modules/tsx/package.json'
+    $depsRoot = $trustedRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $trustedRoot 'package.json'))) {
+        $depsRoot = $RepoRoot
+    }
+
+    $tsxPackage = Join-Path $depsRoot 'node_modules/tsx/package.json'
     if (-not (Test-Path -LiteralPath $tsxPackage)) {
-        Push-Location $trustedRoot
+        Push-Location $depsRoot
         try {
             # Bootstrap from trusted-base lockfile only; never run PR-controlled lifecycle scripts.
             npm ci --include=dev --ignore-scripts --loglevel=error --no-audit 2>&1 | Out-Null
@@ -29,9 +34,9 @@ function Ensure-ReverifyWorkspaceDeps {
         }
     }
 
-    $loader = Join-Path $trustedRoot 'node_modules/tsx/dist/loader.mjs'
+    $loader = Join-Path $depsRoot 'node_modules/tsx/dist/loader.mjs'
     if (-not (Test-Path -LiteralPath $loader)) {
-        [Console]::Error.WriteLine("${WrapperName}: tsx loader missing in $trustedRoot after npm ci")
+        [Console]::Error.WriteLine("${WrapperName}: tsx loader missing in $depsRoot after npm ci")
         exit 1
     }
 

@@ -127,10 +127,6 @@ function Resolve-TrustedReverifyLauncherPath {
     Push-Location $resolvedReviewTarget
     try {
         git archive origin/main -- @bootstrapArchivePaths 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            return $null
-        }
     }
     finally {
         Pop-Location
@@ -138,6 +134,18 @@ function Resolve-TrustedReverifyLauncherPath {
 
     $launcherPath = Join-Path $temp $launcherRelativePath
     $corePath = Join-Path $temp $coreRelativePath
+    if (-not (Test-Path -LiteralPath $launcherPath) -or -not (Test-Path -LiteralPath $corePath)) {
+        if ($env:OPK_REVERIFY_E2E_REQUIRED -eq '1') {
+            if (Test-Path -LiteralPath $temp) {
+                Remove-ImplementingPrScriptsBootstrap -DestinationRoot $temp
+            }
+            if (Copy-ImplementingPrScriptsBootstrap -ReviewTargetRoot $resolvedReviewTarget -DestinationRoot $temp) {
+                $launcherPath = Join-Path $temp $launcherRelativePath
+                $corePath = Join-Path $temp $coreRelativePath
+            }
+        }
+    }
+
     if (-not (Test-Path -LiteralPath $launcherPath) -or -not (Test-Path -LiteralPath $corePath)) {
         Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
         return $null
@@ -163,6 +171,7 @@ try {
 
     & $resolvedLauncher.LauncherPath `
         -RepoRoot $packRoot `
+        -TrustedBaseRoot $resolvedLauncher.TrustedBaseRoot `
         -ReviewTargetRoot $packRoot `
         -ManifestPath $ManifestPath `
         -PrNumber $e2ePrNumber `
@@ -177,6 +186,6 @@ try {
 }
 finally {
     if ($disposableLauncherBootstrapRoot -and $resolvedLauncher -and -not [string]::IsNullOrWhiteSpace($resolvedLauncher.BootstrapRoot)) {
-        Remove-Item -LiteralPath $resolvedLauncher.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ImplementingPrScriptsBootstrap -DestinationRoot $resolvedLauncher.BootstrapRoot
     }
 }

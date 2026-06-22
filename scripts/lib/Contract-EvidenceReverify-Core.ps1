@@ -76,8 +76,13 @@ detail: $Detail
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
 
         if ($disposableScriptBootstrapRoot) {
+            $runnerTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
+                $TrustedBaseRoot
+            } else {
+                $scriptBootstrap.BootstrapRoot
+            }
             try {
-                $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot
+                $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $runnerTrustedBase
             }
             catch {
                 if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {

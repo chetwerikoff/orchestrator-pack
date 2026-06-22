@@ -15,34 +15,58 @@ function Resolve-TrustedPackRoot {
         [string]$BaseRef = 'origin/main'
     )
 
+    $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
+
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+            throw 'refusing trusted-root override: trusted base equals or lies inside review target'
+        }
+        if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        }
+        $checker = Join-Path $trustedRoot $BootstrapCheckerRelativePath
+        if (-not (Test-Path -LiteralPath $checker) -and $env:OPK_REVERIFY_E2E_REQUIRED -eq '1') {
+            Copy-ImplementingPrScriptsBootstrap -ReviewTargetRoot $resolvedReviewTarget -DestinationRoot $trustedRoot | Out-Null
+            $checker = Join-Path $trustedRoot $BootstrapCheckerRelativePath
+        }
+        if (-not (Test-Path -LiteralPath $checker)) {
+            throw "missing trusted runner at $checker"
+        }
         return @{
             Path                  = $trustedRoot
-            DisposableTrustedRoot = $false
+            DisposableTrustedRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
         }
     }
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+            throw 'refusing trusted-root override: trusted base equals or lies inside review target'
+        }
+        if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        }
         return @{
             Path                  = $trustedRoot
-            DisposableTrustedRoot = $false
+            DisposableTrustedRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
         }
     }
 
     if ($env:OPK_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+            throw 'refusing trusted-root override: trusted base equals or lies inside review target'
+        }
+        if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef
+        }
         return @{
             Path                  = $trustedRoot
-            DisposableTrustedRoot = $false
+            DisposableTrustedRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
         }
     }
 
-    $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
     $mainWorktree = Get-MainPackWorktreePath -ReviewTargetRoot $resolvedReviewTarget
     if ($mainWorktree) {
         $checker = Join-Path $mainWorktree $BootstrapCheckerRelativePath

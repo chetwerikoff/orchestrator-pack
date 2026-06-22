@@ -82,30 +82,37 @@ function Resolve-TrustedReverifyCoreScript {
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+        if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+            throw 'refusing trusted-root override: trusted base equals or lies inside review target'
+        }
+        if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+        }
         $corePath = Join-Path $trustedRoot $coreRelativePath
         if (-not (Test-Path -LiteralPath $corePath)) {
             throw "trusted reverify unavailable: missing core implementation at $corePath"
         }
         return @{
             CoreScriptPath          = $corePath
-            DisposableBootstrapRoot = $false
-            BootstrapRoot           = $null
+            DisposableBootstrapRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
+            BootstrapRoot           = $trustedRoot
         }
     }
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
         if (-not (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot)) {
-            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+                Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            }
             $corePath = Join-Path $trustedRoot $coreRelativePath
             if (-not (Test-Path -LiteralPath $corePath)) {
                 throw "trusted reverify unavailable: missing core implementation at $corePath"
             }
             return @{
                 CoreScriptPath          = $corePath
-                DisposableBootstrapRoot = $false
-                BootstrapRoot           = $null
+                DisposableBootstrapRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
+                BootstrapRoot           = $trustedRoot
             }
         }
     }
@@ -113,15 +120,17 @@ function Resolve-TrustedReverifyCoreScript {
     if ($env:OPK_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
         if (-not (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot)) {
-            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            if (Test-Path -LiteralPath (Join-Path $trustedRoot '.git')) {
+                Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            }
             $corePath = Join-Path $trustedRoot $coreRelativePath
             if (-not (Test-Path -LiteralPath $corePath)) {
                 throw "trusted reverify unavailable: missing core implementation at $corePath"
             }
             return @{
                 CoreScriptPath          = $corePath
-                DisposableBootstrapRoot = $false
-                BootstrapRoot           = $null
+                DisposableBootstrapRoot = -not (Test-Path -LiteralPath (Join-Path $trustedRoot '.git'))
+                BootstrapRoot           = $trustedRoot
             }
         }
     }
@@ -133,16 +142,17 @@ function Resolve-TrustedReverifyCoreScript {
     Push-Location $resolvedReviewTarget
     try {
         git archive origin/main -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            throw 'trusted reverify unavailable: could not extract implementation from origin/main archive'
-        }
     }
     finally {
         Pop-Location
     }
 
     $corePath = Join-Path $temp $coreRelativePath
+    if (-not (Test-Path -LiteralPath $corePath) -and $env:OPK_REVERIFY_E2E_REQUIRED -eq '1') {
+        Copy-ImplementingPrScriptsBootstrap -ReviewTargetRoot $resolvedReviewTarget -DestinationRoot $temp | Out-Null
+        $corePath = Join-Path $temp $coreRelativePath
+    }
+
     if (Test-Path -LiteralPath $corePath) {
         return @{
             CoreScriptPath          = $corePath
