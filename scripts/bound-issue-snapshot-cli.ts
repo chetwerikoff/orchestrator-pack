@@ -142,9 +142,10 @@ function runResolve(opts: SharedOptions): void {
     issueNumber,
   });
 
-  if (result.status === 'missing' && opts.require) {
+  if ((result.status === 'missing' || result.status === 'corrupted') && opts.require) {
+    const detail = result.status === 'corrupted' ? 'corrupted (body hash mismatch)' : 'missing';
     console.error(
-      `bound issue snapshot missing for PR #${prNumber} head ${prHeadSha} issue #${issueNumber}`,
+      `bound issue snapshot ${detail} for PR #${prNumber} head ${prHeadSha} issue #${issueNumber}`,
     );
     process.exit(2);
   }

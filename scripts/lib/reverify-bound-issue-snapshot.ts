@@ -27,11 +27,20 @@ export interface BoundIssueSnapshotCaptureResult {
 }
 
 export interface BoundIssueSnapshotResolveResult {
-  status: 'found' | 'missing';
+  status: 'found' | 'missing' | 'corrupted';
   snapshotPath: string | null;
   metadataPath: string | null;
   snapshotHash: string | null;
   metadata: BoundIssueSnapshotMetadata | null;
+}
+
+export function computeBoundIssueSnapshotHash(issueBody: string): string {
+  return `sha256:${hashIssueBodySnapshot(issueBody)}`;
+}
+
+function verifyBoundIssueSnapshotBody(snapshotPath: string, expectedHash: string): boolean {
+  const body = readFileSync(snapshotPath, 'utf8');
+  return computeBoundIssueSnapshotHash(body) === expectedHash;
 }
 
 function normalizeSha(sha: string): string {
@@ -115,7 +124,7 @@ export function captureBoundIssueSnapshot(input: {
     aoBaseDir: input.aoBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
-  const snapshotHash = `sha256:${hashIssueBodySnapshot(input.issueBody)}`;
+  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
   const metadata: BoundIssueSnapshotMetadata = {
     schemaVersion: BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION,
     projectId: input.projectId,
@@ -133,6 +142,11 @@ export function captureBoundIssueSnapshot(input: {
     if (existing.snapshotHash !== snapshotHash) {
       throw new Error(
         `bound issue snapshot already captured for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber} with different content`,
+      );
+    }
+    if (!existsSync(paths.snapshotPath) || !verifyBoundIssueSnapshotBody(paths.snapshotPath, snapshotHash)) {
+      throw new Error(
+        `bound issue snapshot body corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
       );
     }
   } else {
@@ -205,6 +219,16 @@ export function resolveBoundIssueSnapshot(input: {
   }
 
   const metadata = JSON.parse(readFileSync(paths.metadataPath, 'utf8')) as BoundIssueSnapshotMetadata;
+  if (!verifyBoundIssueSnapshotBody(paths.snapshotPath, metadata.snapshotHash)) {
+    return {
+      status: 'corrupted',
+      snapshotPath: null,
+      metadataPath: paths.metadataPath,
+      snapshotHash: metadata.snapshotHash,
+      metadata,
+    };
+  }
+
   return {
     status: 'found',
     snapshotPath: paths.snapshotPath,

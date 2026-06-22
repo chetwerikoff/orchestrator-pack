@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -79,5 +79,27 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     });
     expect(captures).toHaveLength(2);
     expect(captures.every((capture) => capture.created)).toBe(true);
+  });
+
+  it('rejects corrupted snapshot bodies on resolve', () => {
+    withStoreDir();
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      issueBody: '# Original body\n',
+    });
+    writeFileSync(captured.snapshotPath, '# Tampered body\n');
+
+    const resolved = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+    });
+    expect(resolved.status).toBe('corrupted');
+    expect(resolved.snapshotPath).toBeNull();
+    expect(resolved.metadata?.snapshotHash).toBe(captured.snapshotHash);
   });
 });
