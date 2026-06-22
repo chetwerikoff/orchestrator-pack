@@ -1374,7 +1374,7 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
   });
 
-  it('converges only SENT already-served ci-failure claim skips as delivered', () => {
+  it('converges already-served ci-failure claim skips for SENT and UNCERTAIN phases', () => {
     const body = readFileSync(
       path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
       'utf8',
@@ -1383,15 +1383,19 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(body).toMatch(/claimSkipReason -eq 'already_served'/);
     expect(body).toMatch(/claimPhase -eq 'UNCERTAIN'/);
     expect(body).toMatch(/prior nudge claim served; converging delivery/);
+    expect(body).toMatch(/prior nudge claim uncertain; converging terminal delivery/);
+    expect(body).toMatch(/DispatchOutcome 'dispatch_unknown'/);
     const alreadyServedIdx = body.indexOf("claimSkipReason -eq 'already_served'");
     const uncertainIdx = body.indexOf("claimPhase -eq 'UNCERTAIN'", alreadyServedIdx);
-    const sendFailedIdx = body.indexOf("DispatchOutcome 'send_failed'", uncertainIdx);
-    const releaseIntentIdx = body.indexOf("release-submit-intent", uncertainIdx);
+    const uncertainConvergeIdx = body.indexOf('converging terminal delivery', uncertainIdx);
+    const elseConvergeIdx = body.indexOf("prior nudge claim served; converging delivery", uncertainIdx);
+    const uncertainBlockEnd = body.indexOf('else {', uncertainIdx);
     expect(alreadyServedIdx).toBeGreaterThan(-1);
     expect(uncertainIdx).toBeGreaterThan(alreadyServedIdx);
-    expect(body.indexOf('return $false', uncertainIdx)).toBeGreaterThan(uncertainIdx);
-    expect(sendFailedIdx).toBeGreaterThan(uncertainIdx);
-    expect(releaseIntentIdx).toBeGreaterThan(uncertainIdx);
+    expect(uncertainConvergeIdx).toBeGreaterThan(uncertainIdx);
+    expect(elseConvergeIdx).toBeGreaterThan(uncertainIdx);
+    expect(body.indexOf("DispatchOutcome 'dispatch_unknown'", uncertainIdx)).toBeLessThan(uncertainBlockEnd);
+    expect(body.indexOf("release-submit-intent", uncertainIdx)).toBeGreaterThan(uncertainBlockEnd);
   });
 
   it('reuses pre-registered delivery id for ci-failure journaled sends', () => {
