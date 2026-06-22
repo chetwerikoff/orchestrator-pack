@@ -535,6 +535,7 @@ describe('scenario matrix cells', () => {
     expect(mergedTriggered[key].status).toBe('triggered');
     expect(resolveMergedWatchStatus('watching', 'discarded')).toBe('discarded');
     expect(resolveMergedWatchStatus('watching', 'expired')).toBe('expired');
+    expect(resolveMergedWatchStatus('expired', 'watching')).toBe('watching');
   });
 
   it('mergeWatchState keeps prior terminal status when concurrent seed is watching', () => {

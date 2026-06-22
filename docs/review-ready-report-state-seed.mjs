@@ -208,6 +208,32 @@ export function evaluatePollReportBinding(input) {
  * @param {string} [input.sessionId]
  * @param {string} [input.reportEventId]
  */
+/**
+ * Anchor first tip observation to head commit / pre-existing report time so a poller
+ * restart does not treat an already-accepted ready_for_review as predating the tip.
+ *
+ * @param {object} input
+ * @param {number} input.nowMs
+ * @param {number} [input.headCommittedAtMs]
+ * @param {Record<string, unknown> | null} [input.anchorReport]
+ */
+export function resolveInitialTipFirstObservedMs(input) {
+  const nowMs = Number(input.nowMs ?? Date.now());
+  let tipMs = nowMs;
+  const headCommittedAtMs = Number(input.headCommittedAtMs ?? 0);
+  if (Number.isFinite(headCommittedAtMs) && headCommittedAtMs > 0) {
+    tipMs = Math.min(tipMs, headCommittedAtMs);
+  }
+  const report = input.anchorReport ?? null;
+  if (isAcceptedReadyForReviewReport(report)) {
+    const reportMs = getReportTimestampMs(report);
+    if (reportMs > 0) {
+      tipMs = Math.min(tipMs, reportMs);
+    }
+  }
+  return tipMs;
+}
+
 export function updatePollBindingStateEntry(input) {
   const key = pollBindingStateKey({ repoSlug: input.repoSlug, prNumber: input.prNumber });
   const bindingByKey = { ...(input.bindingByKey ?? {}) };
@@ -224,11 +250,16 @@ export function updatePollBindingStateEntry(input) {
   let changed = false;
 
   if (!priorHeadSha || priorHeadSha !== currentHeadSha) {
+    const anchorReport = !priorHeadSha ? (input.latestAcceptedReport ?? null) : null;
     entry = {
       repoSlug: input.repoSlug,
       prNumber: Number(input.prNumber),
       currentHeadSha,
-      tipFirstObservedMs: nowMs,
+      tipFirstObservedMs: resolveInitialTipFirstObservedMs({
+        nowMs,
+        headCommittedAtMs: input.headCommittedAtMs,
+        anchorReport,
+      }),
       boundReportEventId: '',
       boundHeadSha: '',
       updatedAtMs: nowMs,
@@ -518,6 +549,7 @@ export function planReportStatePollTick(input) {
       prNumber,
       currentHeadSha: headSha,
       nowMs,
+      headCommittedAtMs,
       latestAcceptedReport: latestReport,
       sessionId,
       reportEventId: latestReport

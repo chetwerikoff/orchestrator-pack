@@ -9,6 +9,7 @@ export declare function resolveReportStateWatchEntryStatus(entry: Record<string,
 export declare function isPersistedReportStateSeedBlocking(dedupeKey: string, watchEntries?: Record<string, object>, nowMs?: number): boolean;
 export declare function pollBindingStateKey(input: Record<string, unknown>): string;
 export declare function isAcceptedReadyForReviewReport(report: Record<string, unknown>): boolean;
+export declare function resolveInitialTipFirstObservedMs(input: Record<string, unknown>): number;
 export declare function evaluatePollReportBinding(input: Record<string, unknown>): {
   binds: boolean;
   reason: string;

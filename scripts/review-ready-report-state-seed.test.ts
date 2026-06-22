@@ -15,6 +15,7 @@ import {
   resolveOpenPrForRepoAndNumber,
   reportStateSeedDedupeKey,
   updatePollBindingStateEntry,
+  resolveInitialTipFirstObservedMs,
   isPersistedReportStateSeedBlocking,
 } from '../docs/review-ready-report-state-seed.mjs';
 import {
@@ -209,6 +210,38 @@ describe('Issue #391 acceptance criteria', () => {
     ).toBe(false);
   });
 
+  it('reactivates expired watch entry on report-state reseed', () => {
+    const repoSlug = 'chetwerikoff/orchestrator-pack';
+    const headSha = '2847a9ddeadbeef1234567890abcdef12345678';
+    const watchKey = reportStateWatchEntryKey(repoSlug, 380, headSha);
+    const priorNow = 1_700_000_000_000;
+    const reseedNow = priorNow + 600_000;
+    const expired = seedWatchFromReportStatePoll({
+      candidates: [{
+        prNumber: 380,
+        headSha,
+        repoSlug,
+        sessionId: 'opk-165',
+        dedupeKey: 'prior',
+      }],
+      nowMs: priorNow,
+    }).watchEntries[watchKey] as Record<string, unknown>;
+    const reseed = seedWatchFromReportStatePoll({
+      candidates: [{
+        prNumber: 380,
+        headSha,
+        repoSlug,
+        sessionId: 'opk-165',
+        dedupeKey: 'reseed',
+      }],
+      existingWatches: { [watchKey]: { ...expired, status: 'expired' } },
+      nowMs: reseedNow,
+    });
+    const reactivated = reseed.watchEntries[watchKey] as Record<string, unknown>;
+    expect(reactivated?.status).toBe('watching');
+    expect(Number(reactivated?.windowExpiresMs)).toBeGreaterThan(reseedNow);
+  });
+
   it('isolates report-state watch keys per repository', () => {
     const headSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const shared = {
@@ -263,6 +296,51 @@ describe('Issue #391 acceptance criteria', () => {
     });
     expect(binding.binds).toBe(false);
     expect(binding.reason).toBe('report_predates_observed_tip');
+  });
+
+  it('binds accepted report present before first poll observation time', () => {
+    const headSha = 'dddddddddddddddddddddddddddddddddddddddd';
+    const reportMs = Date.parse('2026-06-22T02:21:00.000Z');
+    const nowMs = reportMs + 120_000;
+    const plan = planReportStatePollTick({
+      sessions: [{
+        name: 'opk-88-dead',
+        role: 'worker',
+        status: 'terminated',
+        prNumber: 88,
+        reports: [{
+          timestamp: new Date(reportMs).toISOString(),
+          reportState: 'ready_for_review',
+          accepted: true,
+          prNumber: 88,
+        }],
+      }],
+      openPrs: [{
+        number: 88,
+        headRefOid: headSha,
+        headCommittedAt: '2026-06-22T02:20:00.000Z',
+        baseRefName: 'main',
+      }],
+      reviewRuns: [],
+      bindingByKey: {},
+      handoffRecords: {},
+      terminalClaimKeys: [],
+      existingSeedKeys: [],
+      supervisedProject: 'orchestrator-pack',
+      fallbackRepoSlug: 'chetwerikoff/orchestrator-pack',
+      nowMs,
+      deferredScanKeys: [],
+    });
+    expect(plan.candidates).toHaveLength(1);
+    expect(resolveInitialTipFirstObservedMs({
+      nowMs,
+      headCommittedAtMs: Date.parse('2026-06-22T02:20:00.000Z'),
+      anchorReport: {
+        timestamp: new Date(reportMs).toISOString(),
+        reportState: 'ready_for_review',
+        accepted: true,
+      },
+    })).toBeLessThanOrEqual(reportMs);
   });
 
   it('terminated session row is not dropped', () => {

@@ -203,6 +203,9 @@ const TERMINAL_WATCH_STATUSES = new Set(['triggered', 'discarded', 'expired']);
 export function resolveMergedWatchStatus(priorStatus, incomingStatus) {
   const prior = String(priorStatus ?? '').trim() || 'watching';
   const incoming = String(incomingStatus ?? '').trim() || 'watching';
+  if (incoming === 'watching' && prior === 'expired') {
+    return 'watching';
+  }
   if (TERMINAL_WATCH_STATUSES.has(incoming)) {
     return incoming;
   }
@@ -228,17 +231,24 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
       merged[key] = entry;
       continue;
     }
+    const mergedStatus = resolveMergedWatchStatus(prior.status, entry.status);
+    const reactivated =
+      String(prior.status ?? '').trim() === 'expired' && mergedStatus === 'watching';
     merged[key] = {
       ...prior,
       ...entry,
-      seedMs: Math.min(Number(prior.seedMs ?? nowMs), Number(entry.seedMs ?? nowMs)),
-      windowExpiresMs: Math.max(
-        Number(prior.windowExpiresMs ?? 0),
-        Number(entry.windowExpiresMs ?? 0),
-      ),
+      seedMs: reactivated
+        ? Number(entry.seedMs ?? nowMs)
+        : Math.min(Number(prior.seedMs ?? nowMs), Number(entry.seedMs ?? nowMs)),
+      windowExpiresMs: reactivated
+        ? Number(entry.windowExpiresMs ?? 0)
+        : Math.max(
+            Number(prior.windowExpiresMs ?? 0),
+            Number(entry.windowExpiresMs ?? 0),
+          ),
       lastObservedReadyMs:
         entry.lastObservedReadyMs ?? prior.lastObservedReadyMs ?? null,
-      status: resolveMergedWatchStatus(prior.status, entry.status),
+      status: mergedStatus,
     };
   }
   return pruneExpiredWatchEntries(merged, nowMs);
