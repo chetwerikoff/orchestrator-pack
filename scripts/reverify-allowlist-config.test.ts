@@ -25,4 +25,11 @@ describe('reverify allowlist config (Issue #376)', () => {
     expect(isCommandSafe('npm test -- reverify', packRoot)).toBe(true);
     expect(isCommandSafe('npm test -- contract-evidence-reverify', packRoot)).toBe(true);
   });
+
+  it('maps npm test -- reverify to divergent NEW-row independent producer (AC14)', () => {
+    const config = loadReverifyAllowlistConfig();
+    expect(config.npmProofIndependentCommands['npm test -- reverify']).toBe(
+      'REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+    );
+  });
 });

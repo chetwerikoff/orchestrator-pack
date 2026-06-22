@@ -127,6 +127,10 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
     packRoot,
     '-FixtureDir',
     'tests/fixtures/contract-evidence-reverify/e2e',
+    '-ManifestPath',
+    'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
+    '-ExplicitIssue',
+    '376',
   ];
   if (aoSessionId) {
     args.push('-AoSessionId', aoSessionId);
@@ -141,8 +145,63 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
   });
 }
 
+function parseAoReviewRunJson(stdout) {
+  const jsonStart = stdout.indexOf('{');
+  if (jsonStart < 0) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(stdout.slice(jsonStart));
+    return payload?.run ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function aoReviewExecuteFailed({ aoProc, run }) {
+  if (aoProc.status !== 0) {
+    return true;
+  }
+  if (!run) {
+    return true;
+  }
+  if (run.status === 'failed') {
+    return true;
+  }
+  if (typeof run.terminationReason === 'string' && /Command failed:/i.test(run.terminationReason)) {
+    return true;
+  }
+  return false;
+}
+
 function runAoReviewExecute(sessionId) {
-  return runReviewerReverifyCommand({ aoSessionId: sessionId });
+  const scriptPath = path.join(packRoot, 'scripts/run-reviewer-reverify-ao-review-command.ps1');
+  const mechanicalCommand = [
+    'pwsh',
+    '-NoProfile',
+    '-File',
+    scriptPath,
+    '-RepoRoot',
+    packRoot,
+    '-FixtureDir',
+    'tests/fixtures/contract-evidence-reverify/e2e',
+    '-ManifestPath',
+    'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
+    '-ExplicitIssue',
+    '376',
+  ].join(' ');
+
+  const aoProc = spawnSync(
+    'ao',
+    ['review', 'run', sessionId, '--execute', '--command', mechanicalCommand, '--json'],
+    {
+      cwd: packRoot,
+      encoding: 'utf8',
+      env: process.env,
+    },
+  );
+  const run = parseAoReviewRunJson(aoProc.stdout ?? '');
+  return { aoProc, run };
 }
 
 function finalizeReviewerSummary(output, summary) {
@@ -220,14 +279,26 @@ if (!sessionId) {
   process.exit(1);
 }
 
-const aoProc = runAoReviewExecute(sessionId);
-output.viaAoReviewExecute = aoProc.status === 0;
+const { aoProc, run: aoReviewRun } = runAoReviewExecute(sessionId);
+output.viaAoReviewExecute = !aoReviewExecuteFailed({ aoProc, run: aoReviewRun });
 
 if (!output.viaAoReviewExecute) {
-  output.error = `AO --execute reviewer path failed (exit ${aoProc.status ?? 'null'})`;
+  const detail = aoReviewRun?.terminationReason
+    ?? aoReviewRun?.status
+    ?? `exit ${aoProc.status ?? 'null'}`;
+  output.error = `AO --execute reviewer path failed (${detail})`;
   output.summary = (aoProc.stdout ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }
 
-finalizeReviewerSummary(output, (aoProc.stdout ?? '').trim());
+const mechanicalProc = runReviewerReverifyCommand();
+output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
+if (!output.viaMechanicalReviewerCommand) {
+  output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
+  output.summary = (mechanicalProc.stdout ?? mechanicalProc.stderr ?? '').trim();
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(1);
+}
+
+finalizeReviewerSummary(output, (mechanicalProc.stdout ?? '').trim());

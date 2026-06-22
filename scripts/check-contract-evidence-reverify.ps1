@@ -78,6 +78,58 @@ function Test-LiveReverifyE2eConfigured {
     return $false
 }
 
+function Test-ReverifyLauncherInCheckout {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    return Test-Path -LiteralPath (Join-Path $Root 'scripts/launch-contract-evidence-reverify.ps1')
+}
+
+function Invoke-Ac13ReviewerFlowE2e {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+        [System.Collections.Generic.List[string]]$Failures
+    )
+
+    if (-not (Test-ReverifyLauncherInCheckout -Root $Root)) {
+        $Failures.Add('AC13 blocked: launch-contract-evidence-reverify.ps1 missing from checkout')
+        return
+    }
+
+    Initialize-ReverifyCiTrustedPackRoot -Root $Root
+    $env:OPK_REVERIFY_E2E_REQUIRED = '1'
+
+    if (Test-LiveReverifyE2eConfigured) {
+        & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
+        if ($LASTEXITCODE -ne 0) {
+            $Failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed (AC#13 reviewer-flow e2e; verify OPK_REVERIFY_E2E_LIVE and OPK_REVERIFY_E2E_SESSION)')
+        }
+        return
+    }
+
+    if (Get-Command ao -ErrorAction SilentlyContinue) {
+        $env:OPK_REVERIFY_E2E_LIVE = '1'
+        if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_ALLOW_SPAWN)) {
+            $env:OPK_REVERIFY_E2E_ALLOW_SPAWN = '1'
+        }
+        & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
+        if ($LASTEXITCODE -ne 0) {
+            $Failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed (AC#13 reviewer-flow e2e with ao on PATH)')
+        }
+        return
+    }
+
+    if ($env:OPK_REVERIFY_E2E_ALLOW_SKIP -eq '1' -and $env:GITHUB_ACTIONS -ne 'true') {
+        Write-Warning 'AC13 live reviewer-flow e2e skipped locally (OPK_REVERIFY_E2E_ALLOW_SKIP=1); ao CLI not on PATH'
+        return
+    }
+
+    $Failures.Add('AC13 reviewer-flow e2e required: launch-contract-evidence-reverify.ps1 is present but ao review --execute was not exercised (configure OPK_REVERIFY_E2E_LIVE/SESSION or install ao on PATH)')
+}
+
 $requiredPaths = @(
     (Join-Path $Root 'prompts/agent_rules.md'),
     (Join-Path $Root 'prompts/codex_review_prompt.md'),
@@ -135,32 +187,7 @@ try {
     }
 
     if ($failures.Count -eq 0) {
-        Initialize-ReverifyCiTrustedPackRoot -Root $Root
-
-        $launcherOnOriginMain = $false
-        Push-Location $Root
-        try {
-            git cat-file -e origin/main:scripts/launch-contract-evidence-reverify.ps1 2>$null
-            $launcherOnOriginMain = $LASTEXITCODE -eq 0
-        }
-        finally {
-            Pop-Location
-        }
-
-        if ($launcherOnOriginMain) {
-            if (Test-LiveReverifyE2eConfigured) {
-                & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
-                if ($LASTEXITCODE -ne 0) {
-                    $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed (AC#13 reviewer-flow e2e; verify OPK_REVERIFY_E2E_LIVE and OPK_REVERIFY_E2E_SESSION)')
-                }
-            }
-            else {
-                Write-Warning 'AC13 live reviewer-flow e2e skipped (opt-in): set OPK_REVERIFY_E2E_LIVE=1 and OPK_REVERIFY_E2E_SESSION to exercise ao review --execute'
-            }
-        }
-        else {
-            Write-Warning 'AC13 e2e deferred: launch-contract-evidence-reverify.ps1 is not on origin/main yet'
-        }
+        Invoke-Ac13ReviewerFlowE2e -Root $Root -Failures $failures
     }
 }
 finally {

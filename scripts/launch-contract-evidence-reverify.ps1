@@ -80,6 +80,18 @@ function Resolve-TrustedReverifyCoreScript {
         'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
     )
 
+    $launcherBootstrapCorePath = Join-Path $PSScriptRoot 'lib/Contract-EvidenceReverify-Core.ps1'
+    if (Test-Path -LiteralPath $launcherBootstrapCorePath) {
+        $launcherBootstrapRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+        if (-not (Test-PathInsideReviewTarget -CandidatePath $launcherBootstrapRoot -ReviewTargetRoot $ReviewTargetRoot)) {
+            return @{
+                CoreScriptPath          = $launcherBootstrapCorePath
+                DisposableBootstrapRoot = $true
+                BootstrapRoot           = $launcherBootstrapRoot
+            }
+        }
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
         Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
@@ -96,59 +108,67 @@ function Resolve-TrustedReverifyCoreScript {
 
     if ($env:AO_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:AO_TRUSTED_PACK_ROOT).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
-        $corePath = Join-Path $trustedRoot $coreRelativePath
-        if (-not (Test-Path -LiteralPath $corePath)) {
-            throw "trusted reverify unavailable: missing core implementation at $corePath"
-        }
-        return @{
-            CoreScriptPath          = $corePath
-            DisposableBootstrapRoot = $false
-            BootstrapRoot           = $null
+        if (-not (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot)) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            $corePath = Join-Path $trustedRoot $coreRelativePath
+            if (-not (Test-Path -LiteralPath $corePath)) {
+                throw "trusted reverify unavailable: missing core implementation at $corePath"
+            }
+            return @{
+                CoreScriptPath          = $corePath
+                DisposableBootstrapRoot = $false
+                BootstrapRoot           = $null
+            }
         }
     }
 
     if ($env:OPK_TRUSTED_PACK_ROOT) {
         $trustedRoot = (Resolve-Path -LiteralPath $env:OPK_TRUSTED_PACK_ROOT).Path
-        Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
-        $corePath = Join-Path $trustedRoot $coreRelativePath
-        if (-not (Test-Path -LiteralPath $corePath)) {
-            throw "trusted reverify unavailable: missing core implementation at $corePath"
-        }
-        return @{
-            CoreScriptPath          = $corePath
-            DisposableBootstrapRoot = $false
-            BootstrapRoot           = $null
+        if (-not (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot)) {
+            Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
+            $corePath = Join-Path $trustedRoot $coreRelativePath
+            if (-not (Test-Path -LiteralPath $corePath)) {
+                throw "trusted reverify unavailable: missing core implementation at $corePath"
+            }
+            return @{
+                CoreScriptPath          = $corePath
+                DisposableBootstrapRoot = $false
+                BootstrapRoot           = $null
+            }
         }
     }
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-reverify-{0}" -f ([Guid]::NewGuid().ToString('N')))
-    New-Item -ItemType Directory -Path $temp -Force | Out-Null
+    $archiveRefs = @('origin/main', 'HEAD')
+    foreach ($archiveRef in $archiveRefs) {
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-reverify-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-    Push-Location $resolvedReviewTarget
-    try {
-        git archive origin/main -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            throw 'trusted reverify unavailable: could not extract implementation from origin/main archive'
+        Push-Location $resolvedReviewTarget
+        try {
+            git archive $archiveRef -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+                continue
+            }
         }
-    }
-    finally {
-        Pop-Location
-    }
-
-    $corePath = Join-Path $temp $coreRelativePath
-    if (Test-Path -LiteralPath $corePath) {
-        return @{
-            CoreScriptPath          = $corePath
-            DisposableBootstrapRoot = $true
-            BootstrapRoot           = $temp
+        finally {
+            Pop-Location
         }
+
+        $corePath = Join-Path $temp $coreRelativePath
+        if (Test-Path -LiteralPath $corePath) {
+            return @{
+                CoreScriptPath          = $corePath
+                DisposableBootstrapRoot = $true
+                BootstrapRoot           = $temp
+            }
+        }
+
+        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    throw "trusted reverify unavailable: origin/main archive missing $coreRelativePath"
+    throw "trusted reverify unavailable: could not extract implementation from origin/main or HEAD archive"
 }
 
 $reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path

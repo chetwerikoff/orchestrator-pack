@@ -33,7 +33,7 @@
     "tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs"
   ],
   "npmProofIndependentCommands": {
-    "npm test -- reverify": "node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs",
+    "npm test -- reverify": "REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs",
     "npm test -- contract-evidence-reverify": "node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs"
   },
   "defaultTimeoutMs": 8000,

@@ -73,20 +73,21 @@ detail: $Detail
         $scriptBootstrap = Import-TrustedReverifyBootstrap -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
         $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
-        if (-not $disposableScriptBootstrapRoot) {
-            . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
-        }
+        . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
 
         if ($disposableScriptBootstrapRoot) {
-            $trustedRoot = $scriptBootstrap.BootstrapRoot
-            $runner = Join-Path $trustedRoot 'scripts/invoke-contract-evidence-reverify.ts'
-            if (-not (Test-Path -LiteralPath $runner)) {
-                throw "missing trusted runner at $runner"
+            try {
+                $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot
             }
-            $trusted = @{
-                TrustedBaseRoot       = $trustedRoot
-                RunnerPath            = $runner
-                DisposableTrustedRoot = $true
+            catch {
+                if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {
+                    if ($Summary -or $Text) {
+                        Write-TrustedRunnerUnavailableSummary -Detail $_.Exception.Message
+                        $global:LASTEXITCODE = 0
+                        return
+                    }
+                }
+                throw
             }
         }
         else {

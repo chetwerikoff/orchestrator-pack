@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     Split-Path -Parent $PSScriptRoot
 } else {
@@ -19,7 +20,7 @@ $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 }
 
 $e2ePrNumber = 9380
-$e2eHeadSha = 'e2e00000000000000000000000000000000000001'
+$e2eHeadSha = 'e2e0000000000000000000000000000000000000'
 $e2eIssueNumber = $ExplicitIssue
 $fixtureRoot = if ([System.IO.Path]::IsPathRooted($FixtureDir)) {
     $FixtureDir
@@ -105,6 +106,9 @@ function Resolve-TrustedReverifyLauncherPath {
             continue
         }
         $trustedRoot = (Resolve-Path -LiteralPath $candidateRoot).Path
+        if (Test-PathInsideReviewTarget -CandidatePath $trustedRoot -ReviewTargetRoot $ReviewTargetRoot) {
+            continue
+        }
         $launcherPath = Join-Path $trustedRoot $launcherRelativePath
         if (Test-Path -LiteralPath $launcherPath) {
             return @{
@@ -117,34 +121,53 @@ function Resolve-TrustedReverifyLauncherPath {
     }
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
-    New-Item -ItemType Directory -Path $temp -Force | Out-Null
+    $archiveRefs = @('origin/main', 'HEAD')
+    foreach ($archiveRef in $archiveRefs) {
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-launcher-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-    Push-Location $resolvedReviewTarget
-    try {
-        git archive origin/main -- @bootstrapArchivePaths 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        Push-Location $resolvedReviewTarget
+        try {
+            git archive $archiveRef -- @bootstrapArchivePaths 2>$null | tar -x -C $temp 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+                continue
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $launcherPath = Join-Path $temp $launcherRelativePath
+        $corePath = Join-Path $temp $coreRelativePath
+        if (-not (Test-Path -LiteralPath $launcherPath) -or -not (Test-Path -LiteralPath $corePath)) {
             Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            return $null
+            continue
+        }
+
+        if ($archiveRef -eq 'HEAD') {
+            foreach ($relativePath in $bootstrapArchivePaths) {
+                $sourcePath = Join-Path $resolvedReviewTarget $relativePath
+                if (Test-Path -LiteralPath $sourcePath) {
+                    $destinationPath = Join-Path $temp $relativePath
+                    $destinationParent = Split-Path -Parent $destinationPath
+                    if (-not (Test-Path -LiteralPath $destinationParent)) {
+                        New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+                    }
+                    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+                }
+            }
+        }
+
+        return @{
+            LauncherPath            = $launcherPath
+            TrustedBaseRoot         = $temp
+            DisposableBootstrapRoot = $true
+            BootstrapRoot           = $temp
         }
     }
-    finally {
-        Pop-Location
-    }
 
-    $launcherPath = Join-Path $temp $launcherRelativePath
-    $corePath = Join-Path $temp $coreRelativePath
-    if (-not (Test-Path -LiteralPath $launcherPath) -or -not (Test-Path -LiteralPath $corePath)) {
-        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-        return $null
-    }
-
-    return @{
-        LauncherPath            = $launcherPath
-        TrustedBaseRoot         = $temp
-        DisposableBootstrapRoot = $true
-        BootstrapRoot           = $temp
-    }
+    return $null
 }
 
 $resolvedLauncher = $null

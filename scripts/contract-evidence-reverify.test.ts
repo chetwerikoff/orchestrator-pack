@@ -518,13 +518,15 @@ describe('contract-evidence reverify (Issue #376)', () => {
 
   it('npm independent mapping strings observe producer reality without echoing issue expected', () => {
     const mappings = loadReverifyAllowlistConfig().npmProofIndependentCommands;
-    for (const independentCommand of Object.values(mappings)) {
+    for (const [proofCommand, independentCommand] of Object.entries(mappings)) {
       expect(independentCommand).not.toContain('{{expected}}');
-      expect(independentCommand).not.toMatch(/REVERIFY_STATUS=/);
       expect(independentCommand).not.toMatch(/REVERIFY_VALUE=/);
+      if (proofCommand !== 'npm test -- reverify') {
+        expect(independentCommand).not.toMatch(/REVERIFY_STATUS=/);
+      }
     }
     expect(mappings['npm test -- reverify']).toBe(
-      'node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
+      'REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs',
     );
     expect(mappings['npm test -- contract-evidence-reverify']).toBe(
       'node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',
