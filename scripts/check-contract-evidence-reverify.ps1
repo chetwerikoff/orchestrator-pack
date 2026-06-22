@@ -19,11 +19,12 @@ $requiredPaths = @(
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ts'),
     (Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts'),
     (Join-Path $Root 'scripts/contract-evidence-reverify-production-commands.json'),
+    (Join-Path $Root 'scripts/bound-issue-snapshot-cli.ts'),
     (Join-Path $Root 'scripts/resolve-bound-issue-snapshot.ps1'),
-    (Join-Path $Root 'scripts/resolve-bound-issue-snapshot.ts'),
-    (Join-Path $Root 'scripts/capture-bound-issue-snapshot.ts'),
     (Join-Path $Root 'scripts/lib/reverify-bound-issue-snapshot.ts'),
-    (Join-Path $Root 'scripts/lib/reverify-allowlist-config.ts')
+    (Join-Path $Root 'scripts/lib/reverify-allowlist-config.ts'),
+    (Join-Path $Root 'scripts/lib/reviewer-ts-cli.ts'),
+    (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ps1')
 )
 Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Failures $failures
 

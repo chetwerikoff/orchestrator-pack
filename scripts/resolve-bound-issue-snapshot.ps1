@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $packRoot = Split-Path -Parent $PSScriptRoot
-$runner = Join-Path $PSScriptRoot 'resolve-bound-issue-snapshot.ts'
+$runner = Join-Path $PSScriptRoot 'bound-issue-snapshot-cli.ts'
 
 if (-not (Test-Path -LiteralPath $runner)) {
     Write-Error "missing $runner"
@@ -24,6 +24,7 @@ if (-not (Test-Path -LiteralPath $runner)) {
 
 $args = @(
     $runner,
+    'resolve',
     '--pr-number', [string]$PrNumber,
     '--pr-head-sha', $PrHeadSha,
     '--issue-number', [string]$IssueNumber,

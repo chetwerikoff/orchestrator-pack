@@ -5,6 +5,7 @@ import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
 } from './lib/contract-evidence-reverify.js';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
+import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
 
 function usage(): string {
   return [
@@ -155,11 +156,6 @@ function main() {
   process.exit(0);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  try {
-    main();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
-  }
+if (isDirectCliExecution(import.meta.url, process.argv[1])) {
+  runReviewerTsCli(main);
 }
