@@ -22,12 +22,12 @@ selector: $
 expected: match
 
 binding-id: orchestrator-pack-scripts:scalar:value2
-binding: e2e divergent row
+binding: e2e second verified row
 producer: orchestrator-pack-scripts
 binding-type: structured
-evidence: capture@structured/divergent-record
+evidence: capture@structured/match
 selector: $
-expected: expected
+expected: match
 ```
 
 ## Acceptance criteria
