@@ -327,13 +327,27 @@ function Invoke-PlannedCiGreenWakeSend {
     if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
     $sendSessionId = [string]$targetResolution.ownerSessionId
     if (-not $sendSessionId) { $sendSessionId = $sessionId }
+    $ciGreenMessage = [string]$Action.message
     $tupleKey = "$([int]$Action.prNumber)|$cycleKey|ci-green-handoff|$workerTarget"
     $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'ci-green-handoff' `
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
-        -TupleKey $tupleKey -Surface 'ci-green-wake-reconcile' -ProjectId $ProjectId
+        -TupleKey $tupleKey -Surface 'ci-green-wake-reconcile' -ProjectId $ProjectId -Message $ciGreenMessage
     if (-not $claim.acquired) {
         Write-CiGreenWakeLog "nudge suppressed by claim gate PR #$($Action.prNumber): $($claim.reason)"
-        return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
+        return @{
+            sent         = $false
+            reason       = [string]$claim.reason
+            claimSkipped = $true
+            escalate     = [bool]$claim.escalate
+            diagnosis    = [string]$claim.diagnosis
+        }
+    }
+    $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $ciGreenMessage }
+    $messageContentHash = [string]$messageHashResult.messageContentHash
+    $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
+    if (-not $hashPersist.ok) {
+        Write-CiGreenWakeLog "message hash persist failed PR #$($Action.prNumber): $($hashPersist.reason)"
+        return @{ sent = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason }
     }
     $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
 
@@ -342,7 +356,7 @@ function Invoke-PlannedCiGreenWakeSend {
     Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'side_effect'
     $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        [string]$Action.message | pwsh -NoProfile -File $journaledScript $sendSessionId `
+        $ciGreenMessage | pwsh -NoProfile -File $journaledScript $sendSessionId `
             -Source 'pack-send' -SourceKey "ci-green:$([string]$Action.transitionId)" `
             -ClaimToken $claimToken -GatedNudge -NoWait
         if ($LASTEXITCODE -ne 0) {

@@ -808,6 +808,16 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     );
   });
 
+  it('persists CI-green message hashes before journaled send', () => {
+    const ciGreen = readFileSync(
+      path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+      'utf8',
+    );
+    expect(ciGreen).toMatch(/-Message \$ciGreenMessage/);
+    expect(ciGreen).toMatch(/Set-WorkerNudgeClaimMessageContentHash/);
+    expect(ciGreen).toMatch(/hashMessageContent/);
+  });
+
   it('passes GatedNudge marker from ci-green wake journaled send', () => {
     const ciGreen = readFileSync(
       path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
