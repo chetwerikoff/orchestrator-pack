@@ -6,7 +6,7 @@
   "baseline": {
     "commit_sha": "cd3816888545df3b1fed41b8f23fa4f91de2124c",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:64ebcf154464f7f1668805053fc2bee5cd74b8f2cdcc67f34e7485aa746996e7"
+    "active_scope_hash": "sha256:d55bdbef2ff85e7c5b77f7a239bf73058b8448ee11945fe508785f7f848b3e4e"
   },
   "declared_paths": [
     "docs/review-ready-report-state-seed.mjs",
@@ -31,10 +31,11 @@
     "scripts/verify.ps1",
     "prompts/agent_rules.md",
     "docs/migration_notes.md",
-    "docs/orchestrator-wake-runbook.md",
-    "tests/fixtures/review-ready-report-state-seed"
+    "docs/orchestrator-wake-runbook.md"
   ],
-  "declared_globs": [],
+  "declared_globs": [
+    "tests/fixtures/review-ready-report-state-seed/**"
+  ],
   "amendments": [],
   "supersedes": null
 }
