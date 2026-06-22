@@ -22,10 +22,10 @@ selector: $
 expected: match
 
 binding-id: orchestrator-pack-scripts:scalar:value2
-binding: e2e second verified row
+binding: e2e runtime-file verified row
 producer: orchestrator-pack-scripts
 binding-type: structured
-evidence: capture@structured/match
+evidence: capture@structured/runtime-file-match
 selector: $
 expected: match
 ```
