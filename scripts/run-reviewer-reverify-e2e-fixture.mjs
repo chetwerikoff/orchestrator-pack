@@ -55,6 +55,10 @@ function summaryHasEvaluatedRowEntries(text) {
   return /^- #\d+\s+status=/m.test(text);
 }
 
+function summaryIncludesLiveRowStatuses(text) {
+  return /status=verified\b/.test(text) && /status=divergent\b/.test(text);
+}
+
 function isCheckpoint2ReviewerSummary(text) {
   const trimmed = text.trim();
   return trimmed.includes('## Checkpoint-2 contract-evidence re-verification')
@@ -206,6 +210,7 @@ function finalizeReviewerSummary(output, summary) {
   output.summaryRunOutcomeRowsEvaluated = summaryRunOutcomeRowsEvaluated(summary);
   output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
   output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
+  output.summaryIncludesLiveRowStatuses = summaryIncludesLiveRowStatuses(summary);
   output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
 
   const ok =
@@ -214,8 +219,10 @@ function finalizeReviewerSummary(output, summary) {
     && output.summaryRunOutcomeRowsEvaluated
     && output.summaryIncludesRows
     && output.summaryIncludesNeverBlocks
+    && output.summaryIncludesLiveRowStatuses
     && output.reviewerOutputIsCheckpoint2Summary
-    && !summary.includes('reverify-e2e-probe');
+    && !summary.includes('reverify-e2e-probe')
+    && !summary.includes('reason=untrusted-pr-modified');
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(ok ? 0 : 1);
@@ -235,6 +242,7 @@ const output = {
   summaryIncludesRows: false,
   summaryRunOutcomeRowsEvaluated: false,
   summaryIncludesNeverBlocks: false,
+  summaryIncludesLiveRowStatuses: false,
   reviewerOutputIsCheckpoint2Summary: false,
   summary: '',
   error: null,
