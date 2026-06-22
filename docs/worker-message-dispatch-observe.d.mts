@@ -111,6 +111,14 @@ export declare function mergeDeliveryRecords(input: {
   reviewRuns?: Array<Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
   nowMs: number;
+}): DeliveryRecord[];
+
+export declare function observeReactionDeliveries(input: {
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
+  nowMs: number;
 }): {
   deliveries: DeliveryRecord[];
   reactionAudits: Array<Record<string, unknown>>;

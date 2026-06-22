@@ -79,7 +79,7 @@ if ($reconcileText -match "report-stale' = 'Agent report is stale") {
     exit 1
 }
 
-$reactionConfigCli = Join-Path $Root 'docs/reaction-config-messages.mjs'
+$reactionConfigCli = Join-Path $Root 'scripts/reaction-config-messages.mjs'
 if (-not (Test-Path -LiteralPath $reactionConfigCli -PathType Leaf)) {
     Write-Host 'Missing docs/reaction-config-messages.mjs'
     exit 1

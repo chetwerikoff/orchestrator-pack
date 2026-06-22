@@ -284,7 +284,6 @@ export declare function planWorkerMessageSubmitActions(input: {
   tracking?: SubmitTrackingState;
   floodActiveSessions?: Record<string, boolean>;
   reactionMessages?: Record<string, string>;
-  reactionConfigUnavailable?: boolean;
   nowMs: number;
   config?: Record<string, unknown>;
 }): {
@@ -293,7 +292,6 @@ export declare function planWorkerMessageSubmitActions(input: {
   deliveryCount: number;
   dispatchJournal?: Record<string, Record<string, unknown>>;
   overCapacity?: boolean;
-  reactionAudits?: Array<Record<string, unknown>>;
 };
 
 export declare function evaluateConcurrentSubmitClaim(input: {

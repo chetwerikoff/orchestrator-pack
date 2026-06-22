@@ -384,15 +384,12 @@ function Invoke-SubmitReconcileTick {
         $now = if ($fixture.nowMs) { [long]$fixture.nowMs } else { $NowMs }
         $tickConfig = if ($fixture.config) { $fixture.config } else { @{} }
         $reactionMessages = @{}
-        $reactionConfigUnavailable = $false
         if ($fixture.reactionMessages) {
             foreach ($prop in $fixture.reactionMessages.PSObject.Properties) {
                 $reactionMessages[$prop.Name] = [string]$prop.Value
             }
         }
-        if ($fixture.reactionConfigUnavailable) {
-            $reactionConfigUnavailable = [bool]$fixture.reactionConfigUnavailable
-        }
+        $reactionConfigUnavailable = [bool]$fixture.reactionConfigUnavailable
         if ($fixture.floodActiveSessions) {
             $floodActiveSessions = @{}
             foreach ($prop in $fixture.floodActiveSessions.PSObject.Properties) {
@@ -426,15 +423,31 @@ function Invoke-SubmitReconcileTick {
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
     }
 
+    if ($reactionConfigUnavailable) {
+        $reactionEvents = @($aoEvents | Where-Object {
+                $_.kind -eq 'reaction.action_succeeded' -and
+                $_.data -and $_.data.action -eq 'send-to-agent'
+            })
+        if ($reactionEvents.Count -gt 0) {
+            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$($reactionEvents.Count)"
+            return @{
+                submitted = 0
+                escalated = 0
+                noop      = 0
+                deferred  = 1
+                tracking  = $tracking
+            }
+        }
+    }
+
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
         -Payload @{
             sessions            = @($sessions)
             aoEvents            = @($aoEvents)
             reviewRuns          = @($reviewRuns)
             dispatchJournal     = $dispatchJournal
-            reactionMessages         = $reactionMessages
-            reactionConfigUnavailable = $reactionConfigUnavailable
-            tracking                 = $tracking
+            reactionMessages    = $reactionMessages
+            tracking            = $tracking
             floodActiveSessions = $floodActiveSessions
             nowMs               = $now
             config              = $tickConfig
@@ -452,6 +465,22 @@ function Invoke-SubmitReconcileTick {
             if (-not $compactResult.ok) {
                 Write-SubmitReconcileLog "dispatch journal compaction skipped: reason=$($compactResult.reason)"
             }
+        }
+    }
+
+    $reactionObservation = Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs') -Subcommand 'observe' `
+        -Payload @{
+            aoEvents         = @($aoEvents)
+            dispatchJournal  = $dispatchJournal
+            reviewRuns       = @($reviewRuns)
+            reactionMessages = $reactionMessages
+            nowMs            = $now
+        } -Label $Script:ReconcileLogPrefix -JsonDepth 10
+    foreach ($audit in @($reactionObservation.reactionAudits)) {
+        $reactionKey = [string]$audit.reactionKey
+        $reason = [string]$audit.reason
+        if ($reason) {
+            Write-SubmitReconcileLog "reaction observation: reason=$reason reactionKey=$reactionKey"
         }
     }
 

@@ -404,10 +404,22 @@ export function mergeDeliveryRecords(input) {
       byId.set(id, row);
     }
   }
+  return [...byId.values()].sort(
+    (a, b) => Number(a.deliveredAtMs) - Number(b.deliveredAtMs),
+  );
+}
+
+/**
+ * @param {object} input
+ */
+export function observeReactionDeliveries(input) {
+  const deliveries = mergeDeliveryRecords(input);
+  const reactionObservation = extractReactionDeliveries(
+    toArray(input.aoEvents),
+    input.reactionMessages ?? {},
+  );
   return {
-    deliveries: [...byId.values()].sort(
-      (a, b) => Number(a.deliveredAtMs) - Number(b.deliveredAtMs),
-    ),
+    deliveries,
     reactionAudits: reactionObservation.audits,
   };
 }
@@ -600,6 +612,10 @@ runStdinJsonCli('worker-message-dispatch-observe.mjs', {
   merge() {
     const payload = readStdinJson();
     return mergeDeliveryRecords(payload);
+  },
+  observe() {
+    const payload = readStdinJson();
+    return observeReactionDeliveries(payload);
   },
   classify() {
     const payload = readStdinJson();

@@ -19,7 +19,7 @@ function Get-ReactionMessagesFromYaml {
         $YamlPath = Resolve-PackOrchestratorYamlPath -PackRoot $PackRoot
     }
 
-    $cli = Join-Path $PackRoot 'docs/reaction-config-messages.mjs'
+    $cli = Join-Path $PackRoot 'scripts/reaction-config-messages.mjs'
     if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
         return @{
             ok       = $false

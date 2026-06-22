@@ -8,8 +8,8 @@ import {
   deriveMessageShape,
   DELIVERY_PATH_PENDING_DRAFT,
   DELIVERY_PATH_SELF_SUBMITTED,
-} from './worker-message-dispatch-observe.mjs';
-import { printJson, resolveMechanicalCliArg } from './review-mechanical-cli.mjs';
+} from '../docs/worker-message-dispatch-observe.mjs';
+import { printJson, resolveMechanicalCliArg } from '../docs/review-mechanical-cli.mjs';
 
 export const REACTION_CONFIG_UNAVAILABLE = 'reaction_config_unavailable';
 export const REACTION_MESSAGE_UNRESOLVED = 'reaction_message_unresolved';

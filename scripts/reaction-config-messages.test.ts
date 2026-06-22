@@ -13,7 +13,7 @@ import {
   parseReactionsSection,
   readReactionMessagesFromYamlFile,
   resolveReactionDeliveryShapeFromYaml,
-} from '../docs/reaction-config-messages.mjs';
+} from './reaction-config-messages.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const exampleYaml = readFileSync(
