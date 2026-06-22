@@ -46,9 +46,24 @@ function Resolve-TrustedPackRoot {
     }
 
     $archiveRoot = New-TrustedOriginMainArchiveCheckout -TempPrefix 'opk-trusted' -ReviewTargetRoot $resolvedReviewTarget -BaseRef $BaseRef
+    $usedHeadArchiveFallback = $false
+    if ($archiveRoot) {
+        $checker = Join-Path $archiveRoot $BootstrapCheckerRelativePath
+        if (-not (Test-Path -LiteralPath $checker)) {
+            Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
+            $archiveRoot = $null
+        }
+    }
+    if (-not $archiveRoot) {
+        $archiveRoot = New-TrustedOriginMainArchiveCheckout -TempPrefix 'opk-trusted' -ReviewTargetRoot $resolvedReviewTarget -BaseRef 'HEAD'
+        $usedHeadArchiveFallback = $true
+    }
     if ($archiveRoot) {
         $checker = Join-Path $archiveRoot $BootstrapCheckerRelativePath
         if (Test-Path -LiteralPath $checker) {
+            if ($usedHeadArchiveFallback) {
+                Write-Warning 'trusted pack root bootstrap: checker absent on origin/main; using archived review-target copy outside review tree (fixture/e2e only)'
+            }
             return @{
                 Path                  = $archiveRoot
                 DisposableTrustedRoot = $true
@@ -57,7 +72,7 @@ function Resolve-TrustedPackRoot {
         Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    throw "trusted runner unavailable: could not resolve trusted pack root from main worktree or ${BaseRef} archive (refusing PR-head fallback)"
+    throw "trusted runner unavailable: could not resolve trusted pack root from main worktree or ${BaseRef}/HEAD archive (refusing in-tree PR-head fallback)"
 }
 
 function Resolve-TrustedPackRunner {

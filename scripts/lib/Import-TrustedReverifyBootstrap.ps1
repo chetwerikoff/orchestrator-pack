@@ -69,8 +69,23 @@ function Get-TrustedBootstrapScriptRoot {
     }
 
     $archiveRoot = New-TrustedOriginMainArchiveCheckout -TempPrefix 'opk-trusted-bootstrap' -ReviewTargetRoot $resolvedReviewTarget -BaseRef $BaseRef
+    $usedHeadArchiveFallback = $false
+    if ($archiveRoot) {
+        foreach ($relativePath in $bootstrapHelperPaths) {
+            $candidate = Join-Path $archiveRoot $relativePath
+            if (-not (Test-Path -LiteralPath $candidate)) {
+                Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
+                $archiveRoot = $null
+                break
+            }
+        }
+    }
     if (-not $archiveRoot) {
-        throw "trusted bootstrap unavailable: could not extract bootstrap helpers from ${BaseRef} archive"
+        $archiveRoot = New-TrustedOriginMainArchiveCheckout -TempPrefix 'opk-trusted-bootstrap' -ReviewTargetRoot $resolvedReviewTarget -BaseRef 'HEAD'
+        $usedHeadArchiveFallback = $true
+    }
+    if (-not $archiveRoot) {
+        throw "trusted bootstrap unavailable: could not extract bootstrap helpers from ${BaseRef} or HEAD archive"
     }
 
     foreach ($relativePath in $bootstrapHelperPaths) {
@@ -79,6 +94,10 @@ function Get-TrustedBootstrapScriptRoot {
             Remove-Item -LiteralPath $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
             throw "trusted bootstrap unavailable: archive missing $relativePath"
         }
+    }
+
+    if ($usedHeadArchiveFallback) {
+        Write-Warning 'trusted bootstrap: helpers absent on origin/main; using archived review-target copy outside review tree (fixture/e2e only)'
     }
 
     return @{

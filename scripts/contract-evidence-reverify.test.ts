@@ -433,6 +433,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
   it('capture npm test producer trust checks vitest source closure drift', () => {
     const trustedBaseRoot = packRoot;
     const reviewTargetRoot = createArchiveTrustedRootFixture();
+    const manifestRel = 'tests/fixtures/contract-evidence-reverify/npm-test-closure-manifest.json';
+    const captureRel = 'tests/fixtures/contract-evidence-reverify/captures/npm-test-closure/match.raw.json';
     try {
       const sourcePath = path.join(reviewTargetRoot, 'scripts/contract-evidence.mjs');
       writeFileSync(sourcePath, "export const pwned = true;\n", 'utf8');
@@ -441,8 +443,6 @@ describe('contract-evidence reverify (Issue #376)', () => {
         'utf8',
       );
       const captureHash = `sha256:${createHash('sha256').update(captureContent).digest('hex')}`;
-      const manifestRel = 'tests/fixtures/contract-evidence-reverify/npm-test-closure-manifest.json';
-      const captureRel = 'tests/fixtures/contract-evidence-reverify/captures/npm-test-closure/match.raw.json';
       const manifestJson = `${JSON.stringify({
         entries: {
           'npm-test-closure/match': {
@@ -959,6 +959,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
+        CI: '',
+        GITHUB_ACTIONS: '',
         OPK_REVERIFY_E2E_LIVE: '',
         OPK_REVERIFY_E2E_SESSION: '',
         OPK_REVERIFY_E2E_REQUIRED: '1',
@@ -969,7 +971,31 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const payload = JSON.parse(proc.stdout);
     expect(payload.skipped).toBe(true);
     expect(payload.viaAoReviewExecute).toBe(false);
+    expect(payload.viaMechanicalReviewerCommand).toBe(false);
     expect(payload.error).toContain('AC#13 reviewer-flow e2e required');
+  });
+
+  it('e2e reviewer fixture uses CI mechanical reviewer command when required', { timeout: 120_000 }, () => {
+    const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
+      cwd: packRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CI: 'true',
+        GITHUB_ACTIONS: '',
+        OPK_REVERIFY_E2E_LIVE: '',
+        OPK_REVERIFY_E2E_SESSION: '',
+        OPK_REVERIFY_E2E_REQUIRED: '1',
+        OPK_REVERIFY_E2E_ALLOW_SKIP: '',
+      },
+    });
+    expect(proc.status).toBe(0);
+    const payload = JSON.parse(proc.stdout);
+    expect(payload.skipped).not.toBe(true);
+    expect(payload.viaAoReviewExecute).toBe(false);
+    expect(payload.viaMechanicalReviewerCommand).toBe(true);
+    expect(payload.reviewerOutputIsCheckpoint2Summary).toBe(true);
+    expect(payload.summary).not.toContain('reverify-e2e-probe');
   });
 
   it('e2e reviewer fixture skips without OPK_REVERIFY_E2E_LIVE', () => {

@@ -78,6 +78,44 @@ function Resolve-TrustedReverifyLauncherPath {
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
 
+    function New-TrustedHeadWorktreeCheckout {
+        param(
+            [Parameter(Mandatory)]
+            [string]$TempPrefix
+        )
+
+        $temp = Join-Path ([IO.Path]::GetTempPath()) ("${TempPrefix}-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        Push-Location $resolvedReviewTarget
+        try {
+            git worktree add --detach $temp HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+                return $null
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $launcherPath = Join-Path $temp $launcherRelativePath
+        if (-not (Test-Path -LiteralPath $launcherPath)) {
+            Push-Location $resolvedReviewTarget
+            try {
+                git worktree remove --force $temp 2>$null
+            }
+            finally {
+                Pop-Location
+            }
+            return $null
+        }
+
+        return @{
+            BootstrapRoot = $temp
+            LauncherPath  = $launcherPath
+            IsWorktree    = $true
+        }
+    }
+
     function New-TrustedReverifyBootstrapArchive {
         param(
             [Parameter(Mandatory)]
@@ -111,23 +149,29 @@ function Resolve-TrustedReverifyLauncherPath {
     }
 
     $temp = New-TrustedReverifyBootstrapArchive -GitRef 'origin/main' -TempPrefix 'opk-trusted-launcher'
-    if (-not $temp) {
-        return $null
+    $launcherPath = if ($temp) {
+        Join-Path $temp $launcherRelativePath
+    } else {
+        $null
+    }
+    $usedHeadBootstrap = $false
+    $launcherIsWorktree = $false
+    if (-not $temp -or -not (Test-Path -LiteralPath $launcherPath)) {
+        if ($temp) {
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $headWorktree = New-TrustedHeadWorktreeCheckout -TempPrefix 'opk-trusted-launcher'
+        if (-not $headWorktree) {
+            return $null
+        }
+        $temp = $headWorktree.BootstrapRoot
+        $launcherPath = $headWorktree.LauncherPath
+        $launcherIsWorktree = $true
+        $usedHeadBootstrap = $true
     }
 
-    $launcherPath = Join-Path $temp $launcherRelativePath
-    if (-not (Test-Path -LiteralPath $launcherPath)) {
-        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-        $temp = New-TrustedReverifyBootstrapArchive -GitRef 'HEAD' -TempPrefix 'opk-trusted-launcher'
-        if (-not $temp) {
-            return $null
-        }
-        $launcherPath = Join-Path $temp $launcherRelativePath
-        if (-not (Test-Path -LiteralPath $launcherPath)) {
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            return $null
-        }
-        Write-Warning 'reverify launcher bootstrap: launcher absent on origin/main; using archived review-target bootstrap copy outside review tree (fixture/e2e only)'
+    if ($usedHeadBootstrap) {
+        Write-Warning 'reverify launcher bootstrap: launcher absent on origin/main; using detached HEAD worktree outside review tree (fixture/e2e only)'
     }
 
     return @{
@@ -135,6 +179,7 @@ function Resolve-TrustedReverifyLauncherPath {
         TrustedBaseRoot         = $temp
         DisposableBootstrapRoot = $true
         BootstrapRoot           = $temp
+        IsWorktree              = $launcherIsWorktree
     }
 }
 
@@ -156,7 +201,6 @@ try {
 
     & $resolvedLauncher.LauncherPath `
         -RepoRoot $packRoot `
-        -TrustedBaseRoot $resolvedLauncher.TrustedBaseRoot `
         -ReviewTargetRoot $packRoot `
         -ManifestPath $ManifestPath `
         -SnapshotFile (Join-Path $fixtureRoot 'issue-snapshot.md') `
@@ -169,6 +213,17 @@ try {
 }
 finally {
     if ($disposableLauncherBootstrapRoot -and $resolvedLauncher -and -not [string]::IsNullOrWhiteSpace($resolvedLauncher.BootstrapRoot)) {
-        Remove-Item -LiteralPath $resolvedLauncher.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if ($resolvedLauncher.IsWorktree) {
+            Push-Location $packRoot
+            try {
+                git worktree remove --force $resolvedLauncher.BootstrapRoot 2>$null
+            }
+            finally {
+                Pop-Location
+            }
+        }
+        else {
+            Remove-Item -LiteralPath $resolvedLauncher.BootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }

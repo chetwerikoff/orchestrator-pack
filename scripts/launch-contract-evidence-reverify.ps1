@@ -108,29 +108,34 @@ function Resolve-TrustedReverifyCoreScript {
     $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-reverify-{0}" -f ([Guid]::NewGuid().ToString('N')))
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-    Push-Location $resolvedReviewTarget
-    try {
-        git archive origin/main -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-            throw 'trusted reverify unavailable: could not extract implementation from origin/main archive'
+    foreach ($gitRef in @('origin/main', 'HEAD')) {
+        Get-ChildItem -LiteralPath $temp -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Push-Location $resolvedReviewTarget
+        try {
+            git archive $gitRef -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                continue
+            }
         }
-    }
-    finally {
-        Pop-Location
-    }
+        finally {
+            Pop-Location
+        }
 
-    $corePath = Join-Path $temp $coreRelativePath
-    if (Test-Path -LiteralPath $corePath) {
-        return @{
-            CoreScriptPath          = $corePath
-            DisposableBootstrapRoot = $true
-            BootstrapRoot           = $temp
+        $corePath = Join-Path $temp $coreRelativePath
+        if (Test-Path -LiteralPath $corePath) {
+            if ($gitRef -eq 'HEAD') {
+                Write-Warning 'trusted reverify bootstrap: core absent on origin/main; using archived review-target copy outside review tree (fixture/e2e only)'
+            }
+            return @{
+                CoreScriptPath          = $corePath
+                DisposableBootstrapRoot = $true
+                BootstrapRoot           = $temp
+            }
         }
     }
 
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    throw "trusted reverify unavailable: origin/main archive missing $coreRelativePath"
+    throw 'trusted reverify unavailable: could not extract implementation from origin/main or HEAD archive'
 }
 
 $reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path

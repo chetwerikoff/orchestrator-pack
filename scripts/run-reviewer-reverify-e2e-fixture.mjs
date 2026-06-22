@@ -41,6 +41,10 @@ function isLiveE2eEnabled() {
   return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
 }
 
+function isCiEnvironment() {
+  return isTruthyEnv('CI') || isTruthyEnv('GITHUB_ACTIONS');
+}
+
 function summaryRunOutcomeRowsEvaluated(text) {
   return /run-outcome:\s*rows-evaluated/.test(text);
 }
@@ -118,25 +122,51 @@ function resolveAoFixtureSession() {
   return null;
 }
 
-function runAoReviewExecute(sessionId) {
-  return spawnSync(
-    'pwsh',
-    [
-      '-NoProfile',
-      '-File',
-      'scripts/run-reviewer-reverify-ao-review-command.ps1',
-      '-RepoRoot',
-      packRoot,
-      '-FixtureDir',
-      'tests/fixtures/contract-evidence-reverify/e2e',
-      '-AoSessionId',
-      sessionId,
-    ],
-    {
-      cwd: packRoot,
-      encoding: 'utf8',
+function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
+  const args = [
+    '-NoProfile',
+    '-File',
+    'scripts/run-reviewer-reverify-ao-review-command.ps1',
+    '-RepoRoot',
+    packRoot,
+    '-FixtureDir',
+    'tests/fixtures/contract-evidence-reverify/e2e',
+  ];
+  if (aoSessionId) {
+    args.push('-AoSessionId', aoSessionId);
+  }
+  return spawnSync('pwsh', args, {
+    cwd: packRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...envOverrides,
     },
-  );
+  });
+}
+
+function runAoReviewExecute(sessionId) {
+  return runReviewerReverifyCommand({ aoSessionId: sessionId });
+}
+
+function finalizeReviewerSummary(output, summary) {
+  output.summary = summary;
+  output.summaryRunOutcomeRowsEvaluated = summaryRunOutcomeRowsEvaluated(summary);
+  output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
+  output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
+  output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
+
+  const ok =
+    output.promptContainsCheckpoint2
+    && output.promptContainsInvokeScript
+    && output.summaryRunOutcomeRowsEvaluated
+    && output.summaryIncludesRows
+    && output.summaryIncludesNeverBlocks
+    && output.reviewerOutputIsCheckpoint2Summary
+    && !summary.includes('reverify-e2e-probe');
+
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(ok ? 0 : 1);
 }
 
 const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
@@ -144,6 +174,7 @@ const prompt = readFileSync(path.join(packRoot, 'prompts/codex_review_prompt.md'
 const output = {
   skipped: false,
   viaAoReviewExecute: false,
+  viaMechanicalReviewerCommand: false,
   aoAvailable: false,
   aoSessionId: null,
   aoSessionIsDedicatedFixture: false,
@@ -165,6 +196,23 @@ if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     process.exit(0);
   }
+
+  if (isAc13E2eRequired() && isCiEnvironment()) {
+    const mechanicalProc = runReviewerReverifyCommand({
+      env: {
+        OPK_REVERIFY_E2E_FIXTURE: '1',
+      },
+    });
+    output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
+    if (!output.viaMechanicalReviewerCommand) {
+      output.error = `CI mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
+      output.summary = (mechanicalProc.stdout ?? '').trim() || (mechanicalProc.stderr ?? '').trim();
+      process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      process.exit(1);
+    }
+    finalizeReviewerSummary(output, (mechanicalProc.stdout ?? '').trim());
+  }
+
   output.skipped = true;
   output.error = 'AC#13 reviewer-flow e2e required: set OPK_REVERIFY_E2E_LIVE=1 and OPK_REVERIFY_E2E_SESSION (or OPK_REVERIFY_E2E_ALLOW_SKIP=1 for local opt-out only when OPK_REVERIFY_E2E_REQUIRED is unset)';
   output.summary = output.error;
@@ -202,21 +250,4 @@ if (!output.viaAoReviewExecute) {
   process.exit(1);
 }
 
-const summary = (aoProc.stdout ?? '').trim();
-output.summary = summary;
-output.summaryRunOutcomeRowsEvaluated = summaryRunOutcomeRowsEvaluated(summary);
-output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
-output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
-output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
-
-const ok =
-  output.promptContainsCheckpoint2
-  && output.promptContainsInvokeScript
-  && output.summaryRunOutcomeRowsEvaluated
-  && output.summaryIncludesRows
-  && output.summaryIncludesNeverBlocks
-  && output.reviewerOutputIsCheckpoint2Summary
-  && !summary.includes('reverify-e2e-probe');
-
-process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-process.exit(ok ? 0 : 1);
+finalizeReviewerSummary(output, (aoProc.stdout ?? '').trim());

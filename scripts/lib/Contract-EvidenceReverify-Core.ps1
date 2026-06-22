@@ -68,6 +68,10 @@ detail: $Detail
     try {
         $scriptBootstrap = Import-TrustedReverifyBootstrap -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
         $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
+        . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
+        if (-not $disposableScriptBootstrapRoot) {
+            . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
+        }
 
         if ($disposableScriptBootstrapRoot) {
             $trustedRoot = $scriptBootstrap.BootstrapRoot
