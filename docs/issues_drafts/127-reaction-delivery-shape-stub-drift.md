@@ -1,6 +1,6 @@
 # Static reaction message shape must not be guessed from a stale in-code stub map
 
-GitHub Issue: TBD
+GitHub Issue: #402
 
 ## Prerequisite
 
