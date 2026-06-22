@@ -158,6 +158,16 @@ integrity only. You MUST still **independently validate** each candidate against
 the diff, producer reality, and cited spec snapshot before promoting it to a
 finding. Checkpoint-2 must **never auto-blocks** review availability.
 
+**Do not file checkpoint-2 as a finding.** Never emit the checkpoint-2 summary block
+(`## Checkpoint-2 contract-evidence re-verification`) as a native `findings[]` entry,
+fallback JSON finding, or titled finding such as "Reviewer output". The summary is
+**candidate evidence for your own validation** — cite it in review prose only when
+needed; promote a row to a finding only after independent diff/spec validation and
+only when material. Never run `scripts/run-reviewer-reverify-ao-review-command.ps1`
+or `scripts/run-reviewer-reverify-e2e-fixture.mjs` for real PR review (AC#13
+verify fixtures only). Output with `pr-head-sha: e2e000...` is fixture-only, not
+this PR's checkpoint-2 evidence.
+
 ## Scope context
 
 {{SCOPE_SECTION}}

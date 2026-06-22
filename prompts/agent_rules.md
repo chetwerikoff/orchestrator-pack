@@ -204,6 +204,11 @@ see `prompts/codex_review_prompt.md` (Checkpoint-2 section). Required parameters
 `-ReviewTargetRoot`, `-PrNumber`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
 `-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
 `scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
+Do **not** emit the checkpoint-2 summary as a review finding (including titles like
+"Reviewer output"); it is candidate evidence for independent validation only. Never
+use `scripts/run-reviewer-reverify-ao-review-command.ps1` or
+`scripts/run-reviewer-reverify-e2e-fixture.mjs` for real PR review — AC#13 fixtures
+only. Output with `pr-head-sha: e2e000...` is fixture-only, not PR evidence.
 
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
