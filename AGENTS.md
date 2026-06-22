@@ -137,15 +137,13 @@ canonical file above.
 When the user asks to merge a ready task/PR (best-effort discovery, not a
 deterministic gate), follow
 [`.claude/skills/merge-with-local-adoption/SKILL.md`](.claude/skills/merge-with-local-adoption/SKILL.md)
-immediately — no skill name required. **Cursor executes merge, safe pull, and
-local adoption directly** on the live checkout; do not delegate to OpenCode.
+immediately — no skill name required.
 
-**Triggers (substring or clear paraphrase):** «мерж», «мерж 385», «мерж и пул»,
-«смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull»,
-«merge the PR».
+**Triggers (substring or clear paraphrase):** «мерж», «мерж и пул», «смерж»,
+«смержи», «замержи»; «merge», «merge and pull», «merge the PR».
 
 **Skip:** merge policy discussion without a concrete PR; user explicitly says not
-to merge yet. OpenCode terminal sessions use `opencode-merge-and-pull` instead.
+to merge yet.
 
 **Loader entry points (optional):** `.cursor/skills/merge-with-local-adoption/SKILL.md`,
 `.claude/skills/merge-with-local-adoption/SKILL.md`.

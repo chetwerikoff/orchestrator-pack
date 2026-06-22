@@ -38,7 +38,22 @@ const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-r
 const checkScript = path.join(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
 
 function removeTempDir(dir: string) {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      return;
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err
+        ? (err as NodeJS.ErrnoException).code
+        : undefined;
+      if (code === 'ENOTEMPTY' || code === 'EBUSY' || code === 'EPERM') {
+        continue;
+      }
+      throw err;
+    }
+  }
+  execFileSync('rm', ['-rf', dir], { stdio: 'ignore' });
 }
 
 function writeJson(root: string, rel: string, value: unknown) {
@@ -659,7 +674,7 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
-  it('links issue numbers from committed declaration snapshots on disk', () => {
+  it('does not link worktree-only declaration snapshots via committed resolver', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-disk-'));
     try {
       writeJson(root, 'docs/declarations/324.opk-2.json', {
@@ -674,13 +689,19 @@ describe('orchestrator message registry (Issue #298)', () => {
         resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
           'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
         ]),
-      ).toEqual([324]);
+      ).toEqual([]);
       expect(
         resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['agent-orchestrator.yaml.example']),
-      ).toEqual([324]);
+      ).toEqual([]);
       expect(
         resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, ['scripts/ci-green-wake-reconcile.ps1']),
       ).toEqual([]);
+      expect(
+        resolveLinkedIssuesFromDeclarationSnapshots(root, [
+          'docs/declarations/324.opk-2.json',
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([324]);
     } finally {
       removeTempDir(root);
     }
@@ -710,6 +731,37 @@ describe('orchestrator message registry (Issue #298)', () => {
           'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
         ]),
       ).toEqual([324]);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it('ignores worktree-only declaration snapshots in committed resolver', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-worktree-only-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+      seedMinimalRegistryTree(root, ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1']);
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root, env: gitFixtureEnv });
+      writeJson(root, 'docs/declarations/324.opk-2.json', {
+        issue_number: 324,
+        iteration_id: 'opk-2',
+        declared_paths: ['scripts/lib/Orchestrator-SideProcessSupervisor.ps1'],
+      });
+      const supervisorPath = path.join(root, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+      fs.writeFileSync(supervisorPath, `${fs.readFileSync(supervisorPath, 'utf8')}\n# coordinated edit fixture\n`);
+      execFileSync('git', ['add', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'supervisor-only'], { cwd: root, env: gitFixtureEnv });
+      expect(
+        resolveLinkedIssuesFromCommittedDeclarationSnapshots(root, [
+          'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+        ]),
+      ).toEqual([]);
+      const result = checkProtectedRuntimeForRepo(root, execFileSync('git', ['rev-parse', 'HEAD^'], { cwd: root, encoding: 'utf8' }).trim());
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v: string) => v.includes('Orchestrator-SideProcessSupervisor.ps1'))).toBe(true);
     } finally {
       removeTempDir(root);
     }

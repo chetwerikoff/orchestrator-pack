@@ -34,10 +34,9 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     )
 
     $planned = @{
-        prNumber    = [int]$Action.prNumber
-        headSha     = [string]$Action.headSha
-        sessionId   = [string]$Action.sessionId
-        startReason = if ($Action.startReason) { [string]$Action.startReason } else { 'deferred_head_watch' }
+        prNumber  = [int]$Action.prNumber
+        headSha   = [string]$Action.headSha
+        sessionId = [string]$Action.sessionId
     }
 
     $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
@@ -57,7 +56,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
             -Surface 'review-trigger-reeval' -ReviewRuns $claimRuns -ProjectId $ProjectId `
-            -StartReason $planned.startReason -LogWriter $LogWriter
+            -StartReason 'deferred_head_watch' -LogWriter $LogWriter
     }
     if (-not $claim.acquired) {
         if ($claim.escalation) {

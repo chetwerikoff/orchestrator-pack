@@ -186,6 +186,25 @@ When preflight or mapping cannot complete (`skipped_no_spec`,
 the bounded status — mapping must not block review availability. Emit a
 structured status record (enum, PR head SHA, bound spec IDs/hashes, usability).
 
+**Checkpoint-2 contract-evidence re-verification (reviewers only).** For every PR
+with a linked issue, run checkpoint-2 **after** contract-mapping (when applicable)
+and **before** final verdict. Use
+`scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
+(origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the
+PR checkout). Contract-mapping preflight captures the bound immutable issue
+snapshot (`-PrNumber`, `-PrHeadSha`) into the AO project store; resolve it with
+`scripts/resolve-bound-issue-snapshot.ps1` (never a live re-fetch) before
+checkpoint-2. Pass PR body and changed paths to the launcher. The helper emits **candidate evidence only** — never auto-blocks or auto-merges. A row is **producer-verified** only when
+`status: verified` **and** `verification-mode: live`; `compared-to-record` rows
+are integrity-checked-only. Surface every per-row status (including `unverified`,
+`verification-mode: not-run`, and zero-row `no-rows` runs) in review output.
+Independently validate each candidate against the diff, producer, and cited spec
+snapshot before assigning severity. For the canonical multi-line invoke example,
+see `prompts/codex_review_prompt.md` (Checkpoint-2 section). Required parameters:
+`-ReviewTargetRoot`, `-PrNumber`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
+`-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
+`scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
+
 **Upstream file gate.** Default corpus for `coworker ask` and context for
 `coworker write` is text/markdown only. Source-code input requires `--allow-code`
 or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
@@ -465,15 +484,6 @@ turn. After delivery, report `ao report addressing_reviews` — do not stay idle
 - This path performs **first send only**; bounded re-delivery is owned by
   `review-finding-delivery-confirm.ps1` (#171).
 - It does **not** recover dead sessions (#98) — use `--claim-pr` / respawn discipline.
-
-## Report-state review-start seed (Issue #391)
-
-**Co-primary with #390** when AO accepts `ready_for_review` but no webhook handoff fires.
-`scripts/review-ready-report-state-seed.ps1` polls `ao status --json --reports full
---include-terminated`, binds accepted reports to the current resolved head per the poll
-invariant, seeds scoped #235 watches, and may start review with
-`startReason=report_state_seed` — not `handoff_wake`, `completion_wake`, or
-`periodic=reconcile`.
 
 ## CI-green orchestrator nudge (fast path; Issue #191)
 

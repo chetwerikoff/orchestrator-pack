@@ -49,8 +49,6 @@ $Script:DefaultIntervalMinutes = 2
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
-. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
-. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-ReviewSendIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -195,85 +193,32 @@ function Invoke-PlannedFirstReviewSend {
         return @{ sent = $true; reason = 'dry_run' }
     }
 
-    $cycleKey = "run:$([string]$Action.runId)"
-    $sessionId = [string]$Action.sessionId
-    $openPrs = @()
-    if ($FreshPayload -and $FreshPayload.openPrs) {
-        $openPrs = @($FreshPayload.openPrs)
-    }
-    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber ([int]$Action.prNumber) -SessionId $sessionId `
-        -HeadSha ([string]$Action.targetSha) -ProjectId $Project -OpenPrs $openPrs
-    if (-not $targetResolution.ok) {
-        Write-ReviewSendLog "send suppressed (PR-claim target unresolved) run=$($Action.runId): $($targetResolution.reason)"
-        return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
-    }
-    $targetId = [string]$targetResolution.targetId
-    $targetGeneration = [string]$targetResolution.targetGeneration
-    $workerTarget = [string]$targetResolution.workerTarget
-    if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
-    $sendSessionId = [string]$targetResolution.ownerSessionId
-    if (-not $sendSessionId) { $sendSessionId = $sessionId }
-    $tupleKey = "$([int]$Action.prNumber)|$cycleKey|findings-delivery|$workerTarget"
-    $reviewMessage = 'Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')'
-    $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'findings-delivery' `
-        -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
-        -TupleKey $tupleKey -Surface 'review-send-reconcile' -ProjectId $Project -Message $reviewMessage
-    if (-not $claim.acquired) {
-        Write-ReviewSendLog "send suppressed by claim gate run=$($Action.runId): $($claim.reason)"
-        return @{ sent = $false; reason = [string]$claim.reason; claimSkipped = $true }
-    }
-
-    $sendAttempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
-    if (-not $sendAttempt.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$sendAttempt.reason } | Out-Null
-        Write-ReviewSendLog "send aborted (claim send-attempt failed) run=$($Action.runId): $($sendAttempt.reason)"
-        return @{ sent = $false; reason = [string]$sendAttempt.reason }
-    }
-
-    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$sendSessionId"
+    Write-ReviewSendLog "sending findings: run=$($Action.runId) PR #$($Action.prNumber) head=$($Action.targetSha) session=$($Action.sessionId)"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'
-    $sendFailed = $false
-    $sendError = $null
-    try {
-        $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-            & ao @sendArgs
-            if ($LASTEXITCODE -ne 0) {
-                $script:sendFailed = $true
-                throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
-            }
-        }
-        if (-not $fenced.ok) {
-            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
-            Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
-            return @{ sent = $false; reason = 'side_effect_busy' }
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        & ao @sendArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
         }
     }
-    catch {
-        $sendError = [string]$_.Exception.Message
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'send_failed'; detail = $sendError } | Out-Null
-        Write-ReviewSendLog "send failed run=$($Action.runId): $sendError"
-        return @{ sent = $false; reason = 'send_failed'; detail = $sendError }
+    if (-not $fenced.ok) {
+        Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
+        return @{ sent = $false; reason = 'side_effect_busy' }
     }
+
     $post = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
     $verify = Invoke-ReviewSendFilterCli -Subcommand 'verify-sent' -Payload @{
         reviewRuns = @($post.reviewRuns)
         runId      = [string]$Action.runId
         targetSha  = [string]$Action.targetSha
     }
-    $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $reviewMessage }
-    $messageContentHash = [string]$messageHashResult.messageContentHash
     if (-not $verify.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' -Extra @{
-            reason             = [string]$verify.reason
-            messageContentHash = $messageContentHash
-        } | Out-Null
-        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason) (claim UNCERTAIN; non-retryable)"
-        return @{ sent = $false; reason = $verify.reason; uncertain = $true }
+        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason)"
+        return @{ sent = $false; reason = $verify.reason }
     }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
 
-    $dispatchResult = Register-WorkerMessageDispatch -SessionId $sendSessionId `
+    $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
         -Source 'review-send' -SourceKey ([string]$Action.runId) `
         -DeliveryPath 'pending-draft'

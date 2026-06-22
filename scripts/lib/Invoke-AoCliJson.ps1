@@ -87,17 +87,8 @@ function Get-AoStatusReportsJson {
     return Invoke-AoCliJson -AoArgs @('status', '--json', '--reports', 'full') -FailureLabel 'ao status'
 }
 
-function Get-AoStatusReportsIncludingTerminatedJson {
-    return Invoke-AoCliJson -AoArgs @('status', '--json', '--reports', 'full', '--include-terminated') -FailureLabel 'ao status --include-terminated'
-}
-
 function Get-AoStatusSessions {
     $payload = Get-AoStatusReportsJson
-    return Get-AoStatusSessionsFromPayload -Payload $payload
-}
-
-function Get-AoStatusSessionsIncludingTerminated {
-    $payload = Get-AoStatusReportsIncludingTerminatedJson
     return Get-AoStatusSessionsFromPayload -Payload $payload
 }
 

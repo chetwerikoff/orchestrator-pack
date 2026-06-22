@@ -2,7 +2,6 @@
   "version": "orchestrator-claimed-review-run/v1",
   "boundaryVersion": "autonomous-orchestrator-boundary/v1",
   "atomicClaimCapability": "review-start-claim-atomic/v1",
-  "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
   "capabilities": [
     {
       "id": "invoke-orchestrator-claimed-review-run",
@@ -45,6 +44,18 @@
       "classification": "gated",
       "surface": "process-parent",
       "path": "enumerated-pack-review-preflight-paths"
+    },
+    {
+      "id": "ao-autonomous-guard",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao-autonomous-guard.ps1"
+    },
+    {
+      "id": "ao-shim",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao"
     },
     {
       "id": "git-autonomous-guard",

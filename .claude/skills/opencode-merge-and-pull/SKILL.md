@@ -31,8 +31,8 @@ isolated scratch checkout.
 
 **Skip** when there is no number, or the user only asks about merge policy.
 
-**Skip delegation to this skill** from Cursor architect sessions — they use
-`merge-with-local-adoption` (same live-tree semantics; Cursor executes directly).
+**Skip delegation to this skill** from architect surfaces — they use
+`merge-with-local-adoption` (different pull semantics).
 
 ---
 

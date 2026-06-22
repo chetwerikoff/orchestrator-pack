@@ -493,14 +493,9 @@ projects:
       while still in waiting_worker_review_response, if there is no worker
       addressing_reviews report since the send timestamp and no new PR commit, and
       ao events list --json shows no prior ao send ping for this pending episode,
-      send exactly ONE message via the gated worker-nudge command (never raw ao send):
-        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
-          -SessionId <session> -PrNumber <PR> -HeadSha <head-sha> -ReviewRunId <review-run-id> `
-          -IntentClass review-findings -Surface waiting_worker_review_response
-        Transport chokepoint: scripts/journaled-worker-send.ps1 (claim token required).
-        Message file must hold the reminder to check pending AO review findings (ao review list),
-        report ao report addressing_reviews, or report terminal failure with a reason.
-        Gate version: worker-nudge-gate/v1.
+      send exactly ONE message via ao send <session> reminding the worker to check
+      pending AO review findings (ao review list), report ao report addressing_reviews,
+      or report terminal failure with a reason.
       Do NOT send a second ping before observing the next worker response or commit.
 
       RESPAWN DISCIPLINE. On a later orchestrator turn, if still in

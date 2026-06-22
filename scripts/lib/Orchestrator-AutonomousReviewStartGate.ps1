@@ -10,7 +10,6 @@ $Script:AutonomousCapabilityInventory = Join-Path (Split-Path -Parent (Split-Pat
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousBoundary.ps1')
-. (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
 
 function Test-OrchestratorAutonomousSurfaceActive {
     return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
@@ -25,9 +24,10 @@ function Get-OrchestratorClaimedReviewRunGateVersion {
 }
 
 function Get-AutonomousReviewStartCapabilityInventory {
-    return Get-MergedAutonomousCapabilityInventory `
-        -InventoryPath $Script:AutonomousCapabilityInventory `
-        -PackRoot (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    if (-not (Test-Path -LiteralPath $Script:AutonomousCapabilityInventory)) {
+        throw "missing capability inventory: $Script:AutonomousCapabilityInventory"
+    }
+    return (Get-Content -LiteralPath $Script:AutonomousCapabilityInventory -Raw | ConvertFrom-Json)
 }
 
 function Invoke-OrchestratorClaimedReviewRunFilterCli {
@@ -66,7 +66,16 @@ function Get-LiveAutonomousReviewStartCapabilities {
     param([string]$ConfiguredGateVersion = '')
 
     $inventory = Get-AutonomousReviewStartCapabilityInventory
-    return Get-LiveAutonomousGateCapabilities -Inventory $inventory -ConfiguredGateVersion $ConfiguredGateVersion
+    $configured = if ($ConfiguredGateVersion) { $ConfiguredGateVersion } else { [string]$inventory.version }
+    return @(
+        foreach ($row in @($inventory.capabilities)) {
+            [pscustomobject]@{
+                id             = [string]$row.id
+                classification = [string]$row.classification
+                gateVersion    = $configured
+            }
+        }
+    )
 }
 
 function Test-OrchestratorReviewStartGatePreflight {

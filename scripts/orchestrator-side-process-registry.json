@@ -5,7 +5,6 @@
     "heartbeat",
     "review-trigger-reconcile",
     "review-trigger-reeval",
-    "review-ready-report-state-seed",
     "ci-green-wake-reconcile",
     "review-send-reconcile",
     "review-finding-delivery-confirm",
@@ -53,20 +52,6 @@
       "script": "review-trigger-reeval.ps1",
       "sideEffecting": true,
       "sideEffectLockFile": "review-trigger-reeval-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 5,
-      "stallGraceMultiplier": 4,
-      "extraArgs": [
-        "-StateDir",
-        "{stateRoot}"
-      ]
-    },
-    {
-      "id": "review-ready-report-state-seed",
-      "script": "review-ready-report-state-seed.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "review-ready-report-state-seed-side-effect.lock",
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 5,

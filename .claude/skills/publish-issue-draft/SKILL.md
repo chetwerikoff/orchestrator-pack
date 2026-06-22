@@ -326,10 +326,14 @@ run manual pack review per [`direct-fix-checklist`](../direct-fix-checklist/SKIL
 if the user expects a Codex pass before merge.
 
 When the user asked to merge, follow
-[`merge-with-local-adoption`](../merge-with-local-adoption/SKILL.md): Cursor
-merges, pulls `main` in the live checkout when needed, and applies operator
-adoption. Adoption is usually **none** for docs-only drafts unless the draft
-changed `.example` or runbooks.
+[`merge-with-local-adoption`](../merge-with-local-adoption/SKILL.md): adoption is
+usually **none** for docs-only drafts unless the draft changed `.example` or runbooks.
+
+```powershell
+gh pr checks <pr> --repo chetwerikoff/orchestrator-pack
+gh pr merge <pr> --repo chetwerikoff/orchestrator-pack --merge --delete-branch
+# Refresh only the separate fallback checkout if needed; do not pull the architect's live tree.
+```
 
 ### Report
 

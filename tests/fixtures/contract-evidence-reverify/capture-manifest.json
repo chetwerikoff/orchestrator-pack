@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "corpusRoot": "tests/fixtures/contract-evidence-reverify",
+  "entries": {
+    "structured/match": {
+      "id": "structured/match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_VALUE=match node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "structured/divergent-record": {
+      "id": "structured/divergent-record",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_VALUE=divergent node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/divergent-record.raw.json",
+      "contentHash": "sha256:91693ffea4782be1abeaf2b5376ef0eee1e44d4251ff6a90fe9b4f970e4a4c10"
+    },
+    "structured/integrity-mismatch": {
+      "id": "structured/integrity-mismatch",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_VALUE=match node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "structured/exit-nonzero": {
+      "id": "structured/exit-nonzero",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_VALUE=match REVERIFY_FORCE_EXIT_CODE=1 node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "structured/runtime-file-match": {
+      "id": "structured/runtime-file-match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/runtime-file-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/runtime-file-match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "import-closure/match": {
+      "id": "import-closure/match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/importing-structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "unstructured/token-match": {
+      "id": "unstructured/token-match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_TOKEN=fixture-token node tests/fixtures/contract-evidence-reverify/producers/unstructured-token.mjs",
+      "kind": "unstructured",
+      "path": "captures/unstructured/token-match.raw.txt",
+      "contentHash": "sha256:7f442c5b1699b6384147a5252161306b0bb274a76df807a3db03131db6a588a8"
+    },
+    "cli-behavior/success": {
+      "id": "cli-behavior/success",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_EXIT_CODE=0 REVERIFY_BODY={\"ok\":true} node tests/fixtures/contract-evidence-reverify/producers/cli-behavior.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897",
+      "exitStatus": 0
+    },
+    "cli-behavior/wrong-body": {
+      "id": "cli-behavior/wrong-body",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_EXIT_CODE=0 REVERIFY_BODY={\"ok\":false} node tests/fixtures/contract-evidence-reverify/producers/cli-behavior.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897",
+      "exitStatus": 0
+    },
+    "external/gh-open": {
+      "id": "external/gh-open",
+      "producer": "gh",
+      "sourceCommand": "gh pr list --json number,headRefOid",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "producer/unreachable": {
+      "id": "producer/unreachable",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "REVERIFY_DELAY_MS=30000 node tests/fixtures/contract-evidence-reverify/producers/unreachable.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "producer/unsafe": {
+      "id": "producer/unsafe",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "rm -rf /tmp/should-not-run",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    },
+    "producer/unsupported": {
+      "id": "producer/unsupported",
+      "producer": "unknown-producer",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs",
+      "kind": "structured",
+      "path": "",
+      "contentHash": ""
+    },
+    "dynamic-import-closure/match": {
+      "id": "dynamic-import-closure/match",
+      "producer": "orchestrator-pack-scripts",
+      "sourceCommand": "node tests/fixtures/contract-evidence-reverify/producers/importing-dynamic-structured-value.mjs",
+      "kind": "structured",
+      "path": "captures/structured/match.raw.json",
+      "contentHash": "sha256:55ab018deb92ed56f0041ea6d48109d5071ff8e8cc4fde5339d334331d854897"
+    }
+  }
+}

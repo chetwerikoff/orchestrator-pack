@@ -535,7 +535,6 @@ describe('scenario matrix cells', () => {
     expect(mergedTriggered[key].status).toBe('triggered');
     expect(resolveMergedWatchStatus('watching', 'discarded')).toBe('discarded');
     expect(resolveMergedWatchStatus('watching', 'expired')).toBe('expired');
-    expect(resolveMergedWatchStatus('expired', 'watching')).toBe('expired');
   });
 
   it('mergeWatchState keeps prior terminal status when concurrent seed is watching', () => {
@@ -584,84 +583,5 @@ describe('scenario matrix cells', () => {
     });
     expect(evaluation.triggerReviewRun).toBe(true);
     expect(evaluation.nextEntry?.lastObservedReadyMs).not.toBeNull();
-  });
-});
-
-import { REPORT_STATE_SEED_START_REASON, reportStateWatchEntryKey, resolveStartReasonForWatchEntry, seedWatchFromReportStatePoll } from '../docs/review-trigger-reeval.mjs';
-
-describe('Issue #391 report-state seed integration', () => {
-  it('seedWatchFromReportStatePoll stamps report_state_seed start reason', () => {
-    const seeded = seedWatchFromReportStatePoll({
-      candidates: [{
-        prNumber: 12,
-        headSha: 'abc',
-        sessionId: 'opk-12',
-        repoSlug: 'owner/repo',
-      }],
-      nowMs: 1_700_000_000_000,
-    });
-    const watchKey = reportStateWatchEntryKey('owner/repo', 12, 'abc');
-    const entry = seeded.watchEntries[watchKey] as Record<string, unknown>;
-    expect(entry?.seedSource).toBe('report_state_poll');
-    expect(entry?.repoSlug).toBe('owner/repo');
-    expect(resolveStartReasonForWatchEntry(entry)).toBe(REPORT_STATE_SEED_START_REASON);
-  });
-});
-
-
-  it('mergeWatchState does not reactivate expired wake_defer watches', () => {
-    const key = '235:abc235';
-    const expired = {
-      ...createWatchEntry({
-        prNumber: 235,
-        headSha: 'abc235',
-        sessionId: 'opk-28',
-        nowMs: 100,
-        seedSource: 'wake_defer',
-      }),
-      status: 'expired',
-    };
-    const incoming = {
-      ...createWatchEntry({
-        prNumber: 235,
-        headSha: 'abc235',
-        sessionId: 'opk-28',
-        nowMs: 200,
-        seedSource: 'wake_defer',
-      }),
-      status: 'watching',
-    };
-    const merged = mergeWatchState({ [key]: expired }, { [key]: incoming }, 200);
-    expect(merged[key]).toBeUndefined();
-  });
-
-describe('report-state watch reseed', () => {
-  it('replaces expired report-state watch on reseed', () => {
-    const key = reportStateWatchEntryKey('owner/repo', 12, 'abc');
-    const expired = {
-      ...createWatchEntry({
-        prNumber: 12,
-        headSha: 'abc',
-        sessionId: 'opk-12',
-        nowMs: 1_000,
-        seedSource: 'report_state_poll',
-      }),
-      repoSlug: 'owner/repo',
-      status: 'expired',
-    };
-    const seeded = seedWatchFromReportStatePoll({
-      candidates: [{
-        prNumber: 12,
-        headSha: 'abc',
-        repoSlug: 'owner/repo',
-        sessionId: 'opk-12',
-        dedupeKey: 'k',
-      }],
-      existingWatches: { [key]: expired },
-      nowMs: 2_000,
-    });
-    const reactivated = seeded.watchEntries[key] as Record<string, unknown>;
-    expect(reactivated?.status).toBe('watching');
-    expect(Number(reactivated?.windowExpiresMs)).toBeGreaterThan(2_000);
   });
 });
