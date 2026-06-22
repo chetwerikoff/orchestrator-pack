@@ -28,9 +28,6 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 
-/** Machine-distinct start reason — not handoff_wake, completion_wake, or reconcile. */
-export const REPORT_STATE_SEED_START_REASON = 'report_state_seed';
-
 /** Poll classification for supervised report-state seed child. */
 export const REPORT_STATE_POLL_CLASS = 'report_state_poll';
 
@@ -73,7 +70,7 @@ export function pollBindingStateKey(input) {
  * @param {Record<string, unknown>} report
  */
 export function isAcceptedReadyForReviewReport(report) {
-  if (!report || report.accepted === false) {
+  if (!report || report.accepted !== true) {
     return false;
   }
   return getReportState(report) === READY_FOR_REVIEW_STATE;
@@ -300,6 +297,31 @@ export function findLatestAcceptedReadyForReviewReport(session) {
   }
   return latest;
 }
+/**
+ * Latest accepted ready_for_review across every session row for one PR.
+ *
+ * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
+ */
+export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
+  /** @type {Record<string, unknown> | null} */
+  let latestReport = null;
+  /** @type {import('./review-trigger-reconcile.mjs').AoSession | null} */
+  let latestSession = null;
+  let latestMs = -1;
+  for (const session of toArray(sessions)) {
+    const report = findLatestAcceptedReadyForReviewReport(session);
+    if (!report) {
+      continue;
+    }
+    const ts = getReportTimestampMs(report);
+    if (ts >= latestMs) {
+      latestMs = ts;
+      latestReport = report;
+      latestSession = session;
+    }
+  }
+  return { report: latestReport, session: latestSession };
+}
 
 /**
  * @param {object} input
@@ -341,7 +363,7 @@ export function planReportStatePollTick(input) {
     openPrByNumber.set(Number(pr?.number), pr);
   }
 
-  /** @type {Map<string, { session: import('./review-trigger-reconcile.mjs').AoSession, prNumber: number, repoSlug: string }>} */
+  /** @type {Map<string, { sessions: import('./review-trigger-reconcile.mjs').AoSession[], prNumber: number, repoSlug: string }>} */
   const headsByScanKey = new Map();
 
   for (const session of sessions) {
@@ -355,8 +377,12 @@ export function planReportStatePollTick(input) {
       resolveSessionRepoSlug(session, input.fallbackRepoSlug) ||
       String(input.fallbackRepoSlug ?? '').trim().toLowerCase();
     const scanKey = pollBindingStateKey({ repoSlug, prNumber });
-    if (!headsByScanKey.has(scanKey)) {
-      headsByScanKey.set(scanKey, { session, prNumber, repoSlug });
+    const existing = headsByScanKey.get(scanKey);
+    if (existing) {
+      existing.sessions.push(session);
+    }
+    else {
+      headsByScanKey.set(scanKey, { sessions: [session], prNumber, repoSlug });
     }
   }
 
@@ -377,13 +403,16 @@ export function planReportStatePollTick(input) {
     }
     processed += 1;
 
-    const { session, prNumber, repoSlug } = head;
+    const { sessions: prSessions, prNumber, repoSlug } = head;
     const openPr = openPrByNumber.get(prNumber);
     const headSha = normalizeSha(String(openPr?.headRefOid ?? ''));
     const headCommittedAtMs = resolveHeadCommittedAtMs(openPrs, prNumber);
     const bindingOptions = Number.isFinite(headCommittedAtMs) ? { headCommittedAtMs } : {};
-    const latestReport = findLatestAcceptedReadyForReviewReport(session);
-    const sessionId = String(session?.name ?? session?.sessionId ?? session?.id ?? '').trim();
+    const { report: latestReport, session: reportSession } =
+      findLatestAcceptedReadyForReviewAcrossSessions(prSessions);
+    const sessionId = String(
+      reportSession?.name ?? reportSession?.sessionId ?? reportSession?.id ?? '',
+    ).trim();
 
     const bindingUpdate = updatePollBindingStateEntry({
       bindingByKey,
@@ -432,7 +461,7 @@ export function planReportStatePollTick(input) {
       continue;
     }
 
-    if (!hasReadyForReviewForHead(session, headSha, bindingOptions)) {
+    if (!hasReadyForReviewForHead(reportSession, headSha, bindingOptions)) {
       skips.push({ scanKey, prNumber, headSha, reason: 'classifier_not_ready' });
       continue;
     }

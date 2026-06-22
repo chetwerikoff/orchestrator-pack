@@ -11,6 +11,7 @@ import {
   hasTerminalHandoffOutcome,
   planReportStatePollTick,
   pollBindingStateKey,
+  isAcceptedReadyForReviewReport,
   reportStateSeedDedupeKey,
   updatePollBindingStateEntry,
 } from '../docs/review-ready-report-state-seed.mjs';
@@ -190,6 +191,31 @@ describe('Issue #391 acceptance criteria', () => {
     const fixture = loadFixture('terminated-session-seeds.json');
     const plan = planFromFixture(fixture);
     expect(plan.candidates).toHaveLength(1);
+  });
+
+  it('considers accepted reports from later session rows for the same PR', () => {
+    const fixture = loadFixture('terminated-session-seeds.json');
+    const plan = planFromFixture({
+      ...fixture,
+      sessions: [
+        {
+          name: 'opk-88-live',
+          role: 'worker',
+          status: 'working',
+          prNumber: 88,
+          reports: [{ timestamp: '2026-06-22T02:19:00.000Z', reportState: 'working', accepted: true }],
+        },
+        ...(fixture.sessions ?? []),
+      ],
+    });
+    expect(plan.candidates).toHaveLength(1);
+  });
+
+  it('rejects ready_for_review reports that are not explicitly accepted', () => {
+    expect(isAcceptedReadyForReviewReport({ reportState: 'ready_for_review' })).toBe(false);
+    expect(isAcceptedReadyForReviewReport({ reportState: 'ready_for_review', accepted: null })).toBe(false);
+    expect(isAcceptedReadyForReviewReport({ reportState: 'ready_for_review', accepted: false })).toBe(false);
+    expect(isAcceptedReadyForReviewReport({ reportState: 'ready_for_review', accepted: true })).toBe(true);
   });
 
   it('eventual scan revisits deferred heads when per-tick capacity exceeded', () => {
