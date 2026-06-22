@@ -1620,6 +1620,13 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
 
 
 describe('journaled-worker-send wrapper transport', () => {
+  it('requires claim token only for gated nudges (#384; legacy #281 transport ungated)', () => {
+    const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
+    expect(text).toContain('[switch]$GatedNudge');
+    expect(text).toContain('if ($GatedNudge -and -not $ClaimToken)');
+    expect(text).toContain("if ($ClaimToken) {");
+  });
+
   it('uses Windows PowerShell 5.1-compatible ProcessStartInfo APIs', () => {
     const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
     expect(text).not.toContain('.ArgumentList');

@@ -61,6 +61,50 @@ function Invoke-GhOpenPrList {
     }
 }
 
+
+function Invoke-GhOpenPrListForNumbers {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [int[]]$PrNumbers
+    )
+
+    $unique = @($PrNumbers | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+    if ($unique.Count -eq 0) {
+        return @()
+    }
+
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $prs = @()
+        foreach ($n in $unique) {
+            $raw = gh pr view $n --json number,headRefOid,baseRefName,state 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                continue
+            }
+            $pr = $raw | ConvertFrom-Json
+            if ([string]$pr.state -ne 'OPEN') {
+                continue
+            }
+            $headSha = [string]$pr.headRefOid
+            if (-not $headSha) {
+                continue
+            }
+            $committedDate = gh api "repos/{owner}/{repo}/commits/$headSha" --jq '.commit.committer.date' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $committedDate) {
+                $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$committedDate).Trim() -Force
+            }
+            $prs += $pr
+        }
+        return $prs
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-GhEncodedBranchRef {
     param(
         [Parameter(Mandatory = $true)]
