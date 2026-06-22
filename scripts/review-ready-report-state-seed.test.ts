@@ -15,11 +15,13 @@ import {
   resolveOpenPrForRepoAndNumber,
   reportStateSeedDedupeKey,
   updatePollBindingStateEntry,
+  isPersistedReportStateSeedBlocking,
 } from '../docs/review-ready-report-state-seed.mjs';
 import {
   evaluateDeferredWatchEntry,
   planDeferredWatchTick,
   REPORT_STATE_SEED_START_REASON as REEVAL_REPORT_STATE_SEED_START_REASON,
+  reportStateWatchEntryKey,
   resolveStartReasonForWatchEntry,
   seedWatchFromReportStatePoll,
   revertTriggeredWatchOnAbort,
@@ -41,6 +43,7 @@ type PlanResult = {
   skips: Array<Record<string, unknown>>;
   deferredScanKeys: string[];
   seededKeys: string[];
+  releasedSeedKeys?: string[];
   nowMs: number;
 };
 
@@ -77,6 +80,7 @@ function planFromFixture(fixture: SeedFixture, overrides: Record<string, unknown
     handoffRecords: fixture.handoffRecords ?? {},
     terminalClaimKeys: fixture.terminalClaimKeys ?? [],
     existingSeedKeys: fixture.seededKeys ?? [],
+    watchEntries: (fixture.watchEntries ?? {}) as Record<string, object>,
     supervisedProject: 'orchestrator-pack',
     fallbackRepoSlug: 'chetwerikoff/orchestrator-pack',
     nowMs: fixture.nowMs,
@@ -138,8 +142,9 @@ describe('Issue #391 acceptance criteria', () => {
 
   it('CI-defer then start within bound after CI green', () => {
     const fixture = loadFixture('ci-defer-then-green.json');
+    const watchKey = 'chetwerikoff/orchestrator-pack|42:abc11111111111111111111111111111111111111';
     const redEval = evaluateDeferredWatchEntry({
-      entry: fixture.watchEntries?.['42:abc11111111111111111111111111111111111111'],
+      entry: fixture.watchEntries?.[watchKey],
       openPrs: fixture.openPrs,
       reviewRuns: fixture.reviewRuns,
       sessions: fixture.sessions,
@@ -158,6 +163,76 @@ describe('Issue #391 acceptance criteria', () => {
     const { start } = evaluateReadyFixture(greenFixture);
     expect(start?.startReason).toBe('report_state_seed');
     expect(start?.type).toBe('start_review');
+  });
+
+  it('allows reseed after deferred watch expires while dedupe key remains', () => {
+    const fixture = loadFixture('gate-b-ready-green.json');
+    const repoSlug = 'chetwerikoff/orchestrator-pack';
+    const headSha = String(fixture.headSha);
+    const prNumber = 380;
+    const dedupeKey = reportStateSeedDedupeKey({
+      supervisedProject: 'orchestrator-pack',
+      repoSlug,
+      prNumber,
+      headSha,
+      reportState: 'ready_for_review',
+    });
+    const watchKey = reportStateWatchEntryKey(repoSlug, prNumber, headSha);
+    const expiredFixture: SeedFixture = {
+      ...fixture,
+      seededKeys: [dedupeKey],
+      watchEntries: {
+        [watchKey]: {
+          prNumber,
+          headSha,
+          sessionId: 'opk-165',
+          seedMs: 1719018500000,
+          windowExpiresMs: 1719018800000,
+          seedSource: 'report_state_poll',
+          status: 'expired',
+          pollClass: 'scoped_deferred_head_watch',
+        },
+      },
+      nowMs: 1719018800001,
+    };
+    const plan = planFromFixture(expiredFixture);
+    expect(plan.releasedSeedKeys).toContain(dedupeKey);
+    expect(plan.candidates).toHaveLength(1);
+    expect(plan.skips.some((skip) => skip.reason === 'seed_deduped')).toBe(false);
+    expect(
+      isPersistedReportStateSeedBlocking(
+        dedupeKey,
+        expiredFixture.watchEntries as Record<string, object>,
+        Number(expiredFixture.nowMs),
+      ),
+    ).toBe(false);
+  });
+
+  it('isolates report-state watch keys per repository', () => {
+    const headSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const shared = {
+      prNumber: 1,
+      headSha,
+      sessionId: 's1',
+      dedupeKey: 'dedupe-a',
+      repoSlug: 'org/a',
+    };
+    const other = {
+      prNumber: 1,
+      headSha,
+      sessionId: 's2',
+      dedupeKey: 'dedupe-b',
+      repoSlug: 'org/b',
+    };
+    const first = seedWatchFromReportStatePoll({ candidates: [shared], nowMs: 1_700_000_000_000 });
+    const second = seedWatchFromReportStatePoll({
+      candidates: [other],
+      existingWatches: first.watchEntries,
+      nowMs: 1_700_000_000_100,
+    });
+    expect(Object.keys(second.watchEntries)).toHaveLength(2);
+    expect(second.watchEntries[reportStateWatchEntryKey('org/a', 1, headSha)]).toBeDefined();
+    expect(second.watchEntries[reportStateWatchEntryKey('org/b', 1, headSha)]).toBeDefined();
   });
 
   it('terminal handoff receipt blocks seed', () => {

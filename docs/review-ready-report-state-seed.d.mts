@@ -4,6 +4,9 @@ export declare const REPORT_STATE_SEED_TO_START_MAX_MS: 30000;
 export declare const DEFAULT_REPORT_STATE_POLL_TICK_CAPACITY: 20;
 
 export declare function reportStateSeedDedupeKey(input: Record<string, unknown>): string;
+export declare function parseReportStateSeedDedupeKey(dedupeKey: string): Record<string, unknown> | null;
+export declare function resolveReportStateWatchEntryStatus(entry: Record<string, unknown> | null | undefined, nowMs: number): string;
+export declare function isPersistedReportStateSeedBlocking(dedupeKey: string, watchEntries?: Record<string, object>, nowMs?: number): boolean;
 export declare function pollBindingStateKey(input: Record<string, unknown>): string;
 export declare function isAcceptedReadyForReviewReport(report: Record<string, unknown>): boolean;
 export declare function evaluatePollReportBinding(input: Record<string, unknown>): {

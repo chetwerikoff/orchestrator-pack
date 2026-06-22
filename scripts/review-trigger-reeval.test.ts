@@ -586,16 +586,23 @@ describe('scenario matrix cells', () => {
   });
 });
 
-import { REPORT_STATE_SEED_START_REASON, resolveStartReasonForWatchEntry, seedWatchFromReportStatePoll } from '../docs/review-trigger-reeval.mjs';
+import { REPORT_STATE_SEED_START_REASON, reportStateWatchEntryKey, resolveStartReasonForWatchEntry, seedWatchFromReportStatePoll } from '../docs/review-trigger-reeval.mjs';
 
 describe('Issue #391 report-state seed integration', () => {
   it('seedWatchFromReportStatePoll stamps report_state_seed start reason', () => {
     const seeded = seedWatchFromReportStatePoll({
-      candidates: [{ prNumber: 12, headSha: 'abc', sessionId: 'opk-12' }],
+      candidates: [{
+        prNumber: 12,
+        headSha: 'abc',
+        sessionId: 'opk-12',
+        repoSlug: 'owner/repo',
+      }],
       nowMs: 1_700_000_000_000,
     });
-    const entry = seeded.watchEntries['12:abc'] as Record<string, unknown>;
+    const watchKey = reportStateWatchEntryKey('owner/repo', 12, 'abc');
+    const entry = seeded.watchEntries[watchKey] as Record<string, unknown>;
     expect(entry?.seedSource).toBe('report_state_poll');
+    expect(entry?.repoSlug).toBe('owner/repo');
     expect(resolveStartReasonForWatchEntry(entry)).toBe(REPORT_STATE_SEED_START_REASON);
   });
 });

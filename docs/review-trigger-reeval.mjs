@@ -71,6 +71,21 @@ export function watchEntryKey(prNumber, headSha) {
 }
 
 /**
+ * Repository-scoped watch identity for report-state poll seeds (Issue #391).
+ * Distinct from wake_defer keys so shared state roots do not collapse PR/head pairs
+ * across repositories.
+ *
+ * @param {string} repoSlug
+ * @param {number} prNumber
+ * @param {string} headSha
+ */
+export function reportStateWatchEntryKey(repoSlug, prNumber, headSha) {
+  const repo = String(repoSlug ?? '').trim().toLowerCase();
+  const base = watchEntryKey(prNumber, headSha);
+  return repo ? `${repo}|${base}` : base;
+}
+
+/**
  * @param {object | null | undefined} entry
  */
 export function resolveStartReasonForWatchEntry(entry) {
@@ -794,16 +809,20 @@ export function seedWatchFromReportStatePoll(input) {
     if (!prNumber || !headSha) {
       continue;
     }
-    const key = watchEntryKey(prNumber, headSha);
-    seeded[key] = createWatchEntry({
-      prNumber,
-      headSha,
-      sessionId: String(candidate?.sessionId ?? ''),
-      nowMs,
-      seedSource: 'report_state_poll',
-      deferReason: 'uncovered_not_ready',
-      deferPrimary: 'no_ready_for_review',
-    });
+    const repoSlug = String(candidate?.repoSlug ?? '').trim().toLowerCase();
+    const key = reportStateWatchEntryKey(repoSlug, prNumber, headSha);
+    seeded[key] = {
+      ...createWatchEntry({
+        prNumber,
+        headSha,
+        sessionId: String(candidate?.sessionId ?? ''),
+        nowMs,
+        seedSource: 'report_state_poll',
+        deferReason: 'uncovered_not_ready',
+        deferPrimary: 'no_ready_for_review',
+      }),
+      repoSlug,
+    };
     seededKeys.push(String(candidate?.dedupeKey ?? key));
   }
 

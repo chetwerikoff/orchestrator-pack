@@ -48,6 +48,7 @@ export type ReevalWatchAction =
   | { type: 'skip'; prNumber: number; headSha: string; reason: string };
 
 export declare function watchEntryKey(prNumber: number, headSha: string): string;
+export declare function reportStateWatchEntryKey(repoSlug: string, prNumber: number, headSha: string): string;
 
 export declare function isDeferredNotReadySeedEligible(
   deferReason: string | null | undefined,

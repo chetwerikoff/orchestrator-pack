@@ -14,6 +14,7 @@ import {
   REPORT_STATE_SEED_START_REASON,
   createWatchEntry,
   mergeWatchState,
+  reportStateWatchEntryKey,
   resolveStartReasonForWatchEntry,
   seedWatchFromReportStatePoll,
   watchEntryKey,
@@ -55,6 +56,60 @@ export function reportStateSeedDedupeKey(input) {
     normalizeSha(String(input.headSha ?? '')),
     String(input.reportState ?? READY_FOR_REVIEW_STATE).trim().toLowerCase(),
   ].join('|');
+}
+
+/**
+ * @param {string} dedupeKey
+ */
+export function parseReportStateSeedDedupeKey(dedupeKey) {
+  const parts = String(dedupeKey ?? '').split('|');
+  if (parts.length < 5) {
+    return null;
+  }
+  return {
+    supervisedProject: parts[0],
+    repoSlug: parts[1],
+    prNumber: Number(parts[2]),
+    headSha: parts[3],
+    reportState: parts[4],
+  };
+}
+
+/**
+ * @param {object | null | undefined} entry
+ * @param {number} nowMs
+ */
+export function resolveReportStateWatchEntryStatus(entry, nowMs) {
+  if (!entry || typeof entry !== 'object') {
+    return 'missing';
+  }
+  let status = String(entry.status ?? 'watching');
+  const expiresMs = Number(entry.windowExpiresMs ?? 0);
+  if (status === 'watching' && expiresMs > 0 && nowMs >= expiresMs) {
+    return 'expired';
+  }
+  return status;
+}
+
+/**
+ * @param {string} dedupeKey
+ * @param {Record<string, object>} [watchEntries]
+ * @param {number} [nowMs]
+ */
+export function isPersistedReportStateSeedBlocking(dedupeKey, watchEntries = {}, nowMs = Date.now()) {
+  const parsed = parseReportStateSeedDedupeKey(dedupeKey);
+  if (!parsed?.repoSlug || !parsed.prNumber || !parsed.headSha) {
+    return false;
+  }
+
+  const watchKey = reportStateWatchEntryKey(parsed.repoSlug, parsed.prNumber, parsed.headSha);
+  const entry = watchEntries[watchKey];
+  if (!entry || entry.seedSource !== 'report_state_poll') {
+    return false;
+  }
+
+  const status = resolveReportStateWatchEntryStatus(entry, nowMs);
+  return status === 'watching' || status === 'triggered';
 }
 
 /**
@@ -362,6 +417,7 @@ export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
  * @param {number} [input.nowMs]
  * @param {number} [input.tickCapacity]
  * @param {string[]} [input.deferredScanKeys]
+ * @param {Record<string, object>} [input.watchEntries]
  */
 export function planReportStatePollTick(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
@@ -369,7 +425,17 @@ export function planReportStatePollTick(input) {
   const reviewRuns = toArray(input.reviewRuns);
   const sessions = collectStatusSessionsForPoll(toArray(input.sessions), input.fallbackRepoSlug);
   const tickCapacity = Number(input.tickCapacity ?? DEFAULT_REPORT_STATE_POLL_TICK_CAPACITY);
-  const existingSeedKeys = new Set(toArray(input.existingSeedKeys).map((value) => String(value)));
+  const watchEntries = input.watchEntries ?? {};
+  const releasedSeedKeys = [];
+  const activeSeedKeys = new Set();
+  for (const key of toArray(input.existingSeedKeys).map((value) => String(value))) {
+    if (isPersistedReportStateSeedBlocking(key, watchEntries, nowMs)) {
+      activeSeedKeys.add(key);
+    } else if (key) {
+      releasedSeedKeys.push(key);
+    }
+  }
+  const existingSeedKeys = activeSeedKeys;
   const deferredPrior = toArray(input.deferredScanKeys).map((value) => String(value));
 
   /** @type {Record<string, object>} */
@@ -531,6 +597,7 @@ export function planReportStatePollTick(input) {
     skips,
     deferredScanKeys,
     seededKeys,
+    releasedSeedKeys,
     nowMs,
   };
 }

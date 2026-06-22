@@ -48,7 +48,7 @@
   "handoffRecords": {},
   "terminalClaimKeys": [],
   "watchEntries": {
-    "42:abc11111111111111111111111111111111111111": {
+    "chetwerikoff/orchestrator-pack|42:abc11111111111111111111111111111111111111": {
       "prNumber": 42,
       "headSha": "abc11111111111111111111111111111111111111",
       "sessionId": "opk-42",

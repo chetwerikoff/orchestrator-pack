@@ -104,6 +104,11 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $SupervisedRepoSlug = 'chetwerikoff/orchestrator-pack'
     }
 
+    $watchEntriesForPlan = @{}
+    foreach ($entry in $watchMap.GetEnumerator()) {
+        $watchEntriesForPlan[[string]$entry.Key] = $entry.Value
+    }
+
     $plan = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'planTick' -Payload @{
         sessions               = $sessions
         openPrs                = $openPrs
@@ -117,6 +122,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
         nowMs                  = $nowMs
         tickCapacity           = if ($FixturePayload.tickCapacity) { [int]$FixturePayload.tickCapacity } else { 20 }
         deferredScanKeys       = @($seedState.deferredScanKeys)
+        watchEntries           = $watchEntriesForPlan
     }
 
     $seedResult = @{ seededKeys = @() }
@@ -134,7 +140,16 @@ function Invoke-ReviewReadyReportStateSeedTick {
         Update-ReviewReadyReportStateSeedStateLocked -Path $seedStatePath -NowMs $nowMs -Mutator {
             param($current)
             $mergedSeeds = @{}
-            foreach ($key in @($current.seededKeys) + @($seedResult.seededKeys)) {
+            $released = @{}
+            foreach ($key in @($plan.releasedSeedKeys)) {
+                if ($key) { $released[[string]$key] = $true }
+            }
+            foreach ($key in @($current.seededKeys)) {
+                if (-not $key) { continue }
+                if ($released.ContainsKey([string]$key)) { continue }
+                $mergedSeeds[[string]$key] = $true
+            }
+            foreach ($key in @($seedResult.seededKeys)) {
                 if ($key) { $mergedSeeds[[string]$key] = $true }
             }
             return @{
