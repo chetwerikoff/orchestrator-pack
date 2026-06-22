@@ -442,22 +442,28 @@ function Invoke-CiFailureEpisodeDelivery {
                 -IdempotencyKey $idempotencyKey -ProjectId $ProjectId -SendSnapshot $sendSnapshot -DeliveryId $dispatchDeliveryId
             if (-not $sendResult.ok) {
                 if ($sendResult.claimSkipped) {
-                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "nudge suppressed by claim gate session=$targetId digest=$Digest reason=$($sendResult.reason)"
+                    $claimSkipReason = [string]$sendResult.reason
+                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "nudge suppressed by claim gate session=$targetId digest=$Digest reason=$claimSkipReason"
+                    if ($claimSkipReason -eq 'already_served') {
+                        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "prior nudge claim served; converging delivery session=$targetId digest=$Digest"
+                    }
+                    else {
+                        try {
+                            $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
+                            if (-not $update.updated) {
+                                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest delivery=$dispatchDeliveryId"
+                            }
+                        }
+                        catch {
+                            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
+                        }
+                        $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+                        return $false
+                    }
                 }
                 else {
                     throw "planned ci-failure send failed digest=$Digest reason=$($sendResult.reason) detail=$($sendResult.detail)"
                 }
-                try {
-                    $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
-                    if (-not $update.updated) {
-                        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest delivery=$dispatchDeliveryId"
-                    }
-                }
-                catch {
-                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
-                }
-                $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
-                return $false
             }
         }
         catch {

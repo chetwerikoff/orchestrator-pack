@@ -1326,6 +1326,22 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
   });
 
+  it('treats already-served ci-failure claim skips as delivered sends', () => {
+    const body = readFileSync(
+      path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
+      'utf8',
+    );
+    expect(body).toMatch(/claimSkipReason -eq 'already_served'/);
+    expect(body).toMatch(/prior nudge claim served; converging delivery/);
+    const alreadyServedIdx = body.indexOf("claimSkipReason -eq 'already_served'");
+    const sendFailedIdx = body.indexOf("DispatchOutcome 'send_failed'", alreadyServedIdx);
+    const releaseIntentIdx = body.indexOf("release-submit-intent", alreadyServedIdx);
+    expect(alreadyServedIdx).toBeGreaterThan(-1);
+    expect(body.indexOf('return $false', alreadyServedIdx)).toBeGreaterThan(alreadyServedIdx);
+    expect(sendFailedIdx).toBeGreaterThan(alreadyServedIdx);
+    expect(releaseIntentIdx).toBeGreaterThan(alreadyServedIdx);
+  });
+
   it('reuses pre-registered delivery id for ci-failure journaled sends', () => {
     const ciFailure = readFileSync(
       path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
