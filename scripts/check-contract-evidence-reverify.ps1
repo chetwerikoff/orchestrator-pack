@@ -256,22 +256,6 @@ function Initialize-ReverifyCiAoFixtureEnvironment {
     Ensure-AoDaemonForReverifyE2e -Root $Root | Out-Null
 }
 
-function Test-ReverifyCiAoRuntimeReady {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Root
-    )
-
-    Initialize-ReverifyCiTrustedPackRoot -Root $Root
-    Initialize-ReverifyCiAoFixtureEnvironment -Root $Root
-    if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
-        return $false
-    }
-
-    & ao session ls 2>$null
-    return $LASTEXITCODE -eq 0
-}
-
 function Invoke-ReverifyAc13E2eFixture {
     param(
         [Parameter(Mandatory)]
@@ -300,20 +284,12 @@ function Invoke-Ac13ReviewerFlowE2e {
         return
     }
 
-    if (Test-LiveReverifyE2eConfigured) {
-        Invoke-ReverifyAc13E2eFixture -Root $Root -Failures $Failures
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        Write-Warning 'AC13 live ao review --execute skipped in CI; vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
         return
     }
 
-    if ($env:GITHUB_ACTIONS -eq 'true') {
-        if (-not (Test-ReverifyCiAoRuntimeReady -Root $Root)) {
-            Write-Warning 'AC13 live ao review --execute skipped in CI (ao runtime unavailable after bootstrap); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
-            return
-        }
-        $env:OPK_REVERIFY_E2E_LIVE = '1'
-        if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_ALLOW_SPAWN)) {
-            $env:OPK_REVERIFY_E2E_ALLOW_SPAWN = '1'
-        }
+    if (Test-LiveReverifyE2eConfigured) {
         Invoke-ReverifyAc13E2eFixture -Root $Root -Failures $Failures
         return
     }
