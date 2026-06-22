@@ -55,4 +55,33 @@ describe('reverify e2e fixture session resolution', () => {
     });
     expect(resolved).toBe('opk-173');
   });
+
+  it('does not hijack an arbitrary worker when no dedicated holder exists', () => {
+    const resolved = resolveAoFixtureSessionId({
+      envSession: '',
+      liveE2eEnabled: true,
+      preferredSessionId: 'opk-reverify-e2e',
+      knownSessionIds: ['opk-172', 'opk-173'],
+      knownSessions: [
+        { id: 'opk-172', branch: 'feat/402' },
+        { id: 'opk-173', branch: 'feat/issue-376' },
+      ],
+      allowSpawn: false,
+      spawnSession: () => 'opk-should-not-run',
+    });
+    expect(resolved).toBeNull();
+  });
+
+  it('spawns an explicit fixture holder when none is live and spawn is allowed', () => {
+    const resolved = resolveAoFixtureSessionId({
+      envSession: '',
+      liveE2eEnabled: true,
+      preferredSessionId: 'opk-reverify-e2e',
+      knownSessionIds: ['opk-172'],
+      knownSessions: [{ id: 'opk-172', branch: 'feat/402' }],
+      allowSpawn: true,
+      spawnSession: () => 'opk-spawned-holder',
+    });
+    expect(resolved).toBe('opk-spawned-holder');
+  });
 });

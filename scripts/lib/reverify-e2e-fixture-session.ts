@@ -52,10 +52,6 @@ export function resolveAoFixtureSessionId(options: {
     return dedicatedSession;
   }
 
-  if (options.knownSessionIds.length > 0) {
-    return options.knownSessionIds[0] ?? null;
-  }
-
   if (options.allowSpawn) {
     return options.spawnSession();
   }
