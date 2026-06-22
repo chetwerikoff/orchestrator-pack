@@ -12,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# E2e entrypoint only: allow implementing-PR bootstrap until launcher is on origin/main.
+$env:OPK_REVERIFY_E2E_REQUIRED = '1'
 . (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     Split-Path -Parent $PSScriptRoot

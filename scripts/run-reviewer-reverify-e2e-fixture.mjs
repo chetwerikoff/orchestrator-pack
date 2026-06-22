@@ -41,6 +41,14 @@ function isLiveE2eEnabled() {
   return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
 }
 
+function liveE2eEnv(overrides = {}) {
+  return {
+    ...process.env,
+    OPK_REVERIFY_E2E_REQUIRED: '1',
+    ...overrides,
+  };
+}
+
 function summaryRunOutcomeRowsEvaluated(text) {
   return /run-outcome:\s*rows-evaluated/.test(text);
 }
@@ -138,10 +146,7 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
   return spawnSync('pwsh', args, {
     cwd: packRoot,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      ...envOverrides,
-    },
+    env: liveE2eEnv(envOverrides),
   });
 }
 
@@ -197,7 +202,7 @@ function runAoReviewExecute(sessionId) {
     {
       cwd: packRoot,
       encoding: 'utf8',
-      env: process.env,
+      env: liveE2eEnv(),
     },
   );
   const run = parseAoReviewRunJson(aoProc.stdout ?? '');
