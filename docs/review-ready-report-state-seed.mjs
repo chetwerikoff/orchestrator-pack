@@ -152,6 +152,29 @@ export function resolveSessionPrNumber(session) {
 }
 
 /**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ */
+export function resolveSessionProjectId(session) {
+  return String(session?.project ?? session?.projectId ?? '').trim();
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {string} [supervisedProject]
+ */
+export function sessionMatchesSupervisedProject(session, supervisedProject = '') {
+  const supervised = String(supervisedProject ?? '').trim();
+  if (!supervised) {
+    return true;
+  }
+  const projectId = resolveSessionProjectId(session);
+  if (!projectId) {
+    return true;
+  }
+  return projectId === supervised;
+}
+
+/**
  * @param {Record<string, unknown>} report
  * @param {string} sessionId
  * @param {number} prNumber
@@ -382,8 +405,11 @@ export function resolveOpenPrForRepoAndNumber(openPrs, repoSlug, prNumber, super
   return null;
 }
 
-export function collectStatusSessionsForPoll(sessions, fallbackRepoSlug = '') {
+export function collectStatusSessionsForPoll(sessions, supervisedProject = '') {
   return toArray(sessions).filter((session) => {
+    if (!sessionMatchesSupervisedProject(session, supervisedProject)) {
+      return false;
+    }
     const prNumber = resolveSessionPrNumber(session);
     return Number.isFinite(prNumber) && prNumber > 0;
   });
@@ -395,20 +421,12 @@ export function collectStatusSessionsForPoll(sessions, fallbackRepoSlug = '') {
  * @param {import('./review-trigger-reconcile.mjs').AoSession} session
  */
 export function findLatestAcceptedReadyForReviewReport(session) {
-  /** @type {Record<string, unknown> | null} */
-  let latest = null;
-  let latestMs = -1;
   for (const report of toArray(session?.reports)) {
-    if (!isAcceptedReadyForReviewReport(report)) {
-      continue;
-    }
-    const ts = getReportTimestampMs(report);
-    if (ts >= latestMs) {
-      latestMs = ts;
-      latest = report;
+    if (isAcceptedReadyForReviewReport(report)) {
+      return report;
     }
   }
-  return latest;
+  return null;
 }
 /**
  * Latest accepted ready_for_review across every session row for one PR.
@@ -416,24 +434,14 @@ export function findLatestAcceptedReadyForReviewReport(session) {
  * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
  */
 export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
-  /** @type {Record<string, unknown> | null} */
-  let latestReport = null;
-  /** @type {import('./review-trigger-reconcile.mjs').AoSession | null} */
-  let latestSession = null;
-  let latestMs = -1;
   for (const session of toArray(sessions)) {
-    const report = findLatestAcceptedReadyForReviewReport(session);
-    if (!report) {
-      continue;
-    }
-    const ts = getReportTimestampMs(report);
-    if (ts >= latestMs) {
-      latestMs = ts;
-      latestReport = report;
-      latestSession = session;
+    for (const report of toArray(session?.reports)) {
+      if (isAcceptedReadyForReviewReport(report)) {
+        return { report, session };
+      }
     }
   }
-  return { report: latestReport, session: latestSession };
+  return { report: null, session: null };
 }
 
 /**
@@ -456,7 +464,10 @@ export function planReportStatePollTick(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const openPrs = toArray(input.openPrs);
   const reviewRuns = toArray(input.reviewRuns);
-  const sessions = collectStatusSessionsForPoll(toArray(input.sessions), input.fallbackRepoSlug);
+  const sessions = collectStatusSessionsForPoll(
+    toArray(input.sessions),
+    input.supervisedProject,
+  );
   const tickCapacity = Number(input.tickCapacity ?? DEFAULT_REPORT_STATE_POLL_TICK_CAPACITY);
   const watchEntries = input.watchEntries ?? {};
   const releasedSeedKeys = [];

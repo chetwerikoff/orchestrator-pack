@@ -25,6 +25,24 @@ export declare function resolveOpenPrForRepoAndNumber(
   prNumber: number,
   supervisedRepoSlug?: string,
 ): Record<string, unknown> | null;
+export declare function resolveSessionProjectId(session: Record<string, unknown>): string;
+export declare function sessionMatchesSupervisedProject(
+  session: Record<string, unknown>,
+  supervisedProject?: string,
+): boolean;
+export declare function collectStatusSessionsForPoll(
+  sessions: Array<Record<string, unknown>>,
+  supervisedProject?: string,
+): Array<Record<string, unknown>>;
+export declare function findLatestAcceptedReadyForReviewReport(
+  session: Record<string, unknown>,
+): Record<string, unknown> | null;
+export declare function findLatestAcceptedReadyForReviewAcrossSessions(
+  sessions: Array<Record<string, unknown>>,
+): {
+  report: Record<string, unknown> | null;
+  session: Record<string, unknown> | null;
+};
 export declare function planReportStatePollTick(input: Record<string, unknown>): Record<string, unknown>;
 export declare function seedWatchFromReportStatePoll(input: Record<string, unknown>): {
   watchEntries: Record<string, object>;

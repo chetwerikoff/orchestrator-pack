@@ -17,6 +17,10 @@ import {
   updatePollBindingStateEntry,
   resolveInitialTipFirstObservedMs,
   isPersistedReportStateSeedBlocking,
+  findLatestAcceptedReadyForReviewReport,
+  findLatestAcceptedReadyForReviewAcrossSessions,
+  collectStatusSessionsForPoll,
+  sessionMatchesSupervisedProject,
 } from '../docs/review-ready-report-state-seed.mjs';
 import { isTerminalHandoffAdmissionRecord } from '../docs/review-handoff-wake-admission.mjs';
 import {
@@ -498,6 +502,63 @@ describe('Issue #391 acceptance criteria', () => {
       77,
       supervised,
     )).toBeNull();
+  });
+
+  it('filters status sessions to the supervised project before grouping', () => {
+    const supervised = 'chetwerikoff/orchestrator-pack';
+    const localHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const plan = planReportStatePollTick({
+      supervisedProject: 'orchestrator-pack',
+      fallbackRepoSlug: supervised,
+      openPrs: [
+        { number: 77, headRefOid: localHead, headCommittedAt: '2026-06-22T01:08:00.000Z' },
+      ],
+      sessions: [
+        {
+          name: 'opk-foreign',
+          project: 'foreign-pack',
+          role: 'worker',
+          prNumber: 77,
+          reports: [
+            {
+              timestamp: '2026-06-22T01:09:00.000Z',
+              reportState: 'ready_for_review',
+              accepted: true,
+            },
+          ],
+        },
+      ],
+      reviewRuns: [],
+      bindingByKey: {},
+      nowMs: 1_700_000_000_000,
+    });
+    expect(plan.candidates).toHaveLength(0);
+    expect(collectStatusSessionsForPoll([
+      { name: 'opk-foreign', project: 'foreign-pack', prNumber: 77 },
+      { name: 'opk-local', project: 'orchestrator-pack', prNumber: 77 },
+      { name: 'opk-legacy', prNumber: 77 },
+    ], 'orchestrator-pack')).toHaveLength(2);
+    expect(sessionMatchesSupervisedProject({ project: 'foreign-pack' }, 'orchestrator-pack')).toBe(false);
+  });
+
+  it('selects the first accepted ready_for_review report in emission order', () => {
+    const skewedReports = [
+      {
+        timestamp: '2026-06-22T01:00:00.000Z',
+        reportState: 'ready_for_review',
+        accepted: true,
+        note: 'newest-first emission with skewed older timestamp',
+      },
+      {
+        timestamp: '2026-06-22T02:00:00.000Z',
+        reportState: 'ready_for_review',
+        accepted: true,
+        note: 'older emission with skewed newer timestamp',
+      },
+    ];
+    const session = { name: 'opk-77', role: 'worker', prNumber: 77, reports: skewedReports };
+    expect(findLatestAcceptedReadyForReviewReport(session)).toBe(skewedReports[0]);
+    expect(findLatestAcceptedReadyForReviewAcrossSessions([session]).report).toBe(skewedReports[0]);
   });
 
   it('reverts optimistic triggered marks for unexecuted deferred-watch actions', () => {
