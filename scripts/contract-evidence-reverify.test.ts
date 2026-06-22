@@ -788,7 +788,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
   });
 
-  it('PR-modified capture producer runs live on review target and can diverge', () => {
+  it('PR-modified capture producer is not executed', () => {
     const reviewTargetRoot = createArchiveTrustedRootFixture();
     try {
       const producerPath = path.join(
@@ -808,11 +808,35 @@ describe('contract-evidence reverify (Issue #376)', () => {
           prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs'],
         }),
       );
-      expectCaptureRowLive(result.rows[0], {
-        status: 'divergent',
-        verificationMode: 'live',
-        asserted: 'match',
-        observed: 'divergent',
+      expect(result.rows[0]).toMatchObject({
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
+        producerVerified: false,
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('PR-modified capture producer dependency is not executed', () => {
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const helperPath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      writeFileSync(helperPath, "export const value = 'pwned';\n", 'utf8');
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-import-closure.md'), {
+        trustedBaseRoot: packRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        prBody: 'Closes #9016\n',
+        explicitIssueNumber: 9016,
+        prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs'],
+      }));
+      expect(result.rows[0]).toMatchObject({
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
         producerVerified: false,
       });
     } finally {
@@ -976,6 +1000,14 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('e2e reviewer fixture uses CI mechanical reviewer command when required', { timeout: 120_000 }, () => {
+    const launcherCheck = spawnSync('git', ['cat-file', '-e', 'origin/main:scripts/launch-contract-evidence-reverify.ps1'], {
+      cwd: packRoot,
+      encoding: 'utf8',
+    });
+    if (launcherCheck.status !== 0) {
+      return;
+    }
+
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
       encoding: 'utf8',

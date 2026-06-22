@@ -26,6 +26,7 @@ import {
   isNpmTestDependencyClosureEstablishable,
   listAllowlistedNodeScriptRelPaths,
   listNodeScriptDependencyClosureRelPaths,
+  listNpmTestDependencyClosureRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
@@ -221,17 +222,26 @@ function isProducerClosureExecutionBlocked(
       return true;
     }
     if (trimmed.startsWith('npm test --')) {
-      return !isNpmTestDependencyClosureEstablishable(command, trustedBaseRoot);
+      if (!isNpmTestDependencyClosureEstablishable(command, trustedBaseRoot)) {
+        return true;
+      }
+    } else {
+      return false;
     }
-    return false;
+  } else {
+    const resolved = resolveAllowlistedCommand(command, { repoRoot: trustedBaseRoot });
+    if (!resolved || resolved.executable !== process.execPath) {
+      return false;
+    }
+    if (!isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot)) {
+      return true;
+    }
   }
 
-  const resolved = resolveAllowlistedCommand(command, { repoRoot: trustedBaseRoot });
-  if (!resolved || resolved.executable !== process.execPath) {
-    return false;
-  }
-
-  return !isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot);
+  const closureRelPaths = trimmed.startsWith('npm test --')
+    ? listNpmTestDependencyClosureRelPaths(command, trustedBaseRoot)
+    : listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot);
+  return closureRelPaths.some((relPath) => normalized.has(normalizePath(relPath)));
 }
 
 function remapResolvedCommandToReviewTarget(

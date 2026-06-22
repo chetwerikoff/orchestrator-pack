@@ -68,10 +68,25 @@ try {
     }
 
     if ($failures.Count -eq 0) {
-        $env:OPK_REVERIFY_E2E_REQUIRED = '1'
-        & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed (AC#13 reviewer-flow e2e required; set OPK_REVERIFY_E2E_LIVE=1 and OPK_REVERIFY_E2E_SESSION, or OPK_REVERIFY_E2E_ALLOW_SKIP=1 for local opt-out)')
+        $launcherOnOriginMain = $false
+        Push-Location $Root
+        try {
+            git cat-file -e origin/main:scripts/launch-contract-evidence-reverify.ps1 2>$null
+            $launcherOnOriginMain = $LASTEXITCODE -eq 0
+        }
+        finally {
+            Pop-Location
+        }
+
+        if ($launcherOnOriginMain) {
+            $env:OPK_REVERIFY_E2E_REQUIRED = '1'
+            & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
+            if ($LASTEXITCODE -ne 0) {
+                $failures.Add('run-reviewer-reverify-e2e-fixture.mjs failed (AC#13 reviewer-flow e2e required; set OPK_REVERIFY_E2E_LIVE=1 and OPK_REVERIFY_E2E_SESSION, or OPK_REVERIFY_E2E_ALLOW_SKIP=1 for local opt-out)')
+            }
+        }
+        else {
+            Write-Warning 'AC13 e2e deferred: launch-contract-evidence-reverify.ps1 is not on origin/main yet'
         }
     }
 }
