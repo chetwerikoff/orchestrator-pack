@@ -1,0 +1,16 @@
+{
+  "capabilities": [
+    {
+      "id": "ao-autonomous-guard",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao-autonomous-guard.ps1"
+    },
+    {
+      "id": "ao-shim",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/ao"
+    }
+  ]
+}

@@ -21,7 +21,14 @@ import {
   resolveHeadCommittedAtMs,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import {
+  evaluateAutonomousGatePreflight,
+  loadAutonomousCapabilitiesInventory,
+  loadMergedAutonomousCapabilitiesInventory,
+  validateCapabilityInventory,
+} from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+export { validateCapabilityInventory };
 
 export const ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION =
   'orchestrator-claimed-review-run/v1';
@@ -462,54 +469,13 @@ export function findForbiddenAutonomousReviewRunInvocations(commandLines) {
  * @param {Array<{ id: string, classification: string }>} [input.liveCapabilities]
  */
 export function evaluateGatePreflight(input) {
-  if (input.loadedGateVersion !== ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION) {
-    return {
-      ok: false,
-      reason: 'gate_preflight_stale_or_missing',
-      auditShape: 'preflight_refusal',
-      markerState: String(input.loadedGateVersion ?? ''),
-    };
-  }
-  if (input.atomicClaimPresent === false) {
-    return {
-      ok: false,
-      reason: 'atomic_claim_capability_missing',
-      auditShape: 'preflight_refusal',
-      markerState: ATOMIC_REVIEW_START_CLAIM_CAPABILITY,
-    };
-  }
-  for (const capability of toArray(input.liveCapabilities)) {
-    const classification = String(capability?.classification ?? '').toLowerCase();
-    if (!classification || (classification !== 'gated' && classification !== 'unavailable')) {
-      return {
-        ok: false,
-        reason: 'live_capability_unclassified',
-        auditShape: 'preflight_refusal',
-        markerState: String(capability?.id ?? ''),
-      };
-    }
-  }
-  const raw = toArray(input.liveCapabilities).find((row) => row.id === 'ao-review-run-raw');
-  if (raw && String(raw.classification).toLowerCase() !== 'unavailable') {
-    return {
-      ok: false,
-      reason: 'raw_review_run_not_unavailable',
-      auditShape: 'preflight_refusal',
-      markerState: 'ao-review-run-raw',
-    };
-  }
-  for (const requiredUnavailable of ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env']) {
-    const row = toArray(input.liveCapabilities).find((cap) => cap.id === requiredUnavailable);
-    if (!row || String(row.classification).toLowerCase() !== 'unavailable') {
-      return {
-        ok: false,
-        reason: `${requiredUnavailable}_not_unavailable`,
-        auditShape: 'preflight_refusal',
-        markerState: requiredUnavailable,
-      };
-    }
-  }
-  return { ok: true, reason: 'gate_preflight_ok', auditShape: 'none' };
+  return evaluateAutonomousGatePreflight(input, {
+    expectedGateVersion: ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION,
+    atomicClaimCapability: ATOMIC_REVIEW_START_CLAIM_CAPABILITY,
+    rawCapabilityId: 'ao-review-run-raw',
+    rawNotUnavailableReason: 'raw_review_run_not_unavailable',
+    extraRequiredUnavailable: ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env'],
+  });
 }
 
 /**
@@ -580,11 +546,7 @@ export function coalesceDenialAudit(existing, incoming) {
  * @param {string} [inventoryPath]
  */
 export function loadAutonomousReviewStartCapabilities(inventoryPath) {
-  const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const resolved =
-    inventoryPath ??
-    path.join(repoRoot, 'docs/autonomous-review-start-capabilities.json');
-  return JSON.parse(readFileSync(resolved, 'utf8'));
+  return loadMergedAutonomousCapabilitiesInventory(inventoryPath, 'docs/autonomous-review-start-capabilities.json');
 }
 
 /**
@@ -592,24 +554,6 @@ export function loadAutonomousReviewStartCapabilities(inventoryPath) {
  * @param {Array<{ id: string, classification: string }>} input.repoInventory
  * @param {Array<{ id: string, classification?: string }>} [input.liveSurfaces]
  */
-export function validateCapabilityInventory(input) {
-  const repoIds = new Set(toArray(input.repoInventory).map((row) => String(row.id)));
-  const violations = [];
-  for (const row of toArray(input.repoInventory)) {
-    const classification = String(row.classification ?? '');
-    if (classification !== 'gated' && classification !== 'unavailable') {
-      violations.push(`unclassified repo capability: ${row.id}`);
-    }
-  }
-  for (const live of toArray(input.liveSurfaces)) {
-    const id = String(live.id ?? '');
-    if (!repoIds.has(id)) {
-      violations.push(`live capability missing from repo inventory: ${id}`);
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-
 runStdinJsonCli('orchestrator-claimed-review-run.mjs', {
   evaluateTurnGate: () => evaluateOrchestratorTurnGate(readStdinJson()),
   evaluateBoundary: () => evaluateAutonomousReviewRunBoundary(readStdinJson()),

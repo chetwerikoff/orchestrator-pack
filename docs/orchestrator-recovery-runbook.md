@@ -1068,3 +1068,11 @@ If a worker message is stuck unsubmitted:
 If local `ao send --help` does not advertise `--file` ingestion, this pack intentionally
 fails closed. Do not bypass with unsupported flags; use a published AO version that exposes
 `ao send --file` or `-f, --file <path>`.
+
+## Gated worker nudge adoption (Issue #384)
+
+When the LLM orchestrator turn repeats worker nudges within the same review round or CI transition,
+verify `scripts/invoke-gated-worker-nudge.ps1` is named in live `orchestratorRules` and
+`pwsh -NoProfile -File scripts/check-worker-nudge-gate-adoption.ps1` passes. Audit rows live under
+`~/.agent-orchestrator/projects/<project>/worker-nudge-gate-audit/`. See
+[`docs/migration_notes.md`](migration_notes.md#llm-orchestrator-gated-worker-nudge-gate-issue-384).
