@@ -214,6 +214,19 @@ function Invoke-ReviewReadyReportStateSeedTick {
         }
     }
 
+    foreach ($action in @($reevalPlan.actions)) {
+        if ($action.type -ne 'start_review') { continue }
+        if ($action.startReason -eq 'report_state_seed') { continue }
+        $watchKey = [string]$action.watchKey
+        if (-not $watchKey) { continue }
+        $revert = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'revertTriggeredWatchOnAbort' -Payload @{
+            watchEntries = $watchEntriesToPersist
+            watchKey     = $watchKey
+            nowMs        = $nowMs
+        }
+        $watchEntriesToPersist = $revert.watchEntries
+    }
+
     if (-not $DryRun -and $started -gt 0) {
         Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath -IncomingWatchEntries $watchEntriesToPersist -NowMs $nowMs
     }

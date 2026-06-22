@@ -51,6 +51,11 @@ foreach ($needle in @(
     }
 }
 
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch "startReason -ne 'report_state_seed'") {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must revert unexecuted deferred-watch triggers'
+    exit 1
+}
+
 if ((Get-Content -LiteralPath $reevalLib -Raw) -notmatch '\$planned\.startReason') {
     Write-Host 'Invoke-ReviewTriggerReeval.ps1 must propagate action startReason into planned + claim'
     exit 1

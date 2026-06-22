@@ -22,6 +22,7 @@ import {
   REPORT_STATE_SEED_START_REASON as REEVAL_REPORT_STATE_SEED_START_REASON,
   resolveStartReasonForWatchEntry,
   seedWatchFromReportStatePoll,
+  revertTriggeredWatchOnAbort,
 } from '../docs/review-trigger-reeval.mjs';
 
 const fixturesDir = path.join(
@@ -322,6 +323,19 @@ describe('Issue #391 acceptance criteria', () => {
       77,
       supervised,
     )).toBeNull();
+  });
+
+  it('reverts optimistic triggered marks for unexecuted deferred-watch actions', () => {
+    const deferredKey = '50:cccccccccccccccccccccccccccccccccccccccc';
+    const seedKey = '99:dddddddddddddddddddddddddddddddddddddddd';
+    const nowMs = 1_700_000_000_000;
+    const triggered = {
+      [deferredKey]: { prNumber: 50, headSha: 'cccccccccccccccccccccccccccccccccccccccc', status: 'triggered' },
+      [seedKey]: { prNumber: 99, headSha: 'dddddddddddddddddddddddddddddddddddddddd', status: 'triggered' },
+    };
+    const afterRevert = revertTriggeredWatchOnAbort(triggered, deferredKey, nowMs);
+    expect(afterRevert[deferredKey].status).toBe('watching');
+    expect(afterRevert[seedKey].status).toBe('triggered');
   });
 
   it('concurrent seed for same dedupe key merges to one watch entry', () => {
