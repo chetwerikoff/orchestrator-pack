@@ -6,7 +6,7 @@
   "baseline": {
     "commit_sha": "cd3816888545df3b1fed41b8f23fa4f91de2124c",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:cb2f56af8e3bd98b4c5a4cc6e8f92c7a0c2f4f2caa5e635baad05baf6ebaed20"
+    "active_scope_hash": "sha256:ef2d56fdf77adb65eca2b3f5c637dd14a5c6b5b9e7160c682d5a38e1ee706251"
   },
   "declared_paths": [
     "docs/review-ready-report-state-seed.mjs",
@@ -23,6 +23,8 @@
     "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
     "scripts/lib/Invoke-AoCliJson.ps1",
     "scripts/lib/Get-SupervisedRepoSlug.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/orchestrator-message-audit-roots.manifest.json",
     "scripts/orchestrator-wake-listener.ps1",
@@ -52,6 +54,21 @@
       "reason": "shared supervised repo slug helper for report-state seed",
       "actor": "opk-169",
       "timestamp": "2026-06-22T10:28:04.841Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:cb2f56af8e3bd98b4c5a4cc6e8f92c7a0c2f4f2caa5e635baad05baf6ebaed20",
+      "new_active_scope_hash": "sha256:ef2d56fdf77adb65eca2b3f5c637dd14a5c6b5b9e7160c682d5a38e1ee706251",
+      "changed": {
+        "added": [
+          "scripts/lib/Gh-PrChecks.ps1",
+          "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "scoped GitHub snapshot helper for report-state poll ticks",
+      "actor": "opk-170",
+      "timestamp": "2026-06-22T13:45:00.000Z",
       "applied": true
     }
   ],
