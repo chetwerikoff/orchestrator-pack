@@ -175,17 +175,65 @@ function Test-WorkerNudgeClaimTokenIdentityFields {
     return $true
 }
 
+function Resolve-WorkerNudgeClaimProjectId {
+    param(
+        [string]$ProjectId = '',
+        [string]$Namespace = ''
+    )
+
+    $explicit = ([string]$ProjectId).Trim()
+    if ($explicit) { return $explicit }
+
+    $ns = ([string]$Namespace).Trim()
+    if ($ns) {
+        $canonical = Get-WorkerNudgeClaimStorePathCanonical -Path $ns
+        if ($canonical -match '/projects/([^/]+)/worker-nudge-claims') {
+            return $matches[1]
+        }
+    }
+    return 'orchestrator-pack'
+}
+
+function Resolve-WorkerNudgeClaimTokenProjectId {
+    param([object]$Token)
+
+    if (-not $Token) { return 'orchestrator-pack' }
+    if ($Token.PSObject.Properties.Name -contains 'projectId') {
+        $fromToken = ([string]$Token.projectId).Trim()
+        if ($fromToken) { return $fromToken }
+    }
+    return 'orchestrator-pack'
+}
+
+function Add-WorkerNudgeClaimProjectId {
+    param(
+        [hashtable]$Result,
+        [string]$ProjectId
+    )
+
+    if (-not $Result) { return $Result }
+    $resolvedProjectId = Resolve-WorkerNudgeClaimProjectId -ProjectId $ProjectId -Namespace ([string]$Result.namespace)
+    $Result.projectId = $resolvedProjectId
+    return $Result
+}
+
 function Resolve-WorkerNudgeClaimTokenBinding {
     param(
         [object]$Token,
-        [string]$ProjectId = 'orchestrator-pack'
+        [string]$ProjectId = ''
     )
 
     if (-not (Test-WorkerNudgeClaimTokenIdentityFields -Token $Token)) {
         return @{ ok = $false; reason = 'token_identity_incomplete' }
     }
 
-    $canonicalNamespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
+    $tokenProjectId = Resolve-WorkerNudgeClaimTokenProjectId -Token $Token
+    $overrideProjectId = ([string]$ProjectId).Trim()
+    if ($overrideProjectId -and $overrideProjectId -ne $tokenProjectId) {
+        return @{ ok = $false; reason = 'token_project_mismatch' }
+    }
+
+    $canonicalNamespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $tokenProjectId
     $canonicalPath = Get-WorkerNudgeClaimPath -Namespace $canonicalNamespace `
         -PrNumber ([int]$Token.prNumber) -CycleKey ([string]$Token.cycleKey) `
         -IntentClass ([string]$Token.intentClass) -WorkerTarget ([string]$Token.workerTarget)
@@ -215,6 +263,7 @@ function Resolve-WorkerNudgeClaimTokenBinding {
         ok        = $true
         namespace = $canonicalNamespace
         path      = $canonicalPath
+        projectId = $tokenProjectId
     }
 }
 
@@ -551,8 +600,10 @@ function New-WorkerNudgeClaimToken {
     param([hashtable]$ClaimResult)
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return '' }
     $claim = $ClaimResult.claim
-  $payload = @{
+    $projectId = Resolve-WorkerNudgeClaimProjectId -ProjectId ([string]$ClaimResult.projectId) -Namespace ([string]$ClaimResult.namespace)
+    $payload = @{
         v                     = 1
+        projectId             = $projectId
         claimId               = [string]$claim.tokenNonce
         prNumber              = [int]$claim.prNumber
         cycleKey              = [string]$claim.cycleKey
@@ -621,6 +672,7 @@ function Test-ValidateWorkerNudgeClaimToken {
         claim     = $read.record
         path      = $path
         namespace = [string]$binding.namespace
+        projectId = [string]$binding.projectId
     }
 }
 
@@ -696,7 +748,7 @@ function Acquire-WorkerNudgeClaim {
         $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
 
         if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
-            return @{ acquired = $false; reason = 'mutex_contended'; path = $path; namespace = $resolved; key = $key }
+            return (Add-WorkerNudgeClaimProjectId -Result @{ acquired = $false; reason = 'mutex_contended'; path = $path; namespace = $resolved; key = $key } -ProjectId $ProjectId)
         }
 
         try {
@@ -705,8 +757,8 @@ function Acquire-WorkerNudgeClaim {
                 -Surface $Surface -TupleKey $TupleKey
             $existing = Read-WorkerNudgeClaimRecord -Path $path
             if ($existing.ok) {
-                return Resolve-WorkerNudgeClaimAgainstExisting -Namespace $resolved -Path $path -Existing $existing `
-                    -StaleMinutes $staleMinutes -Surface $Surface -NewRecord $record
+                return (Add-WorkerNudgeClaimProjectId -Result (Resolve-WorkerNudgeClaimAgainstExisting -Namespace $resolved -Path $path -Existing $existing `
+                    -StaleMinutes $staleMinutes -Surface $Surface -NewRecord $record) -ProjectId $ProjectId)
             }
             if ($existing.reason -ne 'missing') {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
@@ -748,15 +800,15 @@ function Acquire-WorkerNudgeClaim {
                 return @{ acquired = $false; reason = 'lost_race'; path = $path; namespace = $resolved; key = $key }
             }
             Clear-WorkerNudgeClaimStoreHealth -Namespace $resolved | Out-Null
-            return @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key }
+            return (Add-WorkerNudgeClaimProjectId -Result @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key } -ProjectId $ProjectId)
         }
         catch [System.IO.IOException] {
             $existing = Read-WorkerNudgeClaimRecord -Path $path
             if (-not $existing.ok) {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
             }
-            return Resolve-WorkerNudgeClaimAgainstExisting -Namespace $resolved -Path $path -Existing $existing `
-                -StaleMinutes $staleMinutes -Surface $Surface -NewRecord $record
+            return (Add-WorkerNudgeClaimProjectId -Result (Resolve-WorkerNudgeClaimAgainstExisting -Namespace $resolved -Path $path -Existing $existing `
+                -StaleMinutes $staleMinutes -Surface $Surface -NewRecord $record) -ProjectId $ProjectId)
         }
         finally {
             Exit-WorkerNudgeClaimMutex -LockDir $lockDir
@@ -1281,10 +1333,11 @@ function Invoke-ConsumeWorkerNudgeClaimTokenForSend {
             return @{ ok = $false; reason = 'lost_race' }
         }
         $claimResult = @{
-            acquired  = $true
-            claim     = $record
-            path      = $path
-            namespace = $namespace
+            acquired   = $true
+            claim      = $record
+            path       = $path
+            namespace  = $namespace
+            projectId  = [string]$binding.projectId
         }
         return @{ ok = $true; token = $token; claim = $record; path = $path; claimResult = $claimResult }
     }

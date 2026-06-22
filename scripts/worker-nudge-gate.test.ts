@@ -1391,10 +1391,42 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(journaled).toMatch(/reused_delivery_id/);
   });
 
+  it('binds claim tokens to the selected project namespace', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = withClaimStoreEnv(dir, `
+        . ${psString(helperPath)}
+        $prevBase = $env:AO_BASE_DIR
+        $env:AO_BASE_DIR = ${psString(dir)}
+        try {
+          $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-793' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -ProjectId 'other-pack' -Surface 'test'
+          if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
+          $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+          $decoded = ConvertFrom-WorkerNudgeClaimToken -ClaimToken $token
+          $consume = Invoke-ConsumeWorkerNudgeClaimTokenForSend -ClaimToken $token -SendSessionId 'opk-1'
+          [pscustomobject]@{
+            projectId = [string]$decoded.projectId
+            consumeOk = [bool]$consume.ok
+            reason = [string]$consume.reason
+          } | ConvertTo-Json -Compress
+        } finally {
+          if ($prevBase) { $env:AO_BASE_DIR = $prevBase } else { Remove-Item Env:AO_BASE_DIR -ErrorAction SilentlyContinue }
+        }
+      `);
+      const result = JSON.parse(runPwsh(script));
+      expect(result.projectId).toBe('other-pack');
+      expect(result.consumeOk).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('binds claim tokens to the canonical claim store', () => {
     const body = readFileSync(path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1'), 'utf8');
     expect(body).toMatch(/function Resolve-WorkerNudgeClaimTokenBinding/);
     expect(body).toMatch(/token_path_unbound/);
+    expect(body).toMatch(/projectId\s+=\s+\$projectId/);
+    expect(body).toMatch(/Resolve-WorkerNudgeClaimTokenProjectId/);
     expect(body).not.toMatch(/namespace\s+=\s+\[string\]\$ClaimResult\.namespace[\s\S]{0,80}path\s+=\s+\[string\]\$ClaimResult\.path/);
   });
 
