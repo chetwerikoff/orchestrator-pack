@@ -30,7 +30,12 @@ function Initialize-ReverifyCiTrustedPackRoot {
     }
 
     $launcherRelativePath = 'scripts/launch-contract-evidence-reverify.ps1'
-    $trustedRoot = Join-Path $env:RUNNER_TEMP 'opk-trusted-reverify-pack'
+    $runnerTemp = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+        [IO.Path]::GetTempPath()
+    } else {
+        $env:RUNNER_TEMP
+    }
+    $trustedRoot = Join-Path $runnerTemp 'opk-trusted-reverify-pack'
     if (Test-Path -LiteralPath (Join-Path $trustedRoot $launcherRelativePath)) {
         $env:OPK_TRUSTED_PACK_ROOT = $trustedRoot
         $env:AO_TRUSTED_PACK_ROOT = $trustedRoot
