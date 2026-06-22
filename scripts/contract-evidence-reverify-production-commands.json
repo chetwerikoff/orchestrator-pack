@@ -1,0 +1,17 @@
+{
+  "description": "Trusted production NEW-row proof command registrations for checkpoint-2 (Issue #376).",
+  "registrations": [
+    {
+      "id": "issue-376-reverify-status-divergent",
+      "proofCommand": "npm test -- reverify",
+      "independentProducerCommand": "REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs",
+      "trustedNodePrefix": "tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs"
+    },
+    {
+      "id": "legacy-list-guard-verdict",
+      "proofCommand": "npm test -- legacy-list-guard",
+      "independentProducerCommand": "node scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "trustedNodePrefix": "scripts/run-contract-evidence-legacy-list-guard.mjs"
+    }
+  ]
+}

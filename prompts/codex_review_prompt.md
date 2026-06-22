@@ -52,6 +52,8 @@ pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
   -IssueFile <issue-body> `
   -PrBodyFile <pr-body> `
   -ExplicitIssue <n> `
+  -PrNumber <n> `
+  -PrHeadSha <sha> `
   -ChangedPathsFile <changed-paths>
 ```
 
@@ -68,6 +70,8 @@ pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
   -IssueFile <issue-body> `
   -PrBodyFile <pr-body> `
   -ExplicitIssue <n> `
+  -PrNumber <n> `
+  -PrHeadSha <sha> `
   -ChangedPathsFile <changed-paths> `
   -InvokeCoworker
 ```
@@ -87,6 +91,8 @@ pwsh -NoProfile -File scripts/invoke-reviewer-contract-mapping.ps1 `
   -IssueFile <issue-body> `
   -PrBodyFile <pr-body> `
   -ExplicitIssue <n> `
+  -PrNumber <n> `
+  -PrHeadSha <sha> `
   -ChangedPathsFile <changed-paths> `
   -LedgerFile /tmp/mapping-ledger.json
 ```
@@ -113,6 +119,44 @@ vocabulary (`skipped_no_spec`, `skipped_no_acceptance`, `ambiguous_spec`,
 
 Emit a structured status record in review output: enum, PR head SHA, bound spec
 IDs/snapshot hashes when resolved, and current usability.
+
+## Checkpoint-2 contract-evidence re-verification (reviewers only)
+
+For every PR with a linked issue, run checkpoint-2 re-verification against the
+**immutable bound issue snapshot** (content-addressed; not a live re-fetch). The
+snapshot is captured during contract-mapping preflight (`-PrNumber` + `-PrHeadSha`)
+into the AO project `code-reviews/bound-issue-snapshots/` store. Resolve the
+persisted artifact with `scripts/resolve-bound-issue-snapshot.ps1` — never pass a
+live re-fetch as `-SnapshotFile`. Use `scripts/launch-contract-evidence-reverify.ps1`
+from **trusted pack root** (origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or
+origin/main archive — never the PR checkout) — the helper owns row evaluation,
+`verification-mode` / `reason` vocabulary, and reviewer summary formatting.
+
+```powershell
+$SnapshotFile = pwsh -NoProfile -File <trusted-pack-root>/scripts/resolve-bound-issue-snapshot.ps1 `
+  -ProjectId <ao-project-id> `
+  -PrNumber <n> `
+  -PrHeadSha <sha> `
+  -IssueNumber <n> `
+  -Require
+
+pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
+  -ReviewTargetRoot <pr-worktree-path> `
+  -PrNumber <n> `
+  -SnapshotFile $SnapshotFile `
+  -CurrentIssueFile <issue-body> `
+  -PrBodyFile <pr-body> `
+  -ExplicitIssue <n> `
+  -ChangedPathsFile <changed-paths> `
+  -Summary
+```
+
+Output is **candidate evidence only** — do not assign severity, approve, or reject
+from checkpoint-2 alone. A row counts as **producer-verified** only under live
+re-verification (`verification-mode: live`). `compared-to-record` rows prove capture
+integrity only. You MUST still **independently validate** each candidate against
+the diff, producer reality, and cited spec snapshot before promoting it to a
+finding. Checkpoint-2 must **never auto-blocks** review availability.
 
 ## Scope context
 

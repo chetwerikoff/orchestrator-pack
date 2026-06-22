@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { readLines, readText } from './lib/reviewer-cli-io.js';
 import {
   buildStructuredStatusRecord,
   computeBoundDiffArtifactHash,
@@ -17,6 +17,11 @@ import {
   type ContractSpecMember,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
+import {
+  captureBoundIssueSnapshotsFromPreflight,
+  resolveDefaultAoProjectId,
+  type BoundIssueSnapshotCaptureResult,
+} from './lib/reverify-bound-issue-snapshot.js';
 
 interface CliOptions {
   prBodyFile: string | null;
@@ -35,6 +40,8 @@ interface CliOptions {
   coworkerAvailable: boolean;
   providerInputByteLimit?: number;
   preflightOnly?: boolean;
+  prNumber?: number | null;
+  projectId?: string | null;
 }
 
 export function parseIssueSpecAssignments(
@@ -93,6 +100,8 @@ function parseArgs(argv: string[]): CliOptions {
     lookupAvailable: true,
     coworkerAvailable: true,
     preflightOnly: false,
+    prNumber: null,
+    projectId: null,
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -129,6 +138,10 @@ function parseArgs(argv: string[]): CliOptions {
       opts.providerInputByteLimit = Number(argv[++i]);
     } else if (arg === '--preflight-only') {
       opts.preflightOnly = true;
+    } else if (arg === '--pr-number') {
+      opts.prNumber = Number(argv[++i]);
+    } else if (arg === '--project-id') {
+      opts.projectId = argv[++i] ?? null;
     } else if (arg === '--text') {
       opts.json = false;
     } else if (arg === '--help' || arg === '-h') {
@@ -159,19 +172,10 @@ Options:
   --coworker-unavailable        Simulate coworker missing
   --provider-input-byte-limit <n>  Provider/input ceiling for preflight
   --preflight-only              Stop after mapping preflight (fixture/integration smoke)
+  --pr-number <n>               PR number for bound issue snapshot capture
+  --project-id <id>             AO project id for bound issue snapshot store
   --text                        Human-readable output instead of JSON
 `);
-}
-
-function readText(filePath: string): string {
-  return readFileSync(filePath, 'utf8');
-}
-
-function readLines(filePath: string): string[] {
-  return readText(filePath)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
 }
 
 export function resolveLiveHeadSha(): string {
@@ -465,6 +469,99 @@ export function applyMappedOutputFinalUsability(input: {
   };
 }
 
+
+
+export function serializeBoundIssueSnapshotCapture(
+  captures: BoundIssueSnapshotCaptureResult[],
+): Array<{
+  issueNumber: number;
+  snapshotPath: string;
+  metadataPath: string;
+  snapshotHash: string;
+  created: boolean;
+}> {
+  return captures.map((capture) => ({
+    issueNumber: capture.issueNumber,
+    snapshotPath: capture.snapshotPath,
+    metadataPath: capture.metadataPath,
+    snapshotHash: capture.snapshotHash,
+    created: capture.created,
+  }));
+}
+
+
+export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus): boolean {
+  const excluded = new Set<ContractMappingStatus>([
+    'stale_head',
+    'stale_spec',
+    'lookup_unavailable',
+    'ambiguous_spec',
+    'skipped_no_spec',
+    'skipped_no_acceptance',
+    'malformed',
+  ]);
+  return !excluded.has(status);
+}
+
+export function specBodiesMatchContractSet(
+  specBodies: Array<{ issueNumber: number; body: string }>,
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>,
+): boolean {
+  const bodyByIssue = new Map(specBodies.map((spec) => [spec.issueNumber, spec.body] as const));
+  return contractSet.every((member) => {
+    const body = bodyByIssue.get(member.issueNumber);
+    if (!body) {
+      return false;
+    }
+    return hashIssueBodySnapshot(body) === member.snapshotHash;
+  });
+}
+
+export function captureValidatedBoundIssueSnapshots(input: {
+  opts: CliOptions;
+  prHeadSha: string;
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>;
+  status: ContractMappingStatus;
+  specBodies: Array<{ issueNumber: number; body: string }>;
+  resolveIssueBody?: IssueBodyResolver;
+}): BoundIssueSnapshotCaptureResult[] {
+  if (!input.opts.prNumber || input.opts.prNumber <= 0) {
+    return [];
+  }
+  if (!shouldPersistBoundIssueSnapshots(input.status)) {
+    return [];
+  }
+  if (input.contractSet.length === 0) {
+    return [];
+  }
+
+  let validatedBodies: Array<{ issueNumber: number; body: string }>;
+  if (input.resolveIssueBody) {
+    validatedBodies = input.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      body: input.resolveIssueBody!(member.issueNumber),
+    }));
+    if (!specBodiesMatchContractSet(validatedBodies, input.contractSet)) {
+      return [];
+    }
+  } else {
+    if (!specBodiesMatchContractSet(input.specBodies, input.contractSet)) {
+      return [];
+    }
+    validatedBodies = input.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      body: input.specBodies.find((spec) => spec.issueNumber === member.issueNumber)!.body,
+    }));
+  }
+
+  return captureBoundIssueSnapshotsFromPreflight({
+    projectId: input.opts.projectId ?? resolveDefaultAoProjectId(),
+    prNumber: input.opts.prNumber,
+    prHeadSha: input.prHeadSha,
+    specBodies: validatedBodies,
+  });
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
@@ -506,6 +603,13 @@ function main(): void {
   });
 
   if (opts.preflightOnly) {
+    const boundIssueSnapshotCapture = captureValidatedBoundIssueSnapshots({
+      opts,
+      prHeadSha,
+      contractSet: preflight.contractSet,
+      status: preflight.status,
+      specBodies,
+    });
     const output = {
       status: preflight.status,
       shouldInvokeCoworker: preflight.shouldInvokeCoworker,
@@ -526,6 +630,7 @@ function main(): void {
           }
         : null,
       coworkerArgv: preflight.coworkerArgv ?? null,
+      boundIssueSnapshotCapture: serializeBoundIssueSnapshotCapture(boundIssueSnapshotCapture),
       ledger: null,
     };
     if (opts.json) {
@@ -580,6 +685,7 @@ function main(): void {
     issueNumber: member.issueNumber,
     snapshotHash: member.snapshotHash,
   }));
+  let specValidationPassed = preflight.contractSet.length === 0;
   if (preflight.contractSet.length > 0) {
     const specReread = tryRecomputeCurrentSpecHashes(
       opts,
@@ -605,6 +711,7 @@ function main(): void {
       statusRecord = merged.statusRecord;
       ledger = merged.ledger;
     } else {
+      specValidationPassed = true;
       currentSpecHashes = specReread.hashes;
     }
   }
@@ -621,6 +728,17 @@ function main(): void {
     statusRecord = finalizedOutput.statusRecord;
     ledger = finalizedOutput.ledger;
   }
+
+  const boundIssueSnapshotCapture = specValidationPassed
+    ? captureValidatedBoundIssueSnapshots({
+        opts,
+        prHeadSha: currentHeadSha,
+        contractSet: preflight.contractSet,
+        status,
+        specBodies,
+        resolveIssueBody: createSpecFreshnessResolver(opts),
+      })
+    : [];
 
   const output = {
     status,
@@ -642,6 +760,7 @@ function main(): void {
         }
       : null,
     coworkerArgv: preflight.coworkerArgv ?? null,
+    boundIssueSnapshotCapture: serializeBoundIssueSnapshotCapture(boundIssueSnapshotCapture),
     ledger: ledger ?? null,
   };
 

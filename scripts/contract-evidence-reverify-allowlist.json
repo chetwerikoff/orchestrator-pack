@@ -1,0 +1,41 @@
+{
+  "description": "Trusted command allowlist for checkpoint-2 live re-verification (Issue #376). Fixture prefixes stay here; production NEW-row proofs register in contract-evidence-reverify-production-commands.json.",
+  "productionCommandsManifest": "contract-evidence-reverify-production-commands.json",
+  "externalProducers": ["ao", "gh", "codex"],
+  "allowedEnvVars": [
+    "NODE_ENV",
+    "REVERIFY_BODY",
+    "REVERIFY_DELAY_MS",
+    "REVERIFY_EXIT_CODE",
+    "REVERIFY_EXPECTED",
+    "REVERIFY_STATUS",
+    "REVERIFY_TOKEN",
+    "REVERIFY_VALUE",
+    "REVERIFY_FORCE_EXIT_CODE",
+    "REVERIFY_ATTEMPT_MUTATION"
+  ],
+  "trustedCommandPrefixes": [
+    "node tests/fixtures/contract-evidence-reverify/producers/",
+    "node scripts/fixtures/contract-evidence-reverify/",
+    "npm test -- reverify",
+    "npm test -- contract-evidence-reverify"
+  ],
+  "mutatingTokenPattern": "\\b(rm\\s|mv\\s|git\\s|tee\\s|>|>>|curl\\s|wget\\s|gh\\s|ao\\s|codex\\s)\\b",
+  "trustedCheckerRelativePaths": [
+    "scripts/lib/contract-evidence-reverify.ts",
+    "scripts/lib/reverify-command-resolution.ts",
+    "scripts/lib/reverify-sandbox.ts",
+    "scripts/contract-evidence.mjs",
+    "scripts/invoke-contract-evidence-reverify.ts",
+    "scripts/contract-evidence-reverify-allowlist.json"
+  ],
+  "newRowProducerBoundaryScripts": [
+    "tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs"
+  ],
+  "npmProofIndependentCommands": {
+    "npm test -- reverify": "REVERIFY_STATUS=divergent node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs",
+    "npm test -- contract-evidence-reverify": "node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs"
+  },
+  "defaultTimeoutMs": 8000,
+  "maxObservedLength": 512
+}
