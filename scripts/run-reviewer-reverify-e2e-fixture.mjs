@@ -107,9 +107,6 @@ function resolveAoFixtureSession() {
   if (knownSessions.includes(preferredSessionId)) {
     return preferredSessionId;
   }
-  if (knownSessions.length > 0) {
-    return knownSessions[0];
-  }
 
   if (isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN')) {
     return spawnEphemeralFixtureSession();
