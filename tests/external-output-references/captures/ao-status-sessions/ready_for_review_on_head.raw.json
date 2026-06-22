@@ -1,0 +1,269 @@
+{
+  "data": [
+    {
+      "name": "opk-165",
+      "role": "worker",
+      "branch": "feat/issue-376",
+      "status": "ci_failed",
+      "summary": null,
+      "claudeSummary": null,
+      "pr": "https://github.com/chetwerikoff/orchestrator-pack/pull/380",
+      "prNumber": 380,
+      "issue": null,
+      "lastActivity": "2m ago",
+      "project": "orchestrator-pack",
+      "ciStatus": null,
+      "reviewDecision": null,
+      "pendingThreads": null,
+      "activity": "idle",
+      "reports": [
+        {
+          "timestamp": "2026-06-22T01:08:14.028Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "note": "merge-contract green on 2847a9d: scope guard, contract tests, self-architect lint, verify all success",
+          "prNumber": 380,
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T01:07:18.349Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-22T01:08:14.028Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-22T01:00:35.080Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "fixing_ci",
+          "note": "PR scope guard failing on current head; investigating",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T01:00:18.944Z"
+          },
+          "after": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T01:00:35.080Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-22T00:59:02.497Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "prNumber": 380,
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-22T00:58:19.629Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-22T00:59:02.497Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-22T00:32:38.095Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "fixing_ci",
+          "note": "PR scope guard: tsx missing from root devDependencies after npm ci on CI",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T00:32:26.706Z"
+          },
+          "after": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T00:32:38.095Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-22T00:27:52.249Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "addressing_reviews",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-22T00:27:28.811Z"
+          },
+          "after": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "resolving_review_comments",
+            "lastTransitionAt": "2026-06-22T00:27:52.249Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T21:21:12.755Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "prNumber": 380,
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-21T21:20:30.204Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-21T21:21:12.755Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T21:18:47.780Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "addressing_reviews",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-21T21:18:31.484Z"
+          },
+          "after": {
+            "legacyStatus": "pr_open",
+            "sessionState": "working",
+            "sessionReason": "resolving_review_comments",
+            "lastTransitionAt": "2026-06-21T21:18:47.780Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T20:59:58.860Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "prNumber": 380,
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-21T20:59:36.774Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-21T20:59:58.860Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T20:59:28.677Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "fixing_ci",
+          "note": "tsc: candidateOnly literal in control-char escape test",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-21T20:58:41.461Z"
+          },
+          "after": {
+            "legacyStatus": "ci_failed",
+            "sessionState": "working",
+            "sessionReason": "fixing_ci",
+            "lastTransitionAt": "2026-06-21T20:59:28.677Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T18:57:11.074Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-21T18:56:56.892Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-21T18:57:11.074Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T18:50:43.122Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "addressing_reviews",
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-21T18:49:59.117Z"
+          },
+          "after": {
+            "legacyStatus": "pr_open",
+            "sessionState": "working",
+            "sessionReason": "resolving_review_comments",
+            "lastTransitionAt": "2026-06-21T18:50:43.122Z"
+          }
+        },
+        {
+          "timestamp": "2026-06-21T18:34:37.577Z",
+          "actor": "che",
+          "source": "report",
+          "reportState": "ready_for_review",
+          "prIsDraft": false,
+          "accepted": true,
+          "before": {
+            "legacyStatus": "stuck",
+            "sessionState": "stuck",
+            "sessionReason": "probe_failure",
+            "lastTransitionAt": "2026-06-21T18:34:02.304Z"
+          },
+          "after": {
+            "legacyStatus": "review_pending",
+            "sessionState": "idle",
+            "sessionReason": "awaiting_external_review",
+            "lastTransitionAt": "2026-06-21T18:34:37.577Z"
+          }
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "hiddenTerminatedCount": 162,
+    "reviewRunCount": 607
+  }
+}
