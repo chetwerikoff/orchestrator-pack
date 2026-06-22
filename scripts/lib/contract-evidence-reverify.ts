@@ -23,8 +23,10 @@ import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
   isCommandSafe,
   isNodeScriptDependencyClosureEstablishable,
+  isNpmTestDependencyClosureEstablishable,
   listAllowlistedNodeScriptRelPaths,
   listNodeScriptDependencyClosureRelPaths,
+  listNpmTestDependencyClosureRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
@@ -208,28 +210,19 @@ function isManifestEntryModified(manifestPath: string, entryPath: string, prModi
   return false;
 }
 
-function isProducerCommandUntrusted(
-  command: string,
+function isDependencyClosureUntrusted(
+  relPaths: string[],
+  establishable: boolean,
   trustedBaseRoot: string,
   reviewTargetRoot: string,
   prModifiedPaths: string[],
 ): boolean {
   const normalized = new Set(prModifiedPaths.map(normalizePath));
-  const trimmed = command.trim();
-  if (trimmed.startsWith('npm ')) {
-    return normalized.has('package.json') || normalized.has('package-lock.json');
-  }
-
-  const resolved = resolveAllowlistedCommand(command, { repoRoot: trustedBaseRoot });
-  if (!resolved || resolved.executable !== process.execPath) {
-    return false;
-  }
-
-  if (!isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot)) {
+  if (!establishable) {
     return true;
   }
 
-  for (const relPath of listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot)) {
+  for (const relPath of relPaths) {
     if (normalized.has(relPath)) {
       return true;
     }
@@ -246,6 +239,45 @@ function isProducerCommandUntrusted(
   }
 
   return false;
+}
+
+function isProducerCommandUntrusted(
+  command: string,
+  trustedBaseRoot: string,
+  reviewTargetRoot: string,
+  prModifiedPaths: string[],
+): boolean {
+  const normalized = new Set(prModifiedPaths.map(normalizePath));
+  const trimmed = command.trim();
+  if (trimmed.startsWith('npm ')) {
+    if (normalized.has('package.json') || normalized.has('package-lock.json')) {
+      return true;
+    }
+    if (trimmed.startsWith('npm test --')) {
+      const closure = listNpmTestDependencyClosureRelPaths(command, trustedBaseRoot);
+      return isDependencyClosureUntrusted(
+        closure,
+        isNpmTestDependencyClosureEstablishable(command, trustedBaseRoot),
+        trustedBaseRoot,
+        reviewTargetRoot,
+        prModifiedPaths,
+      );
+    }
+    return false;
+  }
+
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: trustedBaseRoot });
+  if (!resolved || resolved.executable !== process.execPath) {
+    return false;
+  }
+
+  return isDependencyClosureUntrusted(
+    listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot),
+    isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot),
+    trustedBaseRoot,
+    reviewTargetRoot,
+    prModifiedPaths,
+  );
 }
 
 function remapResolvedCommandToReviewTarget(

@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -14,7 +15,7 @@ import {
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
-import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
+import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, isNpmTestDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, listNpmTestDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './lib/reverify-allowlist-config.js';
 import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
@@ -414,7 +415,88 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
   });
 
-  it('npm test -- reverify resolves vitest proof and independent producer mapping', () => {
+  it('lists npm test vitest filter dependency closure for trusted producers', () => {
+    const command = 'npm test -- legacy-list-guard';
+    expect(isNpmTestDependencyClosureEstablishable(command, packRoot)).toBe(true);
+    const closure = listNpmTestDependencyClosureRelPaths(command, packRoot);
+    expect(closure).toEqual(expect.arrayContaining([
+      'scripts/contract-evidence-legacy-list-guard.test.ts',
+      'scripts/contract-evidence.mjs',
+      'scripts/contract-evidence-legacy-list-guard.mjs',
+    ]));
+  });
+
+  it('capture npm test producer trust checks vitest source closure drift', () => {
+    const trustedBaseRoot = createArchiveTrustedRootFixture();
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const sourcePath = path.join(reviewTargetRoot, 'scripts/contract-evidence.mjs');
+      writeFileSync(sourcePath, "export const pwned = true;\n", 'utf8');
+      const captureContent = readFileSync(
+        path.join(packRoot, 'tests/fixtures/contract-evidence-reverify/captures/structured/match.raw.json'),
+        'utf8',
+      );
+      const captureHash = `sha256:${createHash('sha256').update(captureContent).digest('hex')}`;
+      const manifestRel = 'tests/fixtures/contract-evidence-reverify/npm-test-closure-manifest.json';
+      const captureRel = 'tests/fixtures/contract-evidence-reverify/captures/npm-test-closure/match.raw.json';
+      const manifestJson = `${JSON.stringify({
+        entries: {
+          'npm-test-closure/match': {
+            id: 'npm-test-closure/match',
+            producer: 'orchestrator-pack-scripts',
+            sourceCommand: 'npm test -- legacy-list-guard',
+            kind: 'structured',
+            path: 'captures/npm-test-closure/match.raw.json',
+            contentHash: captureHash,
+          },
+        },
+      }, null, 2)}\n`;
+      for (const root of [trustedBaseRoot, reviewTargetRoot]) {
+        mkdirSync(path.dirname(path.join(root, captureRel)), { recursive: true });
+        writeFileSync(path.join(root, captureRel), captureContent, 'utf8');
+        writeFileSync(path.join(root, manifestRel), manifestJson, 'utf8');
+      }
+      const issueBody = [
+        '# npm test closure trust',
+        '',
+        'GitHub Issue: #9020',
+        '',
+        '```behavior-kind',
+        'action-producing',
+        '```',
+        '',
+        '## Contract evidence',
+        '',
+        '```contract-evidence',
+        'binding-id: orchestrator-pack-scripts:scalar:npm-test-closure',
+        'binding: npm test closure fixture value',
+        'producer: orchestrator-pack-scripts',
+        'binding-type: structured',
+        'evidence: capture@npm-test-closure/match',
+        'selector: $',
+        'expected: match',
+        '```',
+        '',
+      ].join('\n');
+      const result = runContractEvidenceReverify(baseInput(issueBody, {
+        trustedBaseRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        manifestPath: manifestRel,
+        prBody: 'Closes #9020\n',
+        explicitIssueNumber: 9020,
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'unverified',
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
+  });
+
+    it('npm test -- reverify resolves vitest proof and independent producer mapping', () => {
     expect(isCommandSafe('npm test -- reverify', packRoot)).toBe(true);
     const resolved = resolveAllowlistedCommand('npm test -- reverify', { repoRoot: packRoot });
     expect(resolved?.allowlistId).toBe('npm test -- reverify');

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
@@ -227,6 +228,7 @@ export function isCommandSafe(command: string, repoRoot: string): boolean {
 
 const STATIC_MODULE_IMPORT_RE = /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
 const DYNAMIC_MODULE_IMPORT_LITERAL_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+const FROM_CLAUSE_IMPORT_RE = /\bfrom\s+['"]([^'"]+)['"]/g;
 const UNESTABLISHABLE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(?![\s]*['"])/m;
 const UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE = /\bimport\s*\(\s*`/m;
 
@@ -235,20 +237,35 @@ function collectLocalModuleSpecifiers(content: string): { specifiers: string[]; 
   let establishable = !UNESTABLISHABLE_DYNAMIC_IMPORT_RE.test(content)
     && !UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE.test(content);
 
-  STATIC_MODULE_IMPORT_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = STATIC_MODULE_IMPORT_RE.exec(content)) !== null) {
-    const specifier = match[1] ?? match[2];
-    if (specifier) {
-      specifiers.push(specifier);
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('"') || trimmed.startsWith("'") || trimmed.startsWith('`')) {
+      continue;
     }
-  }
 
-  DYNAMIC_MODULE_IMPORT_LITERAL_RE.lastIndex = 0;
-  while ((match = DYNAMIC_MODULE_IMPORT_LITERAL_RE.exec(content)) !== null) {
-    const specifier = match[1];
-    if (specifier) {
-      specifiers.push(specifier);
+    STATIC_MODULE_IMPORT_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = STATIC_MODULE_IMPORT_RE.exec(line)) !== null) {
+      const specifier = match[1] ?? match[2];
+      if (specifier) {
+        specifiers.push(specifier);
+      }
+    }
+
+    DYNAMIC_MODULE_IMPORT_LITERAL_RE.lastIndex = 0;
+    while ((match = DYNAMIC_MODULE_IMPORT_LITERAL_RE.exec(line)) !== null) {
+      const specifier = match[1];
+      if (specifier) {
+        specifiers.push(specifier);
+      }
+    }
+
+    FROM_CLAUSE_IMPORT_RE.lastIndex = 0;
+    while ((match = FROM_CLAUSE_IMPORT_RE.exec(line)) !== null) {
+      const specifier = match[1];
+      if (specifier) {
+        specifiers.push(specifier);
+      }
     }
   }
 
@@ -264,8 +281,12 @@ function resolveLocalModulePath(fromFile: string, specifier: string): string | n
     base,
     `${base}.mjs`,
     `${base}.js`,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.mts`,
     path.join(base, 'index.mjs'),
     path.join(base, 'index.js'),
+    path.join(base, 'index.ts'),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
@@ -275,16 +296,10 @@ function resolveLocalModulePath(fromFile: string, specifier: string): string | n
   return null;
 }
 
-function resolveNodeScriptDependencyClosure(command: string, repoRoot: string): { relPaths: string[]; establishable: boolean } | null {
-  const resolved = resolveAllowlistedCommand(command, { repoRoot });
-  if (!resolved || resolved.executable !== process.execPath) {
-    return null;
-  }
-  const entryScript = resolved.args[0];
-  if (!entryScript) {
-    return null;
-  }
-
+function resolveScriptDependencyClosureFromAbsEntry(
+  entryScript: string,
+  repoRoot: string,
+): { relPaths: string[]; establishable: boolean } {
   const repoRootNorm = path.normalize(repoRoot);
   const visited = new Set<string>();
   const relPaths: string[] = [];
@@ -338,12 +353,113 @@ function resolveNodeScriptDependencyClosure(command: string, repoRoot: string): 
   return { relPaths: [...new Set(relPaths)], establishable };
 }
 
+function resolveNodeScriptDependencyClosure(command: string, repoRoot: string): { relPaths: string[]; establishable: boolean } | null {
+  const resolved = resolveAllowlistedCommand(command, { repoRoot });
+  if (!resolved || resolved.executable !== process.execPath) {
+    return null;
+  }
+  const entryScript = resolved.args[0];
+  if (!entryScript) {
+    return null;
+  }
+
+  return resolveScriptDependencyClosureFromAbsEntry(entryScript, repoRoot);
+}
+
+function parseNpmTestFilter(command: string): string | null {
+  const trimmed = command.trim();
+  if (!trimmed.startsWith('npm test --')) {
+    return null;
+  }
+  const filter = trimmed.slice('npm test --'.length).trim();
+  return filter || null;
+}
+
+function listVitestFilterMatchedTestRelPaths(filter: string, repoRoot: string): string[] {
+  const vitestScript = path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs');
+  if (!existsSync(vitestScript)) {
+    return [];
+  }
+
+  const result = spawnSync(process.execPath, [vitestScript, 'list', filter], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      VITEST_CACHE_DIR: '/tmp/opk-reverify-vitest-cache',
+    },
+    timeout: 60_000,
+  });
+  if (result.status !== 0) {
+    return [];
+  }
+
+  const files = new Set<string>();
+  for (const line of (result.stdout ?? '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const filePart = trimmed.split(' > ')[0]?.trim();
+    if (!filePart) {
+      continue;
+    }
+    const abs = path.isAbsolute(filePart) ? filePart : path.join(repoRoot, filePart);
+    const rel = normalizePath(path.relative(repoRoot, abs));
+    if (rel && !rel.startsWith('..')) {
+      files.add(rel);
+    }
+  }
+  return [...files];
+}
+
+function resolveNpmTestDependencyClosure(command: string, repoRoot: string): { relPaths: string[]; establishable: boolean } | null {
+  const filter = parseNpmTestFilter(command);
+  if (!filter || !isCommandSafe(command, repoRoot)) {
+    return null;
+  }
+
+  const testRelPaths = listVitestFilterMatchedTestRelPaths(filter, repoRoot);
+  if (testRelPaths.length === 0) {
+    return { relPaths: [], establishable: false };
+  }
+
+  const relPaths = new Set<string>();
+  let establishable = true;
+  for (const testRelPath of testRelPaths) {
+    const absPath = path.join(repoRoot, testRelPath);
+    if (!existsSync(absPath)) {
+      establishable = false;
+      relPaths.add(testRelPath);
+      continue;
+    }
+    const closure = resolveScriptDependencyClosureFromAbsEntry(absPath, repoRoot);
+    if (!closure.establishable) {
+      establishable = false;
+    }
+    for (const relPath of closure.relPaths) {
+      relPaths.add(relPath);
+    }
+  }
+
+  return { relPaths: [...relPaths], establishable };
+}
+
 export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
   return resolveNodeScriptDependencyClosure(command, repoRoot)?.relPaths ?? [];
 }
 
 export function isNodeScriptDependencyClosureEstablishable(command: string, repoRoot: string): boolean {
   const closure = resolveNodeScriptDependencyClosure(command, repoRoot);
+  return closure?.establishable ?? false;
+}
+
+export function listNpmTestDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
+  return resolveNpmTestDependencyClosure(command, repoRoot)?.relPaths ?? [];
+}
+
+export function isNpmTestDependencyClosureEstablishable(command: string, repoRoot: string): boolean {
+  const closure = resolveNpmTestDependencyClosure(command, repoRoot);
   return closure?.establishable ?? false;
 }
 
