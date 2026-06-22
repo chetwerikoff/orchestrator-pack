@@ -314,12 +314,20 @@ function resolveNodeScriptDependencyClosure(command: string, repoRoot: string): 
       establishable = false;
     }
     for (const specifier of collected.specifiers) {
+      if (!specifier.startsWith('.')) {
+        continue;
+      }
       const localPath = resolveLocalModulePath(normalized, specifier);
       if (!localPath) {
+        establishable = false;
         continue;
       }
       const localNorm = path.normalize(localPath);
-      if (localNorm === normalized || !localNorm.startsWith(`${repoRootNorm}${path.sep}`)) {
+      if (localNorm === normalized) {
+        continue;
+      }
+      if (!localNorm.startsWith(`${repoRootNorm}${path.sep}`)) {
+        establishable = false;
         continue;
       }
       walk(localNorm);

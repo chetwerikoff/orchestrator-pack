@@ -234,6 +234,56 @@ describe('contract-evidence reverify (Issue #376)', () => {
     }
   });
 
+  it('rejects unresolved relative imports in producer dependency closure', () => {
+    const command = 'node tests/fixtures/contract-evidence-reverify/producers/importing-structured-value.mjs';
+    const trustedBaseRoot = createArchiveTrustedRootFixture();
+    try {
+      const helperPath = path.join(
+        trustedBaseRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      rmSync(helperPath, { force: true });
+      expect(isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot)).toBe(false);
+    } finally {
+      rmSync(trustedBaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects capture producers when PR supplies a previously missing relative import', () => {
+    const trustedBaseRoot = createArchiveTrustedRootFixture();
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const trustedHelperPath = path.join(
+        trustedBaseRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      rmSync(trustedHelperPath, { force: true });
+      const reviewHelperPath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+      );
+      writeFileSync(reviewHelperPath, "export const value = 'pwned';\n", 'utf8');
+      const result = runContractEvidenceReverify(baseInput(loadIssue('live-import-closure.md'), {
+        trustedBaseRoot,
+        reviewTargetRoot,
+        repoRoot: reviewTargetRoot,
+        prBody: 'Closes #9016\n',
+        explicitIssueNumber: 9016,
+        prModifiedPaths: [
+          'tests/fixtures/contract-evidence-reverify/producers/value-helper.mjs',
+        ],
+      }));
+      expect(result.rows[0]).toMatchObject({
+        status: 'unverified',
+        reason: 'untrusted-pr-modified',
+        verificationMode: 'not-run',
+      });
+    } finally {
+      rmSync(trustedBaseRoot, { recursive: true, force: true });
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rejects producers whose dependency closure cannot be established', () => {
     const command = 'node tests/fixtures/contract-evidence-reverify/producers/importing-unestablishable-dynamic.mjs';
     expect(isNodeScriptDependencyClosureEstablishable(command, packRoot)).toBe(false);
