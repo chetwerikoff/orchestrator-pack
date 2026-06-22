@@ -332,8 +332,12 @@ describe('Issue #391 acceptance criteria', () => {
     const triggered = {
       [deferredKey]: { prNumber: 50, headSha: 'cccccccccccccccccccccccccccccccccccccccc', status: 'triggered' },
       [seedKey]: { prNumber: 99, headSha: 'dddddddddddddddddddddddddddddddddddddddd', status: 'triggered' },
-    };
-    const afterRevert = revertTriggeredWatchOnAbort(triggered, deferredKey, nowMs);
+    } as Record<string, Record<string, unknown>>;
+    const afterRevert = revertTriggeredWatchOnAbort(
+      triggered as never,
+      deferredKey,
+      nowMs,
+    );
     expect(afterRevert[deferredKey].status).toBe('watching');
     expect(afterRevert[seedKey].status).toBe('triggered');
   });
