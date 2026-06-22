@@ -7,6 +7,12 @@ import {
   captureBoundIssueSnapshotsFromPreflight,
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.js';
+import { hashIssueBodySnapshot } from './lib/reviewer-contract-mapping.js';
+import {
+  captureValidatedBoundIssueSnapshots,
+  shouldPersistBoundIssueSnapshots,
+  specBodiesMatchContractSet,
+} from './invoke-reviewer-contract-mapping.js';
 
 const storeDirs: string[] = [];
 
@@ -147,5 +153,52 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     });
     expect(resolved.status).toBe('corrupted');
     expect(resolved.snapshotPath).toBeNull();
+  });
+
+  it('defers bound issue snapshot capture until validated spec statuses', () => {
+    expect(shouldPersistBoundIssueSnapshots('mapping_pending')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('mapped')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('stale_spec')).toBe(false);
+    expect(shouldPersistBoundIssueSnapshots('lookup_unavailable')).toBe(false);
+  });
+
+  it('does not capture bound issue snapshots when supplied spec drifts from contract set', () => {
+    const body = '# Issue body\n\ncontract-evidence:\n- datum: sample\n';
+    const members = [{ issueNumber: 376, snapshotHash: hashIssueBodySnapshot(body) }];
+    const staleBody = `${body}\nchanged`;
+    expect(specBodiesMatchContractSet(
+      [{ issueNumber: 376, body }],
+      members,
+    )).toBe(true);
+    expect(specBodiesMatchContractSet(
+      [{ issueNumber: 376, body: staleBody }],
+      members,
+    )).toBe(false);
+
+    const captures = captureValidatedBoundIssueSnapshots({
+      opts: {
+        prBodyFile: null,
+        issueFile: null,
+        issuesFile: null,
+        issueSpecs: [],
+        diffFile: null,
+        changedPathsFile: null,
+        explicitIssue: 376,
+        declarationIssue: null,
+        prHeadSha: 'abc1234',
+        ledgerFile: null,
+        invokeCoworker: false,
+        json: true,
+        lookupAvailable: true,
+        coworkerAvailable: true,
+        prNumber: 380,
+        projectId: 'orchestrator-pack',
+      },
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      contractSet: members,
+      status: 'mapping_pending',
+      specBodies: [{ issueNumber: 376, body: staleBody }],
+    });
+    expect(captures).toEqual([]);
   });
 });
