@@ -164,7 +164,8 @@ function Set-ReconcileState {
 function Get-ReconcileReactionMessages {
     param(
         [object]$Fixture,
-        [string]$PackRoot = ''
+        [string]$PackRoot = '',
+        [string]$YamlPath = ''
     )
 
     if ($Fixture -and $Fixture.reactionMessages) {
@@ -175,7 +176,7 @@ function Get-ReconcileReactionMessages {
         return $map
     }
 
-    $resolved = Get-ReactionMessagesFromYaml -PackRoot $PackRoot
+    $resolved = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $YamlPath
     if (-not $resolved.ok) {
         return @{}
     }
@@ -224,7 +225,8 @@ function Get-FixtureReconcilePayload {
 function Get-ReconcileDeliveryPayload {
     param(
         [string]$FixturePath,
-        [string]$Project
+        [string]$Project,
+        [string]$ConfigYaml = ''
     )
 
     if ($FixturePath) {
@@ -240,7 +242,7 @@ function Get-ReconcileDeliveryPayload {
         aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
         dispatchJournal    = Get-WorkerMessageDispatchJournal
         reviewRuns         = @(Get-AoReviewRuns -Project $Project)
-        reactionMessages   = Get-ReconcileReactionMessages -PackRoot $RepoRoot
+        reactionMessages   = Get-ReconcileReactionMessages -PackRoot $RepoRoot -YamlPath $ConfigYaml
     }
 }
 
@@ -276,7 +278,8 @@ function Merge-ReconcileTrackingIntoPlanPayload {
 function Get-PreRunRecheckSnapshot {
     param(
         [int]$PrNumber,
-        [string]$Project
+        [string]$Project,
+        [string]$ConfigYaml = ''
     )
 
         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
@@ -285,7 +288,7 @@ function Get-PreRunRecheckSnapshot {
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
-        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
 
     return @{
         openPrs                         = @($openPrs)
@@ -307,14 +310,15 @@ function Test-PreRunHeadReadyRecheck {
         [string]$Project,
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
-        [string]$CiGreenWakeStatePath = ''
+        [string]$CiGreenWakeStatePath = '',
+        [string]$ConfigYaml = ''
     )
 
     $fresh = if ($FixtureSnapshot) {
         $FixtureSnapshot
     }
     else {
-        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project
+        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project -ConfigYaml $ConfigYaml
     }
 
     if (-not $FixtureSnapshot) {
@@ -368,7 +372,8 @@ function Invoke-PlannedReviewRun {
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
         [string]$StartReason = '',
-        [string]$CiGreenWakeStatePath = ''
+        [string]$CiGreenWakeStatePath = '',
+        [string]$ConfigYaml = ''
     )
 
     $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
@@ -403,7 +408,7 @@ function Invoke-PlannedReviewRun {
             sessionId   = $SessionId
             startReason = $StartReason
         } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState `
-            -CiGreenWakeStatePath $CiGreenWakeStatePath
+            -CiGreenWakeStatePath $CiGreenWakeStatePath -ConfigYaml $ConfigYaml
     }
     catch {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
@@ -523,7 +528,7 @@ function Invoke-ReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @($openPrs)
-        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
         $payload = @{
             openPrs                       = @($openPrs)
             reviewRuns                    = @($reviewRuns)
@@ -590,7 +595,8 @@ function Invoke-ReconcileTick {
         $startResult = Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
             -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -TrackingState $TrackingState `
-            -StartReason $action.startReason -CiGreenWakeStatePath $CiGreenWakeStatePath
+            -StartReason $action.startReason -CiGreenWakeStatePath $CiGreenWakeStatePath `
+            -ConfigYaml $ConfigYaml
         if ($startResult.started) {
             if (-not $DryRunMode -and $action.ownerCycle) {
                 $commit = Invoke-ReconcileFilterCli -Subcommand 'commit-review-started' -Payload @{

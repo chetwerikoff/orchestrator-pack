@@ -16,8 +16,8 @@ import {
   findOverwrittenDeliveries,
   isDeliveryConsumed,
   isSessionAlive,
-  extractReactionDeliveries,
   mergeDeliveryRecords,
+  observeReactionDeliveries,
   selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
   DISPATCH_SOURCE_AO_SEND,
@@ -43,24 +43,6 @@ import type {
 } from '../docs/worker-message-submit-reconcile.d.mts';
 
 
-function observeReactionDeliveriesForTest(input: {
-  aoEvents?: Array<Record<string, unknown>>;
-  dispatchJournal?: Record<string, Record<string, unknown>>;
-  reviewRuns?: Array<Record<string, unknown>>;
-  reactionMessages?: Record<string, string>;
-  nowMs: number;
-}) {
-  const deliveries = mergeDeliveryRecords(input);
-  const reactionObservation = extractReactionDeliveries(
-    input.aoEvents ?? [],
-    input.reactionMessages ?? {},
-  ) as unknown as {
-    deliveries: ReturnType<typeof mergeDeliveryRecords>;
-    audits: Array<Record<string, unknown>>;
-  };
-  const reactionAudits = reactionObservation.audits;
-  return { deliveries, reactionAudits };
-}
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1464,7 +1446,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
       config: {},
     });
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(true);
-    const { deliveries } = observeReactionDeliveriesForTest({
+    const { deliveries } = observeReactionDeliveries({
       aoEvents: [reactionEvent],
       dispatchJournal: {},
       reviewRuns: [],
@@ -1498,7 +1480,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
       tsEpoch: 1717600000000,
       data: { action: 'send-to-agent', reactionKey: 'changes-requested' },
     };
-    const { deliveries, reactionAudits } = observeReactionDeliveriesForTest({
+    const { deliveries, reactionAudits } = observeReactionDeliveries({
       aoEvents: [unresolvedEvent],
       dispatchJournal: {},
       reviewRuns: [],
@@ -1517,7 +1499,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
   });
 
   it('AC5: ci-failed notify reaction is absent from shape map (negative control)', () => {
-    const { deliveries, reactionAudits } = observeReactionDeliveriesForTest({
+    const { deliveries, reactionAudits } = observeReactionDeliveries({
       aoEvents: [
         {
           kind: 'reaction.action_succeeded',

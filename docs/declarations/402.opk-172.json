@@ -5,15 +5,29 @@
   "supersedes": null,
   "created_at": "2026-06-22T14:42:34.572Z",
   "baseline": {
-    "commit_sha": "b2d867057fd50e6213c017b1720067620a400457",
+    "commit_sha": "488950d3c01ab8374cf48e98826e0270aa844a12",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3c9ebe21f8d3443aa24150d5d6944ae25e260aa9edaaad885b1ad30ebbe03af7"
+    "active_scope_hash": "sha256:3689f8459b38a52bf826100da54a851e8012b185d125ea2fcf035626d891f7c4"
   },
   "declared_paths": [
+    "docs/worker-message-dispatch-observe.d.mts",
     "docs/worker-message-dispatch-observe.mjs"
   ],
   "declared_globs": [
     "scripts/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3c9ebe21f8d3443aa24150d5d6944ae25e260aa9edaaad885b1ad30ebbe03af7",
+      "new_active_scope_hash": "sha256:3689f8459b38a52bf826100da54a851e8012b185d125ea2fcf035626d891f7c4",
+      "changed": {
+        "added": ["docs/worker-message-dispatch-observe.d.mts"],
+        "removed": []
+      },
+      "reason": "review fix: sync dispatch-observe contract types",
+      "actor": "opk-172",
+      "timestamp": "2026-06-22T16:00:00.000Z",
+      "applied": true
+    }
+  ]
 }
