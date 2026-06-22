@@ -254,8 +254,6 @@ function Invoke-PlannedFirstReviewSend {
         Write-ReviewSendLog "send failed run=$($Action.runId): $sendError"
         return @{ sent = $false; reason = 'send_failed'; detail = $sendError }
     }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
-
     $post = Get-ReviewSendPreSendSnapshot -RunId ([string]$Action.runId) -Project $Project
     $verify = Invoke-ReviewSendFilterCli -Subcommand 'verify-sent' -Payload @{
         reviewRuns = @($post.reviewRuns)
@@ -263,9 +261,11 @@ function Invoke-PlannedFirstReviewSend {
         targetSha  = [string]$Action.targetSha
     }
     if (-not $verify.ok) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$verify.reason } | Out-Null
         Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason)"
         return @{ sent = $false; reason = $verify.reason }
     }
+    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
 
     $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
