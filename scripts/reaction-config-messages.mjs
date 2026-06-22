@@ -19,6 +19,40 @@ const SEND_TO_AGENT = 'send-to-agent';
 /**
  * @param {string} blockText
  */
+
+/**
+ * @param {string[]} lines
+ * @param {number} startIndex
+ * @returns {{ bodyLines: string[], nextIndex: number }}
+ */
+function consumeBlockScalarBodyLines(lines, startIndex) {
+  /** @type {string[]} */
+  const bodyLines = [];
+  let index = startIndex;
+  while (index < lines.length) {
+    const body = lines[index];
+    if (body.startsWith('      ')) {
+      bodyLines.push(body.slice(6));
+      index += 1;
+      continue;
+    }
+    if (body.trim() === '') {
+      let peek = index + 1;
+      while (peek < lines.length && lines[peek].trim() === '') {
+        peek += 1;
+      }
+      if (peek < lines.length && lines[peek].startsWith('      ')) {
+        bodyLines.push('');
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    break;
+  }
+  return { bodyLines, nextIndex: index };
+}
+
 function parseReactionEntry(blockText) {
   /** @type {{ action?: string, message?: string }} */
   const entry = {};
@@ -37,15 +71,8 @@ function parseReactionEntry(blockText) {
       const raw = inlineMessageMatch[1].trim();
       if (raw === '>-' || raw === '>' || raw === '|' || raw === '|-') {
         index += 1;
-        const folded = [];
-        while (index < lines.length) {
-          const body = lines[index];
-          if (!body.startsWith('      ')) {
-            break;
-          }
-          folded.push(body.slice(6));
-          index += 1;
-        }
+        const { bodyLines: folded, nextIndex } = consumeBlockScalarBodyLines(lines, index);
+        index = nextIndex;
         entry.message = foldScalarBlock(raw, folded);
         continue;
       }
@@ -176,7 +203,8 @@ function validateReactionMessageSyntax(blockText) {
     }
     const rest = match[1].trim();
     if (!rest) {
-      if (index + 1 >= lines.length || !lines[index + 1].startsWith('      ')) {
+      const { bodyLines } = consumeBlockScalarBodyLines(lines, index + 1);
+      if (bodyLines.length === 0) {
         return { ok: false, error: 'message_scalar_without_body' };
       }
       continue;
@@ -185,6 +213,10 @@ function validateReactionMessageSyntax(blockText) {
       return { ok: false, error: 'unsupported_message_comment' };
     }
     if (supportedIndicators.has(rest)) {
+      const { bodyLines } = consumeBlockScalarBodyLines(lines, index + 1);
+      if (bodyLines.length === 0) {
+        return { ok: false, error: 'message_scalar_without_body' };
+      }
       continue;
     }
     if (rest.startsWith('[') || rest.startsWith('{')) {

@@ -127,4 +127,37 @@ describe('reaction-config-messages (Issue #402)', () => {
     expect(validated.ok).toBe(true);
     expect(parseReactionMessagesFromYaml(yaml).messages?.['changes-requested']).toBeUndefined();
   });
+
+  it('preserves blank lines inside YAML block scalar messages', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: |',
+      '      line one',
+      '',
+      '      line two',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('line one\n\nline two');
+    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
+      DELIVERY_PATH_PENDING_DRAFT,
+    );
+  });
+
+  it('preserves blank lines inside folded block scalar messages', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: >-',
+      '      paragraph one',
+      '',
+      '      paragraph two',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('paragraph one paragraph two');
+  });
 });
