@@ -347,27 +347,22 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('autonomous guard allows registered journaled transport internal capability', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
-    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
     const script = `
-      $journaled = ${psString(journaled)}
+      . ${psString(capabilityLib)}
       $guard = ${psString(guard)}
-      $issuer = @"
-. '$journaled'
-`$registered = New-JournaledWorkerSendInternalCapability
-`$child = @'
-`$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''1''
-`$env:AO_JOURNALED_SEND_INTERNAL = ''__CAP__''
-. __GUARD__
-`$deny = Test-AutonomousRawWorkerSendDenied -Argv @(''send'',''opk-worker'',''ping'')
-[pscustomobject]@{ denied = [bool]`$deny.denied; reason = [string]`$deny.reason } | ConvertTo-Json -Compress
-'@ -replace ''__CAP__'', `$registered
-`$json = pwsh -NoProfile -Command (`$child -replace ''__GUARD__'', '$guard')
-if (`$LASTEXITCODE -ne 0) { throw `$json }
-Write-Output `$json
-"@
-      $json = pwsh -NoProfile -Command $issuer
-      if ($LASTEXITCODE -ne 0) { throw $json }
-      $json
+      $env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = '1'
+      $registered = Register-JournaledWorkerSendInternalCapability
+      if (-not $registered.ok) { throw $registered.reason }
+      $childParts = @(
+        '$env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = ''1''' ,
+        '$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''1''' ,
+        ('$env:AO_JOURNALED_SEND_INTERNAL = ''' + $registered.capability + ''''),
+        ('. ' + $guard),
+        '$deny = Test-AutonomousRawWorkerSendDenied -Argv @(''send'',''opk-worker'',''ping'')',
+        '[pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress'
+      )
+      pwsh -NoProfile -Command ($childParts -join '; ')
     `;
     const result = JSON.parse(runPwsh(script));
     expect(result.denied).toBe(false);

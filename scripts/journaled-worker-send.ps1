@@ -28,7 +28,8 @@ param(
     [string]$AdoptionProbeRunIdHash = '',
     [string]$ClaimToken = '',
     [switch]$GatedNudge,
-    [switch]$NoWait
+    [switch]$NoWait,
+    [switch]$RegisterCapabilityOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -173,6 +174,11 @@ function Invoke-AoSendViaFile {
     finally {
         Remove-MechanicalTransportTempPaths -Paths @($payloadFile)
     }
+}
+
+if ($RegisterCapabilityOnly) {
+    Write-Output (New-JournaledWorkerSendInternalCapability)
+    exit 0
 }
 
 $payload = [Console]::In.ReadToEnd()
