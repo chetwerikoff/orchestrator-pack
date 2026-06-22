@@ -806,6 +806,31 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(summary).not.toContain('gho_abcdefghijklmnopqrstuvwxyz1234567890');
   });
 
+  it('redacts bare credential tokens without key=value labels', () => {
+    const summary = formatReviewerReverifySummary({
+      runOutcome: 'rows-evaluated',
+      issueNumber: 376,
+      snapshotHash: 'sha256:abc',
+      snapshotDrift: false,
+      prHeadSha: 'deadbeef',
+      rows: [{
+        rowIndex: 0,
+        rowHash: 'sha256:row',
+        status: 'divergent',
+        verificationMode: 'live',
+        producerVerified: false,
+        asserted: 'match',
+        observed: 'gho_abcdefghijklmnopqrstuvwxyz1234567890 AKIAIOSFODNN7EXAMPLE',
+      }],
+      candidateOnly: true,
+      neverBlocks: true,
+    });
+    expect(summary).toContain('[REDACTED]');
+    expect(summary).toContain('AKIA[REDACTED]');
+    expect(summary).not.toContain('gho_abcdefghijklmnopqrstuvwxyz1234567890');
+    expect(summary).not.toContain('AKIAIOSFODNN7EXAMPLE');
+  });
+
   it('snapshot-drift flag on rows-evaluated when current issue differs', () => {
     const snapshot = loadIssue('live-match.md');
     const drifted = `${snapshot}\n\nEdited after capture.`;

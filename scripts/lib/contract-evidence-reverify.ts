@@ -178,8 +178,8 @@ function scrubReviewerEvidenceCredentials(text: string): string {
     /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
     '$1[REDACTED]',
   );
-  value = value.replace(/(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}/g, '[REDACTED]');
-  value = value.replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]');
+  value = value.replace(/\b(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
+  value = value.replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA[REDACTED]');
   return value;
 }
 
