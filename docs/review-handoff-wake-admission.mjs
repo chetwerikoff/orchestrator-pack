@@ -426,7 +426,7 @@ export function evaluateHandoffPreClaimRecheck(input) {
   };
 }
 
-function handoffAdmissionKey({ projectId, repoSlug, prNumber, headSha }) {
+export function handoffAdmissionKey({ projectId, repoSlug, prNumber, headSha }) {
   return [projectId ?? '', repoSlug ?? '', String(prNumber ?? ''), normalizeSha(headSha)].join('|');
 }
 

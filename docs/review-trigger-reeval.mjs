@@ -44,6 +44,9 @@ export const READINESS_TO_RUN_DECISION_MAX_MS = 5_000;
 /** Explicit poll classification — scoped deferred-head watch, not full-PR reconcile. */
 export const SCOPED_DEFERRED_HEAD_WATCH_POLL_CLASS = 'scoped_deferred_head_watch';
 
+/** Start reason when report-state poll seeds a scoped watch (Issue #391). */
+export const REPORT_STATE_SEED_START_REASON = 'report_state_seed';
+
 /** Report states indicating worker progress toward review (Issue #235 crit 14). */
 export const IN_PROGRESS_REPORT_STATES = new Set([
   'working',
@@ -65,6 +68,17 @@ export const MECHANICAL_FORBIDDEN_REVIEW_REEVAL = [
  */
 export function watchEntryKey(prNumber, headSha) {
   return `${Number(prNumber)}:${normalizeSha(headSha)}`;
+}
+
+/**
+ * @param {object | null | undefined} entry
+ */
+export function resolveStartReasonForWatchEntry(entry) {
+  const seedSource = String(entry?.seedSource ?? '').trim();
+  if (seedSource === 'report_state_poll') {
+    return REPORT_STATE_SEED_START_REASON;
+  }
+  return 'deferred_head_watch';
 }
 
 /**
@@ -111,7 +125,7 @@ export function isDeferredReevalWatchSeedEligible(deferReason, deferRecord) {
  * @param {string} input.headSha
  * @param {string} input.sessionId
  * @param {number} input.nowMs
- * @param {'wake_defer' | 'in_progress' | 'recovery'} input.seedSource
+ * @param {'wake_defer' | 'in_progress' | 'recovery' | 'report_state_poll'} input.seedSource
  * @param {string} [input.deferReason]
  * @param {string} [input.deferPrimary]
  * @param {number} [input.windowMs]
@@ -475,7 +489,10 @@ export function evaluateDeferredWatchEntry(input) {
     ciChecks,
     requiredCheckNames,
     requiredCheckLookupFailed,
-    entryPath: String(input.entryPath ?? 'scoped_deferred_head_watch'),
+    entryPath:
+      String(entry.seedSource ?? '') === 'report_state_poll'
+        ? 'report_state_seed'
+        : String(input.entryPath ?? 'scoped_deferred_head_watch'),
   });
 
   const expiresMs = Number(entry.windowExpiresMs ?? 0);
@@ -574,6 +591,7 @@ export function planDeferredWatchTick(input) {
         prNumber: evaluation.planned.prNumber,
         headSha: evaluation.planned.headSha,
         sessionId: evaluation.planned.sessionId,
+        startReason: resolveStartReasonForWatchEntry(entry),
         watchKey: key,
         processingMs: evaluation.processingMs,
         withinLatencyBound: evaluation.withinLatencyBound,
@@ -757,6 +775,44 @@ export function seedWatchFromInProgressSignals(input) {
  * @param {number} [input.nowMs]
  * @param {number} [input.windowMs]
  */
+
+/**
+ * @param {object} input
+ * @param {Array<{ prNumber: number, headSha: string, sessionId?: string, dedupeKey?: string }>} [input.candidates]
+ * @param {Record<string, object>} [input.existingWatches]
+ * @param {number} [input.nowMs]
+ */
+export function seedWatchFromReportStatePoll(input) {
+  const nowMs = Number(input.nowMs ?? Date.now());
+  /** @type {Record<string, object>} */
+  const seeded = {};
+  const seededKeys = [];
+
+  for (const candidate of toArray(input.candidates)) {
+    const prNumber = Number(candidate?.prNumber);
+    const headSha = normalizeSha(String(candidate?.headSha ?? ''));
+    if (!prNumber || !headSha) {
+      continue;
+    }
+    const key = watchEntryKey(prNumber, headSha);
+    seeded[key] = createWatchEntry({
+      prNumber,
+      headSha,
+      sessionId: String(candidate?.sessionId ?? ''),
+      nowMs,
+      seedSource: 'report_state_poll',
+      deferReason: 'uncovered_not_ready',
+      deferPrimary: 'no_ready_for_review',
+    });
+    seededKeys.push(String(candidate?.dedupeKey ?? key));
+  }
+
+  return {
+    watchEntries: mergeWatchState(input.existingWatches ?? {}, seeded, nowMs),
+    seededKeys,
+  };
+}
+
 export function seedWatchFromWakeDefer(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const deferRecord = input.deferRecord ?? {};
@@ -825,6 +881,7 @@ runStdinJsonCli('review-trigger-reeval.mjs', {
   planTick: () => planDeferredWatchTick(readStdinJson()),
   seedFromWakeDefer: () => seedWatchFromWakeDefer(readStdinJson()),
   seedFromInProgress: () => seedWatchFromInProgressSignals(readStdinJson()),
+  seedFromReportStatePoll: () => seedWatchFromReportStatePoll(readStdinJson()),
   evaluateVerdict: () => evaluateHeadReviewTriggerDecision(readStdinJson()),
   preRunRecheck: () => {
     const payload = readStdinJson();

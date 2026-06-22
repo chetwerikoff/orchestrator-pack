@@ -1,0 +1,41 @@
+{
+  "description": "Terminal handoff receipt blocks new seed",
+  "nowMs": 1719021000000,
+  "openPrs": [
+    {
+      "number": 77,
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "headCommittedAt": "2026-06-22T02:10:00.000Z",
+      "baseRefName": "main"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-77",
+      "role": "worker",
+      "prNumber": 77,
+      "reports": [
+        {
+          "timestamp": "2026-06-22T02:11:00.000Z",
+          "reportState": "ready_for_review",
+          "accepted": true,
+          "prNumber": 77
+        }
+      ]
+    }
+  ],
+  "reviewRuns": [],
+  "ciChecksByPr": { "77": [{ "name": "PR scope guard", "state": "SUCCESS" }] },
+  "requiredCheckNamesByPr": { "77": [] },
+  "requiredCheckLookupFailedByPr": { "77": false },
+  "bindingByKey": {},
+  "seededKeys": [],
+  "handoffRecords": {
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|77|cccccccccccccccccccccccccccccccccccccccc": {
+      "prNumber": 77,
+      "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "terminalClaimKeys": [],
+  "expect": { "candidateCount": 0, "reason": "handoff_receipt" }
+}

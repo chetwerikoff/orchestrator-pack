@@ -585,3 +585,17 @@ describe('scenario matrix cells', () => {
     expect(evaluation.nextEntry?.lastObservedReadyMs).not.toBeNull();
   });
 });
+
+import { REPORT_STATE_SEED_START_REASON, resolveStartReasonForWatchEntry, seedWatchFromReportStatePoll } from '../docs/review-trigger-reeval.mjs';
+
+describe('Issue #391 report-state seed integration', () => {
+  it('seedWatchFromReportStatePoll stamps report_state_seed start reason', () => {
+    const seeded = seedWatchFromReportStatePoll({
+      candidates: [{ prNumber: 12, headSha: 'abc', sessionId: 'opk-12' }],
+      nowMs: 1_700_000_000_000,
+    });
+    const entry = seeded.watchEntries['12:abc'];
+    expect(entry?.seedSource).toBe('report_state_poll');
+    expect(resolveStartReasonForWatchEntry(entry)).toBe(REPORT_STATE_SEED_START_REASON);
+  });
+});

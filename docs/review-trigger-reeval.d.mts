@@ -2,6 +2,7 @@ export declare const INCIDENT_WAKE_TO_READINESS_DELAY_MS: 77000;
 export declare const DEFERRED_WATCH_WINDOW_MS: 300000;
 export declare const READINESS_TO_RUN_DECISION_MAX_MS: 5000;
 export declare const SCOPED_DEFERRED_HEAD_WATCH_POLL_CLASS: 'scoped_deferred_head_watch';
+export declare const REPORT_STATE_SEED_START_REASON: 'report_state_seed';
 export declare const IN_PROGRESS_REPORT_STATES: ReadonlySet<string>;
 export declare const MECHANICAL_FORBIDDEN_REVIEW_REEVAL: readonly RegExp[];
 
@@ -184,3 +185,6 @@ export declare function preRunHeadReadyRecheck(
   planned: { prNumber: number; headSha: string; sessionId: string },
   fresh: Record<string, unknown>,
 ): { emitReviewRun: boolean; reason: string; decision?: Record<string, unknown> };
+
+export declare function resolveStartReasonForWatchEntry(entry: Record<string, unknown> | null | undefined): string;
+export declare function seedWatchFromReportStatePoll(input: Record<string, unknown>): { watchEntries: Record<string, object>; seededKeys: string[] };

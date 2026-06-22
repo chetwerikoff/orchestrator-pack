@@ -15,6 +15,7 @@
     "scripts/orchestrator-wake-heartbeat.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
+    "scripts/review-ready-report-state-seed.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/review-finding-delivery-confirm.ps1",
@@ -48,6 +49,7 @@
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
+    "scripts/review-ready-report-state-seed.ps1",
     "agent-orchestrator.yaml.example"
   ],
   "toolPaths": [
