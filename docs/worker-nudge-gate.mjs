@@ -30,6 +30,7 @@ export const CLASSIFIER_VERSION = 'worker-nudge-intent/v1';
 export const INTENT_CLASSES = Object.freeze([
   'review-findings',
   'findings-delivery',
+  'review-findings-redelivery',
   'ci-green-handoff',
   'ci-failure',
   'liveness',
@@ -411,6 +412,12 @@ export function classifyIntent(input) {
   const surface = String(input.surface ?? '').trim().toLowerCase();
   const message = String(input.message ?? '').trim().toLowerCase();
 
+  if (
+    source.includes('review-finding-delivery-confirm') ||
+    surface.includes('review-finding-delivery-confirm')
+  ) {
+    return 'review-findings-redelivery';
+  }
   if (source === 'review-send' || source.includes('review-send')) {
     return 'findings-delivery';
   }
@@ -459,6 +466,14 @@ export function deriveCycleKey(intentClass, input) {
         return '';
       }
       return `run:${runId}`;
+    }
+    case 'review-findings-redelivery': {
+      const runId = String(input.reviewRunId ?? input.runId ?? '').trim();
+      const attempt = Number(input.redeliveryAttempt ?? input.attempt ?? 0);
+      if (!runId || !Number.isFinite(attempt) || attempt < 1) {
+        return '';
+      }
+      return `redelivery:${runId}:${attempt}`;
     }
     case 'ci-green-handoff': {
       const transitionId = String(input.transitionId ?? '').trim();

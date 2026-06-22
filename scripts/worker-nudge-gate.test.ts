@@ -151,6 +151,63 @@ describe('worker nudge gate (#384)', () => {
     expect(gate.reason).toBe('already_served');
   });
 
+  it('classifies review-finding-delivery-confirm as review-findings-redelivery', () => {
+    expect(
+      classifyIntent({
+        source: 'review-finding-delivery-confirm',
+        surface: 'review-finding-delivery-confirm',
+      }),
+    ).toBe('review-findings-redelivery');
+  });
+
+  it('derives per-attempt redelivery cycle keys distinct from first findings-delivery send', () => {
+    const first = deriveCycleKey('findings-delivery', { reviewRunId: 'opk-rev-781', runId: 'opk-rev-781' });
+    const retry = deriveCycleKey('review-findings-redelivery', {
+      reviewRunId: 'opk-rev-781',
+      runId: 'opk-rev-781',
+      attempt: 2,
+    });
+    expect(first).toBe('run:opk-rev-781');
+    expect(retry).toBe('redelivery:opk-rev-781:2');
+    const firstTuple = buildTupleKey({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-781',
+      headSha,
+      intentClass: 'findings-delivery',
+    });
+    const retryTuple = buildTupleKey({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-781',
+      headSha,
+      intentClass: 'review-findings-redelivery',
+      attempt: 2,
+    });
+    expect(firstTuple.ok).toBe(true);
+    expect(retryTuple.ok).toBe(true);
+    expect(retryTuple.tupleKey).not.toBe(firstTuple.tupleKey);
+  });
+
+  it('allows redelivery claim after first findings-delivery tuple is terminal SENT', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $first = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-781' -IntentClass 'findings-delivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'review-send-reconcile'
+        if (-not $first.acquired) { throw 'expected first acquire' }
+        Finalize-WorkerNudgeClaim -ClaimResult $first -Outcome 'SENT' | Out-Null
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'redelivery:opk-rev-781:1' -IntentClass 'review-findings-redelivery' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'review-finding-delivery-confirm'
+        [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not suppress distinct intent-class in same cycle', () => {
     const findings = buildTupleKey({
       prNumber: 380,

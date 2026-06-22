@@ -258,7 +258,8 @@ function Invoke-PlannedReviewSend {
         return @{ sent = $true; reason = 'dry_run' }
     }
 
-    $cycleKey = "run:$RunId"
+    $intentClass = 'review-findings-redelivery'
+    $cycleKey = "redelivery:$RunId:$Attempt"
     $openPrs = @(Get-OpenPrList)
     $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
         -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
@@ -272,10 +273,10 @@ function Invoke-PlannedReviewSend {
     if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
     $sendSessionId = [string]$targetResolution.ownerSessionId
     if (-not $sendSessionId) { $sendSessionId = $SessionId }
-    $tupleKey = "$PrNumber|$cycleKey|findings-delivery|$workerTarget"
-    $reviewMessage = 'Review findings for PR #' + $PrNumber + ' (run ' + $RunId + ')'
+    $tupleKey = "$PrNumber|$cycleKey|$intentClass|$workerTarget"
+    $reviewMessage = 'Review findings for PR #' + $PrNumber + ' (run ' + $RunId + ', redelivery attempt ' + $Attempt + ')'
 
-    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass 'findings-delivery' `
+    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $intentClass `
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
         -TupleKey $tupleKey -Surface 'review-finding-delivery-confirm' -ProjectId $ProjectId -Message $reviewMessage
     if (-not $claim.acquired) {

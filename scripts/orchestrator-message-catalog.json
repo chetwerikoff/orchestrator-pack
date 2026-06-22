@@ -195,7 +195,7 @@
         "file": "scripts/review-finding-delivery-confirm.ps1",
         "function": "Invoke-PlannedReviewSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "5e35588847c1fd16"
+        "predicateBodyHash": "62b4bf212193b588"
       }
     },
     {
