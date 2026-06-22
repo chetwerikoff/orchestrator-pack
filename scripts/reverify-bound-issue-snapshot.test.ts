@@ -102,4 +102,26 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     expect(resolved.snapshotPath).toBeNull();
     expect(resolved.metadata?.snapshotHash).toBe(captured.snapshotHash);
   });
+
+  it('returns corrupted for malformed snapshot metadata', () => {
+    withStoreDir();
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      issueBody: '# Original body\n',
+    });
+    writeFileSync(captured.metadataPath, '{"schemaVersion":1,"snapshotHash":"sha256:truncated');
+
+    const resolved = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+    });
+    expect(resolved.status).toBe('corrupted');
+    expect(resolved.snapshotPath).toBeNull();
+    expect(resolved.metadata).toBeNull();
+  });
 });

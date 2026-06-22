@@ -588,7 +588,7 @@ function evaluateCaptureRow(input: {
       resolutionRoot: trustedBaseRoot,
       timeoutMs,
       forceUnreachable: forceProducerUnreachable,
-      sandboxMode: 'pr-head-new',
+      sandboxMode: 'trusted-base',
     });
     if (run.blocked) {
       if (run.blockReason === 'read-only-postcondition-violated') {

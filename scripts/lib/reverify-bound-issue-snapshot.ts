@@ -39,8 +39,34 @@ export function computeBoundIssueSnapshotHash(issueBody: string): string {
 }
 
 function verifyBoundIssueSnapshotBody(snapshotPath: string, expectedHash: string): boolean {
-  const body = readFileSync(snapshotPath, 'utf8');
-  return computeBoundIssueSnapshotHash(body) === expectedHash;
+  try {
+    const body = readFileSync(snapshotPath, 'utf8');
+    return computeBoundIssueSnapshotHash(body) === expectedHash;
+  } catch {
+    return false;
+  }
+}
+
+function readBoundIssueSnapshotMetadata(metadataPath: string): BoundIssueSnapshotMetadata | null {
+  try {
+    const parsed = JSON.parse(readFileSync(metadataPath, 'utf8')) as Partial<BoundIssueSnapshotMetadata>;
+    if (
+      parsed.schemaVersion !== BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION
+      || typeof parsed.snapshotHash !== 'string'
+      || !parsed.snapshotHash.startsWith('sha256:')
+      || typeof parsed.projectId !== 'string'
+      || typeof parsed.prNumber !== 'number'
+      || typeof parsed.prHeadSha !== 'string'
+      || typeof parsed.issueNumber !== 'number'
+      || typeof parsed.capturedAt !== 'string'
+      || parsed.capturePhase !== BOUND_ISSUE_SNAPSHOT_CAPTURE_PHASE
+    ) {
+      return null;
+    }
+    return parsed as BoundIssueSnapshotMetadata;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeSha(sha: string): string {
@@ -138,7 +164,12 @@ export function captureBoundIssueSnapshot(input: {
 
   let created = false;
   if (existsSync(paths.metadataPath)) {
-    const existing = JSON.parse(readFileSync(paths.metadataPath, 'utf8')) as BoundIssueSnapshotMetadata;
+    const existing = readBoundIssueSnapshotMetadata(paths.metadataPath);
+    if (!existing) {
+      throw new Error(
+        `bound issue snapshot metadata corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+      );
+    }
     if (existing.snapshotHash !== snapshotHash) {
       throw new Error(
         `bound issue snapshot already captured for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber} with different content`,
@@ -218,7 +249,17 @@ export function resolveBoundIssueSnapshot(input: {
     };
   }
 
-  const metadata = JSON.parse(readFileSync(paths.metadataPath, 'utf8')) as BoundIssueSnapshotMetadata;
+  const metadata = readBoundIssueSnapshotMetadata(paths.metadataPath);
+  if (!metadata) {
+    return {
+      status: 'corrupted',
+      snapshotPath: null,
+      metadataPath: paths.metadataPath,
+      snapshotHash: null,
+      metadata: null,
+    };
+  }
+
   if (!verifyBoundIssueSnapshotBody(paths.snapshotPath, metadata.snapshotHash)) {
     return {
       status: 'corrupted',

@@ -29,6 +29,13 @@ function loadIssue(name: string): string {
 
 const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
 
+function expectCaptureRowLive(
+  row: ReverifyRowResult,
+  whenLive: Partial<ReverifyRowResult>,
+) {
+  expect(row).toMatchObject(whenLive);
+}
+
 function expectPrHeadRowWhenSandboxAvailable(
   row: ReverifyRowResult,
   whenAvailable: Partial<ReverifyRowResult>,
@@ -88,24 +95,19 @@ function createArchiveTrustedRootFixture(): string {
 
 describe('contract-evidence reverify (Issue #376)', () => {
 
-  it('archive trusted root without .git gets live capture verification when sandbox available', () => {
-    if (!prHeadNetworkSandboxAvailable) {
-      return;
-    }
+  it('archive trusted root without .git gets live capture verification', () => {
     const archiveTrustedRoot = createArchiveTrustedRootFixture();
     try {
       expect(existsSync(path.join(archiveTrustedRoot, '.git'))).toBe(false);
       const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md'), {
         trustedBaseRoot: archiveTrustedRoot,
       }));
-      expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+      expectCaptureRowLive(result.rows[0], {
         status: 'verified',
         verificationMode: 'live',
         producerVerified: true,
       });
-      if (prHeadNetworkSandboxAvailable) {
-        expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
-      }
+      expect(result.rows[0].verificationMode).not.toBe('compared-to-record');
     } finally {
       rmSync(archiveTrustedRoot, { recursive: true, force: true });
     }
@@ -118,6 +120,16 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(sandboxSource).not.toContain('function spawnPrHeadDirect');
     expect(sandboxSource).toContain('sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE)');
     expect(sandboxSource).toContain('export function isPrHeadNetworkSandboxAvailable');
+  });
+
+  it('runs unchanged capture producers with trusted-base sandbox', () => {
+    const reverifySource = readFileSync(path.join(packRoot, 'scripts/lib/contract-evidence-reverify.ts'), 'utf8');
+    const captureBlock = reverifySource.slice(
+      reverifySource.indexOf('function evaluateCaptureRow'),
+      reverifySource.indexOf('function compareToRecord'),
+    );
+    expect(captureBlock).toContain("sandboxMode: 'trusted-base'");
+    expect(captureBlock).not.toContain("sandboxMode: 'pr-head-new'");
   });
 
   it('mounts isolated HOME and TMPDIR paths inside bwrap sandbox', () => {
@@ -254,7 +266,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
         prBody: 'Closes #9015\n',
         explicitIssueNumber: 9015,
       }));
-      expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+      expectCaptureRowLive(result.rows[0], {
         status: 'divergent',
         verificationMode: 'live',
         asserted: 'match',
@@ -270,14 +282,12 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const result = runContractEvidenceReverify(baseInput(loadIssue('live-match.md')));
     expect(result.runOutcome).toBe('rows-evaluated');
     expect(result.rows).toHaveLength(1);
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
     });
-    if (prHeadNetworkSandboxAvailable) {
-      expect(result.rows[0].reason).toBeUndefined();
-    }
+    expect(result.rows[0].reason).toBeUndefined();
   });
 
   it('structured producer nonzero exit is divergent not producer-verified', () => {
@@ -285,7 +295,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9012\n',
       explicitIssueNumber: 9012,
     }));
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
@@ -300,7 +310,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9013\n',
       explicitIssueNumber: 9013,
     }));
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'verified',
       verificationMode: 'live',
       producerVerified: true,
@@ -316,7 +326,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9014\n',
       explicitIssueNumber: 9014,
     }));
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
@@ -387,7 +397,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       prBody: 'Closes #9002\n',
       explicitIssueNumber: 9002,
     }));
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
       producerVerified: false,
@@ -686,11 +696,6 @@ describe('contract-evidence reverify (Issue #376)', () => {
     }));
     const summary = formatReviewerReverifySummary(result);
     expect(summary).toContain('never-blocks: true');
-    if (!prHeadNetworkSandboxAvailable) {
-      expect(summary).toContain('status=unverified');
-      expect(summary).toContain('reason=producer-unreachable');
-      return;
-    }
     expect(summary).toContain('status=divergent');
     expect(summary).toContain('verification-mode=live');
     expect(summary).toContain('never-blocks: true');
@@ -768,11 +773,6 @@ describe('contract-evidence reverify (Issue #376)', () => {
     );
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);
-    if (!prHeadNetworkSandboxAvailable) {
-      expect(payload.rows[0].status).toBe('unverified');
-      expect(payload.rows[0].reason).toBe('producer-unreachable');
-      return;
-    }
     expect(payload.rows[0].status).toBe('divergent');
   });
 
@@ -839,7 +839,7 @@ describe('reverify npm test filter (AC14 producer-emission proof)', () => {
         explicitIssueNumber: 9002,
       }),
     );
-    expectPrHeadRowWhenSandboxAvailable(result.rows[0], {
+    expectCaptureRowLive(result.rows[0], {
       status: 'divergent',
       verificationMode: 'live',
     });
