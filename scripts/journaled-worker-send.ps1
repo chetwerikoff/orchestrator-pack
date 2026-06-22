@@ -260,6 +260,10 @@ $register = Register-WorkerMessageDispatch `
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"
+    if ($claimResult) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claimResult -Outcome 'FAILED_DEFINITIVE' `
+            -Extra @{ reason = 'journal_register_failed'; detail = [string]$register.reason } | Out-Null
+    }
     exit 43
 }
 

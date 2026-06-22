@@ -233,17 +233,26 @@ function Invoke-PlannedFirstReviewSend {
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-send-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-send-reconcile' -Phase 'side_effect'
     $sendFailed = $false
-    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        & ao @sendArgs
-        if ($LASTEXITCODE -ne 0) {
-            $script:sendFailed = $true
-            throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
+    $sendError = $null
+    try {
+        $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+            & ao @sendArgs
+            if ($LASTEXITCODE -ne 0) {
+                $script:sendFailed = $true
+                throw "ao review send failed (exit $LASTEXITCODE) for run $($Action.runId)"
+            }
+        }
+        if (-not $fenced.ok) {
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
+            Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
+            return @{ sent = $false; reason = 'side_effect_busy' }
         }
     }
-    if (-not $fenced.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
-        Write-ReviewSendLog "send skipped (side-effect busy) run=$($Action.runId)"
-        return @{ sent = $false; reason = 'side_effect_busy' }
+    catch {
+        $sendError = [string]$_.Exception.Message
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'send_failed'; detail = $sendError } | Out-Null
+        Write-ReviewSendLog "send failed run=$($Action.runId): $sendError"
+        return @{ sent = $false; reason = 'send_failed'; detail = $sendError }
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
 
