@@ -14,6 +14,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { repoRoot } from './_test-pwsh-helpers.js';
+import { withTempGitRepo } from './_test-git-fixture.js';
 
 const bootstrapPath = path.join(repoRoot, 'scripts/autonomous-orchestrator-surface-bootstrap.sh');
 const bashEnvPath = path.join(repoRoot, 'scripts/autonomous-bash-env.sh');
@@ -57,21 +58,6 @@ function spawnEvalHidden(
       ...extraEnv,
     },
   });
-}
-
-function withTempGitRepo(run: (dir: string) => void) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'autonomous-interposer-'));
-  try {
-    spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, encoding: 'utf8' });
-    writeFileSync(path.join(dir, 'README.md'), 'test\n');
-    spawnSync('git', ['add', 'README.md'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'init'], { cwd: dir, encoding: 'utf8' });
-    run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 function writeAoReadStub(dir: string) {

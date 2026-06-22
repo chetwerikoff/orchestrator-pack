@@ -1,0 +1,23 @@
+{
+  "issue_number": 406,
+  "iteration_id": "opk-174",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-22T17:20:00.000Z",
+  "baseline": {
+    "commit_sha": "275a26df75e61610301779b2f85e8558e42fb98c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:72c1d53e32e5f80de96e326d90830baf93c0ebe9055a8930d2945bde90fe68f1"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/406.opk-174.json",
+    "docs/migration_notes.md",
+    "scripts/_test-git-fixture.ts",
+    "scripts/autonomous-bash-env.sh",
+    "scripts/autonomous-orchestrator-interposer.test.ts",
+    "scripts/autonomous-orchestrator-surface-bootstrap.sh"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
