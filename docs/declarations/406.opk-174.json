@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-06-22T17:20:00.000Z",
   "baseline": {
-    "commit_sha": "cfa87687d7b4e8daf1bf8a91740058b40f878bd1",
+    "commit_sha": "e19bc14a1f2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:72c1d53e32e5f80de96e326d90830baf93c0ebe9055a8930d2945bde90fe68f1"
+    "active_scope_hash": "sha256:718afe5f6146b6873861e7d895c8c3d1c0d52bc2b01cbb864670f1b55e38b82d"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -15,6 +15,7 @@
     "docs/migration_notes.md",
     "scripts/_test-git-fixture.ts",
     "scripts/autonomous-bash-env.sh",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
     "scripts/autonomous-orchestrator-interposer.test.ts",
     "scripts/autonomous-orchestrator-surface-bootstrap.sh"
   ],
