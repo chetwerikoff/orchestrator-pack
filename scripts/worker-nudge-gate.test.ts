@@ -1083,6 +1083,9 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
       'utf8',
     );
+    expect(ciGreen).toMatch(/\$sendExitCapture\.exitCode = \$LASTEXITCODE/);
+    expect(ciGreen).toMatch(/\$sendExitCode = \[int\]\$sendExitCapture\.exitCode/);
+    expect(ciGreen).not.toMatch(/\$script:sendExitCode/);
     expect(ciGreen).toMatch(/\$sendExitCode -eq 44 -or \$sendExitCode -eq 47/);
     expect(ciGreen).toMatch(/Outcome 'UNCERTAIN'/);
     expect(ciGreen).toMatch(/journalRecorded = \$false/);

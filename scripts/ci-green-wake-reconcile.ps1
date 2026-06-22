@@ -389,13 +389,14 @@ function Invoke-PlannedCiGreenWakeSend {
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'ci-green-wake-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'side_effect'
     $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
-    $sendExitCode = 0
+    $sendExitCapture = @{ exitCode = 0 }
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         $ciGreenMessage | pwsh -NoProfile -File $journaledScript $sendSessionId `
             -Source 'pack-send' -SourceKey "ci-green:$([string]$Action.transitionId)" `
             -ClaimToken $claimToken -GatedNudge -NoWait
-        $script:sendExitCode = $LASTEXITCODE
+        $sendExitCapture.exitCode = $LASTEXITCODE
     }
+    $sendExitCode = [int]$sendExitCapture.exitCode
     if (-not $fenced.ok) {
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
         Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason 'side_effect_busy' -ClaimPhase 'CLAIMED') -ProjectId $ProjectId | Out-Null
