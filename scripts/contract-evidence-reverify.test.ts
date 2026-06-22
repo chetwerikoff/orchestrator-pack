@@ -999,35 +999,26 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(payload.error).toContain('AC#13 reviewer-flow e2e required');
   });
 
-  it('e2e reviewer fixture uses CI mechanical reviewer command when required', { timeout: 120_000 }, () => {
-    const launcherCheck = spawnSync('git', ['cat-file', '-e', 'origin/main:scripts/launch-contract-evidence-reverify.ps1'], {
-      cwd: packRoot,
-      encoding: 'utf8',
-    });
-    if (launcherCheck.status !== 0) {
-      return;
-    }
-
+  it('e2e reviewer fixture rejects mechanical-only path when AC13 required in CI', () => {
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
       encoding: 'utf8',
       env: {
         ...process.env,
         CI: 'true',
-        GITHUB_ACTIONS: '',
+        GITHUB_ACTIONS: 'true',
         OPK_REVERIFY_E2E_LIVE: '',
         OPK_REVERIFY_E2E_SESSION: '',
         OPK_REVERIFY_E2E_REQUIRED: '1',
         OPK_REVERIFY_E2E_ALLOW_SKIP: '',
       },
     });
-    expect(proc.status).toBe(0);
+    expect(proc.status).toBe(1);
     const payload = JSON.parse(proc.stdout);
-    expect(payload.skipped).not.toBe(true);
+    expect(payload.skipped).toBe(true);
     expect(payload.viaAoReviewExecute).toBe(false);
-    expect(payload.viaMechanicalReviewerCommand).toBe(true);
-    expect(payload.reviewerOutputIsCheckpoint2Summary).toBe(true);
-    expect(payload.summary).not.toContain('reverify-e2e-probe');
+    expect(payload.viaMechanicalReviewerCommand).toBe(false);
+    expect(payload.error).toContain('AC#13 reviewer-flow e2e required');
   });
 
   it('e2e reviewer fixture skips without OPK_REVERIFY_E2E_LIVE', () => {

@@ -41,10 +41,6 @@ function isLiveE2eEnabled() {
   return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
 }
 
-function isCiEnvironment() {
-  return isTruthyEnv('CI') || isTruthyEnv('GITHUB_ACTIONS');
-}
-
 function summaryRunOutcomeRowsEvaluated(text) {
   return /run-outcome:\s*rows-evaluated/.test(text);
 }
@@ -195,22 +191,6 @@ if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
     output.summary = 'skipped: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1) for live AC#13 e2e';
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     process.exit(0);
-  }
-
-  if (isAc13E2eRequired() && isCiEnvironment()) {
-    const mechanicalProc = runReviewerReverifyCommand({
-      env: {
-        OPK_REVERIFY_E2E_FIXTURE: '1',
-      },
-    });
-    output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
-    if (!output.viaMechanicalReviewerCommand) {
-      output.error = `CI mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
-      output.summary = (mechanicalProc.stdout ?? '').trim() || (mechanicalProc.stderr ?? '').trim();
-      process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-      process.exit(1);
-    }
-    finalizeReviewerSummary(output, (mechanicalProc.stdout ?? '').trim());
   }
 
   output.skipped = true;
