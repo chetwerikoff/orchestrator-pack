@@ -68,24 +68,39 @@ detail: $Detail
     try {
         $scriptBootstrap = Import-TrustedReverifyBootstrap -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
         $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
-        $runnerTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
-            $TrustedBaseRoot
-        } else {
-            $scriptBootstrap.BootstrapRoot
-        }
 
-        try {
-            $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $runnerTrustedBase
-        }
-        catch {
-            if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {
-                if ($Summary -or $Text) {
-                    Write-TrustedRunnerUnavailableSummary -Detail $_.Exception.Message
-                    $global:LASTEXITCODE = 0
-                    return
-                }
+        if ($disposableScriptBootstrapRoot) {
+            $trustedRoot = $scriptBootstrap.BootstrapRoot
+            $runner = Join-Path $trustedRoot 'scripts/invoke-contract-evidence-reverify.ts'
+            if (-not (Test-Path -LiteralPath $runner)) {
+                throw "missing trusted runner at $runner"
             }
-            throw
+            $trusted = @{
+                TrustedBaseRoot       = $trustedRoot
+                RunnerPath            = $runner
+                DisposableTrustedRoot = $true
+            }
+        }
+        else {
+            $runnerTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
+                $TrustedBaseRoot
+            } else {
+                $scriptBootstrap.BootstrapRoot
+            }
+
+            try {
+                $trusted = Resolve-TrustedPackRunner -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $runnerTrustedBase
+            }
+            catch {
+                if ($_.Exception.Message -match 'trusted runner unavailable|missing trusted runner') {
+                    if ($Summary -or $Text) {
+                        Write-TrustedRunnerUnavailableSummary -Detail $_.Exception.Message
+                        $global:LASTEXITCODE = 0
+                        return
+                    }
+                }
+                throw
+            }
         }
         $effectiveTrustedBaseRoot = $trusted.TrustedBaseRoot
         $runner = $trusted.RunnerPath

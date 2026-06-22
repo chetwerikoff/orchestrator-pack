@@ -65,6 +65,15 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Not -Match 'Resolve-TrustedReverifyInvokeScript'
     }
 
+    It 'preserves disposable bootstrap archive roots instead of re-validating them as overrides' {
+        $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
+        $content = Get-Content -LiteralPath $implementationScript -Raw
+        $content | Should -Match 'if \(\$disposableScriptBootstrapRoot\)'
+        $content | Should -Match 'DisposableTrustedRoot\s*=\s*\$true'
+        $content | Should -Match 'scripts/invoke-contract-evidence-reverify\.ts'
+        $content | Should -Not -Match 'Resolve-TrustedPackRunner -ReviewTargetRoot \$reviewTargetRoot -TrustedBaseRoot \$scriptBootstrap\.BootstrapRoot'
+    }
+
     It 'trusted implementation cleans up disposable trusted archive checkouts in finally' {
         $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
