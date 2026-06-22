@@ -122,27 +122,92 @@ function Ensure-GhAuthForReverifyE2e {
         return $false
     }
 
-    & gh auth status 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        return $true
+    $savedGhToken = $env:GH_TOKEN
+    $savedGithubToken = $env:GITHUB_TOKEN
+    if (-not [string]::IsNullOrWhiteSpace($savedGhToken)) {
+        $env:GH_TOKEN = $null
+    }
+    try {
+        & gh auth status 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
+    finally {
+        if (-not [string]::IsNullOrWhiteSpace($savedGhToken)) {
+            $env:GH_TOKEN = $savedGhToken
+        }
     }
 
-    $token = $env:GITHUB_TOKEN
+    $token = $savedGithubToken
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        $token = $savedGhToken
+    }
     if ([string]::IsNullOrWhiteSpace($token)) {
         return $false
     }
 
-    $savedGhToken = $env:GH_TOKEN
     $env:GH_TOKEN = $null
+    $env:GITHUB_TOKEN = $null
     try {
         $token | & gh auth login --with-token 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+        & gh auth status 2>$null
         return $LASTEXITCODE -eq 0
     }
     finally {
-        if ($null -ne $savedGhToken) {
+        if (-not [string]::IsNullOrWhiteSpace($savedGhToken)) {
             $env:GH_TOKEN = $savedGhToken
         }
+        elseif (-not [string]::IsNullOrWhiteSpace($savedGithubToken)) {
+            $env:GH_TOKEN = $savedGithubToken
+        }
+        if (-not [string]::IsNullOrWhiteSpace($savedGithubToken)) {
+            $env:GITHUB_TOKEN = $savedGithubToken
+        }
     }
+}
+
+function Resolve-ReverifyCiFixtureSession {
+    if (-not [string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION)) {
+        return $env:OPK_REVERIFY_E2E_SESSION.Trim()
+    }
+    if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $listed = & ao session ls 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    $preferredSessionId = 'opk-reverify-e2e'
+    foreach ($line in $listed) {
+        if ($line -match '^\s+(opk-\S+)') {
+            $sessionId = $Matches[1]
+            if ($sessionId -eq $preferredSessionId) {
+                return $sessionId
+            }
+        }
+    }
+    foreach ($line in $listed) {
+        if ($line -match '^\s+(opk-\S+)') {
+            return $Matches[1]
+        }
+    }
+
+    $spawned = & ao spawn --prompt 'checkpoint-2 contract-evidence reverify e2e fixture holder' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+    $spawnText = ($spawned | Out-String)
+    if ($spawnText -match 'SESSION=(opk-\S+)') {
+        return $Matches[1]
+    }
+
+    return $null
 }
 
 function Write-ReverifyCiAgentOrchestratorYaml {
@@ -254,6 +319,10 @@ function Initialize-ReverifyCiAoFixtureEnvironment {
     Ensure-GhAuthForReverifyE2e | Out-Null
     Write-ReverifyCiAgentOrchestratorYaml -Root $Root
     Ensure-AoDaemonForReverifyE2e -Root $Root | Out-Null
+    $fixtureSession = Resolve-ReverifyCiFixtureSession
+    if (-not [string]::IsNullOrWhiteSpace($fixtureSession)) {
+        $env:OPK_REVERIFY_E2E_SESSION = $fixtureSession
+    }
 }
 
 function Invoke-ReverifyAc13E2eFixture {
