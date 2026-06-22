@@ -6,7 +6,7 @@
   "baseline": {
     "commit_sha": "cd3816888545df3b1fed41b8f23fa4f91de2124c",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:282903caaa022652e704b339ea0ec3b3913cab21cb04029c79621d6b9ba2c337"
+    "active_scope_hash": "sha256:64ebcf154464f7f1668805053fc2bee5cd74b8f2cdcc67f34e7485aa746996e7"
   },
   "declared_paths": [
     "docs/review-ready-report-state-seed.mjs",
