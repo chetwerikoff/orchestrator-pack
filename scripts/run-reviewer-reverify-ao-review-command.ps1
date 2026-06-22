@@ -59,7 +59,8 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSnapshotFile))
 }
 
 $changedPathsFile = Join-Path ([IO.Path]::GetTempPath()) ("opk-e2e-changed-paths-{0}.txt" -f ([Guid]::NewGuid().ToString('N')))
-[System.IO.File]::WriteAllLines($changedPathsFile, @('scripts/lib/contract-evidence-reverify.ts'))
+# Unrelated PR path so capture rows run as trusted (not untrusted-pr-modified on the checker).
+[System.IO.File]::WriteAllLines($changedPathsFile, @('docs/issue_queue_index.md'))
 
 if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
     . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
