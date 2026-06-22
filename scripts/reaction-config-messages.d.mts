@@ -1,6 +1,12 @@
 export declare const REACTION_CONFIG_UNAVAILABLE: 'reaction_config_unavailable';
 export declare const REACTION_MESSAGE_UNRESOLVED: 'reaction_message_unresolved';
 
+export declare function validateReactionsSection(yamlText: string): {
+  ok: boolean;
+  reactions?: Record<string, { action?: string; message?: string }>;
+  error?: string;
+};
+
 export declare function parseReactionsSection(
   yamlText: string,
 ): Record<string, { action?: string; message?: string }>;

@@ -13,6 +13,7 @@ import {
   parseReactionsSection,
   readReactionMessagesFromYamlFile,
   resolveReactionDeliveryShapeFromYaml,
+  validateReactionsSection,
 } from './reaction-config-messages.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -77,5 +78,53 @@ describe('reaction-config-messages (Issue #402)', () => {
     const result = readReactionMessagesFromYamlFile('/does/not/exist/agent-orchestrator.yaml');
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('reaction_config_unavailable');
+  });
+
+  it('rejects unsupported flow-style reaction message syntax', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: [invalid, flow]',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('reaction_config_unavailable');
+    expect(result.error).toContain('unsupported_flow_scalar');
+  });
+
+  it('rejects send-to-agent message block when scalar body is missing', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: |',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('reaction_config_unavailable');
+  });
+
+  it('accepts quoted inline reaction message scalars', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: "Worker idle (report-stale backstop)."',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('Worker idle (report-stale backstop).');
+  });
+
+  it('allows send-to-agent without message field (runtime unresolved key path)', () => {
+    const yaml = [
+      'reactions:',
+      '  changes-requested:',
+      '    action: send-to-agent',
+    ].join('\n');
+    const validated = validateReactionsSection(yaml);
+    expect(validated.ok).toBe(true);
+    expect(parseReactionMessagesFromYaml(yaml).messages?.['changes-requested']).toBeUndefined();
   });
 });

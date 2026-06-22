@@ -49,5 +49,11 @@ if ($mjs -notmatch "from '\./review-head-ready\.mjs'") {
     exit 1
 }
 
+$reconcilePs1 = Get-Content -LiteralPath $reconcileScript -Raw
+if ($reconcilePs1 -notmatch 'Test-ReconcileReactionConfigDefer') {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must defer when reaction config is unavailable (Issue #402)'
+    exit 1
+}
+
 Write-Host '[PASS] review-trigger reconciliation entrypoint and example wiring (Issue #163)'
 exit 0

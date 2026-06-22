@@ -89,6 +89,203 @@ function stripYamlQuotes(raw) {
 
 /**
  * @param {string} yamlText
+ * @returns {number}
+ */
+function findReactionsSectionStart(yamlText) {
+  const lines = String(yamlText ?? '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^reactions:\s*$/.test(lines[index])) {
+      return index + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * @param {string} yamlText
+ * @returns {string[]}
+ */
+function listReactionKeysInSection(yamlText) {
+  const lines = String(yamlText ?? '').split(/\r?\n/);
+  const start = findReactionsSectionStart(yamlText);
+  if (start < 0) {
+    return [];
+  }
+
+  /** @type {string[]} */
+  const keys = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line && !line.startsWith(' ') && !line.startsWith('\t') && !line.startsWith('#')) {
+      break;
+    }
+    const keyMatch = line.match(/^  ([a-z0-9-]+):\s*$/);
+    if (keyMatch) {
+      keys.push(keyMatch[1]);
+    }
+  }
+  return keys;
+}
+
+/**
+ * @param {string} yamlText
+ * @param {string} reactionKey
+ */
+function extractReactionBlockText(yamlText, reactionKey) {
+  const lines = String(yamlText ?? '').split(/\r?\n/);
+  const start = findReactionsSectionStart(yamlText);
+  if (start < 0) {
+    return '';
+  }
+
+  let collecting = false;
+  /** @type {string[]} */
+  const block = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line && !line.startsWith(' ') && !line.startsWith('\t') && !line.startsWith('#')) {
+      break;
+    }
+    const keyMatch = line.match(/^  ([a-z0-9-]+):\s*$/);
+    if (keyMatch) {
+      if (collecting) {
+        break;
+      }
+      if (keyMatch[1] === reactionKey) {
+        collecting = true;
+      }
+      continue;
+    }
+    if (collecting) {
+      block.push(line);
+    }
+  }
+  return block.join('\n');
+}
+
+/**
+ * @param {string} blockText
+ */
+function validateReactionMessageSyntax(blockText) {
+  const lines = String(blockText ?? '').split(/\r?\n/);
+  const supportedIndicators = new Set(['>-', '>', '|', '|-']);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\s{4}message:\s*(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const rest = match[1].trim();
+    if (!rest) {
+      if (index + 1 >= lines.length || !lines[index + 1].startsWith('      ')) {
+        return { ok: false, error: 'message_scalar_without_body' };
+      }
+      continue;
+    }
+    if (rest.startsWith('#')) {
+      return { ok: false, error: 'unsupported_message_comment' };
+    }
+    if (supportedIndicators.has(rest)) {
+      continue;
+    }
+    if (rest.startsWith('[') || rest.startsWith('{')) {
+      return { ok: false, error: 'unsupported_flow_scalar' };
+    }
+    if (rest.startsWith('&') || rest.startsWith('*')) {
+      return { ok: false, error: 'unsupported_yaml_anchor' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * @param {string} blockText
+ * @param {ReturnType<typeof parseReactionEntry>} entry
+ * @param {string} reactionKey
+ */
+function validateReactionBlock(blockText, entry, reactionKey) {
+  const hasSendToAgent = /^\s{4}action:\s*send-to-agent\s*$/m.test(blockText);
+  if (!hasSendToAgent) {
+    return { ok: true };
+  }
+  const hasMessageLine = /^\s{4}message:/m.test(blockText);
+  if (!hasMessageLine) {
+    return { ok: true };
+  }
+
+  const syntax = validateReactionMessageSyntax(blockText);
+  if (!syntax.ok) {
+    return {
+      ok: false,
+      error: `${syntax.error}:${reactionKey}`,
+    };
+  }
+
+  const message = String(entry?.message ?? '').trim();
+  if (!message) {
+    return {
+      ok: false,
+      error: `unparsed_send_to_agent_message:${reactionKey}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * @param {string} yamlText
+ */
+export function validateReactionsSection(yamlText) {
+  const start = findReactionsSectionStart(yamlText);
+  if (start < 0) {
+    return { ok: true, reactions: {} };
+  }
+
+  const lines = String(yamlText ?? '').split(/\r?\n/);
+  let hasContent = false;
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line && !line.startsWith(' ') && !line.startsWith('\t') && !line.startsWith('#')) {
+      break;
+    }
+    if (line.trim() && !line.trim().startsWith('#')) {
+      hasContent = true;
+      break;
+    }
+  }
+
+  const reactions = parseReactionsSection(yamlText);
+  const keys = listReactionKeysInSection(yamlText);
+  if (hasContent && keys.length === 0) {
+    return {
+      ok: false,
+      error: 'unparsed_reactions_section',
+      reactions,
+    };
+  }
+
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(reactions, key)) {
+      return {
+        ok: false,
+        error: `unparsed_reaction_key:${key}`,
+        reactions,
+      };
+    }
+    const blockText = extractReactionBlockText(yamlText, key);
+    const blockCheck = validateReactionBlock(blockText, reactions[key], key);
+    if (!blockCheck.ok) {
+      return {
+        ok: false,
+        error: blockCheck.error,
+        reactions,
+      };
+    }
+  }
+
+  return { ok: true, reactions };
+}
+
+/**
+ * @param {string} yamlText
  */
 export function parseReactionsSection(yamlText) {
   const lines = String(yamlText ?? '').split(/\r?\n/);
@@ -158,10 +355,18 @@ export function extractSendToAgentReactionMessages(reactions) {
  */
 export function parseReactionMessagesFromYaml(yamlText) {
   try {
-    const reactions = parseReactionsSection(yamlText);
+    const validated = validateReactionsSection(yamlText);
+    if (!validated.ok) {
+      return {
+        ok: false,
+        reason: REACTION_CONFIG_UNAVAILABLE,
+        error: validated.error,
+        messages: {},
+      };
+    }
     return {
       ok: true,
-      messages: extractSendToAgentReactionMessages(reactions),
+      messages: extractSendToAgentReactionMessages(validated.reactions),
     };
   } catch (error) {
     return {

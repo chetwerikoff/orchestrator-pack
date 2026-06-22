@@ -161,6 +161,40 @@ function Set-ReconcileState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReconcileDefaultState -JsonDepth 30
 }
 
+function Resolve-ReconcileReactionConfig {
+    param(
+        [object]$Fixture,
+        [string]$PackRoot = '',
+        [string]$YamlPath = ''
+    )
+
+    if ($Fixture) {
+        if ($Fixture.reactionConfigUnavailable) {
+            return @{
+                ok       = $false
+                reason   = 'reaction_config_unavailable'
+                messages = @{}
+            }
+        }
+        if ($Fixture.reactionMessages) {
+            $map = @{}
+            foreach ($prop in $Fixture.reactionMessages.PSObject.Properties) {
+                $map[$prop.Name] = [string]$prop.Value
+            }
+            return @{
+                ok       = $true
+                messages = $map
+            }
+        }
+        return @{
+            ok       = $true
+            messages = @{}
+        }
+    }
+
+    return Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $YamlPath
+}
+
 function Get-ReconcileReactionMessages {
     param(
         [object]$Fixture,
@@ -168,19 +202,27 @@ function Get-ReconcileReactionMessages {
         [string]$YamlPath = ''
     )
 
-    if ($Fixture -and $Fixture.reactionMessages) {
-        $map = @{}
-        foreach ($prop in $Fixture.reactionMessages.PSObject.Properties) {
-            $map[$prop.Name] = [string]$prop.Value
-        }
-        return $map
-    }
-
-    $resolved = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $YamlPath
+    $resolved = Resolve-ReconcileReactionConfig -Fixture $Fixture -PackRoot $PackRoot -YamlPath $YamlPath
     if (-not $resolved.ok) {
         return @{}
     }
     return $resolved.messages
+}
+
+function Test-ReconcileReactionConfigDefer {
+    param(
+        [bool]$ReactionConfigUnavailable,
+        [array]$AoEvents
+    )
+
+    if (-not $ReactionConfigUnavailable) {
+        return $false
+    }
+
+    return @($AoEvents | Where-Object {
+            $_.kind -eq 'reaction.action_succeeded' -and
+            $_.data -and $_.data.action -eq 'send-to-agent'
+        }).Count -gt 0
 }
 
 function Get-FixtureReconcilePayload {
@@ -218,7 +260,14 @@ function Get-FixtureReconcilePayload {
         $payload.legacyNudged = Copy-MechanicalJsonMap -Map $fixture.legacyNudged
     }
     $payload = Merge-MechanicalFixtureDeliveryFields -Payload $payload -Fixture $fixture
-    $payload.reactionMessages = Get-ReconcileReactionMessages -Fixture $fixture
+    $reactionConfig = Resolve-ReconcileReactionConfig -Fixture $fixture
+    $payload.reactionMessages = @{}
+    if ($reactionConfig.ok) {
+        foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+            $payload.reactionMessages[$entry.Key] = [string]$entry.Value
+        }
+    }
+    $payload.reactionConfigUnavailable = -not $reactionConfig.ok
     return $payload
 }
 
@@ -237,12 +286,21 @@ function Get-ReconcileDeliveryPayload {
         }
     }
 
+    $reactionConfig = Resolve-ReconcileReactionConfig -PackRoot $RepoRoot -YamlPath $ConfigYaml
+    $reactionMessages = @{}
+    if ($reactionConfig.ok) {
+        foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+            $reactionMessages[$entry.Key] = [string]$entry.Value
+        }
+    }
+
     return @{
-        workerDeliveries   = @()
-        aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
-        dispatchJournal    = Get-WorkerMessageDispatchJournal
-        reviewRuns         = @(Get-AoReviewRuns -Project $Project)
-        reactionMessages   = Get-ReconcileReactionMessages -PackRoot $RepoRoot -YamlPath $ConfigYaml
+        workerDeliveries            = @()
+        aoEvents                    = @(Get-AoEventsSince -SinceMinutes 30)
+        dispatchJournal             = Get-WorkerMessageDispatchJournal
+        reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
+        reactionMessages            = $reactionMessages
+        reactionConfigUnavailable   = -not $reactionConfig.ok
     }
 }
 
@@ -301,6 +359,7 @@ function Get-PreRunRecheckSnapshot {
         dispatchJournal                 = $deliveryPayload.dispatchJournal
         workerDeliveries                = Get-ReconcileWorkerDeliveries $deliveryPayload.workerDeliveries
         reactionMessages                = $deliveryPayload.reactionMessages
+        reactionConfigUnavailable       = [bool]$deliveryPayload.reactionConfigUnavailable
     }
 }
 
@@ -329,6 +388,13 @@ function Test-PreRunHeadReadyRecheck {
         $fresh.sharedCycleState = $sharedEvidence.sharedCycleState
         $fresh.legacyNudged = $sharedEvidence.legacyNudged
         $fresh.repoRoot = $RepoRoot
+    }
+
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$fresh.reactionConfigUnavailable) -AoEvents @($fresh.aoEvents)) {
+        return @{
+            emitReviewRun = $false
+            reason        = 'reaction_config_unavailable'
+        }
     }
 
     $prKey = [string]$PlannedAction.prNumber
@@ -517,6 +583,7 @@ function Invoke-ReconcileTick {
             dispatchJournal               = $payload.dispatchJournal
             workerDeliveries              = Get-ReconcileWorkerDeliveries $payload.workerDeliveries
             reactionMessages              = $payload.reactionMessages
+            reactionConfigUnavailable     = [bool]$payload.reactionConfigUnavailable
             cycleState                    = $payload.cycleState
             sharedCycleState              = $payload.sharedCycleState
             legacyNudged                  = $payload.legacyNudged
@@ -539,12 +606,27 @@ function Invoke-ReconcileTick {
             aoEvents                      = @($deliveryPayload.aoEvents)
             dispatchJournal               = $deliveryPayload.dispatchJournal
             reactionMessages              = $deliveryPayload.reactionMessages
+            reactionConfigUnavailable     = [bool]$deliveryPayload.reactionConfigUnavailable
         }
         $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
     }
 
     if (-not $reviewCommand) {
         throw 'Could not resolve REVIEW_COMMAND from agent-orchestrator.yaml'
+    }
+
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$payload.reactionConfigUnavailable) -AoEvents @($payload.aoEvents)) {
+        $reactionEventCount = @($payload.aoEvents | Where-Object {
+                $_.kind -eq 'reaction.action_succeeded' -and
+                $_.data -and $_.data.action -eq 'send-to-agent'
+            }).Count
+        Write-ReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$reactionEventCount"
+        return @{
+            started    = 0
+            plan       = @()
+            cycleState = @{}
+            deferred   = 1
+        }
     }
 
     $planPayload = $payload.Clone()
