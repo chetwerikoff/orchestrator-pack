@@ -14,31 +14,19 @@ import {
 } from './orchestrator-wake-filter.mjs';
 
 export const HANDOFF_WAKE_KIND = 'ready_for_review';
+export const REVIEW_PENDING_HANDOFF_SEMANTIC_TYPE = 'review.pending';
+export const REVIEW_PENDING_HANDOFF_EVENT_TYPE = 'review.pending';
 export const HANDOFF_RECEIPT_TO_RUN_MAX_MS = 30_000;
 export const HANDOFF_LISTENER_RECOVERY_MAX_MS = 30_000;
 
 export const HANDOFF_AUDIT_PREFIX = 'review-handoff-wake';
 
 const NOTIFICATION_ENVELOPE_TYPES = new Set(['notification', 'notification_with_actions']);
+
 /**
- * @param {unknown} body
- * @param {Record<string, unknown>} [event]
+ * @param {Record<string, unknown>} data
  */
-export function isReadyForReviewHandoffEnvelope(body, event = isRecord(body) ? body.event : undefined) {
-  if (!isRecord(body) || !isRecord(event)) {
-    return false;
-  }
-  const envelopeType = nonEmptyString(body.type);
-  if (!envelopeType || !NOTIFICATION_ENVELOPE_TYPES.has(envelopeType)) {
-    return false;
-  }
-  if (nonEmptyString(event.type) !== 'session.working') {
-    return false;
-  }
-  const data = getNotificationData(event);
-  if (!data || nonEmptyString(data.semanticType) !== HANDOFF_WAKE_KIND) {
-    return false;
-  }
+function hasHandoffSubjectIdentity(data) {
   const subject = data.subject;
   if (!isRecord(subject)) {
     return false;
@@ -57,6 +45,61 @@ export function isReadyForReviewHandoffEnvelope(body, event = isRecord(body) ? b
     return false;
   }
   return true;
+}
+
+/**
+ * @param {unknown} body
+ * @param {Record<string, unknown>} event
+ */
+function isSessionWorkingReadyForReviewHandoffEnvelope(body, event) {
+  if (nonEmptyString(event.type) !== 'session.working') {
+    return false;
+  }
+  const data = getNotificationData(event);
+  if (!data || nonEmptyString(data.semanticType) !== HANDOFF_WAKE_KIND) {
+    return false;
+  }
+  return hasHandoffSubjectIdentity(data);
+}
+
+/**
+ * Live AO 0.9.2 wire: review.pending at info with schemaVersion 3 (Issue #390).
+ * @param {unknown} body
+ * @param {Record<string, unknown>} event
+ */
+export function isQualifiedReviewPendingInfoHandoffEnvelope(body, event) {
+  if (nonEmptyString(event.type) !== REVIEW_PENDING_HANDOFF_EVENT_TYPE) {
+    return false;
+  }
+  if (nonEmptyString(event.priority) !== 'info') {
+    return false;
+  }
+  const data = getNotificationData(event);
+  if (!data || data.schemaVersion !== 3) {
+    return false;
+  }
+  if (nonEmptyString(data.semanticType) !== REVIEW_PENDING_HANDOFF_SEMANTIC_TYPE) {
+    return false;
+  }
+  return hasHandoffSubjectIdentity(data);
+}
+
+/**
+ * @param {unknown} body
+ * @param {Record<string, unknown>} [event]
+ */
+export function isReadyForReviewHandoffEnvelope(body, event = isRecord(body) ? body.event : undefined) {
+  if (!isRecord(body) || !isRecord(event)) {
+    return false;
+  }
+  const envelopeType = nonEmptyString(body.type);
+  if (!envelopeType || !NOTIFICATION_ENVELOPE_TYPES.has(envelopeType)) {
+    return false;
+  }
+  return (
+    isSessionWorkingReadyForReviewHandoffEnvelope(body, event) ||
+    isQualifiedReviewPendingInfoHandoffEnvelope(body, event)
+  );
 }
 
 /**

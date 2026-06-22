@@ -29,6 +29,20 @@ if ($listener -notmatch 'ready_for_review') {
     Write-Host 'orchestrator-wake-listener.ps1 must handle ready_for_review hand-off wakes'
     exit 1
 }
+$admissionMjs = Join-Path $Root 'docs/review-handoff-wake-admission.mjs'
+if (-not (Test-Path -LiteralPath $admissionMjs -PathType Leaf)) {
+    Write-Host "Missing required file: $admissionMjs"
+    exit 1
+}
+$admissionText = Get-Content -LiteralPath $admissionMjs -Raw
+if ($admissionText -notmatch 'isQualifiedReviewPendingInfoHandoffEnvelope') {
+    Write-Host 'review-handoff-wake-admission.mjs must qualify live review.pending(info) handoff envelopes (Issue #390)'
+    exit 1
+}
+if ($admissionText -notmatch "REVIEW_PENDING_HANDOFF_EVENT_TYPE = 'review\.pending'") {
+    Write-Host 'review-handoff-wake-admission.mjs must bind review.pending event.type discriminator (Issue #390)'
+    exit 1
+}
 if ($listener -notmatch 'merge\.ready') {
     Write-Host 'orchestrator-wake-listener.ps1 must handle merge.ready completion wakes'
     exit 1
