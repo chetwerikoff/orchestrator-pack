@@ -1,0 +1,16 @@
+{
+  "sourceCommand": "ao status --json --reports full",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-22T01:19:09.000Z",
+  "representative": true,
+  "context": "opk-165 PR #380 branch feat/issue-376; accepted ready_for_review on head 2847a9d3d331a6631a58146ed5df8827b81e4e63; live supervised worker snapshot",
+  "sessionId": "opk-165",
+  "prNumber": 380,
+  "headSha": "2847a9d3d331a6631a58146ed5df8827b81e4e63",
+  "project": "orchestrator-pack",
+  "scrubLog": [
+    "Retained single supervised worker session (opk-165); removed other sessions",
+    "Trimmed reports[] to last 12 entries; dropped reviews[] bulk from top-level",
+    "No tokens or auth headers in ao status JSON"
+  ]
+}

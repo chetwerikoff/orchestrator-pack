@@ -114,6 +114,14 @@
       "path": "captures/ao-status-session/working-no-runtime.raw.json",
       "contentHash": "sha256:019be58ae0c067efda08366b012a9429943550c8dffc9063204fbe2f48473fe6"
     },
+    "ao-status-sessions/ready_for_review_on_head": {
+      "id": "ao-status-sessions/ready_for_review_on_head",
+      "producer": "ao-status-sessions",
+      "sourceCommand": "ao status --json --reports full",
+      "kind": "structured",
+      "path": "captures/ao-status-sessions/ready_for_review_on_head.raw.json",
+      "contentHash": "sha256:36dfe8cafca898fc95483d9b1bab0644b3fe876214c4604438216ba315458cd6"
+    },
     "ao-webhook-notification/ready_for_review": {
       "id": "ao-webhook-notification/ready_for_review",
       "producer": "ao",
