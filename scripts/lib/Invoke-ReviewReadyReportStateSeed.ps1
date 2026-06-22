@@ -186,14 +186,20 @@ function Invoke-ReviewReadyReportStateSeedTick {
         else {
             $plannedRunParams['ResolveFreshSnapshot'] = {
                 param($planned)
-                $scoped = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
+                $freshOpenPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
+                $scoped = @($freshOpenPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
+                $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
+                    param($payload)
+                    Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
+                        -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
+                }
                 @{
                     openPrs                       = $scoped
                     reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
                     sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
-                    ciChecksByPr                  = $checksBundle.ciChecksByPr
-                    requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
-                    requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+                    ciChecksByPr                  = $freshChecks.ciChecksByPr
+                    requiredCheckNamesByPr        = $freshChecks.requiredCheckNamesByPr
+                    requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
                 }
             }
         }

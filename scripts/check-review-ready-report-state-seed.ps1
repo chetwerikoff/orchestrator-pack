@@ -25,11 +25,11 @@ foreach ($path in @($seedScript, $seedMjs, $invokeLib, $recordLib, $reevalLib)) 
 
 $mjs = Get-Content -LiteralPath $seedMjs -Raw
 foreach ($needle in @(
-        "REPORT_STATE_SEED_START_REASON = 'report_state_seed'",
         "REPORT_STATE_POLL_CLASS = 'report_state_poll'",
         'planReportStatePollTick',
         'hasTerminalHandoffOutcome',
-        'evaluatePollReportBinding'
+        'evaluatePollReportBinding',
+        'findLatestAcceptedReadyForReviewAcrossSessions'
     )) {
     if ($mjs -notlike "*$needle*") {
         Write-Host "docs/review-ready-report-state-seed.mjs missing: $needle"
