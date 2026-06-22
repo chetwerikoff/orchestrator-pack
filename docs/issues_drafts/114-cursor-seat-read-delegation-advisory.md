@@ -45,6 +45,11 @@ code, diffs read directly per #337). The stop-time audit keeps the read
 recorded under a distinct, observable **advisory** classification (not silently
 discarded like a #309 exemption), and only the **non-compliance** finding is
 suppressed — so the signal the draft intends to retain is not erased.
+Because removing the mandate **without** positive guidance would just push the
+weak seat to read the same corpus inline on the expensive model (the worst cost
+outcome — no evasion, but no offload either), the amendment also states a
+**recommended (SHOULD)** delegation ladder for the Cursor seat and ties the audit
+so a shell read-around cannot be recorded as satisfying it.
 
 ```behavior-kind
 action-producing
@@ -87,6 +92,13 @@ the amendment lives only in the one canonical source (`prompts/agent_rules.md` +
   remains a **mandatory floor** for the Claude and Codex surfaces. The Cursor
   seat is identified by the same committed surface-spelling manifest #309 already
   uses — no new manifest.
+- On the Cursor seat, when an ask trigger fires for now-advisory corpus, the
+  canonical source states delegation is **recommended (SHOULD), not mandatory
+  (MUST)**, and offers a **preferred order as guidance, not a mandated sequence**
+  (planner-freedom preserved): `coworker ask --profile code --paths …`, then a
+  targeted `Read` with `offset`/`limit`. This keeps the cheap-model cost intent
+  alive without re-mandating the empirically-evaded floor (so the seat is steered
+  toward the cheap path rather than left to read inline on the expensive model).
 - Architecture decision §S records this narrowing and its evidence-grounded
   rationale, so a future reader cannot mistake it for blanket policy decay.
 - The thin `.cursor/rules/` pointer(s) continue to resolve to the canonical
@@ -95,9 +107,13 @@ the amendment lives only in the one canonical source (`prompts/agent_rules.md` +
 - The stop-time delegation audit (the #255/#309 classifier) records a Cursor-seat
   read the amended policy now treats as advisory under a **distinct, observable
   advisory classification** — it is **not** discarded like a #309 exemption — and
-  it **does not** emit a non-compliance finding for that read. The residual metric
-  for genuinely-delegable corpus on other surfaces is preserved (no #264
-  regression).
+  it **does not** emit a non-compliance finding for that read. A Cursor-seat read
+  performed via a **shell read-around** (`head`, chunked `sed`/`grep`, python
+  chunking) is **not** recorded as advisory-satisfied — it stays separately
+  observable (neither laundered into the advisory classification nor discarded),
+  so the SHOULD ladder cannot be gamed by chunking the file through the shell. The
+  residual metric for genuinely-delegable corpus on other surfaces is preserved
+  (no #264 regression).
 - No new blocking behaviour is introduced on any surface; the Claude-side
   read-delegation deny-hook is untouched and stays mandatory.
 
@@ -179,9 +195,26 @@ CLAUDE.md
    metric) and are instead tallied under the separate observable advisory count.
    Meanwhile a genuinely-delegable read on a non-Cursor surface still counts toward
    the residual metric (no #264 regression).
+6. The canonical source states a **recommended (SHOULD)** delegation ladder for the
+   Cursor seat on now-advisory corpus (`coworker ask` preferred, then targeted
+   `Read` with `offset`/`limit`), framed as guidance not a mandated sequence, and
+   the audit honours it as follows: given a captured Cursor-seat stop event whose
+   read crosses an advisory floor, a **delegated or targeted (`offset`/`limit`)**
+   read is recorded under the advisory-satisfied classification, whereas a read
+   performed via a **shell read-around** (`head` / chunked `sed`/`grep` / python
+   chunking) is recorded under a **separate observable category — not**
+   advisory-satisfied — and is still not silently discarded. This closes the
+   laundering path the Evidence section documents (a `head`/`python` chunk must not
+   register as satisfying the ladder).
 
 ```positive-outcome
 asserts: the stop-time delegation audit, given a captured Cursor-seat stop event whose read targets an out-of-index tracked non-code-bulk file over the floor, records it under a distinct observable advisory classification (still visible in the audit output, not discarded) and emits no non-compliance finding
+input: external-tool-output
+provenance: capture-backed
+```
+
+```positive-outcome
+asserts: the stop-time delegation audit, given a captured Cursor-seat stop event over an advisory floor whose read was performed via a shell read-around (head / chunked sed / python chunking), records it under a separate observable category that is NOT the advisory-satisfied classification and does not silently discard it, while an otherwise-identical event whose read was delegated or targeted (offset/limit) is recorded as advisory-satisfied
 input: external-tool-output
 provenance: capture-backed
 ```
@@ -216,6 +249,13 @@ provenance: capture-backed
 5. Confirm `git diff` does not touch `.claude/hooks/**`, and that `AGENTS.md` /
    `CLAUDE.md` carry no clause contradicting the amended canonical Cursor-seat
    wording — criterion 4.
-6. Run the pack-wide required checks on Linux/WSL2 (pwsh 7+):
+6. Show the amended canonical clause carries the **SHOULD** ladder (preferred order
+   as guidance, not a mandated sequence), and run the audit's capture-backed
+   fixtures for a Cursor-seat stop event over an advisory floor in **two variants** —
+   one delegated/targeted (`offset`/`limit`) read recorded as advisory-satisfied,
+   one shell read-around (`head`/chunked `sed`/python chunking) recorded under the
+   separate observable category and **not** advisory-satisfied (and not discarded) —
+   maps to criterion 6 and its `positive-outcome` block.
+7. Run the pack-wide required checks on Linux/WSL2 (pwsh 7+):
    `pwsh ./scripts/verify.ps1` and `pwsh ./scripts/check-reusable.ps1` — both
    pass on the change.

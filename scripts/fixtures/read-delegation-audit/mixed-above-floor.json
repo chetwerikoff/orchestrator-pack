@@ -1,5 +1,5 @@
 {
-  "description": "Mixed unit above floor — delegable markdown bulk triggers while source is index-served",
+  "description": "Mixed unit above floor \u2014 delegable markdown bulk triggers while source is index-served",
   "surface": "cursor",
   "workUnits": [
     {
@@ -24,9 +24,10 @@
   ],
   "expect": {
     "triggerFired": true,
-    "excludedFromDenominator": false,
-    "flagged": true,
-    "inDenominator": true,
-    "indexServedExcludedLines": 900
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "indexServedExcludedLines": 900,
+    "advisory": true
   }
 }

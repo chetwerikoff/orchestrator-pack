@@ -95,6 +95,15 @@ external state files. They must not patch AO core.
 
 ### Review paths
 
+**Event-driven first review (Issue #381).** The orchestrator wake listener admits
+`ready_for_review` hand-off notifications on the **hand-off semantic envelope**
+(`notification` + `session.working` + `ready_for_review` + PR subject), not on
+transport priority. An `info`-priority hand-off is promoted out of the priority
+drop, identity-bound to the supervised project/repo/open PR, then evaluated through
+the shared #195/#352 readiness predicate and started via the #267/#308 claim and
+#332 per-cycle gate. `merge.ready` completion wakes remain a separate fast path
+(Issue #207). The 10-minute reconcile backstop is unchanged.
+
 The primary review path is AO's **active** local Codex review flow. AO drives
 it through `ao review run`, `send`, `list`, and `execute`; orchestration and the
 autonomous loop live in `orchestratorRules` in `agent-orchestrator.yaml`.

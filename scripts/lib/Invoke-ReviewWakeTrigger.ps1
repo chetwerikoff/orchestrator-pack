@@ -9,6 +9,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
+. (Join-Path $PSScriptRoot 'Record-ReviewHandoffWakeAdmission.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
@@ -87,6 +88,21 @@ function Get-ReviewWakeTriggerMergeEval {
     }
 }
 
+
+function Get-ReviewWakeReconcileStatePath {
+    if ($env:AO_REVIEW_TRIGGER_RECONCILE_STATE) { return $env:AO_REVIEW_TRIGGER_RECONCILE_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-review-reconcile-state.json'
+}
+
+function Get-ReviewWakeCycleStateFromReconcile {
+    $defaults = @{ lastTickMs = $null; degradedCi = @{}; cycleState = @{} }
+    $state = Get-MechanicalJsonStateFile -Path (Get-ReviewWakeReconcileStatePath) -DefaultState $defaults -ActionTracking
+    if ($state.cycleState) {
+        return Copy-MechanicalJsonMap -Map $state.cycleState
+    }
+    return @{}
+}
+
 function Get-ReviewWakeTriggerSnapshot {
     param(
         [int]$PrNumber,
@@ -111,6 +127,7 @@ function Get-ReviewWakeTriggerSnapshot {
     } -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as degraded'
 
     $prKey = [string]$PrNumber
+    $cycleState = Get-ReviewWakeCycleStateFromReconcile
     return @{
         openPrs                       = @($openPrs)
         reviewRuns                    = @($reviewRuns)
@@ -119,6 +136,8 @@ function Get-ReviewWakeTriggerSnapshot {
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
         prKey                         = $prKey
+        cycleState                    = $cycleState
+        repoRoot                      = $RepoRoot
     }
 }
 
@@ -133,6 +152,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         [hashtable]$FixtureSnapshot,
         [scriptblock]$ResolveFreshSnapshot,
         [switch]$DryRun,
+        [long]$WakeReceivedMs = 0,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
 
@@ -140,8 +160,10 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         return @{ triggered = $false; reason = 'filter_not_ok' }
     }
 
-    if ($FilterResult.wakeKind -ne 'merge.ready') {
-        return @{ triggered = $false; reason = 'not_completion_wake' }
+    $isCompletionWake = $FilterResult.wakeKind -eq 'merge.ready'
+    $isHandoffWake = $FilterResult.wakeKind -eq 'ready_for_review'
+    if (-not $isCompletionWake -and -not $isHandoffWake) {
+        return @{ triggered = $false; reason = 'not_event_wake' }
     }
 
     $prNumber = [int]$FilterResult.prNumber
@@ -150,29 +172,74 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         return @{ triggered = $false; reason = 'missing_pr_number' }
     }
 
+    if ($isHandoffWake -and $FilterResult.handoffAdmission.auditLine) {
+        & $LogWriter ([string]$FilterResult.handoffAdmission.auditLine)
+    }
+
     $snapshot = Get-ReviewWakeTriggerSnapshot -PrNumber $prNumber -Project $ProjectId `
         -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
 
-    # Bound listener-local processing only — exclude gh/ao snapshot latency.
-    $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-
-    $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
-    $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload @{
-        wakeKind                    = $FilterResult.wakeKind
-        sessionId                   = [string]$FilterResult.sessionId
-        prNumber                    = $prNumber
-        wakeReceivedMs              = $wakeReceivedMs
-        nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        openPrs                     = @($snapshot.openPrs)
-        reviewRuns                  = @($snapshot.reviewRuns)
-        sessions                    = @($snapshot.sessions)
-        ciChecks                    = @($snapshot.ciChecksByPr[$prKey])
-        requiredCheckNames          = @($snapshot.requiredCheckNamesByPr[$prKey])
-        requiredCheckLookupFailed   = [bool]$snapshot.requiredCheckLookupFailedByPr[$prKey]
+    if ($isHandoffWake -and $WakeReceivedMs -gt 0) {
+        $wakeReceivedMs = $WakeReceivedMs
+    }
+    else {
+        $wakeReceivedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
 
-    if (-not $evaluation.withinLatencyBound) {
+    $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
+    $evaluatePayload = @{
+        wakeKind                  = $FilterResult.wakeKind
+        sessionId                 = [string]$FilterResult.sessionId
+        prNumber                  = $prNumber
+        wakeReceivedMs            = $wakeReceivedMs
+        nowMs                     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        openPrs                   = @($snapshot.openPrs)
+        reviewRuns                = @($snapshot.reviewRuns)
+        sessions                  = @($snapshot.sessions)
+        ciChecks                  = @($snapshot.ciChecksByPr[$prKey])
+        requiredCheckNames        = @($snapshot.requiredCheckNamesByPr[$prKey])
+        requiredCheckLookupFailed = [bool]$snapshot.requiredCheckLookupFailedByPr[$prKey]
+    }
+    if ($isHandoffWake) {
+        $evaluatePayload.admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
+        $evaluatePayload.admittedHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha
+        $evaluatePayload.cycleState = if ($snapshot.cycleState) { $snapshot.cycleState } else { @{} }
+        $evaluatePayload.repoRoot = [string]$snapshot.repoRoot
+    }
+    $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload $evaluatePayload
+
+    $resolvedStateRoot = if ($StateRoot) {
+        $StateRoot
+    }
+    elseif ($SideEffectLockPath) {
+        Split-Path -Parent $SideEffectLockPath
+    }
+    else {
+        ''
+    }
+
+    if ($isHandoffWake) {
+        $preSideEffectNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $receiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preSideEffectNowMs
+        if (-not $receiptBound.withinBound) {
+            & $LogWriter "review-wake-trigger: handoff receipt bound exceeded PR #$prNumber ($($receiptBound.receiptToRunMs)ms)"
+            return @{
+                triggered = $false
+                reason    = 'handoff_receipt_bound_exceeded'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $prNumber -Snapshot $snapshot
+            }
+        }
+    }
+    elseif (-not $evaluation.withinLatencyBound) {
         throw "review-wake-trigger exceeded wake-to-run decision bound (${evaluation.processingMs}ms)"
+    }
+
+    if ($isHandoffWake -and $resolvedStateRoot) {
+        $admissionRecord = Record-ReviewHandoffWakeAdmission -StateRoot $resolvedStateRoot -FilterResult $FilterResult `
+            -WakeReceivedMs $wakeReceivedMs -DryRun:$DryRun
+        if ($admissionRecord.recorded) {
+            & $LogWriter "review-handoff-wake: admission recorded key=$($admissionRecord.key)"
+        }
     }
 
     if ($evaluation.route -eq 'empty_review_trap') {
@@ -188,16 +255,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if (-not $evaluation.triggerReviewRun) {
         & $LogWriter "review-wake-trigger: defer PR #$prNumber ($($evaluation.reason))"
-        $resolvedStateRoot = if ($StateRoot) {
-            $StateRoot
-        }
-        elseif ($SideEffectLockPath) {
-            Split-Path -Parent $SideEffectLockPath
-        }
-        else {
-            ''
-        }
-        if ($resolvedStateRoot -and $evaluation.reason -eq 'uncovered_not_ready') {
+        if ($resolvedStateRoot -and $evaluation.reason -in @('uncovered_not_ready', 'ci_red_defer')) {
             $headShaForWatch = ''
             foreach ($pr in @($snapshot.openPrs)) {
                 if ([int]$pr.number -eq $prNumber) {
@@ -206,12 +264,19 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 }
             }
             if ($headShaForWatch) {
+                $deferReason = [string]$evaluation.reason
+                $deferRecord = if ($deferReason -eq 'ci_red_defer') {
+                    @{ primary = 'ci_red' }
+                }
+                else {
+                    @{ primary = 'no_ready_for_review' }
+                }
                 $watchResult = Record-ReviewTriggerReevalWatchFromWakeDefer -StateRoot $resolvedStateRoot `
                     -PrNumber $prNumber -HeadSha $headShaForWatch -SessionId ([string]$FilterResult.sessionId) `
-                    -DeferReason 'uncovered_not_ready' -DeferRecord @{ primary = 'no_ready_for_review' } `
+                    -DeferReason $deferReason -DeferRecord $deferRecord `
                     -DryRun:$DryRun
                 if ($watchResult.recorded) {
-                    & $LogWriter "review-wake-trigger: deferred-head watch recorded key=$($watchResult.watchKey)"
+                    & $LogWriter "review-wake-trigger: deferred-head watch recorded key=$($watchResult.watchKey) reason=$deferReason"
                 }
             }
         }
@@ -247,7 +312,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $claimRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $ProjectId) }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
             -Surface 'review-wake-trigger' -ReviewRuns $claimRuns -ProjectId $ProjectId `
-            -StartReason 'completion_wake' -LogWriter $LogWriter
+            -StartReason $(if ($isHandoffWake) { 'handoff_wake' } else { 'completion_wake' }) -LogWriter $LogWriter
     }
     if (-not $claim.acquired) {
         if ($claim.escalation) {
@@ -260,6 +325,10 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         $holder = Format-ReviewStartClaimHolder -Holder $claim.holder
         & $LogWriter "review-wake-trigger: claim-skip PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): held by $holder reason=$($claim.reason)"
+        if ($isHandoffWake) {
+            Write-ReviewHandoffClaimAudit -Outcome 'claim_loss' -ClaimOutcome 'loss' -Reason ([string]$claim.reason) `
+                -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+        }
         $mergeSnapshot = if ($claim.reason -eq 'covered_by_run') {
             if ($ResolveFreshSnapshot) {
                 & $ResolveFreshSnapshot $planned
@@ -290,6 +359,10 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     if ($claim.recovered) {
         & $LogWriter "review-wake-trigger: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
+    if ($isHandoffWake) {
+        Write-ReviewHandoffClaimAudit -Outcome 'claim_win' -ClaimOutcome 'win' -Reason 'head_ready_for_review' `
+            -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
+    }
 
     try {
         $fresh = if ($FixtureSnapshot) {
@@ -299,19 +372,49 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
         }
         $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        $plannedStartReason = if ($planned.startReason) {
+            [string]$planned.startReason
+        }
+        elseif ($isHandoffWake) {
+            'handoff_wake'
+        }
+        else {
+            'completion_wake'
+        }
+        $plannedAdmittedBase = if ($planned.admittedBaseRef) {
+            [string]$planned.admittedBaseRef
+        }
+        elseif ($isHandoffWake -and $FilterResult.handoffAdmission) {
+            [string]$FilterResult.handoffAdmission.admittedBaseRef
+        }
+        else {
+            ''
+        }
+        $plannedHeadSha = if ($planned.headSha) {
+            [string]$planned.headSha
+        }
+        elseif ($isHandoffWake -and $FilterResult.handoffAdmission) {
+            [string]$FilterResult.handoffAdmission.admittedHeadSha
+        }
+        else {
+            ''
+        }
         $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
-            planned = @{
-                prNumber  = $planned.prNumber
-                headSha   = $planned.headSha
-                sessionId = $planned.sessionId
+            wakeKind = [string]$FilterResult.wakeKind
+            planned  = @{
+                prNumber        = $planned.prNumber
+                headSha         = $plannedHeadSha
+                sessionId       = $planned.sessionId
+                startReason     = $plannedStartReason
+                admittedBaseRef = $plannedAdmittedBase
             }
-            fresh   = @{
-                openPrs                     = @($fresh.openPrs)
-                reviewRuns                  = @($fresh.reviewRuns)
-                sessions                    = @($fresh.sessions)
-                ciChecks                    = @($fresh.ciChecksByPr[$freshPrKey])
-                requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$freshPrKey])
-                requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
+            fresh    = @{
+                openPrs                   = @($fresh.openPrs)
+                reviewRuns                = @($fresh.reviewRuns)
+                sessions                  = @($fresh.sessions)
+                ciChecks                  = @($fresh.ciChecksByPr[$freshPrKey])
+                requiredCheckNames        = @($fresh.requiredCheckNamesByPr[$freshPrKey])
+                requiredCheckLookupFailed = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
             }
         }
     }
@@ -362,6 +465,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     })
             }
         }
+        $handoffReceiptAbort = $false
         try {
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             try {
@@ -371,16 +475,34 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
                 throw
             }
-            & ao @runArgs
-            if ($LASTEXITCODE -ne 0) {
-                $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
-                $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
-                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
-                throw $failure
+            if ($isHandoffWake) {
+                $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
+                if (-not $preInvokeReceiptBound.withinBound) {
+                    & $LogWriter "review-wake-trigger: handoff receipt bound exceeded before review run PR #$($planned.prNumber) ($($preInvokeReceiptBound.receiptToRunMs)ms)"
+                    Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = 'handoff_receipt_bound_exceeded' } | Out-Null
+                    $handoffReceiptAbort = $true
+                }
+            }
+            if (-not $handoffReceiptAbort) {
+                & ao @runArgs
+                if ($LASTEXITCODE -ne 0) {
+                    $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+                    $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
+                    Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+                    throw $failure
+                }
             }
         }
         finally {
             Exit-ReviewWakeTriggerSideEffectFence -LockPath $lockPath
+        }
+        if ($handoffReceiptAbort) {
+            return @{
+                triggered = $false
+                reason    = 'handoff_receipt_bound_exceeded'
+                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+            }
         }
     }
 

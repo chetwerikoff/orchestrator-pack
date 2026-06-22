@@ -114,6 +114,14 @@
       "path": "captures/ao-status-session/working-no-runtime.raw.json",
       "contentHash": "sha256:019be58ae0c067efda08366b012a9429943550c8dffc9063204fbe2f48473fe6"
     },
+    "ao-status-sessions/ready_for_review_on_head": {
+      "id": "ao-status-sessions/ready_for_review_on_head",
+      "producer": "ao-status-sessions",
+      "sourceCommand": "ao status --json --reports full",
+      "kind": "structured",
+      "path": "captures/ao-status-sessions/ready_for_review_on_head.raw.json",
+      "contentHash": "sha256:36dfe8cafca898fc95483d9b1bab0644b3fe876214c4604438216ba315458cd6"
+    },
     "ao-webhook-notification/ready_for_review": {
       "id": "ao-webhook-notification/ready_for_review",
       "producer": "ao",
@@ -129,6 +137,14 @@
       "kind": "structured",
       "path": "captures/ao-webhook-notification/ready_for_review.action-priority.raw.json",
       "contentHash": "sha256:13e46a06a40b89828b55f5ce7aebfd131c822830c7234929cc4d92ed1e8cbe83"
+    },
+    "ao-webhook-notification/review_pending": {
+      "id": "ao-webhook-notification/review_pending",
+      "producer": "ao",
+      "sourceCommand": "live wire capture via loopback proxy redirect (AO webhook POST /ao-wake, operator capture 2026-06-21)",
+      "kind": "structured",
+      "path": "captures/ao-webhook-notification/review_pending.raw.json",
+      "contentHash": "sha256:00e84ca86507178d8bdee0d628d15a6cba5579f8698ce19701f302223b976522"
     },
     "ao-worker-report/addressing_reviews": {
       "id": "ao-worker-report/addressing_reviews",
@@ -189,10 +205,10 @@
     "gh-pr-open/open": {
       "id": "gh-pr-open/open",
       "producer": "gh",
-      "sourceCommand": "gh pr list --state open --json number,headRefOid,commits --limit 200",
+      "sourceCommand": "gh pr list --state open --json number,headRefOid,baseRefName --limit 200",
       "kind": "structured",
       "path": "captures/gh-pr-open/open.raw.json",
-      "contentHash": "sha256:190ae89f3773084ac603b90ba608aa9c4f689f36010376700f822dd0e15cb9ac"
+      "contentHash": "sha256:f8523a313d522ca149bb777731e13da43e3790950f3306b90bdb6683e32e7d0a"
     }
   }
 }

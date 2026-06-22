@@ -17,6 +17,7 @@ import {
   evaluateReadyForReviewNotificationCapture,
   findForbiddenReviewReevalCommands,
   isDeferredNotReadySeedEligible,
+  isDeferredReevalWatchSeedEligible,
   isWatchWindowNonConformant,
   mergeWatchState,
   planDeferredWatchTick,
@@ -118,6 +119,11 @@ describe('review-trigger-reeval constants and helpers', () => {
     expect(watchEntryKey(235, 'ABC235')).toBe('235:abc235');
   });
 
+  it('isDeferredReevalWatchSeedEligible accepts ci_red_defer', () => {
+    expect(isDeferredReevalWatchSeedEligible('ci_red_defer', { primary: 'ci_red' })).toBe(true);
+    expect(isDeferredReevalWatchSeedEligible('ci_red_defer', { primary: 'no_ready_for_review' })).toBe(false);
+  });
+
   it('isDeferredNotReadySeedEligible accepts no_ready_for_review only', () => {
     expect(isDeferredNotReadySeedEligible('uncovered_not_ready', { primary: 'no_ready_for_review' })).toBe(true);
     expect(isDeferredNotReadySeedEligible('ci_red_defer', { primary: 'ci_red' })).toBe(false);
@@ -155,26 +161,30 @@ describe('Issue #235 acceptance criteria', () => {
     expect(verdict.withinLatencyBound).toBe(true);
   });
 
-  it('(3) capture-backed AO ready_for_review notification at info priority is filtered', () => {
+  it('(3) capture-backed AO ready_for_review notification at info priority is promoted (Issue #381)', () => {
     const capture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'),
     );
     const evalCapture = evaluateReadyForReviewNotificationCapture(capture);
     expect(evalCapture.emitsNotification).toBe(true);
     expect(evalCapture.priority).toBe('info');
-    expect(evalCapture.filteredByListener).toBe(true);
-    expect(evalCapture.requiresScopedDeferredHeadWatch).toBe(true);
 
-    const wake = evaluateWakePayload(capture);
-    expect(wake.ok).toBe(false);
-    if (!wake.ok) {
-      expect(wake.reason).toBe('info_priority');
+    const admissionContext = {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrs: [{ number: 234, headRefOid: 'handoff234', baseRefName: 'main' }],
+    };
+    const wake = evaluateWakePayload(capture, admissionContext);
+    expect(wake.ok).toBe(true);
+    if (wake.ok) {
+      expect(wake.wakeKind).toBe('ready_for_review');
+      expect(wake.handoffAdmission?.promotedFromInfoPriority).toBe(true);
     }
 
     const actionCapture = JSON.parse(
       readFileSync(path.join(captureDir, 'ready_for_review.action-priority.raw.json'), 'utf8'),
     );
-    const actionWake = evaluateWakePayload(actionCapture);
+    const actionWake = evaluateWakePayload(actionCapture, admissionContext);
     expect(actionWake.ok).toBe(true);
   });
 

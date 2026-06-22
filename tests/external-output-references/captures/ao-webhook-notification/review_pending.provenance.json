@@ -1,0 +1,11 @@
+{
+  "sourceCommand": "live wire capture via loopback proxy redirect (AO webhook POST /ao-wake, operator capture 2026-06-21)",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-21T15:46:30.479Z",
+  "representative": true,
+  "context": "review.pending transition stuck→review_pending on opk-167 PR #389; priority info; verbatim proxy-captured wire body",
+  "scrubLog": [
+    "Notification payload only; no transport auth headers stored",
+    "Verbatim wire body from loopback proxy /tmp/wake-capture"
+  ]
+}

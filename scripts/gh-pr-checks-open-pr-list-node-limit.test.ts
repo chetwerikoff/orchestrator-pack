@@ -33,6 +33,10 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
     expect(prListLine, 'gh pr list invocation not found').toBeTruthy();
   });
 
+  it('requests baseRefName for handoff admission snapshots', () => {
+    expect(prListLine).toMatch(/baseRefName/);
+  });
+
   it('does not request the heavy commits connection in the list query', () => {
     // `--json ...,commits` at --limit 200 blows past GitHub's 500k GraphQL node
     // limit and fails every reconcile tick (issue: open-PR list node limit).

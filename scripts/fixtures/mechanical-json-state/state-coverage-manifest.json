@@ -53,10 +53,12 @@
       "id": "review-trigger-reconcile",
       "stateFile": "orchestrator-review-trigger-reconcile-state.json",
       "callerScripts": [
-        "scripts/review-trigger-reconcile.ps1"
+        "scripts/review-trigger-reconcile.ps1",
+        "scripts/lib/Invoke-ReviewWakeTrigger.ps1"
       ],
       "mapFields": [
-        "degradedCi"
+        "degradedCi",
+        "cycleState"
       ],
       "actionTracking": true
     },
@@ -105,6 +107,18 @@
       ],
       "actionTracking": true,
       "bespoke": true
+    },
+    {
+      "id": "review-handoff-wake-admission",
+      "stateFile": "review-handoff-wake-admission.json",
+      "callerScripts": [
+        "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1"
+      ],
+      "mapFields": [
+        "records",
+        "pendingRetries"
+      ],
+      "actionTracking": true
     }
   ]
 }

@@ -5,7 +5,7 @@
   "version": 1,
   "captureRef": "captures/gh-pr-open/open.raw.json",
   "provenanceRef": "captures/gh-pr-open/open.provenance.json",
-  "allowedFields": ["number", "headRefOid", "headCommittedAt"],
+  "allowedFields": ["number", "headRefOid", "headCommittedAt", "baseRefName"],
   "forbiddenFields": ["reportState", "reports", "accepted"],
   "forbiddenTogether": []
 }

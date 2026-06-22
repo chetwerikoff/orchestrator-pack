@@ -822,6 +822,14 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/worker-message-submit-reconcile.ps1',
     'scripts/worker-message-submit-reconcile.test.ts',
   ],
+  381: [
+    'scripts/orchestrator-wake-listener.ps1',
+    'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
+    'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1',
+    'docs/orchestrator-wake-filter.mjs',
+    'docs/review-wake-trigger.mjs',
+    'docs/review-handoff-wake-admission.mjs',
+  ],
 };
 
 /**

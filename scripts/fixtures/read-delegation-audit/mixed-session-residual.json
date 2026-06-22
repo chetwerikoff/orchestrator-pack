@@ -32,9 +32,10 @@
     }
   ],
   "expectSummary": {
-    "delegableTriggerUnits": 1,
-    "flaggedUnits": 1,
-    "residualNonCompliance": 1,
-    "denominatorCause": "normal"
+    "delegableTriggerUnits": 0,
+    "flaggedUnits": 0,
+    "residualNonCompliance": 0,
+    "denominatorCause": "all-excluded",
+    "advisoryUnits": 1
   }
 }

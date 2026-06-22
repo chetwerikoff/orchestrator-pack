@@ -1,25 +1,27 @@
 {
-  "description": ">200-line log stays out-of-index delegable and is flagged",
+  "description": ">200-line log on Cursor is advisory, not flagged",
   "surface": "cursor",
   "workUnits": [
     {
-      "key": "unit-log-flagged",
-      "inboundRequestId": "req-1",
+      "key": "unit-log-advisory",
+      "inboundRequestId": "req-out-of-index-log",
       "reads": [
         {
-          "path": "ci-output.log",
+          "path": "artifacts/ci-output.log",
           "lines": 250,
           "kind": "log"
         }
       ],
       "edits": [],
-      "statusText": "skipped delegation on CI log"
+      "statusText": "out-of-index log on cursor stays advisory"
     }
   ],
   "expect": {
+    "fixtureNote": "out-of-index-log-flagged",
     "triggerFired": true,
-    "excludedFromDenominator": false,
-    "flagged": true,
-    "inDenominator": true
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true
   }
 }

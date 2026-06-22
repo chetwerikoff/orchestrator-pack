@@ -1,0 +1,35 @@
+{
+  "description": "Unrelated shell grep must not override targeted advisory satisfaction",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-unrelated-shell",
+      "inboundRequestId": "req-unrelated-shell",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file",
+          "targetedRead": true
+        }
+      ],
+      "shellCommands": [
+        "grep -n helper scripts/unrelated-helper.ts"
+      ],
+      "edits": [],
+      "statusText": "targeted advisory read with unrelated grep elsewhere"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-unrelated-shell",
+    "outcomeReason": "targeted-read-preserved",
+    "grepIgnored": true,
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory-satisfied",
+    "advisorySatisfied": true
+  }
+}

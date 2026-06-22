@@ -1,5 +1,5 @@
 {
-  "description": ">400 combined lines of fetched external corpus flagged",
+  "description": ">400-line external corpus on Cursor is advisory, not flagged",
   "surface": "cursor",
   "workUnits": [
     {
@@ -13,13 +13,15 @@
         }
       ],
       "edits": [],
-      "statusText": "skipped delegation on external fetch"
+      "statusText": "out-of-index external on cursor stays advisory"
     }
   ],
   "expect": {
+    "fixtureNote": "out-of-index-external-flagged",
     "triggerFired": true,
-    "excludedFromDenominator": false,
-    "flagged": true,
-    "inDenominator": true
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true
   }
 }

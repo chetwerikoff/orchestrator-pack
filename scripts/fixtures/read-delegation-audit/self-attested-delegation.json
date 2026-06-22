@@ -1,11 +1,17 @@
 {
-  "description": "status claims delegation without coworker event — flagged",
-  "surface": "cursor",
+  "description": "status claims delegation without coworker event \u2014 flagged",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-self-attest",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/a.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "edits": [],
       "statusText": "Delegated the bulk read through coworker ask."
     }
