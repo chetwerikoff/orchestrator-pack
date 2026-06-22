@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-06-21T00:00:00.000Z",
   "baseline": {
-    "commit_sha": "18adad43cb828561b501d5c89b0e3d6cedef8d5b",
+    "commit_sha": "8ca70b55249aafc659c2dc2c4006572173bb186c",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714"
   },
@@ -50,9 +50,10 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:27e6e0f22a12895fcc0e5ecc99da2b9cc50e127fd141f9bfc4440aaefb17c5e2",
+      "new_active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714",
       "changed": {
         "added": [
+          "scripts/lib/Journaled-WorkerSendInternalCapability.ps1",
           "scripts/orchestrator-message-catalog.json"
         ],
         "removed": []
@@ -61,21 +62,7 @@
       "actor": "opk-162",
       "timestamp": "2026-06-21T12:44:10.660Z",
       "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:27e6e0f22a12895fcc0e5ecc99da2b9cc50e127fd141f9bfc4440aaefb17c5e2",
-      "new_active_scope_hash": "sha256:22065f9ba6acdf8b67b335c9eb7fdd5dc18e797698096bd98477d07b52950714",
-      "changed": {
-        "added": [
-          "scripts/lib/Journaled-WorkerSendInternalCapability.ps1"
-        ],
-        "removed": []
-      },
-      "reason": "declare journaled-send internal capability helper for review fixes",
-      "actor": "opk-166",
-      "timestamp": "2026-06-22T01:05:35.271Z",
-      "applied": true
     }
   ],
-  "commit_sha": "18adad43cb828561b501d5c89b0e3d6cedef8d5b"
+  "commit_sha": "8ca70b55249aafc659c2dc2c4006572173bb186c"
 }
