@@ -15,7 +15,7 @@ Checkpoint-2 must be launched from trusted pack root, not this PR-checkout wrapp
 Use:
   pwsh -NoProfile -File <trusted-pack-root>/scripts/launch-contract-evidence-reverify.ps1 `
     -ReviewTargetRoot <pr-worktree-path> `
-    -SnapshotFile <bound-issue-snapshot.md> `
+    -SnapshotFile <resolved-bound-issue-snapshot.md> `
     ... `
     -Summary
 

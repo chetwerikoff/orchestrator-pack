@@ -27,6 +27,7 @@ import {
   listNodeScriptDependencyClosureRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
+import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
 
 export { DEFAULT_REVERIFY_MANIFEST_PATH };
@@ -37,16 +38,7 @@ const producerRegistry = require('../contract-evidence-producer-registry.json') 
   repoOwned?: string[];
   aliases?: Record<string, string>;
 };
-const allowlist = require('../contract-evidence-reverify-allowlist.json') as {
-  externalProducers: string[];
-  trustedCommandPrefixes: string[];
-  mutatingTokenPattern: string;
-  trustedCheckerRelativePaths: string[];
-  newRowProducerBoundaryScripts?: string[];
-  npmProofIndependentCommands?: Record<string, string>;
-  defaultTimeoutMs: number;
-  maxObservedLength: number;
-};
+const allowlist = loadReverifyAllowlistConfig();
 
 export const REVERIFY_STATUSES = [
   'verified',

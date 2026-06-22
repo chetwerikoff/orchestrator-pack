@@ -1,5 +1,6 @@
 {
-  "description": "Trusted command allowlist for checkpoint-2 live re-verification (Issue #376).",
+  "description": "Trusted command allowlist for checkpoint-2 live re-verification (Issue #376). Fixture prefixes stay here; production NEW-row proofs register in contract-evidence-reverify-production-commands.json.",
+  "productionCommandsManifest": "contract-evidence-reverify-production-commands.json",
   "externalProducers": ["ao", "gh", "codex"],
   "allowedEnvVars": [
     "NODE_ENV",

@@ -1,13 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
 
-const require = createRequire(import.meta.url);
-const allowlist = require('../contract-evidence-reverify-allowlist.json') as {
-  trustedCommandPrefixes: string[];
-  mutatingTokenPattern: string;
-  allowedEnvVars: string[];
-};
+const allowlist = loadReverifyAllowlistConfig();
 
 export const DEFAULT_REVERIFY_MANIFEST_PATH = 'tests/external-output-references/capture-manifest.json';
 

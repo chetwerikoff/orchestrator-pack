@@ -191,8 +191,10 @@ with a linked issue, run checkpoint-2 **after** contract-mapping (when applicabl
 and **before** final verdict. Use
 `scripts/launch-contract-evidence-reverify.ps1` from **trusted pack root**
 (origin/main worktree, `AO_TRUSTED_PACK_ROOT`, or origin/main archive — never the
-PR checkout) with the bound immutable issue snapshot (not a live re-fetch), PR
-body, and changed paths. The helper emits **candidate evidence only** — never auto-blocks or auto-merges. A row is **producer-verified** only when
+PR checkout). Contract-mapping preflight captures the bound immutable issue
+snapshot (`-PrNumber`, `-PrHeadSha`) into the AO project store; resolve it with
+`scripts/resolve-bound-issue-snapshot.ps1` (never a live re-fetch) before
+checkpoint-2. Pass PR body and changed paths to the launcher. The helper emits **candidate evidence only** — never auto-blocks or auto-merges. A row is **producer-verified** only when
 `status: verified` **and** `verification-mode: live`; `compared-to-record` rows
 are integrity-checked-only. Surface every per-row status (including `unverified`,
 `verification-mode: not-run`, and zero-row `no-rows` runs) in review output.

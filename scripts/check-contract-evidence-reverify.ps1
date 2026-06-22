@@ -17,7 +17,13 @@ $requiredPaths = @(
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ps1'),
     (Join-Path $Root 'scripts/launch-contract-evidence-reverify.ps1'),
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ts'),
-    (Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts')
+    (Join-Path $Root 'scripts/lib/contract-evidence-reverify.ts'),
+    (Join-Path $Root 'scripts/contract-evidence-reverify-production-commands.json'),
+    (Join-Path $Root 'scripts/resolve-bound-issue-snapshot.ps1'),
+    (Join-Path $Root 'scripts/resolve-bound-issue-snapshot.ts'),
+    (Join-Path $Root 'scripts/capture-bound-issue-snapshot.ts'),
+    (Join-Path $Root 'scripts/lib/reverify-bound-issue-snapshot.ts'),
+    (Join-Path $Root 'scripts/lib/reverify-allowlist-config.ts')
 )
 Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Failures $failures
 
@@ -28,6 +34,7 @@ if ($failures.Count -eq 0) {
         'candidate evidence only',
         'launch-contract-evidence-reverify.ps1',
         'ReviewTargetRoot',
+        'resolve-bound-issue-snapshot.ps1',
         'producer-verified',
         'verification-mode',
         'never auto-blocks',
@@ -38,6 +45,7 @@ if ($failures.Count -eq 0) {
         'candidate evidence only',
         'launch-contract-evidence-reverify.ps1',
         'ReviewTargetRoot',
+        'resolve-bound-issue-snapshot.ps1',
         'producer-verified',
         'independently validate',
         'never auto-blocks'
@@ -46,6 +54,14 @@ if ($failures.Count -eq 0) {
 
 Push-Location $Root
 try {
+    if ($failures.Count -eq 0) {
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reverify-allowlist-config.test.ts' -Failures $failures
+    }
+
+    if ($failures.Count -eq 0) {
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reverify-bound-issue-snapshot.test.ts' -Failures $failures
+    }
+
     if ($failures.Count -eq 0) {
         Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/contract-evidence-reverify.test.ts' -Failures $failures
     }

@@ -17,6 +17,11 @@ import {
   type ContractSpecMember,
   type MappingLedger,
 } from './lib/reviewer-contract-mapping.js';
+import {
+  captureBoundIssueSnapshotsFromPreflight,
+  resolveDefaultAoProjectId,
+  type BoundIssueSnapshotCaptureResult,
+} from './lib/reverify-bound-issue-snapshot.js';
 
 interface CliOptions {
   prBodyFile: string | null;
@@ -35,6 +40,8 @@ interface CliOptions {
   coworkerAvailable: boolean;
   providerInputByteLimit?: number;
   preflightOnly?: boolean;
+  prNumber?: number | null;
+  projectId?: string | null;
 }
 
 export function parseIssueSpecAssignments(
@@ -93,6 +100,8 @@ function parseArgs(argv: string[]): CliOptions {
     lookupAvailable: true,
     coworkerAvailable: true,
     preflightOnly: false,
+    prNumber: null,
+    projectId: null,
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -129,6 +138,10 @@ function parseArgs(argv: string[]): CliOptions {
       opts.providerInputByteLimit = Number(argv[++i]);
     } else if (arg === '--preflight-only') {
       opts.preflightOnly = true;
+    } else if (arg === '--pr-number') {
+      opts.prNumber = Number(argv[++i]);
+    } else if (arg === '--project-id') {
+      opts.projectId = argv[++i] ?? null;
     } else if (arg === '--text') {
       opts.json = false;
     } else if (arg === '--help' || arg === '-h') {
@@ -159,6 +172,8 @@ Options:
   --coworker-unavailable        Simulate coworker missing
   --provider-input-byte-limit <n>  Provider/input ceiling for preflight
   --preflight-only              Stop after mapping preflight (fixture/integration smoke)
+  --pr-number <n>               PR number for bound issue snapshot capture
+  --project-id <id>             AO project id for bound issue snapshot store
   --text                        Human-readable output instead of JSON
 `);
 }
@@ -454,6 +469,26 @@ export function applyMappedOutputFinalUsability(input: {
   };
 }
 
+
+
+export function serializeBoundIssueSnapshotCapture(
+  captures: BoundIssueSnapshotCaptureResult[],
+): Array<{
+  issueNumber: number;
+  snapshotPath: string;
+  metadataPath: string;
+  snapshotHash: string;
+  created: boolean;
+}> {
+  return captures.map((capture) => ({
+    issueNumber: capture.issueNumber,
+    snapshotPath: capture.snapshotPath,
+    metadataPath: capture.metadataPath,
+    snapshotHash: capture.snapshotHash,
+    created: capture.created,
+  }));
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
@@ -477,6 +512,15 @@ function main(): void {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);
   }
+
+  const boundIssueSnapshotCapture = opts.prNumber && opts.prNumber > 0
+    ? captureBoundIssueSnapshotsFromPreflight({
+        projectId: opts.projectId ?? resolveDefaultAoProjectId(),
+        prNumber: opts.prNumber,
+        prHeadSha,
+        specBodies,
+      })
+    : [];
 
   const preflight = evaluateMappingPreflight({
     diffLineCount,
@@ -515,6 +559,7 @@ function main(): void {
           }
         : null,
       coworkerArgv: preflight.coworkerArgv ?? null,
+      boundIssueSnapshotCapture: serializeBoundIssueSnapshotCapture(boundIssueSnapshotCapture),
       ledger: null,
     };
     if (opts.json) {
@@ -631,6 +676,7 @@ function main(): void {
         }
       : null,
     coworkerArgv: preflight.coworkerArgv ?? null,
+    boundIssueSnapshotCapture: serializeBoundIssueSnapshotCapture(boundIssueSnapshotCapture),
     ledger: ledger ?? null,
   };
 

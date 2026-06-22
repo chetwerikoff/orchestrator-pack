@@ -15,6 +15,7 @@ import {
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
+import { loadReverifyAllowlistConfig } from './lib/reverify-allowlist-config.js';
 import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -357,11 +358,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('npm independent mapping strings observe producer reality without echoing issue expected', () => {
-    const allowlistPath = path.join(packRoot, 'scripts/contract-evidence-reverify-allowlist.json');
-    const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8')) as {
-      npmProofIndependentCommands?: Record<string, string>;
-    };
-    const mappings = allowlist.npmProofIndependentCommands ?? {};
+    const mappings = loadReverifyAllowlistConfig().npmProofIndependentCommands;
     for (const independentCommand of Object.values(mappings)) {
       expect(independentCommand).not.toContain('{{expected}}');
       expect(independentCommand).not.toMatch(/REVERIFY_STATUS=/);
@@ -372,6 +369,9 @@ describe('contract-evidence reverify (Issue #376)', () => {
     );
     expect(mappings['npm test -- contract-evidence-reverify']).toBe(
       'node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',
+    );
+    expect(mappings['npm test -- legacy-list-guard']).toBe(
+      'node scripts/run-contract-evidence-legacy-list-guard.mjs',
     );
   });
 
