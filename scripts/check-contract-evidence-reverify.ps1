@@ -427,6 +427,10 @@ try {
     }
 
     if ($failures.Count -eq 0) {
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reverify-e2e-fixture-session.test.ts' -Failures $failures
+    }
+
+    if ($failures.Count -eq 0) {
         Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/contract-evidence-reverify.test.ts' -Failures $failures
     }
 
