@@ -80,11 +80,14 @@ function Invoke-GhOpenPrListForNumbers {
     try {
         $prs = @()
         foreach ($n in $unique) {
-            $raw = gh pr view $n --json number,headRefOid,baseRefName 2>&1
+            $raw = gh pr view $n --json number,headRefOid,baseRefName,state 2>&1
             if ($LASTEXITCODE -ne 0) {
                 continue
             }
             $pr = $raw | ConvertFrom-Json
+            if ([string]$pr.state -ne 'OPEN') {
+                continue
+            }
             $headSha = [string]$pr.headRefOid
             if (-not $headSha) {
                 continue

@@ -44,12 +44,16 @@ function Get-ReviewReadyReportStateSeedTerminalClaimKeys {
 }
 
 function Get-ReviewReadyReportStateSeedGitHubRefreshIntervalMs {
-    $seconds = 60
+    # Issue #391: CI-defer recovery must observe green within <=30s; keep refresh below that bound.
+    $seconds = 20
     if ($env:AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS) {
         $seconds = [int]$env:AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS
     }
     if ($seconds -lt 5) {
         $seconds = 5
+    }
+    if ($seconds -gt 29) {
+        $seconds = 29
     }
     return $seconds * 1000
 }

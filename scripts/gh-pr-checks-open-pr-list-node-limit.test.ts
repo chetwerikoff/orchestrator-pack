@@ -61,4 +61,9 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
     expect(body).toMatch(/headCommittedAt/);
     expect(body).toMatch(/gh api[^\n]*commits\//);
   });
+
+  it('requests PR state and excludes closed or merged PRs', () => {
+    expect(body).toMatch(/gh pr view \$n --json[^\n]*state/);
+    expect(body).toMatch(/state.*OPEN|OPEN.*state/);
+  });
 });
