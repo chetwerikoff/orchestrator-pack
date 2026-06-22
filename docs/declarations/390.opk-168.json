@@ -2,7 +2,7 @@
   "issue_number": 390,
   "iteration_id": "opk-168",
   "iteration_id_source": "ao_session",
-  "supersedes": null,
+  "supersedes": "architect-gate-a-captures",
   "created_at": "2026-06-22T04:08:23.784Z",
   "baseline": {
     "commit_sha": "7ca599c5966fc8b71a49d6518e242b5698c60d9a",
