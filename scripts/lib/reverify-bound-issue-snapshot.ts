@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { getAoProjectDir } from '../../docs/review-run-recovery.mjs';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.js';
+
+function getAoProjectDir(projectId: string, baseDir?: string): string {
+  const root = baseDir ?? process.env.AO_BASE_DIR ?? join(homedir(), '.agent-orchestrator');
+  return join(root, 'projects', projectId);
+}
 
 export const BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION = 1;
 export const BOUND_ISSUE_SNAPSHOT_STORE_REL = 'code-reviews/bound-issue-snapshots';

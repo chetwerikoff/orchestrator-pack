@@ -137,6 +137,23 @@ function Copy-ImplementingPrScriptsBootstrap {
     New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
 
     Copy-Item -LiteralPath $scriptsRoot -Destination (Join-Path $DestinationRoot 'scripts') -Recurse -Force
+    foreach ($pluginRel in @('plugins/_shared', 'plugins/ao-scope-guard')) {
+        $pluginRoot = Join-Path $resolvedSource $pluginRel
+        if (Test-Path -LiteralPath $pluginRoot) {
+            $pluginDest = Join-Path $DestinationRoot $pluginRel
+            New-Item -ItemType Directory -Path (Split-Path -Parent $pluginDest) -Force | Out-Null
+            Copy-Item -LiteralPath $pluginRoot -Destination $pluginDest -Recurse -Force
+        }
+    }
+    foreach ($fixtureRel in @('tests/fixtures/contract-evidence-reverify')) {
+        $fixtureRoot = Join-Path $resolvedSource $fixtureRel
+        if (Test-Path -LiteralPath $fixtureRoot) {
+            $fixtureDest = Join-Path $DestinationRoot $fixtureRel
+            New-Item -ItemType Directory -Path (Split-Path -Parent (Split-Path -Parent $fixtureDest)) -Force | Out-Null
+            New-Item -ItemType Directory -Path (Split-Path -Parent $fixtureDest) -Force | Out-Null
+            Copy-Item -LiteralPath $fixtureRoot -Destination $fixtureDest -Recurse -Force
+        }
+    }
     foreach ($rootFile in @('package.json', 'package-lock.json', 'tsconfig.base.json')) {
         $sourceFile = Join-Path $resolvedSource $rootFile
         if (Test-Path -LiteralPath $sourceFile) {
