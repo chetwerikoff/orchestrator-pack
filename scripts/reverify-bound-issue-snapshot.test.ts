@@ -124,4 +124,28 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     expect(resolved.snapshotPath).toBeNull();
     expect(resolved.metadata).toBeNull();
   });
+
+  it('returns corrupted when metadata binding fields disagree with the request', () => {
+    withStoreDir();
+    const captured = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+      issueBody: '# Original body\n',
+      capturedAt: '2026-06-22T00:00:00.000Z',
+    });
+    const metadata = JSON.parse(readFileSync(captured.metadataPath, 'utf8')) as Record<string, unknown>;
+    metadata.issueNumber = 377;
+    writeFileSync(captured.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+
+    const resolved = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      issueNumber: 376,
+    });
+    expect(resolved.status).toBe('corrupted');
+    expect(resolved.snapshotPath).toBeNull();
+  });
 });

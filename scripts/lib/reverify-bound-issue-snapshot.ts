@@ -73,6 +73,21 @@ function normalizeSha(sha: string): string {
   return sha.trim().toLowerCase();
 }
 
+function metadataMatchesRequestedBinding(
+  metadata: BoundIssueSnapshotMetadata,
+  requested: {
+    projectId: string;
+    prNumber: number;
+    prHeadSha: string;
+    issueNumber: number;
+  },
+): boolean {
+  return metadata.projectId === requested.projectId
+    && metadata.prNumber === requested.prNumber
+    && metadata.issueNumber === requested.issueNumber
+    && normalizeSha(metadata.prHeadSha) === normalizeSha(requested.prHeadSha);
+}
+
 export function resolveDefaultAoProjectId(env: NodeJS.ProcessEnv = process.env): string {
   return (env.AO_PROJECT_ID ?? env.AO_PROJECT ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
 }
@@ -170,6 +185,16 @@ export function captureBoundIssueSnapshot(input: {
         `bound issue snapshot metadata corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
       );
     }
+    if (!metadataMatchesRequestedBinding(existing, {
+      projectId: input.projectId,
+      prNumber: input.prNumber,
+      prHeadSha,
+      issueNumber: input.issueNumber,
+    })) {
+      throw new Error(
+        `bound issue snapshot metadata binding mismatch for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+      );
+    }
     if (existing.snapshotHash !== snapshotHash) {
       throw new Error(
         `bound issue snapshot already captured for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber} with different content`,
@@ -257,6 +282,21 @@ export function resolveBoundIssueSnapshot(input: {
       metadataPath: paths.metadataPath,
       snapshotHash: null,
       metadata: null,
+    };
+  }
+
+  if (!metadataMatchesRequestedBinding(metadata, {
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha: input.prHeadSha,
+    issueNumber: input.issueNumber,
+  })) {
+    return {
+      status: 'corrupted',
+      snapshotPath: null,
+      metadataPath: paths.metadataPath,
+      snapshotHash: metadata.snapshotHash,
+      metadata,
     };
   }
 
