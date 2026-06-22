@@ -59,6 +59,25 @@ function Test-ProcessIsDescendantOf {
     return $false
 }
 
+function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
+    foreach ($frame in Get-PSCallStack) {
+        if ($frame.ScriptName -match 'journaled-worker-send\.ps1$' -and
+            $frame.Command -in @('Invoke-AoSendViaFile', 'Test-AoSendFileContract', 'New-JournaledWorkerSendInternalCapability')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-JournaledWorkerSendParentChainTrusted {
+    $chain = Get-ProcessParentChainCommandLines
+    foreach ($line in $chain) {
+        if ($line -match 'journaled-worker-send\.ps1') { return $true }
+    }
+    return $false
+}
+
+
 function Write-JournaledWorkerSendInternalCapabilityAtomic {
     param(
         [string]$Path,
@@ -85,6 +104,9 @@ function Write-JournaledWorkerSendInternalCapabilityAtomic {
 function Register-JournaledWorkerSendInternalCapability {
     param([string]$Capability = '')
 
+    if (-not (Test-JournaledWorkerSendCapabilityRegistrationAllowed)) {
+        return @{ ok = $false; reason = 'registration_denied' }
+    }
     if (-not $Capability) {
         $Capability = New-JournaledWorkerSendInternalCapabilityToken
     }
@@ -130,6 +152,9 @@ function Test-ConsumeJournaledWorkerSendInternalCapability {
             return $false
         }
         if (-not (Test-ProcessIsDescendantOf -AncestorPid ([int]$record.issuerPid))) {
+            return $false
+        }
+        if (-not (Test-JournaledWorkerSendParentChainTrusted)) {
             return $false
         }
         Remove-Item -LiteralPath $path -Force

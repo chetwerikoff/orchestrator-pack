@@ -347,20 +347,25 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('autonomous guard allows registered journaled transport internal capability', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
-    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
     const script = `
-      . ${psString(capabilityLib)}
-      $registered = Register-JournaledWorkerSendInternalCapability
-      if (-not $registered.ok) { throw $registered.reason }
-      $child = @'
-$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-$env:AO_JOURNALED_SEND_INTERNAL = '__CAPABILITY__'
+      $journaled = ${psString(journaled)}
+      $guard = ${psString(guard)}
+      $issuer = @"
+. '$journaled'
+`$registered = New-JournaledWorkerSendInternalCapability
+`$child = @'
+`$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''1''
+`$env:AO_JOURNALED_SEND_INTERNAL = ''__CAP__''
 . __GUARD__
-$deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
-[pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
-'@ -replace '__CAPABILITY__', [regex]::Escape($registered.capability) `
-         -replace '__GUARD__', ${psString(guard)}
-      $json = pwsh -NoProfile -Command $child
+`$deny = Test-AutonomousRawWorkerSendDenied -Argv @(''send'',''opk-worker'',''ping'')
+[pscustomobject]@{ denied = [bool]`$deny.denied; reason = [string]`$deny.reason } | ConvertTo-Json -Compress
+'@ -replace ''__CAP__'', `$registered
+`$json = pwsh -NoProfile -Command (`$child -replace ''__GUARD__'', '$guard')
+if (`$LASTEXITCODE -ne 0) { throw `$json }
+Write-Output `$json
+"@
+      $json = pwsh -NoProfile -Command $issuer
       if ($LASTEXITCODE -ne 0) { throw $json }
       $json
     `;
@@ -381,6 +386,18 @@ $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
     const result = JSON.parse(runPwsh(script));
     expect(result.denied).toBe(true);
     expect(result.reason).toBe('autonomous_raw_worker_send_denied');
+  });
+
+  it('rejects capability registration outside journaled transport', () => {
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+    const script = `
+      . ${psString(capabilityLib)}
+      $registered = Register-JournaledWorkerSendInternalCapability
+      [pscustomobject]@{ ok = [bool]$registered.ok; reason = [string]$registered.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('registration_denied');
   });
 
   it('rejects well-formed but unregistered journaled internal capability tokens', () => {

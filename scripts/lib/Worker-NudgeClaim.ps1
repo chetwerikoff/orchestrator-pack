@@ -699,9 +699,9 @@ function Read-WorkerNudgeClaimStoreHealth {
         $raw = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         return @{
             ok                = $true
-            unresolvedCount   = [int]($raw.unresolvedCount ?? 0)
-            unresolvedSinceMs = [long]($raw.unresolvedSinceMs ?? 0)
-            lastReason        = [string]($raw.lastReason ?? '')
+            unresolvedCount   = if ($null -ne $raw.unresolvedCount) { [int]$raw.unresolvedCount } else { 0 }
+            unresolvedSinceMs = if ($null -ne $raw.unresolvedSinceMs) { [long]$raw.unresolvedSinceMs } else { 0 }
+            lastReason        = if ($null -ne $raw.lastReason) { [string]$raw.lastReason } else { '' }
         }
     }
     catch {
