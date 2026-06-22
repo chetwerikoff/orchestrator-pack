@@ -31,6 +31,18 @@ documents both).
 `changes-requested` reaction path is **dormant** (0 `reaction.action_succeeded` events / 30d+).
 Former follow-up draft `127b` **folded** into this issue — see Decision log.
 
+**Contract-evidence limit:** unstructured rows below are **token-only** grounding (no
+machine-checked shape predicates until #125). Shape fidelity is proven by **AC/fixture resolution**
+against **live operator YAML**, not by capture decoration.
+
+**Config authority (class-level).** Runtime shape MUST come from the **live operator config AO is
+actually running** (typically gitignored `agent-orchestrator.yaml` or operator-configured path) —
+**not** from `agent-orchestrator.yaml.example` (committed template) and **not** from in-code stub.
+The bug class is «copy drifts from live truth»; fixing stub→example would only move the drift.
+`agent-orchestrator.yaml.example` is a **CI/fixture proxy**; live config is **runtime truth**.
+Gate A config capture (`report_stale_message`) documents live text at incident time for
+example↔live drift checks in AC7.
+
 ## Goal
 
 For `auto: true` / `action: send-to-agent` reactions whose text is **statically declared** in
@@ -73,23 +85,19 @@ evidence: capture@ao-reaction-event/report_stale_send
 selector: $.data.reactionKey
 expected: report-stale
 
-binding-id: ao:reaction:config.message.charLength:gt-200
+binding-id: ao:reaction:config.message:report-stale-token
 binding-type: unstructured
-binding: Live reactions.report-stale.message exceeds AO paste threshold (200 chars) — pending-draft class
+binding: Live reactions.report-stale.message present in operator config capture (shape proved by AC/fixtures)
 producer: ao-reaction-config
 evidence: capture@ao-reaction-config/report_stale_message
 token: Worker idle (report-stale backstop)
-selector: charLength
-expected: gt:200
 
-binding-id: ao:reaction:delivery.pane:unsubmitted-draft
+binding-id: ao:reaction:delivery.pane:report-stale-token
 binding-type: unstructured
-binding: After AO delivery of report-stale message, worker pane shows unsubmitted input requiring second Enter
+binding: Worker pane after report-stale delivery shows unsubmitted draft tail (shape proved by AC/fixtures)
 producer: ao-reaction-delivery
 evidence: capture@ao-reaction-delivery/report_stale_worker_pane
 token: Worker idle (report-stale backstop)
-selector: paneContainsUnsubmittedDraft
-expected: true
 ```
 
 ## Design analysis (pre-draft gate)
@@ -101,6 +109,8 @@ expected: true
 - AO paste threshold: multiline **or** charLength > 200.
 - Reaction path reads `reactionMessages[reactionKey]` from a reconcile-supplied map — not from
   event payload or dispatch journal.
+- **Config authority:** runtime reads **live** operator YAML (gitignored); `.example` is not
+  runtime source.
 - Missing map keys → silent `continue` today (`extractReactionDeliveries`).
 - **Live dynamic findings** use `review-send` journal with real message text — governed by
   #232/#373/#293, not this stub-map defect.
@@ -125,8 +135,8 @@ changes-requested reaction (dormant) ──► miss in map ──► audit recor
 
 | Option | Cost | Risk | Sufficient for **this** slice? |
 |--------|------|------|-------------------------------|
-| Resolve shape from live `reactions.*.message` in operator config | Low | Low for static keys only | **Yes** for static-text reactions |
-| Record reaction text in dispatch journal at send time | Medium | Low | Yes, but wider than needed here |
+| Resolve shape from live `reactions.*.message` in operator config at observation tick | Low | Low for static keys; config may change between AO delivery and tick | **Yes** for static-text reactions (accepted trade vs journal-at-delivery) |
+| Record reaction text in dispatch journal at send time | Medium | Low | Yes, wider than needed here (Option B if rollover risk unacceptable) |
 | Pane scrape for shape | High | High (#232 forbids) | No |
 
 **Invariant (not a prescribed implementation):** for reactions with static YAML `message:`, shape
@@ -151,17 +161,24 @@ drifting in-code duplicate.
 ## Binding surface
 
 - **Static-text reactions only.** For `send-to-agent` reactions with a non-empty
-  `reactions.<key>.message` in live operator config, `deliveryPath` MUST be derived from that
-  text (or an equally authoritative AO delivery record the planner identifies) — never from a
-  hardcoded stub.
+  `reactions.<key>.message` in **live operator config** (the file AO actually runs — not
+  `agent-orchestrator.yaml.example`), `deliveryPath` MUST be derived from that text at observation
+  time (or an equally authoritative delivery record the planner identifies) — never from a
+  hardcoded stub or committed example template.
 - **Audit on miss (visibility only).** Observed `send-to-agent` reaction whose key has no
-  resolvable message text → named audit outcome in `extractReactionDeliveries` — never bare
-  `continue`. Does **not** require Enter, default-safe shape, or delivery policy (live dynamic
+  resolvable message text (empty YAML `message:`, not in config) → observable
+  `reason=reaction_message_unresolved` (log or fixture field) — never bare `continue`. Does
+  **not** add delivery tracking, Enter obligation, or default-safe shape (live dynamic
   findings: `review-send` + #232/#373/#293).
+- **Config read/parse failure (static keys).** Named defer/escalate — never stub fallback or
+  silent skip; observable `reason=reaction_config_unavailable`.
 - **Remove stale stub entries** that misrepresent live config (e.g. `ci-failed` text while live
   reaction is `notify`).
-- **Drift regression guard.** CI fails if resolved shape for a fixture static reaction diverges
-  from example-YAML text (minimum: `report-stale`).
+- **Drift regression guard (two layers).** (1) **Runtime:** never resolve shape from example or
+  stub — live operator config only. (2) **CI:** `agent-orchestrator.yaml.example` is a test proxy;
+  CI fails when arbiter-resolved shape for `report-stale` disagrees with example **or** when
+  example `report-stale` message text disagrees with Gate A live config capture
+  (`capture@ao-reaction-config/report_stale_message`).
 - **Preserves #232 invariants.** Human input never triggers submit; truly short self-submitted
   paths remain no-op.
 
@@ -185,12 +202,18 @@ supervisor child must restart (#205).
 - Upstream AO single-Enter-after-paste fix.
 - Full #298 message-catalog audit.
 
-## Denylist
+## Denylist / allowed-roots
 
 ```denylist
 vendor/**
 packages/core/**
 .ao/**
+```
+
+```allowed-roots
+scripts/**
+docs/worker-message-dispatch-observe.mjs
+tests/external-output-references/**
 ```
 
 ## Acceptance criteria
@@ -201,23 +224,35 @@ input: external-tool-output
 provenance: capture-backed
 ```
 
-1. **Shape fidelity (report-stale).** Gate A captures: `deliveryPath` is `pending-draft` (224),
+1. **Shape fidelity (report-stale).** Gate A captures ground incident inputs (event, config text,
+   pane). **Fixture or integration** asserts arbiter `deliveryPath` is `pending-draft` (224),
    not `self-submitted` (73-char stub). Fails on current `main`.
-2. **Threshold boundary.** charLength 199 → `self-submitted`; 201 → `pending-draft`.
+2. **Threshold boundary.** charLength 199 → `self-submitted`; **200** → `self-submitted`;
+   201 → `pending-draft` (proves strict `> 200`, not `>= 200`).
 3. **Multiline short.** Multiline static message with total charLength <200 → `pending-draft`.
 4. **Submit action.** `pending-draft` report-stale on idle worker → `submit`; integration path
    records `submitted≥1`.
 5. **No stale ci-failed stub.** Live `ci-failed` is `notify` — stub-map text must not drive
    reaction-shape tracking (negative control).
-6. **Audit on miss (visibility only).** `changes-requested` (or any key with no resolvable text)
-   `reaction.action_succeeded` fixture → named audit outcome — not bare `continue` in
-   `extractReactionDeliveries`. Does **not** require Enter or shape classification.
-7. **Drift guard.** CI fails when example-YAML `report-stale` shape diverges from arbiter
-   resolution.
+6. **Audit on miss (visibility only).** `changes-requested` (or any key with no resolvable
+   text) `reaction.action_succeeded` fixture → reconcile tick emits an **observable** outcome:
+   log line or fixture field containing `reason=reaction_message_unresolved` and
+   `reactionKey=<key>` — not bare `continue` with zero trace. Does **not** create a tracked
+   delivery, Enter attempt, or shape classification (live dynamic findings: `review-send`).
+6b. **Config read failure (static keys).** Fixture: static reaction key present in YAML but
+   config read/parse unavailable at tick → observable `deferred` or `escalated` outcome with
+   `reason=reaction_config_unavailable` (or fixture-equivalent field) — not stub fallback, not
+   silent skip.
+7. **Drift guard (live vs example).** **Runtime:** integration/fixture with explicit live-config
+   message text (or config-read from fixture path standing in for live file) — not
+   `agent-orchestrator.yaml.example` as runtime source. **CI:** fails when (a) arbiter-resolved
+   `report-stale` shape disagrees with example proxy, **or** (b) example `report-stale` message
+   text disagrees with `capture@ao-reaction-config/report_stale_message` (live truth at incident).
 8. **Incident recurrence.** `opk-165:1782123033110:reaction:report-stale`: corrected shape →
    submit attempts; stub shape → negative control (pre-fix fail).
-9. **Escalation after submit budget.** `delivery_backstop_exhausted` only after bounded submit
-   attempts on correct `pending-draft` — not immediate `tracking_auto_submitted` loop.
+9. **Escalation after submit budget.** `delivery_backstop_exhausted` only after the
+   configured per-delivery submit attempt budget is exhausted on correct `pending-draft`
+   classification — not before budget consumption, not immediate `tracking_auto_submitted` loop.
 
 ## Upgrade-safety check
 
@@ -232,6 +267,7 @@ provenance: capture-backed
 - `pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/127-reaction-delivery-shape-stub-drift.md`
 - Planner-chosen tests for static-text class matrix.
 - `pwsh -NoProfile -File scripts/verify.ps1`
+- `pwsh -NoProfile -File scripts/check-reusable.ps1`
 
 ## Decision log
 
@@ -247,3 +283,21 @@ provenance: capture-backed
   delivery policy) obsolete once live path ownership confirmed.
 - **No deferred build** for dynamic findings delivery — `review-send` is live owner; sleeping
   reaction path closed by AC6 audit record only.
+- **Adversarial Codex pass 1 (needs-attention):**
+  - *Config-at-tick vs delivery-time skew* — **partial accept:** documented trade in options
+    table; journal-at-delivery remains wider alternative; rollover ACs out of scope for stub-drift
+    incident class.
+  - *Unstructured capture selectors inert* — **partial accept:** honest limit in Pre-sync;
+    shape proof via AC/fixtures not selector fields; #125 queued for machine grounding.
+  - *Audit-only leaves pane stuck for unknown keys* — **reject** for full fail-closed delivery
+    policy (folded with #127b; live path is review-send); **partial** via AC6b config-read
+    failure for static keys.
+- **Architect Codex pass 1 (P2):** observable `reason=` tokens for AC6/AC6b — **accept**;
+  `allowed-roots` fence — **accept**.
+- **Architect Codex pass 2 (P2):** AC1 capture vs `deliveryPath` assertion split — **accept**.
+- **Architect Codex pass 3 (P2):** add `check-reusable.ps1` to Verification — **accept**.
+- **Architect Codex pass 4 (P2, cap):** charLength=200 boundary + submit-budget exhaustion —
+  **accept**; no further Codex iteration (5-pass limit).
+- **Architect final P1 (post-cap):** live operator config is runtime truth; `.example` is CI/fixture
+  proxy only; AC7/binding drift guard catches example↔live capture drift — closes «stub→example»
+  class relocation.
