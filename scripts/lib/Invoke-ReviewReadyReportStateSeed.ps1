@@ -25,8 +25,7 @@ function Get-ReviewReadyReportStateSeedTerminalClaimKeys {
         $prNumber = [int]$pr.number
         $headSha = [string]$pr.headRefOid
         if (-not $prNumber -or -not $headSha) { continue }
-        $claimKey = Get-ReviewStartClaimKey -PrNumber $prNumber -HeadSha $headSha
-        $claimPath = Get-ReviewStartClaimPath -Namespace $Namespace -Key $claimKey
+        $claimPath = Get-ReviewStartClaimPath -Namespace $Namespace -PrNumber $prNumber -HeadSha $headSha
         if (Test-Path -LiteralPath $claimPath -PathType Leaf) {
             [void]$keys.Add("${prNumber}:$headSha")
             continue

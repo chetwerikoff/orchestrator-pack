@@ -12,6 +12,7 @@ import {
   planReportStatePollTick,
   pollBindingStateKey,
   isAcceptedReadyForReviewReport,
+  resolveOpenPrForRepoAndNumber,
   reportStateSeedDedupeKey,
   updatePollBindingStateEntry,
 } from '../docs/review-ready-report-state-seed.mjs';
@@ -285,6 +286,42 @@ describe('Issue #391 acceptance criteria', () => {
       headSha: head,
     });
     expect(keyA).not.toBe(keyB);
+  });
+
+  it('does not assign supervised open PR head to foreign-repo session with colliding prNumber', () => {
+    const supervised = 'chetwerikoff/orchestrator-pack';
+    const localHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const plan = planReportStatePollTick({
+      supervisedProject: 'orchestrator-pack',
+      fallbackRepoSlug: supervised,
+      openPrs: [
+        { number: 77, headRefOid: localHead, headCommittedAt: '2026-06-22T01:08:00.000Z' },
+      ],
+      sessions: [
+        {
+          name: 'opk-foreign',
+          role: 'worker',
+          pr: 'https://github.com/org/other/pull/77',
+          reports: [
+            {
+              timestamp: '2026-06-22T01:09:00.000Z',
+              reportState: 'ready_for_review',
+              accepted: true,
+            },
+          ],
+        },
+      ],
+      reviewRuns: [],
+      bindingByKey: {},
+      nowMs: 1_700_000_000_000,
+    });
+    expect(plan.candidates).toHaveLength(0);
+    expect(resolveOpenPrForRepoAndNumber(
+      [{ number: 77, headRefOid: localHead }],
+      'org/other',
+      77,
+      supervised,
+    )).toBeNull();
   });
 
   it('concurrent seed for same dedupe key merges to one watch entry', () => {

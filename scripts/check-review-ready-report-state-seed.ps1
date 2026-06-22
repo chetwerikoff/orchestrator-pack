@@ -29,7 +29,8 @@ foreach ($needle in @(
         'planReportStatePollTick',
         'hasTerminalHandoffOutcome',
         'evaluatePollReportBinding',
-        'findLatestAcceptedReadyForReviewAcrossSessions'
+        'findLatestAcceptedReadyForReviewAcrossSessions',
+        'resolveOpenPrForRepoAndNumber'
     )) {
     if ($mjs -notlike "*$needle*") {
         Write-Host "docs/review-ready-report-state-seed.mjs missing: $needle"

@@ -269,6 +269,31 @@ export function hasTerminalHandoffOutcome(input) {
  * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
  * @param {string} [fallbackRepoSlug]
  */
+
+/**
+ * Resolve an open PR row for a session repository + number pair.
+ * Gh open-PR lists are supervised-repo scoped; foreign-repo sessions must not
+ * inherit a colliding prNumber head from the local repository.
+ *
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} openPrs
+ * @param {string} repoSlug
+ * @param {number} prNumber
+ * @param {string} [supervisedRepoSlug]
+ */
+export function resolveOpenPrForRepoAndNumber(openPrs, repoSlug, prNumber, supervisedRepoSlug = '') {
+  const normalizedRepo = String(repoSlug ?? '').trim().toLowerCase();
+  const supervised = String(supervisedRepoSlug ?? '').trim().toLowerCase();
+  if (supervised && normalizedRepo !== supervised) {
+    return null;
+  }
+  for (const pr of toArray(openPrs)) {
+    if (Number(pr?.number) === Number(prNumber)) {
+      return pr;
+    }
+  }
+  return null;
+}
+
 export function collectStatusSessionsForPoll(sessions, fallbackRepoSlug = '') {
   return toArray(sessions).filter((session) => {
     const prNumber = resolveSessionPrNumber(session);
@@ -358,24 +383,26 @@ export function planReportStatePollTick(input) {
   /** @type {string[]} */
   const seededKeys = [];
 
-  const openPrByNumber = new Map();
-  for (const pr of openPrs) {
-    openPrByNumber.set(Number(pr?.number), pr);
-  }
+  const supervisedRepoSlug = String(input.fallbackRepoSlug ?? '').trim().toLowerCase();
 
   /** @type {Map<string, { sessions: import('./review-trigger-reconcile.mjs').AoSession[], prNumber: number, repoSlug: string }>} */
   const headsByScanKey = new Map();
 
   for (const session of sessions) {
     const prNumber = resolveSessionPrNumber(session);
-    const openPr = openPrByNumber.get(prNumber);
+    const repoSlug =
+      resolveSessionRepoSlug(session, input.fallbackRepoSlug) ||
+      supervisedRepoSlug;
+    const openPr = resolveOpenPrForRepoAndNumber(
+      openPrs,
+      repoSlug,
+      prNumber,
+      supervisedRepoSlug,
+    );
     const headSha = normalizeSha(String(openPr?.headRefOid ?? ''));
     if (!headSha) {
       continue;
     }
-    const repoSlug =
-      resolveSessionRepoSlug(session, input.fallbackRepoSlug) ||
-      String(input.fallbackRepoSlug ?? '').trim().toLowerCase();
     const scanKey = pollBindingStateKey({ repoSlug, prNumber });
     const existing = headsByScanKey.get(scanKey);
     if (existing) {
@@ -404,9 +431,14 @@ export function planReportStatePollTick(input) {
     processed += 1;
 
     const { sessions: prSessions, prNumber, repoSlug } = head;
-    const openPr = openPrByNumber.get(prNumber);
+    const openPr = resolveOpenPrForRepoAndNumber(
+      openPrs,
+      repoSlug,
+      prNumber,
+      supervisedRepoSlug,
+    );
     const headSha = normalizeSha(String(openPr?.headRefOid ?? ''));
-    const headCommittedAtMs = resolveHeadCommittedAtMs(openPrs, prNumber);
+    const headCommittedAtMs = resolveHeadCommittedAtMs(openPr ? [openPr] : [], prNumber);
     const bindingOptions = Number.isFinite(headCommittedAtMs) ? { headCommittedAtMs } : {};
     const { report: latestReport, session: reportSession } =
       findLatestAcceptedReadyForReviewAcrossSessions(prSessions);

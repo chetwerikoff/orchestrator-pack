@@ -15,6 +15,12 @@ export declare function hasTerminalHandoffOutcome(input: Record<string, unknown>
   terminal: boolean;
   reason: string;
 };
+export declare function resolveOpenPrForRepoAndNumber(
+  openPrs: Array<Record<string, unknown>>,
+  repoSlug: string,
+  prNumber: number,
+  supervisedRepoSlug?: string,
+): Record<string, unknown> | null;
 export declare function planReportStatePollTick(input: Record<string, unknown>): Record<string, unknown>;
 export declare function seedWatchFromReportStatePoll(input: Record<string, unknown>): {
   watchEntries: Record<string, object>;
