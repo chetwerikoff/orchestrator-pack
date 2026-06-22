@@ -613,18 +613,40 @@ function Acquire-WorkerNudgeClaim {
 function Set-WorkerNudgeClaimSendAttempted {
     param([hashtable]$ClaimResult)
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $read = Read-WorkerNudgeClaimRecord -Path $ClaimResult.path
-    if (-not $read.ok) { return @{ ok = $false; reason = 'claim_missing' } }
-    if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
-        return @{ ok = $false; reason = 'lost_ownership' }
+    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace `
+        -PrNumber ([int]$ClaimResult.claim.prNumber) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
+        -IntentClass ([string]$ClaimResult.claim.intentClass) -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'mutex_contended' }
     }
-    $record = ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record
-    $record.phase = 'SEND_ATTEMPTED'
-    $record.state = 'SEND_ATTEMPTED'
-    $record.sendAttemptedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    Write-WorkerNudgeClaimAtomic -Path $ClaimResult.path -Record $record -AllowOverwrite
-    $ClaimResult.claim = $record
-    return @{ ok = $true; phase = 'SEND_ATTEMPTED' }
+    try {
+        $read = Read-WorkerNudgeClaimRecord -Path $ClaimResult.path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'claim_missing' } }
+        if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
+            return @{ ok = $false; reason = 'lost_ownership' }
+        }
+        if ([string]$read.record.phase -ne 'CLAIMED') {
+            $reason = if ([string]$read.record.phase -eq 'SEND_ATTEMPTED') { 'token_replayed' } else { 'token_phase_invalid' }
+            return @{ ok = $false; reason = $reason }
+        }
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if ([long]$read.record.claimLeaseExpiresAtMs -le $nowMs) {
+            return @{ ok = $false; reason = 'claim_lease_expired' }
+        }
+        $record = ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record
+        $record.phase = 'SEND_ATTEMPTED'
+        $record.state = 'SEND_ATTEMPTED'
+        $record.sendAttemptedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Write-WorkerNudgeClaimAtomic -Path $ClaimResult.path -Record $record -AllowOverwrite
+        if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $ClaimResult.path -Holder $record.holder)) {
+            return @{ ok = $false; reason = 'lost_race' }
+        }
+        $ClaimResult.claim = $record
+        return @{ ok = $true; phase = 'SEND_ATTEMPTED' }
+    }
+    finally {
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
+    }
 }
 
 function Finalize-WorkerNudgeClaim {

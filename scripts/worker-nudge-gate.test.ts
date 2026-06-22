@@ -625,6 +625,13 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(invokeText).not.toMatch(/File \$journaledScript \$SessionId -Source/);
   });
 
+  it('treats journaled journal-update failure as uncertain claim outcome', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    expect(invokeText).toMatch(/\$exitCode -eq 44 -or \$exitCode -eq 47/);
+    expect(invokeText).toMatch(/Outcome 'UNCERTAIN'/);
+    expect(invokeText).toMatch(/journal_update_unknown/);
+  });
+
 
   it('resolves reconcile script tuples from PR ownership claim', () => {
     const ciGreen = readFileSync(

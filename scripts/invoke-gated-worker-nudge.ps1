@@ -208,10 +208,11 @@ if ($exitCode -eq 0) {
     @{ sent = $true; reason = 'sent'; tupleKey = $tupleKey } | ConvertTo-Json -Compress
     exit 0
 }
-if ($exitCode -eq 44) {
+if ($exitCode -eq 44 -or $exitCode -eq 47) {
+    $uncertainReason = if ($exitCode -eq 47) { 'journal_update_unknown' } else { 'dispatch_unknown' }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' | Out-Null
-    @{ sent = $false; reason = 'dispatch_unknown'; tupleKey = $tupleKey } | ConvertTo-Json -Compress
-    exit 44
+    @{ sent = $false; reason = $uncertainReason; tupleKey = $tupleKey } | ConvertTo-Json -Compress
+    exit $exitCode
 }
 
 Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ exitCode = $exitCode } | Out-Null
