@@ -219,7 +219,8 @@ function Invoke-PlannedCiFailureReconcileSend {
         [string]$Message,
         [string]$IdempotencyKey,
         [string]$ProjectId = 'orchestrator-pack',
-        [hashtable]$SendSnapshot = $null
+        [hashtable]$SendSnapshot = $null,
+        [string]$DeliveryId = ''
     )
 
     $prNumber = [int]$Episode.prNumber
@@ -274,9 +275,18 @@ function Invoke-PlannedCiFailureReconcileSend {
     Write-OrchestratorSideProcessProgress -ChildId 'ci-failure-notification-reconcile' -Phase 'side_effect'
     $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
     $sourceKey = if ($IdempotencyKey) { $IdempotencyKey } else { "ci-failure:$redPeriod" }
-    $Message | pwsh -NoProfile -File $journaledScript $sendSessionId `
-        -Source 'ci-failure-notification-reconcile' -SourceKey $sourceKey `
-        -ClaimToken $claimToken -GatedNudge -NoWait
+    $journaledArgs = @(
+        $sendSessionId,
+        '-Source', 'ci-failure-notification-reconcile',
+        '-SourceKey', $sourceKey,
+        '-ClaimToken', $claimToken,
+        '-GatedNudge',
+        '-NoWait'
+    )
+    if ($DeliveryId) {
+        $journaledArgs += @('-DeliveryId', $DeliveryId)
+    }
+    $Message | pwsh -NoProfile -File $journaledScript @journaledArgs
     if ($LASTEXITCODE -ne 0) {
         throw "journaled worker send failed session=$sendSessionId exit=$LASTEXITCODE"
     }
@@ -373,9 +383,24 @@ function Invoke-CiFailureEpisodeDelivery {
     $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
     $recordState = [string]$intent.record.state
     $idempotencyKey = [string]$intent.idempotencyKey
-    $existingDispatch = Get-CiFailureDispatchJournalEntry -SessionId $targetId -SourceKey $idempotencyKey
+    $sendSnapshot = $null
+    if ($Phase -eq 'full') {
+        $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
+    }
+    $journalOpenPrs = @()
+    if ($sendSnapshot -and $sendSnapshot.openPrs) {
+        $journalOpenPrs = @($sendSnapshot.openPrs)
+    }
+    $journalTargetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber ([int]$Episode.prNumber) `
+        -SessionId $targetId -HeadSha ([string]$Episode.headSha) -ProjectId $ProjectId -OpenPrs $journalOpenPrs
+    $journalSessionId = $targetId
+    if ($journalTargetResolution.ok) {
+        $resolvedOwner = [string]$journalTargetResolution.ownerSessionId
+        if ($resolvedOwner) { $journalSessionId = $resolvedOwner }
+    }
+    $existingDispatch = Get-CiFailureDispatchJournalEntry -SessionId $journalSessionId -SourceKey $idempotencyKey
     $dispatchInFlight = $existingDispatch -and [string]$existingDispatch.dispatchOutcome -eq 'dispatch_in_flight'
-    $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
+    $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $journalSessionId -SourceKey $idempotencyKey
     $deliveryEvidence = Test-CiFailureEpisodeDeliveryEvidence -IntentRecord $intent.record `
         -DispatchDelivered $dispatchDelivered -DispatchInFlight ([bool]$dispatchInFlight)
     $sendDelivered = $null -ne $intent.record.sendDeliveredAtMs
@@ -384,7 +409,6 @@ function Invoke-CiFailureEpisodeDelivery {
 
     if (-not $skipSend) {
         if ($Phase -eq 'full') {
-            $sendSnapshot = Get-CiFailurePreSendSnapshot -PrNumber ([int]$Episode.prNumber)
             $sendRecheck = Invoke-CiFailureHelper -Mode 'pre-send-recheck' -Payload @{
                 episode = $Episode
                 fresh   = $sendSnapshot
@@ -395,7 +419,7 @@ function Invoke-CiFailureEpisodeDelivery {
             }
         }
         if (-not $dispatchInFlight) {
-            $dispatchRegister = Register-WorkerMessageDispatch -SessionId $targetId -Message $message `
+            $dispatchRegister = Register-WorkerMessageDispatch -SessionId $journalSessionId -Message $message `
                 -Source 'ci-failure-notification-reconcile' -SourceKey $idempotencyKey `
                 -DeliveryPath 'pending-draft' -DispatchOutcome 'dispatch_in_flight'
             if (-not $dispatchRegister.recorded) {
@@ -415,7 +439,7 @@ function Invoke-CiFailureEpisodeDelivery {
 
         try {
             $sendResult = Invoke-PlannedCiFailureReconcileSend -Episode $Episode -Message $message `
-                -IdempotencyKey $idempotencyKey -ProjectId $ProjectId -SendSnapshot $sendSnapshot
+                -IdempotencyKey $idempotencyKey -ProjectId $ProjectId -SendSnapshot $sendSnapshot -DeliveryId $dispatchDeliveryId
             if (-not $sendResult.ok) {
                 if ($sendResult.claimSkipped) {
                     Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "nudge suppressed by claim gate session=$targetId digest=$Digest reason=$($sendResult.reason)"
@@ -463,12 +487,12 @@ function Invoke-CiFailureEpisodeDelivery {
 
     if (-not $dispatchDelivered -and $dispatchDeliveryId -and ($sendDelivered -or ($skipSend -and $dispatchInFlight))) {
         $null = Invoke-CiFailureDispatchJournalFinalize -DeliveryId $dispatchDeliveryId -Digest $Digest
-        $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
+        $dispatchDelivered = Test-CiFailureDispatchJournalDelivered -SessionId $journalSessionId -SourceKey $idempotencyKey
     }
 
     $null = Invoke-CiFailureHelper -Mode 'mark-submitted' -Payload @{ storeDir = $StoreDir; episode = $Episode }
 
-    $journalRecorded = Test-CiFailureDispatchJournalDelivered -SessionId $targetId -SourceKey $idempotencyKey
+    $journalRecorded = Test-CiFailureDispatchJournalDelivered -SessionId $journalSessionId -SourceKey $idempotencyKey
     if (-not $journalRecorded) {
         Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "preserving submitted-unacked digest=$Digest phase=$Phase (journal retry pending)"
         return $true

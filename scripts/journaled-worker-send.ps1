@@ -29,6 +29,7 @@ param(
     [string]$ClaimToken = '',
     [switch]$GatedNudge,
     [switch]$NoWait,
+    [string]$DeliveryId = '',
     [switch]$RegisterCapabilityOnly
 )
 
@@ -273,21 +274,31 @@ if (-not $AdoptionProbe -and -not $DryRun) {
 
 $draftState = 'unknown'
 $dispatchOutcome = 'dispatch_in_flight'
-$register = Register-WorkerMessageDispatch `
-    -SessionId $SessionId `
-    -Message $payload `
-    -Source $Source `
-    -SourceKey $SourceKey `
-    -JournalPath $effectiveJournalPath `
-    -DispatchOutcome $dispatchOutcome `
-    -DraftState $draftState `
-    -HashIdentity `
-    -AdoptionProbe:$AdoptionProbe `
-    -AoEpoch $AoEpoch `
-    -ConfigPath $ConfigPath `
-    -AoEpochHash $AoEpochHash `
-    -ConfigPathHash $ConfigPathHash `
-    -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
+if ($DeliveryId.Trim()) {
+    $register = @{
+        recorded     = $true
+        deliveryId   = $DeliveryId.Trim()
+        deliveryPath = 'pending-draft'
+        reason       = 'reused_delivery_id'
+    }
+}
+else {
+    $register = Register-WorkerMessageDispatch `
+        -SessionId $SessionId `
+        -Message $payload `
+        -Source $Source `
+        -SourceKey $SourceKey `
+        -JournalPath $effectiveJournalPath `
+        -DispatchOutcome $dispatchOutcome `
+        -DraftState $draftState `
+        -HashIdentity `
+        -AdoptionProbe:$AdoptionProbe `
+        -AoEpoch $AoEpoch `
+        -ConfigPath $ConfigPath `
+        -AoEpochHash $AoEpochHash `
+        -ConfigPathHash $ConfigPathHash `
+        -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
+}
 
 if (-not $register.recorded) {
     Write-JournaledWorkerSendLog "outbox journal write failed: reason=$($register.reason)"

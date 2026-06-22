@@ -273,7 +273,7 @@ function Invoke-PlannedFirstReviewSend {
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
 
-    $dispatchResult = Register-WorkerMessageDispatch -SessionId $Action.sessionId `
+    $dispatchResult = Register-WorkerMessageDispatch -SessionId $sendSessionId `
         -Message ('Review findings for PR #' + $Action.prNumber + ' (run ' + $Action.runId + ')') `
         -Source 'review-send' -SourceKey ([string]$Action.runId) `
         -DeliveryPath 'pending-draft'

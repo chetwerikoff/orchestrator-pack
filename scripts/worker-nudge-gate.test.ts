@@ -1320,6 +1320,23 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(result.stdout).toMatch(/\[PASS\] worker nudge gate wiring/);
   });
 
+  it('journals review-send delivery against resolved send session', () => {
+    const body = readFileSync(path.join(repoRoot, 'scripts/review-send-reconcile.ps1'), 'utf8');
+    expect(body).toMatch(/Register-WorkerMessageDispatch -SessionId \$sendSessionId/);
+    expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
+  });
+
+  it('reuses pre-registered delivery id for ci-failure journaled sends', () => {
+    const ciFailure = readFileSync(
+      path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
+      'utf8',
+    );
+    const journaled = readFileSync(path.join(repoRoot, 'scripts/journaled-worker-send.ps1'), 'utf8');
+    expect(ciFailure).toMatch(/-DeliveryId', \$DeliveryId/);
+    expect(ciFailure).toMatch(/Register-WorkerMessageDispatch -SessionId \$journalSessionId/);
+    expect(journaled).toMatch(/reused_delivery_id/);
+  });
+
   it('requires claim gating on all worker-observable senders', () => {
     const senderPaths = [
       'scripts/invoke-gated-worker-nudge.ps1',
