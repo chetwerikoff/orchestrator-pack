@@ -11,6 +11,63 @@ param(
 $Root = Initialize-ReviewerPolicyCheckRoot -RepoRoot $RepoRoot -ScriptRoot $PSScriptRoot
 $failures = New-ReviewerPolicyCheckFailures
 
+function Initialize-ReverifyCiTrustedPackRoot {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($env:OPK_TRUSTED_PACK_ROOT) -or -not [string]::IsNullOrWhiteSpace($env:AO_TRUSTED_PACK_ROOT)) {
+        return
+    }
+
+    if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_EVENT_NAME -ne 'pull_request') {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:GITHUB_BASE_REF)) {
+        return
+    }
+
+    $launcherRelativePath = 'scripts/launch-contract-evidence-reverify.ps1'
+    $trustedRoot = Join-Path $env:RUNNER_TEMP 'opk-trusted-reverify-pack'
+    if (Test-Path -LiteralPath (Join-Path $trustedRoot $launcherRelativePath)) {
+        $env:OPK_TRUSTED_PACK_ROOT = $trustedRoot
+        $env:AO_TRUSTED_PACK_ROOT = $trustedRoot
+        return
+    }
+
+    Push-Location $Root
+    try {
+        git fetch --no-tags --prune --no-recurse-submodules --depth=1 origin $env:GITHUB_BASE_REF 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return
+        }
+
+        $baseSha = (git rev-parse 'FETCH_HEAD' 2>$null).Trim()
+        if ([string]::IsNullOrWhiteSpace($baseSha)) {
+            return
+        }
+
+        if (Test-Path -LiteralPath $trustedRoot) {
+            Remove-Item -LiteralPath $trustedRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        git worktree add --detach $trustedRoot $baseSha 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return
+        }
+
+        if (Test-Path -LiteralPath (Join-Path $trustedRoot $launcherRelativePath)) {
+            $env:OPK_TRUSTED_PACK_ROOT = $trustedRoot
+            $env:AO_TRUSTED_PACK_ROOT = $trustedRoot
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 $requiredPaths = @(
     (Join-Path $Root 'prompts/agent_rules.md'),
     (Join-Path $Root 'prompts/codex_review_prompt.md'),
@@ -68,6 +125,8 @@ try {
     }
 
     if ($failures.Count -eq 0) {
+        Initialize-ReverifyCiTrustedPackRoot -Root $Root
+
         $launcherOnOriginMain = $false
         Push-Location $Root
         try {

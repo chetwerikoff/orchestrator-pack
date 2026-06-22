@@ -81,21 +81,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Checkout trusted reverify base
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: trusted-reverify-pack
 
       - name: Run read-only pack verifier
         shell: pwsh
-        env:
-          OPK_TRUSTED_PACK_ROOT: ${{ github.event_name == 'pull_request' && format('{0}/trusted-reverify-pack', github.workspace) || '' }}
-          AO_TRUSTED_PACK_ROOT: ${{ github.event_name == 'pull_request' && format('{0}/trusted-reverify-pack', github.workspace) || '' }}
         run: ./scripts/verify.ps1
 
       - name: Enforce reusable repository content policy
