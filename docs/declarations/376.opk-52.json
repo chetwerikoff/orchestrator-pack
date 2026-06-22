@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "HEAD",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:issue-376-contract-evidence-reverify-checkpoint-2"
+    "active_scope_hash": "sha256:29dd9d9cff136ee703efbb3fb02716cbb249ccc03d1dd80b889106f99eaeb411"
   },
   "declared_paths": [
     "docs/declarations/376.opk-52.json",
@@ -93,20 +93,26 @@
   "declared_globs": [],
   "amendments": [
     {
-      "amendment_id": "amend-376-production-commands-and-bound-snapshot",
-      "created_at": "2026-06-22T12:00:00.000Z",
+      "previous_active_scope_hash": "sha256:issue-376-contract-evidence-reverify-checkpoint-2",
+      "new_active_scope_hash": "sha256:29dd9d9cff136ee703efbb3fb02716cbb249ccc03d1dd80b889106f99eaeb411",
+      "changed": {
+        "added": [
+          "scripts/bound-issue-snapshot-cli.ts",
+          "scripts/contract-evidence-reverify-production-commands.json",
+          "scripts/invoke-reviewer-contract-mapping.ps1",
+          "scripts/lib/reverify-allowlist-config.ts",
+          "scripts/lib/reverify-bound-issue-snapshot.ts",
+          "scripts/lib/reviewer-ts-cli.ts",
+          "scripts/resolve-bound-issue-snapshot.ps1",
+          "scripts/reverify-allowlist-config.test.ts",
+          "scripts/reverify-bound-issue-snapshot.test.ts"
+        ],
+        "removed": []
+      },
       "reason": "Add production NEW-row proof command registry and PR-bound issue snapshot capture/resolver (opk-rev-760).",
-      "added_paths": [
-        "scripts/bound-issue-snapshot-cli.ts",
-        "scripts/contract-evidence-reverify-production-commands.json",
-        "scripts/invoke-reviewer-contract-mapping.ps1",
-        "scripts/lib/reverify-allowlist-config.ts",
-        "scripts/lib/reverify-bound-issue-snapshot.ts",
-        "scripts/lib/reviewer-ts-cli.ts",
-        "scripts/resolve-bound-issue-snapshot.ps1",
-        "scripts/reverify-allowlist-config.test.ts",
-        "scripts/reverify-bound-issue-snapshot.test.ts"
-      ]
+      "actor": "opk-165",
+      "timestamp": "2026-06-22T03:17:36.811Z",
+      "applied": true
     }
   ]
 }
