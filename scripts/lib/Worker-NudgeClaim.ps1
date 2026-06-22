@@ -625,6 +625,44 @@ function Acquire-WorkerNudgeClaim {
     }
 }
 
+function Set-WorkerNudgeClaimMessageContentHash {
+    param(
+        [hashtable]$ClaimResult,
+        [string]$MessageContentHash
+    )
+
+    if (-not $ClaimResult -or -not $ClaimResult.path -or -not $MessageContentHash) {
+        return @{ ok = $false; reason = 'missing_args' }
+    }
+    $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace `
+        -PrNumber ([int]$ClaimResult.claim.prNumber) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
+        -IntentClass ([string]$ClaimResult.claim.intentClass) -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'mutex_contended' }
+    }
+    try {
+        $read = Read-WorkerNudgeClaimRecord -Path $ClaimResult.path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'claim_missing' } }
+        if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
+            return @{ ok = $false; reason = 'lost_ownership' }
+        }
+        if ([string]$read.record.phase -ne 'CLAIMED') {
+            return @{ ok = $false; reason = 'token_phase_invalid' }
+        }
+        $record = ConvertTo-WorkerNudgeClaimRecordHashtable -Record $read.record
+        $record.messageContentHash = $MessageContentHash
+        Write-WorkerNudgeClaimAtomic -Path $ClaimResult.path -Record $record -AllowOverwrite
+        if (-not (Test-WorkerNudgeClaimHolderOwnsPath -Path $ClaimResult.path -Holder $record.holder)) {
+            return @{ ok = $false; reason = 'lost_race' }
+        }
+        $ClaimResult.claim = $record
+        return @{ ok = $true; messageContentHash = $MessageContentHash }
+    }
+    finally {
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
+    }
+}
+
 function Set-WorkerNudgeClaimSendAttempted {
     param([hashtable]$ClaimResult)
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }

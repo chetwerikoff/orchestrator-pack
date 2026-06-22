@@ -203,15 +203,19 @@ if ($DryRun) {
     exit 0
 }
 
+$messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $payloadText }
+$messageContentHash = [string]$messageHashResult.messageContentHash
+$hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash $messageContentHash
+if (-not $hashPersist.ok) {
+  @{ sent = $false; reason = 'message_hash_persist_failed'; detail = [string]$hashPersist.reason; tupleKey = $tupleKey } | ConvertTo-Json -Compress
+  exit 0
+}
+
 $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
 $payloadText | pwsh -NoProfile -File $journaledScript $sendSessionId -Source $Source -SourceKey $tupleKey -ClaimToken $token -GatedNudge -NoWait
 $exitCode = $LASTEXITCODE
 
-$messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $payloadText }
-$messageContentHash = [string]$messageHashResult.messageContentHash
-
 if ($exitCode -eq 0) {
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
     Write-WorkerNudgeGateAudit -Record $gate.audit | Out-Null
     @{ sent = $true; reason = 'sent'; tupleKey = $tupleKey } | ConvertTo-Json -Compress
     exit 0

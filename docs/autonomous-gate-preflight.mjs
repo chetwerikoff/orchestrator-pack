@@ -49,7 +49,15 @@ export function evaluateAutonomousGatePreflight(input, config) {
     }
   }
   const raw = toArray(input.liveCapabilities).find((row) => row.id === config.rawCapabilityId);
-  if (raw && String(raw.classification).toLowerCase() !== 'unavailable') {
+  if (!raw) {
+    return {
+      ok: false,
+      reason: `${config.rawCapabilityId}_missing`,
+      auditShape: 'preflight_refusal',
+      markerState: config.rawCapabilityId,
+    };
+  }
+  if (String(raw.classification).toLowerCase() !== 'unavailable') {
     return {
       ok: false,
       reason: config.rawNotUnavailableReason,

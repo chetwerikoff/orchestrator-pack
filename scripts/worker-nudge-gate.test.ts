@@ -309,6 +309,19 @@ describe('worker nudge gate (#384)', () => {
     expect(findForbiddenAutonomousWorkerSendInvocations(['ao send opk-worker ping'])).toHaveLength(1);
   });
 
+
+  it('preflight fails closed when raw send capability is missing from live inventory', () => {
+    const result = evaluatePreflight({
+      loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
+      atomicClaimPresent: true,
+      liveCapabilities: [
+        { id: 'invoke-gated-worker-nudge', classification: 'gated' },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('ao-worker-send-raw_missing');
+  });
+
   it('preflight passes with gated inventory', () => {
     const result = evaluatePreflight({
       loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
@@ -483,6 +496,29 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const result = JSON.parse(runPwsh(script));
     expect(result.denied).toBe(true);
     expect(result.reason).toBe('autonomous_raw_worker_send_denied');
+  });
+
+  it('persists messageContentHash on active claim through terminal finalize', () => {
+    const dir = tempClaimDir();
+    const hash = hashNudgeMessageContent('review findings payload');
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        Initialize-WorkerNudgeClaimNamespace -Namespace $ns
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
+        $persist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash '${hash}'
+        if (-not $persist.ok) { throw "persist failed: $($persist.reason)" }
+        $terminal = Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT'
+        if (-not $terminal.ok) { throw "finalize failed: $($terminal.reason)" }
+        $raw = Get-Content -LiteralPath $terminal.terminalPath -Raw | ConvertFrom-Json
+        Write-Output $raw.messageContentHash
+      `;
+      expect(runPwsh(script).trim()).toBe(hash);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('does not reacquire after terminal SENT claim', () => {
