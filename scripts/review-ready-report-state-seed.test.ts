@@ -49,6 +49,7 @@ type PlanResult = {
 
 type SeedFixture = {
   description?: string;
+  headSha?: string;
   nowMs?: number;
   openPrs?: Array<Record<string, unknown>>;
   sessions?: Array<Record<string, unknown>>;
