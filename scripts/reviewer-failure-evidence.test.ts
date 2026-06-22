@@ -112,6 +112,12 @@ describe('reviewer-failure-evidence', () => {
     expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
   });
 
+  it('scrubs github oauth and pat token formats', () => {
+    expect(scrubSecretLikeOutput('gho_abcdefghijklmnopqrstuvwxyz1234567890')).toBe('[REDACTED]');
+    expect(scrubSecretLikeOutput('github_pat_11ABCDEF012345678901234567890123456789012345678901234567890')).toBe('[REDACTED]');
+    expect(scrubSecretLikeOutput('AKIAIOSFODNN7EXAMPLE')).toBe('AKIA[REDACTED]');
+  });
+
   it('records signal detail for signal-style exit codes on linux', () => {
     const signal = resolveTerminationSignalFromExitCode(137, 'linux');
     expect(signal.signal).toBe('9');

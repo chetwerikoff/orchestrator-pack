@@ -766,6 +766,46 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
   });
 
+  it('NEW row rejects explicit producer-command that does not exercise declared producer', () => {
+    const proofCommand =
+      'REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs';
+    const body = loadIssue('new-fulfilled.md').replace(
+      `proof-command: REVERIFY_STATUS=verified node tests/fixtures/contract-evidence-reverify/producers/genuine-new-proof.mjs`,
+      `proof-command: ${proofCommand}\nproducer-command: REVERIFY_EXPECTED=verified node tests/fixtures/contract-evidence-reverify/producers/echo-expected.mjs`,
+    );
+    const result = runContractEvidenceReverify(
+      baseInput(body, { prBody: 'Closes #9004\n', explicitIssueNumber: 9004 }),
+    );
+    expectNewRowWhenFullSandboxAvailable(result.rows[0], {
+      status: 'unverified',
+      reason: 'non-genuine-proof',
+      verificationMode: 'not-run',
+    });
+  });
+
+  it('redacts credential-like tokens from reviewer summary evidence fields', () => {
+    const summary = formatReviewerReverifySummary({
+      runOutcome: 'rows-evaluated',
+      issueNumber: 376,
+      snapshotHash: 'sha256:abc',
+      snapshotDrift: false,
+      prHeadSha: 'deadbeef',
+      rows: [{
+        rowIndex: 0,
+        rowHash: 'sha256:row',
+        status: 'divergent',
+        verificationMode: 'live',
+        producerVerified: false,
+        asserted: 'match',
+        observed: 'token=gho_abcdefghijklmnopqrstuvwxyz1234567890',
+      }],
+      candidateOnly: true,
+      neverBlocks: true,
+    });
+    expect(summary).toContain('[REDACTED]');
+    expect(summary).not.toContain('gho_abcdefghijklmnopqrstuvwxyz1234567890');
+  });
+
   it('snapshot-drift flag on rows-evaluated when current issue differs', () => {
     const snapshot = loadIssue('live-match.md');
     const drifted = `${snapshot}\n\nEdited after capture.`;

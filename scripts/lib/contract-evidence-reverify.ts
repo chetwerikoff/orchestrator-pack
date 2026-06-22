@@ -13,6 +13,7 @@ import {
   producerEmissionHasExecutableProof,
   producerEmissionIsComplete,
 } from '../contract-evidence.mjs';
+import { scrubSecretLikeOutput } from '../../docs/reviewer-failure-evidence.mjs';
 import { loadCommittedCaptureManifest } from '../generate-capture-manifest.mjs';
 import {
   collectAuthoritativeReferences,
@@ -166,12 +167,13 @@ function sanitizeReviewerEvidenceText(text: string): string {
   });
 }
 
+function formatEvidenceField(text: string): string {
+  return scrubSecretLikeOutput(sanitizeReviewerEvidenceText(text));
+}
+
 function boundValue(value: unknown, max = allowlist.maxObservedLength): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  const redacted = sanitizeReviewerEvidenceText(text)
-    .replace(/ghp_[A-Za-z0-9]{20,}/g, 'ghp_[REDACTED]')
-    .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]')
-    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  const redacted = scrubSecretLikeOutput(sanitizeReviewerEvidenceText(text));
   if (redacted.length <= max) {
     return redacted;
   }
@@ -434,6 +436,63 @@ function isNpmTestProofCommand(command: string): boolean {
   return command.trim().startsWith('npm test --');
 }
 
+const ECHO_ONLY_PRODUCER_STUBS = new Set([
+  'tests/fixtures/contract-evidence-reverify/producers/echo-expected.mjs',
+]);
+
+function listDeclaredProducerBoundaryRelPaths(declaredProducer: string): string[] {
+  const producer = canonicalProducer(declaredProducer);
+  if (producer === 'orchestrator-pack') {
+    return (allowlist.newRowProducerBoundaryScripts ?? []).map(normalizePath);
+  }
+  return [];
+}
+
+function commandExercisesDeclaredProducer(
+  command: string,
+  declaredProducer: string,
+  repoRoot: string,
+): boolean {
+  const trimmed = command.trim();
+  if (!trimmed || !isCommandSafe(trimmed, repoRoot)) {
+    return false;
+  }
+  const producer = canonicalProducer(declaredProducer);
+  if (!producer) {
+    return false;
+  }
+  if (isExternalProducer(producer)) {
+    return trimmed === producer || trimmed.startsWith(`${producer} `);
+  }
+  const rels = listAllowlistedNodeScriptRelPaths(trimmed, repoRoot);
+  if (rels.some((rel) => ECHO_ONLY_PRODUCER_STUBS.has(normalizePath(rel)))) {
+    return false;
+  }
+  const boundaries = listDeclaredProducerBoundaryRelPaths(producer);
+  if (boundaries.length > 0) {
+    if (rels.some((rel) => boundaries.includes(normalizePath(rel)))) {
+      return true;
+    }
+    const spawnedRel = resolveSpawnedProducerRelPath(trimmed, repoRoot);
+    if (spawnedRel && boundaries.includes(normalizePath(spawnedRel))) {
+      return true;
+    }
+    const npmIndependent = allowlist.npmProofIndependentCommands ?? {};
+    if (Object.values(npmIndependent).some((mapped) => mapped.trim() === trimmed)) {
+      return true;
+    }
+    return false;
+  }
+  if (producer === 'orchestrator-pack-scripts') {
+    if (rels.length !== 1) {
+      return false;
+    }
+    const rel = normalizePath(rels[0]!);
+    return rel.startsWith('tests/fixtures/contract-evidence-reverify/producers/');
+  }
+  return false;
+}
+
 function resolveNpmProofIndependentCommand(
   proofCommand: string,
   repoRoot: string,
@@ -462,7 +521,10 @@ function buildIndependentProducerCommand(
     ) {
       return null;
     }
-    if (isCommandSafe(explicit, repoRoot)) {
+    if (
+      isCommandSafe(explicit, repoRoot)
+      && commandExercisesDeclaredProducer(explicit, block.producer ?? '', repoRoot)
+    ) {
       return explicit;
     }
   }
@@ -897,13 +959,13 @@ export function formatReviewerReverifySummary(result: ReverifyRunResult): string
       `producer-verified=${row.producerVerified}`,
     ];
     if (row.reason) {
-      parts.push(`reason=${sanitizeReviewerEvidenceText(row.reason)}`);
+      parts.push(`reason=${formatEvidenceField(row.reason)}`);
     }
     if (row.asserted !== undefined) {
-      parts.push(`asserted=${sanitizeReviewerEvidenceText(row.asserted)}`);
+      parts.push(`asserted=${formatEvidenceField(row.asserted)}`);
     }
     if (row.observed !== undefined) {
-      parts.push(`observed=${sanitizeReviewerEvidenceText(row.observed)}`);
+      parts.push(`observed=${formatEvidenceField(row.observed)}`);
     }
     lines.push(`- ${parts.join(' ')}`);
   }

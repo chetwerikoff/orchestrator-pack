@@ -27,7 +27,7 @@ export const EVIDENCE_PHASES = new Set([
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SECRET_PATTERN = /(?:token|secret|password|api[_-]?key|authorization|cookie|private[_-]?key|bearer\s)/i;
-const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
+const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}\b|\bAKIA[0-9A-Z]{16}\b|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----/i;
 export const OUTPUT_WITHHELD_MARKER = '[output_withheld]';
 const FORBIDDEN_FIELD_NAMES = new Set([
   'env',
@@ -101,13 +101,18 @@ export function tailBoundedText(text, limit = DEFAULT_OUTPUT_TAIL_LIMIT) {
 
 export function scrubSecretLikeOutput(text) {
   let value = String(text ?? '');
+  value = value.replace(
+    /-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |EC )?PRIVATE KEY-----/g,
+    '[REDACTED_PRIVATE_KEY]',
+  );
   value = value.replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]');
   value = value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
   value = value.replace(
     /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
     '$1[REDACTED]',
   );
-  value = value.replace(/\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
+  value = value.replace(/\b(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
+  value = value.replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA[REDACTED]');
   return value;
 }
 
