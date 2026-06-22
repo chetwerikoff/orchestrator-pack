@@ -638,11 +638,13 @@ export function evaluateNudgeGate(input) {
 
   const storeId = canonicalStoreId(input.storePath ?? '');
   const claims = toArray(input.claims);
-  const terminal = claims.find(
-    (row) =>
-      String(row?.tupleKey ?? '') === tuple.tupleKey &&
-      TERMINAL_CLAIM_PHASES.includes(String(row?.phase ?? row?.state ?? '')),
-  );
+  const terminal = claims.find((row) => {
+    if (String(row?.tupleKey ?? '') !== tuple.tupleKey) {
+      return false;
+    }
+    const phase = String(row?.phase ?? row?.state ?? '');
+    return phase === 'SENT' || phase === 'UNCERTAIN';
+  });
   if (terminal) {
     const phase = String(terminal.phase ?? terminal.state ?? 'SENT');
     if (phase === 'SENT' || phase === 'UNCERTAIN') {

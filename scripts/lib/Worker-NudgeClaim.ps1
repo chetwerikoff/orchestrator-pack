@@ -364,6 +364,7 @@ function Find-WorkerNudgeClaimTerminalRecord {
         try {
             $record = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
             $phase = if ($record.phase) { [string]$record.phase } else { [string]$record.state }
+            # FAILED_DEFINITIVE is retryable; only SENT/UNCERTAIN suppress reacquire.
             if ($phase -notin @('SENT', 'UNCERTAIN')) {
                 continue
             }
@@ -615,29 +616,32 @@ function Acquire-WorkerNudgeClaim {
 
             $terminalHit = Find-WorkerNudgeClaimTerminalRecord -Namespace $resolved -Key $key -TupleKey $TupleKey
             if ($terminalHit) {
-                if (Test-WorkerNudgeTerminalContentDiffers -TerminalHit $terminalHit -Message $Message) {
-                    return @{
-                        acquired   = $false
-                        reason     = 'materially_new_content'
-                        escalate   = $true
-                        diagnosis  = '[worker-nudge-gate] ESCALATION: tuple already served but incoming message content differs; tuple remains suppressed.'
-                        claim      = $terminalHit.record
-                        path       = $terminalHit.path
-                        namespace  = $resolved
-                        key        = $key
-                        terminal   = $true
-                        phase      = $terminalHit.phase
+                $terminalPhase = [string]$terminalHit.phase
+                if ($terminalPhase -in @('SENT', 'UNCERTAIN')) {
+                    if (Test-WorkerNudgeTerminalContentDiffers -TerminalHit $terminalHit -Message $Message) {
+                        return @{
+                            acquired   = $false
+                            reason     = 'materially_new_content'
+                            escalate   = $true
+                            diagnosis  = '[worker-nudge-gate] ESCALATION: tuple already served but incoming message content differs; tuple remains suppressed.'
+                            claim      = $terminalHit.record
+                            path       = $terminalHit.path
+                            namespace  = $resolved
+                            key        = $key
+                            terminal   = $true
+                            phase      = $terminalPhase
+                        }
                     }
-                }
-                return @{
-                    acquired  = $false
-                    reason    = 'already_served'
-                    claim     = $terminalHit.record
-                    path      = $terminalHit.path
-                    namespace = $resolved
-                    key       = $key
-                    terminal  = $true
-                    phase     = $terminalHit.phase
+                    return @{
+                        acquired  = $false
+                        reason    = 'already_served'
+                        claim     = $terminalHit.record
+                        path      = $terminalHit.path
+                        namespace = $resolved
+                        key       = $key
+                        terminal  = $true
+                        phase     = $terminalPhase
+                    }
                 }
             }
 

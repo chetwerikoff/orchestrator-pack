@@ -239,6 +239,81 @@ describe('worker nudge gate (#384)', () => {
     expect(unverifiable.suppresses).toBe(false);
   });
 
+  it('allows gate retry when only FAILED_DEFINITIVE terminal claim exists', () => {
+    const tuple = buildTupleKey({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+    });
+    expect(tuple.ok).toBe(true);
+    const gate = evaluateNudgeGate({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+      surface: 'orchestrator-turn',
+      storePath: '/tmp/gate-state',
+      claims: [
+        {
+          tupleKey: tuple.tupleKey,
+          phase: 'FAILED_DEFINITIVE',
+          intentClass: 'review-findings',
+        },
+      ],
+    });
+    expect(gate.allow).toBe(true);
+    expect(acquireClaim({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+      surface: 'orchestrator-turn',
+      storePath: '/tmp/gate-state',
+      claims: gate.tuple
+        ? [
+            {
+              tupleKey: tuple.tupleKey,
+              phase: 'FAILED_DEFINITIVE',
+              intentClass: 'review-findings',
+            },
+          ]
+        : [],
+    }).acquired).toBe(true);
+  });
+
+  it('still suppresses when SENT terminal exists even if FAILED_DEFINITIVE is listed first', () => {
+    const tuple = buildTupleKey({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+    });
+    expect(tuple.ok).toBe(true);
+    const gate = evaluateNudgeGate({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+      surface: 'orchestrator-turn',
+      storePath: '/tmp/gate-state',
+      claims: [
+        {
+          tupleKey: tuple.tupleKey,
+          phase: 'FAILED_DEFINITIVE',
+          intentClass: 'review-findings',
+        },
+        {
+          tupleKey: tuple.tupleKey,
+          phase: 'SENT',
+          intentClass: 'review-findings',
+        },
+      ],
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.reason).toBe('already_served');
+  });
+
   it('FAILED_DEFINITIVE finalize is retryable; UNCERTAIN is not', () => {
     expect(finalizeClaim({ phase: 'FAILED_DEFINITIVE' }).retryable).toBe(true);
     expect(finalizeClaim({ phase: 'UNCERTAIN' }).retryable).toBe(false);
@@ -557,6 +632,26 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         Write-Output $raw.messageContentHash
       `;
       expect(runPwsh(script).trim()).toBe(hash);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reacquires after terminal FAILED_DEFINITIVE claim', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        if (-not $claim.acquired) { throw 'expected initial acquire' }
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' | Out-Null
+        $retry = Acquire-WorkerNudgeClaim -PrNumber 380 -CycleKey 'run:opk-rev-689' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Namespace $ns -Surface 'test'
+        [pscustomobject]@{ acquired = [bool]$retry.acquired; reason = [string]$retry.reason }
+          | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
