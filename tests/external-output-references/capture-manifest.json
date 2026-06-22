@@ -2,6 +2,46 @@
   "version": 1,
   "corpusRoot": "tests/external-output-references",
   "entries": {
+    "ao-reaction-config/changes_requested_config": {
+      "id": "ao-reaction-config/changes_requested_config",
+      "producer": "ao-reaction-config",
+      "sourceCommand": "reactions.changes-requested block from live agent-orchestrator.yaml",
+      "kind": "unstructured",
+      "path": "captures/ao-reaction-config/changes_requested_config.raw.txt",
+      "contentHash": "sha256:f94cdd171632639d790ce10d4373f9d1c3b4c300416f32af0a230c81a9129aad"
+    },
+    "ao-reaction-config/report_stale_message": {
+      "id": "ao-reaction-config/report_stale_message",
+      "producer": "ao-reaction-config",
+      "sourceCommand": "reactions.report-stale.message from live agent-orchestrator.yaml (normalized single line)",
+      "kind": "unstructured",
+      "path": "captures/ao-reaction-config/report_stale_message.raw.txt",
+      "contentHash": "sha256:d369d1708cf9314b24387ec765ecb0327144ccc35a724173947224eea4057036"
+    },
+    "ao-reaction-delivery/findings_delivery_worker_pane": {
+      "id": "ao-reaction-delivery/findings_delivery_worker_pane",
+      "producer": "ao-reaction-delivery",
+      "sourceCommand": "ao review send opk-rev-757 (1 open finding, PR #385); tmux capture-pane -p -t opk-166 -S -20",
+      "kind": "unstructured",
+      "path": "captures/ao-reaction-delivery/findings_delivery_worker_pane.raw.txt",
+      "contentHash": "sha256:19456134a235e4634a743585bcf2bc9673429dbb946bd849208e43ee7c18607c"
+    },
+    "ao-reaction-delivery/report_stale_worker_pane": {
+      "id": "ao-reaction-delivery/report_stale_worker_pane",
+      "producer": "ao-reaction-delivery",
+      "sourceCommand": "ao send opk-166 <report-stale YAML message> --no-wait; tmux capture-pane -p -t opk-166 -S -12",
+      "kind": "unstructured",
+      "path": "captures/ao-reaction-delivery/report_stale_worker_pane.raw.txt",
+      "contentHash": "sha256:1283befe32bc516a14b2e080cac279d82c98706e12054b8b76d32f5c53108a5d"
+    },
+    "ao-reaction-event/report_stale_send": {
+      "id": "ao-reaction-event/report_stale_send",
+      "producer": "ao-reaction-event",
+      "sourceCommand": "ao events list --json --since 2d --session opk-165 --type reaction.action_succeeded (incident delivery tsEpoch=1782123033110)",
+      "kind": "structured",
+      "path": "captures/ao-reaction-event/report_stale_send.raw.json",
+      "contentHash": "sha256:8849bca7931b7bf2b8c65d8f93f9ea03d687c2ebf105a7447d55be9793b41ced"
+    },
     "ao-review-run/cancelled": {
       "id": "ao-review-run/cancelled",
       "producer": "ao",
@@ -209,6 +249,15 @@
       "kind": "structured",
       "path": "captures/gh-pr-open/open.raw.json",
       "contentHash": "sha256:f8523a313d522ca149bb777731e13da43e3790950f3306b90bdb6683e32e7d0a"
+    },
+    "providers-yaml-comment/openmodel-wire": {
+      "id": "providers-yaml-comment/openmodel-wire",
+      "producer": "providers-yaml-comment",
+      "sourceCommand": "grep -A5 '^openmodel:' ~/.config/coworker/providers.yaml",
+      "kind": "unstructured",
+      "path": "captures/providers-yaml-comment/openmodel-wire.raw.txt",
+      "contentHash": "sha256:47b3bb8e25f73c975854041478aa0dbb073b0472ba1c7660916c77afcc827a2d",
+      "exitStatus": 0
     }
   }
 }

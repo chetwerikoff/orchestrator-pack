@@ -1,0 +1,16 @@
+{
+  "id": 28695,
+  "tsEpoch": 1782123033110,
+  "ts": "2026-06-22T10:10:33.110Z",
+  "projectId": "orchestrator-pack",
+  "sessionId": "opk-165",
+  "source": "reaction",
+  "kind": "reaction.action_succeeded",
+  "level": "info",
+  "summary": "send-to-agent report-stale",
+  "data": {
+    "reactionKey": "report-stale",
+    "action": "send-to-agent",
+    "attempts": 6
+  }
+}

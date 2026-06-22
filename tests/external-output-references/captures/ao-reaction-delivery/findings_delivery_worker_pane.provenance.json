@@ -1,0 +1,11 @@
+{
+  "sourceCommand": "ao review send opk-rev-757 (1 open finding, PR #385); tmux capture-pane -p -t opk-166 -S -20",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-22T12:24:00.000Z",
+  "representative": true,
+  "context": "AO delivery of dynamic review-finding text to worker pane: [Pasted text #1 +14 lines] with unsubmitted draft requiring second Enter. Reproduced via ao review send (review-send path, opk-rev-757) — not a changes-requested reaction event. Capture id is transport-neutral (findings_delivery_worker_pane); 0 changes-requested reaction.action_succeeded events in AO event log (30d+). Same AO paste-class wire for runtime-generated findings prose.",
+  "scrubLog": [
+    "Pane capture scrubbed to delivery tail; no credentials",
+    "Finding text from opk-rev-757; session opk-166 restored for reproduction"
+  ]
+}

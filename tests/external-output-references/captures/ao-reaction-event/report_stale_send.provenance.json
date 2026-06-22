@@ -1,0 +1,11 @@
+{
+  "sourceCommand": "ao events list --json --since 2d --session opk-165 --type reaction.action_succeeded (incident delivery tsEpoch=1782123033110)",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-22T11:48:00.000Z",
+  "representative": true,
+  "context": "reaction.action_succeeded send-to-agent report-stale on opk-165 PR #380; deliveryId opk-165:1782123033110:reaction:report-stale",
+  "scrubLog": [
+    "Event payload only; no secrets",
+    "AO event does not include reaction message body — message shape anchored separately via ao-reaction-config/report_stale_message"
+  ]
+}

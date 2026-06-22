@@ -1,0 +1,70 @@
+    … 32 input lines hidden · ctrl+o to expand
+    test patched
+
+  $ cd /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-166 && npx vitest run scripts/worker-nudge-gate.test.ts 2>&1 | tail -3 && node docs/orchestrator-message-registry.mjs audit . 2>&1 | head -3 exit 1 • 27s
+    … 2 output lines hidden · ctrl+o to expand
+      "verdict": "FAIL",
+      "violations": [
+
+  $ cd /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-166 && node docs/orchestrator-message-registry.mjs audit . 2>&1 | head -6 exit 1 • 4.1s
+    … 4 output lines hidden · ctrl+o to expand
+      ],
+      "overlap": {
+
+  $ python3 <<'PY'
+    from pathlib import Path 14s
+    … 10 input + 4 output lines hidden · ctrl+o to expand
+    - cursor version command failed: Error: No Cursor IDE installation found. Use 'cursor agent' or 'agent' to run the agent. Or, install Cursor at https://cursor.com/download
+    Pack verification completed.
+
+  $ cd /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-166 && git add scripts/ci-green-wake-reconcile.ps1 scripts/worker-nudge-gate.test.ts scripts/orchestrator-message-catalog.json && git commit --trailer "Co-authored-by: Cursor
+    <cursoragent@cursor.com>" -m "$(cat <<'EOF'
+    Capture CI-green journaled send exit code in function scope. 6.0s
+    … 6 input + 4 output lines hidden · ctrl+o to expand
+       fafdb1b..8728fd5  feat/issue-384 -> feat/issue-384
+    ok feat/issue-384
+
+  $ cd /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-166 && SHA=$(git rev-parse HEAD) && python3 <<PY
+    from pathlib import Path 6.1s
+    … 10 input + 11 output lines hidden · ctrl+o to expand
+    [notifier-slack] No webhookUrl configured — notifications will be no-ops
+    ✓ opk-166 reported ready_for_review (idle)
+
+  opk-rev-800 fixed — reported addressing-reviews, pushed fix, reported ready-for-review.
+
+  Problem
+
+  Inside Invoke-OrchestratorSideEffectFenced, the journaled send wrote $script:sendExitCode = $LASTEXITCODE, but failure handling read local $sendExitCode (still 0). Uncertain/failed sends were treated as success and transitions were marked nudged.
+
+  Fix (ci-green-wake-reconcile.ps1)
+
+  Capture the exit code in parent function scope via a hashtable:
+
+  $sendExitCapture = @{ exitCode = 0 }
+  # ... inside fenced action: $sendExitCapture.exitCode = $LASTEXITCODE
+  $sendExitCode = [int]$sendExitCapture.exitCode
+
+  Exit 44/47 and other failure paths now run correctly.
+
+  Verification
+
+  • 79/79 tests pass (including scope regression guard)
+  • verify.ps1 pass (registry predicate hash updated)
+  • Pushed: 8728fd5 (fix), e4642c7 (declaration refresh)
+  • ao report ready-for-review — opk-166 idle
+
+
+  Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.
+
+
+ ⠠⠜ Composing
+    Tip: Use /debug to instrument and debug complex problems.
+
+
+  → Add a follow-up                                                                                                                                                                                                                             ctrl+c to stop
+
+
+  8 background tasks
+  Composer 2.5 · 37.6% · 5 files edited                                                                                                                                                                                                         Run Everything
+  ~/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-166 · feat/issue-384 · #385
+
