@@ -43,6 +43,122 @@ function Get-ReviewReadyReportStateSeedTerminalClaimKeys {
     return @($keys)
 }
 
+function Get-ReviewReadyReportStateSeedGitHubRefreshIntervalMs {
+    $seconds = 60
+    if ($env:AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS) {
+        $seconds = [int]$env:AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS
+    }
+    if ($seconds -lt 5) {
+        $seconds = 5
+    }
+    return $seconds * 1000
+}
+
+function Get-ReviewReadyReportStateSeedTrackedPrNumbers {
+    param(
+        [array]$Sessions,
+        [string]$SupervisedProject = ''
+    )
+
+    $numbers = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($session in @($Sessions)) {
+        if ($SupervisedProject) {
+            $project = [string]($session.project)
+            if (-not $project) { $project = [string]($session.projectId) }
+            if ($project -and $project -ne $SupervisedProject) {
+                continue
+            }
+        }
+
+        $prNumber = 0
+        if ($null -ne $session.prNumber) {
+            $prNumber = [int]$session.prNumber
+        }
+        if ($prNumber -le 0) {
+            $prUrl = [string]($session.pr)
+            if (-not $prUrl) { $prUrl = [string]($session.prUrl) }
+            if ($prUrl -match '/pull/(\d+)') {
+                $prNumber = [int]$Matches[1]
+            }
+        }
+        if ($prNumber -gt 0) {
+            [void]$numbers.Add($prNumber)
+        }
+    }
+
+    return @($numbers | Sort-Object)
+}
+
+function Test-ReviewReadyReportStateSeedGitHubSnapshotStale {
+    param(
+        $Snapshot,
+        [array]$TrackedPrNumbers,
+        [long]$NowMs,
+        [long]$RefreshIntervalMs
+    )
+
+    if (-not $Snapshot -or -not $Snapshot.fetchedAtMs) {
+        return $true
+    }
+
+    $age = $NowMs - [long]$Snapshot.fetchedAtMs
+    if ($age -ge $RefreshIntervalMs) {
+        return $true
+    }
+
+    $cached = @($Snapshot.trackedPrNumbers | ForEach-Object { [int]$_ } | Sort-Object)
+    $tracked = @($TrackedPrNumbers | ForEach-Object { [int]$_ } | Sort-Object)
+    return (($cached -join ',') -ne ($tracked -join ','))
+}
+
+function New-ReviewReadyReportStateSeedGitHubSnapshot {
+    param(
+        [string]$RepoRoot,
+        [array]$TrackedPrNumbers,
+        [long]$NowMs
+    )
+
+    $openPrs = if (@($TrackedPrNumbers).Count -gt 0) {
+        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers))
+    }
+    else {
+        @()
+    }
+
+    $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $openPrs -MergeRequiredNames {
+        param($payload)
+        Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
+            -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
+    }
+
+    return @{
+        fetchedAtMs                   = $NowMs
+        trackedPrNumbers              = @($TrackedPrNumbers)
+        openPrs                       = @($openPrs)
+        ciChecksByPr                  = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+    }
+}
+
+function Resolve-ReviewReadyReportStateSeedGitHubSnapshot {
+    param(
+        [string]$RepoRoot,
+        [array]$Sessions,
+        [string]$SupervisedProject,
+        $CachedSnapshot,
+        [long]$NowMs
+    )
+
+    $trackedPrNumbers = @(Get-ReviewReadyReportStateSeedTrackedPrNumbers -Sessions $Sessions -SupervisedProject $SupervisedProject)
+    $refreshIntervalMs = Get-ReviewReadyReportStateSeedGitHubRefreshIntervalMs
+    if (Test-ReviewReadyReportStateSeedGitHubSnapshotStale -Snapshot $CachedSnapshot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -RefreshIntervalMs $refreshIntervalMs) {
+        return (New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot $RepoRoot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs)
+    }
+
+    return $CachedSnapshot
+}
+
 function Invoke-ReviewReadyReportStateSeedTick {
     param(
         [string]$StateRoot,
@@ -57,6 +173,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
 
     $seedStatePath = Get-ReviewReadyReportStateSeedStatePath -StateRoot $StateRoot
     $watchPath = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
+    $githubSnapshot = $null
     $nowMs = if ($FixturePayload -and $FixturePayload.nowMs) {
         [long]$FixturePayload.nowMs
     }
@@ -83,15 +200,21 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $(if ($FixturePayload.watchEntries) { $FixturePayload.watchEntries } else { @{} })
     }
     else {
-        $openPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $sessions = @(Get-AoStatusSessionsIncludingTerminated)
-        $reviewRuns = @(Get-AoReviewRuns -Project $ProjectId)
-        $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $openPrs -MergeRequiredNames {
-            param($payload)
-            Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
-                -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
-        }
         $seedState = Get-ReviewReadyReportStateSeedState -Path $seedStatePath
+        $githubSnapshot = Resolve-ReviewReadyReportStateSeedGitHubSnapshot `
+            -RepoRoot $RepoRoot `
+            -Sessions $sessions `
+            -SupervisedProject $ProjectId `
+            -CachedSnapshot $seedState.githubSnapshot `
+            -NowMs $nowMs
+        $openPrs = @($githubSnapshot.openPrs)
+        $checksBundle = @{
+            ciChecksByPr                  = $githubSnapshot.ciChecksByPr
+            requiredCheckNamesByPr        = $githubSnapshot.requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $githubSnapshot.requiredCheckLookupFailedByPr
+        }
+        $reviewRuns = @(Get-AoReviewRuns -Project $ProjectId)
         $handoffPath = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
         $handoffState = Get-ReviewHandoffWakeAdmissionState -Path $handoffPath
         $handoffRecords = $handoffState.records
@@ -162,6 +285,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
                 bindingByKey     = $plan.bindingByKey
                 seededKeys       = @($mergedSeeds.Keys)
                 deferredScanKeys = @($plan.deferredScanKeys)
+                githubSnapshot   = if ($null -ne $githubSnapshot) { $githubSnapshot } else { $current.githubSnapshot }
             }
         }
         Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath -IncomingWatchEntries $watchMap -NowMs $nowMs
@@ -206,8 +330,8 @@ function Invoke-ReviewReadyReportStateSeedTick {
         else {
             $plannedRunParams['ResolveFreshSnapshot'] = {
                 param($planned)
-                $freshOpenPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
-                $scoped = @($freshOpenPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
+                $freshOpenPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @([int]$planned.prNumber))
+                $scoped = @($freshOpenPrs)
                 $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
                     param($payload)
                     Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `

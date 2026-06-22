@@ -35,6 +35,7 @@ $Script:ReviewReadyReportStateSeedDefaultState = @{
     bindingByKey     = @{}
     seededKeys       = @()
     deferredScanKeys = @()
+    githubSnapshot   = $null
     lastUpdatedMs    = $null
 }
 
@@ -81,6 +82,7 @@ function Update-ReviewReadyReportStateSeedStateLocked {
             bindingByKey     = $next.bindingByKey
             seededKeys       = @($next.seededKeys)
             deferredScanKeys = @($next.deferredScanKeys)
+            githubSnapshot   = $next.githubSnapshot
             lastUpdatedMs    = $NowMs
         }
         return $next

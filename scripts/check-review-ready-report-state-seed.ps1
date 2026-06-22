@@ -56,6 +56,26 @@ if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch "startReason -ne 'repor
     exit 1
 }
 
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'Resolve-ReviewReadyReportStateSeedGitHubSnapshot') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must cache GitHub snapshot between poll ticks'
+    exit 1
+}
+
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'Invoke-GhOpenPrListForNumbers') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must scope GitHub open-PR lookups to tracked PR numbers'
+    exit 1
+}
+
+if ((Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1') -Raw) -notmatch 'function Invoke-GhOpenPrListForNumbers') {
+    Write-Host 'Gh-PrChecks.ps1 must expose Invoke-GhOpenPrListForNumbers for scoped open-PR refresh'
+    exit 1
+}
+
+if ((Get-Content -LiteralPath $invokeLib -Raw) -match 'Invoke-GhOpenPrList -RepoRoot \$RepoRoot\)[\s\S]{0,120}Get-AoStatusSessionsIncludingTerminated') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must not run a full open-PR GitHub scan before every ao status poll'
+    exit 1
+}
+
 if ((Get-Content -LiteralPath $reevalLib -Raw) -notmatch '\$planned\.startReason') {
     Write-Host 'Invoke-ReviewTriggerReeval.ps1 must propagate action startReason into planned + claim'
     exit 1

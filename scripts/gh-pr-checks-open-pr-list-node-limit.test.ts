@@ -48,3 +48,17 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
     expect(body).toMatch(/gh api[^\n]*commits\//);
   });
 });
+
+describe('Invoke-GhOpenPrListForNumbers query cost', () => {
+  const body = functionBody('Invoke-GhOpenPrListForNumbers');
+
+  it('scopes GitHub lookups to explicit PR numbers', () => {
+    expect(body).toMatch(/gh pr view \$n/);
+    expect(body).not.toMatch(/gh pr list/);
+  });
+
+  it('resolves head commit committed date per scoped PR', () => {
+    expect(body).toMatch(/headCommittedAt/);
+    expect(body).toMatch(/gh api[^\n]*commits\//);
+  });
+});
