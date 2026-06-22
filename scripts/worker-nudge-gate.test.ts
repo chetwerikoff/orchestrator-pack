@@ -91,7 +91,8 @@ describe('worker nudge gate (#384)', () => {
         },
       ],
     });
-    expect(gate.allow).toBe(true);
+    expect(gate.allow).toBe(false);
+    expect(gate.decision).toBe('SUPPRESS');
     expect(gate.reason).toBe('materially_new_content');
     expect(gate.escalate).toBe(true);
     expect(String(gate.diagnosis ?? '')).toContain('ESCALATION');
@@ -195,6 +196,35 @@ describe('worker nudge gate (#384)', () => {
       claims: [{ tupleKey: tuple.tupleKey, phase: 'SENT', intentClass: 'ci-green-handoff' }],
     });
     expect(gate.allow).toBe(false);
+  });
+
+
+  it('maps unclassified verifiable legacy records to review-findings', () => {
+    const legacy = {
+      sessionId: 'opk-1',
+      targetGeneration: 'gen1',
+      sentAtMs: 1,
+      reviewRunId: 'opk-rev-689',
+      prNumber: 380,
+    };
+    const mapped = remapLegacy332Record(legacy);
+    expect(mapped.intentClass).toBe('review-findings');
+    expect(mapped.cycleKey).toBe('run:opk-rev-689');
+    const gate = evaluateNudgeGate({
+      prNumber: 380,
+      sessionId: 'opk-1',
+      reviewRunId: 'opk-rev-689',
+      headSha,
+      targetId: 'opk-1',
+      targetGeneration: 'gen1',
+      source: 'orchestrator-turn',
+      surface: 'orchestrator-turn',
+      message: 'Please check ao review list and report addressing_reviews when done.',
+      storePath: '/tmp/gate-state',
+      legacyRecords: [legacy],
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.reason).toBe('legacy_record');
   });
 
   it('verifiable legacy #332 record suppresses equivalent nudge; unverifiable does not', () => {

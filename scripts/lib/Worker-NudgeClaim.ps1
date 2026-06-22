@@ -539,6 +539,7 @@ function Acquire-WorkerNudgeClaim {
         [string]$Surface = 'unknown',
         [string]$Namespace = '',
         [string]$ProjectId = 'orchestrator-pack',
+        [string]$Message = '',
         [scriptblock]$LogWriter = $null
     )
 
@@ -573,7 +574,21 @@ function Acquire-WorkerNudgeClaim {
             }
 
             $terminalHit = Find-WorkerNudgeClaimTerminalRecord -Namespace $resolved -Key $key -TupleKey $TupleKey
-            if ($terminalHit -and -not (Test-WorkerNudgeTerminalAllowsResend -Namespace $resolved -TerminalHit $terminalHit -Message $Message)) {
+            if ($terminalHit) {
+                if (Test-WorkerNudgeTerminalContentDiffers -TerminalHit $terminalHit -Message $Message) {
+                    return @{
+                        acquired   = $false
+                        reason     = 'materially_new_content'
+                        escalate   = $true
+                        diagnosis  = '[worker-nudge-gate] ESCALATION: tuple already served but incoming message content differs; tuple remains suppressed.'
+                        claim      = $terminalHit.record
+                        path       = $terminalHit.path
+                        namespace  = $resolved
+                        key        = $key
+                        terminal   = $true
+                        phase      = $terminalHit.phase
+                    }
+                }
                 return @{
                     acquired  = $false
                     reason    = 'already_served'
@@ -680,7 +695,7 @@ function Release-WorkerNudgeActiveClaim {
     }
 }
 
-function Test-WorkerNudgeTerminalAllowsResend {
+function Test-WorkerNudgeTerminalContentDiffers {
     param(
         [string]$Namespace,
         [hashtable]$TerminalHit,

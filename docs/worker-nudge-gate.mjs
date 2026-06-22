@@ -533,7 +533,7 @@ export function remapLegacy332Record(record) {
     return { suppresses: false, reason: 'legacy_unverifiable', verifiable: false };
   }
   const targetGeneration = String(record?.targetGeneration ?? record?.sessionGeneration ?? sessionId);
-  const intentClass = String(record?.intentClass ?? 'ci-green-handoff');
+  const intentClass = String(record?.intentClass ?? 'review-findings');
   const cycleKey = transitionId
     ? `transition:${transitionId.replace(/^ci-green:/, '')}`
     : deriveCycleKey(intentClass, record);
@@ -648,12 +648,12 @@ export function evaluateNudgeGate(input) {
     if (phase === 'SENT' || phase === 'UNCERTAIN') {
       if (isMateriallyNewServedContent(terminal, input)) {
         return {
-          allow: true,
-          decision: 'SEND',
+          allow: false,
+          decision: 'SUPPRESS',
           reason: 'materially_new_content',
           escalate: true,
           priorPhase: phase,
-          diagnosis: `${OPERATOR_ESCALATION_PREFIX} tuple ${tuple.tupleKey} was already ${phase} but incoming message content differs; allowing resend instead of silent drop.`,
+          diagnosis: `${OPERATOR_ESCALATION_PREFIX} tuple ${tuple.tupleKey} was already ${phase} but incoming message content differs; tuple remains suppressed.`,
           tuple,
           audit: buildAuditRecord({
             prNumber: tuple.prNumber,
@@ -665,7 +665,7 @@ export function evaluateNudgeGate(input) {
             cycleKey: tuple.cycleKey,
             intentClass: tuple.intentClass,
             storeId,
-            decision: 'SEND',
+            decision: 'SUPPRESS',
             reason: 'materially_new_content',
             claimPhase: phase,
             sendTarget: input.sessionId ?? tuple.targetId,

@@ -145,10 +145,12 @@ $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload $ga
 if (-not $gate.allow) {
     Write-WorkerNudgeGateAudit -Record $gate.audit | Out-Null
     @{
-        sent    = $false
-        reason  = [string]$gate.reason
+        sent       = $false
+        reason     = [string]$gate.reason
         suppressed = $true
-        audit   = $gate.audit
+        escalate   = [bool]$gate.escalate
+        diagnosis  = [string]$gate.diagnosis
+        audit      = $gate.audit
     } | ConvertTo-Json -Compress -Depth 8
     exit 0
 }
@@ -183,6 +185,8 @@ if (-not $claim.acquired) {
         reason     = $claimReason
         claimSkip  = $true
         tupleKey   = $tupleKey
+        escalate   = [bool]$claim.escalate
+        diagnosis  = [string]$claim.diagnosis
     } | ConvertTo-Json -Compress -Depth 6
     exit 0
 }
