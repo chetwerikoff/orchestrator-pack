@@ -18,7 +18,7 @@ import {
 import { captureBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.js';
 import { DEFAULT_REVERIFY_MANIFEST_PATH, isCommandSafe, isNodeScriptDependencyClosureEstablishable, isNpmTestDependencyClosureEstablishable, listNodeScriptDependencyClosureRelPaths, listNpmTestDependencyClosureRelPaths, resolveAllowlistedCommand } from './lib/reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './lib/reverify-allowlist-config.js';
-import { isPrHeadNetworkSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
+import { isPrHeadNetworkSandboxAvailable, isTrustedBaseFilesystemSandboxAvailable, runSandboxedAllowlistedCommand } from './lib/reverify-sandbox.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
@@ -30,11 +30,20 @@ function loadIssue(name: string): string {
 }
 
 const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
+const trustedBaseFilesystemSandboxAvailable = isTrustedBaseFilesystemSandboxAvailable();
 
 function expectCaptureRowLive(
   row: ReverifyRowResult,
   whenLive: Partial<ReverifyRowResult>,
 ) {
+  if (!trustedBaseFilesystemSandboxAvailable) {
+    expect(row).toMatchObject({
+      status: 'unverified',
+      reason: 'producer-unreachable',
+      verificationMode: 'not-run',
+    });
+    return;
+  }
   expect(row).toMatchObject(whenLive);
 }
 
@@ -170,6 +179,10 @@ describe('contract-evidence reverify (Issue #376)', () => {
       sandboxMode: 'trusted-base',
     });
     expect(result.blocked).toBe(true);
+    if (!trustedBaseFilesystemSandboxAvailable) {
+      expect(result.blockReason).toBe('filesystem-sandbox-unavailable');
+      return;
+    }
     expect(result.blockReason).toBe('read-only-postcondition-violated');
     expect(existsSync(path.join(packRoot, '.reverify-mutation-marker'))).toBe(false);
   });
@@ -351,7 +364,9 @@ describe('contract-evidence reverify (Issue #376)', () => {
       verificationMode: 'live',
       producerVerified: true,
     });
-    expect(result.rows[0].reason).toBeUndefined();
+    if (trustedBaseFilesystemSandboxAvailable) {
+      expect(result.rows[0].reason).toBeUndefined();
+    }
   });
 
   it('structured producer nonzero exit is divergent not producer-verified', () => {
@@ -905,9 +920,13 @@ describe('contract-evidence reverify (Issue #376)', () => {
     }));
     const summary = formatReviewerReverifySummary(result);
     expect(summary).toContain('never-blocks: true');
+    if (!trustedBaseFilesystemSandboxAvailable) {
+      expect(summary).toContain('status=unverified');
+      expect(summary).toContain('reason=producer-unreachable');
+      return;
+    }
     expect(summary).toContain('status=divergent');
     expect(summary).toContain('verification-mode=live');
-    expect(summary).toContain('never-blocks: true');
   });
 
 
@@ -1029,7 +1048,11 @@ describe('contract-evidence reverify (Issue #376)', () => {
       );
       expect(proc.status).toBe(0);
       const payload = JSON.parse(proc.stdout);
-      expect(payload.rows[0].status).toBe('divergent');
+      if (!trustedBaseFilesystemSandboxAvailable) {
+        expect(payload.rows[0].status).toBe('unverified');
+      } else {
+        expect(payload.rows[0].status).toBe('divergent');
+      }
     } finally {
       if (priorStore === undefined) {
         delete process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR;

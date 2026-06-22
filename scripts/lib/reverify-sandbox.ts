@@ -663,6 +663,24 @@ export function runSandboxedAllowlistedCommand(
   };
 }
 
+export function isTrustedBaseFilesystemSandboxAvailable(): boolean {
+  if (process.platform !== 'linux' || !bwrapAvailable()) {
+    return false;
+  }
+
+  const dependencyRoot = process.cwd();
+  const disposable = createDisposableWorktreeCopy(dependencyRoot);
+  if (!disposable) {
+    return false;
+  }
+
+  try {
+    return ensureBwrapSandboxReady(disposable, dependencyRoot, 'trusted-base');
+  } finally {
+    rmSync(disposable, { recursive: true, force: true });
+  }
+}
+
 export function isPrHeadNetworkSandboxAvailable(): boolean {
   if (process.platform !== 'linux' || !bwrapAvailable()) {
     return false;
