@@ -149,6 +149,15 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(sandboxSource).toContain('externalBinDirs');
   });
 
+  it('preserves trusted dependency module paths in no-bwrap direct fallback', () => {
+    const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
+    expect(sandboxSource).toContain('preserveDependencyModulePaths');
+    expect(sandboxSource).toContain('spawnTrustedBaseDirect');
+    expect(sandboxSource).toMatch(
+      /remapResolvedCommandForDisposable\([\s\S]*preserveDependencyModulePaths:\s*true/,
+    );
+  });
+
   it('detects mutations inside disposable sandbox copy', () => {
     const resolved = resolveAllowlistedCommand(
       'REVERIFY_ATTEMPT_MUTATION=1 REVERIFY_VALUE=match node tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',

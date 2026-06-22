@@ -434,12 +434,25 @@ function remapResolvedCommandForDisposable(
   resolved: ResolvedAllowlistedCommand,
   originalCwd: string,
   disposableCwd: string,
+  options: { preserveDependencyModulePaths?: boolean; dependencyRoot?: string } = {},
 ): ResolvedAllowlistedCommand {
+  const dependencyRoot = options.dependencyRoot ?? originalCwd;
+  const dependencyNodeModules = path.join(dependencyRoot, 'node_modules');
   const remappedArgs = resolved.args.map((arg) => {
-    if (path.isAbsolute(arg) && arg.startsWith(originalCwd)) {
-      return path.join(disposableCwd, path.relative(originalCwd, arg));
+    if (!path.isAbsolute(arg) || !arg.startsWith(originalCwd)) {
+      return arg;
     }
-    return arg;
+    if (options.preserveDependencyModulePaths) {
+      const normalizedArg = path.normalize(arg);
+      const normalizedNodeModules = path.normalize(dependencyNodeModules);
+      if (
+        normalizedArg === normalizedNodeModules
+        || normalizedArg.startsWith(`${normalizedNodeModules}${path.sep}`)
+      ) {
+        return arg;
+      }
+    }
+    return path.join(disposableCwd, path.relative(originalCwd, arg));
   });
   return {
     ...resolved,
@@ -457,7 +470,10 @@ function spawnTrustedBaseDirect(
     dependencyRoot: string;
   },
 ): SpawnSyncReturns<string> {
-  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable);
+  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable, {
+    preserveDependencyModulePaths: true,
+    dependencyRoot: options.dependencyRoot,
+  });
   const externalBinDir = path.join(options.dependencyRoot, 'node_modules', '.bin');
   const externalBinDirs = existsSync(externalBinDir) ? [externalBinDir] : [];
   return spawnDirect(sandboxResolved, {
