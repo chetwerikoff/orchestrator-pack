@@ -1,0 +1,19 @@
+{
+  "issue_number": 402,
+  "iteration_id": "opk-172",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-22T14:42:34.572Z",
+  "baseline": {
+    "commit_sha": "b2d867057fd50e6213c017b1720067620a400457",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3c9ebe21f8d3443aa24150d5d6944ae25e260aa9edaaad885b1ad30ebbe03af7"
+  },
+  "declared_paths": [
+    "docs/worker-message-dispatch-observe.mjs"
+  ],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}
