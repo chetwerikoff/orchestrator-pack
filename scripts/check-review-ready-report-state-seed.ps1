@@ -97,3 +97,4 @@ if ((Get-Content -LiteralPath $migrationNotes -Raw) -notlike '*review-ready-repo
 }
 
 Write-Host 'check-review-ready-report-state-seed: PASS'
+# Issue #391 report-state poll seed wiring guard
