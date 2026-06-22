@@ -668,16 +668,7 @@ describe('orchestrator-wake-supervisor', () => {
     );
 
     const observedPids = new Set<number>();
-    const logPath = path.join(stateDir, 'supervisor.log');
-
-    try {
-      await readMarker(stateDir, 'listener', 20_000);
-    } catch {
-      // listener may restart quickly between attempts
-    }
-
-    let supervisorLog = '';
-    const deadline = Date.now() + 25_000;
+    const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
       try {
         const marker = await readMarker(stateDir, 'listener', 500);
@@ -685,25 +676,17 @@ describe('orchestrator-wake-supervisor', () => {
       } catch {
         // child may be between restarts
       }
-      if (fs.existsSync(logPath)) {
-        supervisorLog = fs.readFileSync(logPath, 'utf8');
-        if (/crash backoff: listener/.test(supervisorLog)) {
-          break;
-        }
-      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    if (!supervisorLog && fs.existsSync(logPath)) {
-      supervisorLog = fs.readFileSync(logPath, 'utf8');
-    }
+    const supervisorLog = fs.readFileSync(path.join(stateDir, 'supervisor.log'), 'utf8');
     expect(supervisorLog).toMatch(/crash backoff: listener/);
     expect(observedPids.size).toBeLessThanOrEqual(4);
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1500));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     },
-    45_000,
+    30_000,
   );
 });
 
