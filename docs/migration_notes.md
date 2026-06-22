@@ -260,7 +260,13 @@ up the behaviour and side-effect fencing:
    `review-wake-trigger: starting review` within seconds of the completion wake (not only
    on the next heartbeat/reconcile tick).
 
-### Deferred-head review re-evaluation (Issue #235)
+### Report-state review-start seed (Issue #391)
+
+After merge, restart the full draft-71 supervised side-process set (listener **and**
+`review-ready-report-state-seed` poll child) from the operator checkout so accepted
+`ready_for_review` reports seed scoped reeval without waiting for webhooks.
+
+## Deferred-head review re-evaluation (Issue #235)
 
 Issue #235 adds `scripts/review-trigger-reeval.ps1`: a **scoped** supervised child that
 re-evaluates recently-deferred-not-ready heads when #195 readiness lands after an early

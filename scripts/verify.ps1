@@ -543,6 +543,22 @@ else {
 
 Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
+$reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
+if (Test-Path -LiteralPath $reviewReadyReportStateSeedCheck -PathType Leaf) {
+    & $reviewReadyReportStateSeedCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-review-ready-report-state-seed.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        $script:VerifyFailed = $true
+    }
+    else {
+        Write-Check 'scripts/check-review-ready-report-state-seed.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-ready-report-state-seed.ps1' 'FAIL' 'missing'
+    $script:VerifyFailed = $true
+}
+
 $reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'
 if (Test-Path -LiteralPath $reviewTriggerReevalCheck -PathType Leaf) {
     & $reviewTriggerReevalCheck
