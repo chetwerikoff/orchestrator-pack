@@ -1,0 +1,30 @@
+{
+  "description": "Targeted offset/limit Cursor read is advisory-satisfied",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-targeted",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file",
+          "targetedRead": true
+        }
+      ],
+      "edits": [],
+      "statusText": "targeted read slice"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-targeted-read",
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory-satisfied",
+    "advisorySatisfied": true
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "description": "Delegated Cursor advisory read is advisory-satisfied",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-delegated",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "docs/large-draft.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
+      "coworkerEvents": [
+        {
+          "kind": "coworker_ask",
+          "profile": "code",
+          "eventNote": "delegation-only"
+        }
+      ],
+      "edits": [],
+      "statusText": "delegated via coworker ask"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-delegated-satisfied",
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory-satisfied",
+    "advisorySatisfied": true
+  }
+}

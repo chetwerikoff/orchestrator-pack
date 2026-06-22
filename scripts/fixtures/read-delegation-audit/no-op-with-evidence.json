@@ -1,11 +1,17 @@
 {
-  "description": "trigger fired with documented no-op evidence in status — not flagged",
-  "surface": "cursor",
+  "description": "trigger fired with documented no-op evidence in status \u2014 not flagged",
+  "surface": "claude",
   "workUnits": [
     {
       "key": "unit-no-op",
       "inboundRequestId": "req-1",
-      "reads": [{ "path": "docs/a.md", "lines": 450, "kind": "file" }],
+      "reads": [
+        {
+          "path": "docs/a.md",
+          "lines": 450,
+          "kind": "file"
+        }
+      ],
       "edits": [],
       "statusText": "No-op: after review, no edit was needed because upstream already matches the spec (evidence: gh pr diff empty)."
     }

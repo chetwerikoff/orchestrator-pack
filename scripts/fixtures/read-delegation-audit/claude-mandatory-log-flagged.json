@@ -1,0 +1,25 @@
+{
+  "description": "Claude >200-line log stays mandatory and flagged",
+  "surface": "claude",
+  "workUnits": [
+    {
+      "key": "unit-claude-log",
+      "inboundRequestId": "req-claude-mandatory-log",
+      "reads": [
+        {
+          "path": "ci-output-claude.log",
+          "lines": 250,
+          "kind": "log"
+        }
+      ],
+      "edits": [],
+      "statusText": "claude mandatory CI log read without delegation"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": false,
+    "flagged": true,
+    "inDenominator": true
+  }
+}

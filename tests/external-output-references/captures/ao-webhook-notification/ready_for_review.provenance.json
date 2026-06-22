@@ -4,7 +4,8 @@
   "capturedAt": "2026-06-05T14:17:58.000Z",
   "context": "ready_for_review transition emitted at info priority; orchestrator-wake-filter drops info_priority",
   "scrubLog": [
-    "Representative AO 0.9.x ready_for_review notification shape",
-    "Priority info — filtered by evaluateWakePayload (not_wake_relevant to fast wake path)"
-  ]
+    "Synthetic negative control; AO 0.9.2 does not emit session.working + semanticType ready_for_review",
+    "Priority info \u2014 filtered by evaluateWakePayload (not_wake_relevant to fast wake path)"
+  ],
+  "representative": false
 }

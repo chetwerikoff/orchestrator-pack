@@ -563,7 +563,16 @@ projects:
       listeners, env, and ao stop / ao start. Do not treat merged example YAML or
       migration prose as executed until the operator confirms.
 
-      NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge.
+      NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge. Merge is
+      operator-only — no AO-managed agent performs or directs a PR merge. Also
+      MUST NOT direct, instruct, ask, nudge, or otherwise prompt any worker or
+      other agent to merge; proceed-to-merge or go-ahead-and-merge messages to a
+      worker are forbidden.
+      The approved-and-green / merge.ready completion wake is a hand-off addressed
+      to the operator (human), not a cue to merge. On that wake, when the ALL-true
+      gate below holds, emit the ready-for-human-merge notification to the
+      operator and stop at the merge boundary — do not merge and do not delegate
+      the merge.
       Emit ready-for-human-merge notification only when ALL are true:
         - Latest AO-local review run for current PR head has findingCount: 0
           (no open or sent findings remain);

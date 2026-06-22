@@ -325,8 +325,12 @@ function Resolve-OrchestratorWakeSupervisorSessionId {
 function Read-OrchestratorWakeSupervisorPidFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 0 }
-    $text = (Get-Content -LiteralPath $Path -Raw).Trim()
-    if ([int]::TryParse($text, [ref]$null)) { return [int]$text }
+    $raw = Get-Content -LiteralPath $Path -Raw
+    if ($null -eq $raw) { return 0 }
+    $text = $raw.Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return 0 }
+    $parsed = 0
+    if ([int]::TryParse($text, [ref]$parsed)) { return $parsed }
     return 0
 }
 

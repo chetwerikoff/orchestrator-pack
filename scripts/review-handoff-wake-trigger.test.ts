@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
+import { evaluateWakePayload, probeReadyForReviewHandoffEnvelope } from '../docs/orchestrator-wake-filter.mjs';
 import {
   evaluateHandoffIdentityAdmission,
   parsePrNumberFromPrUrl,
@@ -15,6 +15,7 @@ import {
   HANDOFF_RECEIPT_TO_RUN_MAX_MS,
   HANDOFF_WAKE_KIND,
   isReadyForReviewHandoffEnvelope,
+  isQualifiedReviewPendingInfoHandoffEnvelope,
   seedHandoffAdmissionRecord,
   seedPendingAdmissionRetry,
   selectHandoffAdmissionReplay,
@@ -52,6 +53,61 @@ type HandoffFixture = {
   requiredCheckNamesByPr?: Record<string, string[]>;
   cycleState?: Record<string, unknown>;
   expect?: Record<string, unknown>;
+};
+
+
+const reviewPendingGreenFixture: HandoffFixture = {
+  wakeKind: 'ready_for_review',
+  sessionId: 'opk-167',
+  prNumber: 389,
+  admittedBaseRef: 'main',
+  openPrs: [
+    {
+      number: 389,
+      headRefOid: 'pending389',
+      headCommittedAt: '2026-06-21T15:40:00.000Z',
+      baseRefName: 'main',
+    },
+  ],
+  reviewRuns: [],
+  sessions: [
+    {
+      name: 'opk-167',
+      role: 'worker',
+      prNumber: 389,
+      status: 'ready_for_review',
+      reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-21T15:46:00.000Z' }],
+    },
+  ],
+  ciChecksByPr: {
+    '389': [
+      { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+      { name: 'PR scope guard', state: 'SUCCESS' },
+      { name: 'Run pack contract tests', state: 'SUCCESS' },
+      { name: 'Self-architect lint', state: 'SUCCESS' },
+    ],
+  },
+  requiredCheckNamesByPr: {
+    '389': [
+      'Verify orchestrator-pack structure',
+      'PR scope guard',
+      'Run pack contract tests',
+      'Self-architect lint',
+    ],
+  },
+};
+
+const reviewPendingNotReadyFixture: HandoffFixture = {
+  ...reviewPendingGreenFixture,
+  sessions: [
+    {
+      name: 'opk-167',
+      role: 'worker',
+      prNumber: 389,
+      status: 'working',
+      reports: [{ reportState: 'working', reportedAt: '2026-06-21T15:46:00.000Z' }],
+    },
+  ],
 };
 
 function loadFixture(name: string): HandoffFixture {
@@ -113,6 +169,7 @@ describe('handoff envelope admission (Issue #381)', () => {
     const runCreatedMs = receiptMs + 2_000;
     const result = evaluateHandoffFixture(fixture, runCreatedMs);
     expect(result.triggerReviewRun).toBe(true);
+    expect(result.planned?.startReason).toBe('handoff_wake');
     expect(result.withinLatencyBound).toBe(true);
     expect(result.processingMs).toBeLessThanOrEqual(HANDOFF_RECEIPT_TO_RUN_MAX_MS);
     expect(result.processingMs).toBeLessThan(10 * 60 * 1000);
@@ -488,6 +545,134 @@ describe('handoff envelope admission (Issue #381)', () => {
   });
 });
 
+
+
+
+describe('review.pending info handoff admission (Issue #390)', () => {
+  function loadReviewPendingCapture() {
+    return JSON.parse(
+      readFileSync(path.join(captureDir, 'review_pending.raw.json'), 'utf8'),
+    );
+  }
+
+  function reviewPendingAdmissionContext(fixture?: HandoffFixture) {
+    return {
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedSessions: fixture?.sessions ?? [],
+      openPrs: fixture?.openPrs ?? [],
+    };
+  }
+
+  it('classifies capture-backed review_pending envelope', () => {
+    const capture = loadReviewPendingCapture();
+    expect(isQualifiedReviewPendingInfoHandoffEnvelope(capture, capture.event)).toBe(true);
+    expect(isReadyForReviewHandoffEnvelope(capture, capture.event)).toBe(true);
+    expect(probeReadyForReviewHandoffEnvelope(capture)).toEqual({ handoffEnvelope: true });
+  });
+
+  it('live envelope admission promotes info review.pending through handoff evaluate', () => {
+    const capture = loadReviewPendingCapture();
+    const fixture = reviewPendingGreenFixture;
+    const wake = evaluateWakePayload(capture, reviewPendingAdmissionContext(fixture));
+    expect(wake.ok).toBe(true);
+    if (wake.ok) {
+      expect(wake.wakeKind).toBe('ready_for_review');
+      expect(wake.wakeKind).not.toBe('review.needs_triage');
+      expect(wake.handoffAdmission?.promotedFromInfoPriority).toBe(true);
+      expect(wake.handoffAdmission?.auditLine).toContain('outcome=promoted');
+    }
+  });
+
+  it('#195-ready recurrence reaches handoff_wake within receipt bound', () => {
+    const fixture = reviewPendingGreenFixture;
+    const receiptMs = 1_700_000_000_000;
+    const runCreatedMs = receiptMs + 2_000;
+    const result = evaluateHandoffFixture(fixture, runCreatedMs);
+    expect(result.triggerReviewRun).toBe(true);
+    expect(result.withinLatencyBound).toBe(true);
+    expect(result.processingMs).toBeLessThanOrEqual(HANDOFF_RECEIPT_TO_RUN_MAX_MS);
+  });
+
+  it('#195-not-ready defer is auditable and not info_priority drop', () => {
+    const capture = loadReviewPendingCapture();
+    const fixture = reviewPendingNotReadyFixture;
+    const wake = evaluateWakePayload(capture, reviewPendingAdmissionContext(fixture));
+    expect(wake.ok).toBe(true);
+    if (wake.ok) {
+      expect(wake.wakeKind).toBe('ready_for_review');
+    }
+
+    const result = evaluateHandoffFixture(fixture);
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).not.toBe('info_priority');
+  });
+
+  it('info-storm negative control without handoff semantic stays dropped', () => {
+    const result = evaluateWakePayload(
+      {
+        type: 'notification',
+        event: {
+          type: 'session.working',
+          priority: 'info',
+          sessionId: 'opk-1',
+          projectId: 'orchestrator-pack',
+          data: {
+            schemaVersion: 3,
+            semanticType: 'session.working',
+            subject: { session: { id: 'opk-1', projectId: 'orchestrator-pack' } },
+          },
+        },
+      },
+      reviewPendingAdmissionContext(),
+    );
+    expect(result).toEqual({ ok: false, reason: 'info_priority', detail: 'info' });
+  });
+
+  it('discriminator negative controls fail qualification independently', () => {
+    const capture = loadReviewPendingCapture();
+    const variants = [
+      { mutate: (event: Record<string, unknown>) => { event.type = 'session.working'; } },
+      { mutate: (event: Record<string, unknown>) => {
+        const data = event.data as Record<string, unknown>;
+        data.semanticType = 'ready_for_review';
+      } },
+      { mutate: (event: Record<string, unknown>) => { event.priority = 'action'; } },
+      { mutate: (event: Record<string, unknown>) => {
+        const data = event.data as Record<string, unknown>;
+        data.schemaVersion = 2;
+      } },
+    ];
+    for (const variant of variants) {
+      const body = structuredClone(capture);
+      variant.mutate(body.event);
+      expect(isQualifiedReviewPendingInfoHandoffEnvelope(body, body.event)).toBe(false);
+      const wake = evaluateWakePayload(body, reviewPendingAdmissionContext());
+      if (body.event.priority === 'action' && body.event.type === 'review.pending') {
+        expect(wake.ok).toBe(true);
+        if (wake.ok) {
+          expect(wake.wakeKind).toBe('review.needs_triage');
+        }
+      } else if (body.event.priority === 'info') {
+        expect(wake.ok).toBe(false);
+        if (!wake.ok) {
+          expect(wake.reason).toBe('info_priority');
+        }
+      }
+    }
+  });
+
+  it('manifest honesty: review_pending representative, ready_for_review webhook not', () => {
+    const reviewPendingProv = JSON.parse(
+      readFileSync(path.join(captureDir, 'review_pending.provenance.json'), 'utf8'),
+    );
+    const readyForReviewProv = JSON.parse(
+      readFileSync(path.join(captureDir, 'ready_for_review.provenance.json'), 'utf8'),
+    );
+    expect(reviewPendingProv.representative).toBe(true);
+    expect(readyForReviewProv.representative).toBe(false);
+  });
+});
 
 describe('parseSupervisedRepoSlugFromGitRemote', () => {
   it('preserves dots in repository names and strips optional .git suffix', () => {

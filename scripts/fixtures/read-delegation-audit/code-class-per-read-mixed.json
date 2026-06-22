@@ -26,9 +26,10 @@
   ],
   "expect": {
     "triggerFired": true,
-    "excludedFromDenominator": false,
-    "flagged": true,
-    "inDenominator": true,
-    "codeClass": false
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "codeClass": false,
+    "advisory": true
   }
 }

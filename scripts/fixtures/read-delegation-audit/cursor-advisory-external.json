@@ -1,0 +1,27 @@
+{
+  "description": "Cursor >400-line external corpus is advisory, not flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-external",
+      "inboundRequestId": "req-1",
+      "reads": [
+        {
+          "path": "fetched/page.md",
+          "lines": 450,
+          "kind": "external"
+        }
+      ],
+      "edits": [],
+      "statusText": "cursor advisory external fetch without delegation"
+    }
+  ],
+  "expect": {
+    "fixtureNote": "cursor-advisory-external",
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true
+  }
+}

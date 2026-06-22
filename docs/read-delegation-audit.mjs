@@ -23,6 +23,7 @@ import {
   classifyUnitReads,
   delegableReadsFromClassifications,
   indexServedExcludedVolume,
+  isKnownCursorSurface,
   loadClassifierManifest,
   READ_CLASSIFICATIONS,
 } from './read-delegation-classifier.mjs';
@@ -38,7 +39,14 @@ export const T2_MIN_FILES = 3;
 
 export const SURFACES = ['cursor', 'claude'];
 
-export const AUDIT_SCHEMA_VERSION = 3;
+export const AUDIT_SCHEMA_VERSION = 4;
+
+/** Cursor-seat advisory classifications (Issue #359). */
+export const CURSOR_ADVISORY_CLASSIFICATIONS = {
+  ADVISORY: 'advisory',
+  ADVISORY_SATISFIED: 'advisory-satisfied',
+  SHELL_READ_AROUND: 'shell-read-around',
+};
 export const REVIEW_HOOK_CAPTURE_BRANCHES = {
   WORLD_A_NO_REVIEW_HOOK: 'world-a-no-review-hook',
   WORLD_B_HOOK_PRESENT: 'world-b-hook-present',
@@ -135,7 +143,10 @@ const EDIT_TOOL_NAMES = new Set([
 const SHELL_TOOL_NAMES = new Set(['Shell', 'shell', 'run_terminal_cmd', 'Bash', 'bash']);
 
 const DIFF_LOG_SHELL_PATTERN =
-  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b|\btail\b)/i;
+  /\b(git\s+(diff|log|show)\b|git\s+diff\b|\bdiff\b[^|\n]{0,40}\b|journalctl\b)/i;
+
+const SHELL_CHUNK_READ_PATTERN = /\b(head|tail|cat|sed|awk|grep|wc)\b/i;
+const SHELL_SCRIPT_READ_PATTERN = /\b(?:open|read|Path)\s*\(/i;
 
 const LOCK_RETRY_MS = 5;
 const LOCK_MAX_ATTEMPTS = 200;
@@ -171,6 +182,7 @@ export function normalizeReads(value) {
       readDiscriminator:
         typeof row.readDiscriminator === 'string' ? row.readDiscriminator : undefined,
       canonicalPath: typeof row.canonicalPath === 'string' ? row.canonicalPath : undefined,
+      targetedRead: row.targetedRead === true,
     };
   });
 }
@@ -341,6 +353,216 @@ export function hasMachineObservedDelegation(unit) {
   return commands.some((command) => matchesCoworkerAskCommand(String(command ?? '')));
 }
 
+
+
+/**
+ * @param {string} surface
+ */
+export function isCursorSeat(surface) {
+  const { manifest } = loadClassifierManifest();
+  return isKnownCursorSurface(surface, manifest);
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadClassificationResult[]} results
+ * @param {import('./read-delegation-audit.d.mts').SessionContext} session
+ */
+export function applyCursorAdvisoryClassifications(results, session) {
+  if (!isCursorSeat(session.surface)) {
+    return results;
+  }
+  return results.map((row) => {
+    if (
+      row.classification === READ_CLASSIFICATIONS.OUT_OF_INDEX &&
+      row.read.kind !== 'diff'
+    ) {
+      return {
+        ...row,
+        classification: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+        delegable: false,
+        excludedFromDenominator: true,
+        exclusionRecord: {
+          ...(row.exclusionRecord ?? {}),
+          advisoryCarveOut: true,
+          priorClassification: READ_CLASSIFICATIONS.OUT_OF_INDEX,
+        },
+      };
+    }
+    return row;
+  });
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadClassificationResult[]} classifications
+ */
+export function advisoryReadsFromClassifications(classifications) {
+  return classifications
+    .filter((row) => row.classification === CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY)
+    .map((row) => row.read);
+}
+
+/**
+ * @param {string} command
+ */
+export function isShellReadAroundCommand(command) {
+  const trimmed = String(command ?? '').trim();
+  if (!trimmed || matchesCoworkerAskCommand(trimmed)) {
+    return false;
+  }
+  if (/\bgit\s+(diff|log|show)\b/i.test(trimmed)) {
+    return false;
+  }
+  if (SHELL_CHUNK_READ_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (/\b(?:python\d*|perl)\b/i.test(trimmed)) {
+    return SHELL_SCRIPT_READ_PATTERN.test(trimmed);
+  }
+  return false;
+}
+
+/**
+ * @param {string | undefined} filePath
+ */
+function normalizePathForShellMatch(filePath) {
+  return String(filePath ?? '').replace(/\\/g, '/').trim();
+}
+
+/**
+ * @param {string} command
+ * @param {string | undefined} filePath
+ */
+function commandReferencesPath(command, filePath) {
+  const normalizedPath = normalizePathForShellMatch(filePath);
+  if (!normalizedPath) {
+    return false;
+  }
+  const commandText = String(command ?? '');
+  if (commandText.includes(normalizedPath)) {
+    return true;
+  }
+  const baseName = normalizedPath.split('/').pop();
+  return Boolean(baseName && baseName.length > 1 && commandText.includes(baseName));
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+function rawReadsForAdvisoryClassifications(unit, advisoryReads) {
+  const rawReads = normalizeReads(unit.reads);
+  const used = new Set();
+  return advisoryReads.map((advisoryRead) => {
+    const matchIndex = rawReads.findIndex((raw, index) => {
+      if (used.has(index)) {
+        return false;
+      }
+      if (
+        advisoryRead.readDiscriminator &&
+        raw.readDiscriminator &&
+        raw.readDiscriminator === advisoryRead.readDiscriminator
+      ) {
+        return true;
+      }
+      const pathMatch =
+        normalizePathForShellMatch(raw.path) === normalizePathForShellMatch(advisoryRead.path);
+      const linesMatch = (raw.lines ?? 0) === (advisoryRead.lines ?? 0);
+      const kindMatch = (raw.kind ?? 'file') === (advisoryRead.kind ?? 'file');
+      return pathMatch && linesMatch && kindMatch;
+    });
+    if (matchIndex >= 0) {
+      used.add(matchIndex);
+      return rawReads[matchIndex];
+    }
+    return { ...advisoryRead, targetedRead: false };
+  });
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+export function hasShellReadAround(unit, advisoryReads) {
+  const reads = Array.isArray(advisoryReads) ? advisoryReads : [];
+  if (reads.length === 0) {
+    return false;
+  }
+  const advisoryPaths = reads
+    .map((read) => read.path)
+    .filter((filePath) => typeof filePath === 'string' && filePath.trim());
+  if (advisoryPaths.length === 0) {
+    return false;
+  }
+  const commands = Array.isArray(unit.shellCommands) ? unit.shellCommands : [];
+  return commands.some((command) => {
+    const text = String(command ?? '');
+    if (!isShellReadAroundCommand(text)) {
+      return false;
+    }
+    return advisoryPaths.some((filePath) => commandReferencesPath(text, filePath));
+  });
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} reads
+ */
+export function hasTargetedRead(reads) {
+  const list = Array.isArray(reads) ? reads : [];
+  if (list.length === 0) {
+    return false;
+  }
+  return list.every((read) => read.targetedRead === true);
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+export function resolveCursorAdvisoryOutcome(unit, advisoryReads) {
+  if (hasMachineObservedDelegation(unit)) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+      advisorySatisfied: true,
+      shellReadAround: false,
+    };
+  }
+  if (hasTargetedRead(rawReadsForAdvisoryClassifications(unit, advisoryReads))) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+      advisorySatisfied: true,
+      shellReadAround: false,
+    };
+  }
+  if (hasShellReadAround(unit, advisoryReads)) {
+    return {
+      advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
+      advisorySatisfied: false,
+      shellReadAround: true,
+    };
+  }
+  return {
+    advisoryOutcome: CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY,
+    advisorySatisfied: false,
+    shellReadAround: false,
+  };
+}
+
+/**
+ * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
+ * @param {import('./read-delegation-audit.d.mts').ReadEntry[]} advisoryReads
+ */
+function buildCursorAdvisoryVerdictFields(unit, advisoryReads) {
+  const advisoryExcludedLines = advisoryReads.reduce(
+    (sum, read) => sum + (read.lines ?? 0),
+    0,
+  );
+  return {
+    advisory: true,
+    advisoryExcludedLines,
+    ...resolveCursorAdvisoryOutcome(unit, advisoryReads),
+  };
+}
+
 /**
  * @param {import('./read-delegation-audit.d.mts').WorkUnit} unit
  */
@@ -416,27 +638,56 @@ export function auditWorkUnit(unit, session) {
     });
   }
 
-  const delegableReads = delegableReadsFromClassifications(classification.results);
+  const remappedResults = applyCursorAdvisoryClassifications(
+    classification.results,
+    session,
+  );
+  const delegableReads = delegableReadsFromClassifications(remappedResults);
+  const advisoryReads = advisoryReadsFromClassifications(remappedResults);
   const trigger = didAskTriggerFire(delegableReads);
+  const advisoryTrigger = didAskTriggerFire(advisoryReads);
   const rawTrigger = didAskTriggerFire(reads);
-  const indexServedExcludedLines = indexServedExcludedVolume(classification.results);
+  const indexServedExcludedLines = indexServedExcludedVolume(remappedResults);
   const allReadsExcluded =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.excludedFromDenominator);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.excludedFromDenominator);
   const codeClass =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.CODE_CLASS);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.classification === READ_CLASSIFICATIONS.CODE_CLASS);
   const allIndexServed =
-    classification.results.length > 0 &&
-    classification.results.every((row) => row.classification === READ_CLASSIFICATIONS.INDEX_SERVED);
+    remappedResults.length > 0 &&
+    remappedResults.every((row) => row.classification === READ_CLASSIFICATIONS.INDEX_SERVED);
   const excludedFromDenominator =
     allReadsExcluded && rawTrigger.rawFired && !trigger.fired;
 
   if (!trigger.fired || excludedFromDenominator) {
+    if (isCursorSeat(session.surface) && advisoryTrigger.fired) {
+      const machineObservedDelegation = hasMachineObservedDelegation(unit);
+      return buildAuditVerdict(unit, session, {
+        reads,
+        trigger: advisoryTrigger,
+        triggerFired: advisoryTrigger.fired,
+        excludedFromDenominator: true,
+        inDenominator: false,
+        flagged: false,
+        reviewerPath: false,
+        reviewSignalState,
+        codeClass,
+        allIndexServed,
+        readClassifications: remappedResults,
+        indexServedExcludedLines,
+        machineObservedDelegation,
+        ...buildCursorAdvisoryVerdictFields(unit, advisoryReads),
+      });
+    }
+
     return buildAuditVerdict(unit, session, {
       reads,
       trigger,
-      triggerFired: excludedFromDenominator ? rawTrigger.rawFired : trigger.fired,
+      triggerFired:
+        advisoryTrigger.fired ||
+        trigger.fired ||
+        (allIndexServed && rawTrigger.rawFired),
       excludedFromDenominator,
       inDenominator: false,
       flagged: false,
@@ -444,7 +695,7 @@ export function auditWorkUnit(unit, session) {
       reviewSignalState,
       codeClass,
       allIndexServed,
-      readClassifications: classification.results,
+      readClassifications: remappedResults,
       indexServedExcludedLines,
     });
   }
@@ -455,6 +706,10 @@ export function auditWorkUnit(unit, session) {
   const editExempt = hasEditInUnit(unit);
 
   const flagged = !machineObservedDelegation && !editExempt && !exceptedReason;
+  const advisoryFields =
+    isCursorSeat(session.surface) && advisoryTrigger.fired
+      ? buildCursorAdvisoryVerdictFields(unit, advisoryReads)
+      : {};
 
   return buildAuditVerdict(unit, session, {
     reads,
@@ -467,12 +722,13 @@ export function auditWorkUnit(unit, session) {
     reviewSignalState,
     codeClass,
     allIndexServed,
-    readClassifications: classification.results,
+    readClassifications: remappedResults,
     indexServedExcludedLines,
     selfAttestedDelegation,
     machineObservedDelegation,
     exceptedReason,
     editExempt,
+    ...advisoryFields,
   });
 }
 
@@ -503,6 +759,11 @@ function buildAuditVerdict(unit, session, fields) {
     machineObservedDelegation: fields.machineObservedDelegation ?? false,
     exceptedReason: fields.exceptedReason ?? false,
     editExempt: fields.editExempt ?? false,
+    advisory: fields.advisory === true,
+    advisoryOutcome: fields.advisoryOutcome,
+    advisorySatisfied: fields.advisorySatisfied === true,
+    shellReadAround: fields.shellReadAround === true,
+    advisoryExcludedLines: fields.advisoryExcludedLines ?? 0,
     blockingFailure: fields.blockingFailure,
   };
 }
@@ -606,6 +867,19 @@ export function summarizeAuditVerdicts(verdicts) {
     (sum, verdict) => sum + (verdict.indexServedExcludedLines ?? 0),
     0,
   );
+  const advisoryUnits = verdicts.filter((verdict) => verdict.advisory === true);
+  const advisorySatisfiedUnits = advisoryUnits.filter(
+    (verdict) =>
+      verdict.advisoryOutcome === CURSOR_ADVISORY_CLASSIFICATIONS.ADVISORY_SATISFIED,
+  );
+  const shellReadAroundUnits = advisoryUnits.filter(
+    (verdict) =>
+      verdict.advisoryOutcome === CURSOR_ADVISORY_CLASSIFICATIONS.SHELL_READ_AROUND,
+  );
+  const advisoryExcludedLines = advisoryUnits.reduce(
+    (sum, verdict) => sum + (verdict.advisoryExcludedLines ?? 0),
+    0,
+  );
 
   const denominatorCause = computeDenominatorCause(verdicts);
 
@@ -614,6 +888,10 @@ export function summarizeAuditVerdicts(verdicts) {
     flaggedUnits: flagged.length,
     flaggedReadLines,
     indexServedExcludedLines,
+    advisoryUnits: advisoryUnits.length,
+    advisorySatisfiedUnits: advisorySatisfiedUnits.length,
+    shellReadAroundUnits: shellReadAroundUnits.length,
+    advisoryExcludedLines,
     residualNonCompliance:
       denominator.length === 0 ? 0 : flagged.length / denominator.length,
     denominatorCause,
@@ -791,6 +1069,224 @@ export function measureShellDiffLogLines(command, capturedOutput) {
   return text === '' ? 0 : countTextLines(text);
 }
 
+const SHELL_COMMAND_WORDS = new Set([
+  'head',
+  'tail',
+  'cat',
+  'sed',
+  'awk',
+  'grep',
+  'wc',
+  'python',
+  'python3',
+  'perl',
+  '-n',
+  '-c',
+]);
+
+/**
+ * @param {string} token
+ */
+function looksLikeShellCommandPath(token) {
+  return token.includes('/') || /\.[a-z0-9]{1,8}$/i.test(token);
+}
+
+/**
+ * @param {string} command
+ */
+function extractNestedQuotedPath(candidate) {
+  const openMatch = String(candidate ?? '').match(/\bopen\s*\(\s*['"]([^'"]+)['"]/);
+  if (openMatch && looksLikeShellCommandPath(openMatch[1])) {
+    return openMatch[1];
+  }
+  const pathMatch = String(candidate ?? '').match(/\bPath\s*\(\s*['"]([^'"]+)['"]/);
+  if (pathMatch && looksLikeShellCommandPath(pathMatch[1])) {
+    return pathMatch[1];
+  }
+  return undefined;
+}
+
+/**
+ * @param {string} command
+ */
+function appendShellCommandPath(paths, seen, candidate) {
+  const nestedPath = extractNestedQuotedPath(candidate);
+  if (nestedPath) {
+    const normalized = normalizePathForShellMatch(nestedPath);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      paths.push(nestedPath);
+    }
+    return;
+  }
+  if (!looksLikeShellCommandPath(candidate)) {
+    return;
+  }
+  const normalized = normalizePathForShellMatch(candidate);
+  if (normalized && !seen.has(normalized)) {
+    seen.add(normalized);
+    paths.push(candidate);
+  }
+}
+
+export function extractShellCommandPaths(command) {
+  const trimmed = String(command ?? '').trim();
+  const nestedFromWhole = extractNestedQuotedPath(trimmed);
+  if (nestedFromWhole) {
+    return [nestedFromWhole];
+  }
+
+  /** @type {string[]} */
+  const paths = [];
+  const seen = new Set();
+  const quotedMatches = [...trimmed.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]);
+  for (const candidate of quotedMatches) {
+    appendShellCommandPath(paths, seen, candidate);
+  }
+
+  const tokens = trimmed.split(/\s+/);
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/^['"]|['"]$/g, '');
+    if (!token || token.startsWith('-')) {
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      continue;
+    }
+    if (SHELL_COMMAND_WORDS.has(token.toLowerCase())) {
+      continue;
+    }
+    appendShellCommandPath(paths, seen, token);
+  }
+
+  return paths;
+}
+
+export function extractShellCommandPath(command) {
+  const paths = extractShellCommandPaths(command);
+  return paths.length > 0 ? paths[paths.length - 1] : undefined;
+}
+
+/**
+ * @param {string} filePath
+ */
+function countFileLinesFromDiskSafe(filePath) {
+  try {
+    if (!existsSync(filePath)) {
+      return 0;
+    }
+    return countFileLinesFromDisk(filePath);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @param {string[]} paths
+ * @param {number} totalLines
+ */
+function distributeMultiFileShellLines(paths, totalLines) {
+  const diskLines = paths.map((filePath) => countFileLinesFromDiskSafe(filePath));
+  const diskSum = diskLines.reduce((sum, lines) => sum + lines, 0);
+  if (diskSum > 0) {
+    if (diskSum === totalLines) {
+      return diskLines;
+    }
+    /** @type {number[]} */
+    const scaled = diskLines.map((lines) =>
+      Math.max(0, Math.round((totalLines * lines) / diskSum)),
+    );
+    const scaledSum = scaled.reduce((sum, lines) => sum + lines, 0);
+    if (scaledSum !== totalLines && scaled.length > 0) {
+      scaled[scaled.length - 1] += totalLines - scaledSum;
+    }
+    return scaled;
+  }
+
+  const base = Math.floor(totalLines / paths.length);
+  const remainder = totalLines % paths.length;
+  return paths.map((_, index) => base + (index < remainder ? 1 : 0));
+}
+
+/**
+ * @param {string} command
+ * @param {unknown} [capturedOutput]
+ * @param {string} [filePath]
+ */
+export function inferShellReadAroundLines(command, capturedOutput, filePath) {
+  if (capturedOutput !== undefined && capturedOutput !== null) {
+    const text = extractToolResultText(capturedOutput);
+    if (text !== '') {
+      return countTextLines(text);
+    }
+  }
+
+  const trimmed = String(command ?? '').trim();
+  const headTailExplicit = trimmed.match(/\b(head|tail)\b\s+-n\s+(\d+)\b/i);
+  if (headTailExplicit) {
+    return Number(headTailExplicit[2]);
+  }
+  if (/\b(?:head|tail)\b/i.test(trimmed)) {
+    return 10;
+  }
+
+  const sedRange = trimmed.match(/\bsed\s+-n\s+['"]?(\d+),(\d+)p['"]?/i);
+  if (sedRange) {
+    return Number(sedRange[2]) - Number(sedRange[1]) + 1;
+  }
+
+  return 0;
+}
+
+/**
+ * @param {string} command
+ * @param {string} filePath
+ */
+function inferShellReadAroundReadKind(command, filePath) {
+  const trimmed = String(command ?? '').trim();
+  if (/\btail\b/i.test(trimmed)) {
+    return 'log';
+  }
+  if (/\.log$/i.test(filePath)) {
+    return 'log';
+  }
+  return 'file';
+}
+
+/**
+ * @param {string} command
+ * @param {unknown} [capturedOutput]
+ */
+export function inferShellReadAroundReads(command, capturedOutput) {
+  if (!isShellReadAroundCommand(command)) {
+    return [];
+  }
+  const paths = extractShellCommandPaths(command);
+  if (paths.length === 0) {
+    return [];
+  }
+  const totalLines = inferShellReadAroundLines(command, capturedOutput, paths[0]);
+  if (totalLines <= 0) {
+    return [];
+  }
+  const perFileLines =
+    paths.length === 1
+      ? [totalLines]
+      : distributeMultiFileShellLines(paths, totalLines);
+  return paths
+    .map((filePath, index) => ({
+      path: filePath,
+      lines: perFileLines[index] ?? 0,
+      readKind: inferShellReadAroundReadKind(command, filePath),
+    }))
+    .filter((read) => read.lines > 0);
+}
+
+export function inferShellReadAroundRead(command, capturedOutput) {
+  const reads = inferShellReadAroundReads(command, capturedOutput);
+  return reads.length > 0 ? reads[0] : null;
+}
+
 /**
  * @param {string} transcriptPath
  */
@@ -936,12 +1432,14 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
 
   if (READ_TOOL_NAMES.has(name)) {
     const path = resolveReadToolPath(input);
+    const targetedRead = input.offset !== undefined || input.limit !== undefined;
     events.push({
       kind: 'read',
       inboundRequestId,
       path,
       lines: measureReadToolLines(input, options.toolOutput),
       readKind: 'file',
+      targetedRead,
     });
   }
 
@@ -960,6 +1458,16 @@ export function toolUseToAuditEvents(toolName, input, inboundRequestId, options 
     events.push({ kind: 'shell', inboundRequestId, command });
     if (matchesCoworkerAskCommand(command)) {
       events.push({ kind: 'coworker_ask', inboundRequestId, profile: 'code' });
+    }
+    const readArounds = inferShellReadAroundReads(command, options.shellOutput);
+    for (const readAround of readArounds) {
+      events.push({
+        kind: 'read',
+        inboundRequestId,
+        path: readAround.path,
+        lines: readAround.lines,
+        readKind: readAround.readKind,
+      });
     }
     const diffLogLines = measureShellDiffLogLines(command, options.shellOutput);
     if (diffLogLines > 0) {
@@ -1327,6 +1835,11 @@ export function loadMetricWindowSummary(artifactPath, options = {}) {
       delegableTriggerUnits: 0,
       flaggedUnits: 0,
       flaggedReadLines: 0,
+      indexServedExcludedLines: 0,
+      advisoryUnits: 0,
+      advisorySatisfiedUnits: 0,
+      shellReadAroundUnits: 0,
+      advisoryExcludedLines: 0,
       residualNonCompliance: 0,
       auditErrors: 0,
       missingWindows: 0,

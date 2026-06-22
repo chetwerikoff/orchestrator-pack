@@ -1,0 +1,29 @@
+{
+  "description": "Cursor capture-backed tracked non-code bulk >400 lines is advisory, not flagged",
+  "surface": "cursor",
+  "workUnits": [
+    {
+      "key": "unit-advisory-md",
+      "inboundRequestId": "req-1",
+      "useCaptureMetadata": true,
+      "reads": [
+        {
+          "path": "docs/issues_drafts/114-cursor-seat-read-delegation-advisory.md",
+          "lines": 450,
+          "kind": "file",
+          "readDiscriminator": "0"
+        }
+      ],
+      "edits": [],
+      "statusText": "inline read on advisory corpus"
+    }
+  ],
+  "expect": {
+    "triggerFired": true,
+    "excludedFromDenominator": true,
+    "flagged": false,
+    "inDenominator": false,
+    "advisory": true,
+    "advisoryOutcome": "advisory"
+  }
+}

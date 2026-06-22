@@ -1430,3 +1430,28 @@ Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml
    - Land an **authorization-only** admin commit on `main` whose record sets `baseSha=P` (the pre-land main tip — knowable before the auth commit) **or** `baseSha=B` after the land, plus `headSha=H` and the scoped path/file sets.
    - Rebase/update the path-addition PR onto the new `main` tip only after updating/re-issuing the authorization so `baseSha` still matches the merge base or its parent binding and `headSha` matches the rebased head.
 
+
+## Operator-only merge policy (Issue #386)
+
+Issue #386 tightens the existing NO MERGE BY ORCHESTRATOR clause in
+`agent-orchestrator.yaml.example` and adds a worker-facing operator-only-merge
+rule in `prompts/agent_rules.md`. Merge is operator-only; no AO-managed agent
+performs or directs a PR merge. The approved-and-green / `merge.ready` completion
+wake is an operator-addressed ready-for-human-merge hand-off, not a cue to merge.
+
+**Operator adoption** — after merge:
+
+1. Merge the updated **NO MERGE BY ORCHESTRATOR** prose from
+   `agent-orchestrator.yaml.example` into the live `orchestratorRules` block in
+   `agent-orchestrator.yaml`.
+2. Pull the merged repo so live `agentRulesFile` loads the updated
+   `prompts/agent_rules.md` (git-tracked — no manual copy if the path is already
+   wired).
+3. Restart AO from the operator terminal: `ao stop` then `ao start` (managed
+   sessions must not run these commands).
+4. Verify the orchestrator forwards an approved-and-green head as a
+   ready-for-human-merge hand-off and does not send proceed-to-merge instructions
+   to workers.
+
+Mechanical `gh pr merge` deny (#324) and send-path merge-instruction reject
+(#384) remain separate follow-ups; this issue is prose-only policy.
