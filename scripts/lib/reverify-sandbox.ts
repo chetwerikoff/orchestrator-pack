@@ -101,26 +101,6 @@ function captureSandboxDirectoryFingerprint(root: string): string {
   return captureDirectoryFingerprint(root, { skipNodeModules: true });
 }
 
-function captureTrustedNodeModulesFingerprint(dependencyRoot: string): string {
-  const nodeModules = path.join(dependencyRoot, 'node_modules');
-  if (!existsSync(nodeModules)) {
-    return '';
-  }
-  return captureDirectoryFingerprint(nodeModules, { skipNodeModules: false });
-}
-
-function guardTrustedDependencyPostcondition(
-  dependencyRoot: string,
-  beforeFingerprint: string,
-  result: SpawnSyncReturns<string>,
-): SpawnSyncReturns<string> {
-  const afterFingerprint = captureTrustedNodeModulesFingerprint(dependencyRoot);
-  if (beforeFingerprint !== afterFingerprint) {
-    return postconditionViolationResult();
-  }
-  return result;
-}
-
 function guardSandboxPostcondition(
   disposable: string,
   beforeFingerprint: string,
@@ -460,31 +440,6 @@ function remapResolvedCommandForDisposable(
   };
 }
 
-function spawnTrustedBaseDirect(
-  resolved: ResolvedAllowlistedCommand,
-  disposable: string,
-  originalCwd: string,
-  options: {
-    timeoutMs: number;
-    env: NodeJS.ProcessEnv;
-    dependencyRoot: string;
-  },
-): SpawnSyncReturns<string> {
-  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable, {
-    preserveDependencyModulePaths: true,
-    dependencyRoot: options.dependencyRoot,
-  });
-  const externalBinDir = path.join(options.dependencyRoot, 'node_modules', '.bin');
-  const externalBinDirs = existsSync(externalBinDir) ? [externalBinDir] : [];
-  return spawnDirect(sandboxResolved, {
-    cwd: disposable,
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    env: withSandboxBinDir(options.env, disposable, { externalBinDirs }),
-    shell: false,
-  });
-}
-
 function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -534,21 +489,7 @@ function spawnTrustedBaseIsolated(
       }
     }
 
-    const beforeDependencyFingerprint = captureTrustedNodeModulesFingerprint(options.dependencyRoot);
-    const directResult = spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
-      timeoutMs: options.timeoutMs,
-      env,
-      dependencyRoot: options.dependencyRoot,
-    });
-    return guardSandboxPostcondition(
-      disposable,
-      beforeSandboxFingerprint,
-      guardTrustedDependencyPostcondition(
-        options.dependencyRoot,
-        beforeDependencyFingerprint,
-        directResult,
-      ),
-    );
+    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   } finally {
     rmSync(disposable, { recursive: true, force: true });
   }

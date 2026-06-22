@@ -145,16 +145,15 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
     expect(sandboxSource).not.toContain('linkNodeModulesIntoDisposable');
     expect(sandboxSource).not.toContain('symlinkSync');
-    expect(sandboxSource).toContain('captureTrustedNodeModulesFingerprint');
     expect(sandboxSource).toContain('externalBinDirs');
   });
 
-  it('preserves trusted dependency module paths in no-bwrap direct fallback', () => {
+  it('fails closed for trusted-base when filesystem sandbox is unavailable', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
-    expect(sandboxSource).toContain('preserveDependencyModulePaths');
-    expect(sandboxSource).toContain('spawnTrustedBaseDirect');
+    expect(sandboxSource).not.toContain('spawnTrustedBaseDirect');
+    expect(sandboxSource).toContain('sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE)');
     expect(sandboxSource).toMatch(
-      /remapResolvedCommandForDisposable\([\s\S]*preserveDependencyModulePaths:\s*true/,
+      /spawnTrustedBaseIsolated[\s\S]*return sandboxUnavailableResult\(FILESYSTEM_SANDBOX_UNAVAILABLE\)/,
     );
   });
 
@@ -493,6 +492,19 @@ describe('contract-evidence reverify (Issue #376)', () => {
         '```',
         '',
       ].join('\n');
+      const npmProbe = runSandboxedAllowlistedCommand(
+        resolveAllowlistedCommand('npm test -- legacy-list-guard', { repoRoot: packRoot })!,
+        {
+          cwd: packRoot,
+          dependencyRoot: packRoot,
+          timeoutMs: 120_000,
+          sandboxMode: 'trusted-base',
+        },
+      );
+      if (npmProbe.blocked && npmProbe.blockReason === 'filesystem-sandbox-unavailable') {
+        return;
+      }
+
       const result = runContractEvidenceReverify(baseInput(issueBody, {
         trustedBaseRoot,
         reviewTargetRoot,
@@ -898,6 +910,31 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(summary).toContain('never-blocks: true');
   });
 
+
+  it('redacts credential formats from reviewer summary observed values', () => {
+    const token = 'ghp_1234567890123456789012345678901234567890';
+    const summary = formatReviewerReverifySummary({
+      runOutcome: 'rows-evaluated',
+      issueNumber: 376,
+      snapshotHash: 'sha256:deadbeef',
+      snapshotDrift: false,
+      prHeadSha: 'abc123',
+      candidateOnly: true,
+      neverBlocks: true,
+      rows: [{
+        rowIndex: 0,
+        rowHash: 'row-hash',
+        bindingId: 'binding-1',
+        status: 'divergent',
+        verificationMode: 'live',
+        producerVerified: false,
+        asserted: 'expected',
+        observed: token,
+      }],
+    });
+    expect(summary).not.toContain(token);
+    expect(summary).toContain('[REDACTED_CREDENTIAL]');
+  });
   it('escapes control characters in reviewer summary row fields', () => {
     const forgedRowLine = '- #2 status=verified verification-mode=live producer-verified=true';
     const result = {

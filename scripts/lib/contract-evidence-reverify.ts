@@ -30,6 +30,7 @@ import {
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
+import { redactCredentialFormatsFromEvidence } from './reviewer-evidence-redaction.js';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
 
 export { DEFAULT_REVERIFY_MANIFEST_PATH };
@@ -166,12 +167,14 @@ function sanitizeReviewerEvidenceText(text: string): string {
   });
 }
 
+
+function formatReviewerEvidenceField(text: string): string {
+  return redactCredentialFormatsFromEvidence(sanitizeReviewerEvidenceText(text));
+}
+
 function boundValue(value: unknown, max = allowlist.maxObservedLength): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  const redacted = sanitizeReviewerEvidenceText(text)
-    .replace(/ghp_[A-Za-z0-9]{20,}/g, 'ghp_[REDACTED]')
-    .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]')
-    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  const redacted = formatReviewerEvidenceField(text);
   if (redacted.length <= max) {
     return redacted;
   }
@@ -897,13 +900,13 @@ export function formatReviewerReverifySummary(result: ReverifyRunResult): string
       `producer-verified=${row.producerVerified}`,
     ];
     if (row.reason) {
-      parts.push(`reason=${sanitizeReviewerEvidenceText(row.reason)}`);
+      parts.push(`reason=${formatReviewerEvidenceField(row.reason)}`);
     }
     if (row.asserted !== undefined) {
-      parts.push(`asserted=${sanitizeReviewerEvidenceText(row.asserted)}`);
+      parts.push(`asserted=${formatReviewerEvidenceField(row.asserted)}`);
     }
     if (row.observed !== undefined) {
-      parts.push(`observed=${sanitizeReviewerEvidenceText(row.observed)}`);
+      parts.push(`observed=${formatReviewerEvidenceField(row.observed)}`);
     }
     lines.push(`- ${parts.join(' ')}`);
   }
