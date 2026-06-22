@@ -42,6 +42,28 @@ function Get-ReviewReadyReportStateSeedTerminalClaimKeys {
     return @($keys)
 }
 
+function Get-SupervisedRepoSlugFromRepoRoot {
+    param([string]$RepoRoot)
+
+    if (-not $RepoRoot) { return '' }
+    Push-Location -LiteralPath $RepoRoot
+    try {
+        $remote = git remote get-url origin 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $remote) { return '' }
+        if ($remote -match 'github\.com[:/](?<owner>[^/\s#?]+)/(?<repo>[^/\s#?]+)') {
+            $repo = [string]$Matches['repo']
+            if ($repo.EndsWith('.git', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $repo = $repo.Substring(0, $repo.Length - 4)
+            }
+            return "$($Matches['owner'])/$repo".ToLower()
+        }
+        return ''
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-ReviewReadyReportStateSeedTick {
     param(
         [string]$StateRoot,
@@ -101,7 +123,12 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
 
     if (-not $SupervisedRepoSlug) {
-        $SupervisedRepoSlug = 'chetwerikoff/orchestrator-pack'
+        if ($FixturePayload -and $FixturePayload.supervisedRepoSlug) {
+            $SupervisedRepoSlug = [string]$FixturePayload.supervisedRepoSlug
+        }
+        elseif ($RepoRoot) {
+            $SupervisedRepoSlug = Get-SupervisedRepoSlugFromRepoRoot -RepoRoot $RepoRoot
+        }
     }
 
     $watchEntriesForPlan = @{}

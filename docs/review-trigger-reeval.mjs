@@ -203,9 +203,6 @@ const TERMINAL_WATCH_STATUSES = new Set(['triggered', 'discarded', 'expired']);
 export function resolveMergedWatchStatus(priorStatus, incomingStatus) {
   const prior = String(priorStatus ?? '').trim() || 'watching';
   const incoming = String(incomingStatus ?? '').trim() || 'watching';
-  if (incoming === 'watching' && prior === 'expired') {
-    return 'watching';
-  }
   if (TERMINAL_WATCH_STATUSES.has(incoming)) {
     return incoming;
   }
@@ -241,7 +238,9 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
     }
     const mergedStatus = resolveMergedWatchStatus(prior.status, entry.status);
     const reactivated =
-      String(prior.status ?? '').trim() === 'expired' && mergedStatus === 'watching';
+      String(prior.status ?? '').trim() === 'expired' &&
+      mergedStatus === 'watching' &&
+      String(entry.seedSource ?? '') === 'report_state_poll';
     merged[key] = {
       ...prior,
       ...entry,

@@ -535,7 +535,7 @@ describe('scenario matrix cells', () => {
     expect(mergedTriggered[key].status).toBe('triggered');
     expect(resolveMergedWatchStatus('watching', 'discarded')).toBe('discarded');
     expect(resolveMergedWatchStatus('watching', 'expired')).toBe('expired');
-    expect(resolveMergedWatchStatus('expired', 'watching')).toBe('watching');
+    expect(resolveMergedWatchStatus('expired', 'watching')).toBe('expired');
   });
 
   it('mergeWatchState keeps prior terminal status when concurrent seed is watching', () => {
@@ -608,6 +608,32 @@ describe('Issue #391 report-state seed integration', () => {
   });
 });
 
+
+  it('mergeWatchState does not reactivate expired wake_defer watches', () => {
+    const key = '235:abc235';
+    const expired = {
+      ...createWatchEntry({
+        prNumber: 235,
+        headSha: 'abc235',
+        sessionId: 'opk-28',
+        nowMs: 100,
+        seedSource: 'wake_defer',
+      }),
+      status: 'expired',
+    };
+    const incoming = {
+      ...createWatchEntry({
+        prNumber: 235,
+        headSha: 'abc235',
+        sessionId: 'opk-28',
+        nowMs: 200,
+        seedSource: 'wake_defer',
+      }),
+      status: 'watching',
+    };
+    const merged = mergeWatchState({ [key]: expired }, { [key]: incoming }, 200);
+    expect(merged[key]).toBeUndefined();
+  });
 
 describe('report-state watch reseed', () => {
   it('replaces expired report-state watch on reseed', () => {

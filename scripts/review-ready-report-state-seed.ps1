@@ -58,7 +58,8 @@ function Get-FixtureReviewReadyReportStateSeedPayload {
     foreach ($name in @(
             'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
             'bindingByKey', 'seededKeys', 'deferredScanKeys', 'handoffRecords',
-            'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand'
+            'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand',
+            'supervisedRepoSlug'
         )) {
         if ($null -ne $fixture.$name) {
             if ($name -in @(
