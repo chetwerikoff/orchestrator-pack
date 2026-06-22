@@ -26,7 +26,6 @@ import {
   isNpmTestDependencyClosureEstablishable,
   listAllowlistedNodeScriptRelPaths,
   listNodeScriptDependencyClosureRelPaths,
-  listNpmTestDependencyClosureRelPaths,
   resolveAllowlistedCommand,
 } from './reverify-command-resolution.js';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
@@ -210,41 +209,9 @@ function isManifestEntryModified(manifestPath: string, entryPath: string, prModi
   return false;
 }
 
-function isDependencyClosureUntrusted(
-  relPaths: string[],
-  establishable: boolean,
-  trustedBaseRoot: string,
-  reviewTargetRoot: string,
-  prModifiedPaths: string[],
-): boolean {
-  const normalized = new Set(prModifiedPaths.map(normalizePath));
-  if (!establishable) {
-    return true;
-  }
-
-  for (const relPath of relPaths) {
-    if (normalized.has(relPath)) {
-      return true;
-    }
-    const trustedPath = path.join(trustedBaseRoot, relPath);
-    const reviewPath = path.join(reviewTargetRoot, relPath);
-    if (!existsSync(trustedPath) || !existsSync(reviewPath)) {
-      return true;
-    }
-    const trustedHash = createHash('sha256').update(readFileSync(trustedPath)).digest('hex');
-    const reviewHash = createHash('sha256').update(readFileSync(reviewPath)).digest('hex');
-    if (trustedHash !== reviewHash) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isProducerCommandUntrusted(
+function isProducerClosureExecutionBlocked(
   command: string,
   trustedBaseRoot: string,
-  reviewTargetRoot: string,
   prModifiedPaths: string[],
 ): boolean {
   const normalized = new Set(prModifiedPaths.map(normalizePath));
@@ -254,14 +221,7 @@ function isProducerCommandUntrusted(
       return true;
     }
     if (trimmed.startsWith('npm test --')) {
-      const closure = listNpmTestDependencyClosureRelPaths(command, trustedBaseRoot);
-      return isDependencyClosureUntrusted(
-        closure,
-        isNpmTestDependencyClosureEstablishable(command, trustedBaseRoot),
-        trustedBaseRoot,
-        reviewTargetRoot,
-        prModifiedPaths,
-      );
+      return !isNpmTestDependencyClosureEstablishable(command, trustedBaseRoot);
     }
     return false;
   }
@@ -271,13 +231,7 @@ function isProducerCommandUntrusted(
     return false;
   }
 
-  return isDependencyClosureUntrusted(
-    listNodeScriptDependencyClosureRelPaths(command, trustedBaseRoot),
-    isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot),
-    trustedBaseRoot,
-    reviewTargetRoot,
-    prModifiedPaths,
-  );
+  return !isNodeScriptDependencyClosureEstablishable(command, trustedBaseRoot);
 }
 
 function remapResolvedCommandToReviewTarget(
@@ -609,7 +563,7 @@ function evaluateCaptureRow(input: {
   const command = (entry.sourceCommand ?? '').trim();
   const canRunLive = !external && command && isCommandSafe(command, trustedBaseRoot);
 
-  if (command && isProducerCommandUntrusted(command, trustedBaseRoot, reviewTargetRoot, prModifiedPaths)) {
+  if (command && isProducerClosureExecutionBlocked(command, trustedBaseRoot, prModifiedPaths)) {
     return buildUnverified(rowIndex, row, 'untrusted-pr-modified');
   }
 

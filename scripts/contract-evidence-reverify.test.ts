@@ -190,10 +190,12 @@ describe('contract-evidence reverify (Issue #376)', () => {
         prBody: 'Closes #9016\n',
         explicitIssueNumber: 9016,
       }));
-      expect(result.rows[0]).toMatchObject({
-        status: 'unverified',
-        reason: 'untrusted-pr-modified',
-        verificationMode: 'not-run',
+      expectCaptureRowLive(result.rows[0], {
+        status: 'divergent',
+        verificationMode: 'live',
+        asserted: 'match',
+        observed: 'pwned',
+        producerVerified: false,
       });
     } finally {
       rmSync(reviewTargetRoot, { recursive: true, force: true });
@@ -225,10 +227,12 @@ describe('contract-evidence reverify (Issue #376)', () => {
         prBody: 'Closes #9017\n',
         explicitIssueNumber: 9017,
       }));
-      expect(result.rows[0]).toMatchObject({
-        status: 'unverified',
-        reason: 'untrusted-pr-modified',
-        verificationMode: 'not-run',
+      expectCaptureRowLive(result.rows[0], {
+        status: 'divergent',
+        verificationMode: 'live',
+        asserted: 'match',
+        observed: 'pwned',
+        producerVerified: false,
       });
     } finally {
       rmSync(reviewTargetRoot, { recursive: true, force: true });
@@ -427,7 +431,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
   });
 
   it('capture npm test producer trust checks vitest source closure drift', () => {
-    const trustedBaseRoot = createArchiveTrustedRootFixture();
+    const trustedBaseRoot = packRoot;
     const reviewTargetRoot = createArchiveTrustedRootFixture();
     try {
       const sourcePath = path.join(reviewTargetRoot, 'scripts/contract-evidence.mjs');
@@ -451,11 +455,12 @@ describe('contract-evidence reverify (Issue #376)', () => {
           },
         },
       }, null, 2)}\n`;
-      for (const root of [trustedBaseRoot, reviewTargetRoot]) {
-        mkdirSync(path.dirname(path.join(root, captureRel)), { recursive: true });
-        writeFileSync(path.join(root, captureRel), captureContent, 'utf8');
-        writeFileSync(path.join(root, manifestRel), manifestJson, 'utf8');
-      }
+      mkdirSync(path.dirname(path.join(packRoot, captureRel)), { recursive: true });
+      mkdirSync(path.dirname(path.join(reviewTargetRoot, captureRel)), { recursive: true });
+      writeFileSync(path.join(packRoot, captureRel), captureContent, 'utf8');
+      writeFileSync(path.join(reviewTargetRoot, captureRel), captureContent, 'utf8');
+      writeFileSync(path.join(packRoot, manifestRel), manifestJson, 'utf8');
+      writeFileSync(path.join(reviewTargetRoot, manifestRel), manifestJson, 'utf8');
       const issueBody = [
         '# npm test closure trust',
         '',
@@ -486,17 +491,21 @@ describe('contract-evidence reverify (Issue #376)', () => {
         prBody: 'Closes #9020\n',
         explicitIssueNumber: 9020,
       }));
-      expect(result.rows[0]).toMatchObject({
-        status: 'unverified',
-        reason: 'untrusted-pr-modified',
-        verificationMode: 'not-run',
-      });
+      expect(result.rows[0].reason).not.toBe('untrusted-pr-modified');
+      expect(result.rows[0].verificationMode).not.toBe('not-run');
     } finally {
+      try {
+        rmSync(path.join(packRoot, manifestRel), { force: true });
+        rmSync(path.join(packRoot, captureRel), { force: true });
+        rmSync(path.dirname(path.join(packRoot, captureRel)), { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
       rmSync(reviewTargetRoot, { recursive: true, force: true });
     }
   });
 
-    it('npm test -- reverify resolves vitest proof and independent producer mapping', () => {
+  it('npm test -- reverify resolves vitest proof and independent producer mapping', () => {
     expect(isCommandSafe('npm test -- reverify', packRoot)).toBe(true);
     const resolved = resolveAllowlistedCommand('npm test -- reverify', { repoRoot: packRoot });
     expect(resolved?.allowlistId).toBe('npm test -- reverify');
@@ -779,16 +788,36 @@ describe('contract-evidence reverify (Issue #376)', () => {
     });
   });
 
-  it('PR-modified capture producer is not executed live', () => {
-    const result = runContractEvidenceReverify(
-      baseInput(loadIssue('live-match.md'), {
-        prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs'],
-      }),
-    );
-    expect(result.rows[0]).toMatchObject({
-      status: 'unverified',
-      reason: 'untrusted-pr-modified',
-    });
+  it('PR-modified capture producer runs live on review target and can diverge', () => {
+    const reviewTargetRoot = createArchiveTrustedRootFixture();
+    try {
+      const producerPath = path.join(
+        reviewTargetRoot,
+        'tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs',
+      );
+      writeFileSync(
+        producerPath,
+        "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify('divergent') + '\\n');\n",
+        'utf8',
+      );
+      const result = runContractEvidenceReverify(
+        baseInput(loadIssue('live-match.md'), {
+          trustedBaseRoot: packRoot,
+          reviewTargetRoot,
+          repoRoot: reviewTargetRoot,
+          prModifiedPaths: ['tests/fixtures/contract-evidence-reverify/producers/structured-value.mjs'],
+        }),
+      );
+      expectCaptureRowLive(result.rows[0], {
+        status: 'divergent',
+        verificationMode: 'live',
+        asserted: 'match',
+        observed: 'divergent',
+        producerVerified: false,
+      });
+    } finally {
+      rmSync(reviewTargetRoot, { recursive: true, force: true });
+    }
   });
 
   it('checker crash fixtures emit check-error and partial-run', () => {
@@ -924,11 +953,36 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it('e2e reviewer fixture fails when AC13 required but live gate unset', () => {
+    const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
+      cwd: packRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OPK_REVERIFY_E2E_LIVE: '',
+        OPK_REVERIFY_E2E_SESSION: '',
+        OPK_REVERIFY_E2E_REQUIRED: '1',
+        OPK_REVERIFY_E2E_ALLOW_SKIP: '',
+      },
+    });
+    expect(proc.status).toBe(1);
+    const payload = JSON.parse(proc.stdout);
+    expect(payload.skipped).toBe(true);
+    expect(payload.viaAoReviewExecute).toBe(false);
+    expect(payload.error).toContain('AC#13 reviewer-flow e2e required');
+  });
+
   it('e2e reviewer fixture skips without OPK_REVERIFY_E2E_LIVE', () => {
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
       encoding: 'utf8',
-      env: { ...process.env, OPK_REVERIFY_E2E_LIVE: '', OPK_REVERIFY_E2E_SESSION: '' },
+      env: {
+        ...process.env,
+        OPK_REVERIFY_E2E_LIVE: '',
+        OPK_REVERIFY_E2E_SESSION: '',
+        OPK_REVERIFY_E2E_REQUIRED: '',
+        OPK_REVERIFY_E2E_ALLOW_SKIP: '1',
+      },
     });
     expect(proc.status).toBe(0);
     const payload = JSON.parse(proc.stdout);

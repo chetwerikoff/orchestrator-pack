@@ -7,6 +7,7 @@
  *   OPK_REVERIFY_E2E_LIVE=1            — run the live AO path
  *   OPK_REVERIFY_E2E_SESSION=<id>      — reuse an existing worker (preferred)
  *   OPK_REVERIFY_E2E_ALLOW_SPAWN=1     — optional: spawn one fixture holder when live
+ *   OPK_REVERIFY_E2E_ALLOW_SKIP=1      — local opt-out when AO is unavailable (not for acceptance)
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -26,6 +27,14 @@ const FIXTURE_PROMPT = 'checkpoint-2 contract-evidence reverify e2e fixture hold
 function isTruthyEnv(name) {
   const value = process.env[name]?.trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+function isAc13E2eRequired() {
+  return isTruthyEnv('OPK_REVERIFY_E2E_REQUIRED');
+}
+
+function isAc13E2eAllowSkip() {
+  return isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SKIP');
 }
 
 function isLiveE2eEnabled() {
@@ -149,11 +158,18 @@ const output = {
 };
 
 if (!isLiveE2eEnabled() && !process.env.OPK_REVERIFY_E2E_SESSION?.trim()) {
+  if (isAc13E2eAllowSkip() && !isAc13E2eRequired()) {
+    output.skipped = true;
+    output.error = null;
+    output.summary = 'skipped: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1) for live AC#13 e2e';
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    process.exit(0);
+  }
   output.skipped = true;
-  output.error = null;
-  output.summary = 'skipped: set OPK_REVERIFY_E2E_LIVE=1 (and OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1) for live AC#13 e2e';
+  output.error = 'AC#13 reviewer-flow e2e required: set OPK_REVERIFY_E2E_LIVE=1 and OPK_REVERIFY_E2E_SESSION (or OPK_REVERIFY_E2E_ALLOW_SKIP=1 for local opt-out only when OPK_REVERIFY_E2E_REQUIRED is unset)';
+  output.summary = output.error;
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-  process.exit(0);
+  process.exit(1);
 }
 
 const aoAvailable = spawnSync('which', ['ao']).status === 0;
