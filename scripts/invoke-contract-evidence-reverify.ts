@@ -176,6 +176,10 @@ function main() {
   }
 
   const prHeadSha = resolveHeadSha(opts.prHeadSha ? String(opts.prHeadSha) : undefined);
+  if (!prHeadSha) {
+    console.error('missing required --pr-head-sha for bound snapshot validation');
+    process.exit(2);
+  }
   let boundSnapshotBody: string;
   try {
     ({ body: boundSnapshotBody } = loadValidatedBoundSnapshotBody({
