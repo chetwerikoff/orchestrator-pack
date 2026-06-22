@@ -21,6 +21,11 @@ export declare function isReadyForReviewHandoffEnvelope(
   event?: Record<string, unknown>,
 ): boolean;
 
+export declare function isQualifiedReviewPendingInfoHandoffEnvelope(
+  body: unknown,
+  event: Record<string, unknown>,
+): boolean;
+
 export declare function parseHandoffNotificationSubject(event: Record<string, unknown>): {
   sessionId?: string;
   projectId?: string;

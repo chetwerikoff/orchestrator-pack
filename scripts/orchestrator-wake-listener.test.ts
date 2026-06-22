@@ -172,6 +172,40 @@ describe('evaluateWakePayload', () => {
     }
   });
 
+
+  it('promotes info-priority review.pending hand-off envelope (Issue #390)', () => {
+    const result = evaluateWakePayload(
+      notificationEvent({
+        type: 'review.pending',
+        priority: 'info',
+        sessionId: 'op-worker-2',
+        projectId: 'orchestrator-pack',
+        data: {
+          schemaVersion: 3,
+          semanticType: 'review.pending',
+          subject: {
+            session: { id: 'op-worker-2', projectId: 'orchestrator-pack' },
+            pr: {
+              number: 42,
+              url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/42',
+            },
+          },
+        },
+      }),
+      {
+        supervisedProjectId: 'orchestrator-pack',
+        supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+        openPrs: [{ number: 42, headRefOid: 'abc123', baseRefName: 'main' }],
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.wakeKind).toBe('ready_for_review');
+      expect(result.wakeKind).not.toBe('review.needs_triage');
+      expect(result.handoffAdmission?.promotedFromInfoPriority).toBe(true);
+    }
+  });
+
   it('drops dashboard-style info notification', () => {
     const result = evaluateWakePayload(
       notificationEvent({
