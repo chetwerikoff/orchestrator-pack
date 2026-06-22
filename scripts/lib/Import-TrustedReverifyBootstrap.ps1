@@ -19,21 +19,6 @@ function Get-TrustedBootstrapScriptRoot {
         'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
     )
 
-    $localBootstrapRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
-    $localHelpersPresent = $true
-    foreach ($relativePath in $bootstrapHelperPaths) {
-        if (-not (Test-Path -LiteralPath (Join-Path $localBootstrapRoot $relativePath))) {
-            $localHelpersPresent = $false
-            break
-        }
-    }
-    if ($localHelpersPresent -and -not (Test-PathInsideReviewTarget -CandidatePath $localBootstrapRoot -ReviewTargetRoot $ReviewTargetRoot)) {
-        return @{
-            Path                    = $localBootstrapRoot
-            DisposableBootstrapRoot = $true
-        }
-    }
-
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
         $resolved = (Resolve-Path -LiteralPath $TrustedBaseRoot).Path
         Assert-TrustedRootOverrideEligible -TrustedRoot $resolved -ReviewTargetRoot $ReviewTargetRoot -BaseRef $BaseRef

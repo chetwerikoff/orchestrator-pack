@@ -80,18 +80,6 @@ function Resolve-TrustedReverifyCoreScript {
         'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
     )
 
-    $launcherBootstrapCorePath = Join-Path $PSScriptRoot 'lib/Contract-EvidenceReverify-Core.ps1'
-    if (Test-Path -LiteralPath $launcherBootstrapCorePath) {
-        $launcherBootstrapRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-        if (-not (Test-PathInsideReviewTarget -CandidatePath $launcherBootstrapRoot -ReviewTargetRoot $ReviewTargetRoot)) {
-            return @{
-                CoreScriptPath          = $launcherBootstrapCorePath
-                DisposableBootstrapRoot = $true
-                BootstrapRoot           = $launcherBootstrapRoot
-            }
-        }
-    }
-
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRootOverride)) {
         $trustedRoot = (Resolve-Path -LiteralPath $TrustedBaseRootOverride).Path
         Assert-TrustedRootOverrideEligible -TrustedRoot $trustedRoot -ReviewTargetRoot $ReviewTargetRoot
@@ -139,36 +127,32 @@ function Resolve-TrustedReverifyCoreScript {
     }
 
     $resolvedReviewTarget = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path
-    $archiveRefs = @('origin/main', 'HEAD')
-    foreach ($archiveRef in $archiveRefs) {
-        $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-reverify-{0}" -f ([Guid]::NewGuid().ToString('N')))
-        New-Item -ItemType Directory -Path $temp -Force | Out-Null
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ("opk-trusted-reverify-{0}" -f ([Guid]::NewGuid().ToString('N')))
+    New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-        Push-Location $resolvedReviewTarget
-        try {
-            git archive $archiveRef -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-                continue
-            }
+    Push-Location $resolvedReviewTarget
+    try {
+        git archive origin/main -- @archiveRelativePaths 2>$null | tar -x -C $temp 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+            throw 'trusted reverify unavailable: could not extract implementation from origin/main archive'
         }
-        finally {
-            Pop-Location
-        }
-
-        $corePath = Join-Path $temp $coreRelativePath
-        if (Test-Path -LiteralPath $corePath) {
-            return @{
-                CoreScriptPath          = $corePath
-                DisposableBootstrapRoot = $true
-                BootstrapRoot           = $temp
-            }
-        }
-
-        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    finally {
+        Pop-Location
     }
 
-    throw "trusted reverify unavailable: could not extract implementation from origin/main or HEAD archive"
+    $corePath = Join-Path $temp $coreRelativePath
+    if (Test-Path -LiteralPath $corePath) {
+        return @{
+            CoreScriptPath          = $corePath
+            DisposableBootstrapRoot = $true
+            BootstrapRoot           = $temp
+        }
+    }
+
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    throw "trusted reverify unavailable: origin/main archive missing $coreRelativePath"
 }
 
 $reviewTargetRoot = (Resolve-Path -LiteralPath $ReviewTargetRoot).Path

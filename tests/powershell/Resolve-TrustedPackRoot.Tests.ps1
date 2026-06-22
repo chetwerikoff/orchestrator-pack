@@ -99,15 +99,24 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Match 'Invoke-ContractEvidenceReverifyCore @PSBoundParameters'
     }
 
-    It 'ao review command bootstrap archives launcher helpers from origin/main before HEAD fallback' {
+    It 'trusted launcher resolves core implementation from origin/main archive only' {
+        $launcherScript = Join-Path $script:RepoRoot 'scripts/launch-contract-evidence-reverify.ps1'
+        $content = Get-Content -LiteralPath $launcherScript -Raw
+        $content | Should -Match 'git archive origin/main -- @archiveRelativePaths'
+        $content | Should -Not -Match "archiveRefs = @\('origin/main', 'HEAD'\)"
+        $content | Should -Not -Match 'git archive \$archiveRef'
+        $content | Should -Not -Match 'launcherBootstrapCorePath'
+    }
+
+    It 'ao review command bootstrap archives launcher and core helpers from origin/main only' {
         $aoReviewCommand = Join-Path $script:RepoRoot 'scripts/run-reviewer-reverify-ao-review-command.ps1'
         $content = Get-Content -LiteralPath $aoReviewCommand -Raw
         $content | Should -Match 'bootstrapArchivePaths'
         $content | Should -Match 'Contract-EvidenceReverify-Core\.ps1'
         $content | Should -Match 'Import-TrustedReverifyBootstrap\.ps1'
-        $content | Should -Match '\$archiveRefs = @\(''origin/main'', ''HEAD''\)'
-        $content | Should -Match 'git archive \$archiveRef -- @bootstrapArchivePaths'
-        $content | Should -Match 'Test-PathInsideReviewTarget'
+        $content | Should -Match 'git archive origin/main -- @bootstrapArchivePaths'
+        $content | Should -Not -Match "GitRef 'HEAD'"
+        $content | Should -Not -Match 'git archive \$archiveRef'
         $content | Should -Not -Match 'git worktree add --detach'
     }
 
