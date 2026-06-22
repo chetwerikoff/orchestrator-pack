@@ -86,6 +86,7 @@ const PEM_PRIVATE_KEY_HEADER_PATTERN =
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(?:api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*\S+/gi,
   /(?:authorization|auth)\s*:\s*Bearer\s+\S+/gi,
+  /\bBearer\s+\S+/gi,
   /(?:cookie|set-cookie)\s*:\s*[^\n\r]+/gi,
   /(?:x-api-key|x-auth-token|x-amz-security-token)\s*:\s*\S+/gi,
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
@@ -93,6 +94,8 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:ASIA|AROA)[0-9A-Z]{16}\b/g,
   /ghp_[A-Za-z0-9]{20,}/g,
   /gho_[A-Za-z0-9]{20,}/g,
+  /github_pat_[A-Za-z0-9_]+/g,
+  /\bnpm_[A-Za-z0-9-]+\b/g,
   /sk-[A-Za-z0-9]{20,}/g,
   /(?:database_url|redis_url|mongodb(?:\+srv)?_url|amqp_url|postgres(?:ql)?|mysql|mariadb|mongodb):\/\/[^\s'"]+/gi,
   /\b[A-Z][A-Z0-9_]*_URL\s*=\s*\S+/g,
@@ -137,6 +140,24 @@ function isStandaloneCredentialFixtureBody(body: string): boolean {
     return true;
   }
   if (/^[A-Za-z0-9+/=]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^github_pat_[A-Za-z0-9_]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^npm_[A-Za-z0-9-]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^ghp_[A-Za-z0-9]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^gho_[A-Za-z0-9]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^sk-[A-Za-z0-9]+$/.test(trimmed)) {
+    return true;
+  }
+  if (/^Bearer\s+\S+$/i.test(trimmed)) {
     return true;
   }
   return (

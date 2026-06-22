@@ -17,6 +17,8 @@ import { loadCommittedCaptureManifest } from '../generate-capture-manifest.mjs';
 import {
   collectAuthoritativeReferences,
   hashIssueBodySnapshot,
+  MAPPING_PREFLIGHT_SCRUB_OPTIONS,
+  scrubForProviderInput,
   sha256Hex,
 } from './reviewer-contract-mapping.js';
 import {
@@ -166,12 +168,17 @@ function sanitizeReviewerEvidenceText(text: string): string {
   });
 }
 
+export function redactReviewerEvidenceValue(text: string): string {
+  const scrubbed = scrubForProviderInput(text, MAPPING_PREFLIGHT_SCRUB_OPTIONS);
+  if (!scrubbed.ok) {
+    return '[REDACTED_EVIDENCE]';
+  }
+  return sanitizeReviewerEvidenceText(scrubbed.scrubbed);
+}
+
 function boundValue(value: unknown, max = allowlist.maxObservedLength): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  const redacted = sanitizeReviewerEvidenceText(text)
-    .replace(/ghp_[A-Za-z0-9]{20,}/g, 'ghp_[REDACTED]')
-    .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]')
-    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  const redacted = redactReviewerEvidenceValue(text);
   if (redacted.length <= max) {
     return redacted;
   }

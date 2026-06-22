@@ -12,6 +12,7 @@ import {
   REVERIFY_VERIFICATION_MODES,
   formatReviewerReverifySummary,
   resolveLinkedIssueNumber,
+  redactReviewerEvidenceValue,
   runContractEvidenceReverify,
   type ReverifyRowResult,
 } from './lib/contract-evidence-reverify.js';
@@ -30,6 +31,22 @@ function loadIssue(name: string): string {
 }
 
 const prHeadNetworkSandboxAvailable = isPrHeadNetworkSandboxAvailable();
+
+function isTrustedBaseNpmVitestSandboxAvailable(): boolean {
+  const resolved = resolveAllowlistedCommand('npm test -- legacy-list-guard', { repoRoot: packRoot });
+  if (!resolved) {
+    return false;
+  }
+  const probe = runSandboxedAllowlistedCommand(resolved, {
+    cwd: packRoot,
+    dependencyRoot: packRoot,
+    timeoutMs: 120_000,
+    sandboxMode: 'trusted-base',
+  });
+  return !probe.blocked;
+}
+
+const trustedBaseNpmVitestSandboxAvailable = isTrustedBaseNpmVitestSandboxAvailable();
 
 function expectCaptureRowLive(
   row: ReverifyRowResult,
@@ -145,17 +162,37 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
     expect(sandboxSource).not.toContain('linkNodeModulesIntoDisposable');
     expect(sandboxSource).not.toContain('symlinkSync');
-    expect(sandboxSource).toContain('captureTrustedNodeModulesFingerprint');
+    expect(sandboxSource).toContain('appendVitestWritableCacheBinds');
+    expect(sandboxSource).toContain('ensureVitestCacheMountPoints');
     expect(sandboxSource).toContain('externalBinDirs');
   });
 
-  it('preserves trusted dependency module paths in no-bwrap direct fallback', () => {
+  it('fails closed instead of running trusted-base without filesystem isolation', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
-    expect(sandboxSource).toContain('preserveDependencyModulePaths');
-    expect(sandboxSource).toContain('spawnTrustedBaseDirect');
-    expect(sandboxSource).toMatch(
-      /remapResolvedCommandForDisposable\([\s\S]*preserveDependencyModulePaths:\s*true/,
-    );
+    expect(sandboxSource).not.toContain('spawnTrustedBaseDirect');
+    expect(sandboxSource).toContain('return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE)');
+  });
+
+  it('redacts supported credential formats from reviewer evidence values', () => {
+    const sample = [
+      'github_pat_11AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'npm_abcdefghijklmnopqrstuvwxyz',
+      'sk-abcdefghijklmnopqrstuvwxyz123456',
+      'Bearer eyJhbGciOiJIUzI1NiJ9',
+      'Cookie: session=abc123',
+    ].join('\n');
+    const redacted = redactReviewerEvidenceValue(sample);
+    expect(redacted).not.toContain('github_pat_11AAAA');
+    expect(redacted).not.toContain('npm_abcdefghijklmnopqrstuvwxyz');
+    expect(redacted).not.toContain('sk-abcdefghijklmnopqrstuvwxyz123456');
+    expect(redacted).not.toContain('session=abc123');
+    expect(redacted).toContain('[REDACTED_SECRET]');
+  });
+
+  it('redacts PEM private keys without leaking decision-bearing material', () => {
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----';
+    expect(redactReviewerEvidenceValue(pem)).not.toContain('BEGIN RSA PRIVATE KEY');
+    expect(redactReviewerEvidenceValue(pem)).toContain('[REDACTED_SECRET]');
   });
 
   it('detects mutations inside disposable sandbox copy', () => {
@@ -502,7 +539,12 @@ describe('contract-evidence reverify (Issue #376)', () => {
         explicitIssueNumber: 9020,
       }));
       expect(result.rows[0].reason).not.toBe('untrusted-pr-modified');
-      expect(result.rows[0].verificationMode).not.toBe('not-run');
+      if (trustedBaseNpmVitestSandboxAvailable) {
+        expect(result.rows[0].verificationMode).not.toBe('not-run');
+      } else {
+        expect(result.rows[0].verificationMode).toBe('not-run');
+        expect(result.rows[0].reason).not.toBe('untrusted-pr-modified');
+      }
     } finally {
       try {
         rmSync(path.join(packRoot, manifestRel), { force: true });

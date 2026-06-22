@@ -161,6 +161,7 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     expect(shouldPersistBoundIssueSnapshots('mapped')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('incomplete_evidence')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('skipped_input_limit')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('skipped_no_acceptance')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('stale_spec')).toBe(false);
     expect(shouldPersistBoundIssueSnapshots('lookup_unavailable')).toBe(false);
   });
@@ -191,6 +192,38 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
       prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
       contractSet: members,
       status: 'incomplete_evidence',
+      specBodies: [{ issueNumber: 376, body }],
+    });
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.created).toBe(true);
+  });
+
+  it('captures bound snapshots when mapping reports skipped_no_acceptance', () => {
+    withStoreDir();
+    const body = '# Issue body\n\ncontract-evidence: none\n';
+    const members = [{ issueNumber: 376, snapshotHash: hashIssueBodySnapshot(body) }];
+    const captures = captureValidatedBoundIssueSnapshots({
+      opts: {
+        prBodyFile: null,
+        issueFile: null,
+        issuesFile: null,
+        issueSpecs: [],
+        diffFile: null,
+        changedPathsFile: null,
+        explicitIssue: 376,
+        declarationIssue: null,
+        prHeadSha: 'abc1234',
+        ledgerFile: null,
+        invokeCoworker: false,
+        json: true,
+        lookupAvailable: true,
+        coworkerAvailable: true,
+        prNumber: 380,
+        projectId: 'orchestrator-pack',
+      },
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      contractSet: members,
+      status: 'skipped_no_acceptance',
       specBodies: [{ issueNumber: 376, body }],
     });
     expect(captures).toHaveLength(1);

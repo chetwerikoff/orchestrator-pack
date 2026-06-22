@@ -270,9 +270,22 @@ function appendNodeModulesBwrapBind(args: string[], sandboxCwd: string, dependen
   }
 }
 
-function appendVitestNodeModulesTmpfs(args: string[], sandboxCwd: string): void {
-  args.push('--tmpfs', path.join(sandboxCwd, 'node_modules', '.vite-temp'));
-  args.push('--tmpfs', path.join(sandboxCwd, 'node_modules', '.vitest'));
+function ensureVitestCacheMountPoints(dependencyRoot: string): void {
+  mkdirSync(path.join(dependencyRoot, 'node_modules', '.vitest'), { recursive: true });
+  mkdirSync(path.join(dependencyRoot, 'node_modules', '.vite-temp'), { recursive: true });
+}
+
+function appendVitestWritableCacheBinds(
+  args: string[],
+  sandboxCwd: string,
+  hostCacheRoot: string,
+): void {
+  const vitestHost = path.join(hostCacheRoot, '.vitest');
+  const viteHost = path.join(hostCacheRoot, '.vite-temp');
+  mkdirSync(vitestHost, { recursive: true });
+  mkdirSync(viteHost, { recursive: true });
+  args.push('--bind', vitestHost, path.join(sandboxCwd, 'node_modules', '.vitest'));
+  args.push('--bind', viteHost, path.join(sandboxCwd, 'node_modules', '.vite-temp'));
 }
 
 function withSandboxBinDir(
@@ -330,7 +343,7 @@ function buildBwrapSandboxArgs(
   sandboxCwd: string,
   dependencyRoot: string,
   env: NodeJS.ProcessEnv,
-  options: { npmVitestProof?: boolean; mode?: SandboxMode } = {},
+  options: { npmVitestProof?: boolean; vitestCacheHostRoot?: string; mode?: SandboxMode } = {},
 ): string[] {
   const mode = options.mode ?? 'pr-head-new';
   const args: string[] = [
@@ -357,8 +370,8 @@ function buildBwrapSandboxArgs(
 
   args.push('--bind', sandboxCwd, sandboxCwd);
   appendNodeModulesBwrapBind(args, sandboxCwd, dependencyRoot);
-  if (options.npmVitestProof) {
-    appendVitestNodeModulesTmpfs(args, sandboxCwd);
+  if (options.npmVitestProof && options.vitestCacheHostRoot) {
+    appendVitestWritableCacheBinds(args, sandboxCwd, options.vitestCacheHostRoot);
   }
   appendSandboxEnvPathMounts(args, env, sandboxCwd);
   args.push('--chdir', sandboxCwd);
@@ -419,11 +432,13 @@ function spawnWithBwrap(
     shell: false;
     dependencyRoot: string;
     npmVitestProof?: boolean;
+    vitestCacheHostRoot?: string;
     mode: SandboxMode;
   },
 ): SpawnSyncReturns<string> {
   const args = buildBwrapSandboxArgs(payload.cwd, payload.dependencyRoot, payload.env, {
     npmVitestProof: payload.npmVitestProof,
+    vitestCacheHostRoot: payload.vitestCacheHostRoot,
     mode: payload.mode,
   });
   args.push('--', resolved.executable, ...resolved.args);
@@ -460,31 +475,6 @@ function remapResolvedCommandForDisposable(
   };
 }
 
-function spawnTrustedBaseDirect(
-  resolved: ResolvedAllowlistedCommand,
-  disposable: string,
-  originalCwd: string,
-  options: {
-    timeoutMs: number;
-    env: NodeJS.ProcessEnv;
-    dependencyRoot: string;
-  },
-): SpawnSyncReturns<string> {
-  const sandboxResolved = remapResolvedCommandForDisposable(resolved, originalCwd, disposable, {
-    preserveDependencyModulePaths: true,
-    dependencyRoot: options.dependencyRoot,
-  });
-  const externalBinDir = path.join(options.dependencyRoot, 'node_modules', '.bin');
-  const externalBinDirs = existsSync(externalBinDir) ? [externalBinDir] : [];
-  return spawnDirect(sandboxResolved, {
-    cwd: disposable,
-    encoding: 'utf8',
-    timeout: options.timeoutMs,
-    env: withSandboxBinDir(options.env, disposable, { externalBinDirs }),
-    shell: false,
-  });
-}
-
 function spawnTrustedBaseIsolated(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -506,6 +496,12 @@ function spawnTrustedBaseIsolated(
     sandboxRoot: disposable,
   });
   const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
+  const vitestCacheHostRoot = options.npmVitestProof
+    ? mkdtempSync(path.join(tmpdir(), 'reverify-vitest-cache-'))
+    : null;
+  if (options.npmVitestProof) {
+    ensureVitestCacheMountPoints(options.dependencyRoot);
+  }
 
   try {
     const canUseBwrap = process.platform === 'linux'
@@ -522,6 +518,7 @@ function spawnTrustedBaseIsolated(
         shell: false as const,
         dependencyRoot: options.dependencyRoot,
         npmVitestProof: options.npmVitestProof,
+        vitestCacheHostRoot: vitestCacheHostRoot ?? undefined,
         mode: 'trusted-base' as const,
       };
 
@@ -534,22 +531,11 @@ function spawnTrustedBaseIsolated(
       }
     }
 
-    const beforeDependencyFingerprint = captureTrustedNodeModulesFingerprint(options.dependencyRoot);
-    const directResult = spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
-      timeoutMs: options.timeoutMs,
-      env,
-      dependencyRoot: options.dependencyRoot,
-    });
-    return guardSandboxPostcondition(
-      disposable,
-      beforeSandboxFingerprint,
-      guardTrustedDependencyPostcondition(
-        options.dependencyRoot,
-        beforeDependencyFingerprint,
-        directResult,
-      ),
-    );
+    return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   } finally {
+    if (vitestCacheHostRoot) {
+      rmSync(vitestCacheHostRoot, { recursive: true, force: true });
+    }
     rmSync(disposable, { recursive: true, force: true });
   }
 }
@@ -579,6 +565,12 @@ function spawnPrHeadIsolated(
     sandboxRoot: disposable,
   });
   const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
+  const vitestCacheHostRoot = options.npmVitestProof
+    ? mkdtempSync(path.join(tmpdir(), 'reverify-vitest-cache-'))
+    : null;
+  if (options.npmVitestProof) {
+    ensureVitestCacheMountPoints(options.dependencyRoot);
+  }
 
   // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
   if (!ensureBwrapSandboxReady(disposable, options.dependencyRoot, 'pr-head-new')) {
@@ -595,6 +587,7 @@ function spawnPrHeadIsolated(
     shell: false as const,
     dependencyRoot: options.dependencyRoot,
     npmVitestProof: options.npmVitestProof,
+    vitestCacheHostRoot: vitestCacheHostRoot ?? undefined,
     mode: 'pr-head-new' as const,
   };
 
@@ -608,6 +601,9 @@ function spawnPrHeadIsolated(
     }
     return guardSandboxPostcondition(disposable, beforeSandboxFingerprint, isolated);
   } finally {
+    if (vitestCacheHostRoot) {
+      rmSync(vitestCacheHostRoot, { recursive: true, force: true });
+    }
     rmSync(disposable, { recursive: true, force: true });
   }
 }

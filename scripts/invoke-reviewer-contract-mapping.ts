@@ -497,7 +497,6 @@ export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus):
     'lookup_unavailable',
     'ambiguous_spec',
     'skipped_no_spec',
-    'skipped_no_acceptance',
     'malformed',
   ]);
   return !excluded.has(status);
