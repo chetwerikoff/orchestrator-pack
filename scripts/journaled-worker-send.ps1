@@ -38,6 +38,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Journaled-WorkerSendInternalCapability.ps1')
 
 function Write-JournaledWorkerSendLog {
     param([string]$Message)
@@ -46,7 +47,11 @@ function Write-JournaledWorkerSendLog {
 }
 
 function New-JournaledWorkerSendInternalCapability {
-    return "journaled-worker-send-internal/v1:$([guid]::NewGuid().ToString('n'))"
+    $registered = Register-JournaledWorkerSendInternalCapability
+    if (-not $registered.ok) {
+        throw "journaled-worker-send: failed to register internal capability: $($registered.reason)"
+    }
+    return [string]$registered.capability
 }
 
 function Test-AoSendFileContract {

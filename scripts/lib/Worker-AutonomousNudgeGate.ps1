@@ -12,6 +12,7 @@ $Script:AutonomousWorkerNudgeCapabilityInventory = Join-Path (Split-Path -Parent
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousReviewStartGate.ps1')
 . (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
+. (Join-Path $PSScriptRoot 'Journaled-WorkerSendInternalCapability.ps1')
 
 function Get-WorkerNudgeGateVersion {
     return $Script:WorkerNudgeGateVersion
@@ -40,12 +41,7 @@ function Test-AtomicWorkerNudgeClaimCapabilityPresent {
 }
 
 function Test-JournaledWorkerSendInternalActive {
-    $raw = [string]$env:AO_JOURNALED_SEND_INTERNAL
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
-    $prefix = "$($Script:JournaledWorkerSendInternalCapability):"
-    if (-not $raw.StartsWith($prefix, [System.StringComparison]::Ordinal)) { return $false }
-    $nonce = $raw.Substring($prefix.Length).Trim()
-    return ($nonce.Length -ge 8) -and ($nonce -match '^[A-Za-z0-9-]+$')
+    return Test-ConsumeJournaledWorkerSendInternalCapability
 }
 
 function Test-AutonomousRawWorkerSendDenied {

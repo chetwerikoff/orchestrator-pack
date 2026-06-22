@@ -345,14 +345,24 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.stderr).toMatch(/autonomous worker nudges paused/i);
   });
 
-  it('autonomous guard allows journaled transport internal sentinel', () => {
+  it('autonomous guard allows registered journaled transport internal capability', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
     const script = `
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-      $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
-      . ${psString(guard)}
-      $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
-      [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+      . ${psString(capabilityLib)}
+      $registered = Register-JournaledWorkerSendInternalCapability
+      if (-not $registered.ok) { throw $registered.reason }
+      $child = @'
+$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+$env:AO_JOURNALED_SEND_INTERNAL = '__CAPABILITY__'
+. __GUARD__
+$deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
+[pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+'@ -replace '__CAPABILITY__', [regex]::Escape($registered.capability) `
+         -replace '__GUARD__', ${psString(guard)}
+      $json = pwsh -NoProfile -Command $child
+      if ($LASTEXITCODE -ne 0) { throw $json }
+      $json
     `;
     const result = JSON.parse(runPwsh(script));
     expect(result.denied).toBe(false);
@@ -364,6 +374,20 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const script = `
       $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
       $env:AO_JOURNALED_SEND_INTERNAL = '1'
+      . ${psString(guard)}
+      $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
+      [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.denied).toBe(true);
+    expect(result.reason).toBe('autonomous_raw_worker_send_denied');
+  });
+
+  it('rejects well-formed but unregistered journaled internal capability tokens', () => {
+    const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+    const script = `
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
       . ${psString(guard)}
       $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
       [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
