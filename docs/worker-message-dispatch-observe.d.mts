@@ -91,7 +91,10 @@ export declare function isReactionSendSucceededEvent(
 export declare function extractReactionDeliveries(
   events: Array<Record<string, unknown>>,
   reactionMessages?: Record<string, string>,
-): DeliveryRecord[];
+): {
+  deliveries: DeliveryRecord[];
+  audits: Array<Record<string, unknown>>;
+};
 
 export declare function extractJournalDeliveries(
   journal: Record<string, Record<string, unknown>>,
@@ -108,7 +111,10 @@ export declare function mergeDeliveryRecords(input: {
   reviewRuns?: Array<Record<string, unknown>>;
   reactionMessages?: Record<string, string>;
   nowMs: number;
-}): DeliveryRecord[];
+}): {
+  deliveries: DeliveryRecord[];
+  reactionAudits: Array<Record<string, unknown>>;
+};
 
 export declare function getSessionActivity(session: Record<string, unknown>): string;
 

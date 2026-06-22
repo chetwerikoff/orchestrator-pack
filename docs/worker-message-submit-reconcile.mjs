@@ -32,6 +32,7 @@ import {
   isSessionAlive,
   isSessionStreaming,
   DISPATCH_SOURCE_REVIEW_SEND,
+  isReactionSendSucceededEvent,
   mergeDeliveryRecords,
   selectSurvivingDelivery,
 } from './worker-message-dispatch-observe.mjs';
@@ -1337,13 +1338,33 @@ export function planWorkerMessageSubmitActions(input) {
   }
   const baseTracking = convergence.tracking;
   const compactedJournal = convergence.journal ?? dispatchJournal ?? {};
-  const deliveries = mergeDeliveryRecords({
+  if (input.reactionConfigUnavailable) {
+    const hasReactionEvents = toArray(aoEvents).some((event) => isReactionSendSucceededEvent(event));
+    if (hasReactionEvents) {
+      return {
+        actions: [{
+          type: 'defer',
+          deliveryId: 'reaction-config-unavailable',
+          sessionId: 'operator',
+          reason: 'reaction_config_unavailable',
+        }],
+        tracking: baseTracking,
+        dispatchJournal: compactedJournal,
+        deliveryCount: 0,
+        reactionAudits: [],
+      };
+    }
+  }
+
+  const mergedDeliveries = mergeDeliveryRecords({
     aoEvents,
     dispatchJournal: compactedJournal,
     reviewRuns,
     reactionMessages,
     nowMs,
   });
+  const deliveries = mergedDeliveries.deliveries;
+  const reactionAudits = mergedDeliveries.reactionAudits ?? [];
 
   const sessionList = toArray(sessions);
   /** @type {Array<Record<string, unknown>>} */
@@ -1352,7 +1373,16 @@ export function planWorkerMessageSubmitActions(input) {
   const nextDeliveries = { ...(baseTracking?.deliveries ?? {}) };
   const nextFailedDeliveries = { ...(baseTracking?.failedDeliveries ?? {}) };
   /** @type {Array<Record<string, unknown>>} */
-  const audit = [];
+  const audit = [...toArray(baseTracking?.audit)];
+  for (const reactionAudit of reactionAudits) {
+    audit.push({
+      action: 'reaction_observation',
+      reason: trimString(reactionAudit.reason),
+      reactionKey: trimString(reactionAudit.reactionKey),
+      sessionId: trimString(reactionAudit.sessionId),
+      deliveredAtMs: Number(reactionAudit.deliveredAtMs ?? 0) || undefined,
+    });
+  }
 
   const sessionIds = new Set(deliveries.map((d) => trimString(d.sessionId)).filter(Boolean));
   const paneCompetingBySession = new Map();
@@ -1748,6 +1778,7 @@ export function planWorkerMessageSubmitActions(input) {
     tracking: compacted.tracking,
     dispatchJournal: compactedJournal,
     deliveryCount: deliveries.length,
+    reactionAudits,
   };
 }
 

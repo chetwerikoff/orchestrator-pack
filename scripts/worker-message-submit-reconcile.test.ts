@@ -55,6 +55,7 @@ type FixturePayload = {
   tracking?: SubmitTrackingState;
   config?: Record<string, unknown>;
   reactionMessages?: Record<string, string>;
+  reactionConfigUnavailable?: boolean;
   floodActiveSessions?: Record<string, boolean>;
 };
 
@@ -72,6 +73,7 @@ function planFixture(name: string) {
     tracking: fixture.tracking ?? { deliveries: {}, audit: [] },
     floodActiveSessions: fixture.floodActiveSessions ?? {},
     reactionMessages: fixture.reactionMessages ?? {},
+    reactionConfigUnavailable: fixture.reactionConfigUnavailable ?? false,
     nowMs: fixture.nowMs,
     config: fixture.config,
   });
@@ -1303,7 +1305,7 @@ describe('mergeDeliveryRecords from AO events', () => {
       prNumber: 234,
       targetSha: 'abc123',
     };
-    const deliveries = mergeDeliveryRecords({
+    const { deliveries } = mergeDeliveryRecords({
       aoEvents: [],
       dispatchJournal: {
         'opk-dedupe:1717600300000:review-send:run-journal-dedupe': {
@@ -1340,7 +1342,7 @@ describe('mergeDeliveryRecords from AO events', () => {
       prNumber: 234,
       targetSha: 'abc123',
     };
-    const deliveries = mergeDeliveryRecords({
+    const { deliveries } = mergeDeliveryRecords({
       aoEvents: [],
       dispatchJournal: {
         'opk-redeliver:1717600300000:review-send:run-redeliver-232': {
@@ -1371,7 +1373,7 @@ describe('mergeDeliveryRecords from AO events', () => {
   });
 
   it('skips unknown reaction keys without a configured message shape', () => {
-    const deliveries = mergeDeliveryRecords({
+    const { deliveries } = mergeDeliveryRecords({
       aoEvents: [
         {
           kind: 'reaction.action_succeeded',
@@ -1389,7 +1391,7 @@ describe('mergeDeliveryRecords from AO events', () => {
   });
 
   it('ingests reaction.action_succeeded send-to-agent', () => {
-    const deliveries = mergeDeliveryRecords({
+    const { deliveries } = mergeDeliveryRecords({
       aoEvents: [
         {
           kind: 'reaction.action_succeeded',
@@ -1408,6 +1410,68 @@ describe('mergeDeliveryRecords from AO events', () => {
   });
 });
 
+
+describe('issue #402 static reaction delivery shape from live config', () => {
+  const liveReportStale =
+    'Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.';
+
+  it('AC1/AC4/AC8: report-stale live text classifies pending-draft and plans submit', () => {
+    const { actions } = planFixture('report-stale-reaction-pending-draft.json');
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(true);
+    const { deliveries } = mergeDeliveryRecords({
+      aoEvents: loadFixture('report-stale-reaction-pending-draft.json').aoEvents ?? [],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: { 'report-stale': liveReportStale },
+      nowMs: 1782123034000,
+    });
+    expect(deliveries[0]?.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+    expect(deliveries[0]?.messageShape?.charLength).toBe(224);
+  });
+
+  it('AC8 negative: stale 73-char stub classifies self-submitted and does not submit', () => {
+    const { actions } = planFixture('report-stale-stub-self-submitted.json');
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(false);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'tracking_auto_submitted')).toBe(true);
+  });
+
+  it('AC6: unresolved reaction key emits audit, not delivery tracking', () => {
+    const { actions, tracking, reactionAudits } = planFixture('reaction-message-unresolved.json');
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(false);
+    expect(reactionAudits?.[0]?.reason).toBe('reaction_message_unresolved');
+    expect(reactionAudits?.[0]?.reactionKey).toBe('changes-requested');
+    expect(tracking.audit?.some((row) => row.reason === 'reaction_message_unresolved')).toBe(true);
+  });
+
+  it('AC6b: config unavailable defers instead of stub fallback', () => {
+    const { actions } = planFixture('reaction-config-unavailable.json');
+    expect(actions).toEqual([
+      expect.objectContaining({
+        type: 'defer',
+        reason: 'reaction_config_unavailable',
+      }),
+    ]);
+  });
+
+  it('AC5: ci-failed notify reaction is absent from shape map (negative control)', () => {
+    const { deliveries, reactionAudits } = mergeDeliveryRecords({
+      aoEvents: [
+        {
+          kind: 'reaction.action_succeeded',
+          sessionId: 'opk-ci',
+          tsEpoch: 1717600000000,
+          data: { action: 'send-to-agent', reactionKey: 'ci-failed' },
+        },
+      ],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: {},
+      nowMs: 1717600001000,
+    });
+    expect(deliveries).toHaveLength(0);
+    expect(reactionAudits?.[0]?.reactionKey).toBe('ci-failed');
+  });
+});
 
 describe('issue #281 journaled worker-send delivery accounting', () => {
   const baseSession = {
@@ -1973,7 +2037,7 @@ describe('worker-message-send adoption preflight', () => {
     expect(selfSubmittedProbe?.deliveryPath).toBe('self-submitted');
     expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.charLength).toBeLessThanOrEqual(200);
     expect((selfSubmittedProbe?.messageShape as { charLength?: number; lineCount?: number } | undefined)?.lineCount).toBe(1);
-    const deliveries = mergeDeliveryRecords({
+    const { deliveries } = mergeDeliveryRecords({
       dispatchJournal: parsedJournal,
       aoEvents: [],
       reviewRuns: [],

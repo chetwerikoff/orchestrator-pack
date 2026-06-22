@@ -38,6 +38,7 @@ $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
 $Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
@@ -162,7 +163,8 @@ function Set-ReconcileState {
 
 function Get-ReconcileReactionMessages {
     param(
-        [object]$Fixture
+        [object]$Fixture,
+        [string]$PackRoot = ''
     )
 
     if ($Fixture -and $Fixture.reactionMessages) {
@@ -173,10 +175,11 @@ function Get-ReconcileReactionMessages {
         return $map
     }
 
-    return @{
-        'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
-        'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    $resolved = Get-ReactionMessagesFromYaml -PackRoot $PackRoot
+    if (-not $resolved.ok) {
+        return @{}
     }
+    return $resolved.messages
 }
 
 function Get-FixtureReconcilePayload {
@@ -237,7 +240,7 @@ function Get-ReconcileDeliveryPayload {
         aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
         dispatchJournal    = Get-WorkerMessageDispatchJournal
         reviewRuns         = @(Get-AoReviewRuns -Project $Project)
-        reactionMessages   = Get-ReconcileReactionMessages
+        reactionMessages   = Get-ReconcileReactionMessages -PackRoot $RepoRoot
     }
 }
 

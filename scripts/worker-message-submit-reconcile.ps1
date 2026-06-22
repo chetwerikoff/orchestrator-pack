@@ -42,6 +42,7 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 
 $Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
 
@@ -383,10 +384,14 @@ function Invoke-SubmitReconcileTick {
         $now = if ($fixture.nowMs) { [long]$fixture.nowMs } else { $NowMs }
         $tickConfig = if ($fixture.config) { $fixture.config } else { @{} }
         $reactionMessages = @{}
+        $reactionConfigUnavailable = $false
         if ($fixture.reactionMessages) {
             foreach ($prop in $fixture.reactionMessages.PSObject.Properties) {
                 $reactionMessages[$prop.Name] = [string]$prop.Value
             }
+        }
+        if ($fixture.reactionConfigUnavailable) {
+            $reactionConfigUnavailable = [bool]$fixture.reactionConfigUnavailable
         }
         if ($fixture.floodActiveSessions) {
             $floodActiveSessions = @{}
@@ -407,9 +412,16 @@ function Invoke-SubmitReconcileTick {
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
-        $reactionMessages = @{
-            'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
-            'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+        $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot
+        $reactionMessages = @{}
+        $reactionConfigUnavailable = $false
+        if ($reactionConfig.ok) {
+            foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+                $reactionMessages[$entry.Key] = [string]$entry.Value
+            }
+        }
+        else {
+            $reactionConfigUnavailable = $true
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
     }
@@ -420,8 +432,9 @@ function Invoke-SubmitReconcileTick {
             aoEvents            = @($aoEvents)
             reviewRuns          = @($reviewRuns)
             dispatchJournal     = $dispatchJournal
-            reactionMessages    = $reactionMessages
-            tracking            = $tracking
+            reactionMessages         = $reactionMessages
+            reactionConfigUnavailable = $reactionConfigUnavailable
+            tracking                 = $tracking
             floodActiveSessions = $floodActiveSessions
             nowMs               = $now
             config              = $tickConfig

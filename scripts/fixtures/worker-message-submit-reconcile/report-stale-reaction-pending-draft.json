@@ -1,0 +1,28 @@
+{
+  "description": "Issue #402 AC1/AC4/AC8: report-stale live YAML text (224 chars) pending-draft → submit",
+  "nowMs": 1782123034000,
+  "sessions": [
+    {
+      "sessionId": "opk-165",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "aoEvents": [
+    {
+      "kind": "reaction.action_succeeded",
+      "sessionId": "opk-165",
+      "tsEpoch": 1782123033110,
+      "data": { "action": "send-to-agent", "reactionKey": "report-stale" }
+    }
+  ],
+  "dispatchJournal": {},
+  "reviewRuns": [],
+  "reactionMessages": {
+    "report-stale": "Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land."
+  },
+  "tracking": { "deliveries": {}, "audit": [] }
+}

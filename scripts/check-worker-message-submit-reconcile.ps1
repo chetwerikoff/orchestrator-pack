@@ -63,6 +63,42 @@ if ($ps1 -notmatch 'Invoke-WorkerInputDraftSubmit') {
     exit 1
 }
 
+if ($ps1 -match "report-stale' = 'Agent report is stale") {
+    Write-Host 'worker-message-submit-reconcile.ps1 must not use hardcoded report-stale stub text (Issue #402)'
+    exit 1
+}
+
+$reconcilePs1 = Join-Path $Root 'scripts/review-trigger-reconcile.ps1'
+if (-not (Test-Path -LiteralPath $reconcilePs1 -PathType Leaf)) {
+    Write-Host 'Missing scripts/review-trigger-reconcile.ps1'
+    exit 1
+}
+$reconcileText = Get-Content -LiteralPath $reconcilePs1 -Raw
+if ($reconcileText -match "report-stale' = 'Agent report is stale") {
+    Write-Host 'review-trigger-reconcile.ps1 must not use hardcoded report-stale stub text (Issue #402)'
+    exit 1
+}
+
+$reactionConfigCli = Join-Path $Root 'docs/reaction-config-messages.mjs'
+if (-not (Test-Path -LiteralPath $reactionConfigCli -PathType Leaf)) {
+    Write-Host 'Missing docs/reaction-config-messages.mjs'
+    exit 1
+}
+$shapeJson = & node $reactionConfigCli shape --path $example --reaction-key report-stale 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "reaction-config shape guard failed: $shapeJson"
+    exit 1
+}
+$shape = $shapeJson | ConvertFrom-Json
+if (-not $shape.ok -or $shape.deliveryPath -ne 'pending-draft') {
+    Write-Host 'agent-orchestrator.yaml.example report-stale must resolve to pending-draft deliveryPath'
+    exit 1
+}
+if ([int]$shape.messageShape.charLength -ne 224) {
+    Write-Host 'agent-orchestrator.yaml.example report-stale message must remain 224 chars for drift guard'
+    exit 1
+}
+
 if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
     Write-Host 'worker-message-submit-reconcile.ps1 must fence Enter with worker-message-submit-side-effect.lock'
     exit 1

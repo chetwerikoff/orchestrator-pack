@@ -414,7 +414,7 @@ export function mergeWorkerDeliveriesFromPlanInput(input = {}) {
         reviewRuns: toArray(input.reviewRuns),
         reactionMessages: input.reactionMessages ?? {},
         nowMs: Number(input.nowMs) || Date.now(),
-      })
+      }).deliveries
     : [];
 
   if (explicit.length === 0) {

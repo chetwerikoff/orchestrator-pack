@@ -1,0 +1,26 @@
+{
+  "description": "Issue #402 AC6: changes-requested send-to-agent without YAML message → audit only",
+  "nowMs": 1717600001000,
+  "sessions": [
+    {
+      "sessionId": "opk-changes",
+      "role": "worker",
+      "status": "working",
+      "runtime": "alive",
+      "activity": "idle",
+      "reports": []
+    }
+  ],
+  "aoEvents": [
+    {
+      "kind": "reaction.action_succeeded",
+      "sessionId": "opk-changes",
+      "tsEpoch": 1717600000000,
+      "data": { "action": "send-to-agent", "reactionKey": "changes-requested" }
+    }
+  ],
+  "dispatchJournal": {},
+  "reviewRuns": [],
+  "reactionMessages": {},
+  "tracking": { "deliveries": {}, "audit": [] }
+}
