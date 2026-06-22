@@ -55,7 +55,7 @@
         "file": "scripts/ci-green-wake-reconcile.ps1",
         "function": "Invoke-PlannedCiGreenWakeSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "772d88e741484dd7"
+        "predicateBodyHash": "7c5492484d2a2271"
       }
     },
     {
@@ -89,7 +89,7 @@
         "file": "scripts/ci-failure-notification-reconcile.ps1",
         "function": "Invoke-PlannedCiFailureReconcileSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "f9cc9e94f0c929b4"
+        "predicateBodyHash": "a38bd6bc16846f0b"
       }
     },
     {

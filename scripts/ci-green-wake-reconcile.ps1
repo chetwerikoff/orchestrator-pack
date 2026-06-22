@@ -389,19 +389,36 @@ function Invoke-PlannedCiGreenWakeSend {
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'ci-green-wake-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'ci-green-wake-reconcile' -Phase 'side_effect'
     $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
+    $sendExitCode = 0
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         $ciGreenMessage | pwsh -NoProfile -File $journaledScript $sendSessionId `
             -Source 'pack-send' -SourceKey "ci-green:$([string]$Action.transitionId)" `
             -ClaimToken $claimToken -GatedNudge -NoWait
-        if ($LASTEXITCODE -ne 0) {
-            throw "journaled worker send failed (exit $LASTEXITCODE) for PR #$($Action.prNumber)"
-        }
+        $script:sendExitCode = $LASTEXITCODE
     }
     if (-not $fenced.ok) {
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
         Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason 'side_effect_busy' -ClaimPhase 'CLAIMED') -ProjectId $ProjectId | Out-Null
         Write-CiGreenWakeLog "nudge skipped (side-effect busy) PR #$($Action.prNumber)"
         return @{ sent = $false; reason = 'side_effect_busy' }
+    }
+    if ($sendExitCode -ne 0) {
+        if ($sendExitCode -eq 44 -or $sendExitCode -eq 47) {
+            $uncertainReason = if ($sendExitCode -eq 47) { 'journal_update_unknown' } else { 'dispatch_unknown' }
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' -Extra @{ reason = $uncertainReason } | Out-Null
+            Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason $uncertainReason -ClaimPhase 'UNCERTAIN') -ProjectId $ProjectId | Out-Null
+            Write-CiGreenWakeLog "journaled worker send uncertain PR #$($Action.prNumber): $uncertainReason exit=$sendExitCode"
+            return @{
+                sent            = $false
+                reason          = $uncertainReason
+                uncertain       = $true
+                delivered       = $true
+                journalRecorded = $false
+            }
+        }
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ exitCode = $sendExitCode } | Out-Null
+        Write-CiGreenWakeLog "journaled worker send failed PR #$($Action.prNumber): exit=$sendExitCode"
+        return @{ sent = $false; reason = 'send_failed'; exitCode = $sendExitCode }
     }
 
     Write-WorkerNudgeGateDecisionAudit -Record $gate.audit -ProjectId $ProjectId | Out-Null

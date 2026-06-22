@@ -254,10 +254,12 @@ function Invoke-PlannedCiFailureReconcileSend {
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
         -TupleKey $tupleKey -Surface 'ci-failure-notification-reconcile' -ProjectId $ProjectId -Message $Message
     if (-not $claim.acquired) {
+        $claimPhase = if ($claim.phase) { [string]$claim.phase } elseif ($claim.claim -and $claim.claim.phase) { [string]$claim.claim.phase } else { '' }
         return @{
             ok           = $false
             reason       = [string]$claim.reason
             claimSkipped = $true
+            claimPhase   = $claimPhase
             escalate     = [bool]$claim.escalate
             diagnosis    = [string]$claim.diagnosis
         }
@@ -445,7 +447,22 @@ function Invoke-CiFailureEpisodeDelivery {
                     $claimSkipReason = [string]$sendResult.reason
                     Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "nudge suppressed by claim gate session=$targetId digest=$Digest reason=$claimSkipReason"
                     if ($claimSkipReason -eq 'already_served') {
-                        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "prior nudge claim served; converging delivery session=$targetId digest=$Digest"
+                        $claimPhase = if ($sendResult.claimPhase) { [string]$sendResult.claimPhase } else { 'SENT' }
+                        if ($claimPhase -eq 'UNCERTAIN') {
+                            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "prior nudge claim uncertain; retaining retry session=$targetId digest=$Digest"
+                            try {
+                                $update = Update-WorkerMessageDispatchOutcome -DeliveryId $dispatchDeliveryId -DispatchOutcome 'send_failed' -DraftState 'unknown'
+                                if (-not $update.updated) {
+                                    Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest delivery=$dispatchDeliveryId"
+                                }
+                            }
+                            catch {
+                                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dispatch journal send_failed update failed digest=$Digest error=$($_.Exception.Message)"
+                            }
+                            $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
+                            return $false
+                        }
+                        Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "prior nudge claim served; converging delivery session=$targetId digest=$Digest phase=$claimPhase"
                     }
                     else {
                         try {

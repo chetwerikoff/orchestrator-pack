@@ -1078,6 +1078,16 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(invokeText).toMatch(/journal_update_unknown/);
   });
 
+  it('treats ci-green journaled journal-update failure as uncertain claim outcome', () => {
+    const ciGreen = readFileSync(
+      path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+      'utf8',
+    );
+    expect(ciGreen).toMatch(/\$sendExitCode -eq 44 -or \$sendExitCode -eq 47/);
+    expect(ciGreen).toMatch(/Outcome 'UNCERTAIN'/);
+    expect(ciGreen).toMatch(/journalRecorded = \$false/);
+    expect(ciGreen).toMatch(/journal_update_unknown/);
+  });
 
   it('resolves reconcile script tuples from PR ownership claim', () => {
     const ciGreen = readFileSync(
@@ -1364,20 +1374,24 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
   });
 
-  it('treats already-served ci-failure claim skips as delivered sends', () => {
+  it('converges only SENT already-served ci-failure claim skips as delivered', () => {
     const body = readFileSync(
       path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),
       'utf8',
     );
+    expect(body).toMatch(/claimPhase\s*=/);
     expect(body).toMatch(/claimSkipReason -eq 'already_served'/);
+    expect(body).toMatch(/claimPhase -eq 'UNCERTAIN'/);
     expect(body).toMatch(/prior nudge claim served; converging delivery/);
     const alreadyServedIdx = body.indexOf("claimSkipReason -eq 'already_served'");
-    const sendFailedIdx = body.indexOf("DispatchOutcome 'send_failed'", alreadyServedIdx);
-    const releaseIntentIdx = body.indexOf("release-submit-intent", alreadyServedIdx);
+    const uncertainIdx = body.indexOf("claimPhase -eq 'UNCERTAIN'", alreadyServedIdx);
+    const sendFailedIdx = body.indexOf("DispatchOutcome 'send_failed'", uncertainIdx);
+    const releaseIntentIdx = body.indexOf("release-submit-intent", uncertainIdx);
     expect(alreadyServedIdx).toBeGreaterThan(-1);
-    expect(body.indexOf('return $false', alreadyServedIdx)).toBeGreaterThan(alreadyServedIdx);
-    expect(sendFailedIdx).toBeGreaterThan(alreadyServedIdx);
-    expect(releaseIntentIdx).toBeGreaterThan(alreadyServedIdx);
+    expect(uncertainIdx).toBeGreaterThan(alreadyServedIdx);
+    expect(body.indexOf('return $false', uncertainIdx)).toBeGreaterThan(uncertainIdx);
+    expect(sendFailedIdx).toBeGreaterThan(uncertainIdx);
+    expect(releaseIntentIdx).toBeGreaterThan(uncertainIdx);
   });
 
   it('reuses pre-registered delivery id for ci-failure journaled sends', () => {
