@@ -12,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# AC#13 e2e runs before launch-contract-evidence-reverify.ps1 lands on origin/main.
+$env:OPK_REVERIFY_E2E_REQUIRED = '1'
 . (Join-Path $PSScriptRoot 'lib/TrustedPackRoot-Common.ps1')
 $packRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     Split-Path -Parent $PSScriptRoot
