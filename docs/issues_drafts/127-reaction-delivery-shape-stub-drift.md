@@ -10,22 +10,26 @@ GitHub Issue: TBD
 - `docs/issues_drafts/71-orchestrator-side-process-supervisor.md` (GitHub #205) — supervised
   child host (unchanged).
 - `docs/issues_drafts/89-worker-message-delivery-confirmed-consumption.md` (GitHub #373) —
-  scenario matrix assumes accurate `deliveryPath`.
+  shipped; journaled deliveries including **`review-send`** (Enter / confirmed consumption).
+- `docs/issues_drafts/92-arbiter-budget-eligibility-resume.md` (GitHub #293) — shipped;
+  Enter-on-busy enqueue-safe for arbiter backstop (#373 surface).
 - `docs/issues_drafts/95-orchestrator-message-egress-registry.md` (GitHub #298) — **queued**
   related work on orchestrator message single-source; not shipped on `main`.
 - `docs/issues_drafts/117-spec-contract-evidence-grounding-gate.md` (GitHub #366) — contract
   evidence discipline.
 - Binding-bug pattern (#218 / #381): in-pack config fidelity drift, not upstream AO wire shape.
 
-**Follow-up (out of scope here):** `docs/issues_drafts/127b-dynamic-reaction-delivery-shape-default.md`
-— `send-to-agent` reactions whose text is not statically available in YAML
-(`changes-requested` today).
-
 ## Pre-sync grounding
 
 Gate A captures are declared in `contract-evidence` below (`capture@ao-reaction-*`). AO reaction
 events do not carry message body; shape bindings use config text + pane reproduction (provenance
 documents both).
+
+**AC1 overlap (code, 2026-06-22):** live dynamic review-findings delivery runs through
+`review-send` (`review-send-reconcile.ps1` → `Register-WorkerMessageDispatch` with real
+`$reviewMessage` text). Reliability of that path is **#232 / #373 / #293**, not stub-map shape.
+`changes-requested` reaction path is **dormant** (0 `reaction.action_succeeded` events / 30d+).
+Former follow-up draft `127b` **folded** into this issue — see Decision log.
 
 ## Goal
 
@@ -97,18 +101,24 @@ expected: true
 - AO paste threshold: multiline **or** charLength > 200.
 - Reaction path reads `reactionMessages[reactionKey]` from a reconcile-supplied map — not from
   event payload or dispatch journal.
-- Missing map keys → silent `continue`.
+- Missing map keys → silent `continue` today (`extractReactionDeliveries`).
+- **Live dynamic findings** use `review-send` journal with real message text — governed by
+  #232/#373/#293, not this stub-map defect.
 
 ### Architecture sketch
 
 ```
-reactions.<key>.message (YAML, static only) ──► AO delivers to pane
+reactions.<key>.message (YAML, static) ──► AO delivers to pane
         │                                              │
         │ (must match)                                 ▼
         │                                     [unsubmitted draft]
         X today: stale stub map
         ▼
 wrong deliveryPath → tracking_auto_submitted noop
+
+review-send (live dynamic findings) ──► journal + real text ──► #232/#373/#293
+
+changes-requested reaction (dormant) ──► miss in map ──► audit record (AC6), not bare continue
 ```
 
 ### Options (illustrative — planner picks mechanism)
@@ -121,9 +131,9 @@ wrong deliveryPath → tracking_auto_submitted noop
 
 **Invariant (not a prescribed implementation):** for reactions with static YAML `message:`, shape
 classification MUST use that live text or an equally authoritative delivery record — never a
-drifting in-code duplicate. Dynamic-text reactions are **out of scope** (see `127b`).
+drifting in-code duplicate.
 
-### In-scope class matrix (static message only)
+### In-scope class matrix (static message + visibility guard)
 
 | Dimension | Class | Expected outcome |
 |-----------|-------|------------------|
@@ -131,6 +141,7 @@ drifting in-code duplicate. Dynamic-text reactions are **out of scope** (see `12
 | Key | Same key, stub <200 chars (negative) | Must **not** classify from stub when YAML is longer |
 | Key | Static message present in YAML, absent from old stub map | Shape resolved from YAML |
 | Key | `ci-failed` stub present but YAML is `notify` | No false reaction-shape tracking |
+| Key | Reaction key, no resolvable text (e.g. `changes-requested`) | Named audit — not bare `continue` |
 | Form | charLength 201 | `pending-draft` |
 | Form | charLength 199 | `self-submitted` |
 | Form | Multiline, total <200 chars | `pending-draft` |
@@ -143,6 +154,10 @@ drifting in-code duplicate. Dynamic-text reactions are **out of scope** (see `12
   `reactions.<key>.message` in live operator config, `deliveryPath` MUST be derived from that
   text (or an equally authoritative AO delivery record the planner identifies) — never from a
   hardcoded stub.
+- **Audit on miss (visibility only).** Observed `send-to-agent` reaction whose key has no
+  resolvable message text → named audit outcome in `extractReactionDeliveries` — never bare
+  `continue`. Does **not** require Enter, default-safe shape, or delivery policy (live dynamic
+  findings: `review-send` + #232/#373/#293).
 - **Remove stale stub entries** that misrepresent live config (e.g. `ci-failed` text while live
   reaction is `notify`).
 - **Drift regression guard.** CI fails if resolved shape for a fixture static reaction diverges
@@ -156,14 +171,16 @@ supervisor child must restart (#205).
 ## Files in scope
 
 - Submit reconcile / reaction observation wiring for **static-text** reactions.
+- `extractReactionDeliveries` audit-on-miss for unresolvable reaction keys (same edit surface).
 - Regression fixtures and CI guards for matrix above.
 - Existing `capture@ao-reaction-*` manifest entries (keep in sync if paths change).
 
 ## Files out of scope
 
 - `vendor/**`, `packages/core/**`, `.ao/**`.
-- **Dynamic-text `send-to-agent` reactions** (`changes-requested` — no static `message:` in
-  YAML; AO generates body; event carries no text). See `127b` and `parked-root-cause` below.
+- **Default-safe shape / Enter policy** for dynamic-text reactions when text is unknown — live
+  dynamic findings delivery is `review-send` (#232/#373/#293); `changes-requested` reaction
+  path dormant (0 events/30d+).
 - Changing `reactions.report-stale` prose (operator choice).
 - Upstream AO single-Enter-after-paste fix.
 - Full #298 message-catalog audit.
@@ -192,26 +209,15 @@ provenance: capture-backed
    records `submitted≥1`.
 5. **No stale ci-failed stub.** Live `ci-failed` is `notify` — stub-map text must not drive
    reaction-shape tracking (negative control).
-6. **Drift guard.** CI fails when example-YAML `report-stale` shape diverges from arbiter
+6. **Audit on miss (visibility only).** `changes-requested` (or any key with no resolvable text)
+   `reaction.action_succeeded` fixture → named audit outcome — not bare `continue` in
+   `extractReactionDeliveries`. Does **not** require Enter or shape classification.
+7. **Drift guard.** CI fails when example-YAML `report-stale` shape diverges from arbiter
    resolution.
-7. **Incident recurrence.** `opk-165:1782123033110:reaction:report-stale`: corrected shape →
+8. **Incident recurrence.** `opk-165:1782123033110:reaction:report-stale`: corrected shape →
    submit attempts; stub shape → negative control (pre-fix fail).
-8. **Escalation after submit budget.** `delivery_backstop_exhausted` only after bounded submit
+9. **Escalation after submit budget.** `delivery_backstop_exhausted` only after bounded submit
    attempts on correct `pending-draft` — not immediate `tracking_auto_submitted` loop.
-
-## Parked class (pre-sync — add `parked-root-cause` fence with `#N` when `127b` syncs)
-
-- **cause:** `send-to-agent` reactions without static `reactions.<key>.message` (`changes-requested`
-  today) cannot have shape resolved from YAML; AO generates text dynamically; events carry no
-  body; pane scrape forbidden (#232).
-- **evidence:** live yaml — `changes-requested` has `send-to-agent`, no `message:`; silent
-  `continue` when stub map lacks key (`extractReactionDeliveries`); no-silent-drop invariant
-  and review-send overlap proof belong in `127b`.
-- **reason-deferred:** #127 YAML-read returns empty shape; touching the `continue` path for
-  dynamic keys is out of scope here; default-safe policy + audit invariant → `127b`.
-- **follow-up:** `docs/issues_drafts/127b-dynamic-reaction-delivery-shape-default.md` → assign
-  `#N` before publish and replace this section with a `parked-root-cause` fence.
-- **resolution-policy:** static slice resolved by #127; dynamic class reopens via #127b only.
 
 ## Upgrade-safety check
 
@@ -229,6 +235,15 @@ provenance: capture-backed
 
 ## Decision log
 
-- Decomposed from original single draft per architect review 2026-06-22: static slice shippable
-  here; dynamic slice → `127b`.
+- Decomposed from original single draft per architect review 2026-06-22; static slice shippable
+  here; dynamic slice initially → `127b`.
 - New issue (not fold into #232/#373): drift-guard ACs specific to config-fidelity regression.
+- **#127b folded (2026-06-22, AC1 code verdict).** `review-send-reconcile.ps1` registers
+  deliveries with real `$reviewMessage` via `Register-WorkerMessageDispatch` — shape correct;
+  Enter/consumption/busy-enqueue governed by **#232/#373/#293**. `changes-requested` reaction
+  dormant (0 events/30d+). Remaining work is one visibility guard (AC6 audit-on-miss in
+  `extractReactionDeliveries`) — below decomposition threshold for a standalone issue; no
+  `parked-root-cause` fence or follow-up issue. Former P1-A split rationale (no-silent-drop +
+  delivery policy) obsolete once live path ownership confirmed.
+- **No deferred build** for dynamic findings delivery — `review-send` is live owner; sleeping
+  reaction path closed by AC6 audit record only.
