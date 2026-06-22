@@ -120,6 +120,13 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(sandboxSource).toContain('export function isPrHeadNetworkSandboxAvailable');
   });
 
+  it('mounts isolated HOME and TMPDIR paths inside bwrap sandbox', () => {
+    const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
+    expect(sandboxSource).toContain('appendSandboxEnvPathMounts');
+    expect(sandboxSource).toContain('sandboxRoot: disposable');
+    expect(sandboxSource).toContain("--dir', envPath");
+  });
+
   it('does not expose writable trusted node_modules symlink fallback in sandbox', () => {
     const sandboxSource = readFileSync(path.join(packRoot, 'scripts/lib/reverify-sandbox.ts'), 'utf8');
     expect(sandboxSource).not.toContain('linkNodeModulesIntoDisposable');

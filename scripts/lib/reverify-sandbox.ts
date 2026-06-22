@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
@@ -135,10 +135,11 @@ function guardSandboxPostcondition(
 
 function buildIsolatedEnv(
   extraEnv: Record<string, string>,
-  options: { binDirs?: string[] } = {},
+  options: { binDirs?: string[]; sandboxRoot?: string } = {},
 ): NodeJS.ProcessEnv {
-  const isolatedHome = mkdtempSync(path.join(tmpdir(), 'reverify-home-'));
-  const isolatedTmp = mkdtempSync(path.join(tmpdir(), 'reverify-tmp-'));
+  const parentDir = options.sandboxRoot ?? tmpdir();
+  const isolatedHome = mkdtempSync(path.join(parentDir, '.reverify-home-'));
+  const isolatedTmp = mkdtempSync(path.join(parentDir, '.reverify-tmp-'));
   const nodeBin = path.dirname(process.execPath);
   const pathEntries = [
     ...(options.binDirs ?? []),
@@ -294,6 +295,37 @@ function withSandboxBinDir(
   };
 }
 
+function collectSandboxEnvPaths(env: NodeJS.ProcessEnv): string[] {
+  const paths = new Set<string>();
+  for (const key of ['HOME', 'TMPDIR', 'VITEST_CACHE_DIR', 'XDG_CACHE_HOME']) {
+    const value = env[key];
+    if (typeof value === 'string' && path.isAbsolute(value)) {
+      paths.add(value);
+    }
+  }
+  return [...paths];
+}
+
+function appendSandboxEnvPathMounts(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  sandboxCwd: string,
+): void {
+  const sandboxPrefix = `${sandboxCwd}${path.sep}`;
+  for (const envPath of collectSandboxEnvPaths(env)) {
+    if (envPath === sandboxCwd || envPath.startsWith(sandboxPrefix)) {
+      mkdirSync(envPath, { recursive: true });
+      continue;
+    }
+    if (envPath === '/tmp' || envPath.startsWith('/tmp/')) {
+      args.push('--dir', envPath);
+      continue;
+    }
+    mkdirSync(envPath, { recursive: true });
+    args.push('--bind', envPath, envPath);
+  }
+}
+
 function buildBwrapSandboxArgs(
   sandboxCwd: string,
   dependencyRoot: string,
@@ -328,6 +360,7 @@ function buildBwrapSandboxArgs(
   if (options.npmVitestProof) {
     appendVitestNodeModulesTmpfs(args, sandboxCwd);
   }
+  appendSandboxEnvPathMounts(args, env, sandboxCwd);
   args.push('--chdir', sandboxCwd);
 
   for (const [key, value] of Object.entries(env)) {
@@ -358,7 +391,7 @@ function ensureBwrapSandboxReady(
     return cachedBwrapSandboxReady[mode] as boolean;
   }
 
-  const probeEnv = buildIsolatedEnv({});
+  const probeEnv = buildIsolatedEnv({}, { sandboxRoot: sandboxCwd });
   const args = buildBwrapSandboxArgs(sandboxCwd, dependencyRoot, probeEnv, { mode });
   const truePath = existsSync('/bin/true') ? '/bin/true' : process.execPath;
   if (truePath === process.execPath) {
@@ -442,7 +475,8 @@ function spawnTrustedBaseIsolated(
     cwd: string;
     dependencyRoot: string;
     timeoutMs: number;
-    env: NodeJS.ProcessEnv;
+    baseEnv: Record<string, string>;
+    binDirs: string[];
     npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
@@ -451,6 +485,10 @@ function spawnTrustedBaseIsolated(
     return sandboxUnavailableResult(FILESYSTEM_SANDBOX_UNAVAILABLE);
   }
 
+  const env = buildIsolatedEnv(options.baseEnv, {
+    binDirs: options.binDirs,
+    sandboxRoot: disposable,
+  });
   const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
 
   try {
@@ -464,7 +502,7 @@ function spawnTrustedBaseIsolated(
         cwd: disposable,
         encoding: 'utf8' as const,
         timeout: options.timeoutMs,
-        env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
+        env: withSandboxBinDir(env, disposable, { assumeBoundNodeModules: true }),
         shell: false as const,
         dependencyRoot: options.dependencyRoot,
         npmVitestProof: options.npmVitestProof,
@@ -483,7 +521,7 @@ function spawnTrustedBaseIsolated(
     const beforeDependencyFingerprint = captureTrustedNodeModulesFingerprint(options.dependencyRoot);
     const directResult = spawnTrustedBaseDirect(resolved, disposable, options.cwd, {
       timeoutMs: options.timeoutMs,
-      env: options.env,
+      env,
       dependencyRoot: options.dependencyRoot,
     });
     return guardSandboxPostcondition(
@@ -506,7 +544,8 @@ function spawnPrHeadIsolated(
     cwd: string;
     dependencyRoot: string;
     timeoutMs: number;
-    env: NodeJS.ProcessEnv;
+    baseEnv: Record<string, string>;
+    binDirs: string[];
     npmVitestProof?: boolean;
   },
 ): SpawnSyncReturns<string> {
@@ -519,6 +558,10 @@ function spawnPrHeadIsolated(
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
 
+  const env = buildIsolatedEnv(options.baseEnv, {
+    binDirs: options.binDirs,
+    sandboxRoot: disposable,
+  });
   const beforeSandboxFingerprint = captureSandboxDirectoryFingerprint(disposable);
 
   // Bwrap ro-binds dependencyRoot/node_modules at disposable/node_modules; skip host symlink.
@@ -532,7 +575,7 @@ function spawnPrHeadIsolated(
     cwd: disposable,
     encoding: 'utf8' as const,
     timeout: options.timeoutMs,
-    env: withSandboxBinDir(options.env, disposable, { assumeBoundNodeModules: true }),
+    env: withSandboxBinDir(env, disposable, { assumeBoundNodeModules: true }),
     shell: false as const,
     dependencyRoot: options.dependencyRoot,
     npmVitestProof: options.npmVitestProof,
@@ -559,7 +602,8 @@ function spawnIsolated(
     cwd: string;
     dependencyRoot: string;
     timeoutMs: number;
-    env: NodeJS.ProcessEnv;
+    baseEnv: Record<string, string>;
+    binDirs: string[];
     networkRestricted: boolean;
     npmVitestProof?: boolean;
   },
@@ -611,7 +655,6 @@ export function runSandboxedAllowlistedCommand(
   const beforeFingerprint = captureWorktreeFingerprint(options.cwd);
   const localBinDir = path.join(dependencyRoot, 'node_modules', '.bin');
   const binDirs = existsSync(localBinDir) ? [localBinDir] : [];
-  const env = buildIsolatedEnv(resolved.env, { binDirs });
   const networkRestricted = options.sandboxMode === 'pr-head-new';
 
   const npmVitestProof = resolved.allowlistId.startsWith('npm test --');
@@ -619,7 +662,8 @@ export function runSandboxedAllowlistedCommand(
     cwd: options.cwd,
     dependencyRoot,
     timeoutMs: options.timeoutMs,
-    env,
+    baseEnv: resolved.env,
+    binDirs,
     networkRestricted,
     npmVitestProof,
   });
