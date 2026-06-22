@@ -57,6 +57,9 @@ import {
   shouldInvokeCoworkerForStatus,
   resolveLiveHeadSha,
   resolveCoworkerLedgerInput,
+  shouldPersistBoundIssueSnapshots,
+  specBodiesMatchContractSet,
+  captureValidatedBoundIssueSnapshots,
 } from './invoke-reviewer-contract-mapping.js';
 
 const fixturesDir = path.join(
@@ -1684,6 +1687,54 @@ describe('reviewer contract-mapping (Issue #362)', () => {
       specBodies: [issue],
     });
     expect(result.status).toBe('incomplete_evidence');
+  });
+
+
+  it('defers bound issue snapshot capture until validated spec statuses', () => {
+    expect(shouldPersistBoundIssueSnapshots('mapping_pending')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('mapped')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('stale_spec')).toBe(false);
+    expect(shouldPersistBoundIssueSnapshots('lookup_unavailable')).toBe(false);
+  });
+
+  it('does not capture bound issue snapshots when supplied spec drifts from contract set', () => {
+    const body = fixture('issue-with-acceptance.md');
+    const members = [{ issueNumber: 362, snapshotHash: hashIssueBodySnapshot(body) }];
+    const staleBody = `${body}\nchanged`;
+    expect(specBodiesMatchContractSet(
+      [{ issueNumber: 362, body }],
+      members,
+    )).toBe(true);
+    expect(specBodiesMatchContractSet(
+      [{ issueNumber: 362, body: staleBody }],
+      members,
+    )).toBe(false);
+
+    const captures = captureValidatedBoundIssueSnapshots({
+      opts: {
+        prBodyFile: null,
+        issueFile: null,
+        issuesFile: null,
+        issueSpecs: [],
+        diffFile: null,
+        changedPathsFile: null,
+        explicitIssue: 362,
+        declarationIssue: null,
+        prHeadSha: 'abc1234',
+        ledgerFile: null,
+        invokeCoworker: false,
+        json: true,
+        lookupAvailable: true,
+        coworkerAvailable: true,
+        prNumber: 380,
+        projectId: 'orchestrator-pack',
+      },
+      prHeadSha: 'abc1234567890abcdef1234567890abcdef1234',
+      contractSet: members,
+      status: 'mapping_pending',
+      specBodies: [{ issueNumber: 362, body: staleBody }],
+    });
+    expect(captures).toEqual([]);
   });
 
 });

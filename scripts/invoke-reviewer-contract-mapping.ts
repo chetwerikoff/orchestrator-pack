@@ -489,6 +489,70 @@ export function serializeBoundIssueSnapshotCapture(
   }));
 }
 
+
+export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus): boolean {
+  return status === 'mapped' || status === 'mapping_pending';
+}
+
+export function specBodiesMatchContractSet(
+  specBodies: Array<{ issueNumber: number; body: string }>,
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>,
+): boolean {
+  const bodyByIssue = new Map(specBodies.map((spec) => [spec.issueNumber, spec.body] as const));
+  return contractSet.every((member) => {
+    const body = bodyByIssue.get(member.issueNumber);
+    if (!body) {
+      return false;
+    }
+    return hashIssueBodySnapshot(body) === member.snapshotHash;
+  });
+}
+
+export function captureValidatedBoundIssueSnapshots(input: {
+  opts: CliOptions;
+  prHeadSha: string;
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>;
+  status: ContractMappingStatus;
+  specBodies: Array<{ issueNumber: number; body: string }>;
+  resolveIssueBody?: IssueBodyResolver;
+}): BoundIssueSnapshotCaptureResult[] {
+  if (!input.opts.prNumber || input.opts.prNumber <= 0) {
+    return [];
+  }
+  if (!shouldPersistBoundIssueSnapshots(input.status)) {
+    return [];
+  }
+  if (input.contractSet.length === 0) {
+    return [];
+  }
+
+  let validatedBodies: Array<{ issueNumber: number; body: string }>;
+  if (input.resolveIssueBody) {
+    validatedBodies = input.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      body: input.resolveIssueBody!(member.issueNumber),
+    }));
+    if (!specBodiesMatchContractSet(validatedBodies, input.contractSet)) {
+      return [];
+    }
+  } else {
+    if (!specBodiesMatchContractSet(input.specBodies, input.contractSet)) {
+      return [];
+    }
+    validatedBodies = input.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      body: input.specBodies.find((spec) => spec.issueNumber === member.issueNumber)!.body,
+    }));
+  }
+
+  return captureBoundIssueSnapshotsFromPreflight({
+    projectId: input.opts.projectId ?? resolveDefaultAoProjectId(),
+    prNumber: input.opts.prNumber,
+    prHeadSha: input.prHeadSha,
+    specBodies: validatedBodies,
+  });
+}
+
 function main(): void {
   const opts = parseArgs(process.argv);
   if (!opts.diffFile) {
@@ -513,15 +577,6 @@ function main(): void {
     process.exit(2);
   }
 
-  const boundIssueSnapshotCapture = opts.prNumber && opts.prNumber > 0
-    ? captureBoundIssueSnapshotsFromPreflight({
-        projectId: opts.projectId ?? resolveDefaultAoProjectId(),
-        prNumber: opts.prNumber,
-        prHeadSha,
-        specBodies,
-      })
-    : [];
-
   const preflight = evaluateMappingPreflight({
     diffLineCount,
     diffContent,
@@ -539,6 +594,13 @@ function main(): void {
   });
 
   if (opts.preflightOnly) {
+    const boundIssueSnapshotCapture = captureValidatedBoundIssueSnapshots({
+      opts,
+      prHeadSha,
+      contractSet: preflight.contractSet,
+      status: preflight.status,
+      specBodies,
+    });
     const output = {
       status: preflight.status,
       shouldInvokeCoworker: preflight.shouldInvokeCoworker,
@@ -614,6 +676,7 @@ function main(): void {
     issueNumber: member.issueNumber,
     snapshotHash: member.snapshotHash,
   }));
+  let specValidationPassed = preflight.contractSet.length === 0;
   if (preflight.contractSet.length > 0) {
     const specReread = tryRecomputeCurrentSpecHashes(
       opts,
@@ -639,6 +702,7 @@ function main(): void {
       statusRecord = merged.statusRecord;
       ledger = merged.ledger;
     } else {
+      specValidationPassed = true;
       currentSpecHashes = specReread.hashes;
     }
   }
@@ -655,6 +719,17 @@ function main(): void {
     statusRecord = finalizedOutput.statusRecord;
     ledger = finalizedOutput.ledger;
   }
+
+  const boundIssueSnapshotCapture = specValidationPassed
+    ? captureValidatedBoundIssueSnapshots({
+        opts,
+        prHeadSha: currentHeadSha,
+        contractSet: preflight.contractSet,
+        status,
+        specBodies,
+        resolveIssueBody: createSpecFreshnessResolver(opts),
+      })
+    : [];
 
   const output = {
     status,
