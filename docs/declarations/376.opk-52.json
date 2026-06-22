@@ -41,6 +41,7 @@
     "scripts/lib/reviewer-cli-io.ts",
     "scripts/lib/reviewer-ts-cli.ts",
     "scripts/orchestrator-message-registry.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/resolve-bound-issue-snapshot.ps1",
     "scripts/reverify-allowlist-config.test.ts",
     "scripts/reverify-bound-issue-snapshot.test.ts",
@@ -103,6 +104,7 @@
           "scripts/lib/reverify-allowlist-config.ts",
           "scripts/lib/reverify-bound-issue-snapshot.ts",
           "scripts/lib/reviewer-ts-cli.ts",
+          "scripts/orchestrator-wake-supervisor.test.ts",
           "scripts/resolve-bound-issue-snapshot.ps1",
           "scripts/reverify-allowlist-config.test.ts",
           "scripts/reverify-bound-issue-snapshot.test.ts"
