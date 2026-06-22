@@ -8,6 +8,7 @@ $Script:WorkerNudgeClaimSafeFloorMinutes = 1
 $Script:WorkerNudgeClaimTerminalRetentionCount = 64
 $Script:WorkerNudgeClaimMutexStaleSeconds = 5
 $Script:WorkerNudgeClaimDefaultLeaseMs = 120000
+$Script:WorkerNudgeClaimReportStaleMs = 30 * 60 * 1000
 
 function Get-WorkerNudgeClaimProjectNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
@@ -18,6 +19,34 @@ function Get-WorkerNudgeClaimProjectNamespace {
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'worker-nudge-claims')
 }
 
+
+function Get-WorkerNudgeCanonicalClaimNamespace {
+    param(
+        [string]$CandidatePath,
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    $libDir = $PSScriptRoot
+    . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
+    $candidate = ([string]$CandidatePath).Trim()
+    if (-not $candidate) {
+        return (Get-WorkerNudgeClaimProjectNamespace -ProjectId $ProjectId)
+    }
+    try {
+        $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+    }
+    catch {
+        $resolved = $candidate
+    }
+    $canonical = Invoke-WorkerNudgeFilterCli -Subcommand 'canonicalizeStorePath' -Payload @{ storePath = $resolved }
+    $storeId = [string]$canonical.storeId
+    if (-not $storeId) {
+        return (Get-WorkerNudgeClaimProjectNamespace -ProjectId $ProjectId)
+    }
+    $root = Get-WorkerNudgeClaimProjectNamespace -ProjectId $ProjectId
+    return (Join-Path (Join-Path $root 'by-store-id') $storeId)
+}
+
 function Resolve-WorkerNudgeClaimNamespace {
     param(
         [string]$ProjectId = 'orchestrator-pack',
@@ -25,7 +54,9 @@ function Resolve-WorkerNudgeClaimNamespace {
     )
 
     if ($Namespace) { return $Namespace }
-    if ($env:AO_WORKER_NUDGE_CLAIM_DIR) { return $env:AO_WORKER_NUDGE_CLAIM_DIR.Trim() }
+    if ($env:AO_WORKER_NUDGE_CLAIM_DIR) {
+        return (Get-WorkerNudgeCanonicalClaimNamespace -CandidatePath $env:AO_WORKER_NUDGE_CLAIM_DIR.Trim() -ProjectId $ProjectId)
+    }
     return (Get-WorkerNudgeClaimProjectNamespace -ProjectId $ProjectId)
 }
 
@@ -49,12 +80,21 @@ function Get-WorkerNudgeClaimStaleMinutes {
 }
 
 function Get-WorkerNudgeClaimLeaseMs {
+    param([scriptblock]$LogWriter = $null)
+
     $lease = $Script:WorkerNudgeClaimDefaultLeaseMs
     if ($env:AO_WORKER_NUDGE_CLAIM_LEASE_MS) {
         $parsed = 0
         if ([int]::TryParse($env:AO_WORKER_NUDGE_CLAIM_LEASE_MS, [ref]$parsed) -and $parsed -gt 0) {
             $lease = $parsed
         }
+    }
+    $maxLease = $Script:WorkerNudgeClaimReportStaleMs
+    if ($lease -gt $maxLease) {
+        if ($LogWriter) {
+            & $LogWriter "worker-nudge-claim: WARN claim lease ${lease}ms exceeds report-stale bound ${maxLease}ms; clamped"
+        }
+        $lease = $maxLease
     }
     return $lease
 }

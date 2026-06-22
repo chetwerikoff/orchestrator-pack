@@ -40,3 +40,40 @@ function Write-WorkerNudgeGatePreflightRefusal {
         atUtc       = (Get-Date).ToUniversalTime().ToString('o')
     }
 }
+
+function Write-WorkerNudgeGateDecisionAudit {
+    param(
+        [object]$Record,
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    if (-not $Record) { return $null }
+    return Write-WorkerNudgeGateAudit -AuditRoot (Get-WorkerNudgeGateAuditRoot -ProjectId $ProjectId) -Record $Record
+}
+
+function Merge-WorkerNudgeClaimSkipAudit {
+    param(
+        [object]$GateAudit,
+        [string]$Reason,
+        [string]$ClaimPhase = 'none',
+        [string]$Decision = 'SUPPRESS'
+    )
+
+    $audit = @{}
+    if ($GateAudit) {
+        if ($GateAudit -is [pscustomobject]) {
+            foreach ($prop in $GateAudit.PSObject.Properties) {
+                $audit[$prop.Name] = $prop.Value
+            }
+        }
+        elseif ($GateAudit -is [hashtable]) {
+            $audit = @{} + $GateAudit
+        }
+    }
+    $audit['decision'] = $Decision
+    $audit['reason'] = $Reason
+    $audit['claimPhase'] = $ClaimPhase
+    if (-not $audit['kind']) { $audit['kind'] = 'worker-nudge-gate' }
+    return $audit
+}
+

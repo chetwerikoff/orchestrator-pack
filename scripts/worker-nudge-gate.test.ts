@@ -1121,3 +1121,38 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
   });
 });
 
+describe('worker nudge claim namespace and lease (#384 opk-rev-772)', () => {
+  it('maps equivalent AO_WORKER_NUDGE_CLAIM_DIR forms to one physical namespace', () => {
+    const helperPath = path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1');
+    const wsl = '/mnt/c/Users/me/.agent-orchestrator/custom-claims';
+    const win = 'C:\\Users\\me\\.agent-orchestrator\\custom-claims';
+    const script = `
+      $prev = $env:AO_WORKER_NUDGE_CLAIM_DIR
+      . ${psString(helperPath)}
+      $env:AO_WORKER_NUDGE_CLAIM_DIR = '${wsl}'
+      $wslNs = Resolve-WorkerNudgeClaimNamespace
+      $env:AO_WORKER_NUDGE_CLAIM_DIR = '${win}'
+      $winNs = Resolve-WorkerNudgeClaimNamespace
+      if ($prev) { $env:AO_WORKER_NUDGE_CLAIM_DIR = $prev } else { Remove-Item Env:AO_WORKER_NUDGE_CLAIM_DIR -ErrorAction SilentlyContinue }
+      [pscustomobject]@{ wslNs = $wslNs; winNs = $winNs; same = ($wslNs -eq $winNs) } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.same).toBe(true);
+    expect(result.wslNs).toMatch(/by-store-id[/\\]/);
+  });
+
+  it('clamps AO_WORKER_NUDGE_CLAIM_LEASE_MS above report-stale bound', () => {
+    const helperPath = path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1');
+    const script = `
+      $prev = $env:AO_WORKER_NUDGE_CLAIM_LEASE_MS
+      $env:AO_WORKER_NUDGE_CLAIM_LEASE_MS = '999999999'
+      . ${psString(helperPath)}
+      $lease = Get-WorkerNudgeClaimLeaseMs
+      if ($prev) { $env:AO_WORKER_NUDGE_CLAIM_LEASE_MS = $prev } else { Remove-Item Env:AO_WORKER_NUDGE_CLAIM_LEASE_MS -ErrorAction SilentlyContinue }
+      [pscustomobject]@{ lease = $lease } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.lease).toBe(30 * 60 * 1000);
+  });
+});
+

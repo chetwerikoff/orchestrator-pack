@@ -47,6 +47,7 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 
 function Get-CiGreenWakeIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -329,10 +330,42 @@ function Invoke-PlannedCiGreenWakeSend {
     if (-not $sendSessionId) { $sendSessionId = $sessionId }
     $ciGreenMessage = [string]$Action.message
     $tupleKey = "$([int]$Action.prNumber)|$cycleKey|ci-green-handoff|$workerTarget"
+    $namespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
+    $targetResolutionSource = [string]$targetResolution.targetResolutionSource
+    if (-not $targetResolutionSource) { $targetResolutionSource = 'pr-claim' }
+    $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload @{
+        prNumber               = [int]$Action.prNumber
+        headSha                = [string]$Action.headSha
+        sessionId              = $sendSessionId
+        sendTarget             = $sendSessionId
+        intentClass            = 'ci-green-handoff'
+        cycleKey               = $cycleKey
+        targetId               = $targetId
+        targetGeneration       = $targetGeneration
+        source                 = 'ci-green-wake-reconcile'
+        surface                = 'ci-green-wake-reconcile'
+        message                = $ciGreenMessage
+        storePath              = $namespace
+        targetResolutionSource = $targetResolutionSource
+        claims                 = @(Get-WorkerNudgeClaimRecordsForGate -Namespace $namespace)
+    }
+    if (-not $gate.allow) {
+        Write-WorkerNudgeGateDecisionAudit -Record $gate.audit -ProjectId $ProjectId | Out-Null
+        Write-CiGreenWakeLog "nudge suppressed by gate PR #$($Action.prNumber): $($gate.reason)"
+        return @{
+            sent         = $false
+            reason       = [string]$gate.reason
+            claimSkipped = $true
+            escalate     = [bool]$gate.escalate
+            diagnosis    = [string]$gate.diagnosis
+        }
+    }
     $claim = Acquire-WorkerNudgeClaim -PrNumber ([int]$Action.prNumber) -CycleKey $cycleKey -IntentClass 'ci-green-handoff' `
         -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
-        -TupleKey $tupleKey -Surface 'ci-green-wake-reconcile' -ProjectId $ProjectId -Message $ciGreenMessage
+        -TupleKey $tupleKey -Surface 'ci-green-wake-reconcile' -ProjectId $ProjectId -Message $ciGreenMessage -Namespace $namespace
     if (-not $claim.acquired) {
+        $claimPhase = if ($claim.phase) { [string]$claim.phase } else { 'none' }
+        Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason ([string]$claim.reason) -ClaimPhase $claimPhase) -ProjectId $ProjectId | Out-Null
         Write-CiGreenWakeLog "nudge suppressed by claim gate PR #$($Action.prNumber): $($claim.reason)"
         return @{
             sent         = $false
@@ -365,10 +398,12 @@ function Invoke-PlannedCiGreenWakeSend {
     }
     if (-not $fenced.ok) {
         Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
+        Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason 'side_effect_busy' -ClaimPhase 'CLAIMED') -ProjectId $ProjectId | Out-Null
         Write-CiGreenWakeLog "nudge skipped (side-effect busy) PR #$($Action.prNumber)"
         return @{ sent = $false; reason = 'side_effect_busy' }
     }
 
+    Write-WorkerNudgeGateDecisionAudit -Record $gate.audit -ProjectId $ProjectId | Out-Null
     return @{
         sent            = $true
         delivered       = $true
