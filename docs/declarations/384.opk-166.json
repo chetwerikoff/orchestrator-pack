@@ -5,7 +5,7 @@
   "supersedes": "opk-162",
   "created_at": "2026-06-22T04:47:37.649Z",
   "baseline": {
-    "commit_sha": "51b1f7dfec9289732da8119c0e5bd7ba32707a65",
+    "commit_sha": "98eccae83adc4a9e52feeacebff4859fa3c9c7ad",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:7f6119f4318342532afa695315ae37be48ea11d687fea88886a830a2485d25b6"
   },
@@ -51,5 +51,5 @@
   ],
   "declared_globs": [],
   "amendments": [],
-  "commit_sha": "51b1f7dfec9289732da8119c0e5bd7ba32707a65"
+  "commit_sha": "98eccae83adc4a9e52feeacebff4859fa3c9c7ad"
 }
