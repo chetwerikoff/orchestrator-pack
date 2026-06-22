@@ -13,7 +13,6 @@ import {
   producerEmissionHasExecutableProof,
   producerEmissionIsComplete,
 } from '../contract-evidence.mjs';
-import { scrubSecretLikeOutput } from '../../docs/reviewer-failure-evidence.mjs';
 import { loadCommittedCaptureManifest } from '../generate-capture-manifest.mjs';
 import {
   collectAuthoritativeReferences,
@@ -167,13 +166,30 @@ function sanitizeReviewerEvidenceText(text: string): string {
   });
 }
 
+function scrubReviewerEvidenceCredentials(text: string): string {
+  let value = text;
+  value = value.replace(
+    /-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |EC )?PRIVATE KEY-----/g,
+    '[REDACTED_PRIVATE_KEY]',
+  );
+  value = value.replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]');
+  value = value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  value = value.replace(
+    /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
+    '$1[REDACTED]',
+  );
+  value = value.replace(/(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}/g, '[REDACTED]');
+  value = value.replace(/AKIA[0-9A-Z]{16}/g, 'AKIA[REDACTED]');
+  return value;
+}
+
 function formatEvidenceField(text: string): string {
-  return scrubSecretLikeOutput(sanitizeReviewerEvidenceText(text));
+  return scrubReviewerEvidenceCredentials(sanitizeReviewerEvidenceText(text));
 }
 
 function boundValue(value: unknown, max = allowlist.maxObservedLength): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  const redacted = scrubSecretLikeOutput(sanitizeReviewerEvidenceText(text));
+  const redacted = scrubReviewerEvidenceCredentials(sanitizeReviewerEvidenceText(text));
   if (redacted.length <= max) {
     return redacted;
   }
