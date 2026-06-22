@@ -1377,6 +1377,18 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
   });
 
+  it('finalizes review-send SENT only after verify-sent and releases failed verify for retry', () => {
+    const body = readFileSync(path.join(repoRoot, 'scripts/review-send-reconcile.ps1'), 'utf8');
+    const verifyIdx = body.indexOf("Subcommand 'verify-sent'");
+    const sentFinalizeIdx = body.indexOf("Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT'", verifyIdx);
+    const verifyFailIdx = body.indexOf('if (-not $verify.ok)', verifyIdx);
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(sentFinalizeIdx).toBeGreaterThan(verifyIdx);
+    expect(verifyFailIdx).toBeGreaterThan(verifyIdx);
+    expect(body.indexOf("Outcome 'FAILED_DEFINITIVE'", verifyFailIdx)).toBeGreaterThan(verifyFailIdx);
+    expect(body.indexOf("Outcome 'UNCERTAIN'", verifyFailIdx)).toBe(-1);
+  });
+
   it('converges already-served ci-failure claim skips for SENT and UNCERTAIN phases', () => {
     const body = readFileSync(
       path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'),

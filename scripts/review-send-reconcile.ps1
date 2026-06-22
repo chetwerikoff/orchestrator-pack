@@ -264,12 +264,9 @@ function Invoke-PlannedFirstReviewSend {
     $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $reviewMessage }
     $messageContentHash = [string]$messageHashResult.messageContentHash
     if (-not $verify.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' -Extra @{
-            reason             = [string]$verify.reason
-            messageContentHash = $messageContentHash
-        } | Out-Null
-        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason) (claim UNCERTAIN; non-retryable)"
-        return @{ sent = $false; reason = $verify.reason; uncertain = $true }
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$verify.reason } | Out-Null
+        Write-ReviewSendLog "post-send verify failed run=$($Action.runId): $($verify.reason) (claim released for retry)"
+        return @{ sent = $false; reason = $verify.reason }
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
 
