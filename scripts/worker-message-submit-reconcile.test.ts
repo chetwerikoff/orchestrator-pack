@@ -18,11 +18,11 @@ import {
   isSessionAlive,
   extractReactionDeliveries,
   mergeDeliveryRecords,
-  observeReactionDeliveries,
   selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
   DISPATCH_SOURCE_AO_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
+import { readReactionMessagesFromYamlFile } from './reaction-config-messages.mjs';
 import {
   applySubmitOutcomes,
   evaluateConcurrentSubmitClaim,
@@ -41,6 +41,26 @@ import type {
   SubmitTrackingState,
   WorkerMessageSubmitAction,
 } from '../docs/worker-message-submit-reconcile.d.mts';
+
+
+function observeReactionDeliveriesForTest(input: {
+  aoEvents?: Array<Record<string, unknown>>;
+  dispatchJournal?: Record<string, Record<string, unknown>>;
+  reviewRuns?: Array<Record<string, unknown>>;
+  reactionMessages?: Record<string, string>;
+  nowMs: number;
+}) {
+  const deliveries = mergeDeliveryRecords(input);
+  const reactionObservation = extractReactionDeliveries(
+    input.aoEvents ?? [],
+    input.reactionMessages ?? {},
+  ) as unknown as {
+    deliveries: ReturnType<typeof mergeDeliveryRecords>;
+    audits: Array<Record<string, unknown>>;
+  };
+  const reactionAudits = reactionObservation.audits;
+  return { deliveries, reactionAudits };
+}
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1444,7 +1464,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
       config: {},
     });
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(true);
-    const { deliveries } = observeReactionDeliveries({
+    const { deliveries } = observeReactionDeliveriesForTest({
       aoEvents: [reactionEvent],
       dispatchJournal: {},
       reviewRuns: [],
@@ -1478,7 +1498,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
       tsEpoch: 1717600000000,
       data: { action: 'send-to-agent', reactionKey: 'changes-requested' },
     };
-    const { deliveries, reactionAudits } = observeReactionDeliveries({
+    const { deliveries, reactionAudits } = observeReactionDeliveriesForTest({
       aoEvents: [unresolvedEvent],
       dispatchJournal: {},
       reviewRuns: [],
@@ -1497,7 +1517,7 @@ describe('issue #402 static reaction delivery shape from live config', () => {
   });
 
   it('AC5: ci-failed notify reaction is absent from shape map (negative control)', () => {
-    const { deliveries, reactionAudits } = observeReactionDeliveries({
+    const { deliveries, reactionAudits } = observeReactionDeliveriesForTest({
       aoEvents: [
         {
           kind: 'reaction.action_succeeded',
@@ -1516,49 +1536,6 @@ describe('issue #402 static reaction delivery shape from live config', () => {
   });
 });
 
-  it('AC8 negative: stale 73-char stub classifies self-submitted and does not submit', () => {
-    const { actions } = planFixture('report-stale-stub-self-submitted.json');
-    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(false);
-    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'tracking_auto_submitted')).toBe(true);
-  });
-
-  it('AC6: unresolved reaction key emits audit, not delivery tracking', () => {
-    const { actions, tracking, reactionAudits } = planFixture('reaction-message-unresolved.json');
-    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(false);
-    expect(reactionAudits?.[0]?.reason).toBe('reaction_message_unresolved');
-    expect(reactionAudits?.[0]?.reactionKey).toBe('changes-requested');
-    expect(tracking.audit?.some((row) => row.reason === 'reaction_message_unresolved')).toBe(true);
-  });
-
-  it('AC6b: config unavailable defers instead of stub fallback', () => {
-    const { actions } = planFixture('reaction-config-unavailable.json');
-    expect(actions).toEqual([
-      expect.objectContaining({
-        type: 'defer',
-        reason: 'reaction_config_unavailable',
-      }),
-    ]);
-  });
-
-  it('AC5: ci-failed notify reaction is absent from shape map (negative control)', () => {
-    const { deliveries, reactionAudits } = observeReactionDeliveries({
-      aoEvents: [
-        {
-          kind: 'reaction.action_succeeded',
-          sessionId: 'opk-ci',
-          tsEpoch: 1717600000000,
-          data: { action: 'send-to-agent', reactionKey: 'ci-failed' },
-        },
-      ],
-      dispatchJournal: {},
-      reviewRuns: [],
-      reactionMessages: {},
-      nowMs: 1717600001000,
-    });
-    expect(deliveries).toHaveLength(0);
-    expect(reactionAudits?.[0]?.reactionKey).toBe('ci-failed');
-  });
-});
 
 describe('issue #281 journaled worker-send delivery accounting', () => {
   const baseSession = {
