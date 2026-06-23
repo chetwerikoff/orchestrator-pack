@@ -1239,6 +1239,49 @@ describe('handoff lookup degrade on admission failure (Issue #418)', () => {
     expect(formatHandoffWakeAuditLine(result.audit)).toContain('lookupDimension=supervisedRepo');
   });
 
+  it('resets lookup attempt counts when failure dimension changes', () => {
+    const bodyJson = JSON.stringify(capture());
+    const t0 = 1_700_000_000_000;
+    const seed = seedPendingAdmissionRetry({
+      existing: {},
+      bodyJson,
+      lookupDimension: 'openPr',
+      nowMs: t0,
+    });
+    const key = String(seed.key);
+    let pending = seed.pendingRetries as Record<string, Record<string, unknown>>;
+    const afterOpenPr = recordPendingAdmissionLookupAttempt({
+      existing: pending,
+      key,
+      lookupDimension: 'openPr',
+      nowMs: t0 + HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS,
+    });
+    expect(afterOpenPr.recorded).toBe(true);
+    expect(Number((afterOpenPr.record as Record<string, unknown>).lookupAttemptCount)).toBe(2);
+
+    const dimensionSwitch = seedPendingAdmissionRetry({
+      existing: afterOpenPr.pendingRetries as Record<string, Record<string, unknown>>,
+      bodyJson,
+      lookupDimension: 'session',
+      nowMs: t0 + HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS * 2,
+    });
+    expect(dimensionSwitch.seeded).toBe(true);
+    const switched = dimensionSwitch.record as Record<string, unknown>;
+    expect(switched.lookupDimension).toBe('session');
+    expect(switched.failureIdentity).toContain('session|');
+    expect(Number(switched.lookupAttemptCount)).toBe(1);
+    expect(switched.lookupDegraded).toBe(false);
+
+    const sessionAttempt = recordPendingAdmissionLookupAttempt({
+      existing: dimensionSwitch.pendingRetries as Record<string, Record<string, unknown>>,
+      key,
+      lookupDimension: 'session',
+      nowMs: t0 + HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS * 3,
+    });
+    expect(Number((sessionAttempt.record as Record<string, unknown>).lookupAttemptCount)).toBe(2);
+    expect((sessionAttempt.record as Record<string, unknown>).lookupDegraded).toBe(false);
+  });
+
   it('bounds identical openPr lookup retries with spacing and degrades', () => {
     const bodyJson = JSON.stringify(capture());
     const t0 = 1_700_000_000_000;
