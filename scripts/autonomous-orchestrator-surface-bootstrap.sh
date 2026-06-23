@@ -3,11 +3,22 @@
 # Operator coworker.env should point BASH_ENV here. Heavy interposer logic lives in
 # autonomous-bash-env.sh (sourced below). This file maps live session markers only.
 
-[[ "${__AO_AUTONOMOUS_SURFACE_BOOTSTRAP:-}" == "1" ]] && return 0
+if [[ "${__AO_AUTONOMOUS_SURFACE_BOOTSTRAP:-}" == "1" ]]; then
+  PACK_SCRIPTS="$(__ao_surface_bootstrap_script_dir)"
+  case ":${PATH:-}:" in
+    *:"${PACK_SCRIPTS}":*) ;;
+    *) export PATH="${PACK_SCRIPTS}:${PATH:-}" ;;
+  esac
+  return 0
+fi
 __AO_AUTONOMOUS_SURFACE_BOOTSTRAP=1
 
 __ao_surface_bootstrap_script_dir() {
-  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+  local source_path="${BASH_SOURCE[0]:-}"
+  if [[ -z "${source_path}" || ! -f "${source_path}" ]]; then
+    source_path="${BASH_ENV:-}"
+  fi
+  cd "$(dirname "${source_path}")" && pwd
 }
 
 __ao_surface_bootstrap_is_orchestrator_tmux() {

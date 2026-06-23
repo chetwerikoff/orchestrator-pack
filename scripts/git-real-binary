@@ -4,11 +4,30 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+resolve_pwsh() {
+  if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
+    printf '%s\n' "${AO_PWSH_BINARY}"
+    return 0
+  fi
+  if command -v pwsh >/dev/null 2>&1; then
+    command -v pwsh
+    return 0
+  fi
+  local candidate
+  for candidate in /usr/local/bin/pwsh /usr/bin/pwsh /opt/microsoft/powershell/7/pwsh "${HOME}/.local/bin/pwsh"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf 'pwsh\n'
+}
+
 GUARD="${SCRIPT_DIR}/git-autonomous-guard.ps1"
 INVOKE="${SCRIPT_DIR}/_invoke-system-git.sh"
 
 if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]]; then
-  exec pwsh -NoProfile -ExecutionPolicy Bypass -File "${GUARD}" "$@"
+  exec "$(resolve_pwsh)" -NoProfile -ExecutionPolicy Bypass -File "${GUARD}" "$@"
 fi
 
 if [[ "${AO_AUTONOMOUS_GIT_INTERNAL_EXEC:-}" == "1" ]]; then

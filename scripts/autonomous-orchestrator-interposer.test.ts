@@ -22,7 +22,13 @@ const scriptsDir = path.join(repoRoot, 'scripts');
 const aoShimPath = path.join(scriptsDir, 'ao');
 
 function stripBashEnvBlockers(env: NodeJS.ProcessEnv) {
-  const { POSIXLY_CORRECT: _pc, SHELLOPTS: _so, ...rest } = env;
+  const {
+    POSIXLY_CORRECT: _pc,
+    SHELLOPTS: _so,
+    __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: _sb,
+    __AO_AUTONOMOUS_BASH_INTERPOSED: _bi,
+    ...rest
+  } = env;
   return rest;
 }
 
