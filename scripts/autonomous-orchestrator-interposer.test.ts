@@ -34,12 +34,32 @@ function stripBashEnvBlockers(env: NodeJS.ProcessEnv) {
 
 
 function armedBashCommand(command: string) {
-  // GHA node→bash spawns may skip BASH_ENV; source bootstrap in-shell on CI while
-  // keeping BASH_ENV set so local runs still exercise the env-channel contract.
-  if (process.env.CI === 'true') {
-    return `. ${JSON.stringify(bootstrapPath)}; ${command}`;
-  }
   return command;
+}
+
+function writeAutonomousRealBinariesConfig(packRoot: string, aoStub: string) {
+  const aoDir = path.join(packRoot, '.ao');
+  mkdirSync(aoDir, { recursive: true });
+  writeFileSync(
+    path.join(aoDir, 'autonomous-real-binaries.json'),
+    JSON.stringify({
+      ao: aoStub,
+      git: path.join(repoRoot, 'scripts/git-real-binary'),
+      gitSystemBinary: '/usr/bin/git',
+    }),
+  );
+}
+
+function withRepoAoStubConfig(aoStub: string, fn: () => void) {
+  const configPath = path.join(repoRoot, '.ao/autonomous-real-binaries.json');
+  const prior = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
+  writeAutonomousRealBinariesConfig(repoRoot, aoStub);
+  try {
+    fn();
+  } finally {
+    if (prior) writeFileSync(configPath, prior);
+    else rmSync(configPath, { force: true });
+  }
 }
 
 function spawnOrchestratorBash(args: string[], env: Record<string, string | undefined>, cwd = repoRoot) {
@@ -105,32 +125,6 @@ exit 1
   return aoStub;
 }
 
-function writeFailClosedBootstrap(packScripts: string) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'autonomous-bootstrap-missing-'));
-  const bootstrap = path.join(dir, 'bootstrap.sh');
-  writeFileSync(
-    bootstrap,
-    `#!/usr/bin/env bash
-[[ "\${__AO_AUTONOMOUS_SURFACE_BOOTSTRAP:-}" == "1" ]] && return 0
-__AO_AUTONOMOUS_SURFACE_BOOTSTRAP=1
-if [[ -n "\${AO_TMUX_NAME:-}" && "\${AO_TMUX_NAME}" == *orchestrator* ]]; then
-  export AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1
-fi
-PACK_SCRIPTS="${packScripts.replace(/"/g, '\\"')}"
-case ":\${PATH:-}:" in
-  *:"\${PACK_SCRIPTS}":*) ;;
-  *) export PATH="\${PACK_SCRIPTS}:\${PATH:-}" ;;
-esac
-INTERPOSER="\${PACK_SCRIPTS}/autonomous-bash-env.sh"
-if [[ -r "\${INTERPOSER}" ]]; then
-  source "\${INTERPOSER}"
-fi
-`,
-  );
-  chmodSync(bootstrap, 0o755);
-  return { dir, bootstrap };
-}
-
 describe('autonomous orchestrator interposer (#406)', () => {
   it('tracks bootstrap and interposer wiring', () => {
     expect(existsSync(bootstrapPath)).toBe(true);
@@ -143,49 +137,54 @@ describe('autonomous orchestrator interposer (#406)', () => {
     const aoStub = writeAoReadStub(stubDir);
     const probeFile = path.join(stubDir, 'spawn-probe.txt');
     try {
-      const deny = spawnLiveArmedBash(repoRoot, 'ao spawn opk-probe', {
-        AO_REAL_BINARY: aoStub,
-        AO_SPAWN_PROBE_FILE: probeFile,
-      });
-      expect(deny.status).toBe(93);
-      expect(`${deny.stderr}${deny.stdout}`).toMatch(/autonomous worker spawn denied/i);
-      expect(existsSync(probeFile)).toBe(false);
+      withRepoAoStubConfig(aoStub, () => {
+        const deny = spawnLiveArmedBash(repoRoot, 'ao spawn opk-probe', {
+          AO_SPAWN_PROBE_FILE: probeFile,
+        });
+        expect(deny.status).toBe(93);
+        expect(`${deny.stderr}${deny.stdout}`).toMatch(/autonomous worker spawn denied/i);
+        expect(existsSync(probeFile)).toBe(false);
 
-      const read = spawnLiveArmedBash(repoRoot, 'ao review list --json', {
-        AO_REAL_BINARY: aoStub,
+        const read = spawnLiveArmedBash(repoRoot, 'ao review list --json');
+        expect(read.status).toBe(0);
+        expect(() => JSON.parse(read.stdout)).not.toThrow();
+        expect(read.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
       });
-      expect(read.status).toBe(0);
-      expect(() => JSON.parse(read.stdout)).not.toThrow();
-      expect(read.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
   });
 
-  it('fail-closed when bootstrap is armed but interposer file is missing', () => {
+  it('fail-closed when tracked bootstrap is armed but interposer file is missing', () => {
     const packCopy = mkdtempSync(path.join(tmpdir(), 'autonomous-pack-copy-'));
     try {
       const copiedScripts = path.join(packCopy, 'scripts');
       mkdirSync(copiedScripts, { recursive: true });
       cpSync(path.join(scriptsDir, 'lib'), path.join(copiedScripts, 'lib'), { recursive: true });
-      for (const name of ['_resolve-pwsh.sh', 'ao', 'git', 'ao-autonomous-guard.ps1', 'git-autonomous-guard.ps1']) {
-        writeFileSync(path.join(copiedScripts, name), readFileSync(path.join(scriptsDir, name)));
-        if (name === 'ao' || name === 'git') {
-          chmodSync(path.join(copiedScripts, name), 0o755);
-        }
+      for (const name of [
+        '_resolve-pwsh.sh',
+        'ao',
+        'git',
+        'ao-autonomous-guard.ps1',
+        'git-autonomous-guard.ps1',
+        'autonomous-orchestrator-surface-bootstrap.sh',
+      ]) {
+        cpSync(path.join(scriptsDir, name), path.join(copiedScripts, name));
+        chmodSync(path.join(copiedScripts, name), 0o755);
       }
-      const { dir: bootstrapDir, bootstrap } = writeFailClosedBootstrap(copiedScripts);
-      try {
-        const denySpawn = spawnOrchestratorBash([path.join(packCopy, 'scripts/ao'), 'spawn', 'opk-probe'], { BASH_ENV: bootstrap });
-        expect(denySpawn.status).toBe(93);
-        expect(denySpawn.stderr).toMatch(/autonomous worker spawn denied/i);
+      const trackedBootstrap = path.join(copiedScripts, 'autonomous-orchestrator-surface-bootstrap.sh');
 
-        const denySend = spawnOrchestratorBash([path.join(packCopy, 'scripts/ao'), 'send', 'opk-worker', 'hi'], { BASH_ENV: bootstrap });
-        expect(denySend.status).toBe(93);
-        expect(denySend.stderr).toMatch(/autonomous worker nudges paused/i);
-      } finally {
-        rmSync(bootstrapDir, { recursive: true, force: true });
-      }
+      const denySpawn = spawnOrchestratorBash([path.join(copiedScripts, 'ao'), 'spawn', 'opk-probe'], {
+        BASH_ENV: trackedBootstrap,
+      });
+      expect(denySpawn.status).toBe(93);
+      expect(denySpawn.stderr).toMatch(/autonomous worker spawn denied/i);
+
+      const denySend = spawnOrchestratorBash([path.join(copiedScripts, 'ao'), 'send', 'opk-worker', 'hi'], {
+        BASH_ENV: trackedBootstrap,
+      });
+      expect(denySend.status).toBe(93);
+      expect(denySend.stderr).toMatch(/autonomous worker nudges paused/i);
     } finally {
       rmSync(packCopy, { recursive: true, force: true });
     }
@@ -195,25 +194,26 @@ describe('autonomous orchestrator interposer (#406)', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-read-verbs-'));
     const aoStub = writeAoReadStub(stubDir);
     try {
-      const cases = [
-        ['review', 'list', '--json'],
-        ['status', '--json'],
-        ['events', 'list', '--json'],
-      ] as const;
-      for (const argv of cases) {
-        const direct = spawnOrchestratorBash([aoShimPath, ...argv], {
+      withRepoAoStubConfig(aoStub, () => {
+        const cases = [
+          ['review', 'list', '--json'],
+          ['status', '--json'],
+          ['events', 'list', '--json'],
+        ] as const;
+        for (const argv of cases) {
+          const direct = spawnOrchestratorBash([aoShimPath, ...argv], {
             AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            AO_REAL_BINARY: aoStub,
           });
-        expect(direct.status).toBe(0);
-        expect(() => JSON.parse(direct.stdout)).not.toThrow();
-        expect(direct.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+          expect(direct.status).toBe(0);
+          expect(() => JSON.parse(direct.stdout)).not.toThrow();
+          expect(direct.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
 
-        const hidden = spawnEvalHidden(repoRoot, `ao ${argv.join(' ')}`, { AO_REAL_BINARY: aoStub });
-        expect(hidden.status).toBe(0);
-        expect(() => JSON.parse(hidden.stdout)).not.toThrow();
-        expect(hidden.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
-      }
+          const hidden = spawnEvalHidden(repoRoot, `ao ${argv.join(' ')}`);
+          expect(hidden.status).toBe(0);
+          expect(() => JSON.parse(hidden.stdout)).not.toThrow();
+          expect(hidden.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+        }
+      });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
@@ -228,7 +228,6 @@ describe('autonomous orchestrator interposer (#406)', () => {
     try {
       withTempGitRepo((dir) => {
         const denySpawn = spawnEvalHidden(dir, 'ao spawn opk-probe', {
-          AO_REAL_BINARY: aoStub,
           AO_SPAWN_PROBE_FILE: probeFile,
           PATH: `${wrapDir}:${hostPath}`,
         });
@@ -279,13 +278,39 @@ exit 0
     try {
       const spawnProbe = path.join(stubDir, 'spawn-probe.txt');
       const result = spawnEvalHidden(repoRoot, 'ao spawn opk-probe', {
-        AO_REAL_BINARY: aoStub,
         AO_SPAWN_PROBE_FILE: spawnProbe,
         AO_PWSH_BINARY: fakePwsh,
       });
       expect(result.status).toBe(93);
       expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous worker spawn denied/i);
       expect(existsSync(probeFile)).toBe(false);
+    } finally {
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores turn-visible AO_REAL_BINARY on autonomous surface', () => {
+    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-real-bypass-'));
+    const aoStub = writeAoReadStub(stubDir);
+    const maliciousStub = path.join(stubDir, 'malicious-ao.sh');
+    writeFileSync(
+      maliciousStub,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'bypassed\n'
+exit 0
+`,
+    );
+    chmodSync(maliciousStub, 0o755);
+    try {
+      withRepoAoStubConfig(aoStub, () => {
+        const result = spawnEvalHidden(repoRoot, 'ao status --json', {
+          AO_REAL_BINARY: maliciousStub,
+        });
+        expect(result.status).toBe(0);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(result.stdout).not.toMatch(/bypassed/);
+      });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
@@ -311,14 +336,12 @@ exit 0
         expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
 
         const flatSpawn = spawnLiveArmedBash(repoRoot, 'ao spawn opk-probe', {
-          AO_REAL_BINARY: aoStub,
           AO_SPAWN_PROBE_FILE: probeFile,
         });
         expect(flatSpawn.status).toBe(93);
         expect(`${flatSpawn.stderr}${flatSpawn.stdout}`).toMatch(/autonomous worker spawn denied/i);
 
         const hiddenSpawn = spawnEvalHidden(repoRoot, 'ao spawn opk-probe', {
-          AO_REAL_BINARY: aoStub,
           AO_SPAWN_PROBE_FILE: probeFile,
         });
         expect(hiddenSpawn.status).toBe(93);
@@ -380,14 +403,16 @@ exit 0
     const aoStub = writeAoReadStub(stubDir);
     try {
       const command = `source ${bootstrapPath}; source ${bashEnvPath}; ao review list --json`;
-      const once = spawnLiveArmedBash(repoRoot, command, { AO_REAL_BINARY: aoStub });
-      const twice = spawnLiveArmedBash(repoRoot, command, { AO_REAL_BINARY: aoStub });
-      expect(once.status).toBe(0);
-      expect(twice.status).toBe(0);
-      expect(once.stdout).toBe(twice.stdout);
-      const pathSegments = (process.env.PATH ?? '').split(':').filter(Boolean);
-      const scriptCount = pathSegments.filter((segment) => segment === scriptsDir).length;
-      expect(scriptCount).toBeLessThanOrEqual(1);
+      withRepoAoStubConfig(aoStub, () => {
+        const once = spawnLiveArmedBash(repoRoot, command);
+        const twice = spawnLiveArmedBash(repoRoot, command);
+        expect(once.status).toBe(0);
+        expect(twice.status).toBe(0);
+        expect(once.stdout).toBe(twice.stdout);
+        const pathSegments = (process.env.PATH ?? '').split(':').filter(Boolean);
+        const scriptCount = pathSegments.filter((segment) => segment === scriptsDir).length;
+        expect(scriptCount).toBeLessThanOrEqual(1);
+      });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
