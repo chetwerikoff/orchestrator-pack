@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-06-22T17:20:00.000Z",
   "baseline": {
-    "commit_sha": "8a5f561b7865cf97d2fd3275b803c32dde438259",
+    "commit_sha": "491ea69459e66dc7f04a383c5c63d6f9d7cc7d29",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:337a546adde0416bb979e740b30f97896522524b5aa971a1499d44e092512f6b"
+    "active_scope_hash": "sha256:35cd5435dc6e3d73c9da6757f73c63eec07d62ef490b3c3bea12067281f28365"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -27,32 +27,19 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:718afe5f6146b6873861e7d895c8c3d1c0d52bc2b01cbb864670f1b55e38b82d",
-      "new_active_scope_hash": "sha256:9f27cdaa584cfc5de785b2ecdbf48fe5486c7bb638804951dbfa8b17a8a7856a",
-      "changed": {
-        "added": [
-          "scripts/lib/Orchestrator-AutonomousBoundary.ps1"
-        ],
-        "removed": []
-      },
-      "reason": "Add boundary resolver fix for read-verbs forwarder path",
-      "actor": "opk-2",
-      "timestamp": "2026-06-23T06:03:40.506Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:9f27cdaa584cfc5de785b2ecdbf48fe5486c7bb638804951dbfa8b17a8a7856a",
-      "new_active_scope_hash": "sha256:337a546adde0416bb979e740b30f97896522524b5aa971a1499d44e092512f6b",
+      "new_active_scope_hash": "sha256:35cd5435dc6e3d73c9da6757f73c63eec07d62ef490b3c3bea12067281f28365",
       "changed": {
         "added": [
           "scripts/ao",
           "scripts/git",
-          "scripts/git-real-binary"
+          "scripts/git-real-binary",
+          "scripts/lib/Orchestrator-AutonomousBoundary.ps1"
         ],
         "removed": []
       },
-      "reason": "Include ao/git shim pwsh resolver edits in scope",
+      "reason": "Boundary resolver and ao/git shim pwsh resolver for read-verbs path",
       "actor": "opk-2",
-      "timestamp": "2026-06-23T06:22:00.000Z",
+      "timestamp": "2026-06-23T06:24:00.000Z",
       "applied": true
     }
   ]
