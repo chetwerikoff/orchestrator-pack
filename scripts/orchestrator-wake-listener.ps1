@@ -33,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewWakeTrigger.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewHandoffWakeAdmission.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-SupervisedRepoSlug.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
 $Script:DefaultPort = 17487
@@ -96,28 +97,6 @@ function Invoke-HandoffWakeTriggerFromFilter {
         triggerResult   = $triggerResult
     }
 }
-
-function Get-SupervisedRepoSlug {
-    param([string]$RepoRoot)
-
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $remote = git remote get-url origin 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $remote) { return '' }
-        if ($remote -match 'github\.com[:/](?<owner>[^/\s#?]+)/(?<repo>[^/\s#?]+)') {
-            $repo = [string]$Matches['repo']
-            if ($repo.EndsWith('.git', [System.StringComparison]::OrdinalIgnoreCase)) {
-                $repo = $repo.Substring(0, $repo.Length - 4)
-            }
-            return "$($Matches['owner'])/$repo".ToLower()
-        }
-        return ''
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 
 function Resolve-SupervisedRepoForAdmission {
     param(

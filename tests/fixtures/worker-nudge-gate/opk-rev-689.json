@@ -1,0 +1,23 @@
+{
+  "incident": "opk-rev-689",
+  "prNumber": 380,
+  "storePath": "/tmp/orchestrator-ci-green-wake-state.json",
+  "tuple": {
+    "prNumber": 380,
+    "sessionId": "opk-1",
+    "targetId": "opk-1",
+    "targetGeneration": "gen1",
+    "reviewRunId": "opk-rev-689",
+    "headSha": "ef6e1c7000000000000000000000000000000000",
+    "surface": "waiting_worker_review_response",
+    "message": "Please check pending AO review findings via ao review list and report addressing_reviews."
+  },
+  "priorClaims": [
+    {
+      "tupleKey": "380|run:opk-rev-689|review-findings|opk-1:gen1",
+      "phase": "SENT",
+      "intentClass": "review-findings",
+      "surface": "ci-green-wake-reconcile"
+    }
+  ]
+}

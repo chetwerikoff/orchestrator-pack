@@ -242,3 +242,11 @@ Stopping the listener alone leaves the heartbeat path active (and vice versa).
 
 - [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md) — end-to-end autoloop adoption
 - [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) — orchestrator `stuck` / `probe_failure`
+
+## review-ready-report-state-seed.ps1
+
+State-derived co-primary backstop (Issue #391): polls `ao status --include-terminated`
+for accepted `ready_for_review` reports, seeds `review-trigger-reeval-watch.json`, and
+starts review with `report_state_seed` when #195-ready. Distinct from webhook handoff and
+`review-trigger-reconcile.ps1` (`periodic=reconcile`).
+
