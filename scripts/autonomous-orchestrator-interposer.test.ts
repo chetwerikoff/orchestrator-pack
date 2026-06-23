@@ -259,7 +259,7 @@ exec "$REAL_AO" "$@"
     chmodSync(forwarder, 0o755);
     try {
       withRepoAoStubConfig(realAo, () => {
-        const result = spawnOrchestratorBash([forwarder, 'review', 'list', '--json']);
+        const result = spawnOrchestratorBash([forwarder, 'review', 'list', '--json'], {});
         expect(result.status).toBe(0);
         expect(() => JSON.parse(result.stdout)).not.toThrow();
         expect(result.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
