@@ -42,12 +42,6 @@ __ao_autonomous_is_guard_forwarder_shim() {
     "${pack_scripts}/git-real-binary" | "${pack_scripts}/_invoke-system-git.sh") return 0 ;;
   esac
 
-  if [[ "${resolved##*/}" == "ao" || "${resolved##*/}" == "git" ]]; then
-    if [[ -x "${resolved}" ]] && grep -Eq 'ao-autonomous-guard|git-autonomous-guard|scripts/ao|scripts/git|REAL_AO=|REAL_GIT=' "${resolved}" 2>/dev/null; then
-      return 0
-    fi
-  fi
-
   return 1
 }
 

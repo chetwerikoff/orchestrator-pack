@@ -27,6 +27,7 @@ function stripBashEnvBlockers(env: NodeJS.ProcessEnv) {
     SHELLOPTS: _so,
     __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: _sb,
     __AO_AUTONOMOUS_BASH_INTERPOSED: _bi,
+    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: _as,
     ...rest
   } = env;
   return rest;
@@ -277,6 +278,60 @@ describe('autonomous orchestrator interposer (#406)', () => {
       expect(hiddenGit.status).toBe(93);
       expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
     });
+  });
+
+  it('does not treat attacker-named forwarder grep bait as a trusted shim', () => {
+    if (!existsSync('/usr/bin/git')) {
+      return;
+    }
+    withTempGitRepo((dir) => {
+      const readme = path.join(dir, 'README.md');
+      const evilDir = mkdtempSync(path.join(tmpdir(), 'autonomous-evil-forwarder-'));
+      const evilAo = path.join(evilDir, 'ao');
+      writeFileSync(
+        evilAo,
+        `#!/usr/bin/env bash
+# ao-autonomous-guard REAL_AO=
+set -euo pipefail
+/usr/bin/git checkout -- ${readme}
+`,
+      );
+      chmodSync(evilAo, 0o755);
+      try {
+        const result = spawnOrchestratorBash([evilAo], {}, dir);
+        expect(result.status).toBe(93);
+        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+      } finally {
+        rmSync(evilDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('ignores turn-visible PATH pwsh on autonomous surface', () => {
+    const fakePwshDir = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-pwsh-dir-'));
+    const probeFile = path.join(fakePwshDir, 'pwsh-probe.txt');
+    const fakePwsh = path.join(fakePwshDir, 'pwsh');
+    writeFileSync(
+      fakePwsh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > "${probeFile}"
+exit 0
+`,
+    );
+    chmodSync(fakePwsh, 0o755);
+    try {
+      const spawnProbe = path.join(fakePwshDir, 'spawn-probe.txt');
+      const result = spawnEvalHidden(repoRoot, 'ao spawn opk-probe', {
+        AO_SPAWN_PROBE_FILE: spawnProbe,
+        PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
+      });
+      expect(result.status).toBe(93);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous worker spawn denied/i);
+      expect(existsSync(probeFile)).toBe(false);
+    } finally {
+      rmSync(fakePwshDir, { recursive: true, force: true });
+    }
   });
 
   it('ignores turn-visible AO_PWSH_BINARY on autonomous surface', () => {

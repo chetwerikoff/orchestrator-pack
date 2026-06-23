@@ -1,16 +1,19 @@
 # Shared pwsh resolver for pack bash shims (Issue #406).
 resolve_pwsh() {
-  # Turn-visible AO_PWSH_BINARY must not override the guard interpreter on protected surfaces.
-  if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" != "1" ]]; then
+  local trusted_only=0
+  [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]] && trusted_only=1
+
+  if [[ "${trusted_only}" -eq 0 ]]; then
     if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
       printf '%s\n' "${AO_PWSH_BINARY}"
       return 0
     fi
+    if command -v pwsh >/dev/null 2>&1; then
+      command -v pwsh
+      return 0
+    fi
   fi
-  if command -v pwsh >/dev/null 2>&1; then
-    command -v pwsh
-    return 0
-  fi
+
   local candidate
   for candidate in \
     /usr/local/bin/pwsh \
@@ -22,5 +25,10 @@ resolve_pwsh() {
       return 0
     fi
   done
-  printf 'pwsh\n'
+
+  if [[ "${trusted_only}" -eq 0 ]]; then
+    printf 'pwsh\n'
+  else
+    printf '/usr/local/bin/pwsh\n'
+  fi
 }
