@@ -20,6 +20,10 @@ import {
   seedPendingAdmissionRetry,
   selectHandoffAdmissionReplay,
   parseSupervisedRepoSlugFromGitRemote,
+  evaluatePendingAdmissionLookupRetry,
+  recordPendingAdmissionLookupAttempt,
+  HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL,
+  HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS,
 } from '../docs/review-handoff-wake-admission.mjs';
 import {
   evaluateWakePreRunRecheck,
@@ -29,6 +33,11 @@ import {
   WAKE_TO_RUN_DECISION_MAX_MS,
 } from '../docs/review-wake-trigger.mjs';
 import { seedWatchFromWakeDefer, isDeferredReevalWatchSeedEligible } from '../docs/review-trigger-reeval.mjs';
+import {
+  hasTerminalHandoffOutcome,
+  planReportStatePollTick,
+  REPORT_STATE_SEED_TO_START_MAX_MS,
+} from '../docs/review-ready-report-state-seed.mjs';
 import type { OpenPr } from '../docs/review-trigger-reconcile.d.mts';
 
 const fixturesDir = path.join(
@@ -1189,3 +1198,215 @@ if (-not $state.records.ContainsKey('orchestrator-pack|chetwerikoff/orchestrator
     expect(result.stderr).toBe('');
   });
 });
+
+describe('handoff lookup degrade on admission failure (Issue #418)', () => {
+  const capture = () =>
+    JSON.parse(readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8'));
+
+  it('names openPr lookup dimension in audit', () => {
+    const result = evaluateHandoffIdentityAdmission({
+      event: capture().event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      openPrLookupFailed: true,
+    });
+    expect(result.reason).toBe('admission_lookup_unknown');
+    expect(result.audit.lookupDimension).toBe('openPr');
+    expect(formatHandoffWakeAuditLine(result.audit)).toContain('lookupDimension=openPr');
+  });
+
+  it('names session lookup dimension in audit', () => {
+    const result = evaluateHandoffIdentityAdmission({
+      event: capture().event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedSessions: [],
+      sessionLookupFailed: true,
+    });
+    expect(result.audit.lookupDimension).toBe('session');
+    expect(formatHandoffWakeAuditLine(result.audit)).toContain('lookupDimension=session');
+  });
+
+  it('names supervisedRepo lookup dimension in audit', () => {
+    const result = evaluateHandoffIdentityAdmission({
+      event: capture().event,
+      supervisedProjectId: 'orchestrator-pack',
+      supervisedRepoSlug: 'chetwerikoff/orchestrator-pack',
+      supervisedRepoLookupFailed: true,
+      openPrs: loadFixture('green-info-handoff-triggers.json').openPrs,
+    });
+    expect(result.audit.lookupDimension).toBe('supervisedRepo');
+    expect(formatHandoffWakeAuditLine(result.audit)).toContain('lookupDimension=supervisedRepo');
+  });
+
+  it('bounds identical openPr lookup retries with spacing and degrades', () => {
+    const bodyJson = JSON.stringify(capture());
+    const t0 = 1_700_000_000_000;
+    const seed = seedPendingAdmissionRetry({
+      existing: {},
+      bodyJson,
+      lookupDimension: 'openPr',
+      nowMs: t0,
+    });
+    expect(seed.seeded).toBe(true);
+    let record = seed.record as Record<string, unknown>;
+    let pending = seed.pendingRetries as Record<string, Record<string, unknown>>;
+
+    const gateFirst = evaluatePendingAdmissionLookupRetry({ record, nowMs: t0 + 1_000 });
+    expect(gateFirst.shouldAttempt).toBe(true);
+
+    for (let attempt = 2; attempt <= HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL; attempt += 1) {
+      const nowMs = t0 + attempt * HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS;
+      const gate = evaluatePendingAdmissionLookupRetry({ record, nowMs });
+      expect(gate.shouldAttempt).toBe(true);
+      const recorded = recordPendingAdmissionLookupAttempt({
+        existing: pending,
+        key: String(record.key),
+        lookupDimension: 'openPr',
+        nowMs,
+      });
+      expect(recorded.recorded).toBe(true);
+      record = recorded.record as Record<string, unknown>;
+      pending = recorded.pendingRetries as Record<string, Record<string, unknown>>;
+    }
+
+    const exhausted = evaluatePendingAdmissionLookupRetry({
+      record,
+      nowMs: t0 + HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL * HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS,
+    });
+    expect(exhausted.shouldAttempt).toBe(false);
+    expect(exhausted.reason).toMatch(/lookup_(retry_exhausted|degraded)/);
+    expect(exhausted.yieldToBackstop).toBe(true);
+
+    const backoff = evaluatePendingAdmissionLookupRetry({
+      record: {
+        ...record,
+        lookupAttemptCount: 2,
+        lookupDegraded: false,
+        lastLookupAttemptAtMs: t0,
+      },
+      nowMs: t0 + 1_000,
+    });
+    expect(backoff.shouldAttempt).toBe(false);
+    expect(backoff.reason).toBe('lookup_retry_backoff');
+  });
+
+  it('lookup-degraded pending retry does not block report-state seed', () => {
+    const headSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const handoffRecords = {
+      'orchestrator-pack|chetwerikoff/orchestrator-pack|418|deadbeefdeadbeefdeadbeefdeadbeefdeadbeef': {
+        outcome: 'promoted',
+        prNumber: 418,
+        headSha,
+      },
+    };
+    expect(
+      hasTerminalHandoffOutcome({
+        supervisedProject: 'orchestrator-pack',
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 418,
+        headSha,
+        handoffRecords,
+      }).terminal,
+    ).toBe(false);
+
+    const plan = planReportStatePollTick({
+      sessions: [{
+        name: 'opk-418',
+        role: 'worker',
+        prNumber: 418,
+        reports: [{
+          timestamp: '2026-06-23T10:00:00.000Z',
+          reportState: 'ready_for_review',
+          accepted: true,
+          prNumber: 418,
+        }],
+      }],
+      openPrs: [{
+        number: 418,
+        headRefOid: headSha,
+        headCommittedAt: '2026-06-23T09:59:00.000Z',
+        baseRefName: 'main',
+      }],
+      reviewRuns: [],
+      ciChecksByPr: { '418': [{ name: 'PR scope guard', state: 'SUCCESS' }] },
+      requiredCheckNamesByPr: { '418': [] },
+      requiredCheckLookupFailedByPr: { '418': false },
+      handoffRecords,
+      nowMs: Date.parse('2026-06-23T10:00:05.000Z'),
+    });
+    expect(plan.candidates.length).toBeGreaterThan(0);
+    expect(plan.nowMs - Date.parse('2026-06-23T10:00:00.000Z')).toBeLessThanOrEqual(
+      REPORT_STATE_SEED_TO_START_MAX_MS,
+    );
+  });
+
+    it('pwsh recovery stops tight-looping openPr lookup failures', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-lookup-degrade-'));
+    const bodyJson = readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8');
+    const t0 = 1_700_000_000_000;
+    const seed = seedPendingAdmissionRetry({ existing: {}, bodyJson, lookupDimension: 'openPr', nowMs: t0 });
+    const key = String(seed.key);
+    const retry = {
+      ...(seed.record as Record<string, unknown>),
+      lookupAttemptCount: 2,
+      lastLookupAttemptAtMs: t0 - HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS - 1,
+      lookupDegraded: false,
+    };
+    writeFileSync(
+      path.join(dir, 'review-handoff-wake-admission.json'),
+      JSON.stringify({ records: {}, pendingRetries: { [key]: retry }, lastUpdatedMs: t0 }, null, 2),
+    );
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const stateRoot = dir.replace(/'/g, "''");
+    const runRecovery = (label: string) => {
+      const script = [
+        `. '${lib.replace(/'/g, "''")}'`,
+        '$calls = 0',
+        `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot}' -ListenerReadyMs ${t0} -PendingRetriesOnly \``,
+        `  -InvokeWakeFilter { throw "filter should not run (${label})" } \``,
+        '  -ResolveOpenPrs { $script:calls++; throw "gh open pr lookup failed" } `',
+        "  -InvokeTrigger { throw 'trigger should not run' } `",
+        '  -LogWriter { param($Message) }',
+        '$calls',
+      ].join('\n');
+      return spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    };
+
+    const first = runRecovery('final attempt');
+    expect(first.status).toBe(0);
+    expect(Number(first.stdout.trim())).toBe(1);
+    const stateAfterFirst = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
+    const afterFirst = Object.values(stateAfterFirst.pendingRetries)[0] as Record<string, unknown>;
+    expect(Number(afterFirst.lookupAttemptCount)).toBe(HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL);
+    expect(afterFirst.lookupDegraded).toBe(true);
+
+    const second = runRecovery('after degrade');
+    expect(second.status).toBe(0);
+    expect(Number(second.stdout.trim())).toBe(0);
+  });
+
+
+  it('regression: successful lookups still promote handoff within receipt bound', () => {
+    const fixture = loadFixture('green-info-handoff-triggers.json');
+    const pr = fixture.openPrs?.[0];
+    const wakeReceivedMs = 1_700_000_000_000;
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: HANDOFF_WAKE_KIND,
+      sessionId: fixture.sessionId,
+      prNumber: fixture.prNumber,
+      wakeReceivedMs,
+      nowMs: wakeReceivedMs + 2_000,
+      admittedBaseRef: 'main',
+      admittedHeadSha: pr?.headRefOid ? String(pr.headRefOid) : undefined,
+      openPrs: fixture.openPrs,
+      reviewRuns: fixture.reviewRuns,
+      sessions: fixture.sessions,
+      ciChecks: fixture.ciChecksByPr?.[String(fixture.prNumber)],
+      requiredCheckNames: fixture.requiredCheckNamesByPr?.[String(fixture.prNumber)],
+    });
+    expect(result.triggerReviewRun).toBe(true);
+    expect(result.withinReceiptBound).toBe(true);
+  });
+});
+

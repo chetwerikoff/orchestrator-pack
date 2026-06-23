@@ -176,6 +176,7 @@ function Record-ReviewHandoffWakePendingRetry {
     param(
         [string]$StateRoot = '',
         [string]$BodyJson = '',
+        [string]$LookupDimension = '',
         [switch]$DryRun
     )
 
@@ -189,9 +190,10 @@ function Record-ReviewHandoffWakePendingRetry {
     $path = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
     $state = Get-ReviewHandoffWakeAdmissionState -Path $path
     $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seedPendingRetry' -Payload @{
-        existing = $state.pendingRetries
-        bodyJson = $BodyJson
-        nowMs    = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        existing        = $state.pendingRetries
+        bodyJson        = $BodyJson
+        lookupDimension = $LookupDimension
+        nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
 
     if (-not $seed.seeded) {
@@ -383,11 +385,45 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         return
     }
 
+    $statePath = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
     $pending = Get-ReviewHandoffWakePendingRetries -StateRoot $StateRoot
     foreach ($retry in @($pending.retries)) {
         $bodyJson = [string]$retry.bodyJson
         $retryKey = [string]$retry.key
         if (-not $bodyJson) { continue }
+
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+        $lookupGate = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'evaluatePendingLookupRetry' -Payload @{
+            record = $retry
+            nowMs  = $nowMs
+        }
+        $lookupDimension = if ($lookupGate.lookupDimension) { [string]$lookupGate.lookupDimension } else { 'openPr' }
+
+        if (-not $lookupGate.shouldAttempt) {
+            if ($lookupGate.yieldToBackstop) {
+                if ($lookupGate.reason -eq 'lookup_retry_exhausted' -and -not $retry.lookupDegraded) {
+                    $degraded = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'markPendingLookupDegraded' -Payload @{
+                        existing = $admissionState.pendingRetries
+                        key      = $retryKey
+                        nowMs    = $nowMs
+                    }
+                    if ($degraded.marked -and -not $DryRun) {
+                        Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
+                            records        = $admissionState.records
+                            pendingRetries = $degraded.pendingRetries
+                            lastUpdatedMs  = $nowMs
+                        }
+                        $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+                    }
+                }
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey lookup degraded ($lookupDimension) reason=$($lookupGate.reason)"
+            }
+            else {
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey lookup backoff ($lookupDimension) reason=$($lookupGate.reason)"
+            }
+            continue
+        }
 
         $openPrLookupFailed = $false
         $openPrsForAdmission = @()
@@ -398,13 +434,49 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
             $openPrLookupFailed = $true
         }
         if ($openPrLookupFailed) {
-            & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown"
+            $attempt = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'recordPendingLookupAttempt' -Payload @{
+                existing        = $admissionState.pendingRetries
+                key             = $retryKey
+                lookupDimension = 'openPr'
+                nowMs           = $nowMs
+            }
+            if ($attempt.recorded -and -not $DryRun) {
+                Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
+                    records        = $admissionState.records
+                    pendingRetries = $attempt.pendingRetries
+                    lastUpdatedMs  = $nowMs
+                }
+                $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+            }
+            & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=openPr attempt=$($attempt.record.lookupAttemptCount)"
             continue
         }
 
         $filterResult = & $InvokeWakeFilter $bodyJson $openPrsForAdmission $openPrLookupFailed
         if (-not $filterResult.ok) {
-            if ($filterResult.retryable) {
+            if ($filterResult.retryable -and $filterResult.reason -eq 'admission_lookup_unknown') {
+                $dim = 'openPr'
+                if ($filterResult.audit -and $filterResult.audit.lookupDimension) {
+                    $dim = [string]$filterResult.audit.lookupDimension
+                }
+                $attempt = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'recordPendingLookupAttempt' -Payload @{
+                    existing        = $admissionState.pendingRetries
+                    key             = $retryKey
+                    lookupDimension = $dim
+                    nowMs           = $nowMs
+                }
+                if ($attempt.recorded -and -not $DryRun) {
+                    $statePath = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
+                    $stateNow = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+                    Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
+                        records        = $stateNow.records
+                        pendingRetries = $attempt.pendingRetries
+                        lastUpdatedMs  = $nowMs
+                    }
+                }
+                & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=$dim attempt=$($attempt.record.lookupAttemptCount)"
+            }
+            elseif ($filterResult.retryable) {
                 & $LogWriter "review-handoff-wake: pending retry key=$retryKey still retryable ($($filterResult.reason))"
             }
             else {
