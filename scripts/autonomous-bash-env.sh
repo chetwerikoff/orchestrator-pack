@@ -93,12 +93,12 @@ __ao_autonomous_rewrite_binary_command() {
     return 0
   fi
 
-  # String-concatenated quoted absolute binary (e.g. foo"/path/git" …).
+  # String-concatenated quoted absolute binary (e.g. foo"/path/git" …, REAL_AO="/path/ao").
   if [[ "${cmd}" =~ \"(${abs_binary})\"(.*)$ ]]; then
     printf -v quoted_pack_target '%q' "${pack_target}"
     abs_match="${BASH_REMATCH[1]}"
     prefix="${cmd%%\"${abs_match}\"*}"
-    printf '%s%s%s%s' "${prefix}" "\"" "${quoted_pack_target}" "${BASH_REMATCH[2]}"
+    printf '%s%s%s%s%s' "${prefix}" "\"" "${quoted_pack_target}" "\"" "${BASH_REMATCH[2]}"
     return 0
   fi
 
@@ -106,7 +106,7 @@ __ao_autonomous_rewrite_binary_command() {
     printf -v quoted_pack_target '%q' "${pack_target}"
     abs_match="${BASH_REMATCH[1]}"
     prefix="${cmd%%\'${abs_match}\'*}"
-    printf '%s%s%s%s' "${prefix}" "'" "${quoted_pack_target}" "${BASH_REMATCH[2]}"
+    printf '%s%s%s%s%s' "${prefix}" "'" "${quoted_pack_target}" "'" "${BASH_REMATCH[2]}"
     return 0
   fi
 
@@ -261,8 +261,48 @@ __ao_autonomous_rewrite_all_of_binary_in_command() {
   printf '%s' "${cmd}"
 }
 
+__ao_autonomous_bash_command_is_real_var_assignment() {
+  local cmd="${1-}" trimmed=""
+  trimmed="$(__ao_autonomous_trim_whitespace "${cmd}")"
+  [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_(AO|GIT)= ]] && return 0
+  return 1
+}
+
+__ao_autonomous_try_rewrite_real_var_assignment_bash_command() {
+  local cmd="${1-}" pack_git="${2-}" pack_ao="${3-}" trimmed="" rewritten=""
+  trimmed="$(__ao_autonomous_trim_whitespace "${cmd}")"
+  if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_GIT= ]]; then
+    if rewritten="$(__ao_autonomous_rewrite_real_var_assignment_line "${trimmed}" "REAL_GIT" "git" "${pack_git}")"; then
+      if [[ "${trimmed}" == "${cmd}" ]]; then
+        printf '%s' "${rewritten}"
+      else
+        printf '%s' "${cmd%"${trimmed}"}${rewritten}"
+      fi
+      return 0
+    fi
+    return 1
+  fi
+  if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_AO= ]]; then
+    if rewritten="$(__ao_autonomous_rewrite_real_var_assignment_line "${trimmed}" "REAL_AO" "ao" "${pack_ao}")"; then
+      if [[ "${trimmed}" == "${cmd}" ]]; then
+        printf '%s' "${rewritten}"
+      else
+        printf '%s' "${cmd%"${trimmed}"}${rewritten}"
+      fi
+      return 0
+    fi
+    return 1
+  fi
+  return 1
+}
+
 __ao_autonomous_rewrite_all_binaries_in_command() {
   local cmd="${1-}" pack_git="${2-}" pack_ao="${3-}"
+
+  if [[ "${cmd}" != *$'\n'* ]] && __ao_autonomous_bash_command_is_real_var_assignment "${cmd}"; then
+    printf '%s' "${cmd}"
+    return 0
+  fi
 
   cmd="$(__ao_autonomous_rewrite_all_of_binary_in_command "${cmd}" "${pack_git}" "git")"
   cmd="$(__ao_autonomous_rewrite_all_of_binary_in_command "${cmd}" "${pack_ao}" "ao")"
@@ -397,7 +437,7 @@ __ao_autonomous_maybe_reexec_preprocessed_script() {
   [[ -f "${script_path}" ]] || return 1
   [[ "${script_path}" == *"/autonomous-bash-env.sh" ]] && return 1
 
-  local pack_git pack_ao content rewritten tmp=""
+  local pack_git pack_ao content original rewritten tmp=""
   pack_git="$(__ao_autonomous_pack_git)"
   pack_ao="$(__ao_autonomous_pack_ao)"
   content="$(<"${script_path}")"
@@ -408,9 +448,10 @@ __ao_autonomous_maybe_reexec_preprocessed_script() {
     return 1
   fi
 
+  original="${content}"
   content="$(__ao_autonomous_rewrite_real_var_assignments_in_content "${content}" "${pack_git}" "${pack_ao}")"
   rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${content}" "${pack_git}" "${pack_ao}")"
-  if [[ "${rewritten}" == "${content}" ]]; then
+  if [[ "${rewritten}" == "${original}" ]]; then
     return 1
   fi
 
@@ -459,8 +500,30 @@ __ao_autonomous_debug_trap() {
   [[ "${BASH_COMMAND}" == *__ao_autonomous_* ]] && return 0
   [[ "${__AO_AUTONOMOUS_DEBUG_ACTIVE:-}" == 1 ]] && return 0
   [[ -z "${pack_git}" || -z "${pack_ao}" ]] && return 0
+  if __ao_autonomous_is_trusted_operator_forwarder_path; then
+    return 0
+  fi
 
   __ao_autonomous_prepend_pack_scripts_path "${pack_scripts}"
+
+  if __ao_autonomous_bash_command_is_real_var_assignment "${BASH_COMMAND}"; then
+    if rewritten="$(__ao_autonomous_try_rewrite_real_var_assignment_bash_command "${BASH_COMMAND}" "${pack_git}" "${pack_ao}")"; then
+      if [[ "${rewritten}" != "${BASH_COMMAND}" ]]; then
+        __AO_AUTONOMOUS_DEBUG_ACTIVE=1
+        BASH_ENV= __AO_AUTONOMOUS_BASH_INTERPOSED=1 eval "${rewritten}"
+        ec=$?
+        __AO_AUTONOMOUS_DEBUG_ACTIVE=0
+        if [[ ${ec} -eq 93 ]]; then
+          exit 93
+        fi
+        if [[ ${ec} -eq 0 ]]; then
+          return 1
+        fi
+        return "${ec}"
+      fi
+    fi
+    return 0
+  fi
 
   rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_COMMAND}" "${pack_git}" "${pack_ao}")"
   if [[ "${rewritten}" == "${BASH_COMMAND}" ]]; then
