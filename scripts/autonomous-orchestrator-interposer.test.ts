@@ -32,21 +32,35 @@ function stripBashEnvBlockers(env: NodeJS.ProcessEnv) {
   return rest;
 }
 
-function spawnLiveArmedBash(
-  cwd: string,
-  command: string,
-  extraEnv: Record<string, string | undefined> = {},
-) {
-  return spawnSync('/bin/bash', ['+o', 'posix', '-c', command], {
+
+function armedBashCommand(command: string) {
+  // GHA node→bash spawns may skip BASH_ENV; source bootstrap in-shell on CI while
+  // keeping BASH_ENV set so local runs still exercise the env-channel contract.
+  if (process.env.CI === 'true') {
+    return `. ${JSON.stringify(bootstrapPath)}; ${command}`;
+  }
+  return command;
+}
+
+function spawnOrchestratorBash(args: string[], env: Record<string, string | undefined>, cwd = repoRoot) {
+  return spawnSync('/bin/bash', ['+o', 'posix', ...args], {
     cwd,
     encoding: 'utf8',
     env: {
       ...stripBashEnvBlockers(process.env),
       AO_TMUX_NAME: 'opk-orchestrator',
       BASH_ENV: bootstrapPath,
-      ...extraEnv,
+      ...env,
     },
   });
+}
+
+function spawnLiveArmedBash(
+  cwd: string,
+  command: string,
+  extraEnv: Record<string, string | undefined> = {},
+) {
+  return spawnOrchestratorBash(['-c', armedBashCommand(command)], extraEnv, cwd);
 }
 
 function spawnEvalHidden(
@@ -54,16 +68,7 @@ function spawnEvalHidden(
   command: string,
   extraEnv: Record<string, string | undefined> = {},
 ) {
-  return spawnSync('/bin/bash', ['+o', 'posix', '-O', 'extglob', '-c', 'builtin eval "$1"', 'x', command], {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      ...stripBashEnvBlockers(process.env),
-      AO_TMUX_NAME: 'opk-orchestrator',
-      BASH_ENV: bootstrapPath,
-      ...extraEnv,
-    },
-  });
+  return spawnOrchestratorBash(['-O', 'extglob', '-c', 'builtin eval "$1"', 'x', armedBashCommand(command)], extraEnv, cwd);
 }
 
 function writeAoReadStub(dir: string) {
@@ -171,27 +176,11 @@ describe('autonomous orchestrator interposer (#406)', () => {
       }
       const { dir: bootstrapDir, bootstrap } = writeFailClosedBootstrap(copiedScripts);
       try {
-        const denySpawn = spawnSync('bash', [path.join(packCopy, 'scripts/ao'), 'spawn', 'opk-probe'], {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: {
-            ...stripBashEnvBlockers(process.env),
-            AO_TMUX_NAME: 'opk-orchestrator',
-            BASH_ENV: bootstrap,
-          },
-        });
+        const denySpawn = spawnOrchestratorBash([path.join(packCopy, 'scripts/ao'), 'spawn', 'opk-probe'], { BASH_ENV: bootstrap });
         expect(denySpawn.status).toBe(93);
         expect(denySpawn.stderr).toMatch(/autonomous worker spawn denied/i);
 
-        const denySend = spawnSync('bash', [path.join(packCopy, 'scripts/ao'), 'send', 'opk-worker', 'hi'], {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: {
-            ...stripBashEnvBlockers(process.env),
-            AO_TMUX_NAME: 'opk-orchestrator',
-            BASH_ENV: bootstrap,
-          },
-        });
+        const denySend = spawnOrchestratorBash([path.join(packCopy, 'scripts/ao'), 'send', 'opk-worker', 'hi'], { BASH_ENV: bootstrap });
         expect(denySend.status).toBe(93);
         expect(denySend.stderr).toMatch(/autonomous worker nudges paused/i);
       } finally {
@@ -212,17 +201,10 @@ describe('autonomous orchestrator interposer (#406)', () => {
         ['events', 'list', '--json'],
       ] as const;
       for (const argv of cases) {
-        const direct = spawnSync('bash', [aoShimPath, ...argv], {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: {
-            ...stripBashEnvBlockers(process.env),
+        const direct = spawnOrchestratorBash([aoShimPath, ...argv], {
             AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
             AO_REAL_BINARY: aoStub,
-            BASH_ENV: bootstrapPath,
-            AO_TMUX_NAME: 'opk-orchestrator',
-          },
-        });
+          });
         expect(direct.status).toBe(0);
         expect(() => JSON.parse(direct.stdout)).not.toThrow();
         expect(direct.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
