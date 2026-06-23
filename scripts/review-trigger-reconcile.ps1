@@ -38,6 +38,8 @@ $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
 $Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
@@ -160,23 +162,68 @@ function Set-ReconcileState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:ReconcileDefaultState -JsonDepth 30
 }
 
-function Get-ReconcileReactionMessages {
+function Resolve-ReconcileReactionConfig {
     param(
-        [object]$Fixture
+        [object]$Fixture,
+        [string]$PackRoot = '',
+        [string]$YamlPath = ''
     )
 
-    if ($Fixture -and $Fixture.reactionMessages) {
-        $map = @{}
-        foreach ($prop in $Fixture.reactionMessages.PSObject.Properties) {
-            $map[$prop.Name] = [string]$prop.Value
+    if ($Fixture) {
+        if ($Fixture.reactionConfigUnavailable) {
+            return @{
+                ok       = $false
+                reason   = 'reaction_config_unavailable'
+                messages = @{}
+            }
         }
-        return $map
+        if ($Fixture.reactionMessages) {
+            $map = @{}
+            foreach ($prop in $Fixture.reactionMessages.PSObject.Properties) {
+                $map[$prop.Name] = [string]$prop.Value
+            }
+            return @{
+                ok       = $true
+                messages = $map
+            }
+        }
+        return @{
+            ok       = $true
+            messages = @{}
+        }
     }
 
-    return @{
-        'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
-        'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    return Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $YamlPath
+}
+
+function Get-ReconcileReactionMessages {
+    param(
+        [object]$Fixture,
+        [string]$PackRoot = '',
+        [string]$YamlPath = ''
+    )
+
+    $resolved = Resolve-ReconcileReactionConfig -Fixture $Fixture -PackRoot $PackRoot -YamlPath $YamlPath
+    if (-not $resolved.ok) {
+        return @{}
     }
+    return $resolved.messages
+}
+
+function Test-ReconcileReactionConfigDefer {
+    param(
+        [bool]$ReactionConfigUnavailable,
+        [array]$AoEvents
+    )
+
+    if (-not $ReactionConfigUnavailable) {
+        return $false
+    }
+
+    return @($AoEvents | Where-Object {
+            $_.kind -eq 'reaction.action_succeeded' -and
+            $_.data -and $_.data.action -eq 'send-to-agent'
+        }).Count -gt 0
 }
 
 function Get-FixtureReconcilePayload {
@@ -214,14 +261,22 @@ function Get-FixtureReconcilePayload {
         $payload.legacyNudged = Copy-MechanicalJsonMap -Map $fixture.legacyNudged
     }
     $payload = Merge-MechanicalFixtureDeliveryFields -Payload $payload -Fixture $fixture
-    $payload.reactionMessages = Get-ReconcileReactionMessages -Fixture $fixture
+    $reactionConfig = Resolve-ReconcileReactionConfig -Fixture $fixture
+    $payload.reactionMessages = @{}
+    if ($reactionConfig.ok) {
+        foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+            $payload.reactionMessages[$entry.Key] = [string]$entry.Value
+        }
+    }
+    $payload.reactionConfigUnavailable = -not $reactionConfig.ok
     return $payload
 }
 
 function Get-ReconcileDeliveryPayload {
     param(
         [string]$FixturePath,
-        [string]$Project
+        [string]$Project,
+        [string]$ConfigYaml = ''
     )
 
     if ($FixturePath) {
@@ -232,12 +287,21 @@ function Get-ReconcileDeliveryPayload {
         }
     }
 
+    $reactionConfig = Resolve-ReconcileReactionConfig -PackRoot $RepoRoot -YamlPath $ConfigYaml
+    $reactionMessages = @{}
+    if ($reactionConfig.ok) {
+        foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+            $reactionMessages[$entry.Key] = [string]$entry.Value
+        }
+    }
+
     return @{
-        workerDeliveries   = @()
-        aoEvents           = @(Get-AoEventsSince -SinceMinutes 30)
-        dispatchJournal    = Get-WorkerMessageDispatchJournal
-        reviewRuns         = @(Get-AoReviewRuns -Project $Project)
-        reactionMessages   = Get-ReconcileReactionMessages
+        workerDeliveries            = @()
+        aoEvents                    = @(Get-AoEventsSince -SinceMinutes 30)
+        dispatchJournal             = Get-WorkerMessageDispatchJournal
+        reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
+        reactionMessages            = $reactionMessages
+        reactionConfigUnavailable   = -not $reactionConfig.ok
     }
 }
 
@@ -273,7 +337,8 @@ function Merge-ReconcileTrackingIntoPlanPayload {
 function Get-PreRunRecheckSnapshot {
     param(
         [int]$PrNumber,
-        [string]$Project
+        [string]$Project,
+        [string]$ConfigYaml = ''
     )
 
         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
@@ -282,7 +347,7 @@ function Get-PreRunRecheckSnapshot {
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
-        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
 
     return @{
         openPrs                         = @($openPrs)
@@ -295,6 +360,7 @@ function Get-PreRunRecheckSnapshot {
         dispatchJournal                 = $deliveryPayload.dispatchJournal
         workerDeliveries                = Get-ReconcileWorkerDeliveries $deliveryPayload.workerDeliveries
         reactionMessages                = $deliveryPayload.reactionMessages
+        reactionConfigUnavailable       = [bool]$deliveryPayload.reactionConfigUnavailable
     }
 }
 
@@ -304,14 +370,15 @@ function Test-PreRunHeadReadyRecheck {
         [string]$Project,
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
-        [string]$CiGreenWakeStatePath = ''
+        [string]$CiGreenWakeStatePath = '',
+        [string]$ConfigYaml = ''
     )
 
     $fresh = if ($FixtureSnapshot) {
         $FixtureSnapshot
     }
     else {
-        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project
+        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project -ConfigYaml $ConfigYaml
     }
 
     if (-not $FixtureSnapshot) {
@@ -322,6 +389,13 @@ function Test-PreRunHeadReadyRecheck {
         $fresh.sharedCycleState = $sharedEvidence.sharedCycleState
         $fresh.legacyNudged = $sharedEvidence.legacyNudged
         $fresh.repoRoot = $RepoRoot
+    }
+
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$fresh.reactionConfigUnavailable) -AoEvents @($fresh.aoEvents)) {
+        return @{
+            emitReviewRun = $false
+            reason        = 'reaction_config_unavailable'
+        }
     }
 
     $prKey = [string]$PlannedAction.prNumber
@@ -365,7 +439,8 @@ function Invoke-PlannedReviewRun {
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
         [string]$StartReason = '',
-        [string]$CiGreenWakeStatePath = ''
+        [string]$CiGreenWakeStatePath = '',
+        [string]$ConfigYaml = ''
     )
 
     $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
@@ -400,7 +475,7 @@ function Invoke-PlannedReviewRun {
             sessionId   = $SessionId
             startReason = $StartReason
         } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState `
-            -CiGreenWakeStatePath $CiGreenWakeStatePath
+            -CiGreenWakeStatePath $CiGreenWakeStatePath -ConfigYaml $ConfigYaml
     }
     catch {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
@@ -509,6 +584,7 @@ function Invoke-ReconcileTick {
             dispatchJournal               = $payload.dispatchJournal
             workerDeliveries              = Get-ReconcileWorkerDeliveries $payload.workerDeliveries
             reactionMessages              = $payload.reactionMessages
+            reactionConfigUnavailable     = [bool]$payload.reactionConfigUnavailable
             cycleState                    = $payload.cycleState
             sharedCycleState              = $payload.sharedCycleState
             legacyNudged                  = $payload.legacyNudged
@@ -520,7 +596,7 @@ function Invoke-ReconcileTick {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @($openPrs)
-        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project
+        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
         $payload = @{
             openPrs                       = @($openPrs)
             reviewRuns                    = @($reviewRuns)
@@ -531,12 +607,27 @@ function Invoke-ReconcileTick {
             aoEvents                      = @($deliveryPayload.aoEvents)
             dispatchJournal               = $deliveryPayload.dispatchJournal
             reactionMessages              = $deliveryPayload.reactionMessages
+            reactionConfigUnavailable     = [bool]$deliveryPayload.reactionConfigUnavailable
         }
         $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $ConfigYaml
     }
 
     if (-not $reviewCommand) {
         throw 'Could not resolve REVIEW_COMMAND from agent-orchestrator.yaml'
+    }
+
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$payload.reactionConfigUnavailable) -AoEvents @($payload.aoEvents)) {
+        $reactionEventCount = @($payload.aoEvents | Where-Object {
+                $_.kind -eq 'reaction.action_succeeded' -and
+                $_.data -and $_.data.action -eq 'send-to-agent'
+            }).Count
+        Write-ReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$reactionEventCount"
+        return @{
+            started    = 0
+            plan       = @()
+            cycleState = @{}
+            deferred   = 1
+        }
     }
 
     $planPayload = $payload.Clone()
@@ -587,7 +678,8 @@ function Invoke-ReconcileTick {
         $startResult = Invoke-PlannedReviewRun -SessionId $action.sessionId -ReviewCommand $reviewCommand `
             -PrNumber $action.prNumber -HeadSha $action.headSha -Project $Project `
             -DryRunMode:$DryRunMode -FixtureSnapshot $fixtureSnapshot -TrackingState $TrackingState `
-            -StartReason $action.startReason -CiGreenWakeStatePath $CiGreenWakeStatePath
+            -StartReason $action.startReason -CiGreenWakeStatePath $CiGreenWakeStatePath `
+            -ConfigYaml $ConfigYaml
         if ($startResult.started) {
             if (-not $DryRunMode -and $action.ownerCycle) {
                 $commit = Invoke-ReconcileFilterCli -Subcommand 'commit-review-started' -Payload @{
@@ -618,13 +710,7 @@ $intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-ReconcileStatePath -CliPath $StateFile
 $ciGreenWakeStatePath = Get-CiGreenWakeSharedStatePath -CliPath $CiGreenWakeStateFile
-$configYaml = if ($YamlPath) {
-    (Resolve-Path -LiteralPath $YamlPath).Path
-}
-else {
-    $live = Join-Path $PackRoot 'agent-orchestrator.yaml'
-    if (Test-Path -LiteralPath $live -PathType Leaf) { $live } else { Join-Path $PackRoot 'agent-orchestrator.yaml.example' }
-}
+$configYaml = Resolve-OperatorOrchestratorYamlPath -YamlPathOverride $YamlPath -PackRoot $PackRoot
 
 $claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null

@@ -149,6 +149,8 @@ export function isReactionSendSucceededEvent(event) {
 export function extractReactionDeliveries(events, reactionMessages = {}) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const audits = [];
   for (const event of toArray(events)) {
     if (!isReactionSendSucceededEvent(event)) {
       continue;
@@ -163,10 +165,28 @@ export function extractReactionDeliveries(events, reactionMessages = {}) {
       typeof data === 'object' && data !== null && !Array.isArray(data)
         ? String(data.reactionKey ?? '').trim()
         : '';
-    if (!Object.prototype.hasOwnProperty.call(reactionMessages, reactionKey)) {
+    if (!reactionKey) {
       continue;
     }
-    const message = reactionMessages[reactionKey];
+    if (!Object.prototype.hasOwnProperty.call(reactionMessages, reactionKey)) {
+      audits.push({
+        reason: 'reaction_message_unresolved',
+        reactionKey,
+        sessionId,
+        deliveredAtMs,
+      });
+      continue;
+    }
+    const message = String(reactionMessages[reactionKey] ?? '').trim();
+    if (!message) {
+      audits.push({
+        reason: 'reaction_message_unresolved',
+        reactionKey,
+        sessionId,
+        deliveredAtMs,
+      });
+      continue;
+    }
     const shape = deriveMessageShape(message);
     const deliveryId = buildDeliveryId(
       sessionId,
@@ -190,7 +210,7 @@ export function extractReactionDeliveries(events, reactionMessages = {}) {
       },
     });
   }
-  return deliveries;
+  return { deliveries, audits };
 }
 
 /**
@@ -366,10 +386,14 @@ export function mergeDeliveryRecords(input) {
     const runAt = Number(row.deliveredAtMs ?? 0);
     return runAt > journalAt;
   });
+  const reactionObservation = extractReactionDeliveries(
+    toArray(aoEvents),
+    reactionMessages ?? {},
+  );
   const byId = new Map();
   for (const row of [
     ...journalDeliveries,
-    ...extractReactionDeliveries(toArray(aoEvents), reactionMessages ?? {}),
+    ...reactionObservation.deliveries,
     ...reviewRunDeliveries,
   ]) {
     const id = String(row.deliveryId ?? '');
@@ -383,6 +407,21 @@ export function mergeDeliveryRecords(input) {
   return [...byId.values()].sort(
     (a, b) => Number(a.deliveredAtMs) - Number(b.deliveredAtMs),
   );
+}
+
+/**
+ * @param {object} input
+ */
+export function observeReactionDeliveries(input) {
+  const deliveries = mergeDeliveryRecords(input);
+  const reactionObservation = extractReactionDeliveries(
+    toArray(input.aoEvents),
+    input.reactionMessages ?? {},
+  );
+  return {
+    deliveries,
+    reactionAudits: reactionObservation.audits,
+  };
 }
 
 /**
@@ -573,6 +612,10 @@ runStdinJsonCli('worker-message-dispatch-observe.mjs', {
   merge() {
     const payload = readStdinJson();
     return mergeDeliveryRecords(payload);
+  },
+  observe() {
+    const payload = readStdinJson();
+    return observeReactionDeliveries(payload);
   },
   classify() {
     const payload = readStdinJson();

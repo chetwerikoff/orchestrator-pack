@@ -1,0 +1,1 @@
+Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.

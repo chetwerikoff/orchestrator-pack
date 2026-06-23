@@ -17,10 +17,12 @@ import {
   isDeliveryConsumed,
   isSessionAlive,
   mergeDeliveryRecords,
+  observeReactionDeliveries,
   selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
   DISPATCH_SOURCE_AO_SEND,
 } from '../docs/worker-message-dispatch-observe.mjs';
+import { readReactionMessagesFromYamlFile } from './reaction-config-messages.mjs';
 import {
   applySubmitOutcomes,
   evaluateConcurrentSubmitClaim,
@@ -39,6 +41,8 @@ import type {
   SubmitTrackingState,
   WorkerMessageSubmitAction,
 } from '../docs/worker-message-submit-reconcile.d.mts';
+
+
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1405,6 +1409,112 @@ describe('mergeDeliveryRecords from AO events', () => {
     });
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+  });
+});
+
+
+describe('issue #402 static reaction delivery shape from live config', () => {
+  const liveReportStale =
+    'Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.';
+  const stubReportStale =
+    'Agent report is stale (30 minutes since last report). Continue your task.';
+  const reactionEvent = {
+    kind: 'reaction.action_succeeded',
+    sessionId: 'opk-165',
+    tsEpoch: 1782123033110,
+    data: { action: 'send-to-agent', reactionKey: 'report-stale' },
+  };
+  const idleWorker = {
+    sessionId: 'opk-165',
+    role: 'worker',
+    status: 'working',
+    runtime: 'alive',
+    activity: 'idle',
+    reports: [],
+  };
+
+  it('AC1/AC4/AC8: report-stale live text classifies pending-draft and plans submit', () => {
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [idleWorker],
+      dispatchJournal: {},
+      aoEvents: [reactionEvent],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      floodActiveSessions: {},
+      reactionMessages: { 'report-stale': liveReportStale },
+      nowMs: 1782123034000,
+      config: {},
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(true);
+    const { deliveries } = observeReactionDeliveries({
+      aoEvents: [reactionEvent],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: { 'report-stale': liveReportStale },
+      nowMs: 1782123034000,
+    });
+    expect(deliveries[0]?.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+    expect(deliveries[0]?.messageShape?.charLength).toBe(224);
+  });
+
+  it('AC8 negative: stale 73-char stub classifies self-submitted and does not submit', () => {
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [idleWorker],
+      dispatchJournal: {},
+      aoEvents: [reactionEvent],
+      reviewRuns: [],
+      tracking: { deliveries: {}, audit: [] },
+      floodActiveSessions: {},
+      reactionMessages: { 'report-stale': stubReportStale },
+      nowMs: 1782123034000,
+      config: {},
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit')).toBe(false);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'tracking_auto_submitted')).toBe(true);
+  });
+
+  it('AC6: unresolved reaction key emits audit, not delivery tracking', () => {
+    const unresolvedEvent = {
+      kind: 'reaction.action_succeeded',
+      sessionId: 'opk-changes',
+      tsEpoch: 1717600000000,
+      data: { action: 'send-to-agent', reactionKey: 'changes-requested' },
+    };
+    const { deliveries, reactionAudits } = observeReactionDeliveries({
+      aoEvents: [unresolvedEvent],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: {},
+      nowMs: 1717600001000,
+    });
+    expect(deliveries).toHaveLength(0);
+    expect(reactionAudits[0]?.reason).toBe('reaction_message_unresolved');
+    expect(reactionAudits[0]?.reactionKey).toBe('changes-requested');
+  });
+
+  it('AC6b: config read failure is unavailable (no stub fallback surface)', () => {
+    const result = readReactionMessagesFromYamlFile('/does/not/exist/agent-orchestrator.yaml');
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('reaction_config_unavailable');
+  });
+
+  it('AC5: ci-failed notify reaction is absent from shape map (negative control)', () => {
+    const { deliveries, reactionAudits } = observeReactionDeliveries({
+      aoEvents: [
+        {
+          kind: 'reaction.action_succeeded',
+          sessionId: 'opk-ci',
+          tsEpoch: 1717600000000,
+          data: { action: 'send-to-agent', reactionKey: 'ci-failed' },
+        },
+      ],
+      dispatchJournal: {},
+      reviewRuns: [],
+      reactionMessages: {},
+      nowMs: 1717600001000,
+    });
+    expect(deliveries).toHaveLength(0);
+    expect(reactionAudits[0]?.reactionKey).toBe('ci-failed');
   });
 });
 
