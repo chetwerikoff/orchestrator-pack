@@ -1334,7 +1334,7 @@ describe('handoff lookup degrade on admission failure (Issue #418)', () => {
       requiredCheckLookupFailedByPr: { '418': false },
       handoffRecords,
       nowMs: Date.parse('2026-06-23T10:00:05.000Z'),
-    });
+    }) as { candidates: unknown[]; nowMs: number };
     expect(plan.candidates.length).toBeGreaterThan(0);
     expect(plan.nowMs - Date.parse('2026-06-23T10:00:00.000Z')).toBeLessThanOrEqual(
       REPORT_STATE_SEED_TO_START_MAX_MS,
