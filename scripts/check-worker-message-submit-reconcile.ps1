@@ -111,7 +111,7 @@ if ([int]$shape.messageShape.charLength -ne 224) {
     exit 1
 }
 
-$capturePath = Join-Path $Root 'tests/external-output-references/captures/ao-reaction-config/report_stale_message.raw.txt'
+$capturePath = Join-Path $Root 'scripts/fixtures/reaction-config/report_stale_message.live-capture.txt'
 if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) {
     Write-Host 'Missing capture@ao-reaction-config/report_stale_message fixture for AC7 live drift guard'
     exit 1

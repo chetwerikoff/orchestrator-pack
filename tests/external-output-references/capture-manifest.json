@@ -2,14 +2,6 @@
   "version": 1,
   "corpusRoot": "tests/external-output-references",
   "entries": {
-    "ao-reaction-config/report_stale_message": {
-      "id": "ao-reaction-config/report_stale_message",
-      "producer": "ao-reaction-config",
-      "sourceCommand": "live operator agent-orchestrator.yaml reactions.report-stale.message (Gate A capture, incident opk-165 / Issue #402)",
-      "kind": "unstructured",
-      "path": "captures/ao-reaction-config/report_stale_message.raw.txt",
-      "contentHash": "sha256:d369d1708cf9314b24387ec765ecb0327144ccc35a724173947224eea4057036"
-    },
     "ao-review-run/cancelled": {
       "id": "ao-review-run/cancelled",
       "producer": "ao",

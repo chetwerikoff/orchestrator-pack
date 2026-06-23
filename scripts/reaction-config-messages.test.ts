@@ -73,12 +73,9 @@ describe('reaction-config-messages (Issue #402)', () => {
   it('AC7 live capture token matches example report-stale message text', () => {
     const capturePath = path.join(
       root,
-      '..',
-      'tests',
-      'external-output-references',
-      'captures',
-      'ao-reaction-config',
-      'report_stale_message.raw.txt',
+      'fixtures',
+      'reaction-config',
+      'report_stale_message.live-capture.txt',
     );
     const captureText = readFileSync(capturePath, 'utf8').replace(/\r?\n$/, '');
     const parsed = parseReactionMessagesFromYaml(exampleYaml);
