@@ -14,7 +14,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { repoRoot } from './_test-pwsh-helpers.js';
-import { withTempGitRepo } from './_test-git-fixture.js';
+import { gitFixtureEnv, resolveTrustedSystemGit, withTempGitRepo } from './_test-git-fixture.js';
 
 const bootstrapPath = path.join(repoRoot, 'scripts/autonomous-orchestrator-surface-bootstrap.sh');
 const bashEnvPath = path.join(repoRoot, 'scripts/autonomous-bash-env.sh');
@@ -145,6 +145,29 @@ exit 1
 }
 
 describe('autonomous orchestrator interposer (#406)', () => {
+  it('withTempGitRepo initializes repos via trusted system git under autonomous surface env', () => {
+    if (!existsSync('/usr/bin/git')) {
+      return;
+    }
+    withTempGitRepo((dir) => {
+      expect(readFileSync(path.join(dir, 'README.md'), 'utf8')).toBe('test\n');
+      const hostileEnv = gitFixtureEnv({
+        ...process.env,
+        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+        AO_TMUX_NAME: 'opk-orchestrator',
+        PATH: `${scriptsDir}:${process.env.PATH ?? ''}`,
+        BASH_ENV: bootstrapPath,
+      });
+      const status = spawnSync(resolveTrustedSystemGit(), ['rev-parse', '--is-inside-work-tree'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: hostileEnv,
+      });
+      expect(status.status).toBe(0);
+      expect(status.stdout.trim()).toBe('true');
+    });
+  });
+
   it('tracks bootstrap and interposer wiring', () => {
     expect(existsSync(bootstrapPath)).toBe(true);
     expect(existsSync(bashEnvPath)).toBe(true);
