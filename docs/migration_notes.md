@@ -189,8 +189,8 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
 `coworker.env` logic:
 
 1. Point `BASH_ENV` at `scripts/autonomous-orchestrator-surface-bootstrap.sh`
-   (thin bootstrap — prepends pack `scripts/`, sources
-   `scripts/autonomous-bash-env.sh`).
+   (thin bootstrap — prepends pack `scripts/`, maps live `AO_TMUX_NAME`
+   `*orchestrator*` → surface marker when needed, sources `scripts/autonomous-bash-env.sh`).
 2. Keep pack `scripts/` first on `PATH` in orchestrator `agentConfig` (same as
    Issue #324).
 3. In operator `coworker.env` (or equivalent `BASH_ENV` chain), replace the
@@ -201,6 +201,10 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
 4. Verify:
    `npm test -- scripts/autonomous-orchestrator-interposer.test.ts` and
    `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1 -Boundary`.
+
+Live arming: tracked bootstrap maps `AO_TMUX_NAME` `*orchestrator*` →
+`AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1` for AO 0.9.x tmux shells where
+`agentConfig.env` does not propagate.
 
 Fail-closed: if the tracked interposer file is missing or cannot be sourced, the
 bootstrap aborts the bash turn (exit 93) instead of leaving PATH-only shims that

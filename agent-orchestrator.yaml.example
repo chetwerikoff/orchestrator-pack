@@ -61,8 +61,9 @@ projects:
           # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
           # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
           # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
-          # (pwsh, python3, dirname, readlink) resolve; BASH_ENV bootstrap sources
-          # scripts/autonomous-bash-env.sh for bash-turn absolute-git interposition.
+          # (pwsh, python3, dirname, readlink) resolve; BASH_ENV bootstrap prepends scripts/,
+          # maps live AO_TMUX_NAME *orchestrator* when agentConfig.env does not reach tmux,
+          # and sources scripts/autonomous-bash-env.sh for bash-turn absolute-git interposition.
           # Do not set POSIXLY_CORRECT or SHELLOPTS=posix here — bash disables BASH_ENV when either is active.
           BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-orchestrator-surface-bootstrap.sh
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin

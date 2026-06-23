@@ -270,6 +270,23 @@ __ao_autonomous_rewrite_all_binaries_in_command() {
   printf '%s' "${cmd}"
 }
 
+__ao_autonomous_script_is_real_binary_forwarder() {
+  local content="${1-}" line trimmed="" has_real_ao=0 has_real_git=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${line}")"
+    [[ "${trimmed}" == \#* ]] && continue
+    if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_AO= ]]; then
+      __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "ao" && has_real_ao=1
+    fi
+    if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_GIT= ]]; then
+      __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "git" && has_real_git=1
+    fi
+  done <<< "${content}"
+  (( has_real_ao || has_real_git )) || return 1
+  [[ "${content}" =~ exec[[:space:]].*REAL_(AO|GIT) ]] && return 0
+  return 1
+}
+
 __ao_autonomous_script_content_needs_interposer() {
   local content="${1-}" line trimmed="" abs_git abs_ao
   abs_git="$(__ao_autonomous_absolute_binary_pattern "git")"
@@ -319,6 +336,9 @@ __ao_autonomous_maybe_reexec_preprocessed_script() {
   pack_git="$(__ao_autonomous_pack_git)"
   pack_ao="$(__ao_autonomous_pack_ao)"
   content="$(<"${script_path}")"
+  if __ao_autonomous_script_is_real_binary_forwarder "${content}"; then
+    return 1
+  fi
   if ! __ao_autonomous_script_content_needs_interposer "${content}"; then
     return 1
   fi
