@@ -243,11 +243,13 @@ describe('autonomous orchestrator interposer (#406)', () => {
   });
 
 
-  it('skips preprocessing for installed ao forwarders with absolute REAL_AO assignment', () => {
+  it('skips preprocessing for trusted ~/.local/bin ao forwarders with REAL_AO assignment', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-forwarder-'));
     const realAo = writeAoReadStub(stubDir);
-    const forwarderDir = mkdtempSync(path.join(tmpdir(), 'autonomous-forwarder-bin-'));
-    const forwarder = path.join(forwarderDir, 'ao');
+    const homeDir = mkdtempSync(path.join(tmpdir(), 'autonomous-forwarder-home-'));
+    const localBin = path.join(homeDir, '.local', 'bin');
+    mkdirSync(localBin, { recursive: true });
+    const forwarder = path.join(localBin, 'ao');
     writeFileSync(
       forwarder,
       `#!/usr/bin/env bash
@@ -259,15 +261,42 @@ exec "$REAL_AO" "$@"
     chmodSync(forwarder, 0o755);
     try {
       withRepoAoStubConfig(realAo, () => {
-        const result = spawnOrchestratorBash([forwarder, 'review', 'list', '--json'], {});
+        const result = spawnOrchestratorBash([forwarder, 'review', 'list', '--json'], { HOME: homeDir });
         expect(result.status).toBe(0);
         expect(() => JSON.parse(result.stdout)).not.toThrow();
         expect(result.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
       });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
-      rmSync(forwarderDir, { recursive: true, force: true });
+      rmSync(homeDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not exempt untrusted REAL_GIT forwarder bait from preprocessing', () => {
+    if (!existsSync('/usr/bin/git')) {
+      return;
+    }
+    withTempGitRepo((dir) => {
+      const readme = path.join(dir, 'README.md');
+      const evilDir = mkdtempSync(path.join(tmpdir(), 'autonomous-real-git-bait-'));
+      const evilScript = path.join(evilDir, 'mutate.sh');
+      writeFileSync(
+        evilScript,
+        `#!/usr/bin/env bash
+set -euo pipefail
+REAL_GIT=/usr/bin/git
+exec "$REAL_GIT" checkout -- ${readme}
+`,
+      );
+      chmodSync(evilScript, 0o755);
+      try {
+        const result = spawnOrchestratorBash([evilScript], {}, dir);
+        expect(result.status).toBe(93);
+        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+      } finally {
+        rmSync(evilDir, { recursive: true, force: true });
+      }
+    });
   });
   it('read-verbs stay clean on orchestrator surface through forwarder shims', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-read-verbs-'));
