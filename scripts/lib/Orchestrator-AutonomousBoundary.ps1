@@ -211,10 +211,6 @@ function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
 }
 
 function Resolve-RealAoExecutable {
-    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
-        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
-    }
-
     if ($env:AO_REAL_BINARY -and $env:AO_REAL_BINARY -ne 'ao') {
         if (Test-Path -LiteralPath $env:AO_REAL_BINARY -ErrorAction SilentlyContinue) {
             $resolved = (Resolve-Path -LiteralPath $env:AO_REAL_BINARY).Path
@@ -224,6 +220,10 @@ function Resolve-RealAoExecutable {
         if ($configured -and -not (Test-IsPackAoShimPathForBoundary -CandidatePath $configured.Source)) {
             return $configured.Source
         }
+    }
+
+    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
+        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
     }
 
     return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
