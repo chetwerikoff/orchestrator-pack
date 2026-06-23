@@ -38,6 +38,7 @@ $ReconcileFilterCli = Join-Path $PackRoot 'docs/review-trigger-reconcile.mjs'
 $Script:DefaultIntervalMinutes = 10
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
@@ -709,13 +710,7 @@ $intervalMs = [Math]::Max(1, $intervalMinutes) * 60 * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
 $statePath = Get-ReconcileStatePath -CliPath $StateFile
 $ciGreenWakeStatePath = Get-CiGreenWakeSharedStatePath -CliPath $CiGreenWakeStateFile
-$configYaml = if ($YamlPath) {
-    (Resolve-Path -LiteralPath $YamlPath).Path
-}
-else {
-    $live = Join-Path $PackRoot 'agent-orchestrator.yaml'
-    if (Test-Path -LiteralPath $live -PathType Leaf) { $live } else { Join-Path $PackRoot 'agent-orchestrator.yaml.example' }
-}
+$configYaml = Resolve-OperatorOrchestratorYamlPath -YamlPathOverride $YamlPath -PackRoot $PackRoot
 
 $claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null

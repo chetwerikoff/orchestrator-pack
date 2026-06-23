@@ -47,18 +47,6 @@ $Script:DefaultIntervalSeconds = 30
 
 $Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
 
-function Resolve-SubmitReconcileOperatorYamlPath {
-    param([string]$YamlPathOverride = '')
-
-    if ($YamlPathOverride) {
-        return (Resolve-SubmitReconcileStatePathLiteral -Path $YamlPathOverride)
-    }
-
-    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
-    return [string]$binding.ConfigPath
-}
-
-
 function Get-SubmitReconcileActiveDeliveryCount {
     param([object]$Deliveries)
 
@@ -423,7 +411,7 @@ function Invoke-SubmitReconcileTick {
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
-        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-SubmitReconcileOperatorYamlPath }
+        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot
         $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $operatorYamlPath
         $reactionMessages = @{}
         $reactionConfigUnavailable = $false
@@ -586,7 +574,7 @@ function Invoke-SubmitReconcileTick {
     }
 }
 
-$configYaml = Resolve-SubmitReconcileOperatorYamlPath -YamlPathOverride $YamlPath
+$configYaml = Resolve-OperatorOrchestratorYamlPath -YamlPathOverride $YamlPath -PackRoot $PackRoot
 
 $intervalSeconds = Get-SubmitReconcileIntervalSeconds
 $intervalMs = [Math]::Max(1, $intervalSeconds) * 1000

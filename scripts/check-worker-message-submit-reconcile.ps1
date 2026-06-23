@@ -129,7 +129,7 @@ if ($exampleReportStaleMessage -ne $captureReportStaleMessage) {
     exit 1
 }
 
-if ($ps1 -notmatch 'Resolve-SubmitReconcileOperatorYamlPath') {
+if ($ps1 -notmatch 'Resolve-OperatorOrchestratorYamlPath') {
     Write-Host 'worker-message-submit-reconcile.ps1 must resolve operator YAML path from -YamlPath or AO runtime binding (Issue #402)'
     exit 1
 }

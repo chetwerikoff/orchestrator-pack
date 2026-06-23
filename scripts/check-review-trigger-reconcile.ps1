@@ -55,5 +55,14 @@ if ($reconcilePs1 -notmatch 'Test-ReconcileReactionConfigDefer') {
     exit 1
 }
 
+if ($reconcilePs1 -notmatch 'Resolve-OperatorOrchestratorYamlPath') {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must resolve operator YAML from AO runtime binding (Issue #402)'
+    exit 1
+}
+if ($reconcilePs1 -match "Join-Path \$PackRoot 'agent-orchestrator\.yaml\.example'") {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must not fall back to agent-orchestrator.yaml.example for runtime config (Issue #402)'
+    exit 1
+}
+
 Write-Host '[PASS] review-trigger reconciliation entrypoint and example wiring (Issue #163)'
 exit 0
