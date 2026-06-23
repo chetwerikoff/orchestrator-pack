@@ -246,6 +246,51 @@ describe('autonomous orchestrator interposer (#406)', () => {
     }
   });
 
+  it('moves pack scripts to PATH front when already present later in PATH', () => {
+    if (!existsSync('/usr/bin/git')) {
+      return;
+    }
+    withTempGitRepo((dir) => {
+      const readme = path.join(dir, 'README.md');
+      const hostPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
+      const buriedPath = `/usr/bin:${scriptsDir}:${hostPath}`;
+      const hiddenGit = spawnEvalHidden(dir, `git checkout -- ${readme}`, {
+        PATH: buriedPath,
+      });
+      expect(hiddenGit.status).toBe(93);
+      expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+    });
+  });
+
+  it('ignores turn-visible AO_PWSH_BINARY on autonomous surface', () => {
+    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-pwsh-bypass-'));
+    const aoStub = writeAoReadStub(stubDir);
+    const probeFile = path.join(stubDir, 'pwsh-probe.txt');
+    const fakePwsh = path.join(stubDir, 'fake-pwsh');
+    writeFileSync(
+      fakePwsh,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" > "${probeFile}"
+exit 0
+`,
+    );
+    chmodSync(fakePwsh, 0o755);
+    try {
+      const spawnProbe = path.join(stubDir, 'spawn-probe.txt');
+      const result = spawnEvalHidden(repoRoot, 'ao spawn opk-probe', {
+        AO_REAL_BINARY: aoStub,
+        AO_SPAWN_PROBE_FILE: spawnProbe,
+        AO_PWSH_BINARY: fakePwsh,
+      });
+      expect(result.status).toBe(93);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous worker spawn denied/i);
+      expect(existsSync(probeFile)).toBe(false);
+    } finally {
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
   it('orchestrator deny matrix covers flat and eval-hidden shapes', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-deny-matrix-'));
     const aoStub = writeAoReadStub(stubDir);

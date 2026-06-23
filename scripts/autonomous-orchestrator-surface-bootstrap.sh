@@ -7,10 +7,15 @@
   _ao_bootstrap_self="${BASH_SOURCE[0]:-${BASH_ENV:-}}"
   if [[ -n "${_ao_bootstrap_self}" ]]; then
     _ao_pack_scripts="$(cd "$(dirname "${_ao_bootstrap_self}")" && pwd)"
-    case ":${PATH:-}:" in
-      *:"${_ao_pack_scripts}":*) ;;
-      *) export PATH="${_ao_pack_scripts}:${PATH:-}" ;;
-    esac
+    _ao_cleaned_path=""
+    IFS=':' read -ra _ao_path_parts <<< "${PATH:-}"
+    for _ao_part in "${_ao_path_parts[@]}"; do
+      [[ -z "${_ao_part}" || "${_ao_part}" == "${_ao_pack_scripts}" ]] && continue
+      _ao_cleaned_path="${_ao_cleaned_path:+${_ao_cleaned_path}:}${_ao_part}"
+    done
+    unset _ao_path_parts _ao_part
+    export PATH="${_ao_pack_scripts}${_ao_cleaned_path:+:${_ao_cleaned_path}}"
+    unset _ao_cleaned_path
   fi
   unset _ao_bootstrap_self _ao_pack_scripts
 }

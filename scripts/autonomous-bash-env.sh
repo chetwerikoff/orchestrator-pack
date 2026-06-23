@@ -291,12 +291,15 @@ __ao_autonomous_script_content_needs_interposer() {
 }
 
 __ao_autonomous_prepend_pack_scripts_path() {
-  local pack_scripts="${1-}"
+  local pack_scripts="${1-}" cleaned="" part
   [[ -n "${pack_scripts}" ]] || return 0
-  case ":${PATH:-}:" in
-    *:"${pack_scripts}":*) return 0 ;;
-    *) export PATH="${pack_scripts}:${PATH:-}" ;;
-  esac
+  IFS=':' read -ra __ao_path_parts <<< "${PATH:-}"
+  for part in "${__ao_path_parts[@]}"; do
+    [[ -z "${part}" || "${part}" == "${pack_scripts}" ]] && continue
+    cleaned="${cleaned:+${cleaned}:}${part}"
+  done
+  unset __ao_path_parts
+  export PATH="${pack_scripts}${cleaned:+:${cleaned}}"
 }
 
 __ao_autonomous_entry_script_is_shell_binary() {

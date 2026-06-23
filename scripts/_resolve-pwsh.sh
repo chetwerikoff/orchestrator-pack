@@ -1,8 +1,11 @@
 # Shared pwsh resolver for pack bash shims (Issue #406).
 resolve_pwsh() {
-  if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
-    printf '%s\n' "${AO_PWSH_BINARY}"
-    return 0
+  # Turn-visible AO_PWSH_BINARY must not override the guard interpreter on protected surfaces.
+  if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" != "1" ]]; then
+    if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
+      printf '%s\n' "${AO_PWSH_BINARY}"
+      return 0
+    fi
   fi
   if command -v pwsh >/dev/null 2>&1; then
     command -v pwsh
