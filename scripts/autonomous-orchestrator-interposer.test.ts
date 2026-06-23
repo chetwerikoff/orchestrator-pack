@@ -33,9 +33,26 @@ function stripBashEnvBlockers(env: NodeJS.ProcessEnv) {
 }
 
 
-function armedBashCommand(command: string) {
-  return command;
-}
+const bashEnvRunnerDir = mkdtempSync(path.join(tmpdir(), 'ao-interposer-bash-env-runners-'));
+const liveCommandRunner = path.join(bashEnvRunnerDir, 'run-live-command.sh');
+const evalHiddenRunner = path.join(bashEnvRunnerDir, 'run-eval-hidden.sh');
+writeFileSync(
+  liveCommandRunner,
+  `#!/usr/bin/env bash
+set -euo pipefail
+eval "$1"
+`,
+);
+writeFileSync(
+  evalHiddenRunner,
+  `#!/usr/bin/env bash
+set -O extglob
+set -euo pipefail
+builtin eval "$1"
+`,
+);
+chmodSync(liveCommandRunner, 0o755);
+chmodSync(evalHiddenRunner, 0o755);
 
 function writeAutonomousRealBinariesConfig(packRoot: string, aoStub: string) {
   const aoDir = path.join(packRoot, '.ao');
@@ -63,7 +80,8 @@ function withRepoAoStubConfig(aoStub: string, fn: () => void) {
 }
 
 function spawnOrchestratorBash(args: string[], env: Record<string, string | undefined>, cwd = repoRoot) {
-  return spawnSync('/bin/bash', ['+o', 'posix', ...args], {
+  // Invoke bash with a script path so BASH_ENV is honored on GHA (node→bash -c may skip it).
+  return spawnSync('/bin/bash', args, {
     cwd,
     encoding: 'utf8',
     env: {
@@ -80,7 +98,7 @@ function spawnLiveArmedBash(
   command: string,
   extraEnv: Record<string, string | undefined> = {},
 ) {
-  return spawnOrchestratorBash(['-c', armedBashCommand(command)], extraEnv, cwd);
+  return spawnOrchestratorBash([liveCommandRunner, command], extraEnv, cwd);
 }
 
 function spawnEvalHidden(
@@ -88,7 +106,7 @@ function spawnEvalHidden(
   command: string,
   extraEnv: Record<string, string | undefined> = {},
 ) {
-  return spawnOrchestratorBash(['-O', 'extglob', '-c', 'builtin eval "$1"', 'x', armedBashCommand(command)], extraEnv, cwd);
+  return spawnOrchestratorBash([evalHiddenRunner, command], extraEnv, cwd);
 }
 
 function writeAoReadStub(dir: string) {
