@@ -15,7 +15,23 @@ export interface AoFixtureSessionRecord {
   pr?: string | null;
 }
 
+export type AoSessionListingSource = 'json' | 'text' | 'none';
+
+export interface AoSessionListing {
+  records: AoFixtureSessionRecord[];
+  source: AoSessionListingSource;
+}
+
 export const FIXTURE_HOLDER_PROMPT = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
+
+const FIXTURE_HOLDER_CLAIM_ID_RE = /^opk-\S+$/;
+
+function defaultSleepMs(ms: number): void {
+  if (ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 /** Parse `ao session ls` text for active session rows (TTY-indented or piped). */
 export function parseAoSessionLsText(stdout: string): AoFixtureSessionRecord[] {
@@ -49,29 +65,41 @@ export function parseAoSessionLsText(stdout: string): AoFixtureSessionRecord[] {
 }
 
 export function normalizeAoSessionRecordsFromJson(stdout: string): AoFixtureSessionRecord[] {
-  try {
-    const payload = JSON.parse(stdout);
-    return (payload?.data ?? [])
-      .filter((session: { id?: string }) => typeof session?.id === 'string' && session.id.startsWith('opk-'))
-      .map((session: { id: string; branch?: string; pr?: string | null }) => ({
-        id: session.id,
-        branch: typeof session.branch === 'string' ? session.branch : null,
-        pr: typeof session.pr === 'string' ? session.pr : null,
-      }));
-  } catch {
-    return [];
-  }
+  const payload = JSON.parse(stdout);
+  return (payload?.data ?? [])
+    .filter((session: { id?: string }) => typeof session?.id === 'string' && session.id.startsWith('opk-'))
+    .map((session: { id: string; branch?: string; pr?: string | null }) => ({
+      id: session.id,
+      branch: typeof session.branch === 'string' ? session.branch : null,
+      pr: typeof session.pr === 'string' ? session.pr : null,
+    }));
 }
 
 export function listAoSessionRecordsFromOutputs(options: {
   jsonStdout?: string | null;
   textStdout?: string | null;
-}): AoFixtureSessionRecord[] {
-  const fromJson = options.jsonStdout ? normalizeAoSessionRecordsFromJson(options.jsonStdout) : [];
-  if (fromJson.length > 0) {
-    return fromJson;
+}): AoSessionListing {
+  if (options.jsonStdout?.trim()) {
+    try {
+      const records = normalizeAoSessionRecordsFromJson(options.jsonStdout);
+      return { records, source: 'json' };
+    } catch {
+      // fall through to text
+    }
   }
-  return options.textStdout ? parseAoSessionLsText(options.textStdout) : [];
+
+  if (options.textStdout?.trim()) {
+    return {
+      records: parseAoSessionLsText(options.textStdout),
+      source: 'text',
+    };
+  }
+
+  return { records: [], source: 'none' };
+}
+
+export function isSpawnTrustworthySessionListing(source: AoSessionListingSource): boolean {
+  return source === 'json';
 }
 
 /** Branch names used for operator-spawned AC#13 fixture holders (not task workers). */
@@ -104,11 +132,43 @@ export function pickDedicatedFixtureHolderSession(
   return sessionBranch?.id ?? dedicated[0]?.id ?? null;
 }
 
+export function parseFixtureHolderClaimContent(raw: string): {
+  kind: 'empty' | 'pending' | 'resolved';
+  sessionId?: string;
+  pendingSince?: number;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { kind: 'empty' };
+  }
+  if (FIXTURE_HOLDER_CLAIM_ID_RE.test(trimmed)) {
+    return { kind: 'resolved', sessionId: trimmed };
+  }
+  const pendingSince = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(pendingSince)) {
+    return { kind: 'pending', pendingSince };
+  }
+  return { kind: 'empty' };
+}
+
+export function readResolvedFixtureHolderClaim(claimPath: string): string | null {
+  if (!existsSync(claimPath)) {
+    return null;
+  }
+  try {
+    const parsed = parseFixtureHolderClaimContent(readFileSync(claimPath, 'utf8'));
+    return parsed.kind === 'resolved' ? parsed.sessionId ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveAoFixtureSessionId(options: {
   envSession?: string | null;
   liveE2eEnabled: boolean;
   preferredSessionId: string;
   knownSessions: AoFixtureSessionRecord[];
+  sessionListingSource?: AoSessionListingSource;
   allowSpawn: boolean;
   spawnSession: () => string | null;
   claimSpawn?: (spawnSession: () => string | null, knownSessions: AoFixtureSessionRecord[]) => string | null;
@@ -142,23 +202,15 @@ export function resolveAoFixtureSessionId(options: {
     return null;
   }
 
+  if (!isSpawnTrustworthySessionListing(options.sessionListingSource ?? 'none')) {
+    return null;
+  }
+
   const claimSpawn = options.claimSpawn ?? ((spawnSession) => spawnSession());
   return claimSpawn(options.spawnSession, knownSessions);
 }
 
 const CLAIM_STALE_MS = 120_000;
-
-export function readFixtureHolderClaim(claimPath: string): string | null {
-  if (!existsSync(claimPath)) {
-    return null;
-  }
-  try {
-    const raw = readFileSync(claimPath, 'utf8').trim();
-    return raw || null;
-  } catch {
-    return null;
-  }
-}
 
 export function claimOrSpawnFixtureHolder(options: {
   claimPath: string;
@@ -168,12 +220,7 @@ export function claimOrSpawnFixtureHolder(options: {
   sleepMs?: (ms: number) => void;
 }): string | null {
   const now = options.now ?? Date.now;
-  const sleepMs = options.sleepMs ?? ((ms: number) => {
-    const deadline = now() + ms;
-    while (now() < deadline) {
-      // busy-wait for short claim races in spawnSync callers
-    }
-  });
+  const sleepMs = options.sleepMs ?? defaultSleepMs;
   mkdirSync(path.dirname(options.claimPath), { recursive: true });
 
   const existingDedicated = pickDedicatedFixtureHolderSession(options.knownSessions);
@@ -181,9 +228,9 @@ export function claimOrSpawnFixtureHolder(options: {
     return existingDedicated;
   }
 
-  const claimedId = readFixtureHolderClaim(options.claimPath);
-  if (claimedId && options.knownSessions.some((session) => session.id === claimedId)) {
-    return claimedId;
+  const resolvedClaim = readResolvedFixtureHolderClaim(options.claimPath);
+  if (resolvedClaim && options.knownSessions.some((session) => session.id === resolvedClaim)) {
+    return resolvedClaim;
   }
 
   try {
@@ -208,15 +255,16 @@ export function claimOrSpawnFixtureHolder(options: {
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
     sleepMs(50);
-    const claimed = readFixtureHolderClaim(options.claimPath);
-    if (claimed) {
-      return claimed;
+
+    const resolved = readResolvedFixtureHolderClaim(options.claimPath);
+    if (resolved) {
+      return resolved;
     }
 
     if (existsSync(options.claimPath)) {
       try {
-        const stamp = Number.parseInt(readFileSync(options.claimPath, 'utf8').trim(), 10);
-        if (Number.isFinite(stamp) && now() - stamp > CLAIM_STALE_MS) {
+        const parsed = parseFixtureHolderClaimContent(readFileSync(options.claimPath, 'utf8'));
+        if (parsed.kind === 'pending' && parsed.pendingSince !== undefined && now() - parsed.pendingSince > CLAIM_STALE_MS) {
           unlinkSync(options.claimPath);
           break;
         }

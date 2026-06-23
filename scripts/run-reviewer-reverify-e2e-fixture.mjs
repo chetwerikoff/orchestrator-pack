@@ -88,7 +88,7 @@ function listAoSessions() {
     encoding: 'utf8',
   });
   if (jsonListed.status !== 0 && textListed.status !== 0) {
-    return [];
+    return { records: [], source: 'none' };
   }
   return listAoSessionRecordsFromOutputs({
     jsonStdout: jsonListed.status === 0 ? jsonListed.stdout : '',
@@ -113,12 +113,13 @@ function spawnEphemeralFixtureSession() {
 }
 
 function resolveAoFixtureSession() {
-  const knownSessions = listAoSessions();
+  const sessionListing = listAoSessions();
   return resolveAoFixtureSessionId({
     envSession: process.env.OPK_REVERIFY_E2E_SESSION,
     liveE2eEnabled: isLiveE2eEnabled(),
     preferredSessionId,
-    knownSessions,
+    knownSessions: sessionListing.records,
+    sessionListingSource: sessionListing.source,
     allowSpawn: isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN'),
     spawnSession: spawnEphemeralFixtureSession,
     claimSpawn: (spawnSession, sessions) => claimOrSpawnFixtureHolder({
@@ -322,17 +323,17 @@ if (!aoAvailable) {
   process.exit(1);
 }
 
-const knownSessions = listAoSessions();
+const sessionListing = listAoSessions();
 const sessionId = resolveAoFixtureSession();
 output.aoSessionId = sessionId;
-const sessionRecord = knownSessions.find((session) => session.id === sessionId);
+const sessionRecord = sessionListing.records.find((session) => session.id === sessionId);
 output.aoSessionIsDedicatedFixture = sessionId === preferredSessionId
   || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim())
   || isDedicatedFixtureHolderBranch(sessionRecord?.branch);
 
 if (!sessionId) {
-  const onlyRealPrWorkers = knownSessions.length > 0
-    && knownSessions.every((session) => sessionOwnsRealPr(session) || !isDedicatedFixtureHolderBranch(session.branch));
+  const onlyRealPrWorkers = sessionListing.records.length > 0
+    && sessionListing.records.every((session) => sessionOwnsRealPr(session) || !isDedicatedFixtureHolderBranch(session.branch));
   output.error = onlyRealPrWorkers
     ? 'unable to resolve AO fixture session: only real-PR workers are live; set OPK_REVERIFY_E2E_SESSION to a dedicated fixture holder or OPK_REVERIFY_E2E_ALLOW_SPAWN=1'
     : 'unable to resolve AO fixture session: set OPK_REVERIFY_E2E_SESSION, reuse a dedicated fixture holder, or set OPK_REVERIFY_E2E_ALLOW_SPAWN=1';

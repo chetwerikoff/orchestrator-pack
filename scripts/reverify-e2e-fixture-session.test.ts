@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import {
   listAoSessionRecordsFromOutputs,
   parseAoSessionLsText,
   pickDedicatedFixtureHolderSession,
+  readResolvedFixtureHolderClaim,
   resolveAoFixtureSessionId,
 } from './lib/reverify-e2e-fixture-session.js';
 
@@ -23,6 +24,7 @@ describe('reverify e2e fixture session resolution', () => {
     expect(isDedicatedFixtureHolderBranch('feat/issue-376')).toBe(false);
     expect(isDedicatedFixtureHolderBranch('fix/reverify-ci-fixture-holder')).toBe(false);
   });
+
   it('parses real piped ao session ls output without TTY indentation', () => {
     const listed = spawnSync('ao', ['session', 'ls'], {
       cwd: packRoot,
@@ -66,19 +68,45 @@ describe('reverify e2e fixture session resolution', () => {
     expect(jsonListed.status).toBe(0);
     expect(textListed.status).toBe(0);
 
-    const records = listAoSessionRecordsFromOutputs({
+    const listing = listAoSessionRecordsFromOutputs({
       jsonStdout: jsonListed.stdout,
       textStdout: textListed.stdout,
     });
-    if (records.length > 0) {
-      expect(records[0].id).toMatch(/^opk-/);
-    } else {
-      const fallback = listAoSessionRecordsFromOutputs({
-        jsonStdout: '',
-        textStdout: textListed.stdout,
-      });
-      expect(fallback.length).toBeGreaterThanOrEqual(0);
+    expect(listing.source).toBe('json');
+    if (listing.records.length > 0) {
+      expect(listing.records[0].id).toMatch(/^opk-/);
     }
+
+    const fallback = listAoSessionRecordsFromOutputs({
+      jsonStdout: '',
+      textStdout: textListed.stdout,
+    });
+    expect(fallback.source).toBe('text');
+  });
+
+  it('does not spawn when only text listing is available without a dedicated holder', () => {
+    let spawnCount = 0;
+    const listing = listAoSessionRecordsFromOutputs({
+      jsonStdout: 'not-json',
+      textStdout: 'opk-173:\n  (no active sessions)\n',
+    });
+    expect(listing.source).toBe('text');
+
+    const resolved = resolveAoFixtureSessionId({
+      envSession: '',
+      liveE2eEnabled: true,
+      preferredSessionId: 'opk-reverify-e2e',
+      knownSessions: listing.records,
+      sessionListingSource: listing.source,
+      allowSpawn: true,
+      spawnSession: () => {
+        spawnCount += 1;
+        return 'opk-should-not-run';
+      },
+    });
+
+    expect(resolved).toBeNull();
+    expect(spawnCount).toBe(0);
   });
 
   it('prefers session/opk-* fixture holders over feat/opk-*-reverify-e2e-holder branches', () => {
@@ -161,6 +189,7 @@ describe('reverify e2e fixture session resolution', () => {
       liveE2eEnabled: true,
       preferredSessionId: 'opk-reverify-e2e',
       knownSessions: [{ id: 'opk-172', branch: 'feat/402' }],
+      sessionListingSource: 'json',
       allowSpawn: true,
       spawnSession: () => {
         spawnCount += 1;
@@ -179,6 +208,7 @@ describe('reverify e2e fixture session resolution', () => {
       liveE2eEnabled: true,
       preferredSessionId: 'opk-reverify-e2e',
       knownSessions,
+      sessionListingSource: 'json',
       allowSpawn: true,
       spawnSession: () => {
         spawnCount += 1;
@@ -189,6 +219,53 @@ describe('reverify e2e fixture session resolution', () => {
     expect(resolveOnce()).toBe('opk-175');
     expect(resolveOnce()).toBe('opk-175');
     expect(spawnCount).toBe(0);
+  });
+
+  it('does not treat a pending timestamp claim as a resolved session id', () => {
+    const claimDir = mkdtempSync(path.join(os.tmpdir(), 'reverify-claim-pending-'));
+    const claimPath = path.join(claimDir, 'fixture-holder.claim');
+    writeFileSync(claimPath, '1782150475225\n', 'utf8');
+
+    try {
+      expect(readResolvedFixtureHolderClaim(claimPath)).toBeNull();
+      const waiter = claimOrSpawnFixtureHolder({
+        claimPath,
+        knownSessions: [],
+        spawnSession: () => 'opk-should-not-run',
+        now: () => 1_782_150_475_300,
+        sleepMs: () => {},
+      });
+      expect(waiter).toBeNull();
+    } finally {
+      rmSync(claimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for a resolved claim during slow spawn and converges on one holder', () => {
+    const claimDir = mkdtempSync(path.join(os.tmpdir(), 'reverify-claim-slow-'));
+    const claimPath = path.join(claimDir, 'fixture-holder.claim');
+    writeFileSync(claimPath, '5000\n', 'utf8');
+    let loopCount = 0;
+
+    try {
+      const waiter = claimOrSpawnFixtureHolder({
+        claimPath,
+        knownSessions: [],
+        spawnSession: () => 'opk-should-not-run',
+        now: () => 5_100,
+        sleepMs: () => {
+          loopCount += 1;
+          if (loopCount === 2) {
+            writeFileSync(claimPath, 'opk-winner\n', 'utf8');
+          }
+        },
+      });
+
+      expect(waiter).toBe('opk-winner');
+      expect(waiter).toMatch(/^opk-/);
+    } finally {
+      rmSync(claimDir, { recursive: true, force: true });
+    }
   });
 
   it('claim lock allows only one spawn under concurrent claim', () => {

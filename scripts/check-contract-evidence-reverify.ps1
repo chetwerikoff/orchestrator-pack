@@ -111,26 +111,36 @@ function Test-ReverifyFixtureSessionOwnsRealPr {
     return -not [string]::IsNullOrWhiteSpace([string]$Session.pr)
 }
 
-function Get-ReverifyAoSessionRecords {
+function Test-ResolvedReverifyFixtureHolderClaim {
+    param(
+        [string]$Content
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        return $false
+    }
+    return $Content.Trim() -match '^opk-\S+$'
+}
+
+function Get-ReverifyAoSessionListing {
     $jsonRaw = & ao session ls --json 2>$null
-    $records = @()
     if ($LASTEXITCODE -eq 0) {
         try {
             $payload = $jsonRaw | ConvertFrom-Json
             $records = @($payload.data | Where-Object { $_.id -like 'opk-*' })
+            return [pscustomobject]@{
+                records = $records
+                source  = 'json'
+            }
         }
         catch {
-            $records = @()
+            # fall through to text
         }
-    }
-
-    if ($records.Count -gt 0) {
-        return $records
     }
 
     $textRaw = & ao session ls 2>$null
     if ($LASTEXITCODE -ne 0) {
-        return @()
+        return [pscustomobject]@{ records = @(); source = 'none' }
     }
 
     $parsed = @()
@@ -156,7 +166,7 @@ function Get-ReverifyAoSessionRecords {
             }
         }
     }
-    return $parsed
+    return [pscustomobject]@{ records = $parsed; source = 'text' }
 }
 
 function Resolve-ReverifyCiFixtureSession {
@@ -178,7 +188,8 @@ function Resolve-ReverifyCiFixtureSession {
         $preferredSessionId = (Get-Content -LiteralPath $fixtureSessionFile -Raw).Trim()
     }
 
-    $sessions = Get-ReverifyAoSessionRecords
+    $listing = Get-ReverifyAoSessionListing
+    $sessions = @($listing.records)
     foreach ($session in $sessions) {
         if ($session.id -eq $preferredSessionId -and -not (Test-ReverifyFixtureSessionOwnsRealPr $session)) {
             return $session.id
@@ -200,6 +211,9 @@ function Resolve-ReverifyCiFixtureSession {
     if (-not $allowSpawn) {
         return $null
     }
+    if ($listing.source -ne 'json') {
+        return $null
+    }
 
     $claimPath = Join-Path $Root 'tests/fixtures/contract-evidence-reverify/e2e/fixture-holder.claim'
     $claimDir = Split-Path -Parent $claimPath
@@ -208,7 +222,7 @@ function Resolve-ReverifyCiFixtureSession {
     }
     if (Test-Path -LiteralPath $claimPath) {
         $claimed = (Get-Content -LiteralPath $claimPath -Raw).Trim()
-        if (-not [string]::IsNullOrWhiteSpace($claimed) -and ($sessions.id -contains $claimed)) {
+        if ((Test-ResolvedReverifyFixtureHolderClaim $claimed) -and ($sessions.id -contains $claimed)) {
             return $claimed
         }
     }
@@ -219,7 +233,12 @@ function Resolve-ReverifyCiFixtureSession {
     catch [System.IO.IOException] {
         if (Test-Path -LiteralPath $claimPath) {
             $claimed = (Get-Content -LiteralPath $claimPath -Raw).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($claimed)) {
+            if (Test-ResolvedReverifyFixtureHolderClaim $claimed) {
+                return $claimed
+            }
+            Start-Sleep -Milliseconds 50
+            $claimed = (Get-Content -LiteralPath $claimPath -Raw).Trim()
+            if (Test-ResolvedReverifyFixtureHolderClaim $claimed) {
                 return $claimed
             }
         }
