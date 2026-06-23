@@ -1198,7 +1198,13 @@ describe('review-trigger-reconcile.ps1 fixture wiring', () => {
   const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const scriptPath = path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1');
 
-  it('honors -CiGreenWakeStateFile when loading shared nudge evidence', () => {
+  it('resolves operator YAML from AO runtime binding instead of example fallback', () => {
+    const ps1 = readFileSync(scriptPath, 'utf8');
+    expect(ps1).toContain('Resolve-OperatorOrchestratorYamlPath');
+    expect(ps1).not.toMatch(/Join-Path \$PackRoot 'agent-orchestrator\.yaml\.example'/);
+  });
+
+    it('honors -CiGreenWakeStateFile when loading shared nudge evidence', () => {
     const ps1 = readFileSync(scriptPath, 'utf8');
     expect(ps1).toContain('CiGreenWakeStateFile');
     expect(ps1).toMatch(/function Get-CiGreenWakeSharedStatePath[\s\S]*CliPath/);

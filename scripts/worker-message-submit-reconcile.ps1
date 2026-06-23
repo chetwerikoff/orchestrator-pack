@@ -22,7 +22,8 @@ param(
     [string]$DispatchJournalPath = '',
     [switch]$DryRun,
     [switch]$Once,
-    [string]$FixturePath = ''
+    [string]$FixturePath = '',
+    [string]$YamlPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +43,7 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 
 $Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
 
@@ -365,7 +367,8 @@ function Invoke-SubmitReconcileTick {
         [string]$JournalPath,
         [switch]$DryRunMode,
         [string]$Fixture,
-        [long]$NowMs
+        [long]$NowMs,
+        [string]$ConfigYaml = ''
     )
 
     if ($Fixture) {
@@ -388,6 +391,7 @@ function Invoke-SubmitReconcileTick {
                 $reactionMessages[$prop.Name] = [string]$prop.Value
             }
         }
+        $reactionConfigUnavailable = [bool]$fixture.reactionConfigUnavailable
         if ($fixture.floodActiveSessions) {
             $floodActiveSessions = @{}
             foreach ($prop in $fixture.floodActiveSessions.PSObject.Properties) {
@@ -407,11 +411,36 @@ function Invoke-SubmitReconcileTick {
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
-        $reactionMessages = @{
-            'report-stale' = 'Agent report is stale (30 minutes since last report). Continue your task.'
-            'ci-failed'    = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot }
+        $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $operatorYamlPath
+        $reactionMessages = @{}
+        $reactionConfigUnavailable = $false
+        if ($reactionConfig.ok) {
+            foreach ($entry in $reactionConfig.messages.GetEnumerator()) {
+                $reactionMessages[$entry.Key] = [string]$entry.Value
+            }
+        }
+        else {
+            $reactionConfigUnavailable = $true
         }
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+    }
+
+    if ($reactionConfigUnavailable) {
+        $reactionEvents = @($aoEvents | Where-Object {
+                $_.kind -eq 'reaction.action_succeeded' -and
+                $_.data -and $_.data.action -eq 'send-to-agent'
+            })
+        if ($reactionEvents.Count -gt 0) {
+            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$($reactionEvents.Count)"
+            return @{
+                submitted = 0
+                escalated = 0
+                noop      = 0
+                deferred  = 1
+                tracking  = $tracking
+            }
+        }
     }
 
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
@@ -439,6 +468,22 @@ function Invoke-SubmitReconcileTick {
             if (-not $compactResult.ok) {
                 Write-SubmitReconcileLog "dispatch journal compaction skipped: reason=$($compactResult.reason)"
             }
+        }
+    }
+
+    $reactionObservation = Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs') -Subcommand 'observe' `
+        -Payload @{
+            aoEvents         = @($aoEvents)
+            dispatchJournal  = $dispatchJournal
+            reviewRuns       = @($reviewRuns)
+            reactionMessages = $reactionMessages
+            nowMs            = $now
+        } -Label $Script:ReconcileLogPrefix -JsonDepth 10
+    foreach ($audit in @($reactionObservation.reactionAudits)) {
+        $reactionKey = [string]$audit.reactionKey
+        $reason = [string]$audit.reason
+        if ($reason) {
+            Write-SubmitReconcileLog "reaction observation: reason=$reason reactionKey=$reactionKey"
         }
     }
 
@@ -529,6 +574,8 @@ function Invoke-SubmitReconcileTick {
     }
 }
 
+$configYaml = Resolve-OperatorOrchestratorYamlPath -YamlPathOverride $YamlPath -PackRoot $PackRoot
+
 $intervalSeconds = Get-SubmitReconcileIntervalSeconds
 $intervalMs = [Math]::Max(1, $intervalSeconds) * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
@@ -542,7 +589,7 @@ if ($FixturePath) {
         Write-SubmitReconcileLog 'fixture mode: enforcing dry-run (no live submit side effects)'
     }
     $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath -JournalPath $journalPath `
-        -DryRunMode -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        -DryRunMode -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -ConfigYaml $configYaml
     Write-SubmitReconcileLog "fixture tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
     exit 0
 }
@@ -585,7 +632,7 @@ try {
                     Set-SubmitReconcileState -Path $statePath -State $state -JournalPath $journalPath
                 }
                 $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath `
-                    -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs
+                    -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs -ConfigYaml $configYaml
                 $result.tracking = Merge-SubmitAdoptionTrackingFields -Target $result.tracking -Source $state
                 if (-not $DryRun) {
                     Set-SubmitReconcileState -Path $statePath -State $result.tracking -JournalPath $journalPath

@@ -96,3 +96,26 @@ function Get-WorkerMessageAdoptionBinding {
         ConfigPath = $configPath
     }
 }
+
+function Resolve-OperatorOrchestratorYamlPath {
+    param(
+        [string]$YamlPathOverride = '',
+        [string]$PackRoot = ''
+    )
+
+    if ($YamlPathOverride) {
+        try {
+            return (Resolve-Path -LiteralPath $YamlPathOverride -ErrorAction Stop).Path
+        }
+        catch {
+            return $YamlPathOverride
+        }
+    }
+
+    if (-not $PackRoot) {
+        $PackRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+
+    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    return [string]$binding.ConfigPath
+}
