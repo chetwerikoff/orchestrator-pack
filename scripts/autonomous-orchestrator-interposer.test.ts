@@ -87,7 +87,7 @@ function spawnOrchestratorBash(args: string[], env: Record<string, string | unde
     encoding: 'utf8',
     env: {
       ...stripBashEnvBlockers(process.env),
-      AO_TMUX_NAME: 'opk-orchestrator',
+      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
       BASH_ENV: bootstrapPath,
       ...env,
     },
@@ -151,7 +151,26 @@ describe('autonomous orchestrator interposer (#406)', () => {
     expect(statSync(bootstrapPath).mode & 0o111).toBeGreaterThan(0);
   });
 
-  it('live arming path: bootstrap maps AO_TMUX_NAME to surface and denies spawn', () => {
+  it('does not derive AO_AUTONOMOUS_ORCHESTRATOR_SURFACE from AO_TMUX_NAME in tracked bootstrap', () => {
+    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-tmux-no-map-'));
+    const aoStub = writeAoReadStub(stubDir);
+    const probeFile = path.join(stubDir, 'spawn-probe.txt');
+    try {
+      withRepoAoStubConfig(aoStub, () => {
+        const onlyTmux = spawnOrchestratorBash([liveCommandRunner, 'ao spawn opk-probe'], {
+          AO_TMUX_NAME: 'opk-orchestrator',
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+          AO_SPAWN_PROBE_FILE: probeFile,
+        });
+        expect(onlyTmux.status).toBe(0);
+        expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-probe']);
+      });
+    } finally {
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
+  it('live arming path: BASH_ENV bootstrap arms orchestrator surface and denies spawn', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-live-arm-'));
     const aoStub = writeAoReadStub(stubDir);
     const probeFile = path.join(stubDir, 'spawn-probe.txt');
@@ -443,7 +462,7 @@ exit 0
     const probeFile = path.join(stubDir, 'spawn-probe.txt');
     try {
       const workerSpawn = spawnEvalHidden(repoRoot, 'ao spawn opk-probe', {
-        AO_TMUX_NAME: 'opk-worker',
+        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
         AO_REAL_BINARY: aoStub,
         AO_SPAWN_PROBE_FILE: probeFile,
       });
@@ -459,7 +478,7 @@ exit 0
           encoding: 'utf8',
           env: {
             ...stripBashEnvBlockers(process.env),
-            AO_TMUX_NAME: 'opk-orchestrator',
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
             BASH_ENV: bootstrapPath,
           },
         },

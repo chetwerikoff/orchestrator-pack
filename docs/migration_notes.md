@@ -189,8 +189,7 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
 `coworker.env` logic:
 
 1. Point `BASH_ENV` at `scripts/autonomous-orchestrator-surface-bootstrap.sh`
-   (thin bootstrap — maps live `AO_TMUX_NAME` `*orchestrator*` →
-   `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`, prepends pack `scripts/`, sources
+   (thin bootstrap — prepends pack `scripts/`, sources
    `scripts/autonomous-bash-env.sh`).
 2. Keep pack `scripts/` first on `PATH` in orchestrator `agentConfig` (same as
    Issue #324).

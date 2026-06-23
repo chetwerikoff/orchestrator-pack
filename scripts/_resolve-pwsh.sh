@@ -15,6 +15,20 @@ resolve_pwsh() {
   fi
 
   local candidate
+  if [[ "${trusted_only}" -eq 1 ]]; then
+    for candidate in \
+      /usr/local/bin/pwsh \
+      /usr/bin/pwsh \
+      /opt/microsoft/powershell/7/pwsh; do
+      if [[ -x "${candidate}" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+    done
+    printf '/usr/local/bin/pwsh\n'
+    return 0
+  fi
+
   for candidate in \
     /usr/local/bin/pwsh \
     /usr/bin/pwsh \
@@ -26,9 +40,5 @@ resolve_pwsh() {
     fi
   done
 
-  if [[ "${trusted_only}" -eq 0 ]]; then
-    printf 'pwsh\n'
-  else
-    printf '/usr/local/bin/pwsh\n'
-  fi
+  printf 'pwsh\n'
 }
