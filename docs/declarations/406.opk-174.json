@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "2f2254f4b14ea073df5a56589e672b641115cb0a",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:accc2e2c835775f595fa7dd056a8a753d991eb8f2b2fdd649dc975deb180d725"
+    "active_scope_hash": "sha256:b920215bba064dccf03b2539deea7309c9337dedbbf81831408fd537502631a9"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -22,24 +22,26 @@
     "scripts/autonomous-orchestrator-surface-bootstrap.sh",
     "scripts/git",
     "scripts/git-real-binary",
-    "scripts/lib/Orchestrator-AutonomousBoundary.ps1"
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/verify.ps1"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:718afe5f6146b6873861e7d895c8c3d1c0d52bc2b01cbb864670f1b55e38b82d",
-      "new_active_scope_hash": "sha256:accc2e2c835775f595fa7dd056a8a753d991eb8f2b2fdd649dc975deb180d725",
+      "new_active_scope_hash": "sha256:b920215bba064dccf03b2539deea7309c9337dedbbf81831408fd537502631a9",
       "changed": {
         "added": [
           "scripts/_resolve-pwsh.sh",
           "scripts/ao",
           "scripts/git",
           "scripts/git-real-binary",
-          "scripts/lib/Orchestrator-AutonomousBoundary.ps1"
+          "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+          "scripts/verify.ps1"
         ],
         "removed": []
       },
-      "reason": "Boundary resolver and ao/git shim pwsh resolver for read-verbs path",
+      "reason": "Boundary resolver, ao/git shim pwsh resolver, and verify.ps1 interposer vitest wiring",
       "actor": "opk-2",
       "timestamp": "2026-06-23T06:24:00.000Z",
       "applied": true
