@@ -275,7 +275,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       if (existsSync('/usr/bin/git')) {
         withTempGitRepo((dir) => {
           const readme = path.join(dir, 'README.md');
-          const absoluteGit = spawnSync('/bin/bash', ['-c', `/usr/bin/git checkout -- ${readme}`], {
+          const absoluteGit = spawnSync('/bin/bash', [liveCommandRunner, `/usr/bin/git checkout -- ${readme}`], {
             cwd: dir,
             encoding: 'utf8',
             env: {
