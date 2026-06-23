@@ -411,7 +411,7 @@ function Invoke-SubmitReconcileTick {
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
-        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot
+        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot }
         $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $operatorYamlPath
         $reactionMessages = @{}
         $reactionConfigUnavailable = $false
