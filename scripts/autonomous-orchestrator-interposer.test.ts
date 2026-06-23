@@ -163,7 +163,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       const copiedScripts = path.join(packCopy, 'scripts');
       mkdirSync(copiedScripts, { recursive: true });
       cpSync(path.join(scriptsDir, 'lib'), path.join(copiedScripts, 'lib'), { recursive: true });
-      for (const name of ['ao', 'git', 'ao-autonomous-guard.ps1', 'git-autonomous-guard.ps1']) {
+      for (const name of ['_resolve-pwsh.sh', 'ao', 'git', 'ao-autonomous-guard.ps1', 'git-autonomous-guard.ps1']) {
         writeFileSync(path.join(copiedScripts, name), readFileSync(path.join(scriptsDir, name)));
         if (name === 'ao' || name === 'git') {
           chmodSync(path.join(copiedScripts, name), 0o755);
