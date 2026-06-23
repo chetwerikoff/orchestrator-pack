@@ -789,7 +789,7 @@ Write-Host '== Worker launch-failure detection (Issue #63) =='
 $launchFailureCheck = Join-Path $Root 'scripts/check-worker-launch-failure.ps1'
 $launchFixtureDir = Join-Path $Root 'tests/fixtures/worker-launch-failure'
 if ((Test-Path -LiteralPath $launchFailureCheck -PathType Leaf) -and
-    (Test-Path -LiteralPath $launchFixtureDir -PathType Container)) {
+    (Test-Path -LiteralPath $launchFixtureDir -PathType Container) {
     $fixtureCases = @(
         @{ Name = 'signature-a'; File = 'signature-a-pty.txt'; ExpectMatch = $true },
         @{ Name = 'signature-b'; File = 'signature-b-pty.txt'; ExpectMatch = $true },
