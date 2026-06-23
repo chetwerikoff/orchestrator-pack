@@ -426,7 +426,40 @@ export function evaluateHandoffPreClaimRecheck(input) {
   };
 }
 
-function handoffAdmissionKey({ projectId, repoSlug, prNumber, headSha }) {
+const TERMINAL_HANDOFF_ADMISSION_OUTCOMES = new Set([
+  'claim_win',
+  'toctou_reject',
+]);
+
+const TERMINAL_HANDOFF_ADMISSION_REASONS = new Set([
+  'pre_claim_toctou_pr_closed',
+  'pre_claim_toctou_base_retargeted',
+  'pre_claim_toctou_head_advanced',
+  'handoff_receipt_bound_exceeded',
+]);
+
+/**
+ * @param {Record<string, unknown> | null | undefined} record
+ */
+export function isTerminalHandoffAdmissionRecord(record) {
+  if (!record || typeof record !== 'object') {
+    return false;
+  }
+  const outcome = String(record.outcome ?? '').trim().toLowerCase();
+  if (!outcome || outcome === 'promoted') {
+    return false;
+  }
+  if (TERMINAL_HANDOFF_ADMISSION_OUTCOMES.has(outcome)) {
+    return true;
+  }
+  if (record.terminal === true) {
+    return true;
+  }
+  const reason = String(record.reason ?? record.deferReason ?? '').trim();
+  return TERMINAL_HANDOFF_ADMISSION_REASONS.has(reason);
+}
+
+export function handoffAdmissionKey({ projectId, repoSlug, prNumber, headSha }) {
   return [projectId ?? '', repoSlug ?? '', String(prNumber ?? ''), normalizeSha(headSha)].join('|');
 }
 
