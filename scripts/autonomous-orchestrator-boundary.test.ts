@@ -25,7 +25,7 @@ import {
   validateBoundaryCapabilityInventory,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
-import { withTempGitRepo } from './_test-git-fixture.js';
+import { autonomousBashEnv, gitFixtureEnv, withTempGitRepo } from './_test-git-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -187,7 +187,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
+          env: autonomousBashEnv({ PATH: `${path.join(repoRoot, 'scripts')}:${gitFixtureEnv().PATH ?? '/usr/bin:/bin'}` }),
         },
       );
       expect(deny.status).toBe(93);
@@ -343,18 +343,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const denyShim = spawnSync('bash', [gitShimPath, 'branch', '-m', 'blocked'], {
         cwd: dir,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-          PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
-        },
+        env: autonomousBashEnv({ PATH: `${path.join(repoRoot, 'scripts')}:${gitFixtureEnv().PATH ?? '/usr/bin:/bin'}` }),
       });
       expect(denyShim.status).toBe(93);
 
       const denyRealBinary = spawnSync('bash', [gitRealBinaryPath, 'branch', '-m', 'blocked'], {
         cwd: dir,
         encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        env: autonomousBashEnv(),
       });
       expect(denyRealBinary.status).toBe(93);
       expect(denyRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
@@ -402,10 +398,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         const after = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
@@ -419,10 +412,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(allowChain.stdout).toMatch(/done-marker/);
@@ -434,10 +424,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(allowRedirect.status).toBe(0);
@@ -445,17 +432,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         expect(existsSync(outFile)).toBe(true);
         expect(readFileSync(outFile, 'utf8').length).toBeGreaterThan(0);
 
-        const directStatus = spawnSync('git', ['status'], { cwd: dir, encoding: 'utf8' });
+        const directStatus = spawnSync('git', ['status'], { cwd: dir, encoding: 'utf8', env: gitFixtureEnv() });
         const interposedStatus = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; /usr/bin/git status`],
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(interposedStatus.status).toBe(0);
@@ -464,6 +448,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const directShort = spawnSync('bash', ['-c', 'GIT_OPTIONAL_LOCKS=0 git status --short'], {
           cwd: dir,
           encoding: 'utf8',
+          env: gitFixtureEnv(),
         });
         const interposedShort = spawnSync(
           'bash',
@@ -471,10 +456,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(interposedShort.status).toBe(0);
@@ -483,6 +465,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const directMultiEnv = spawnSync('bash', ['-c', 'FOO=1 BAR=2 git status --short'], {
           cwd: dir,
           encoding: 'utf8',
+          env: gitFixtureEnv(),
         });
         const interposedMultiEnv = spawnSync(
           'bash',
@@ -490,10 +473,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(interposedMultiEnv.status).toBe(0);
@@ -505,11 +485,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-              PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
-            },
+            env: autonomousBashEnv({ PATH: `${path.join(repoRoot, 'scripts')}:${gitFixtureEnv().PATH ?? '/usr/bin:/bin'}` }),
           },
         );
         expect(allowLsFiles.status).toBe(0);
@@ -520,10 +496,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(fallthrough.status).toBe(93);
@@ -535,10 +508,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(quotedAbsolute.status).toBe(93);
@@ -553,10 +523,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(prefixedAbsolute.status).toBe(93);
@@ -571,10 +538,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(envPathGit.status).toBe(93);
@@ -603,10 +567,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            },
+            env: autonomousBashEnv(),
           },
         );
         expect(interposedChained.status).toBe(0);
@@ -641,7 +602,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+            env: autonomousBashEnv(),
           },
         );
         expect(denyCustomGit.status).toBe(93);
@@ -656,7 +617,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+            env: autonomousBashEnv(),
           },
         );
         expect(denyCustomAo.status).toBe(93);
@@ -677,7 +638,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+          env: autonomousBashEnv(),
         },
       );
       expect(denyGitVar.status).toBe(93);
@@ -692,7 +653,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+          env: autonomousBashEnv(),
         },
       );
       expect(denyGitCommandSubstitution.stderr || denyGitCommandSubstitution.stdout).toMatch(
@@ -711,7 +672,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+          env: autonomousBashEnv(),
         },
       );
       expect(denyAoVar.status).toBe(93);
@@ -768,7 +729,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const denyForwarder = spawnSync('bash', [invokePath, 'branch', '-m', 'forwarder-bypass'], {
         cwd: dir,
         encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        env: autonomousBashEnv(),
       });
       expect(denyForwarder.status).toBe(93);
       expect(denyForwarder.stderr).toMatch(/autonomous tree-mutating git denied/i);
@@ -776,7 +737,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const denyRealBinary = spawnSync(path.join(repoRoot, 'scripts/git-real-binary'), ['branch', '-m', 'real-binary-bypass'], {
         cwd: dir,
         encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        env: autonomousBashEnv(),
       });
       expect(denyRealBinary.status).toBe(93);
       expect(denyRealBinary.stderr).toMatch(/autonomous tree-mutating git denied/i);
@@ -897,7 +858,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        env: autonomousBashEnv(),
       },
     );
     expect(result.status).toBe(93);
@@ -911,7 +872,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
+        env: autonomousBashEnv(),
       },
     );
     expect(result.status).toBe(93);

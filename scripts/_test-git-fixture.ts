@@ -39,6 +39,18 @@ export function gitFixtureEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.
   };
 }
 
+/** Isolated env for bash interposer probes — strips operator BASH_ENV/coworker chain. */
+export function autonomousBashEnv(
+  overrides: NodeJS.ProcessEnv = {},
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...gitFixtureEnv(baseEnv),
+    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+    ...overrides,
+  };
+}
+
 function runTrustedGitFixture(git: string, args: string[], cwd: string): void {
   const result = spawnSync(git, args, {
     cwd,
