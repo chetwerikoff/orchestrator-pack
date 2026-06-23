@@ -1107,6 +1107,8 @@ describe('contract-evidence reverify (Issue #376)', () => {
     const payload = JSON.parse(proc.stdout);
     expect(payload.skipped).not.toBe(true);
     expect(payload.viaAoReviewExecute).toBe(true);
+    expect(payload.aoReviewOutputIsCheckpoint2Summary).toBe(true);
+    expect(payload.aoReviewRunId).toMatch(/^review-run-/);
     expect(payload.promptContainsCheckpoint2).toBe(true);
     expect(payload.summaryRunOutcomeRowsEvaluated).toBe(true);
     expect(payload.summaryIncludesRows).toBe(true);
