@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Optional BASH_ENV interposer for autonomous orchestrator bash turns (Issue #324).
+# Optional BASH_ENV interposer for autonomous orchestrator bash turns (Issue #324, #406).
 # Redirects absolute host git/ao binaries through pack scripts/git and scripts/ao.
 [[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
-[[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]] || return 0
 
 __ao_autonomous_pack_script_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
@@ -19,6 +18,39 @@ __ao_autonomous_pack_ao() {
   script_dir="$(__ao_autonomous_pack_script_dir)"
   printf '%s\n' "${script_dir}/ao"
 }
+
+__ao_autonomous_resolve_path() {
+  local candidate="${1-}"
+  readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}"
+}
+
+__ao_autonomous_is_guard_forwarder_shim() {
+  local script_path="${0#./}"
+  [[ -n "${script_path}" && -f "${script_path}" ]] || return 1
+  [[ "${script_path}" == *"/autonomous-bash-env.sh" ]] && return 1
+  [[ "${script_path}" == *"/autonomous-orchestrator-surface-bootstrap.sh" ]] && return 1
+
+  local resolved pack_git pack_ao pack_scripts
+  resolved="$(__ao_autonomous_resolve_path "${script_path}")"
+  pack_git="$(__ao_autonomous_pack_git)"
+  pack_ao="$(__ao_autonomous_pack_ao)"
+  pack_scripts="$(dirname "${pack_git}")"
+
+  [[ "${resolved}" == "${pack_git}" || "${resolved}" == "${pack_ao}" ]] && return 0
+
+  case "${resolved}" in
+    "${pack_scripts}/git-real-binary" | "${pack_scripts}/_invoke-system-git.sh") return 0 ;;
+  esac
+
+  return 1
+}
+
+# Forwarder shims executed as $0 must not be rewritten/reexec'd (#406).
+if __ao_autonomous_is_guard_forwarder_shim; then
+  return 0
+fi
+
+[[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]] || return 0
 
 __ao_autonomous_absolute_binary_pattern() {
   local leaf="${1-}"
@@ -238,6 +270,88 @@ __ao_autonomous_rewrite_all_binaries_in_command() {
   printf '%s' "${cmd}"
 }
 
+__ao_autonomous_is_trusted_operator_forwarder_path() {
+  local script_path="${0#./}"
+  [[ -n "${script_path}" && -f "${script_path}" ]] || return 1
+
+  local resolved home_local_ao home_local_git
+  resolved="$(__ao_autonomous_resolve_path "${script_path}")"
+  home_local_ao="$(__ao_autonomous_resolve_path "${HOME}/.local/bin/ao")"
+  home_local_git="$(__ao_autonomous_resolve_path "${HOME}/.local/bin/git")"
+  [[ -n "${home_local_ao}" && "${resolved}" == "${home_local_ao}" ]] && return 0
+  [[ -n "${home_local_git}" && "${resolved}" == "${home_local_git}" ]] && return 0
+  return 1
+}
+
+__ao_autonomous_script_is_real_binary_forwarder() {
+  local content="${1-}" line trimmed="" has_real_ao=0 has_real_git=0
+  __ao_autonomous_is_trusted_operator_forwarder_path || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${line}")"
+    [[ "${trimmed}" == \#* ]] && continue
+    if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_AO= ]]; then
+      __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "ao" && has_real_ao=1
+    fi
+    if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_GIT= ]]; then
+      __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "git" && has_real_git=1
+    fi
+  done <<< "${content}"
+  (( has_real_ao || has_real_git )) || return 1
+  [[ "${content}" =~ exec[[:space:]].*REAL_(AO|GIT) ]] && return 0
+  return 1
+}
+
+__ao_autonomous_rewrite_real_var_assignment_line() {
+  local trimmed="${1-}" var="${2-}" leaf="${3-}" pack_target="${4-}" prefix="" quoted=""
+  [[ "${trimmed}" =~ ^(export[[:space:]]+)?${var}= ]] || return 1
+  __ao_autonomous_assignment_matches_absolute_binary "${trimmed}" "${leaf}" || return 1
+  prefix="${BASH_REMATCH[1]:-}"
+  printf -v quoted '%q' "${pack_target}"
+  printf '%s%s=%s' "${prefix}" "${var}" "${quoted}"
+  return 0
+}
+
+__ao_autonomous_rewrite_real_var_assignments_in_content() {
+  local content="${1-}" pack_git="${2-}" pack_ao="${3-}"
+  local line trimmed="" out="" rewritten_line=""
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    trimmed="$(__ao_autonomous_trim_whitespace "${line}")"
+    rewritten_line=""
+    if [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_GIT= ]]; then
+      if rewritten_line="$(__ao_autonomous_rewrite_real_var_assignment_line "${trimmed}" "REAL_GIT" "git" "${pack_git}")"; then
+        if [[ "${trimmed}" == "${line}" ]]; then
+          line="${rewritten_line}"
+        else
+          line="${line%"${trimmed}"}${rewritten_line}"
+        fi
+      fi
+    elif [[ "${trimmed}" =~ ^(export[[:space:]]+)?REAL_AO= ]]; then
+      if rewritten_line="$(__ao_autonomous_rewrite_real_var_assignment_line "${trimmed}" "REAL_AO" "ao" "${pack_ao}")"; then
+        if [[ "${trimmed}" == "${line}" ]]; then
+          line="${rewritten_line}"
+        else
+          line="${line%"${trimmed}"}${rewritten_line}"
+        fi
+      fi
+    fi
+    out+="${line}"$'\n'
+  done <<< "${content}"
+  printf '%s' "${out%$'\n'}"
+}
+
+__ao_autonomous_rewrite_real_var_command() {
+  local cmd="${1-}" var="${2-}" leaf="${3-}" pack_target="${4-}"
+  local current="" quoted_target=""
+  [[ "${cmd}" == *"${var}"* ]] || return 1
+  current="${!var-}"
+  __ao_autonomous_assignment_matches_absolute_binary "${var}=${current}" "${leaf}" || return 1
+  printf -v quoted_target '%q' "${pack_target}"
+  cmd="${cmd//\"\$${var}\"/${quoted_target}}"
+  cmd="${cmd//\$${var}/${quoted_target}}"
+  printf '%s' "${cmd}"
+  return 0
+}
+
 __ao_autonomous_script_content_needs_interposer() {
   local content="${1-}" line trimmed="" abs_git abs_ao
   abs_git="$(__ao_autonomous_absolute_binary_pattern "git")"
@@ -252,9 +366,32 @@ __ao_autonomous_script_content_needs_interposer() {
   return 1
 }
 
+__ao_autonomous_prepend_pack_scripts_path() {
+  local pack_scripts="${1-}" cleaned="" part
+  [[ -n "${pack_scripts}" ]] || return 0
+  IFS=':' read -ra __ao_path_parts <<< "${PATH:-}"
+  for part in "${__ao_path_parts[@]}"; do
+    [[ -z "${part}" || "${part}" == "${pack_scripts}" ]] && continue
+    cleaned="${cleaned:+${cleaned}:}${part}"
+  done
+  unset __ao_path_parts
+  export PATH="${pack_scripts}${cleaned:+:${cleaned}}"
+}
+
+__ao_autonomous_entry_script_is_shell_binary() {
+  local script_path="${0#./}"
+  case "${script_path##*/}" in
+    bash | sh | dash) return 0 ;;
+  esac
+  [[ "${script_path}" == */bin/bash || "${script_path}" == */bin/sh ]] && return 0
+  return 1
+}
+
 __ao_autonomous_maybe_reexec_preprocessed_script() {
   [[ -n "${BASH_EXECUTION_STRING:-}" ]] && return 1
   [[ "${__AO_AUTONOMOUS_SCRIPT_REEXECED:-}" == "1" ]] && return 1
+  __ao_autonomous_is_guard_forwarder_shim && return 1
+  __ao_autonomous_entry_script_is_shell_binary && return 1
 
   local script_path="${0#./}"
   [[ -f "${script_path}" ]] || return 1
@@ -264,10 +401,14 @@ __ao_autonomous_maybe_reexec_preprocessed_script() {
   pack_git="$(__ao_autonomous_pack_git)"
   pack_ao="$(__ao_autonomous_pack_ao)"
   content="$(<"${script_path}")"
+  if __ao_autonomous_script_is_real_binary_forwarder "${content}"; then
+    return 1
+  fi
   if ! __ao_autonomous_script_content_needs_interposer "${content}"; then
     return 1
   fi
 
+  content="$(__ao_autonomous_rewrite_real_var_assignments_in_content "${content}" "${pack_git}" "${pack_ao}")"
   rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${content}" "${pack_git}" "${pack_ao}")"
   if [[ "${rewritten}" == "${content}" ]]; then
     return 1
@@ -283,32 +424,35 @@ __ao_autonomous_maybe_reexec_preprocessed_script() {
 __ao_autonomous_interpose_execution_string() {
   [[ "${__AO_AUTONOMOUS_BASH_INTERPOSED:-}" == "1" ]] && return 0
 
-  local pack_git pack_ao rewritten="" ec
+  local pack_git pack_ao pack_scripts rewritten="" ec
   pack_git="$(__ao_autonomous_pack_git)"
   pack_ao="$(__ao_autonomous_pack_ao)"
+  pack_scripts="$(dirname "${pack_git}")"
+
+  __ao_autonomous_prepend_pack_scripts_path "${pack_scripts}"
 
   if [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
     rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_EXECUTION_STRING}" "${pack_git}" "${pack_ao}")"
-    if [[ "${rewritten}" == "${BASH_EXECUTION_STRING}" ]]; then
-      return 0
+    if [[ "${rewritten}" != "${BASH_EXECUTION_STRING}" ]]; then
+      __AO_AUTONOMOUS_BASH_INTERPOSED=1
+      BASH_ENV= eval "${rewritten}"
+      ec=$?
+      exit "${ec}"
     fi
-
-    __AO_AUTONOMOUS_BASH_INTERPOSED=1
-    BASH_ENV= eval "${rewritten}"
-    ec=$?
-    exit "${ec}"
+    # Eval-hidden (#406): unchanged wrapper still arms DEBUG trap for hidden absolutes.
   fi
 
   if __ao_autonomous_maybe_reexec_preprocessed_script; then
     exit $?
   fi
 
-  __ao_autonomous_install_debug_interposer "${pack_git}" "${pack_ao}"
+  __ao_autonomous_install_debug_interposer "${pack_git}" "${pack_ao}" "${pack_scripts}"
 }
 
 __ao_autonomous_debug_trap() {
   local pack_git="${__AO_AUTONOMOUS_DEBUG_PACK_GIT:-}"
   local pack_ao="${__AO_AUTONOMOUS_DEBUG_PACK_AO:-}"
+  local pack_scripts="${__AO_AUTONOMOUS_DEBUG_PACK_SCRIPTS:-}"
   local rewritten="" ec=0
 
   [[ "${BASH_COMMAND}" == __ao_autonomous_debug_trap ]] && return 0
@@ -316,7 +460,18 @@ __ao_autonomous_debug_trap() {
   [[ "${__AO_AUTONOMOUS_DEBUG_ACTIVE:-}" == 1 ]] && return 0
   [[ -z "${pack_git}" || -z "${pack_ao}" ]] && return 0
 
+  __ao_autonomous_prepend_pack_scripts_path "${pack_scripts}"
+
   rewritten="$(__ao_autonomous_rewrite_all_binaries_in_command "${BASH_COMMAND}" "${pack_git}" "${pack_ao}")"
+  if [[ "${rewritten}" == "${BASH_COMMAND}" ]]; then
+    if rewritten="$(__ao_autonomous_rewrite_real_var_command "${BASH_COMMAND}" "REAL_GIT" "git" "${pack_git}")"; then
+      :
+    elif rewritten="$(__ao_autonomous_rewrite_real_var_command "${BASH_COMMAND}" "REAL_AO" "ao" "${pack_ao}")"; then
+      :
+    else
+      return 0
+    fi
+  fi
   if [[ "${rewritten}" == "${BASH_COMMAND}" ]]; then
     return 0
   fi
@@ -335,20 +490,12 @@ __ao_autonomous_debug_trap() {
 }
 
 __ao_autonomous_install_debug_interposer() {
-  local pack_git="${1-}" pack_ao="${2-}"
+  local pack_git="${1-}" pack_ao="${2-}" pack_scripts="${3-}"
   [[ "${__AO_AUTONOMOUS_DEBUG_TRAP_INSTALLED:-}" == 1 ]] && return 0
-
-  local script_path="${0#./}"
-  if [[ -f "${script_path}" ]]; then
-    local content=""
-    content="$(<"${script_path}")"
-    if ! __ao_autonomous_script_content_needs_interposer "${content}"; then
-      return 0
-    fi
-  fi
 
   __AO_AUTONOMOUS_DEBUG_PACK_GIT="${pack_git}"
   __AO_AUTONOMOUS_DEBUG_PACK_AO="${pack_ao}"
+  __AO_AUTONOMOUS_DEBUG_PACK_SCRIPTS="${pack_scripts}"
   shopt -s extdebug
   trap '__ao_autonomous_debug_trap' DEBUG
   __AO_AUTONOMOUS_DEBUG_TRAP_INSTALLED=1

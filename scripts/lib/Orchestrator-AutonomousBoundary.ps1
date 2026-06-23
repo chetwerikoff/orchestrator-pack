@@ -211,8 +211,10 @@ function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
 }
 
 function Resolve-RealAoExecutable {
+    param([string]$PackRoot = '')
+
     if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
-        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
+        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao' -PackRoot $PackRoot
     }
 
     if ($env:AO_REAL_BINARY -and $env:AO_REAL_BINARY -ne 'ao') {
@@ -226,7 +228,7 @@ function Resolve-RealAoExecutable {
         }
     }
 
-    return Resolve-AutonomousRealBinaryPath -BinaryName 'ao'
+    return Resolve-AutonomousRealBinaryPath -BinaryName 'ao' -PackRoot $PackRoot
 }
 
 function Resolve-SystemGitExecutable {

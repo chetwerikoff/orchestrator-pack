@@ -1199,6 +1199,38 @@ else {
     Add-Failure 'Missing autonomous orchestrator spawn/git boundary check (Issue #324)'
 }
 
+$autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
+if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+        & npm ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-interposer/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Add-Failure 'autonomous-interposer vitest prerequisites failed (Issue #406)'
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container) {
+        $previousCi = $env:CI
+        $env:CI = 'true'
+        try {
+            & npx vitest run scripts/autonomous-orchestrator-interposer.test.ts
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'autonomous-interposer/vitest' 'FAIL' "exit=$LASTEXITCODE"
+                Add-Failure 'autonomous orchestrator interposer vitest suite failed (Issue #406)'
+            }
+            else {
+                Write-Check 'autonomous-interposer/vitest' 'PASS' 'completed'
+            }
+        }
+        finally {
+            if ($null -ne $previousCi) { $env:CI = $previousCi } else { Remove-Item Env:CI -ErrorAction SilentlyContinue }
+        }
+    }
+}
+else {
+    Write-Check 'autonomous-interposer/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous orchestrator interposer vitest (Issue #406)'
+}
+
 $orchestratorGatePreflight = Join-Path $Root 'scripts/orchestrator-review-start-preflight.ps1'
 if (Test-Path -LiteralPath $orchestratorGatePreflight -PathType Leaf) {
     & $orchestratorGatePreflight -FixtureMode

@@ -25,6 +25,7 @@ import {
   validateBoundaryCapabilityInventory,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
+import { withTempGitRepo } from './_test-git-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -46,21 +47,6 @@ function spawnAutonomousBashTurn(cwd: string, command: string) {
       BASH_ENV: bashEnvPath,
     },
   });
-}
-
-function withTempGitRepo(run: (dir: string) => void) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'autonomous-boundary-'));
-  try {
-    spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, encoding: 'utf8' });
-    writeFileSync(path.join(dir, 'README.md'), 'test\n');
-    spawnSync('git', ['add', 'README.md'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['commit', '-m', 'init'], { cwd: dir, encoding: 'utf8' });
-    run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 /** Isolated AO_REAL_BINARY stub: records argv to probeFile, exits 0 — no live ao spawn. */
@@ -991,6 +977,38 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const parsed = JSON.parse(output);
       expect(parsed.spoofed).toBe(false);
       expect(parsed.resolved).toMatch(/\/usr\/bin\/git$/);
+    } finally {
+      rmSync(packRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores turn-visible AO_REAL_BINARY on autonomous surface', () => {
+    const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-pack-'));
+    const fakeAo = path.join(packRoot, 'fake-ao.sh');
+    const configuredAo = path.join(packRoot, 'configured-ao.sh');
+    try {
+      writeFileSync(fakeAo, '#!/usr/bin/env bash\necho spoofed-ao\n');
+      writeFileSync(configuredAo, '#!/usr/bin/env bash\necho configured-ao\n');
+      chmodSync(fakeAo, 0o755);
+      chmodSync(configuredAo, 0o755);
+      const aoDir = path.join(packRoot, '.ao');
+      mkdirSync(aoDir, { recursive: true });
+      writeFileSync(
+        path.join(aoDir, 'autonomous-real-binaries.json'),
+        JSON.stringify({ ao: configuredAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }),
+      );
+      const output = runPwsh(`
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_REAL_BINARY = ${psString(fakeAo)}
+        . ${psString(boundaryLibPath)}
+        [pscustomobject]@{
+          resolved = [string](Resolve-RealAoExecutable -PackRoot ${psString(packRoot)})
+          spoofed = [bool]((Resolve-RealAoExecutable -PackRoot ${psString(packRoot)}) -eq ${psString(fakeAo)})
+        } | ConvertTo-Json -Compress
+      `);
+      const parsed = JSON.parse(output);
+      expect(parsed.spoofed).toBe(false);
+      expect(parsed.resolved).toBe(configuredAo);
     } finally {
       rmSync(packRoot, { recursive: true, force: true });
     }
