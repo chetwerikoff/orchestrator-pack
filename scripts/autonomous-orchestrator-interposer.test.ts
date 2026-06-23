@@ -216,13 +216,26 @@ describe('autonomous orchestrator interposer (#406)', () => {
         BASH_ENV: trackedBootstrap,
       });
       expect(denySpawn.status).toBe(93);
-      expect(denySpawn.stderr).toMatch(/autonomous worker spawn denied/i);
+      expect(denySpawn.stderr).toMatch(/autonomous orchestrator interposer unavailable/i);
 
       const denySend = spawnOrchestratorBash([path.join(copiedScripts, 'ao'), 'send', 'opk-worker', 'hi'], {
         BASH_ENV: trackedBootstrap,
       });
       expect(denySend.status).toBe(93);
-      expect(denySend.stderr).toMatch(/autonomous worker nudges paused/i);
+      expect(denySend.stderr).toMatch(/autonomous orchestrator interposer unavailable/i);
+
+      if (existsSync('/usr/bin/git')) {
+        withTempGitRepo((dir) => {
+          const readme = path.join(dir, 'README.md');
+          const absoluteGit = spawnOrchestratorBash(
+            ['/bin/bash', '-c', `/usr/bin/git checkout -- ${readme}`],
+            { BASH_ENV: trackedBootstrap },
+            dir,
+          );
+          expect(absoluteGit.status).toBe(93);
+          expect(absoluteGit.stderr).toMatch(/autonomous orchestrator interposer unavailable/i);
+        });
+      }
     } finally {
       rmSync(packCopy, { recursive: true, force: true });
     }

@@ -27,7 +27,14 @@ fi
 __AO_AUTONOMOUS_SURFACE_BOOTSTRAP=1
 PACK_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]:-${BASH_ENV:-}}")" && pwd)"
 INTERPOSER="${PACK_SCRIPTS}/autonomous-bash-env.sh"
-if [[ -r "${INTERPOSER}" ]]; then
-  # shellcheck disable=SC1090
-  source "${INTERPOSER}"
+if [[ ! -r "${INTERPOSER}" ]]; then
+  printf '%s\n' \
+    'autonomous orchestrator interposer unavailable; aborting protected bash turn' >&2
+  exit 93
+fi
+# shellcheck disable=SC1090
+if ! source "${INTERPOSER}"; then
+  printf '%s\n' \
+    'autonomous orchestrator interposer failed to source; aborting protected bash turn' >&2
+  exit 93
 fi

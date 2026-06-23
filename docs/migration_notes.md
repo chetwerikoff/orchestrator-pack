@@ -202,8 +202,9 @@ Orchestrator bash turns arm through **tracked** wiring instead of operator-only
    `npm test -- scripts/autonomous-orchestrator-interposer.test.ts` and
    `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1 -Boundary`.
 
-Fail-closed: if the tracked interposer file is missing, the bootstrap still keeps
-deny-shims on `PATH` with the surface marker — protected ops remain denied.
+Fail-closed: if the tracked interposer file is missing or cannot be sourced, the
+bootstrap aborts the bash turn (exit 93) instead of leaving PATH-only shims that
+absolute invocations such as `/usr/bin/git` could bypass.
 
 Safe rollback: revert to prior `coworker.env` wiring or disable orchestrator
 `BASH_ENV` bootstrap (do not leave autonomous turns with permissive real-binary
