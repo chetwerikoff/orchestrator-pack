@@ -16,6 +16,8 @@ import {
 
 const packRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+const aoAvailable = spawnSync('which', ['ao'], { encoding: 'utf8' }).status === 0;
+
 describe('reverify e2e fixture session resolution', () => {
   it('recognizes dedicated fixture-holder branch names', () => {
     expect(isDedicatedFixtureHolderBranch('session/opk-175')).toBe(true);
@@ -26,18 +28,20 @@ describe('reverify e2e fixture session resolution', () => {
   });
 
   it('parses real piped ao session ls output without TTY indentation', () => {
-    const listed = spawnSync('ao', ['session', 'ls'], {
-      cwd: packRoot,
-      encoding: 'utf8',
-    });
-    expect(listed.status).toBe(0);
+    if (aoAvailable) {
+      const listed = spawnSync('ao', ['session', 'ls'], {
+        cwd: packRoot,
+        encoding: 'utf8',
+      });
+      expect(listed.status).toBe(0);
 
-    const parsed = parseAoSessionLsText(listed.stdout ?? '');
-    const legacyRegexCount = (listed.stdout ?? '')
-      .split('\n')
-      .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
-      .filter(Boolean).length;
-    expect(parsed.length).toBeGreaterThanOrEqual(legacyRegexCount);
+      const parsed = parseAoSessionLsText(listed.stdout ?? '');
+      const legacyRegexCount = (listed.stdout ?? '')
+        .split('\n')
+        .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
+        .filter(Boolean).length;
+      expect(parsed.length).toBeGreaterThanOrEqual(legacyRegexCount);
+    }
 
     const sample = [
       'orchestrator-pack:',
@@ -57,6 +61,36 @@ describe('reverify e2e fixture session resolution', () => {
   });
 
   it('prefers ao session ls --json when available', () => {
+    const pipedSample = [
+      'orchestrator-pack:',
+      '  (no active sessions)',
+      '',
+      'opk-173:',
+      '  (no active sessions)',
+      'opk-176  (-)  session/opk-176  [active]',
+    ].join('\n');
+    const jsonSample = JSON.stringify({
+      data: [{ id: 'opk-176', branch: 'session/opk-176', pr: null }],
+    });
+
+    const listing = listAoSessionRecordsFromOutputs({
+      jsonStdout: jsonSample,
+      textStdout: pipedSample,
+    });
+    expect(listing.source).toBe('json');
+    expect(listing.records[0]?.id).toBe('opk-176');
+
+    const fallback = listAoSessionRecordsFromOutputs({
+      jsonStdout: 'not-json',
+      textStdout: pipedSample,
+    });
+    expect(fallback.source).toBe('text');
+    expect(fallback.records.map((session) => session.id)).toContain('opk-176');
+
+    if (!aoAvailable) {
+      return;
+    }
+
     const jsonListed = spawnSync('ao', ['session', 'ls', '--json'], {
       cwd: packRoot,
       encoding: 'utf8',
@@ -67,21 +101,6 @@ describe('reverify e2e fixture session resolution', () => {
     });
     expect(jsonListed.status).toBe(0);
     expect(textListed.status).toBe(0);
-
-    const listing = listAoSessionRecordsFromOutputs({
-      jsonStdout: jsonListed.stdout,
-      textStdout: textListed.stdout,
-    });
-    expect(listing.source).toBe('json');
-    if (listing.records.length > 0) {
-      expect(listing.records[0].id).toMatch(/^opk-/);
-    }
-
-    const fallback = listAoSessionRecordsFromOutputs({
-      jsonStdout: '',
-      textStdout: textListed.stdout,
-    });
-    expect(fallback.source).toBe('text');
   });
 
   it('does not spawn when only text listing is available without a dedicated holder', () => {

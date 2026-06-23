@@ -491,6 +491,10 @@ function Invoke-Ac13ReviewerFlowE2e {
             Write-Warning 'AC13 live ao review --execute skipped in CI (ao CLI unavailable); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
             return
         }
+        if (-not (Ensure-GhAuthForReverifyE2e)) {
+            Write-Warning 'AC13 live ao review --execute skipped in CI (gh CLI not authenticated); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
+            return
+        }
         Initialize-ReverifyCiAoFixtureEnvironment -Root $Root
         if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION)) {
             Write-Warning 'AC13 live ao review --execute skipped in CI (no dedicated fixture holder; set OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1)'
