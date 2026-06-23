@@ -14,6 +14,8 @@ param(
     [int]$ExplicitIssue = 0,
     [int]$DeclarationIssue = 0,
     [string]$PrHeadSha,
+    [int]$PrNumber = 0,
+    [string]$ProjectId,
     [string]$LedgerFile,
     [switch]$InvokeCoworker,
     [switch]$LookupUnavailable,
@@ -48,6 +50,8 @@ if ($ChangedPathsFile) { $args += @('--changed-paths-file', $ChangedPathsFile) }
 if ($ExplicitIssue -gt 0) { $args += @('--explicit-issue', [string]$ExplicitIssue) }
 if ($DeclarationIssue -gt 0) { $args += @('--declaration-issue', [string]$DeclarationIssue) }
 if ($PrHeadSha) { $args += @('--pr-head-sha', $PrHeadSha) }
+if ($PrNumber -gt 0) { $args += @('--pr-number', [string]$PrNumber) }
+if ($ProjectId) { $args += @('--project-id', $ProjectId) }
 if ($LedgerFile) { $args += @('--ledger-file', $LedgerFile) }
 if ($InvokeCoworker) { $args += '--invoke-coworker' }
 if ($LookupUnavailable) { $args += '--lookup-unavailable' }
