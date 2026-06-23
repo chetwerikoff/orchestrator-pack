@@ -71,7 +71,53 @@ describe('reaction-config-messages (Issue #402)', () => {
   });
 
   it('AC7 live capture token matches example report-stale message text', () => {
-    expect(reportStaleLiveMessage).toContain('Worker idle (report-stale backstop)');
+    const capturePath = path.join(
+      root,
+      '..',
+      'tests',
+      'external-output-references',
+      'captures',
+      'ao-reaction-config',
+      'report_stale_message.raw.txt',
+    );
+    const captureText = readFileSync(capturePath, 'utf8').replace(/\r?\n$/, '');
+    const parsed = parseReactionMessagesFromYaml(exampleYaml);
+    expect(parsed.messages?.['report-stale']).toBe(captureText);
+    expect(captureText).toContain('Worker idle (report-stale backstop)');
+  });
+
+  it('parses folded block scalar keep indicator (>+) before shape classification', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: >+',
+      '      paragraph one',
+      '',
+      '      paragraph two',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('paragraph one\n\nparagraph two');
+    expect(result.messages?.['report-stale']).not.toBe('>+');
+    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
+      DELIVERY_PATH_PENDING_DRAFT,
+    );
+  });
+
+  it('decodes double-quoted YAML escape sequences in inline reaction messages', () => {
+    const yaml = [
+      'reactions:',
+      '  report-stale:',
+      '    action: send-to-agent',
+      '    message: "line one\\nline two"',
+    ].join('\n');
+    const result = parseReactionMessagesFromYaml(yaml);
+    expect(result.ok).toBe(true);
+    expect(result.messages?.['report-stale']).toBe('line one\nline two');
+    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
+      DELIVERY_PATH_PENDING_DRAFT,
+    );
   });
 
   it('readReactionMessagesFromYamlFile fails closed on missing path', () => {

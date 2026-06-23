@@ -25,6 +25,21 @@ const SEND_TO_AGENT = 'send-to-agent';
  * @param {number} startIndex
  * @returns {{ bodyLines: string[], nextIndex: number }}
  */
+/**
+ * @param {string} raw
+ * @returns {{ style: '|' | '>', chomping: 'clip' | 'strip' | 'keep' } | null}
+ */
+function parseBlockScalarIndicator(raw) {
+  const text = String(raw ?? '').trim();
+  const match = text.match(/^([>|])([+-]?)$/);
+  if (!match) {
+    return null;
+  }
+  const chomping =
+    match[2] === '-' ? 'strip' : match[2] === '+' ? 'keep' : 'clip';
+  return { style: /** @type {'|' | '>'} */ (match[1]), chomping };
+}
+
 function consumeBlockScalarBodyLines(lines, startIndex) {
   /** @type {string[]} */
   const bodyLines = [];
@@ -66,17 +81,28 @@ function parseReactionEntry(blockText) {
       index += 1;
       continue;
     }
-    const inlineMessageMatch = line.match(/^\s{4}message:\s*(.+)\s*$/);
+    const inlineMessageMatch = line.match(/^\s{4}message:\s*(.*)\s*$/);
     if (inlineMessageMatch) {
       const raw = inlineMessageMatch[1].trim();
-      if (raw === '>-' || raw === '>' || raw === '|' || raw === '|-') {
+      const blockIndicator = parseBlockScalarIndicator(raw);
+      if (blockIndicator) {
         index += 1;
-        const { bodyLines: folded, nextIndex } = consumeBlockScalarBodyLines(lines, index);
+        const { bodyLines, nextIndex } = consumeBlockScalarBodyLines(lines, index);
         index = nextIndex;
-        entry.message = foldScalarBlock(raw, folded);
+        entry.message = foldScalarBlock(blockIndicator, bodyLines);
         continue;
       }
-      entry.message = stripYamlQuotes(raw);
+      if (!raw) {
+        index += 1;
+        const { bodyLines, nextIndex } = consumeBlockScalarBodyLines(lines, index);
+        index = nextIndex;
+        if (bodyLines.length === 0) {
+          continue;
+        }
+        entry.message = bodyLines.join('\n');
+        continue;
+      }
+      entry.message = decodeYamlScalar(raw);
       index += 1;
       continue;
     }
@@ -116,27 +142,84 @@ function foldFoldedScalarBody(bodyLines, chompTrailing) {
   return result;
 }
 
+/**
+ * @param {{ style: '|' | '>', chomping: 'clip' | 'strip' | 'keep' }} indicator
+ * @param {string[]} bodyLines
+ */
 function foldScalarBlock(indicator, bodyLines) {
   const joined = bodyLines.join('\n');
-  if (indicator === '|-') {
-    return joined.replace(/\n+$/, '');
-  }
-  if (indicator === '|') {
+  if (indicator.style === '|') {
+    if (indicator.chomping === 'strip') {
+      return joined.replace(/\n+$/, '');
+    }
+    if (indicator.chomping === 'keep') {
+      return joined.endsWith('\n') ? joined : `${joined}\n`;
+    }
     return joined.endsWith('\n') ? joined : `${joined}\n`;
   }
-  return foldFoldedScalarBody(bodyLines, indicator === '>-');
+
+  const chompTrailing = indicator.chomping === 'strip';
+  let result = foldFoldedScalarBody(bodyLines, chompTrailing);
+  if (indicator.chomping === 'clip' && result.length > 0 && !result.endsWith('\n')) {
+    result = `${result}\n`;
+  }
+  if (indicator.chomping === 'keep' && result.length > 0 && !result.endsWith('\n')) {
+    result = `${result}\n`;
+  }
+  return result;
+}
+
+/**
+ * @param {string} inner
+ */
+function decodeYamlDoubleQuoted(inner) {
+  let out = '';
+  for (let index = 0; index < inner.length; index += 1) {
+    const ch = inner[index];
+    if (ch !== '\\' || index + 1 >= inner.length) {
+      out += ch;
+      continue;
+    }
+    const next = inner[index + 1];
+    index += 1;
+    if (next === 'n') {
+      out += '\n';
+      continue;
+    }
+    if (next === 't') {
+      out += '\t';
+      continue;
+    }
+    if (next === 'r') {
+      out += '\r';
+      continue;
+    }
+    if (next === '\\' || next === '"') {
+      out += next;
+      continue;
+    }
+    out += `\\${next}`;
+  }
+  return out;
+}
+
+/**
+ * @param {string} inner
+ */
+function decodeYamlSingleQuoted(inner) {
+  return inner.replace(/''/g, "'");
 }
 
 /**
  * @param {string} raw
  */
-function stripYamlQuotes(raw) {
+function decodeYamlScalar(raw) {
   const text = String(raw ?? '').trim();
-  if (
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-  ) {
-    return text.slice(1, -1);
+  if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
+    return decodeYamlDoubleQuoted(text.slice(1, -1));
+  }
+  if (text.startsWith("'") && text.endsWith("'") && text.length >= 2) {
+    return decodeYamlSingleQuoted(text.slice(1, -1));
   }
   return text;
 }
@@ -222,7 +305,6 @@ function extractReactionBlockText(yamlText, reactionKey) {
  */
 function validateReactionMessageSyntax(blockText) {
   const lines = String(blockText ?? '').split(/\r?\n/);
-  const supportedIndicators = new Set(['>-', '>', '|', '|-']);
   for (let index = 0; index < lines.length; index += 1) {
     const match = lines[index].match(/^\s{4}message:\s*(.*)$/);
     if (!match) {
@@ -239,7 +321,7 @@ function validateReactionMessageSyntax(blockText) {
     if (rest.startsWith('#')) {
       return { ok: false, error: 'unsupported_message_comment' };
     }
-    if (supportedIndicators.has(rest)) {
+    if (parseBlockScalarIndicator(rest)) {
       const { bodyLines } = consumeBlockScalarBodyLines(lines, index + 1);
       if (bodyLines.length === 0) {
         return { ok: false, error: 'message_scalar_without_body' };

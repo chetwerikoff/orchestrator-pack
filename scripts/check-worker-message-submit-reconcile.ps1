@@ -111,6 +111,33 @@ if ([int]$shape.messageShape.charLength -ne 224) {
     exit 1
 }
 
+$capturePath = Join-Path $Root 'tests/external-output-references/captures/ao-reaction-config/report_stale_message.raw.txt'
+if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) {
+    Write-Host 'Missing capture@ao-reaction-config/report_stale_message fixture for AC7 live drift guard'
+    exit 1
+}
+$exampleParseJson = & node $reactionConfigCli parse --path $example 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "reaction-config example parse failed: $exampleParseJson"
+    exit 1
+}
+$exampleParse = $exampleParseJson | ConvertFrom-Json
+$exampleReportStaleMessage = [string]$exampleParse.messages.'report-stale'
+$captureReportStaleMessage = (Get-Content -LiteralPath $capturePath -Raw).TrimEnd("`r", "`n")
+if ($exampleReportStaleMessage -ne $captureReportStaleMessage) {
+    Write-Host 'AC7 drift guard failed: example report-stale message text must match capture@ao-reaction-config/report_stale_message'
+    exit 1
+}
+
+if ($ps1 -notmatch 'Resolve-SubmitReconcileOperatorYamlPath') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must resolve operator YAML path from -YamlPath or AO runtime binding (Issue #402)'
+    exit 1
+}
+if ($ps1 -notmatch 'Get-ReactionMessagesFromYaml -PackRoot \$PackRoot -YamlPath') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must pass resolved operator YAML path to Get-ReactionMessagesFromYaml (Issue #402)'
+    exit 1
+}
+
 if ($ps1 -notmatch 'worker-message-submit-side-effect\.lock') {
     Write-Host 'worker-message-submit-reconcile.ps1 must fence Enter with worker-message-submit-side-effect.lock'
     exit 1

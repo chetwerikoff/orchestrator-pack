@@ -1,0 +1,5 @@
+{
+  "sourceCommand": "live operator agent-orchestrator.yaml reactions.report-stale.message (Gate A capture, incident opk-165 / Issue #402)",
+  "capturedAt": "2026-06-22T00:00:00.000Z",
+  "context": "Unstructured capture-backed live config text for AC7 example↔live drift guard"
+}

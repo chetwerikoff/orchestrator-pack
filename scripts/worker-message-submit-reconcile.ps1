@@ -22,7 +22,8 @@ param(
     [string]$DispatchJournalPath = '',
     [switch]$DryRun,
     [switch]$Once,
-    [string]$FixturePath = ''
+    [string]$FixturePath = '',
+    [string]$YamlPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +46,18 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 
 $Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
+
+function Resolve-SubmitReconcileOperatorYamlPath {
+    param([string]$YamlPathOverride = '')
+
+    if ($YamlPathOverride) {
+        return (Resolve-SubmitReconcileStatePathLiteral -Path $YamlPathOverride)
+    }
+
+    $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
+    return [string]$binding.ConfigPath
+}
+
 
 function Get-SubmitReconcileActiveDeliveryCount {
     param([object]$Deliveries)
@@ -366,7 +379,8 @@ function Invoke-SubmitReconcileTick {
         [string]$JournalPath,
         [switch]$DryRunMode,
         [string]$Fixture,
-        [long]$NowMs
+        [long]$NowMs,
+        [string]$ConfigYaml = ''
     )
 
     if ($Fixture) {
@@ -409,7 +423,8 @@ function Invoke-SubmitReconcileTick {
         Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
-        $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot
+        $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-SubmitReconcileOperatorYamlPath }
+        $reactionConfig = Get-ReactionMessagesFromYaml -PackRoot $PackRoot -YamlPath $operatorYamlPath
         $reactionMessages = @{}
         $reactionConfigUnavailable = $false
         if ($reactionConfig.ok) {
@@ -571,6 +586,8 @@ function Invoke-SubmitReconcileTick {
     }
 }
 
+$configYaml = Resolve-SubmitReconcileOperatorYamlPath -YamlPathOverride $YamlPath
+
 $intervalSeconds = Get-SubmitReconcileIntervalSeconds
 $intervalMs = [Math]::Max(1, $intervalSeconds) * 1000
 $pollMs = [Math]::Max(5, $PollSeconds) * 1000
@@ -584,7 +601,7 @@ if ($FixturePath) {
         Write-SubmitReconcileLog 'fixture mode: enforcing dry-run (no live submit side effects)'
     }
     $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath -JournalPath $journalPath `
-        -DryRunMode -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        -DryRunMode -Fixture $FixturePath -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -ConfigYaml $configYaml
     Write-SubmitReconcileLog "fixture tick complete (submitted=$($result.submitted) escalated=$($result.escalated) noop=$($result.noop))"
     exit 0
 }
@@ -627,7 +644,7 @@ try {
                     Set-SubmitReconcileState -Path $statePath -State $state -JournalPath $journalPath
                 }
                 $result = Invoke-SubmitReconcileTick -Project $ProjectId -StatePath $statePath `
-                    -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs
+                    -JournalPath $journalPath -DryRunMode:$DryRun -NowMs $nowMs -ConfigYaml $configYaml
                 $result.tracking = Merge-SubmitAdoptionTrackingFields -Target $result.tracking -Source $state
                 if (-not $DryRun) {
                     Set-SubmitReconcileState -Path $statePath -State $result.tracking -JournalPath $journalPath
