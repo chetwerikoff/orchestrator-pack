@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "2f2254f4b14ea073df5a56589e672b641115cb0a",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b920215bba064dccf03b2539deea7309c9337dedbbf81831408fd537502631a9"
+    "active_scope_hash": "sha256:3f0a6a306732bbd3803c751f89fa12e9cf6293af5c335a09c48fc2cbcdf2448c"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
@@ -15,6 +15,7 @@
     "docs/migration_notes.md",
     "scripts/_resolve-pwsh.sh",
     "scripts/_test-git-fixture.ts",
+    "scripts/_test-interposer-pack-fixture.ts",
     "scripts/ao",
     "scripts/autonomous-bash-env.sh",
     "scripts/autonomous-orchestrator-boundary.test.ts",
