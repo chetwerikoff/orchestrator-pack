@@ -7,32 +7,23 @@ param(
     [string]$RepoRoot
 )
 
-$ErrorActionPreference = 'Stop'
-$Root = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
-    Split-Path -Parent $PSScriptRoot
-} else {
-    $RepoRoot
-}
-
-$failures = [System.Collections.Generic.List[string]]::new()
-
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
-$codexPrompt = Join-Path $Root 'prompts/codex_review_prompt.md'
+. (Join-Path $PSScriptRoot 'lib/Initialize-ReviewerPolicyCheck.ps1')
+$Root = Initialize-ReviewerPolicyCheckRoot -RepoRoot $RepoRoot -ScriptRoot $PSScriptRoot
+$failures = New-ReviewerPolicyCheckFailures
 $helperPs1 = Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ps1'
-$helperTs = Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'
-$library = Join-Path $Root 'scripts/lib/reviewer-contract-mapping.ts'
 
-foreach ($required in @($agentRules, $codexPrompt, $helperPs1, $helperTs, $library)) {
-    if (-not (Test-Path -LiteralPath $required)) {
-        $failures.Add("missing required file: $required")
-    }
-}
+$requiredPaths = @(
+    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'prompts/codex_review_prompt.md'),
+    $helperPs1,
+    (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
+    (Join-Path $Root 'scripts/lib/reviewer-contract-mapping.ts')
+)
+Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Failures $failures
 
 if ($failures.Count -eq 0) {
-    $agentText = Get-Content -LiteralPath $agentRules -Raw
-    $codexText = Get-Content -LiteralPath $codexPrompt -Raw
-
-    $requiredAgent = @(
+    $prompts = Get-ReviewerPolicyPromptTexts -Root $Root
+    Test-ReviewerPolicyPromptPhrases -Label 'prompts/agent_rules.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
         'Contract-mapping pass (reviewers only)',
         'candidate evidence',
         'direct diff inspection',
@@ -49,13 +40,7 @@ if ($failures.Count -eq 0) {
         '--paths',
         'untrusted data'
     )
-    foreach ($phrase in $requiredAgent) {
-        if ($agentText -notmatch [regex]::Escape($phrase)) {
-            $failures.Add("prompts/agent_rules.md missing phrase: $phrase")
-        }
-    }
-
-    $requiredCodex = @(
+    Test-ReviewerPolicyPromptPhrases -Label 'prompts/codex_review_prompt.md' -Text $prompts.CodexPrompt -Failures $failures -RequiredPhrases @(
         'Contract-mapping pass',
         'candidate evidence',
         'independently validate',
@@ -68,20 +53,14 @@ if ($failures.Count -eq 0) {
         '--paths',
         'untrusted data'
     )
-    foreach ($phrase in $requiredCodex) {
-        if ($codexText -notmatch [regex]::Escape($phrase)) {
-            $failures.Add("prompts/codex_review_prompt.md missing phrase: $phrase")
-        }
-    }
 
-    $forbidden = @(
-        'coworker assigns severity',
-        'coworker may approve',
-        'coworker may reject',
-        'positional arguments after --question'
-    )
-    foreach ($phrase in $forbidden) {
-        if ($agentText -match [regex]::Escape($phrase) -or $codexText -match [regex]::Escape($phrase)) {
+    foreach ($phrase in @(
+            'coworker assigns severity',
+            'coworker may approve',
+            'coworker may reject',
+            'positional arguments after --question'
+        )) {
+        if ($prompts.AgentRules -match [regex]::Escape($phrase) -or $prompts.CodexPrompt -match [regex]::Escape($phrase)) {
             $failures.Add("forbidden prompt phrase present: $phrase")
         }
     }
@@ -89,21 +68,8 @@ if ($failures.Count -eq 0) {
 
 Push-Location $Root
 try {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        $failures.Add('npm required for reviewer-contract-mapping vitest suite')
-    }
-    elseif (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules'))) {
-        & npm ci --include=dev | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('npm ci failed before reviewer-contract-mapping tests')
-        }
-    }
-
     if ($failures.Count -eq 0) {
-        & npx vitest run scripts/reviewer-contract-mapping.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add('scripts/reviewer-contract-mapping.test.ts failed')
-        }
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reviewer-contract-mapping.test.ts' -Failures $failures
     }
 
     if ($failures.Count -eq 0) {
@@ -146,13 +112,4 @@ finally {
     Pop-Location
 }
 
-if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] reviewer contract-mapping checks:'
-    foreach ($item in $failures) {
-        Write-Host " - $item"
-    }
-    exit 1
-}
-
-Write-Host '[PASS] reviewer contract-mapping prompt/policy contracts and fixtures'
-exit 0
+Write-ReviewerPolicyCheckResult -Label 'reviewer contract-mapping' -Failures $failures

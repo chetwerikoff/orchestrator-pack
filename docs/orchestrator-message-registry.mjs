@@ -884,8 +884,22 @@ function listGitTreeDeclarationSnapshots(repoRoot, gitRef = 'HEAD') {
   return [...paths];
 }
 
-function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
+function declarationSnapshotExistsAtRef(repoRoot, relPath, gitRef = 'HEAD') {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${gitRef}:${relPath}`], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
+function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD', options = {}) {
   const normalized = String(relPath).replace(/\\/g, '/');
+  const preferCommittedOverDisk = options.preferCommittedOverDisk === true;
   try {
     const out = execFileSync('git', ['show', `${gitRef}:${normalized}`], {
       cwd: repoRoot,
@@ -894,6 +908,9 @@ function readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef = 'HEAD') {
     return JSON.parse(out);
   }
   catch {
+    if (preferCommittedOverDisk) {
+      return null;
+    }
     // fall through to working tree for uncommitted local declaration edits
   }
   const diskPath = path.join(repoRoot, relPath);
@@ -936,22 +953,22 @@ export function resolveLinkedIssuesFromCommittedDeclarationSnapshots(
     ...listGitTreeDeclarationSnapshots(repoRoot, gitRef),
   ]);
   for (const file of changed) {
-    if (/^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.test(file)) {
-      snapshotPaths.add(file);
+    if (!/^docs\/declarations\/(\d{1,6})\.[^/]+\.json$/.test(file)) {
+      continue;
     }
-  }
-  const declarationsDir = path.join(repoRoot, 'docs/declarations');
-  if (existsSync(declarationsDir)) {
-    for (const entry of readdirSync(declarationsDir)) {
-      if (/^(\d{1,6})\.[^/]+\.json$/.test(entry)) {
-        snapshotPaths.add(`docs/declarations/${entry}`);
-      }
+    if (declarationSnapshotExistsAtRef(repoRoot, file, gitRef)) {
+      snapshotPaths.add(file);
     }
   }
 
   const linked = new Set();
   for (const relPath of snapshotPaths) {
-    const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef);
+    if (!declarationSnapshotExistsAtRef(repoRoot, relPath, gitRef)) {
+      continue;
+    }
+    const snapshot = readDeclarationSnapshotAtRef(repoRoot, relPath, gitRef, {
+      preferCommittedOverDisk: true,
+    });
     const issue = issueLinksFromValidatedDeclarationSnapshot(relPath, snapshot, changed);
     if (issue !== null) linked.add(issue);
   }
