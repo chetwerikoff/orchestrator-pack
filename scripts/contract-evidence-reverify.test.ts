@@ -1063,6 +1063,49 @@ describe('contract-evidence reverify (Issue #376)', () => {
     expect(payload.error).toContain('AC#13 reviewer-flow e2e required');
   });
 
+
+  it('verify path does not auto-spawn AO workers without explicit opt-in', () => {
+    const aoCheck = spawnSync('which', ['ao'], { encoding: 'utf8' });
+    if (aoCheck.status !== 0) {
+      return;
+    }
+
+    const before = spawnSync('ao', ['session', 'ls', '--json'], { cwd: packRoot, encoding: 'utf8' });
+    const beforeCount = (() => {
+      try {
+        return JSON.parse(before.stdout ?? '').data?.length ?? 0;
+      } catch {
+        return 0;
+      }
+    })();
+
+    const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
+      cwd: packRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OPK_REVERIFY_E2E_LIVE: '',
+        OPK_REVERIFY_E2E_SESSION: '',
+        OPK_REVERIFY_E2E_ALLOW_SPAWN: '',
+        OPK_REVERIFY_E2E_REQUIRED: '',
+        OPK_REVERIFY_E2E_ALLOW_SKIP: '1',
+      },
+    });
+    expect(proc.status).toBe(0);
+    const payload = JSON.parse(proc.stdout);
+    expect(payload.skipped).toBe(true);
+
+    const after = spawnSync('ao', ['session', 'ls', '--json'], { cwd: packRoot, encoding: 'utf8' });
+    const afterCount = (() => {
+      try {
+        return JSON.parse(after.stdout ?? '').data?.length ?? 0;
+      } catch {
+        return 0;
+      }
+    })();
+    expect(afterCount).toBe(beforeCount);
+  });
+
   it('e2e reviewer fixture skips without OPK_REVERIFY_E2E_LIVE', () => {
     const proc = spawnSync('node', ['--import', 'tsx', 'scripts/run-reviewer-reverify-e2e-fixture.mjs'], {
       cwd: packRoot,
@@ -1097,7 +1140,7 @@ describe('contract-evidence reverify (Issue #376)', () => {
       env: {
         ...process.env,
         OPK_REVERIFY_E2E_LIVE: '1',
-        OPK_REVERIFY_E2E_ALLOW_SPAWN: '1',
+        OPK_REVERIFY_E2E_ALLOW_SPAWN: process.env.OPK_REVERIFY_E2E_SESSION?.trim() ? '' : '1',
         OPK_REVERIFY_E2E_REQUIRED: '1',
         OPK_TRUSTED_PACK_ROOT: '',
         AO_TRUSTED_PACK_ROOT: '',

@@ -13,16 +13,23 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import {
+  FIXTURE_HOLDER_PROMPT,
+  claimOrSpawnFixtureHolder,
+  isDedicatedFixtureHolderBranch,
+  listAoSessionRecordsFromOutputs,
+  resolveAoFixtureSessionId,
+  sessionOwnsRealPr,
+} from './lib/reverify-e2e-fixture-session.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packRoot = path.join(here, '..');
 const fixtureDir = path.join(packRoot, 'tests/fixtures/contract-evidence-reverify/e2e');
 const fixtureSessionFile = path.join(fixtureDir, 'fixture-session-id.txt');
+const fixtureClaimFile = path.join(fixtureDir, 'fixture-holder.claim');
 const preferredSessionId = existsSync(fixtureSessionFile)
   ? readFileSync(fixtureSessionFile, 'utf8').trim()
   : 'opk-reverify-e2e';
-
-const FIXTURE_PROMPT = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
 
 function isTruthyEnv(name) {
   const value = process.env[name]?.trim().toLowerCase();
@@ -72,23 +79,27 @@ function isCheckpoint2ReviewerSummary(text) {
 }
 
 function listAoSessions() {
-  const listed = spawnSync('ao', ['session', 'ls'], {
+  const jsonListed = spawnSync('ao', ['session', 'ls', '--json'], {
     cwd: packRoot,
     encoding: 'utf8',
   });
-  if (listed.status !== 0) {
+  const textListed = spawnSync('ao', ['session', 'ls'], {
+    cwd: packRoot,
+    encoding: 'utf8',
+  });
+  if (jsonListed.status !== 0 && textListed.status !== 0) {
     return [];
   }
-  return listed.stdout
-    .split('\n')
-    .map((line) => line.match(/^\s+(opk-\S+)/)?.[1])
-    .filter(Boolean);
+  return listAoSessionRecordsFromOutputs({
+    jsonStdout: jsonListed.status === 0 ? jsonListed.stdout : '',
+    textStdout: textListed.status === 0 ? textListed.stdout : '',
+  });
 }
 
 function spawnEphemeralFixtureSession() {
   const spawned = spawnSync(
     'ao',
-    ['spawn', '--prompt', FIXTURE_PROMPT],
+    ['spawn', '--prompt', FIXTURE_HOLDER_PROMPT],
     {
       cwd: packRoot,
       encoding: 'utf8',
@@ -102,28 +113,20 @@ function spawnEphemeralFixtureSession() {
 }
 
 function resolveAoFixtureSession() {
-  const envSession = process.env.OPK_REVERIFY_E2E_SESSION?.trim();
-  if (envSession) {
-    return envSession;
-  }
-
-  if (!isLiveE2eEnabled()) {
-    return null;
-  }
-
   const knownSessions = listAoSessions();
-  if (knownSessions.includes(preferredSessionId)) {
-    return preferredSessionId;
-  }
-  if (knownSessions.length > 0) {
-    return knownSessions[0];
-  }
-
-  if (isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN')) {
-    return spawnEphemeralFixtureSession();
-  }
-
-  return null;
+  return resolveAoFixtureSessionId({
+    envSession: process.env.OPK_REVERIFY_E2E_SESSION,
+    liveE2eEnabled: isLiveE2eEnabled(),
+    preferredSessionId,
+    knownSessions,
+    allowSpawn: isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN'),
+    spawnSession: spawnEphemeralFixtureSession,
+    claimSpawn: (spawnSession, sessions) => claimOrSpawnFixtureHolder({
+      claimPath: fixtureClaimFile,
+      knownSessions: sessions,
+      spawnSession,
+    }),
+  });
 }
 
 function parseAoReviewRunJson(stdout) {
@@ -319,13 +322,20 @@ if (!aoAvailable) {
   process.exit(1);
 }
 
+const knownSessions = listAoSessions();
 const sessionId = resolveAoFixtureSession();
 output.aoSessionId = sessionId;
+const sessionRecord = knownSessions.find((session) => session.id === sessionId);
 output.aoSessionIsDedicatedFixture = sessionId === preferredSessionId
-  || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim());
+  || Boolean(process.env.OPK_REVERIFY_E2E_SESSION?.trim())
+  || isDedicatedFixtureHolderBranch(sessionRecord?.branch);
 
 if (!sessionId) {
-  output.error = 'unable to resolve AO fixture session: set OPK_REVERIFY_E2E_SESSION, start a live worker, or set OPK_REVERIFY_E2E_ALLOW_SPAWN=1';
+  const onlyRealPrWorkers = knownSessions.length > 0
+    && knownSessions.every((session) => sessionOwnsRealPr(session) || !isDedicatedFixtureHolderBranch(session.branch));
+  output.error = onlyRealPrWorkers
+    ? 'unable to resolve AO fixture session: only real-PR workers are live; set OPK_REVERIFY_E2E_SESSION to a dedicated fixture holder or OPK_REVERIFY_E2E_ALLOW_SPAWN=1'
+    : 'unable to resolve AO fixture session: set OPK_REVERIFY_E2E_SESSION, reuse a dedicated fixture holder, or set OPK_REVERIFY_E2E_ALLOW_SPAWN=1';
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }

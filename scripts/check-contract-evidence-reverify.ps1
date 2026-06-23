@@ -93,6 +93,175 @@ function Test-ReverifyLauncherInCheckout {
     return Test-Path -LiteralPath (Join-Path $Root 'scripts/launch-contract-evidence-reverify.ps1')
 }
 
+function Test-DedicatedReverifyFixtureHolderBranch {
+    param(
+        [string]$Branch
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Branch)) {
+        return $false
+    }
+
+    return ($Branch -match '^session/opk-\d+$') -or ($Branch -match '^feat/opk-\d+-reverify-e2e-holder(?:-[\w-]+)?$')
+}
+
+function Test-ReverifyFixtureSessionOwnsRealPr {
+    param($Session)
+
+    return -not [string]::IsNullOrWhiteSpace([string]$Session.pr)
+}
+
+function Get-ReverifyAoSessionRecords {
+    $jsonRaw = & ao session ls --json 2>$null
+    $records = @()
+    if ($LASTEXITCODE -eq 0) {
+        try {
+            $payload = $jsonRaw | ConvertFrom-Json
+            $records = @($payload.data | Where-Object { $_.id -like 'opk-*' })
+        }
+        catch {
+            $records = @()
+        }
+    }
+
+    if ($records.Count -gt 0) {
+        return $records
+    }
+
+    $textRaw = & ao session ls 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return @()
+    }
+
+    $parsed = @()
+    $seen = @{}
+    foreach ($line in ($textRaw -split "`n")) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('(')) {
+            continue
+        }
+        if ($trimmed -match '^(opk-\S+)\s+\([^)]*\)\s+(\S+)') {
+            $id = $Matches[1]
+            if (-not $seen.ContainsKey($id)) {
+                $seen[$id] = $true
+                $parsed += [pscustomobject]@{ id = $id; branch = $Matches[2]; pr = $null }
+            }
+            continue
+        }
+        if ($trimmed -match '^(opk-\S+):$') {
+            $id = $Matches[1]
+            if (-not $seen.ContainsKey($id)) {
+                $seen[$id] = $true
+                $parsed += [pscustomobject]@{ id = $id; branch = $null; pr = $null }
+            }
+        }
+    }
+    return $parsed
+}
+
+function Resolve-ReverifyCiFixtureSession {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION)) {
+        return $env:OPK_REVERIFY_E2E_SESSION.Trim()
+    }
+    if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+
+    $preferredSessionId = 'opk-reverify-e2e'
+    $fixtureSessionFile = Join-Path $Root 'tests/fixtures/contract-evidence-reverify/e2e/fixture-session-id.txt'
+    if (Test-Path -LiteralPath $fixtureSessionFile) {
+        $preferredSessionId = (Get-Content -LiteralPath $fixtureSessionFile -Raw).Trim()
+    }
+
+    $sessions = Get-ReverifyAoSessionRecords
+    foreach ($session in $sessions) {
+        if ($session.id -eq $preferredSessionId -and -not (Test-ReverifyFixtureSessionOwnsRealPr $session)) {
+            return $session.id
+        }
+    }
+
+    $dedicated = @($sessions | Where-Object {
+            (Test-DedicatedReverifyFixtureHolderBranch $_.branch) -and -not (Test-ReverifyFixtureSessionOwnsRealPr $_)
+        })
+    if ($dedicated.Count -gt 0) {
+        $sessionBranchHolder = @($dedicated | Where-Object { $_.branch -match '^session/opk-\d+$' } | Select-Object -First 1)
+        if ($sessionBranchHolder) {
+            return $sessionBranchHolder.id
+        }
+        return $dedicated[0].id
+    }
+
+    $allowSpawn = $env:OPK_REVERIFY_E2E_ALLOW_SPAWN -eq '1' -or $env:OPK_REVERIFY_E2E_ALLOW_SPAWN -eq 'true'
+    if (-not $allowSpawn) {
+        return $null
+    }
+
+    $claimPath = Join-Path $Root 'tests/fixtures/contract-evidence-reverify/e2e/fixture-holder.claim'
+    $claimDir = Split-Path -Parent $claimPath
+    if (-not (Test-Path -LiteralPath $claimDir)) {
+        New-Item -ItemType Directory -Path $claimDir -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $claimPath) {
+        $claimed = (Get-Content -LiteralPath $claimPath -Raw).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($claimed) -and ($sessions.id -contains $claimed)) {
+            return $claimed
+        }
+    }
+
+    try {
+        [System.IO.File]::WriteAllText($claimPath, [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    }
+    catch [System.IO.IOException] {
+        if (Test-Path -LiteralPath $claimPath) {
+            $claimed = (Get-Content -LiteralPath $claimPath -Raw).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($claimed)) {
+                return $claimed
+            }
+        }
+        return $null
+    }
+
+    $spawned = & ao spawn --prompt 'checkpoint-2 contract-evidence reverify e2e fixture holder' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $claimPath -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+    $spawnText = ($spawned | Out-String)
+    if ($spawnText -match 'SESSION=(opk-\S+)') {
+        [System.IO.File]::WriteAllText($claimPath, $Matches[1])
+        return $Matches[1]
+    }
+
+    Remove-Item -LiteralPath $claimPath -Force -ErrorAction SilentlyContinue
+    return $null
+}
+
+function Initialize-ReverifyCiAoFixtureEnvironment {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    if ($env:GITHUB_ACTIONS -ne 'true') {
+        return
+    }
+    if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    $fixtureSession = Resolve-ReverifyCiFixtureSession -Root $Root
+    if (-not [string]::IsNullOrWhiteSpace($fixtureSession)) {
+        $env:OPK_REVERIFY_E2E_SESSION = $fixtureSession
+        $env:OPK_REVERIFY_E2E_LIVE = '1'
+    }
+}
+
+
 function Invoke-ReverifyAc13E2eFixture {
     param(
         [Parameter(Mandatory)]
@@ -101,6 +270,7 @@ function Invoke-ReverifyAc13E2eFixture {
     )
 
     Initialize-ReverifyCiTrustedPackRoot -Root $Root
+    Initialize-ReverifyCiAoFixtureEnvironment -Root $Root
     $env:OPK_REVERIFY_E2E_REQUIRED = '1'
     & node --import tsx scripts/run-reviewer-reverify-e2e-fixture.mjs
     if ($LASTEXITCODE -ne 0) {
@@ -125,17 +295,17 @@ function Invoke-Ac13ReviewerFlowE2e {
         return
     }
 
-    if (Get-Command ao -ErrorAction SilentlyContinue) {
-        $env:OPK_REVERIFY_E2E_LIVE = '1'
-        if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_ALLOW_SPAWN)) {
-            $env:OPK_REVERIFY_E2E_ALLOW_SPAWN = '1'
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
+            Write-Warning 'AC13 live ao review --execute skipped in CI (ao CLI unavailable); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
+            return
+        }
+        Initialize-ReverifyCiAoFixtureEnvironment -Root $Root
+        if ([string]::IsNullOrWhiteSpace($env:OPK_REVERIFY_E2E_SESSION)) {
+            Write-Warning 'AC13 live ao review --execute skipped in CI (no dedicated fixture holder; set OPK_REVERIFY_E2E_SESSION or OPK_REVERIFY_E2E_ALLOW_SPAWN=1)'
+            return
         }
         Invoke-ReverifyAc13E2eFixture -Root $Root -Failures $Failures
-        return
-    }
-
-    if ($env:GITHUB_ACTIONS -eq 'true') {
-        Write-Warning 'AC13 live ao review --execute skipped in CI (ao CLI unavailable); vitest AC13 fixture checks above are authoritative in GITHUB_ACTIONS'
         return
     }
 
@@ -197,6 +367,10 @@ try {
 
     if ($failures.Count -eq 0) {
         Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reverify-bound-issue-snapshot.test.ts' -Failures $failures
+    }
+
+    if ($failures.Count -eq 0) {
+        Invoke-ReviewerPolicyVitestSuite -Root $Root -TestFile 'scripts/reverify-e2e-fixture-session.test.ts' -Failures $failures
     }
 
     if ($failures.Count -eq 0) {
