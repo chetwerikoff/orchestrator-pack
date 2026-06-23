@@ -37,7 +37,7 @@ function spawnLiveArmedBash(
   command: string,
   extraEnv: Record<string, string | undefined> = {},
 ) {
-  return spawnSync('/bin/bash', ['-c', command], {
+  return spawnSync('/bin/bash', ['+o', 'posix', '-c', command], {
     cwd,
     encoding: 'utf8',
     env: {
@@ -54,7 +54,7 @@ function spawnEvalHidden(
   command: string,
   extraEnv: Record<string, string | undefined> = {},
 ) {
-  return spawnSync('/bin/bash', ['-O', 'extglob', '-c', 'builtin eval "$1"', 'x', command], {
+  return spawnSync('/bin/bash', ['+o', 'posix', '-O', 'extglob', '-c', 'builtin eval "$1"', 'x', command], {
     cwd,
     encoding: 'utf8',
     env: {
