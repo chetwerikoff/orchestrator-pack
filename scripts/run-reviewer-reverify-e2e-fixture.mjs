@@ -9,7 +9,7 @@
  *   OPK_REVERIFY_E2E_ALLOW_SPAWN=1     — optional: spawn one fixture holder when live
  *   OPK_REVERIFY_E2E_ALLOW_SKIP=1      — local opt-out when AO is unavailable (not for acceptance)
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -39,6 +39,14 @@ function isAc13E2eAllowSkip() {
 
 function isLiveE2eEnabled() {
   return isTruthyEnv('OPK_REVERIFY_E2E_LIVE');
+}
+
+function ac13E2eEnv(overrides = {}) {
+  return {
+    ...process.env,
+    OPK_REVERIFY_E2E_REQUIRED: '1',
+    ...overrides,
+  };
 }
 
 function summaryRunOutcomeRowsEvaluated(text) {
@@ -107,39 +115,15 @@ function resolveAoFixtureSession() {
   if (knownSessions.includes(preferredSessionId)) {
     return preferredSessionId;
   }
+  if (knownSessions.length > 0) {
+    return knownSessions[0];
+  }
 
   if (isTruthyEnv('OPK_REVERIFY_E2E_ALLOW_SPAWN')) {
     return spawnEphemeralFixtureSession();
   }
 
   return null;
-}
-
-function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
-  const args = [
-    '-NoProfile',
-    '-File',
-    'scripts/run-reviewer-reverify-ao-review-command.ps1',
-    '-RepoRoot',
-    packRoot,
-    '-FixtureDir',
-    'tests/fixtures/contract-evidence-reverify/e2e',
-    '-ManifestPath',
-    'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
-    '-ExplicitIssue',
-    '376',
-  ];
-  if (aoSessionId) {
-    args.push('-AoSessionId', aoSessionId);
-  }
-  return spawnSync('pwsh', args, {
-    cwd: packRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      ...envOverrides,
-    },
-  });
 }
 
 function parseAoReviewRunJson(stdout) {
@@ -153,6 +137,71 @@ function parseAoReviewRunJson(stdout) {
   } catch {
     return null;
   }
+}
+
+function resolveAoFindingsDir() {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+  const base = process.env.AO_BASE_DIR?.trim() || path.join(home, '.agent-orchestrator');
+  const projectId = process.env.AO_PROJECT_ID?.trim()
+    || process.env.AO_PROJECT?.trim()
+    || 'orchestrator-pack';
+  return path.join(base, 'projects', projectId, 'code-reviews', 'findings');
+}
+
+function loadReviewFindingsForRun(runId) {
+  if (!runId) {
+    return [];
+  }
+  const findingsDir = resolveAoFindingsDir();
+  if (!existsSync(findingsDir)) {
+    return [];
+  }
+  const findings = [];
+  for (const entry of readdirSync(findingsDir)) {
+    if (!entry.endsWith('.json')) {
+      continue;
+    }
+    const filePath = path.join(findingsDir, entry);
+    try {
+      const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+      if (parsed?.runId === runId) {
+        findings.push(parsed);
+      }
+    } catch {
+      // ignore malformed finding records
+    }
+  }
+  return findings;
+}
+
+function extractCheckpoint2SummaryFromText(text) {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (isCheckpoint2ReviewerSummary(trimmed)) {
+    return trimmed;
+  }
+  const match = trimmed.match(/## Checkpoint-2 contract-evidence re-verification[\s\S]*/);
+  if (match && isCheckpoint2ReviewerSummary(match[0])) {
+    return match[0].trim();
+  }
+  return '';
+}
+
+function extractCheckpoint2SummaryFromAoReviewInvocation({ aoProc, run }) {
+  const stdout = aoProc.stdout ?? '';
+  const jsonStart = stdout.indexOf('{');
+  const preJson = jsonStart > 0 ? stdout.slice(0, jsonStart) : '';
+  const findingBodies = loadReviewFindingsForRun(run?.id).map((finding) => finding?.body ?? '');
+  const candidates = [preJson, ...findingBodies, aoProc.stderr ?? ''];
+  for (const candidate of candidates) {
+    const summary = extractCheckpoint2SummaryFromText(candidate);
+    if (summary) {
+      return summary;
+    }
+  }
+  return '';
 }
 
 function aoReviewExecuteFailed({ aoProc, run }) {
@@ -194,7 +243,7 @@ function runAoReviewExecute(sessionId) {
     {
       cwd: packRoot,
       encoding: 'utf8',
-      env: process.env,
+      env: ac13E2eEnv(),
     },
   );
   const run = parseAoReviewRunJson(aoProc.stdout ?? '');
@@ -207,10 +256,13 @@ function finalizeReviewerSummary(output, summary) {
   output.summaryIncludesRows = summaryHasEvaluatedRowEntries(summary);
   output.summaryIncludesNeverBlocks = summary.includes('never-blocks: true');
   output.reviewerOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(summary);
+  output.aoReviewOutputIsCheckpoint2Summary = output.reviewerOutputIsCheckpoint2Summary;
 
   const ok =
     output.promptContainsCheckpoint2
     && output.promptContainsInvokeScript
+    && output.viaAoReviewExecute
+    && output.aoReviewOutputIsCheckpoint2Summary
     && output.summaryRunOutcomeRowsEvaluated
     && output.summaryIncludesRows
     && output.summaryIncludesNeverBlocks
@@ -227,6 +279,8 @@ const output = {
   skipped: false,
   viaAoReviewExecute: false,
   viaMechanicalReviewerCommand: false,
+  aoReviewRunId: null,
+  aoReviewOutputIsCheckpoint2Summary: false,
   aoAvailable: false,
   aoSessionId: null,
   aoSessionIsDedicatedFixture: false,
@@ -277,6 +331,7 @@ if (!sessionId) {
 }
 
 const { aoProc, run: aoReviewRun } = runAoReviewExecute(sessionId);
+output.aoReviewRunId = aoReviewRun?.id ?? null;
 output.viaAoReviewExecute = !aoReviewExecuteFailed({ aoProc, run: aoReviewRun });
 
 if (!output.viaAoReviewExecute) {
@@ -289,13 +344,17 @@ if (!output.viaAoReviewExecute) {
   process.exit(1);
 }
 
-const mechanicalProc = runReviewerReverifyCommand();
-output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
-if (!output.viaMechanicalReviewerCommand) {
-  output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
-  output.summary = (mechanicalProc.stdout ?? mechanicalProc.stderr ?? '').trim();
+const aoReviewSummary = extractCheckpoint2SummaryFromAoReviewInvocation({
+  aoProc,
+  run: aoReviewRun,
+});
+output.aoReviewOutputIsCheckpoint2Summary = isCheckpoint2ReviewerSummary(aoReviewSummary);
+
+if (!output.aoReviewOutputIsCheckpoint2Summary) {
+  output.error = 'AO --execute reviewer path did not surface checkpoint-2 rows in review output';
+  output.summary = aoReviewSummary || (aoProc.stdout ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }
 
-finalizeReviewerSummary(output, (mechanicalProc.stdout ?? '').trim());
+finalizeReviewerSummary(output, aoReviewSummary);

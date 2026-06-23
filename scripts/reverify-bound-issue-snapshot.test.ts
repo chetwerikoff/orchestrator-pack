@@ -57,6 +57,41 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     expect(resolved.snapshotHash).toBe(captured.snapshotHash);
   });
 
+
+  it('preserves the original snapshot across PR head updates', () => {
+    withStoreDir();
+    const body = '# Issue body\n\ncontract-evidence:\n- datum: sample\n';
+    const head1 = '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99';
+    const head2 = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    const first = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: head1,
+      issueNumber: 376,
+      issueBody: body,
+    });
+    expect(first.created).toBe(true);
+    const edited = `${body}\n# edited after first capture\n`;
+    const second = captureBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: head2,
+      issueNumber: 376,
+      issueBody: edited,
+    });
+    expect(second.created).toBe(false);
+    expect(second.snapshotPath).toBe(first.snapshotPath);
+    expect(readFileSync(second.snapshotPath, 'utf8')).toBe(body);
+    const resolved = resolveBoundIssueSnapshot({
+      projectId: 'orchestrator-pack',
+      prNumber: 380,
+      prHeadSha: head2,
+      issueNumber: 376,
+    });
+    expect(resolved.status).toBe('found');
+    expect(resolved.metadata?.prHeadSha).toBe(head1);
+  });
+
   it('is idempotent for the same PR head and issue body', () => {
     withStoreDir();
     const input = {
@@ -161,6 +196,7 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
     expect(shouldPersistBoundIssueSnapshots('mapped')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('incomplete_evidence')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('skipped_input_limit')).toBe(true);
+    expect(shouldPersistBoundIssueSnapshots('skipped_no_acceptance')).toBe(true);
     expect(shouldPersistBoundIssueSnapshots('stale_spec')).toBe(false);
     expect(shouldPersistBoundIssueSnapshots('lookup_unavailable')).toBe(false);
   });
@@ -191,6 +227,38 @@ describe('reverify bound issue snapshot (Issue #376)', () => {
       prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
       contractSet: members,
       status: 'incomplete_evidence',
+      specBodies: [{ issueNumber: 376, body }],
+    });
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.created).toBe(true);
+  });
+
+
+  it('captures bound snapshots for skipped_no_acceptance linked issues without contract rows', () => {
+    withStoreDir();
+    const body = '# Issue without acceptance criteria\n\ncontract-evidence: none\n';
+    const captures = captureValidatedBoundIssueSnapshots({
+      opts: {
+        prBodyFile: null,
+        issueFile: null,
+        issuesFile: null,
+        issueSpecs: [],
+        diffFile: null,
+        changedPathsFile: null,
+        explicitIssue: 376,
+        declarationIssue: null,
+        prHeadSha: 'abc1234',
+        ledgerFile: null,
+        invokeCoworker: false,
+        json: true,
+        lookupAvailable: true,
+        coworkerAvailable: true,
+        prNumber: 380,
+        projectId: 'orchestrator-pack',
+      },
+      prHeadSha: '9d7864bd16ed548b8d98b181e8b286ad7aeb7d99',
+      contractSet: [],
+      status: 'skipped_no_acceptance',
       specBodies: [{ issueNumber: 376, body }],
     });
     expect(captures).toHaveLength(1);

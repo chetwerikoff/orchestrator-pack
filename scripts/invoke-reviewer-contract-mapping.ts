@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readLines, readText } from './lib/reviewer-cli-io.js';
 import {
   buildStructuredStatusRecord,
+  collectAuthoritativeReferences,
   computeBoundDiffArtifactHash,
   countDiffLines,
   evaluateFinalUsability,
@@ -497,7 +498,6 @@ export function shouldPersistBoundIssueSnapshots(status: ContractMappingStatus):
     'lookup_unavailable',
     'ambiguous_spec',
     'skipped_no_spec',
-    'skipped_no_acceptance',
     'malformed',
   ]);
   return !excluded.has(status);
@@ -517,6 +517,51 @@ export function specBodiesMatchContractSet(
   });
 }
 
+export function resolveBoundIssueSnapshotBodies(input: {
+  opts: CliOptions;
+  contractSet: Array<Pick<ContractSpecMember, 'issueNumber' | 'snapshotHash'>>;
+  specBodies: Array<{ issueNumber: number; body: string }>;
+  resolveIssueBody?: IssueBodyResolver;
+}): Array<{ issueNumber: number; body: string }> {
+  if (input.contractSet.length > 0) {
+    if (input.resolveIssueBody) {
+      const validatedBodies = input.contractSet.map((member) => ({
+        issueNumber: member.issueNumber,
+        body: input.resolveIssueBody!(member.issueNumber),
+      }));
+      if (!specBodiesMatchContractSet(validatedBodies, input.contractSet)) {
+        return [];
+      }
+      return validatedBodies;
+    }
+    if (!specBodiesMatchContractSet(input.specBodies, input.contractSet)) {
+      return [];
+    }
+    return input.contractSet.map((member) => ({
+      issueNumber: member.issueNumber,
+      body: input.specBodies.find((spec) => spec.issueNumber === member.issueNumber)!.body,
+    }));
+  }
+
+  const refs = collectAuthoritativeReferences({
+    explicitIssueNumber: input.opts.explicitIssue,
+    prBody: input.opts.prBodyFile ? readText(input.opts.prBodyFile) : null,
+    declarationIssueNumber: input.opts.declarationIssue,
+  });
+  if (refs.length !== 1) {
+    return [];
+  }
+  const issueNumber = refs[0]!;
+  const specBody = input.specBodies.find((spec) => spec.issueNumber === issueNumber)?.body;
+  if (specBody) {
+    return [{ issueNumber, body: specBody }];
+  }
+  if (input.resolveIssueBody) {
+    return [{ issueNumber, body: input.resolveIssueBody(issueNumber) }];
+  }
+  return [];
+}
+
 export function captureValidatedBoundIssueSnapshots(input: {
   opts: CliOptions;
   prHeadSha: string;
@@ -531,27 +576,15 @@ export function captureValidatedBoundIssueSnapshots(input: {
   if (!shouldPersistBoundIssueSnapshots(input.status)) {
     return [];
   }
-  if (input.contractSet.length === 0) {
-    return [];
-  }
 
-  let validatedBodies: Array<{ issueNumber: number; body: string }>;
-  if (input.resolveIssueBody) {
-    validatedBodies = input.contractSet.map((member) => ({
-      issueNumber: member.issueNumber,
-      body: input.resolveIssueBody!(member.issueNumber),
-    }));
-    if (!specBodiesMatchContractSet(validatedBodies, input.contractSet)) {
-      return [];
-    }
-  } else {
-    if (!specBodiesMatchContractSet(input.specBodies, input.contractSet)) {
-      return [];
-    }
-    validatedBodies = input.contractSet.map((member) => ({
-      issueNumber: member.issueNumber,
-      body: input.specBodies.find((spec) => spec.issueNumber === member.issueNumber)!.body,
-    }));
+  const validatedBodies = resolveBoundIssueSnapshotBodies({
+    opts: input.opts,
+    contractSet: input.contractSet,
+    specBodies: input.specBodies,
+    resolveIssueBody: input.resolveIssueBody,
+  });
+  if (validatedBodies.length === 0) {
+    return [];
   }
 
   return captureBoundIssueSnapshotsFromPreflight({

@@ -73,19 +73,17 @@ function normalizeSha(sha: string): string {
   return sha.trim().toLowerCase();
 }
 
-function metadataMatchesRequestedBinding(
+function metadataMatchesRequestedIdentity(
   metadata: BoundIssueSnapshotMetadata,
   requested: {
     projectId: string;
     prNumber: number;
-    prHeadSha: string;
     issueNumber: number;
   },
 ): boolean {
   return metadata.projectId === requested.projectId
     && metadata.prNumber === requested.prNumber
-    && metadata.issueNumber === requested.issueNumber
-    && normalizeSha(metadata.prHeadSha) === normalizeSha(requested.prHeadSha);
+    && metadata.issueNumber === requested.issueNumber;
 }
 
 export function resolveDefaultAoProjectId(env: NodeJS.ProcessEnv = process.env): string {
@@ -111,14 +109,12 @@ export function boundIssueSnapshotArtifactPaths(input: {
   aoBaseDir?: string;
   storeDirOverride?: string | null;
 }): { artifactDir: string; snapshotPath: string; metadataPath: string } {
-  const prHeadSha = normalizeSha(input.prHeadSha);
   const artifactDir = join(
     resolveBoundIssueSnapshotStoreDir(input.projectId, {
       aoBaseDir: input.aoBaseDir,
       storeDirOverride: input.storeDirOverride,
     }),
     `pr-${input.prNumber}`,
-    prHeadSha.slice(0, 12),
   );
   const baseName = `issue-${input.issueNumber}`;
   return {
@@ -182,29 +178,30 @@ export function captureBoundIssueSnapshot(input: {
     const existing = readBoundIssueSnapshotMetadata(paths.metadataPath);
     if (!existing) {
       throw new Error(
-        `bound issue snapshot metadata corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+        `bound issue snapshot metadata corrupted for PR #${input.prNumber} issue #${input.issueNumber}`,
       );
     }
-    if (!metadataMatchesRequestedBinding(existing, {
+    if (!metadataMatchesRequestedIdentity(existing, {
       projectId: input.projectId,
       prNumber: input.prNumber,
-      prHeadSha,
       issueNumber: input.issueNumber,
     })) {
       throw new Error(
-        `bound issue snapshot metadata binding mismatch for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+        `bound issue snapshot metadata binding mismatch for PR #${input.prNumber} issue #${input.issueNumber}`,
       );
     }
-    if (existing.snapshotHash !== snapshotHash) {
+    if (!existsSync(paths.snapshotPath) || !verifyBoundIssueSnapshotBody(paths.snapshotPath, existing.snapshotHash)) {
       throw new Error(
-        `bound issue snapshot already captured for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber} with different content`,
+        `bound issue snapshot body corrupted for PR #${input.prNumber} issue #${input.issueNumber}`,
       );
     }
-    if (!existsSync(paths.snapshotPath) || !verifyBoundIssueSnapshotBody(paths.snapshotPath, snapshotHash)) {
-      throw new Error(
-        `bound issue snapshot body corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
-      );
-    }
+    return {
+      issueNumber: input.issueNumber,
+      snapshotPath: paths.snapshotPath,
+      metadataPath: paths.metadataPath,
+      snapshotHash: existing.snapshotHash,
+      created: false,
+    };
   } else {
     writeFileAtomically(paths.snapshotPath, input.issueBody);
     writeFileAtomically(paths.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
@@ -324,10 +321,9 @@ export function resolveBoundIssueSnapshot(input: {
     };
   }
 
-  if (!metadataMatchesRequestedBinding(metadata, {
+  if (!metadataMatchesRequestedIdentity(metadata, {
     projectId: input.projectId,
     prNumber: input.prNumber,
-    prHeadSha: input.prHeadSha,
     issueNumber: input.issueNumber,
   })) {
     return {
