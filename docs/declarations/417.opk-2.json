@@ -12,6 +12,7 @@
   "declared_paths": [
     "docs/declarations/417.opk-2.json",
     "docs/orchestrator-message-registry.mjs",
+    "docs/review-run-recovery.mjs",
     "docs/review-start-claim-lifecycle.d.mts",
     "docs/review-start-claim-lifecycle.mjs",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
