@@ -522,7 +522,8 @@ function Invoke-PlannedReviewRun {
     }
 
     $postRuns = @(Get-AoReviewRuns -Project $Project)
-    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter { param($m) Write-ReconcileLog $m }
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns { @(Get-AoReviewRuns -Project $Project) } -LogWriter { param($m) Write-ReconcileLog $m }
     if (-not $complete.ok) {
         Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"
     }

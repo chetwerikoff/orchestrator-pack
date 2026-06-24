@@ -180,7 +180,9 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
-    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $LogWriter
+    $resolveRuns = if ($ResolveFreshSnapshot) { { @((& $ResolveFreshSnapshot $planned).reviewRuns) } } else { $null }
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns $resolveRuns -LogWriter $LogWriter
     if (-not $complete.ok) {
         & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
     }

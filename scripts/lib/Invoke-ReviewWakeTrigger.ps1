@@ -530,7 +530,14 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     if (-not $DryRun) {
-        $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $LogWriter
+        $resolveRuns = if ($FixtureSnapshot) {
+            { @($FixtureSnapshot.reviewRuns) }
+        }
+        else {
+            { @(Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot).reviewRuns }
+        }
+        $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+            -ResolveReviewRuns $resolveRuns -LogWriter $LogWriter
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
         }

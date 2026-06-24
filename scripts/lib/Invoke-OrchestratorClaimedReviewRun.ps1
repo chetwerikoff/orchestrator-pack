@@ -208,7 +208,14 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     $postRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $Project) }
-    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $writeLog
+    $resolveRuns = if ($FixtureSnapshot) {
+        { @($FixtureSnapshot.reviewRuns) }
+    }
+    else {
+        { @(Get-AoReviewRuns -Project $Project) }
+    }
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns $resolveRuns -LogWriter $writeLog
     if (-not $complete.ok) {
         & $writeLog "orchestrator-claimed-review-run: ESCALATE claim completion PR #$PrNumber head=$headSha reason=$($complete.reason)"
     }

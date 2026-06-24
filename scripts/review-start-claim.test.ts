@@ -779,17 +779,15 @@ describe('Review-StartClaim liveness reaper (Issue #417)', () => {
         $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'fixture' -Namespace $ns -ReviewRuns @()
         $env:AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS = '1'
         $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns @()
-        Start-Sleep -Milliseconds 1100
-        $complete2 = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns @()
         [pscustomobject]@{
           firstReason = [string]$complete.reason
-          fenced = [bool]$complete2.fenced
+          fenced = [bool]$complete.fenced
           terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*run_not_visible_fenced*.json').Name)
           activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
         } | ConvertTo-Json -Compress
       `;
       const result = JSON.parse(runPwsh(script));
-      expect(result.firstReason).toBe('run_not_visible');
+      expect(result.firstReason).toBe('run_not_visible_fenced');
       expect(result.fenced || result.terminal.length === 1).toBe(true);
       expect(result.activeExists).toBe(false);
     } finally {

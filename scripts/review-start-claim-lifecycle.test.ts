@@ -4,6 +4,7 @@ import {
   classifyClaimHolderLiveness,
   evaluateHoldBudget,
   evaluateLaunchPending,
+  evaluateReadinessEnvelope,
   evaluateReclaimDecision,
   evaluateSweep,
   evaluateVisibilityFence,
@@ -146,22 +147,83 @@ describe('review-start-claim-lifecycle predicates', () => {
   });
 
 
-  it('keeps legacy holders blocking until stale-time reclaim', () => {
+  it('keeps legacy holders blocking when pid evidence is still present', () => {
+    const acquired = '2026-06-24T12:00:00.000Z';
+    const liveness = classifyClaimHolderLiveness(fakeHolder({ startTimeTicks: '', bootIdHash: '' }), {
+      localHost: 'test-host',
+      procStartTimeTicks: '123',
+      allowNonLinuxProc: true,
+    });
+    expect(liveness.outcome).toBe('legacy');
     const decision = evaluateReclaimDecision({
       claim: {
         state: 'active',
         prNumber: 266,
         headSha: fullSha,
         holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
-        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+        acquiredAtUtc: acquired,
+        holdStartedAtUtc: acquired,
       },
-      holderLiveness: { outcome: 'legacy', reason: 'missing_process_identity' },
+      holderLiveness: liveness,
       reviewRuns: [],
-      nowMs: Date.parse('2026-06-24T12:00:00.000Z'),
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
       localHost: 'test-host',
     });
     expect(decision.action).toBe('skip');
     expect(decision.reason).toBe('legacy_holder_unverified');
+  });
+
+  it('reclaims legacy holder when local pid is absent', () => {
+    const acquired = '2026-06-24T12:00:00.000Z';
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
+        acquiredAtUtc: acquired,
+        holdStartedAtUtc: acquired,
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+      localHost: 'test-host',
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('recovered_orphan_liveness');
+  });
+
+  it('enforces shared readiness envelope across stacked lifecycle phases', () => {
+    const acquired = '2026-06-24T12:00:00.000Z';
+    const nowMs = Date.parse('2026-06-24T12:00:31.000Z');
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder(),
+        acquiredAtUtc: acquired,
+        holdStartedAtUtc: acquired,
+        launchPending: { atUtc: '2026-06-24T12:00:15.000Z', budgetMs: 15_000 },
+        visibilityPendingAtUtc: '2026-06-24T12:00:20.000Z',
+        invokeCompletedAtUtc: '2026-06-24T12:00:20.000Z',
+      },
+      holderLiveness: { outcome: 'alive', reason: 'alive' },
+      reviewRuns: [],
+      nowMs,
+      config: resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000 }),
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('run_not_visible_fenced');
+  });
+
+  it('caps hold budget by the shared readiness envelope', () => {
+    const envelope = evaluateReadinessEnvelope({
+      claim: { acquiredAtUtc: '2026-06-24T12:00:00.000Z', holdStartedAtUtc: '2026-06-24T12:00:00.000Z' },
+      nowMs: Date.parse('2026-06-24T12:00:31.000Z'),
+      config: resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000, holdBudgetMs: 15_000 }),
+    });
+    expect(envelope.exceeded).toBe(true);
   });
 
   it('fences post-invoke visibility before launch-pending expiry', () => {

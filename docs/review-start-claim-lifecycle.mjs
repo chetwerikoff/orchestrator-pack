@@ -124,10 +124,16 @@ export function classifyClaimHolderLiveness(holder, options = {}) {
   if (localHost && holderHost && holderHost !== localHost) {
     return { outcome: 'foreign_host', reason: 'non_local_holder' };
   }
+  const pid = Number(h.pid);
   if (!h.startTimeTicks || !h.bootIdHash) {
+    if (Number.isInteger(pid) && pid > 0 && process.platform === 'linux') {
+      const actualStart = options.procStartTimeTicks ?? readProcStartTimeTicks(pid);
+      if (!actualStart) {
+        return { outcome: 'provably_not_alive', reason: 'proc_entry_missing' };
+      }
+    }
     return { outcome: 'legacy', reason: 'missing_process_identity' };
   }
-  const pid = Number(h.pid);
   if (Number.isInteger(pid) && pid > 0 && process.platform === 'linux') {
     const actualStart = options.procStartTimeTicks ?? readProcStartTimeTicks(pid);
     if (!actualStart) {
@@ -186,12 +192,49 @@ export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifec
   if (startedMs == null) {
     return { active: false, expired: false, reason: 'invalid_timestamp' };
   }
-  const ageMs = Math.max(0, nowMs - startedMs);
-  const budgetMs = Number(pending.budgetMs) > 0 ? Number(pending.budgetMs) : config.launchPendingBudgetMs;
-  if (ageMs >= budgetMs) {
-    return { active: false, expired: true, ageMs, budgetMs, reason: 'budget_exceeded' };
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  if (envelope.exceeded) {
+    return {
+      active: false,
+      expired: true,
+      ageMs: Math.max(0, nowMs - startedMs),
+      budgetMs: Number(pending.budgetMs) > 0 ? Number(pending.budgetMs) : config.launchPendingBudgetMs,
+      envelope,
+      reason: 'envelope_exceeded',
+    };
   }
-  return { active: true, expired: false, ageMs, budgetMs, reason: 'active' };
+  const ageMs = Math.max(0, nowMs - startedMs);
+  const configuredBudget = Number(pending.budgetMs) > 0 ? Number(pending.budgetMs) : config.launchPendingBudgetMs;
+  const readinessStartMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc) ?? startedMs;
+  const envelopeRemainingAtLaunch = Math.max(0, config.readinessEnvelopeMs - Math.max(0, startedMs - readinessStartMs));
+  const budgetMs = Math.min(configuredBudget, envelopeRemainingAtLaunch);
+  if (ageMs >= budgetMs) {
+    return { active: false, expired: true, ageMs, budgetMs, envelope, reason: 'budget_exceeded' };
+  }
+  return { active: true, expired: false, ageMs, budgetMs, envelope, reason: 'active' };
+}
+
+export function evaluateReadinessEnvelope({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
+  const startedMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc);
+  if (startedMs == null) {
+    return {
+      exceeded: false,
+      reason: 'no_readiness_start',
+      ageMs: 0,
+      budgetMs: config.readinessEnvelopeMs,
+      remainingMs: config.readinessEnvelopeMs,
+    };
+  }
+  const ageMs = Math.max(0, nowMs - startedMs);
+  const budgetMs = config.readinessEnvelopeMs;
+  const remainingMs = Math.max(0, budgetMs - ageMs);
+  return {
+    exceeded: ageMs >= budgetMs,
+    ageMs,
+    budgetMs,
+    remainingMs,
+    reason: ageMs >= budgetMs ? 'envelope_exceeded' : 'within_envelope',
+  };
 }
 
 export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
@@ -199,12 +242,16 @@ export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycl
   if (startedMs == null) {
     return { exceeded: false, reason: 'no_hold_start' };
   }
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
   const ageMs = Math.max(0, nowMs - startedMs);
+  const budgetMs = Math.min(config.holdBudgetMs, envelope.budgetMs);
+  const exceeded = envelope.exceeded || ageMs >= budgetMs;
   return {
-    exceeded: ageMs >= config.holdBudgetMs,
+    exceeded,
     ageMs,
-    budgetMs: config.holdBudgetMs,
-    reason: ageMs >= config.holdBudgetMs ? 'budget_exceeded' : 'within_budget',
+    budgetMs,
+    envelope,
+    reason: envelope.exceeded ? 'envelope_exceeded' : (ageMs >= budgetMs ? 'budget_exceeded' : 'within_budget'),
   };
 }
 
@@ -213,15 +260,25 @@ export function evaluateVisibilityFence({ claim, reviewRuns, nowMs, config = res
   if (pendingMs == null) {
     return { shouldFence: false, reason: 'not_pending' };
   }
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
   const ageMs = Math.max(0, nowMs - pendingMs);
   const covered = findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''));
   if (covered) {
-    return { shouldFence: false, reason: 'run_visible', coveredRunId: covered.runId };
+    return { shouldFence: false, reason: 'run_visible', coveredRunId: covered.runId, envelope };
   }
-  if (ageMs >= config.visibilityBudgetMs) {
-    return { shouldFence: true, reason: 'visibility_budget_exceeded', ageMs, budgetMs: config.visibilityBudgetMs };
+  const readinessStartMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc) ?? pendingMs;
+  const envelopeRemainingAtPending = Math.max(0, config.readinessEnvelopeMs - Math.max(0, pendingMs - readinessStartMs));
+  const budgetMs = Math.min(config.visibilityBudgetMs, envelopeRemainingAtPending);
+  if (envelope.exceeded || ageMs >= budgetMs) {
+    return {
+      shouldFence: true,
+      reason: envelope.exceeded ? 'readiness_envelope_exceeded' : 'visibility_budget_exceeded',
+      ageMs,
+      budgetMs,
+      envelope,
+    };
   }
-  return { shouldFence: false, reason: 'within_visibility_budget', ageMs, budgetMs: config.visibilityBudgetMs };
+  return { shouldFence: false, reason: 'within_visibility_budget', ageMs, budgetMs, envelope };
 }
 
 export function evaluateLegacyPreInvokeOrphan({ claim, reviewRuns }) {
@@ -240,6 +297,39 @@ export function evaluateLegacyPreInvokeOrphan({ claim, reviewRuns }) {
     return { reclaimable: false, reason: 'covering_run_present' };
   }
   return { reclaimable: true, reason: 'legacy_pre_invoke_orphan' };
+}
+
+
+function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config }) {
+  if (claim?.visibilityPendingAtUtc) {
+    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, config });
+    if (visibility.shouldFence || !findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''))) {
+      return {
+        action: 'terminalize',
+        outcome: 'run_not_visible_fenced',
+        reason: visibility.reason ?? 'readiness_envelope_exceeded',
+        visibility,
+        envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+      };
+    }
+  }
+  const launch = evaluateLaunchPending({ claim, nowMs, config });
+  if (launch.expired || asRecord(claim?.launchPending)?.atUtc || claim?.launchPendingInvokedAtUtc) {
+    return {
+      action: 'terminalize',
+      outcome: 'launch_pending_budget_exceeded',
+      reason: 'readiness_envelope_exceeded',
+      launch,
+      envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+    };
+  }
+  return {
+    action: 'terminalize',
+    outcome: 'hold_budget_exceeded',
+    reason: 'readiness_envelope_exceeded',
+    hold: evaluateHoldBudget({ claim, nowMs, config }),
+    envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+  };
 }
 
 export function evaluateReclaimDecision({
@@ -264,6 +354,7 @@ export function evaluateReclaimDecision({
     return { action: 'skip', reason: 'in_flight_covering_run', runId: covered.runId };
   }
 
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
   const hold = evaluateHoldBudget({ claim, nowMs, config });
   const liveness = holderLiveness ?? { outcome: 'ambiguous', reason: 'not_evaluated' };
 
@@ -273,6 +364,11 @@ export function evaluateReclaimDecision({
       outcome: 'foreign_holder_manual',
       reason: 'non_local_holder',
     };
+  }
+
+  const launch = evaluateLaunchPending({ claim, nowMs, config });
+  if (launch.active) {
+    return { action: 'skip', reason: 'launch_pending_active', launch };
   }
 
   if (claim?.invokeCompletedAtUtc || claim?.visibilityPendingAtUtc) {
@@ -290,10 +386,6 @@ export function evaluateReclaimDecision({
     }
   }
 
-  const launch = evaluateLaunchPending({ claim, nowMs, config });
-  if (launch.active) {
-    return { action: 'skip', reason: 'launch_pending_active', launch };
-  }
   if (launch.expired) {
     return {
       action: 'terminalize',
@@ -301,6 +393,28 @@ export function evaluateReclaimDecision({
       reason: 'launch_pending_budget_exceeded',
       launch,
     };
+  }
+
+  if (liveness.outcome === 'provably_not_alive') {
+    if (covered && !IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
+      return {
+        action: 'terminalize',
+        outcome: 'orphan_covered_run_unbound',
+        reason: 'dead_holder_terminal_covered_run',
+        coveredRunId: covered.runId,
+        warn: true,
+      };
+    }
+    return {
+      action: 'terminalize',
+      outcome: 'recovered_orphan_liveness',
+      reason: 'dead_local_holder',
+      liveness,
+    };
+  }
+
+  if (envelope.exceeded) {
+    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config });
   }
 
   if (hold.exceeded && liveness.outcome === 'alive') {
@@ -336,24 +450,6 @@ export function evaluateReclaimDecision({
 
   if (liveness.outcome === 'legacy') {
     return { action: 'skip', reason: 'legacy_holder_unverified', liveness };
-  }
-
-  if (liveness.outcome === 'provably_not_alive') {
-    if (covered && !IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
-      return {
-        action: 'terminalize',
-        outcome: 'orphan_covered_run_unbound',
-        reason: 'dead_holder_terminal_covered_run',
-        coveredRunId: covered.runId,
-        warn: true,
-      };
-    }
-    return {
-      action: 'terminalize',
-      outcome: 'recovered_orphan_liveness',
-      reason: 'dead_local_holder',
-      liveness,
-    };
   }
 
   return { action: 'skip', reason: 'holder_liveness_ambiguous', liveness };
@@ -432,6 +528,15 @@ async function main() {
       bootIdHash: payload?.bootIdHash,
       procStartTimeTicks: payload?.procStartTimeTicks,
       allowNonLinuxProc: payload?.allowNonLinuxProc,
+    });
+  }
+  if (subcommand === 'readiness-envelope') {
+    const config = resolveClaimLifecycleConfig(payload?.config ?? {});
+    const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
+    return evaluateReadinessEnvelope({
+      claim: payload?.claim,
+      nowMs,
+      config,
     });
   }
   if (subcommand === 'visibility-fence') {

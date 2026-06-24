@@ -349,20 +349,90 @@ function Test-ReviewStartClaimHoldBudgetExceeded {
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ exceeded = $false } }
     $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
     if (-not $read.ok) { return @{ exceeded = $false; reason = 'unreadable' } }
-    $hold = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'evaluate' -Payload @{
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload @{
         claim = $read.record
-        nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        nowMs = $nowMs
     }
-    # evaluate path uses reclaim; use hold sub-eval via visibility-fence payload shape - call validate config + hold from record
     $config = Get-ReviewStartClaimLifecycleConfig
     $started = if ($read.record.holdStartedAtUtc) { $read.record.holdStartedAtUtc } else { $read.record.acquiredAtUtc }
     $startedMs = [DateTimeOffset]::Parse([string]$started).ToUnixTimeMilliseconds()
-    $ageMs = [Math]::Max(0, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $startedMs)
-    $budgetMs = [int]$config.config.holdBudgetMs
+    $ageMs = [Math]::Max(0, $nowMs - $startedMs)
+    $budgetMs = [Math]::Min([int]$config.config.holdBudgetMs, [int]$envelope.budgetMs)
     return @{
-        exceeded = ($ageMs -ge $budgetMs)
+        exceeded = ([bool]$envelope.exceeded -or ($ageMs -ge $budgetMs))
         ageMs    = $ageMs
         budgetMs = $budgetMs
+        envelope = $envelope
+    }
+}
+
+function Wait-ReviewStartClaimPostInvokeVisibility {
+    param(
+        [hashtable]$ClaimResult,
+        [array]$ReviewRuns = @(),
+        [scriptblock]$ResolveReviewRuns = $null,
+        [scriptblock]$LogWriter = $null
+    )
+
+    $config = Get-ReviewStartClaimLifecycleConfig
+    $pollMs = 250
+    $runs = @($ReviewRuns)
+    while ($true) {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if ($ResolveReviewRuns) {
+            $runs = @(& $ResolveReviewRuns)
+        }
+        Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $runs | Out-Null
+        $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $runs
+        if ($complete.ok) { return $complete }
+
+        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
+        $fence = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'visibility-fence' -Payload @{
+            claim      = $read.record
+            reviewRuns = @($runs)
+            nowMs      = $nowMs
+        }
+        if ($fence.shouldFence) {
+            $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
+                -Record $read.record -Decision @{
+                    action     = 'terminalize'
+                    outcome    = 'run_not_visible_fenced'
+                    reason     = [string]$fence.reason
+                    visibility = $fence
+                } -DecisionSource 'post_run_visibility' -ReviewRuns $runs
+            if ($LogWriter) {
+                & $LogWriter "review-start-claim: WARN run_not_visible_fenced key=$($ClaimResult.key) audit=$($terminal.auditPath)"
+            }
+            return @{ ok = [bool]$terminal.ok; reason = 'run_not_visible_fenced'; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true; fence = $fence }
+        }
+
+        $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload @{
+            claim = $read.record
+            nowMs = $nowMs
+        }
+        if ($envelope.exceeded) {
+            $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
+                -Record $read.record -Decision @{
+                    action     = 'terminalize'
+                    outcome    = 'run_not_visible_fenced'
+                    reason     = 'readiness_envelope_exceeded'
+                    visibility = $fence
+                    envelope   = $envelope
+                } -DecisionSource 'post_run_visibility' -ReviewRuns $runs
+            if ($LogWriter) {
+                & $LogWriter "review-start-claim: WARN readiness envelope exceeded during visibility wait key=$($ClaimResult.key) audit=$($terminal.auditPath)"
+            }
+            return @{ ok = [bool]$terminal.ok; reason = 'run_not_visible_fenced'; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true; envelope = $envelope }
+        }
+
+        $pendingMs = [DateTimeOffset]::Parse([string]$read.record.visibilityPendingAtUtc).ToUnixTimeMilliseconds()
+        $visibilityAgeMs = [Math]::Max(0, $nowMs - $pendingMs)
+        $visibilityBudgetMs = [int]$config.config.visibilityBudgetMs
+        $remainingMs = [Math]::Min([int]$envelope.remainingMs, [Math]::Max(0, $visibilityBudgetMs - $visibilityAgeMs))
+        if ($remainingMs -le 0) { continue }
+        Start-Sleep -Milliseconds ([Math]::Min($pollMs, $remainingMs))
     }
 }
 
@@ -370,6 +440,7 @@ function Complete-ReviewStartClaimAfterRunInvoke {
     param(
         [hashtable]$ClaimResult,
         [array]$ReviewRuns = @(),
+        [scriptblock]$ResolveReviewRuns = $null,
         [scriptblock]$LogWriter = $null
     )
 
@@ -386,29 +457,11 @@ function Complete-ReviewStartClaimAfterRunInvoke {
             $fields.visibilityPendingAtUtc = $now
         }
         Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields $fields -ClearFields @('launchPending') | Out-Null
-        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-        $fence = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'visibility-fence' -Payload @{
-            claim      = $read.record
-            reviewRuns = @($ReviewRuns)
-            nowMs      = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
-        if ($fence.shouldFence) {
-            $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
-                -Record $read.record -Decision @{
-                    action  = 'terminalize'
-                    outcome = 'run_not_visible_fenced'
-                    reason  = [string]$fence.reason
-                    visibility = $fence
-                } -DecisionSource 'post_run_visibility' -ReviewRuns $ReviewRuns
-            if ($LogWriter) {
-                & $LogWriter "review-start-claim: WARN run_not_visible_fenced key=$($ClaimResult.key) audit=$($terminal.auditPath)"
-            }
-            return @{ ok = [bool]$terminal.ok; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true }
-        }
         if ($LogWriter) {
-            & $LogWriter "review-start-claim: visibility pending key=$($ClaimResult.key) reason=$($fence.reason)"
+            & $LogWriter "review-start-claim: waiting for post-invoke visibility key=$($ClaimResult.key)"
         }
-        return @{ ok = $false; reason = 'run_not_visible'; visibilityPending = $true; fence = $fence }
+        return Wait-ReviewStartClaimPostInvokeVisibility -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns `
+            -ResolveReviewRuns $ResolveReviewRuns -LogWriter $LogWriter
     }
     return $complete
 }
