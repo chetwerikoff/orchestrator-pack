@@ -55,6 +55,7 @@ import {
   loadVariantCatalog,
   validateExternalObject,
 } from './external-output-shape-guard.mjs';
+import { buildCaptureWorkerState } from './lib/ci-failure-capture-worker-state.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/ci-failure-notification');
@@ -115,25 +116,7 @@ function workerState(overrides: {
 }
 
 function captureWorkerState(scenarioFixture: string) {
-  const base = fixture<any>('ci-failure-worker-state-base.json');
-  const scenario = fixture<any>(scenarioFixture);
-  const openPrs = base.openPrs.map((row: any) => ({
-    ...row,
-    ...(scenario.openPrHeadCommittedAt ? { headCommittedAt: scenario.openPrHeadCommittedAt } : {}),
-  }));
-  return {
-    sessions: [
-      {
-        ...base.sessionShell,
-        status: scenario.status,
-        lastActivity: scenario.lastActivity ?? base.sessionShell.lastActivity,
-        targetGeneration: episode.targetGeneration,
-        sessionGeneration: episode.targetGeneration,
-        reports: scenario.reports,
-      },
-    ],
-    openPrs,
-  };
+  return buildCaptureWorkerState(scenarioFixture, episode, fixturesDir);
 }
 
 const progressPins = () => fixture<{

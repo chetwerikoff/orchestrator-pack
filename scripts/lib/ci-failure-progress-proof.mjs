@@ -2,31 +2,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decideCiFailureNotification } from '../../docs/ci-failure-notification.mjs';
+import { buildCaptureWorkerState } from './ci-failure-capture-worker-state.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const fixtureDir = path.join(repoRoot, 'scripts/fixtures/ci-failure-notification');
 
 function loadJson(name) {
   return JSON.parse(readFileSync(path.join(fixtureDir, name), 'utf8'));
-}
-
-function buildWorkerState(scenarioFixture) {
-  const base = loadJson('ci-failure-worker-state-base.json');
-  const scenario = loadJson(scenarioFixture);
-  const episode = buildEpisode();
-  return {
-    sessions: [
-      {
-        ...base.sessionShell,
-        status: scenario.status,
-        lastActivity: scenario.lastActivity ?? base.sessionShell.lastActivity,
-        targetGeneration: episode.targetGeneration,
-        sessionGeneration: episode.targetGeneration,
-        reports: scenario.reports,
-      },
-    ],
-    openPrs: base.openPrs,
-  };
 }
 
 function buildEpisode() {
@@ -50,7 +32,7 @@ export function emitCiFailureProgressProof(mode) {
     : 'live-worker-stale-same-head-fixing-ci.json';
   const decision = decideCiFailureNotification({
     episode: buildEpisode(),
-    workerState: buildWorkerState(scenarioFixture),
+    workerState: buildCaptureWorkerState(scenarioFixture, buildEpisode(), fixtureDir),
     nowMs: mode === 'freshness' ? pins.freshEvaluationMs : pins.staleEvaluationMs,
     config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
   });
