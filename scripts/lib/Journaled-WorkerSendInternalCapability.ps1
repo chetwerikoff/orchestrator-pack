@@ -45,7 +45,9 @@ function Get-ScriptPathsFromProcessCommandLine {
     if ([string]::IsNullOrWhiteSpace($CommandLine)) {
         return @()
     }
-    $tokens = @(Split-ProcessCommandLineTokens -CommandLine $CommandLine)
+    # Honor Split-ProcessCommandLineTokens comma-return contract: do not re-wrap with @()
+    # or single-element pipeline arrays nest and -File tokens become invisible (Issue #428).
+    $tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
     for ($index = 0; $index -lt $tokens.Count; $index++) {
         if ($tokens[$index] -in @('-File', '-f') -and ($index + 1) -lt $tokens.Count) {
             $paths.Add([string]$tokens[$index + 1]) | Out-Null
