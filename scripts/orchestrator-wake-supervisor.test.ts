@@ -162,6 +162,7 @@ type WakeMarker = {
   pid: number;
   orchestratorSessionId: string;
   projectId?: string;
+  ghCommandPath?: string;
 };
 
 async function readMarker(
@@ -220,6 +221,25 @@ describe('orchestrator-wake-supervisor', () => {
     }
     child.kill('SIGTERM');
   });
+
+  it(
+    'prepends pack scripts to child PATH so gh resolves to pack REST shim',
+    async () => {
+      const stateDir = makeStateDir();
+      const expectedGh = path.join(repoRoot, 'scripts', 'gh');
+      const child = startSupervisorBackground(stateDir, [
+        '-OrchestratorSessionId',
+        'op-test-override',
+      ]);
+      await waitForMarkers(stateDir, 25_000, ['listener']);
+
+      const marker = await readMarker(stateDir, 'listener');
+      expect(marker.ghCommandPath).toBe(expectedGh);
+
+      child.kill('SIGTERM');
+    },
+    supervisorHookTimeoutMs,
+  );
 
   it('resolves orchestrator session id from ao status when override unset', async () => {
     const stateDir = makeStateDir();

@@ -169,7 +169,19 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## Wake-supervisor child gh PATH (Issue #447)
 
+Wake-supervisor managed children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,
+`review-finding-delivery-confirm`, and other registry entries) now inherit a child env whose
+`PATH` prepends pack `scripts/` so inventory `gh` reads route through `scripts/gh` (Issue #431)
+even when the operator started the supervisor from a shell without pack PATH adoption.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Confirm a gh-using child resolves the shim, e.g. from a child log tick or
+   `command -v gh` inside a test marker when running supervisor tests locally.
 
 ## Issue-keyed task-continuation nudge (Issue #430)
 

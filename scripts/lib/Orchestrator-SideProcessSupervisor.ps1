@@ -15,6 +15,58 @@ $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot
 $Script:OrchestratorSideProcessRegistryPath = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-side-process-registry.json'
 $Script:OrchestratorSideProcessTestChildScript = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-wake-supervisor-test-child.ps1'
 
+function Get-OrchestratorSideProcessPackScriptsDir {
+    return (Resolve-Path -LiteralPath (Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts')).Path
+}
+
+function Merge-OrchestratorSideProcessPackScriptsPath {
+    param([string]$PathValue = $env:PATH)
+
+    $packScripts = Get-OrchestratorSideProcessPackScriptsDir
+    $sep = [IO.Path]::PathSeparator
+    $parts = @()
+    if ($PathValue) {
+        $parts = @($PathValue -split [regex]::Escape($sep) | Where-Object { $_ })
+    }
+    $filtered = @($parts | Where-Object { $_ -and $_ -ne $packScripts })
+    if ($filtered.Count -eq 0) {
+        return $packScripts
+    }
+    return (@($packScripts) + $filtered) -join $sep
+}
+
+function New-OrchestratorWakeSupervisorChildEnvironment {
+    param(
+        [hashtable]$Paths,
+        [object]$Entry,
+        [string]$ChildId,
+        [string]$OrchestratorSessionId,
+        [string]$ProjectId,
+        [switch]$TestMode
+    )
+
+    $childEnv = @{
+        AO_SIDE_PROCESS_STATE_DIR    = $Paths.Root
+        AO_SIDE_PROCESS_PROGRESS_DIR = $Paths.ProgressDir
+        PATH                         = (Merge-OrchestratorSideProcessPackScriptsPath)
+    }
+    if ($Entry.RequiresOrchestratorSession) {
+        $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
+    }
+    if ($ChildId -eq 'listener' -and $ProjectId) {
+        $childEnv['AO_WAKE_LISTENER_PROJECT_ID'] = $ProjectId
+    }
+    if ($TestMode) {
+        $markerRoot = Join-Path $Paths.Root 'markers'
+        if (-not (Test-Path -LiteralPath $markerRoot)) {
+            New-Item -ItemType Directory -Path $markerRoot -Force | Out-Null
+        }
+        $childEnv['AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'] = $markerRoot
+    }
+    return $childEnv
+}
+
+
 function Get-OrchestratorSideProcessRegistryDocument {
     if (-not (Test-Path -LiteralPath $Script:OrchestratorSideProcessRegistryPath)) {
         throw "Missing side-process registry: $Script:OrchestratorSideProcessRegistryPath"
@@ -651,23 +703,8 @@ function Start-OrchestratorWakeSupervisorChild {
         $childArgs += Expand-OrchestratorWakeSupervisorChildExtraArgs -ExtraArgs $entry.ExtraArgs -Paths $Paths
     }
 
-    $childEnv = @{
-        AO_SIDE_PROCESS_STATE_DIR    = $Paths.Root
-        AO_SIDE_PROCESS_PROGRESS_DIR = $Paths.ProgressDir
-    }
-    if ($entry.RequiresOrchestratorSession) {
-        $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
-    }
-    if ($ChildId -eq 'listener' -and $ProjectId) {
-        $childEnv['AO_WAKE_LISTENER_PROJECT_ID'] = $ProjectId
-    }
-    if ($TestMode) {
-        $markerRoot = Join-Path $Paths.Root 'markers'
-        if (-not (Test-Path -LiteralPath $markerRoot)) {
-            New-Item -ItemType Directory -Path $markerRoot -Force | Out-Null
-        }
-        $childEnv['AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'] = $markerRoot
-    }
+    $childEnv = New-OrchestratorWakeSupervisorChildEnvironment -Paths $Paths -Entry $entry `
+        -ChildId $ChildId -OrchestratorSessionId $OrchestratorSessionId -ProjectId $ProjectId -TestMode:$TestMode
 
     $psi = @{
         FilePath         = 'pwsh'
@@ -1386,10 +1423,12 @@ function Start-OrchestratorWakeSupervisorDaemon {
         $quotedArgs = ($LoopArguments | ForEach-Object {
                 Format-UnixShellSingleQuotedArgument -Value $_
             }) -join ' '
+        $packScriptsQuoted = Format-UnixShellSingleQuotedArgument -Value (Get-OrchestratorSideProcessPackScriptsDir)
         $launcherContent = @(
             '#!/usr/bin/env bash'
             'set -euo pipefail'
             "cd $(Format-UnixShellSingleQuotedArgument -Value $WorkingDirectory)"
+            ('export PATH={0}:${{PATH:-}}' -f $packScriptsQuoted)
             "nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 &"
             'echo $!'
         ) -join "`n"
