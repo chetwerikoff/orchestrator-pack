@@ -81,12 +81,6 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $holdRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @($claimRuns) }
-    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
-    if ($hold.exceeded) {
-        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns $holdRuns -DecisionSource 'hold_budget' -LogWriter $LogWriter | Out-Null
-        & $LogWriter "review-trigger-reeval: hold budget exceeded PR #$($planned.prNumber) head=$($planned.headSha)"
-        return @{ triggered = $false; reason = 'hold_budget_exceeded'; retainWatch = $true }
-    }
 
     try {
         $fresh = if ($FixtureSnapshot) {
@@ -138,15 +132,6 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        & $LogWriter "review-trigger-reeval: review-start-claim ownership lost before invocation PR #$($planned.prNumber) key=$($claim.key); aborting"
-        return @{
-            triggered   = $false
-            reason      = 'claim_ownership_lost'
-            retainWatch = $true
-        }
-    }
-
     $lockPath = Get-ReviewTriggerReevalSideEffectLockPath -StateRoot $StateRoot
     if (-not (Enter-OrchestratorSideEffectFence -LockPath $lockPath -Metadata @{
             prNumber  = $planned.prNumber
@@ -163,8 +148,6 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     try {
-        Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
-        & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         if ($RepoRoot) {
             try {
                 Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
@@ -174,6 +157,16 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 throw
             }
         }
+        $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
+        if (-not $launchGate.ok) {
+            & $LogWriter "review-trigger-reeval: launch gate denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($launchGate.reason)"
+            return @{
+                triggered   = $false
+                reason      = [string]$launchGate.reason
+                retainWatch = $true
+            }
+        }
+        & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
             $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"

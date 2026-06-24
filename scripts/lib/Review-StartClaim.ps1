@@ -658,7 +658,32 @@ function Resolve-ReviewStartClaimAgainstExisting {
         return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
     }
 
+    if ($Existing.record.manualResolutionRequired) {
+        return @{
+            acquired  = $false
+            reason    = 'foreign_holder_manual'
+            holder    = $Existing.record.holder
+            claim     = $Existing.record
+            path      = $Path
+            namespace = $Namespace
+            key       = $Existing.record.key
+            blocking  = $true
+        }
+    }
+
     $syncReclaim = Sync-ReviewStartClaimReclaimBeforeSkip -Namespace $Namespace -Path $Path -Record $Existing.record -ReviewRuns $ReviewRuns
+    if ($syncReclaim.blocking -or ($syncReclaim.decision -and [string]$syncReclaim.decision.action -eq 'mark_manual')) {
+        return @{
+            acquired  = $false
+            reason    = 'foreign_holder_manual'
+            holder    = $Existing.record.holder
+            claim     = $Existing.record
+            path      = $Path
+            namespace = $Namespace
+            key       = $Existing.record.key
+            blocking  = $true
+        }
+    }
     if ($syncReclaim.reclaimed) {
         $newRecord = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $Normalized -Surface $Surface -Reason $StartReason -RecoveredFrom @{
             path          = if ($syncReclaim.result.terminalPath) { $syncReclaim.result.terminalPath } else { '' }
@@ -857,7 +882,7 @@ function Release-ReviewStartClaimForTerminalizedRun {
                             coveredRunId = $RunId
                         }
                         $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $resolved -Path $path -Record $read.record `
-                            -Decision $decision -DecisionSource 'run_recovery' -ReviewRuns $runs
+                            -Decision $decision -DecisionSource 'run_recovery' -ReviewRuns $runs -MutexAlreadyHeld
                         if ($LogWriter) {
                             & $LogWriter "review-start-claim: WARN orphan unbound claim terminalized PR #$PrNumber head=$normalized run=$RunId audit=$($terminal.auditPath)"
                         }

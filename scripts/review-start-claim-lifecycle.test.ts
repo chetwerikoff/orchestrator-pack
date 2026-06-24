@@ -145,6 +145,46 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(sweep.actions).toHaveLength(2);
   });
 
+
+  it('keeps legacy holders blocking until stale-time reclaim', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
+        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+      },
+      holderLiveness: { outcome: 'legacy', reason: 'missing_process_identity' },
+      reviewRuns: [],
+      nowMs: Date.parse('2026-06-24T12:00:00.000Z'),
+      localHost: 'test-host',
+    });
+    expect(decision.action).toBe('skip');
+    expect(decision.reason).toBe('legacy_holder_unverified');
+  });
+
+  it('fences post-invoke visibility before launch-pending expiry', () => {
+    const nowMs = Date.parse('2026-06-24T12:00:20.000Z');
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder(),
+        acquiredAtUtc: '2026-06-24T12:00:00.000Z',
+        invokeCompletedAtUtc: '2026-06-24T12:00:01.000Z',
+        visibilityPendingAtUtc: '2026-06-24T12:00:01.000Z',
+      },
+      holderLiveness: { outcome: 'alive', reason: 'alive' },
+      reviewRuns: [],
+      nowMs,
+      config: resolveClaimLifecycleConfig({ visibilityBudgetMs: 15_000 }),
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('run_not_visible_fenced');
+  });
+
   it('marks non-local holders for manual resolution', () => {
     const decision = evaluateReclaimDecision({
       claim: {

@@ -264,6 +264,32 @@ export function evaluateReclaimDecision({
     return { action: 'skip', reason: 'in_flight_covering_run', runId: covered.runId };
   }
 
+  const hold = evaluateHoldBudget({ claim, nowMs, config });
+  const liveness = holderLiveness ?? { outcome: 'ambiguous', reason: 'not_evaluated' };
+
+  if (liveness.outcome === 'foreign_host') {
+    return {
+      action: 'mark_manual',
+      outcome: 'foreign_holder_manual',
+      reason: 'non_local_holder',
+    };
+  }
+
+  if (claim?.invokeCompletedAtUtc || claim?.visibilityPendingAtUtc) {
+    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, config });
+    if (visibility.shouldFence) {
+      return {
+        action: 'terminalize',
+        outcome: 'run_not_visible_fenced',
+        reason: visibility.reason,
+        visibility,
+      };
+    }
+    if (liveness.outcome === 'alive' || liveness.outcome === 'legacy') {
+      return { action: 'skip', reason: 'visibility_pending', visibility };
+    }
+  }
+
   const launch = evaluateLaunchPending({ claim, nowMs, config });
   if (launch.active) {
     return { action: 'skip', reason: 'launch_pending_active', launch };
@@ -274,17 +300,6 @@ export function evaluateReclaimDecision({
       outcome: 'launch_pending_budget_exceeded',
       reason: 'launch_pending_budget_exceeded',
       launch,
-    };
-  }
-
-  const hold = evaluateHoldBudget({ claim, nowMs, config });
-  const liveness = holderLiveness ?? { outcome: 'ambiguous', reason: 'not_evaluated' };
-
-  if (liveness.outcome === 'foreign_host') {
-    return {
-      action: 'mark_manual',
-      outcome: 'foreign_holder_manual',
-      reason: 'non_local_holder',
     };
   }
 
@@ -319,13 +334,11 @@ export function evaluateReclaimDecision({
     return { action: 'skip', reason: 'holder_alive', hold, visibility };
   }
 
-  if (liveness.outcome === 'provably_not_alive' || liveness.outcome === 'legacy') {
-    if (liveness.outcome === 'legacy') {
-      const legacy = evaluateLegacyPreInvokeOrphan({ claim, reviewRuns });
-      if (!legacy.reclaimable) {
-        return { action: 'skip', reason: legacy.reason, legacy };
-      }
-    }
+  if (liveness.outcome === 'legacy') {
+    return { action: 'skip', reason: 'legacy_holder_unverified', liveness };
+  }
+
+  if (liveness.outcome === 'provably_not_alive') {
     if (covered && !IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
       return {
         action: 'terminalize',
@@ -338,7 +351,7 @@ export function evaluateReclaimDecision({
     return {
       action: 'terminalize',
       outcome: 'recovered_orphan_liveness',
-      reason: liveness.outcome === 'legacy' ? 'legacy_orphan_reclaim' : 'dead_local_holder',
+      reason: 'dead_local_holder',
       liveness,
     };
   }

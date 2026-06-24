@@ -69,7 +69,8 @@ function Write-ReviewStartClaimTransitionAudit {
 function Update-ReviewStartClaimRecordFields {
     param(
         [hashtable]$ClaimResult,
-        [hashtable]$Fields
+        [hashtable]$Fields,
+        [string[]]$ClearFields = @()
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
@@ -84,8 +85,10 @@ function Update-ReviewStartClaimRecordFields {
         $record = @{}
         $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
         foreach ($key in $Fields.Keys) { $record[$key] = $Fields[$key] }
+        foreach ($key in @($ClearFields)) { $record.Remove($key) | Out-Null }
         ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $ClaimResult.path -Encoding UTF8
         foreach ($key in $Fields.Keys) { $ClaimResult.claim[$key] = $Fields[$key] }
+        foreach ($key in @($ClearFields)) { $ClaimResult.claim.Remove($key) | Out-Null }
         return @{ ok = $true; record = $record }
     }
     finally {
@@ -99,6 +102,33 @@ function Set-ReviewStartClaimHoldStarted {
     if ($ClaimResult.claim.holdStartedAtUtc) { return @{ ok = $true; skipped = $true } }
     $now = (Get-Date).ToUniversalTime().ToString('o')
     return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{ holdStartedAtUtc = $now }
+}
+
+function Confirm-ReviewStartClaimLaunchGate {
+    param(
+        [hashtable]$ClaimResult,
+        [array]$ReviewRuns = @(),
+        [string]$DecisionSource = 'hold_budget',
+        [scriptblock]$LogWriter = $null
+    )
+
+    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $ClaimResult
+    if ($hold.exceeded) {
+        Invoke-ReviewStartClaimReclaimOrphan -Namespace $ClaimResult.namespace -Path $ClaimResult.path -Record $ClaimResult.claim `
+            -ReviewRuns @($ReviewRuns) -DecisionSource $DecisionSource -LogWriter $LogWriter | Out-Null
+        if ($LogWriter) { & $LogWriter "review-start-claim: hold budget exceeded key=$($ClaimResult.key)" }
+        return @{ ok = $false; reason = 'hold_budget_exceeded' }
+    }
+    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $ClaimResult)) {
+        return @{ ok = $false; reason = 'claim_ownership_lost' }
+    }
+    $pending = Set-ReviewStartClaimLaunchPending -ClaimResult $ClaimResult
+    if (-not $pending.ok) {
+        $reason = if ([string]$pending.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$pending.reason }
+        return @{ ok = $false; reason = $reason }
+    }
+    return @{ ok = $true }
 }
 
 function Set-ReviewStartClaimLaunchPending {
@@ -139,13 +169,16 @@ function Invoke-ReviewStartClaimTerminalizeFromDecision {
         [object]$Record,
         [object]$Decision,
         [string]$DecisionSource,
-        [array]$ReviewRuns = @()
+        [array]$ReviewRuns = @(),
+        [switch]$MutexAlreadyHeld
     )
 
     $outcome = [string]$Decision.outcome
     if (-not $outcome) { return @{ ok = $false; reason = 'missing_outcome' } }
     $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
-    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
+    if (-not $MutexAlreadyHeld) {
+        if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
+    }
     try {
         $read = Read-ReviewStartClaimRecord -Path $Path
         if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
@@ -175,6 +208,55 @@ function Invoke-ReviewStartClaimTerminalizeFromDecision {
         return @{ ok = $true; terminalPath = $terminalPath; auditPath = $auditPath; outcome = $outcome }
     }
     finally {
+        if (-not $MutexAlreadyHeld) {
+            Exit-ReviewStartClaimMutex -LockDir $lockDir
+        }
+    }
+}
+
+function Mark-ReviewStartClaimForeignHolderBlocking {
+    param(
+        [string]$Namespace,
+        [string]$Path,
+        [object]$Record,
+        [object]$Decision,
+        [string]$DecisionSource,
+        [array]$ReviewRuns = @(),
+        [scriptblock]$LogWriter = $null
+    )
+
+    $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
+    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
+    try {
+        $read = Read-ReviewStartClaimRecord -Path $Path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
+        if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
+        if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
+            return @{ ok = $false; reason = 'lost_ownership' }
+        }
+        $now = (Get-Date).ToUniversalTime().ToString('o')
+        $record = @{}
+        $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
+        $record.manualResolutionRequired = @{
+            outcome        = [string]$Decision.outcome
+            reason         = [string]$Decision.reason
+            decisionSource = $DecisionSource
+            atUtc          = $now
+        }
+        ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $Path -Encoding UTF8
+        $extra = @{
+            decisionReason = [string]$Decision.reason
+            decisionSource = $DecisionSource
+            blocking       = $true
+        }
+        $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
+            -Outcome ([string]$Decision.outcome) -DecisionSource $DecisionSource -Extra $extra
+        if ($LogWriter) {
+            & $LogWriter "review-start-claim: WARN foreign holder blocking key=$($Record.key) audit=$auditPath"
+        }
+        return @{ ok = $true; auditPath = $auditPath; blocking = $true; outcome = [string]$Decision.outcome }
+    }
+    finally {
         Exit-ReviewStartClaimMutex -LockDir $lockDir
     }
 }
@@ -199,12 +281,9 @@ function Invoke-ReviewStartClaimReclaimOrphan {
         return @{ reclaimed = $false; decision = $decision }
     }
     if ($decision.action -eq 'mark_manual') {
-        $result = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $Namespace -Path $Path -Record $Record `
-            -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns
-        if ($LogWriter -and $result.ok) {
-            & $LogWriter "review-start-claim: WARN foreign holder manual resolution key=$($Record.key) audit=$($result.auditPath)"
-        }
-        return @{ reclaimed = [bool]$result.ok; manual = $true; result = $result; decision = $decision }
+        $result = Mark-ReviewStartClaimForeignHolderBlocking -Namespace $Namespace -Path $Path -Record $Record `
+            -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns -LogWriter $LogWriter
+        return @{ reclaimed = $false; manual = $true; blocking = $true; result = $result; decision = $decision }
     }
     if ($decision.action -eq 'terminalize') {
         $result = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $Namespace -Path $Path -Record $Record `
@@ -306,7 +385,7 @@ function Complete-ReviewStartClaimAfterRunInvoke {
         if (-not $pendingRead.record.visibilityPendingAtUtc) {
             $fields.visibilityPendingAtUtc = $now
         }
-        Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields $fields | Out-Null
+        Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields $fields -ClearFields @('launchPending') | Out-Null
         $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
         $fence = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'visibility-fence' -Payload @{
             claim      = $read.record

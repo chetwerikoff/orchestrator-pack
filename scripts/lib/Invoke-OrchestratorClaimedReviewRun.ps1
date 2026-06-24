@@ -139,13 +139,6 @@ function Invoke-OrchestratorClaimedReviewRun {
         return @{ started = $false; reason = [string]$claim.reason; claimSkipped = $true; headSha = $headSha }
     }
 
-    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
-    if ($hold.exceeded) {
-        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns @($claimRuns) -DecisionSource 'hold_budget' -LogWriter $writeLog | Out-Null
-        & $writeLog "orchestrator-claimed-review-run: hold budget exceeded PR #$PrNumber head=$headSha"
-        return @{ started = $false; reason = 'hold_budget_exceeded'; headSha = $headSha }
-    }
-
     try {
         $fresh = if ($FixtureSnapshot) { $FixtureSnapshot } else { Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot }
         $recheck = Invoke-OrchestratorClaimedReviewRunPreRecheck -PlannedAction @{
@@ -168,10 +161,6 @@ function Invoke-OrchestratorClaimedReviewRun {
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true; headSha = $headSha }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        return @{ started = $false; reason = 'claim_ownership_lost'; headSha = $headSha }
-    }
-
     try {
         Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     }
@@ -180,7 +169,11 @@ function Invoke-OrchestratorClaimedReviewRun {
         throw
     }
 
-    Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
+    $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -LogWriter $writeLog
+    if (-not $launchGate.ok) {
+        & $writeLog "orchestrator-claimed-review-run: launch gate denied PR #$PrNumber head=$headSha reason=$($launchGate.reason)"
+        return @{ started = $false; reason = [string]$launchGate.reason; headSha = $headSha }
+    }
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {

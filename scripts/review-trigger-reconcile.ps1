@@ -468,13 +468,6 @@ function Invoke-PlannedReviewRun {
         Write-ReconcileLog "review-start-claim recovered stale claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
-    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
-    if ($hold.exceeded) {
-        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns $claimRuns -DecisionSource 'hold_budget' -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null
-        Write-ReconcileLog "hold budget exceeded PR #$PrNumber head=$HeadSha"
-        return @{ started = $false; reason = 'hold_budget_exceeded' }
-    }
-
     try {
         $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
             prNumber    = $PrNumber
@@ -498,11 +491,6 @@ function Invoke-PlannedReviewRun {
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        Write-ReconcileLog "review-start-claim ownership lost before invocation PR #$PrNumber head=$HeadSha key=$($claim.key); aborting"
-        return @{ started = $false; reason = 'claim_ownership_lost' }
-    }
-
     try {
         Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     }
@@ -510,7 +498,11 @@ function Invoke-PlannedReviewRun {
         Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
         throw
     }
-    Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
+    $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -DecisionSource 'hold_budget' -LogWriter { param($m) Write-ReconcileLog $m }
+    if (-not $launchGate.ok) {
+        Write-ReconcileLog "launch gate denied PR #$PrNumber head=$HeadSha reason=$($launchGate.reason)"
+        return @{ started = $false; reason = [string]$launchGate.reason }
+    }
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
