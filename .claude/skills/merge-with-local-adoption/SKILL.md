@@ -3,7 +3,8 @@ name: merge-with-local-adoption
 description: >-
   Merge a ready PR, safely pull main in the live checkout, and apply documented
   local operator adoption. For runtime-sensitive merges, verify the AO orchestrator
-  runs on the current commit after operator restart. Use when the user asks to merge
+  runs on the current commit after operator restart. After merge, kill the merged PR's
+  worker AO session and run ao session cleanup -p orchestrator-pack. Use when the user asks to merge
   a finished task — e.g. «мерж», «мерж 385», «мерж и пул», «смерж», «merge»,
   «merge and pull» — or clearly wants a ready PR merged after review/CI. Operates
   on the operator's live working tree in Cursor; never discards uncommitted local
@@ -19,7 +20,8 @@ to `opencode run`, `opencode-publish.sh`, or DeepSeek.
 Goal: merge the PR → update local `main` when needed → apply post-merge local steps
 from the issue/PR → for runtime-sensitive merges, restart AO from the **operator
 terminal** and confirm the orchestrator runtime worktree is on the merged commit →
-report exactly what changed.
+kill the merged PR's worker session and run project session cleanup → report exactly
+what changed.
 
 **OpenCode terminal sessions** use
 [`.claude/skills/opencode-merge-and-pull/SKILL.md`](../opencode-merge-and-pull/SKILL.md)
@@ -621,7 +623,90 @@ contain `MERGE_SHA`, or `origin/main` does not contain `MERGE_SHA`):
 
 ---
 
-## Step 9 — Final report (required)
+## Step 9 — Worker session teardown (mandatory)
+
+Run from the **operator terminal** after Step 7 and after Step 8 when it ran (or
+immediately after Step 7 when Step 8 was skipped). The merged PR's worker is
+terminal — tear it down so stale worktrees and session records do not linger.
+
+Canonical reference: `docs/orchestrator-recovery-runbook.md` — **After manual PR
+merge** (merged PR workers are not review/ping targets).
+
+### 9a — Resolve worker session id for PR `P`
+
+Read from live AO state only — **never** infer a session id from the issue number,
+branch name, or PR title.
+
+```bash
+WORKER_SESSIONS="$(ao status --project orchestrator-pack --json | jq -r --argjson pr "$P" '
+  [.data[]
+   | select((.role == "worker" or .role == "coding") and .prNumber == $pr)
+   | .name] | unique | .[]')"
+```
+
+Interpretation:
+
+| Result | Action |
+|--------|--------|
+| Exactly one id | Record as `W`; proceed to 9b |
+| Zero ids | Record **worker session: not found**; skip 9b kill; still run 9c cleanup |
+| Multiple ids | **Stop** — list candidates, ask operator once; do not guess |
+
+**Hard guard:** `W` MUST NOT be an orchestrator session (`role: orchestrator` in
+`ao status`). If the only match is orchestrator-shaped, stop and report.
+
+### 9b — Kill the worker session
+
+When `W` is set:
+
+```bash
+ao session kill "$W"
+```
+
+Verify the session is gone:
+
+```bash
+ao status --project orchestrator-pack --json | jq -r --arg w "$W" '
+  [.data[] | select(.name == $w)] | length'
+```
+
+Expect **0**. If the session still appears, record the failure and continue to 9c
+(do not retry kill in a loop).
+
+Optional when OpenCode mapping must be purged with the session (rare after merge):
+`ao session kill --purge-session "$W"` — use only when adoption docs or stderr
+call for it.
+
+### 9c — Project session cleanup
+
+Remove other cleanup-eligible dead/closed-work sessions for this project:
+
+```bash
+ao session cleanup -p orchestrator-pack
+```
+
+Preview only when diagnosing before the real run:
+
+```bash
+ao session cleanup -p orchestrator-pack --dry-run
+```
+
+Record stdout (which sessions were cleaned). **Do not** kill the orchestrator
+session manually — cleanup targets eligible workers/reviewers only.
+
+### 9d — Post-teardown check
+
+```bash
+ao status --project orchestrator-pack --json | jq -r '
+  [.data[] | select(.role == "worker" or .role == "coding")
+   | "\(.name)\tpr=\(.prNumber // "—")\t\(.status)"] | .[]"'
+```
+
+Confirm no worker row still lists `prNumber == P`. Orchestrator row should remain.
+
+---
+
+## Step 10 — Final report (required)
 
 Reply in the user’s language (Russian if they wrote Russian):
 
@@ -660,6 +745,12 @@ Reply in the user’s language (Russian if they wrote Russian):
 - **Runtime adoption:** подтверждён (только Outcome A) / routing не подтверждён (Outcome B) / stale / пропущен (не runtime-sensitive)
 - **Escalation:** <recovery runbook step / change-orchestrator-runtime / contract gap / —>
 
+### Worker session (Step 9)
+- **Worker session id:** <W / not found / multiple — stopped>
+- **Kill:** выполнен / пропущен (нет сессии) / не удался (<stderr>)
+- **Cleanup:** `ao session cleanup -p orchestrator-pack` — <краткий итог stdout>
+- **Post-check:** нет worker с prNumber=P / остался <id> (<статус>)
+
 ### Проверка
 - `git status --short`: …
 - `git log -1 --oneline`: …
@@ -679,6 +770,9 @@ Do not claim CI/adoption/restart succeeded without the commands you actually ran
 - Drop a stash after a failed `stash pop`
 - “Fix” a failed pull by discarding local changes
 - Run `ao stop` / `ao start` from an AO-managed worker session
+- `ao session kill` on the orchestrator session (`role: orchestrator`) — only the
+  merged PR's worker (`role: worker` / `coding`) in Step 9
+- Skip Step 9 worker teardown after a successful merge (kill + cleanup are mandatory)
 - `git pull`, `reset`, `checkout`, or hand-edit inside the AO orchestrator worktree
 - Delete AO worktrees manually or claim restart succeeded without post-start HEAD check
 - Claim journaled worker-send adoption from `worker-message-submit-reconcile -DryRun` alone
