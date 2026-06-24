@@ -1,0 +1,21 @@
+{
+  "issue_number": 442,
+  "iteration_id": "opk-29",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T17:40:05.301Z",
+  "baseline": {
+    "commit_sha": "61bca241d017b6389ef165a0846a2827466fcf4f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:63e8ce6e1bf7754581e93bd5ac3a15fc4eb9bd47de67a41432d988ea2b8a951c"
+  },
+  "declared_paths": [
+    "scripts/check-gh-wrapper.ps1",
+    "scripts/gh",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-resolve-real-binary.d.mts",
+    "scripts/lib/gh-resolve-real-binary.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
