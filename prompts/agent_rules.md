@@ -385,6 +385,15 @@ do not route them through RTK compaction.
 Architecture: §R.7 in
 [`docs/issues_drafts/00-architecture-decisions.md`](../docs/issues_drafts/00-architecture-decisions.md).
 
+## `gh` inventory REST routing (Issue #431)
+
+On Linux-hosted surfaces with pack `scripts/` on PATH, `scripts/gh` routes **inventory-listed**
+read forms (`gh pr list/view/checks/diff`, `gh issue view --json body`, listed `--jq` patterns)
+to GitHub REST unconditionally. **Do not** hand-build REST replacements for those forms. Unknown
+`gh` argv passes through to native `gh`; if GraphQL quota is exhausted on an unlisted form, the
+native error is expected — report the argv shape for inventory extension instead of improvising
+REST.
+
 ## Required CI (CI green)
 
 Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use

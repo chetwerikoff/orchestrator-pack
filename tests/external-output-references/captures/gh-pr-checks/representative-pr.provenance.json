@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "gh pr checks 435 --json name,state,bucket,link,startedAt,completedAt,workflow,description",
+  "toolVersion": "gh version 2.93.0 (2026-05-27)",
+  "capturedAt": "2026-06-24T07:30:00.000Z",
+  "context": "Representative open PR with scope-guard workflow checks; bucket parity grounding for scripts/gh REST pr checks route.",
+  "scrubLog": ["PR number references public orchestrator-pack PR metadata only"]
+}
