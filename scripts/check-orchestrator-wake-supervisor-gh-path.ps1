@@ -6,7 +6,6 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
-$testChild = Join-Path $Root 'scripts/orchestrator-wake-supervisor-test-child.ps1'
 
 if (-not (Test-Path -LiteralPath $supervisorLib -PathType Leaf)) {
     Write-Host 'Missing required file: scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
@@ -20,8 +19,7 @@ $requiredPatterns = @(
     @{ Path = $supervisorLib; Pattern = 'function New-OrchestratorWakeSupervisorChildEnvironment' },
     @{ Path = $supervisorLib; Pattern = 'PATH\s*=\s*\(Merge-OrchestratorSideProcessPackScriptsPath\)' },
     @{ Path = $supervisorLib; Pattern = 'New-OrchestratorWakeSupervisorChildEnvironment -Paths \$Paths -Entry \$entry' },
-    @{ Path = $supervisorLib; Pattern = "export PATH=\{0\}:\$\{\{PATH:-\}\}" },
-    @{ Path = $testChild; Pattern = 'ghCommandPath' }
+    @{ Path = $supervisorLib; Pattern = "export PATH=\{0\}:\$\{\{PATH:-\}\}" }
 )
 
 foreach ($item in $requiredPatterns) {

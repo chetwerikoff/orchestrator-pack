@@ -162,7 +162,6 @@ type WakeMarker = {
   pid: number;
   orchestratorSessionId: string;
   projectId?: string;
-  ghCommandPath?: string;
 };
 
 async function readMarker(
@@ -222,24 +221,21 @@ describe('orchestrator-wake-supervisor', () => {
     child.kill('SIGTERM');
   });
 
-  it(
-    'prepends pack scripts to child PATH so gh resolves to pack REST shim',
-    async () => {
-      const stateDir = makeStateDir();
-      const expectedGh = path.join(repoRoot, 'scripts', 'gh');
-      const child = startSupervisorBackground(stateDir, [
-        '-OrchestratorSessionId',
-        'op-test-override',
-      ]);
-      await waitForMarkers(stateDir, 25_000, ['listener']);
-
-      const marker = await readMarker(stateDir, 'listener');
-      expect(marker.ghCommandPath).toBe(expectedGh);
-
-      child.kill('SIGTERM');
-    },
-    supervisorHookTimeoutMs,
-  );
+  it('prepends pack scripts in wake-supervisor child environment', () => {
+    const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+    const result = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `. '${supervisorLib.replace(/'/g, "''")}'; $stateRoot = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()); New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot; $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId 'review-trigger-reconcile'; $envMap = New-OrchestratorWakeSupervisorChildEnvironment -Paths $paths -Entry $entry -ChildId 'review-trigger-reconcile' -OrchestratorSessionId 'op-test' -ProjectId 'orchestrator-pack'; $pack = Get-OrchestratorSideProcessPackScriptsDir; $head = ($envMap['PATH'] -split [IO.Path]::PathSeparator)[0]; if ($head -ne $pack) { exit 1 }; $savedPath = $env:PATH; $env:PATH = $envMap['PATH']; try { $gh = (Get-Command gh -ErrorAction Stop).Source; if ($gh -ne (Join-Path $pack 'gh')) { exit 2 } } finally { $env:PATH = $savedPath }; exit 0`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+  });
 
   it('resolves orchestrator session id from ao status when override unset', async () => {
     const stateDir = makeStateDir();

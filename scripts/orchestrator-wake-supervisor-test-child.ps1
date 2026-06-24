@@ -65,10 +65,6 @@ $marker = @{
 if ($projectId) {
     $marker.projectId = $projectId
 }
-$ghCmd = Get-Command gh -ErrorAction SilentlyContinue
-if ($ghCmd) {
-    $marker.ghCommandPath = $ghCmd.Source
-}
 $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encoding utf8 -NoNewline
 Move-Item -LiteralPath $markerTemp -Destination $markerPath -Force
 
