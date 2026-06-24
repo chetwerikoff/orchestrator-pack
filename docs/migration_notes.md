@@ -137,6 +137,37 @@ remains the accepted unobservable residual.
 Supervisor child logs are rotated to `*.previous-*` before child start; the previous generation
 remains readable after restart for incident reconstruction.
 
+## Always-REST `gh` transport on PATH (Issue #431)
+
+When pack `scripts/` is prepended on PATH, `scripts/gh` intercepts inventory read forms
+(`gh pr list/view/checks/diff`, `gh issue view --json body`, `gh repo view --json nameWithOwner`)
+and routes them to GitHub REST via absolute-path `gh api` — no GraphQL attempt. Unknown argv
+passthroughs to the real `gh` binary (honest native errors under GraphQL quota exhaustion on
+unlisted forms). v1 has **no** stderr-triggered REST fallback for unknown forms.
+
+**Per-PR REST upper bound (reconcile tick):** for each open PR: `gh pr checks` REST path uses
+`1` pull fetch + `ceil(check_runs/100)` check-run pages + `1` status request + cached
+`actions/runs/{id}` lookups (one per unique workflow run id); plus list/view/diff/issue reads on
+the same tick. REST `core` bucket is ~5000 req/hr authenticated — hard caps remain out of scope
+(#129). **gh upgrade policy:** golden captures record `gh --version`; intentional refresh when
+pinned dedupe rules change. **cli#12812:** stale GraphQL cache affects passthrough forms only;
+inventory reads bypass GraphQL. **Boundary:** agents outside pack PATH (global shell without
+adoption) keep native `gh`.
+
+Operator adoption after merge:
+
+1. Ensure orchestrator `agentConfig.env.PATH` prepends pack `scripts/` (same channel as #318)
+   and `BASH_ENV` points at `scripts/autonomous-orchestrator-surface-bootstrap.sh` (#128).
+2. `ao stop` then `ao start` from the operator terminal.
+3. On orchestrator, worker, and reviewer Linux-hosted pwsh surfaces:
+   `command -v gh` must resolve to `<pack>/scripts/gh`.
+4. Spot-check: `gh pr list --state open --json number,headRefOid --limit 5` succeeds when
+   GraphQL quota is exhausted (`gh api rate_limit` shows `graphql.remaining: 0`).
+5. If an unlisted `gh` form fails with GraphQL quota errors, report the argv shape for inventory
+   extension — do not improvise manual REST shims in `/tmp`.
+
+Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
+returns to native GraphQL-backed `gh`.
 
 
 ## LLM-orchestrator gated worker nudge gate (Issue #384)

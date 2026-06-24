@@ -880,6 +880,57 @@ else {
 }
 
 Write-Host ''
+Write-Host '== gh wrapper static guards (Issue #431) =='
+$ghWrapperCheck = Join-Path $Root 'scripts/check-gh-wrapper.ps1'
+if (Test-Path -LiteralPath $ghWrapperCheck -PathType Leaf) {
+    & $ghWrapperCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-gh-wrapper.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-gh-wrapper.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'gh wrapper wiring check failed (Issue #431)'
+    }
+}
+else {
+    Write-Check 'scripts/check-gh-wrapper.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing gh wrapper check script (Issue #431)'
+}
+
+$ghInventoryCheck = Join-Path $Root 'scripts/check-gh-inventory-static.ps1'
+if (Test-Path -LiteralPath $ghInventoryCheck -PathType Leaf) {
+    & $ghInventoryCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-gh-inventory-static.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-gh-inventory-static.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'gh inventory static guard failed (Issue #431)'
+    }
+}
+else {
+    Write-Check 'scripts/check-gh-inventory-static.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing gh inventory static guard (Issue #431)'
+}
+
+if (Test-Path -LiteralPath (Join-Path $Root 'node_modules/vitest') -PathType Container) {
+    Push-Location $Root
+    try {
+        & npx vitest run scripts/gh-wrapper.test.ts
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check 'gh-wrapper/vitest' 'PASS' 'completed'
+        }
+        else {
+            Write-Check 'gh-wrapper/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'gh-wrapper vitest suite failed (Issue #431)'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+Write-Host ''
 Write-Host '== Draft discipline guards (Issue #221) =='
 $draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'
 $draftDisciplineFixtureDir = Join-Path $Root 'tests/fixtures/draft-discipline'
