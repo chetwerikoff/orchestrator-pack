@@ -300,7 +300,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
         encoding: 'utf8',
         timeout: 15_000,
       });
-      expect(result.error?.code).not.toBe('ETIMEDOUT');
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
       expect([0, 1, 2, 4]).toContain(result.status ?? -1);
     } finally {
       fixture.cleanup();
@@ -315,7 +315,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
         encoding: 'utf8',
         timeout: 15_000,
       });
-      expect(result.error?.code).not.toBe('ETIMEDOUT');
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
       expect([0, 1, 2, 4]).toContain(result.status ?? -1);
     } finally {
       fixture.cleanup();
@@ -331,7 +331,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
         encoding: 'utf8',
         timeout: 15_000,
       });
-      expect(result.error?.code).not.toBe('ETIMEDOUT');
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
       expect([0, 1, 2, 4]).toContain(result.status ?? -1);
     } finally {
       fixture.cleanup();
@@ -350,7 +350,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
           encoding: 'utf8',
           timeout: 15_000,
         });
-        expect(result.error?.code).not.toBe('ETIMEDOUT');
+        expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
         const after = spawnSync('pgrep', ['-c', '-f', 'gh-two-wrapper-'], { encoding: 'utf8' });
         const afterCount = Number.parseInt(String(after.stdout).trim(), 10) || 0;
         expect(afterCount - beforeCount).toBeLessThanOrEqual(maxPeakDelta);
