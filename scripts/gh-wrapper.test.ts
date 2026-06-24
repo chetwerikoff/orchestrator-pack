@@ -9,8 +9,15 @@ import {
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
 import { applyListedJq, mapPullState, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
-import { resolveRealGhBinary } from './lib/gh-resolve-real-binary.mjs';
+import {
+  isNativeGhExecutable,
+  MAX_NON_NATIVE_GH_CANDIDATES,
+  resolveRealGhBinary,
+} from './lib/gh-resolve-real-binary.mjs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('gh inventory matcher', () => {
   it('routes open pr list with listed json fields', () => {
@@ -188,6 +195,220 @@ describe('gh recursion guard', () => {
     const wrapperPath = join(import.meta.dirname, 'gh');
     const real = resolveRealGhBinary(wrapperPath);
     expect(real).not.toBe(wrapperPath);
+  });
+
+  it('resolveRealGhBinary returns a native gh executable', () => {
+    const wrapperPath = join(import.meta.dirname, 'gh');
+    const real = resolveRealGhBinary(wrapperPath);
+    expect(isNativeGhExecutable(real)).toBe(true);
+  });
+});
+
+const AO_WRAPPER_SCRIPT = `#!/usr/bin/env bash
+set -euo pipefail
+ao_bin_dir="$(cd "$(dirname "$0")" && pwd)"
+clean_path="$(echo "$PATH" | tr ':' '\\n' | grep -Fxv "$ao_bin_dir" | grep . | tr '\\n' ':')"
+clean_path="\${clean_path%:}"
+real_gh="$(PATH="$clean_path" command -v gh 2>/dev/null || true)"
+if [[ -z "$real_gh" ]]; then
+  echo "fixture-ao-wrapper: gh not found" >&2
+  exit 127
+fi
+exec "$real_gh" "$@"
+`;
+
+function writeExecutable(path: string, content: string) {
+  writeFileSync(path, content, { mode: 0o755 });
+  chmodSync(path, 0o755);
+}
+
+function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
+  const root = mkdtempSync(join(tmpdir(), 'gh-two-wrapper-'));
+  const aoDir = join(root, 'ao-bin');
+  const packScripts = join(import.meta.dirname);
+  const packGh = join(packScripts, 'gh');
+  mkdirSync(aoDir, { recursive: true });
+  writeExecutable(join(aoDir, 'gh'), AO_WRAPPER_SCRIPT);
+
+  const pathParts = order === 'ao-first'
+    ? [aoDir, packScripts]
+    : [packScripts, aoDir];
+  const pathValue = [...pathParts, process.env.PATH ?? ''].filter(Boolean).join(':');
+
+  return {
+    root,
+    packGh,
+    env: {
+      ...process.env,
+      PATH: pathValue,
+      GH_WRAPPER_ACTIVE: undefined,
+      GH_REAL_BINARY: undefined,
+    },
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/** Passthrough argv (route: null) — detectPR multi-field --json shape from Issue #442. */
+const PASSTHROUGH_DETECT_PR_ARGV = [
+  'pr', 'list', '--repo', 'chetwerikoff/orchestrator-pack',
+  '--head', 'feat/issue-442', '--json', 'number,url', '--limit', '1',
+];
+
+describe('gh mutual-recursion terminality (Issue #442)', () => {
+  it('classifies detectPR multi-field argv as passthrough (route null)', () => {
+    const { route } = classifyArgv(PASSTHROUGH_DETECT_PR_ARGV);
+    expect(route).toBeNull();
+  });
+
+  it('resolveRealGhBinary skips AO bash wrapper on PATH (ao before pack)', () => {
+    const fixture = twoWrapperPathFixture('ao-first');
+    try {
+      const prevPath = process.env.PATH;
+      process.env.PATH = fixture.env.PATH;
+      delete process.env.GH_REAL_BINARY;
+      const wrapperPath = join(import.meta.dirname, 'gh');
+      const real = resolveRealGhBinary(wrapperPath);
+      expect(isNativeGhExecutable(real)).toBe(true);
+      expect(real).not.toBe(join(fixture.root, 'ao-bin', 'gh'));
+      expect(real).not.toBe(wrapperPath);
+      process.env.PATH = prevPath;
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('resolveRealGhBinary skips AO bash wrapper on PATH (pack before ao)', () => {
+    const fixture = twoWrapperPathFixture('pack-first');
+    try {
+      const prevPath = process.env.PATH;
+      process.env.PATH = fixture.env.PATH;
+      delete process.env.GH_REAL_BINARY;
+      const wrapperPath = join(import.meta.dirname, 'gh');
+      const real = resolveRealGhBinary(wrapperPath);
+      expect(isNativeGhExecutable(real)).toBe(true);
+      process.env.PATH = prevPath;
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('passthrough smoke completes without hang under two-wrapper PATH (ao first)', () => {
+    const fixture = twoWrapperPathFixture('ao-first');
+    try {
+      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+        env: fixture.env,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
+      expect([0, 1, 2, 4]).toContain(result.status ?? -1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('passthrough smoke completes without hang under two-wrapper PATH (pack first)', () => {
+    const fixture = twoWrapperPathFixture('pack-first');
+    try {
+      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+        env: fixture.env,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
+      expect([0, 1, 2, 4]).toContain(result.status ?? -1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('terminality holds when GH_WRAPPER_ACTIVE is set (guard alone insufficient)', () => {
+    const fixture = twoWrapperPathFixture('ao-first');
+    try {
+      const env = { ...fixture.env, GH_WRAPPER_ACTIVE: '1' };
+      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+        env,
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
+      expect([0, 1, 2, 4]).toContain(result.status ?? -1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('repeated passthrough invocations stay within bounded wrapper process growth', () => {
+    const fixture = twoWrapperPathFixture('ao-first');
+    try {
+      const maxPeakDelta = 12;
+      for (let i = 0; i < 5; i += 1) {
+        const before = spawnSync('pgrep', ['-c', '-f', 'gh-two-wrapper-'], { encoding: 'utf8' });
+        const beforeCount = Number.parseInt(String(before.stdout).trim(), 10) || 0;
+        const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+          env: fixture.env,
+          encoding: 'utf8',
+          timeout: 15_000,
+        });
+        expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe('ETIMEDOUT');
+        const after = spawnSync('pgrep', ['-c', '-f', 'gh-two-wrapper-'], { encoding: 'utf8' });
+        const afterCount = Number.parseInt(String(after.stdout).trim(), 10) || 0;
+        expect(afterCount - beforeCount).toBeLessThanOrEqual(maxPeakDelta);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('fail-closed when PATH has only wrapper shims (hop budget)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-only-'));
+    const shimA = join(root, 'a');
+    const shimB = join(root, 'b');
+    mkdirSync(shimA, { recursive: true });
+    mkdirSync(shimB, { recursive: true });
+    writeExecutable(join(shimA, 'gh'), AO_WRAPPER_SCRIPT);
+    writeExecutable(join(shimB, 'gh'), AO_WRAPPER_SCRIPT);
+    const prevPath = process.env.PATH;
+    const prevReal = process.env.GH_REAL_BINARY;
+    const prevMax = process.env.GH_RESOLVE_MAX_NON_NATIVE;
+    delete process.env.GH_REAL_BINARY;
+    process.env.GH_RESOLVE_MAX_NON_NATIVE = '2';
+    process.env.PATH = `${shimA}:${shimB}`;
+    try {
+      expect(() => resolveRealGhBinary(join(import.meta.dirname, 'gh'))).toThrow(
+        /wrapper hop budget exceeded/,
+      );
+    } finally {
+      process.env.PATH = prevPath;
+      if (prevMax === undefined) {
+        delete process.env.GH_RESOLVE_MAX_NON_NATIVE;
+      } else {
+        process.env.GH_RESOLVE_MAX_NON_NATIVE = prevMax;
+      }
+      if (prevReal === undefined) {
+        delete process.env.GH_REAL_BINARY;
+      } else {
+        process.env.GH_REAL_BINARY = prevReal;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('isNativeGhExecutable rejects bash wrapper and accepts system gh', () => {
+    const fixture = twoWrapperPathFixture('ao-first');
+    try {
+      expect(isNativeGhExecutable(join(fixture.root, 'ao-bin', 'gh'))).toBe(false);
+      expect(isNativeGhExecutable(join(import.meta.dirname, 'gh'))).toBe(false);
+      const real = resolveRealGhBinary(join(import.meta.dirname, 'gh'));
+      expect(isNativeGhExecutable(real)).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('exports a bounded hop budget constant for defense-in-depth', () => {
+    expect(MAX_NON_NATIVE_GH_CANDIDATES).toBeGreaterThan(0);
+    expect(MAX_NON_NATIVE_GH_CANDIDATES).toBeLessThanOrEqual(128);
   });
 });
 
