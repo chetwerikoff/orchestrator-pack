@@ -133,9 +133,9 @@ describe('checkContractEvidence fixtures', () => {
     checkFixture('new-ac-section-anchored-pass.md', true);
   });
 
-  it('rejects conflicting duplicate binding identities', () => {
+  it('rejects duplicate binding-id reuse in one block', () => {
     const result = checkFixture('duplicate-identity-conflict.md', false);
-    expect(result.errors.join(' ')).toMatch(/conflicting binding assertion/i);
+    expect(result.errors.join(' ')).toMatch(/binding-id .* is already used/i);
   });
 
   it('rejects conflicting expected values that share one capture reference', () => {
@@ -210,6 +210,51 @@ describe('checkContractEvidence fixtures', () => {
     const result = checkFixture('coworker-fake-found.md', false);
     expect(result.errors.join(' ')).toMatch(/does not exist/i);
   });
+
+  it('passes shape predicate on conforming capture value', () => {
+    checkFixture('predicate-non-empty-pass.md', true);
+  });
+
+  it('rejects shape predicate when field is empty', () => {
+    const result = checkFixture('predicate-non-empty-fail-empty.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match expected/i);
+  });
+
+  it('rejects shape predicate when selector is absent', () => {
+    const result = checkFixture('predicate-non-empty-fail-absent.md', false);
+    expect(result.errors.join(' ')).toMatch(/did not resolve|does not match expected/i);
+  });
+
+  it('rejects integer predicate for string-encoded numbers', () => {
+    const result = checkFixture('predicate-integer-fail-string.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match expected/i);
+  });
+
+  it('rejects positive-integer predicate for zero', () => {
+    const result = checkFixture('predicate-positive-integer-fail-zero.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match expected/i);
+  });
+
+  it('rejects boolean predicate for non-boolean values', () => {
+    const result = checkFixture('predicate-boolean-fail.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match expected/i);
+  });
+
+  it('allows same producer and selector across different captures', () => {
+    checkFixture('multi-capture-non-conflict.md', true);
+  });
+
+  it('passes mixed literal and predicate rows', () => {
+    checkFixture('mixed-literal-predicate-pass.md', true);
+  });
+
+  it('treats quoted expected values as literals for reserved tokens', () => {
+    checkFixture('literal-predicate-disambiguation-pass.md', true);
+  });
+
+  it('evaluates unquoted reserved tokens as predicates', () => {
+    checkFixture('literal-predicate-disambiguation-predicate.md', true);
+  });
 });
 
 describe('CLI help detection', () => {
@@ -279,7 +324,7 @@ describe('capture manifest integrity', () => {
 });
 
 describe('canonical binding identity', () => {
-  it('collapses alias producers and selector spellings', () => {
+  it('collapses alias producers and selector spellings for the same capture', () => {
     const rowA = {
       'binding-id': 'gh-cli:number:1',
       producer: 'gh-cli',
@@ -296,6 +341,23 @@ describe('canonical binding identity', () => {
     };
     expect(canonicalProducer(rowA.producer)).toBe('gh');
     expect(canonicalBindingIdentity(rowA, 'structured')).toBe(
+      canonicalBindingIdentity(rowB, 'structured'),
+    );
+  });
+
+  it('scopes identity to normalized evidence captures', () => {
+    const rowA = {
+      'binding-id': 'ao:reportState:live',
+      producer: 'ao',
+      selector: '$.reportState',
+      expected: 'fixing_ci',
+      evidence: 'capture@ao-worker-report/fixing_ci',
+    };
+    const rowB = {
+      ...rowA,
+      evidence: 'capture@ao-worker-report/wrong_value',
+    };
+    expect(canonicalBindingIdentity(rowA, 'structured')).not.toBe(
       canonicalBindingIdentity(rowB, 'structured'),
     );
   });
