@@ -11,6 +11,7 @@
     "review-finding-delivery-confirm",
     "worker-message-submit-reconcile",
     "review-run-recovery",
+    "review-start-claim-reaper",
     "ci-failure-notification-reconcile",
     "ci-failure-notification-reaction"
   ],
@@ -124,6 +125,16 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "review-start-claim-reaper",
+      "script": "review-start-claim-reaper.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "review-start-claim-reaper-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 30,
       "stallGraceMultiplier": 4
     },
     {

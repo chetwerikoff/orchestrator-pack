@@ -80,6 +80,8 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         & $LogWriter "review-trigger-reeval: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
+    $holdRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @($claimRuns) }
+
     try {
         $fresh = if ($FixtureSnapshot) {
             $FixtureSnapshot
@@ -130,15 +132,6 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        & $LogWriter "review-trigger-reeval: review-start-claim ownership lost before invocation PR #$($planned.prNumber) key=$($claim.key); aborting"
-        return @{
-            triggered   = $false
-            reason      = 'claim_ownership_lost'
-            retainWatch = $true
-        }
-    }
-
     $lockPath = Get-ReviewTriggerReevalSideEffectLockPath -StateRoot $StateRoot
     if (-not (Enter-OrchestratorSideEffectFence -LockPath $lockPath -Metadata @{
             prNumber  = $planned.prNumber
@@ -155,7 +148,6 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     try {
-        & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         if ($RepoRoot) {
             try {
                 Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
@@ -165,6 +157,16 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 throw
             }
         }
+        $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
+        if (-not $launchGate.ok) {
+            & $LogWriter "review-trigger-reeval: launch gate denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($launchGate.reason)"
+            return @{
+                triggered   = $false
+                reason      = [string]$launchGate.reason
+                retainWatch = $true
+            }
+        }
+        & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
             $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
@@ -178,8 +180,9 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $resolveRuns = if ($ResolveFreshSnapshot) { { @((& $ResolveFreshSnapshot $planned).reviewRuns) } } else { $null }
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns $resolveRuns -LogWriter $LogWriter
     if (-not $complete.ok) {
         & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
     }
