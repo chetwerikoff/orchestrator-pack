@@ -1,0 +1,35 @@
+{
+  "issue_number": 417,
+  "iteration_id": "opk-2",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T02:25:00.000Z",
+  "baseline": {
+    "commit_sha": "fb3f2b756e09e907c9afa87cbb87e4191c8b3674",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending-at-commit"
+  },
+  "declared_paths": [
+    "docs/declarations/417.opk-2.json",
+    "docs/orchestrator-message-registry.mjs",
+    "docs/review-run-recovery.mjs",
+    "docs/review-start-claim-lifecycle.d.mts",
+    "docs/review-start-claim-lifecycle.mjs",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
+    "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-run-recovery.ps1",
+    "scripts/review-start-claim-lifecycle.test.ts",
+    "scripts/review-start-claim-reaper.ps1",
+    "scripts/review-start-claim.test.ts",
+    "scripts/review-trigger-reconcile.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -23,6 +23,7 @@ $Script:RecoveryLogPrefix = 'review-run-recovery'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 $RecoveryCli = Join-Path $PackRoot 'docs/review-run-recovery.mjs'
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
@@ -73,9 +74,10 @@ try {
                     $prNumber = 0
                     $headSha = [string]$action.targetSha
                     if ($null -ne $action.prNumber -and [int]::TryParse([string]$action.prNumber, [ref]$prNumber) -and $prNumber -gt 0 -and $headSha) {
+                        $recoveryRuns = @(Get-AoReviewRuns -Project $ProjectId)
                         $claimRelease = Release-ReviewStartClaimForTerminalizedRun -PrNumber $prNumber -HeadSha $headSha `
                             -ProjectId $ProjectId -RunId ([string]$action.runId) -RunCreatedAtUtc ([string]$action.runCreatedAt) `
-                            -LogWriter { param($m) Write-RecoveryLog $m }
+                            -ReviewRuns $recoveryRuns -LogWriter { param($m) Write-RecoveryLog $m }
                         if (-not $claimRelease.ok -and $claimRelease.reason -notin @('no_active_claim', 'not_active', 'superseded_claim')) {
                             Write-RecoveryLog "claim-release WARN PR #$prNumber head=$($headSha): $($claimRelease.reason) $($claimRelease.detail)"
                         }

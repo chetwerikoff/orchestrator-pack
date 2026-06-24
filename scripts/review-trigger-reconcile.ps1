@@ -491,17 +491,17 @@ function Invoke-PlannedReviewRun {
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        Write-ReconcileLog "review-start-claim ownership lost before invocation PR #$PrNumber head=$HeadSha key=$($claim.key); aborting"
-        return @{ started = $false; reason = 'claim_ownership_lost' }
-    }
-
     try {
         Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     }
     catch {
         Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
         throw
+    }
+    $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -DecisionSource 'hold_budget' -LogWriter { param($m) Write-ReconcileLog $m }
+    if (-not $launchGate.ok) {
+        Write-ReconcileLog "launch gate denied PR #$PrNumber head=$HeadSha reason=$($launchGate.reason)"
+        return @{ started = $false; reason = [string]$launchGate.reason }
     }
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
@@ -522,8 +522,8 @@ function Invoke-PlannedReviewRun {
     }
 
     $postRuns = @(Get-AoReviewRuns -Project $Project)
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns { @(Get-AoReviewRuns -Project $Project) } -LogWriter { param($m) Write-ReconcileLog $m }
     if (-not $complete.ok) {
         Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"
     }

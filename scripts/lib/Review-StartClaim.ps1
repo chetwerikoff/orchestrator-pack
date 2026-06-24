@@ -133,13 +133,21 @@ function New-ReviewStartClaimHolder {
     param([string]$Surface)
     $hostName = try { [System.Net.Dns]::GetHostName() } catch { 'unknown-host' }
     $generation = if ($env:AO_CHILD_GENERATION) { $env:AO_CHILD_GENERATION } elseif ($env:AO_SESSION_ID) { $env:AO_SESSION_ID } else { '' }
-    return @{
+    $holder = @{
         surface     = $Surface
         pid         = $PID
         host        = $hostName
         generation  = $generation
         processGuid = [guid]::NewGuid().ToString('n')
     }
+    if ($IsLinux) {
+        . (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
+        $startTicks = Get-ReviewRecoveryProcessStartTicks -ProcessId $PID
+        $bootHash = Get-ReviewRecoveryBootIdHash
+        if ($startTicks) { $holder.startTimeTicks = $startTicks }
+        if ($bootHash) { $holder.bootIdHash = $bootHash }
+    }
+    return $holder
 }
 
 function Format-ReviewStartClaimHolder {
@@ -262,6 +270,7 @@ function Initialize-ReviewStartClaimNamespace {
     New-Item -ItemType Directory -Path $Namespace -Force -ErrorAction Stop | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Namespace '.locks') -Force -ErrorAction Stop | Out-Null
     New-Item -ItemType Directory -Path (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) -Force -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Namespace 'audit') -Force -ErrorAction Stop | Out-Null
 }
 
 function Read-ReviewStartClaimRecord {
@@ -558,6 +567,7 @@ function New-ReviewStartClaimActiveRecord {
         state         = 'active'
         holder        = New-ReviewStartClaimHolder -Surface $Surface
         acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        holdStartedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         startReason   = $Reason
         recoveredFrom = $RecoveredFrom
     }
@@ -646,6 +656,46 @@ function Resolve-ReviewStartClaimAgainstExisting {
             return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $terminalPath; namespace = $Namespace; key = $Existing.record.key }
         }
         return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
+    }
+
+    if ($Existing.record.manualResolutionRequired) {
+        return @{
+            acquired  = $false
+            reason    = 'foreign_holder_manual'
+            holder    = $Existing.record.holder
+            claim     = $Existing.record
+            path      = $Path
+            namespace = $Namespace
+            key       = $Existing.record.key
+            blocking  = $true
+        }
+    }
+
+    $syncReclaim = Sync-ReviewStartClaimReclaimBeforeSkip -Namespace $Namespace -Path $Path -Record $Existing.record -ReviewRuns $ReviewRuns
+    if ($syncReclaim.blocking -or ($syncReclaim.decision -and [string]$syncReclaim.decision.action -eq 'mark_manual')) {
+        return @{
+            acquired  = $false
+            reason    = 'foreign_holder_manual'
+            holder    = $Existing.record.holder
+            claim     = $Existing.record
+            path      = $Path
+            namespace = $Namespace
+            key       = $Existing.record.key
+            blocking  = $true
+        }
+    }
+    if ($syncReclaim.reclaimed) {
+        $newRecord = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $Normalized -Surface $Surface -Reason $StartReason -RecoveredFrom @{
+            path          = if ($syncReclaim.result.terminalPath) { $syncReclaim.result.terminalPath } else { '' }
+            holder        = $Existing.record.holder
+            acquiredAtUtc = $Existing.record.acquiredAtUtc
+            outcome       = [string]$syncReclaim.decision.outcome
+        }
+        Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
+        if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
+            return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
+        }
+        return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $Path; namespace = $Namespace; key = $newRecord.key; recoveredRecord = $Existing.record }
     }
 
     $age = ((Get-Date).ToUniversalTime() - $Existing.acquiredAtUtc).TotalMinutes
@@ -801,6 +851,7 @@ function Release-ReviewStartClaimForTerminalizedRun {
         [string]$Namespace = '',
         [string]$RunId = '',
         [string]$RunCreatedAtUtc = '',
+        [array]$ReviewRuns = @(),
         [scriptblock]$LogWriter = $null
     )
 
@@ -819,6 +870,25 @@ function Release-ReviewStartClaimForTerminalizedRun {
             if (-not $read.ok) { return @{ ok = $false; reason = 'no_active_claim'; detail = $read.reason } }
             if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
             if (-not (Test-ReviewStartClaimMatchesTerminalizedRun -ClaimRecord $read.record -RunId $RunId -RunCreatedAtUtc $RunCreatedAtUtc)) {
+                $bound = [string]$read.record.boundRunId
+                if (-not $bound) {
+                    $runs = @($ReviewRuns)
+                    if (Test-ReviewStartClaimRunVisible -ReviewRuns $runs -PrNumber $PrNumber -HeadSha $normalized) {
+                        $decision = @{
+                            action  = 'terminalize'
+                            outcome = 'orphan_covered_run_unbound'
+                            reason  = 'recovery_unbound_covering_run'
+                            warn    = $true
+                            coveredRunId = $RunId
+                        }
+                        $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $resolved -Path $path -Record $read.record `
+                            -Decision $decision -DecisionSource 'run_recovery' -ReviewRuns $runs -MutexAlreadyHeld
+                        if ($LogWriter) {
+                            & $LogWriter "review-start-claim: WARN orphan unbound claim terminalized PR #$PrNumber head=$normalized run=$RunId audit=$($terminal.auditPath)"
+                        }
+                        return @{ ok = [bool]$terminal.ok; terminalPath = $terminal.terminalPath; key = $read.record.key; outcome = 'orphan_covered_run_unbound' }
+                    }
+                }
                 return @{
                     ok         = $false
                     reason     = 'superseded_claim'
@@ -871,3 +941,5 @@ function Resolve-ReviewStartClaimEscalation {
     if ($LogWriter) { & $LogWriter "review-start-claim: operator resolved PR #$PrNumber head=$HeadSha outcome=$outcome audit=$result" }
     return @{ ok = $true; outcome = $outcome; auditPath = $result }
 }
+
+. (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')

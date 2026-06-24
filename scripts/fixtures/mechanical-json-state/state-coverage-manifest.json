@@ -12,6 +12,12 @@
       "reason": "JS-owned AO runtime recovery state uses atomic file replace outside the PowerShell mechanical state helper"
     },
     {
+      "childId": "review-start-claim-reaper",
+      "path": "{project}/review-start-claims",
+      "owner": "scripts/lib/Review-StartClaim.ps1",
+      "reason": "Stateless periodic sweeper; claim lifecycle state lives in the canonical claim namespace (active/terminal/audit dirs), not mechanical JSON reconcile state"
+    },
+    {
       "childId": "ci-failure-notification-reconcile",
       "path": "{temp}/orchestrator-ci-failure-notification",
       "owner": "docs/ci-failure-notification.mjs",

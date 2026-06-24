@@ -49,11 +49,11 @@ export const TERMINAL_REVIEW_STATUSES = new Set([
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-function asRecord(value) {
+export function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
-function toArray(value) {
+export function toArray(value) {
   if (value == null) return [];
   return Array.isArray(value) ? value : [value];
 }
@@ -286,7 +286,7 @@ function hashBootId(value) {
   return createHash('sha256').update(String(value ?? '').trim()).digest('hex').slice(0, 16);
 }
 
-function readCurrentBootHash() {
+export function readCurrentBootHash() {
   try {
     return hashBootId(readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'));
   } catch {
@@ -294,7 +294,7 @@ function readCurrentBootHash() {
   }
 }
 
-function readProcStartTimeTicks(pid) {
+export function readProcStartTimeTicks(pid) {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const end = stat.lastIndexOf(')');

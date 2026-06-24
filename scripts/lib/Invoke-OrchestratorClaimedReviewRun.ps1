@@ -161,10 +161,6 @@ function Invoke-OrchestratorClaimedReviewRun {
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true; headSha = $headSha }
     }
 
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-        return @{ started = $false; reason = 'claim_ownership_lost'; headSha = $headSha }
-    }
-
     try {
         Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
     }
@@ -173,6 +169,11 @@ function Invoke-OrchestratorClaimedReviewRun {
         throw
     }
 
+    $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -LogWriter $writeLog
+    if (-not $launchGate.ok) {
+        & $writeLog "orchestrator-claimed-review-run: launch gate denied PR #$PrNumber head=$headSha reason=$($launchGate.reason)"
+        return @{ started = $false; reason = [string]$launchGate.reason; headSha = $headSha }
+    }
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
@@ -207,8 +208,14 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     $postRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $Project) }
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $resolveRuns = if ($FixtureSnapshot) {
+        { @($FixtureSnapshot.reviewRuns) }
+    }
+    else {
+        { @(Get-AoReviewRuns -Project $Project) }
+    }
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+        -ResolveReviewRuns $resolveRuns -LogWriter $writeLog
     if (-not $complete.ok) {
         & $writeLog "orchestrator-claimed-review-run: ESCALATE claim completion PR #$PrNumber head=$headSha reason=$($complete.reason)"
     }
