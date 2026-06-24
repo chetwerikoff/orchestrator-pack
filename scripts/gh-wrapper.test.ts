@@ -387,7 +387,6 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
       }
       if (prevReal === undefined) {
         delete process.env.GH_REAL_BINARY;
-    process.env.GH_RESOLVE_MAX_NON_NATIVE = '2';
       } else {
         process.env.GH_REAL_BINARY = prevReal;
       }
