@@ -11,7 +11,7 @@ import {
   extractAuthoritativeContractEvidenceBody,
   isHelpOnlyCliSourceCommand,
   verifyCaptureManifestIntegrity,
-} from './contract-evidence.mjs';
+} from './contract-evidence-validator.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDraftDir = path.join(repoRoot, 'tests/fixtures/draft-discipline/contract-evidence');

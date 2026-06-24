@@ -13,6 +13,14 @@ export function canonicalBindingIdentity(
   kind: 'structured' | 'unstructured',
 ): string;
 
+export const SHAPE_PREDICATES: ReadonlySet<string>;
+
+export function interpretExpected(
+  expected: string,
+): { mode: 'literal'; value: string } | { mode: 'predicate'; token: string };
+
+export function matchesShapePredicate(value: unknown, token: string): boolean;
+
 export function parseProducerEmissionBlocks(markdown: string): Array<Record<string, string>>;
 
 export function criterionHasProducerEmission(

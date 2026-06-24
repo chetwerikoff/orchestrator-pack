@@ -1,0 +1,39 @@
+{
+  "issue_number": 394,
+  "iteration_id": "opk-5",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T05:50:35.197Z",
+  "baseline": {
+    "commit_sha": "85704349a5bd30c095151824a40a2d514ef4f2fa",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:dc177ddb4bd503eb47dd3a62499ac12ae0a107d2225a45b864e7dcc9bd42a7cf"
+  },
+  "declared_paths": [
+    "docs/contract-evidence-expected.md",
+    "docs/declarations/394.opk-5.json",
+    "scripts/contract-evidence-validator.d.mts",
+    "scripts/contract-evidence-validator.mjs",
+    "scripts/contract-evidence.test.ts",
+    "scripts/draft-discipline.mjs",
+    "scripts/lib/contract-evidence-reverify.ts",
+    "scripts/verify.ps1",
+    "tests/fixtures/contract-evidence/capture-manifest.json",
+    "tests/fixtures/contract-evidence/captures/scalar-json/predicate-shapes.provenance.json",
+    "tests/fixtures/contract-evidence/captures/scalar-json/predicate-shapes.raw.json",
+    "tests/fixtures/draft-discipline/contract-evidence/literal-predicate-disambiguation-pass.md",
+    "tests/fixtures/draft-discipline/contract-evidence/literal-predicate-disambiguation-predicate.md",
+    "tests/fixtures/draft-discipline/contract-evidence/mixed-literal-predicate-pass.md",
+    "tests/fixtures/draft-discipline/contract-evidence/multi-capture-non-conflict.md",
+    "tests/fixtures/draft-discipline/contract-evidence/new-shared-identity-conflict.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-boolean-fail.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-integer-fail-string.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-non-empty-fail-absent.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-non-empty-fail-empty.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-non-empty-pass.md",
+    "tests/fixtures/draft-discipline/contract-evidence/predicate-positive-integer-fail-zero.md",
+    "tests/fixtures/draft-discipline/contract-evidence/shared-evidence-conflicting-expected.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

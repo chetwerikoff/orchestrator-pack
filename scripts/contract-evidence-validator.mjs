@@ -28,6 +28,14 @@ const CAPTURE_EVIDENCE_PATTERN = /^capture@(.+)$/i;
 export const PRODUCTION_CAPTURE_CORPUS_ROOT = 'tests/external-output-references';
 const CLI_BINDING_ID_KINDS = new Set(['flag', 'command', 'option']);
 const CAPTURE_BINDING_TYPES = new Set(['structured', 'unstructured', 'cli-behavior']);
+/** Closed reserved set for shape/presence predicates on structured selector rows. */
+export const SHAPE_PREDICATES = new Set([
+  'non-empty-string',
+  'integer',
+  'positive-integer',
+  'boolean',
+  'present',
+]);
 
 
 /**
@@ -216,6 +224,61 @@ function normalizeDatumIdentity(datum, kind, row) {
 }
 
 /**
+ * @param {string} evidence
+ */
+function normalizeEvidence(evidence) {
+  const trimmed = (evidence ?? '').trim();
+  const captureMatch = trimmed.match(CAPTURE_EVIDENCE_PATTERN);
+  if (captureMatch) {
+    return `capture@${captureMatch[1].trim()}`;
+  }
+  const newMatch = trimmed.match(NEW_EVIDENCE_PATTERN);
+  if (newMatch) {
+    return `NEW(produced-by AC#${newMatch[1]})`;
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * @param {string} expected
+ * @returns {{ mode: 'literal', value: string } | { mode: 'predicate', token: string }}
+ */
+export function interpretExpected(expected) {
+  const trimmed = (expected ?? '').trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    return { mode: 'literal', value: trimmed.slice(1, -1) };
+  }
+  if (SHAPE_PREDICATES.has(trimmed)) {
+    return { mode: 'predicate', token: trimmed };
+  }
+  return { mode: 'literal', value: trimmed };
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} token
+ */
+export function matchesShapePredicate(value, token) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  switch (token) {
+    case 'present':
+      return true;
+    case 'non-empty-string':
+      return typeof value === 'string' && value.length > 0;
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value);
+    case 'positive-integer':
+      return typeof value === 'number' && Number.isInteger(value) && value > 0;
+    case 'boolean':
+      return typeof value === 'boolean';
+    default:
+      return false;
+  }
+}
+
+/**
  * @param {Record<string, string>} row
  * @param {'structured' | 'unstructured'} kind
  */
@@ -226,9 +289,6 @@ function normalizeDatumIdentity(datum, kind, row) {
  * @param {'structured' | 'unstructured'} kind
  */
 function bindingAssertionsCompatible(prior, row, kind) {
-  if (prior.evidence !== row.evidence) {
-    return false;
-  }
   if (NEW_EVIDENCE_PATTERN.test(prior.evidence ?? '')) {
     const priorWant = extractRowProducerEmissionExpectation(prior);
     const rowWant = extractRowProducerEmissionExpectation(row);
@@ -272,17 +332,21 @@ function recordBindingIdentity(identities, identity, row, kind, rowLabel, errors
 
 export function canonicalBindingIdentity(row, kind) {
   const producer = canonicalProducer(row.producer ?? '');
+  let datum;
   if (row['binding-id']) {
     const parts = row['binding-id'].split(':');
-    const datum = parts.slice(1).join(':');
-    if (datum) {
-      return `${producer}:${normalizeDatumIdentity(datum, kind, row)}`;
+    const bindingDatum = parts.slice(1).join(':');
+    if (bindingDatum) {
+      datum = normalizeDatumIdentity(bindingDatum, kind, row);
     }
   }
-  const datum = kind === 'structured'
-    ? normalizeSelector(row.selector ?? row.datum ?? '')
-    : normalizeToken(row.token ?? row.expected ?? row.datum ?? '');
-  return `${producer}:${datum}`;
+  if (!datum) {
+    datum = kind === 'structured'
+      ? normalizeSelector(row.selector ?? row.datum ?? '')
+      : normalizeToken(row.token ?? row.expected ?? row.datum ?? '');
+  }
+  const evidence = normalizeEvidence(row.evidence ?? '');
+  return `${producer}:${datum}:${evidence}`;
 }
 
 /**
@@ -481,16 +545,28 @@ export function criterionHasMatchingProducerEmission(markdown, criterionNumber, 
 
 /**
  * @param {unknown} value
- * @param {string} expected
+ * @param {string} expectedLiteral
  */
-function valuesEqual(value, expected) {
+function valuesEqualLiteral(value, expectedLiteral) {
   if (value === undefined || value === null) {
     return false;
   }
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value) === expected;
+    return String(value) === expectedLiteral;
   }
-  return JSON.stringify(value) === expected;
+  return JSON.stringify(value) === expectedLiteral;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} expected
+ */
+function expectedMatchesValue(value, expected) {
+  const interpreted = interpretExpected(expected);
+  if (interpreted.mode === 'predicate') {
+    return matchesShapePredicate(value, interpreted.token);
+  }
+  return valuesEqualLiteral(value, interpreted.value);
 }
 
 /**
@@ -569,6 +645,8 @@ export function checkContractEvidence(markdown, options = {}) {
 
   /** @type {Map<string, Record<string, string>>} */
   const identities = new Map();
+  /** @type {Map<string, number>} */
+  const seenBindingIds = new Map();
 
   for (const [index, row] of parsed.rows.entries()) {
     const rowLabel = `contract-evidence row ${index + 1}`;
@@ -580,6 +658,18 @@ export function checkContractEvidence(markdown, options = {}) {
     }
     if (errors.some((error) => error.startsWith(rowLabel))) {
       continue;
+    }
+
+    if (row['binding-id']) {
+      const bindingId = row['binding-id'].trim();
+      const priorRow = seenBindingIds.get(bindingId);
+      if (priorRow !== undefined) {
+        errors.push(
+          `${rowLabel}: binding-id ${bindingId} is already used by contract-evidence row ${priorRow}`,
+        );
+        continue;
+      }
+      seenBindingIds.set(bindingId, index + 1);
     }
 
     const producer = canonicalProducer(row.producer);
@@ -764,7 +854,7 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: selector ${row.selector} did not resolve in capture (${redactCaptureContent(captureContent)})`);
         continue;
       }
-      const matched = matches.some((item) => valuesEqual(item.value, row.expected));
+      const matched = matches.some((item) => expectedMatchesValue(item.value, row.expected));
       if (!matched) {
         errors.push(`${rowLabel}: selector ${row.selector} value does not match expected ${row.expected} (${redactCaptureContent(captureContent)})`);
         continue;

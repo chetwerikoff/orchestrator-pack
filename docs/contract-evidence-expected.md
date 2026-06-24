@@ -3,6 +3,10 @@
 Authoring-time `contract-evidence` rows on **structured** captures (rows with a
 `selector`) may ground values with either a literal or a shape/presence predicate.
 
+Implementation lives in `scripts/contract-evidence-validator.mjs` (wired from
+`scripts/draft-discipline.mjs` and tests). `scripts/contract-evidence.mjs` remains
+the legacy authoring gate surface for governed-surface compatibility (#377).
+
 ## Literal equality (unchanged)
 
 When `expected` is not a reserved predicate token (and not a quoted literal — see
