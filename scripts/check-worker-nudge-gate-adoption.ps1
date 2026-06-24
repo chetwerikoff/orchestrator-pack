@@ -13,7 +13,7 @@ function Get-YamlOrchestratorRules {
     $capture = $false
     $out = New-Object System.Collections.Generic.List[string]
     foreach ($line in $lines) {
-        if ($line -match '^\s+orchestratorRules:\s*\|\s*$') {
+        if ($line -match '^\s+orchestratorRules:\s*(?:\||>)\s*$') {
             $capture = $true
             continue
         }
