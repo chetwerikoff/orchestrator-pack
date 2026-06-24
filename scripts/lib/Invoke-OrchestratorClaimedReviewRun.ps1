@@ -139,6 +139,13 @@ function Invoke-OrchestratorClaimedReviewRun {
         return @{ started = $false; reason = [string]$claim.reason; claimSkipped = $true; headSha = $headSha }
     }
 
+    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
+    if ($hold.exceeded) {
+        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns @($claimRuns) -DecisionSource 'hold_budget' -LogWriter $writeLog | Out-Null
+        & $writeLog "orchestrator-claimed-review-run: hold budget exceeded PR #$PrNumber head=$headSha"
+        return @{ started = $false; reason = 'hold_budget_exceeded'; headSha = $headSha }
+    }
+
     try {
         $fresh = if ($FixtureSnapshot) { $FixtureSnapshot } else { Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot }
         $recheck = Invoke-OrchestratorClaimedReviewRunPreRecheck -PlannedAction @{
@@ -173,6 +180,7 @@ function Invoke-OrchestratorClaimedReviewRun {
         throw
     }
 
+    Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
@@ -207,8 +215,7 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     $postRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @(Get-AoReviewRuns -Project $Project) }
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $writeLog
     if (-not $complete.ok) {
         & $writeLog "orchestrator-claimed-review-run: ESCALATE claim completion PR #$PrNumber head=$headSha reason=$($complete.reason)"
     }

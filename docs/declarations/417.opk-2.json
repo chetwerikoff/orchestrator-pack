@@ -1,0 +1,20 @@
+{
+  "issue_number": 417,
+  "iteration_id": "opk-2",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T02:25:00.000Z",
+  "baseline": {
+    "commit_sha": "b98b3d1763b47e4030eca9f533778d46d15b7a1f",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:pending-at-commit"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "tests/external-output-references/**",
+    "tests/fixtures/**"
+  ],
+  "amendments": []
+}

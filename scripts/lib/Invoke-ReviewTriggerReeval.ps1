@@ -80,6 +80,14 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         & $LogWriter "review-trigger-reeval: recovered stale review-start-claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
+    $holdRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @($claimRuns) }
+    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
+    if ($hold.exceeded) {
+        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns $holdRuns -DecisionSource 'hold_budget' -LogWriter $LogWriter | Out-Null
+        & $LogWriter "review-trigger-reeval: hold budget exceeded PR #$($planned.prNumber) head=$($planned.headSha)"
+        return @{ triggered = $false; reason = 'hold_budget_exceeded'; retainWatch = $true }
+    }
+
     try {
         $fresh = if ($FixtureSnapshot) {
             $FixtureSnapshot
@@ -155,6 +163,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     try {
+        Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         if ($RepoRoot) {
             try {
@@ -178,8 +187,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     }
 
     $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $LogWriter
     if (-not $complete.ok) {
         & $LogWriter "review-trigger-reeval: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
     }

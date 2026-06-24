@@ -468,6 +468,13 @@ function Invoke-PlannedReviewRun {
         Write-ReconcileLog "review-start-claim recovered stale claim key=$($claim.key) previous=$(Format-ReviewStartClaimHolder -Holder $claim.recoveredRecord.holder)"
     }
 
+    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
+    if ($hold.exceeded) {
+        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns $claimRuns -DecisionSource 'hold_budget' -LogWriter { param($m) Write-ReconcileLog $m } | Out-Null
+        Write-ReconcileLog "hold budget exceeded PR #$PrNumber head=$HeadSha"
+        return @{ started = $false; reason = 'hold_budget_exceeded' }
+    }
+
     try {
         $recheck = Test-PreRunHeadReadyRecheck -PlannedAction @{
             prNumber    = $PrNumber
@@ -503,6 +510,7 @@ function Invoke-PlannedReviewRun {
         Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
         throw
     }
+    Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
@@ -522,8 +530,7 @@ function Invoke-PlannedReviewRun {
     }
 
     $postRuns = @(Get-AoReviewRuns -Project $Project)
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+    $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter { param($m) Write-ReconcileLog $m }
     if (-not $complete.ok) {
         Write-ReconcileLog "ESCALATE review-start-claim PR #$PrNumber head=$HeadSha key=$($claim.key): run-start completion $($complete.reason)"
     }

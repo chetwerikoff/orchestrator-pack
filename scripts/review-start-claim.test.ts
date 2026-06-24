@@ -59,7 +59,7 @@ describe('Review-StartClaim single-flight contract', () => {
         $env:AO_SIDE_PROCESS_STATE_DIR = ${psString(side)}
         Set-Location ${psString(side)}
         $r = Acquire-ReviewStartClaim -PrNumber 307 -HeadSha ${psString(fullSha)} -Surface '${surface}' -ProjectId 'orchestrator-pack' -ReviewRuns @()
-        [pscustomobject]@{ acquired=[bool]$r.acquired; reason=[string]$r.reason; namespace=(Resolve-ReviewStartClaimNamespace -ProjectId 'orchestrator-pack') } | ConvertTo-Json -Compress
+        [pscustomobject]@{ acquired=[bool]$r.acquired; recovered=[bool]$r.recovered; reason=[string]$r.reason; namespace=(Resolve-ReviewStartClaimNamespace -ProjectId 'orchestrator-pack') } | ConvertTo-Json -Compress
       `),
         );
       const first = runAcquire(sideA, 'review-trigger-reconcile');
@@ -71,8 +71,10 @@ describe('Review-StartClaim single-flight contract', () => {
       `),
       ).activeCount;
       expect(ns).toContain(path.join('projects', 'orchestrator-pack', 'review-start-claims'));
-      expect([first, second].filter((r) => r.acquired)).toHaveLength(1);
-      expect([first, second].filter((r) => !r.acquired)).toHaveLength(1);
+      expect(first.acquired).toBe(true);
+      // First pwsh session exits before the second acquire; liveness reclaim allows the second winner.
+      expect(second.acquired).toBe(true);
+      expect(second.recovered).toBe(true);
       expect(activeCount).toBe(1);
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -697,6 +699,99 @@ describe('Review-StartClaim single-flight contract', () => {
       expect(result.mergeable).toBe(true);
       expect(result.mergeReason).toBe('covered_terminal_run');
       expect(result.calls).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('Review-StartClaim liveness reaper (Issue #417)', () => {
+  it('reclaims a dead-local holder without waiting for StaleMinutes', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'dead-starter' -Reason 'fixture'
+        $record.holder.pid = 99999999
+        $record.holder.startTimeTicks = '100'
+        $record.holder.bootIdHash = 'dead-boot-hash'
+        Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha) -Record $record
+        $retry = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          acquired = [bool]$retry.acquired
+          recovered = [bool]$retry.recovered
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_orphan_liveness*.json').Name)
+          auditCount = @((Get-ChildItem -LiteralPath (Join-Path $ns 'audit') -File -ErrorAction SilentlyContinue).Name).Count
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(true);
+      expect(result.terminal).toHaveLength(1);
+      expect(result.auditCount).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reaper sweep terminalizes dead holder with batch run-store read', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 266 -HeadSha $sha -Surface 'dead-starter' -Reason 'fixture'
+        $record.holder.pid = 99999999
+        $record.holder.startTimeTicks = '100'
+        $record.holder.bootIdHash = 'dead-boot-hash'
+        Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha) -Record $record
+        $sweep = Invoke-ReviewStartClaimReaperSweep -Namespace $ns -ReviewRuns @() -LogWriter { param($m) }
+        [pscustomobject]@{
+          scanned = [int]$sweep.scanned
+          batchReads = [int]$sweep.batchReads
+          reclaimed = @($sweep.results | Where-Object { $_.reclaimed -eq $true }).Count
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.scanned).toBe(1);
+      expect(result.batchReads).toBe(1);
+      expect(result.reclaimed).toBe(1);
+      expect(result.activeExists).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fences run_not_visible after successful invoke when run record stays empty', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'fixture' -Namespace $ns -ReviewRuns @()
+        $env:AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS = '1'
+        $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns @()
+        Start-Sleep -Milliseconds 1100
+        $complete2 = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns @()
+        [pscustomobject]@{
+          firstReason = [string]$complete.reason
+          fenced = [bool]$complete2.fenced
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*run_not_visible_fenced*.json').Name)
+          activeExists = Test-Path -LiteralPath (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 266 -HeadSha $sha)
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.firstReason).toBe('run_not_visible');
+      expect(result.fenced || result.terminal.length === 1).toBe(true);
+      expect(result.activeExists).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -364,6 +364,14 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
     }
 
+    $holdRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @($claimRuns) }
+    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $claim
+    if ($hold.exceeded -and -not $DryRun) {
+        Invoke-ReviewStartClaimReclaimOrphan -Namespace $claim.namespace -Path $claim.path -Record $claim.claim -ReviewRuns $holdRuns -DecisionSource 'hold_budget' -LogWriter $LogWriter | Out-Null
+        & $LogWriter "review-wake-trigger: hold budget exceeded PR #$($planned.prNumber) head=$($planned.headSha)"
+        return @{ triggered = $false; reason = 'hold_budget_exceeded'; mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $snapshot }
+    }
+
     try {
         $fresh = if ($FixtureSnapshot) {
             $FixtureSnapshot
@@ -467,6 +475,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         $handoffReceiptAbort = $false
         try {
+            Set-ReviewStartClaimLaunchPending -ClaimResult $claim | Out-Null
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             try {
                 Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
@@ -527,8 +536,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     if (-not $DryRun) {
-        Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-        $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+        $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns -LogWriter $LogWriter
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
         }
