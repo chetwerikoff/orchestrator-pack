@@ -913,21 +913,37 @@ else {
     Add-Failure 'Missing gh inventory static guard (Issue #431)'
 }
 
-if (Test-Path -LiteralPath (Join-Path $Root 'node_modules/vitest') -PathType Container) {
+$ghWrapperVitest = Join-Path $Root 'scripts/gh-wrapper.test.ts'
+if (Test-Path -LiteralPath $ghWrapperVitest -PathType Leaf) {
     Push-Location $Root
     try {
-        & npx vitest run scripts/gh-wrapper.test.ts
-        if ($LASTEXITCODE -eq 0) {
-            Write-Check 'gh-wrapper/vitest' 'PASS' 'completed'
+        $ghWrapperVitestReady = $true
+        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+            & npm ci --include=dev
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'gh-wrapper/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+                Add-Failure 'gh-wrapper vitest prerequisites failed (Issue #431)'
+                $ghWrapperVitestReady = $false
+            }
         }
-        else {
-            Write-Check 'gh-wrapper/vitest' 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure 'gh-wrapper vitest suite failed (Issue #431)'
+        if ($ghWrapperVitestReady) {
+            & npx vitest run scripts/gh-wrapper.test.ts
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'gh-wrapper/vitest' 'FAIL' "exit=$LASTEXITCODE"
+                Add-Failure 'gh-wrapper vitest suite failed (Issue #431)'
+            }
+            else {
+                Write-Check 'gh-wrapper/vitest' 'PASS' 'completed'
+            }
         }
     }
     finally {
         Pop-Location
     }
+}
+else {
+    Write-Check 'gh-wrapper/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing gh-wrapper vitest suite (Issue #431)'
 }
 
 Write-Host ''
