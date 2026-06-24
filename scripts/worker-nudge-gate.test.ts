@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -52,6 +52,74 @@ function withClaimStoreEnv(dir: string, script: string) {
     }
   `;
 }
+function writeDownstreamAoStub(dir: string): string {
+  const stub = path.join(dir, 'ao-downstream');
+  writeFileSync(
+    stub,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "send" && "\${2:-}" == "--help" ]]; then
+  echo "Usage: ao send <session> -f, --file <path>"
+  exit 0
+fi
+if [[ "\${1:-}" == "send" ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == "--file" ]]; then
+      exit 0
+    fi
+  done
+fi
+printf 'unhandled:%s\\n' "$*" >&2
+exit 99
+`,
+  );
+  chmodSync(stub, 0o755);
+  return stub;
+}
+
+function withAutonomousRealBinariesConfig(downstreamAo: string): { cleanup: () => void } {
+  const aoDir = path.join(repoRoot, '.ao');
+  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
+  const prior = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
+  mkdirSync(aoDir, { recursive: true });
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        ao: downstreamAo,
+        git: path.join(repoRoot, 'scripts/git-real-binary'),
+        gitSystemBinary: '/usr/bin/git',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return {
+    cleanup: () => {
+      if (prior === null) {
+        rmSync(configPath, { force: true });
+      } else {
+        writeFileSync(configPath, prior);
+      }
+    },
+  };
+}
+
+function autonomousProductionChainEnv(aoBaseDir: string): NodeJS.ProcessEnv {
+  const scriptsDir = path.join(repoRoot, 'scripts');
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+    AO_TMUX_NAME: 'opk-orchestrator',
+    PATH: `${scriptsDir}:${process.env.PATH ?? ''}`,
+    AO_BASE_DIR: aoBaseDir,
+  };
+  delete env.AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE;
+  delete env.AO_JOURNALED_SEND_ASSUME_FILE;
+  delete env.AO_REAL_BINARY;
+  return env;
+}
+
 
 describe('worker nudge gate (#384)', () => {
   it('exports stable gate capability markers', () => {
@@ -674,6 +742,240 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.matches).toBe(true);
     expect(result.trusted).toBe(trusted);
   });
+
+  it('Split-ProcessCommandLineTokens return-shape: Get-ScriptPathsFromProcessCommandLine finds -File path', () => {
+    const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+    const boundaryLib = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
+    const trusted = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    const script = `
+      . ${psString(boundaryLib)}
+      . ${psString(capabilityLib)}
+      $cmdLine = 'pwsh -NoProfile -File ${trusted.replace(/'/g, "''")}'
+      $nestedTokens = @(Split-ProcessCommandLineTokens -CommandLine $cmdLine)
+      $nestedPathCount = 0
+      for ($index = 0; $index -lt $nestedTokens.Count; $index++) {
+        if ($nestedTokens[$index] -in @('-File', '-f') -and ($index + 1) -lt $nestedTokens.Count) {
+          $nestedPathCount++
+        }
+      }
+      $paths = @(Get-ScriptPathsFromProcessCommandLine -CommandLine $cmdLine)
+      [pscustomobject]@{
+        nestedPathCount = $nestedPathCount
+        pathCount = $paths.Count
+        extracted = [string]$paths[0]
+        trusted = [bool](Test-TrustedJournaledWorkerSendScriptPath -CandidatePath $paths[0])
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.nestedPathCount).toBe(0);
+    expect(result.pathCount).toBe(1);
+    expect(result.extracted).toBe(trusted);
+    expect(result.trusted).toBe(true);
+  });
+
+  it('production chain help probe: journaled-worker-send DryRun preflight through real scripts/ao', () => {
+    const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-'));
+    const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-'));
+    const downstreamAo = writeDownstreamAoStub(stubDir);
+    const config = withAutonomousRealBinariesConfig(downstreamAo);
+    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    try {
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', journaled, 'opk-2', '-Source', 'diagnostic', '-DryRun'],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          input: 'probe',
+          env: autonomousProductionChainEnv(aoBaseDir),
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --file contract is unavailable/i);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
+    } finally {
+      config.cleanup();
+      rmSync(aoBaseDir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
+  it('production chain delivery: gated journaled send through real scripts/ao and guard', () => {
+    const claimDir = tempClaimDir();
+    const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-'));
+    const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-'));
+    const downstreamAo = writeDownstreamAoStub(stubDir);
+    const config = withAutonomousRealBinariesConfig(downstreamAo);
+    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+    try {
+      const script = withClaimStoreEnv(
+        claimDir,
+        `
+        . ${psString(helperPath)}
+        $claim = Acquire-WorkerNudgeClaim -PrNumber 428 -CycleKey 'run:issue-428' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
+        if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
+        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
+        'hello worker' | pwsh -NoProfile -File ${psString(journaled)} 'opk-1' -ClaimToken $token -GatedNudge -Source 'test'
+        [pscustomobject]@{ exitCode = $LASTEXITCODE } | ConvertTo-Json -Compress
+      `,
+      );
+      const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: autonomousProductionChainEnv(aoBaseDir),
+      });
+      const jsonLine = `${result.stdout}${result.stderr}`
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{'))
+        .pop();
+      const parsed = JSON.parse(jsonLine ?? '{}');
+      expect(parsed.exitCode).toBe(0);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --file contract is unavailable/i);
+    } finally {
+      config.cleanup();
+      rmSync(claimDir, { recursive: true, force: true });
+      rmSync(aoBaseDir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
+  describe('internal capability deny', () => {
+    it('raw ao send on autonomous surface is internal capability deny exit 93', () => {
+      const aoShim = path.join(repoRoot, 'scripts/ao');
+      const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
+      });
+      expect(result.status).toBe(93);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
+    });
+
+    it('raw ao send --help without capability is internal capability deny exit 93', () => {
+      const aoShim = path.join(repoRoot, 'scripts/ao');
+      const result = spawnSync('bash', [aoShim, 'send', '--help'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
+      });
+      expect(result.status).toBe(93);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
+    });
+
+    it('forged unregistered internal capability token is internal capability deny exit 93', () => {
+      const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+      const script = `
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
+        . ${psString(guard)}
+        $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
+        [pscustomobject]@{ denied = [bool]$deny.denied; reason = [string]$deny.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.denied).toBe(true);
+      expect(result.reason).toBe('autonomous_raw_worker_send_denied');
+    });
+
+    it('TTL-expired internal capability token is internal capability deny exit 93', () => {
+      const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+      const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-expired-'));
+      const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-expired-'));
+      const downstreamAo = writeDownstreamAoStub(stubDir);
+      const config = withAutonomousRealBinariesConfig(downstreamAo);
+      const script = `
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_BASE_DIR = ${psString(aoBaseDir)}
+        $env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = '1'
+        . ${psString(capabilityLib)}
+        $registered = Register-JournaledWorkerSendInternalCapability
+        if (-not $registered.ok) { throw $registered.reason }
+        $nonce = ($registered.capability -split ':',2)[1]
+        $capPath = Join-Path (Get-JournaledWorkerSendInternalCapabilityDir) "$nonce.json"
+        $record = Get-Content -LiteralPath $capPath -Raw | ConvertFrom-Json
+        $record.expiresAtUtc = ([datetime]::UtcNow.AddMinutes(-5)).ToString('o')
+        ($record | ConvertTo-Json -Compress -Depth 6) | Set-Content -LiteralPath $capPath -Encoding UTF8
+        Remove-Item Env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -ErrorAction SilentlyContinue
+        $env:AO_JOURNALED_SEND_INTERNAL = $registered.capability
+        & bash ${psString(path.join(repoRoot, 'scripts/ao'))} send opk-worker ping
+        exit $LASTEXITCODE
+      `;
+      try {
+        const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+          },
+        });
+        expect(result.status).toBe(93);
+        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
+      } finally {
+        config.cleanup();
+        rmSync(aoBaseDir, { recursive: true, force: true });
+        rmSync(stubDir, { recursive: true, force: true });
+      }
+    });
+
+    it('replayed internal capability nonce is internal capability deny exit 93', () => {
+      const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
+      const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-replay-'));
+      const script = `
+        $env:AO_BASE_DIR = ${psString(aoBaseDir)}
+        $env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = '1'
+        . ${psString(capabilityLib)}
+        $registered = Register-JournaledWorkerSendInternalCapability
+        if (-not $registered.ok) { throw $registered.reason }
+        $nonce = ($registered.capability -split ':',2)[1]
+        $capPath = Join-Path (Get-JournaledWorkerSendInternalCapabilityDir) "$nonce.json"
+        Remove-Item -LiteralPath $capPath -Force
+        $env:AO_JOURNALED_SEND_INTERNAL = $registered.capability
+        $replayed = Test-ConsumeJournaledWorkerSendInternalCapability
+        [pscustomobject]@{ consumed = [bool]$replayed } | ConvertTo-Json -Compress
+      `;
+      try {
+        const result = JSON.parse(runPwsh(script));
+        expect(result.consumed).toBe(false);
+      } finally {
+        rmSync(aoBaseDir, { recursive: true, force: true });
+      }
+    });
+
+    it('sibling ao send --file with live unconsumed token is internal capability deny exit 93', () => {
+      const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-sibling-'));
+      const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-sibling-'));
+      const downstreamAo = writeDownstreamAoStub(stubDir);
+      const payloadFile = path.join(stubDir, 'payload.txt');
+      writeFileSync(payloadFile, 'leaked sibling probe');
+      const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
+      const config = withAutonomousRealBinariesConfig(downstreamAo);
+      const script = `
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_BASE_DIR = ${psString(aoBaseDir)}
+        $env:AO_TMUX_NAME = 'opk-orchestrator'
+        $env:PATH = ${psString(path.join(repoRoot, 'scripts'))} + ':' + $env:PATH
+        $cap = pwsh -NoProfile -File ${psString(journaled)} opk-2 -RegisterCapabilityOnly
+        $sibling = Start-Process -FilePath 'bash' -ArgumentList @(${psString(path.join(repoRoot, 'scripts/ao'))}, 'send', 'opk-worker', '--file', ${psString(payloadFile)}) -PassThru -Wait -NoNewWindow -Environment @{ AO_AUTONOMOUS_ORCHESTRATOR_SURFACE='1'; AO_JOURNALED_SEND_INTERNAL=$cap; AO_BASE_DIR=${psString(aoBaseDir)}; PATH=$env:PATH }
+        exit $sibling.ExitCode
+      `;
+      try {
+        const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: autonomousProductionChainEnv(aoBaseDir),
+        });
+        expect(result.status).toBe(93);
+        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
+      } finally {
+        config.cleanup();
+        rmSync(aoBaseDir, { recursive: true, force: true });
+        rmSync(stubDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('rejects well-formed but unregistered journaled internal capability tokens', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
     const script = `
