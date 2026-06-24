@@ -471,6 +471,9 @@ export function evaluateReclaimDecision({
   }
 
   if (envelope.exceeded) {
+    if (liveness.outcome === 'legacy') {
+      return { action: 'skip', reason: 'legacy_holder_unverified', liveness, envelope };
+    }
     return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config });
   }
 

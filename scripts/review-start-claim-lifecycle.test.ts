@@ -230,6 +230,33 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(decision.reason).toBe('legacy_holder_unverified');
   });
 
+  it('does not reclaim legacy live holders when the readiness envelope expires', () => {
+    const acquired = '2026-06-24T12:00:00.000Z';
+    const liveness = classifyClaimHolderLiveness(fakeHolder({ startTimeTicks: '', bootIdHash: '' }), {
+      localHost: 'test-host',
+      procStartTimeTicks: '123',
+      allowNonLinuxProc: true,
+    });
+    expect(liveness.outcome).toBe('legacy');
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
+        acquiredAtUtc: acquired,
+        holdStartedAtUtc: acquired,
+      },
+      holderLiveness: liveness,
+      reviewRuns: [],
+      nowMs: Date.parse('2026-06-24T12:00:31.000Z'),
+      config: resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000 }),
+      localHost: 'test-host',
+    });
+    expect(decision.action).toBe('skip');
+    expect(decision.reason).toBe('legacy_holder_unverified');
+  });
+
   it('reclaims legacy holder when local pid is absent', () => {
     const acquired = '2026-06-24T12:00:00.000Z';
     const decision = evaluateReclaimDecision({
