@@ -126,7 +126,10 @@ const managedChildRoles = [
   'heartbeat',
   'review-trigger-reconcile',
   'review-trigger-reeval',
+  'review-ready-report-state-seed',
   'ci-green-wake-reconcile',
+  'review-run-recovery',
+  'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
   'ci-failure-notification-reaction',
   'review-send-reconcile',
@@ -452,7 +455,9 @@ describe('orchestrator-wake-supervisor', () => {
     child.kill('SIGTERM');
   });
 
-  it('stops children when orchestrator session disappears at runtime', async () => {
+  it(
+    'stops children when orchestrator session disappears at runtime',
+    async () => {
     const stateDir = makeStateDir();
     const dynamicFixture = path.join(stateDir, 'ao-status.json');
     fs.writeFileSync(
@@ -461,7 +466,7 @@ describe('orchestrator-wake-supervisor', () => {
     );
 
     const child = startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
-    await waitForMarkers(stateDir);
+    await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
     const listenerBefore = await readMarker(stateDir, 'listener');
     const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
@@ -469,19 +474,23 @@ describe('orchestrator-wake-supervisor', () => {
       dynamicFixture,
       fs.readFileSync(path.join(fixtureDir, 'status-no-orchestrator.json')),
     );
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 8000));
     expect(isAlive(listenerBefore.pid)).toBe(false);
     expect(isAlive(heartbeatBefore.pid)).toBe(false);
     child.kill('SIGTERM');
-  });
+    },
+    detachedSupervisorTimeoutMs,
+  );
 
-  it('reports status and stops both children cleanly', async () => {
+  it(
+    'reports status and stops both children cleanly',
+    async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
       '-OrchestratorSessionId',
       'op-status-stop',
     ]);
-    await waitForMarkers(stateDir);
+    await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat', 'review-send-reconcile']);
 
     const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusUp.status).toBe(0);
@@ -499,7 +508,9 @@ describe('orchestrator-wake-supervisor', () => {
     const statusDown = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusDown.status).not.toBe(0);
     expect(statusDown.stdout).toContain('stopped');
-  });
+    },
+    detachedSupervisorTimeoutMs,
+  );
 
   it(
     'stops supervisor before children so no orphan wake processes remain',

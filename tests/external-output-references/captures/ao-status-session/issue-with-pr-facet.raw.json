@@ -1,0 +1,38 @@
+{
+  "name": "opk-430",
+  "role": "worker",
+  "branch": "feat/430",
+  "status": "working",
+  "summary": null,
+  "claudeSummary": null,
+  "pr": "https://github.com/chetwerikoff/orchestrator-pack/pull/427",
+  "prNumber": 427,
+  "issue": "417",
+  "lastActivity": "2m ago",
+  "project": "orchestrator-pack",
+  "ciStatus": null,
+  "reviewDecision": null,
+  "pendingThreads": null,
+  "activity": "ready",
+  "reports": [
+    {
+      "timestamp": "2026-06-24T05:00:00.000Z",
+      "actor": "che",
+      "source": "acknowledge",
+      "reportState": "started",
+      "accepted": true,
+      "before": {
+        "legacyStatus": "spawning",
+        "sessionState": "not_started",
+        "sessionReason": "spawn_requested",
+        "lastTransitionAt": "2026-06-24T04:59:30.000Z"
+      },
+      "after": {
+        "legacyStatus": "working",
+        "sessionState": "working",
+        "sessionReason": "agent_acknowledged",
+        "lastTransitionAt": "2026-06-24T05:00:00.000Z"
+      }
+    }
+  ]
+}

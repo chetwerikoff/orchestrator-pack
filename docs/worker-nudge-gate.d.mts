@@ -49,3 +49,9 @@ export declare function validateCapabilityInventory(input: Record<string, unknow
   violations: string[];
 };
 export declare function evaluateAdoptionGate(input: Record<string, unknown>): Record<string, unknown>;
+
+export declare function normalizeIssueNumber(value: unknown): number;
+export declare function syncIssueOwnershipClaimRecord(input: Record<string, unknown>): Record<string, unknown>;
+export declare function resolveIssueOwnerSessionForNudge(input: Record<string, unknown>): Record<string, unknown>;
+export declare function resolveWorkerTargetFromIssueClaim(input: Record<string, unknown>): Record<string, unknown>;
+export declare function buildIssueTupleKey(input: Record<string, unknown>): Record<string, unknown>;

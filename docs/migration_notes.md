@@ -170,6 +170,17 @@ Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` w
 returns to native GraphQL-backed `gh`.
 
 
+
+## Issue-keyed task-continuation nudge (Issue #430)
+
+Extends the #384 worker-nudge gate with `task-continuation` — issue-keyed tuples that stay
+issue-keyed after `prNumber` appears on the same session row.
+
+1. Merge `agent-orchestrator.yaml.example` **TASK CONTINUATION** orchestratorRules clause into live yaml.
+2. `ao stop` / `ao start` so orchestrator rules reload.
+3. Verify: `npm test -- worker-nudge-task-continuation-tuple worker-nudge-issue-owner-bootstrap worker-nudge-task-continuation-pr-facet autonomous-worker-nudge-boundary`
+4. Adoption probe unchanged: `pwsh -NoProfile -File scripts/check-worker-nudge-gate-adoption.ps1`
+
 ## LLM-orchestrator gated worker nudge gate (Issue #384)
 
 Autonomous orchestrator turns must deliver worker nudges only through
