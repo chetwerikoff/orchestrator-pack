@@ -17,6 +17,8 @@ import {
   episodeKeyDigest,
   evaluateEpisodeTerminal,
   evaluateHelperErrorEscalation,
+  evaluateLiveWorkerSuppressor,
+  evaluateProgressFreshness,
   evaluatePreflightRevalidation,
   evaluateSnapshotCoherence,
   evaluateTargetApplySnapshot,
@@ -27,6 +29,9 @@ import {
   migrateLegacyEpisodeRecord,
   planReconcileTick,
   recordPendingEpisode,
+  DEFAULT_PROGRESS_FRESHNESS_MS,
+  PROGRESS_FRESHNESS_ENV,
+  resolveProgressFreshnessMs,
   resolveConfig,
   resolveSubmittedDelivery,
   reserveSubmitIntent,
@@ -128,6 +133,29 @@ function captureWorkerState(scenarioFixture: string) {
       },
     ],
     openPrs,
+  };
+}
+
+const progressPins = () => fixture<{
+  defaultProgressFreshnessMs: number;
+  reportedAt: string;
+  freshEvaluationMs: number;
+  staleEvaluationMs: number;
+}>('ci-failure-progress-pinned.json');
+
+function freshProgressClock(overrides: { nowMs?: number; config?: Record<string, unknown> } = {}) {
+  const pins = progressPins();
+  return {
+    nowMs: overrides.nowMs ?? pins.freshEvaluationMs,
+    config: { progressFreshnessMs: pins.defaultProgressFreshnessMs, ...(overrides.config ?? {}) },
+  };
+}
+
+function staleProgressClock(overrides: { nowMs?: number; config?: Record<string, unknown> } = {}) {
+  const pins = progressPins();
+  return {
+    nowMs: overrides.nowMs ?? pins.staleEvaluationMs,
+    config: { progressFreshnessMs: pins.defaultProgressFreshnessMs, ...(overrides.config ?? {}) },
   };
 }
 
@@ -282,6 +310,7 @@ describe('CI failure live worker suppressor (Issue #342)', () => {
     const result = decideCiFailureNotification({
       episode,
       workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+      ...freshProgressClock(),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
@@ -515,6 +544,7 @@ describe('episode lifecycle outbox (Issue #342)', () => {
         storeDir: dir,
         episode,
         workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+        ...freshProgressClock(),
       });
       expect(result.action).toBe('suppressed');
       expect(result.terminal!.audit!.reason).toBe('suppressed-live-worker');
@@ -884,6 +914,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     const result = runWrapper('decide', {
       episode,
       workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+      ...freshProgressClock(),
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
@@ -953,6 +984,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
         storeDir: dir,
         episode,
         workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+        ...freshProgressClock(),
       });
       expect(suppressed.action).toBe('suppressed');
       const auditFiles = readdirSync(path.join(dir, 'audit')).filter((name) => name.endsWith('.json'));
@@ -1070,5 +1102,167 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('ci-failure-progress-freshness (Issue #439 AC#1)', () => {
+  it('fresh same-head fixing_ci suppresses with pinned default progressFreshnessMs', () => {
+    const pins = progressPins();
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+      ...freshProgressClock(),
+    });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+    expect(result.audit!.reason).toBe('suppressed-live-worker');
+    expect(result.diagnostics!.progress_freshness).toMatchObject({
+      progressFreshnessMs: pins.defaultProgressFreshnessMs,
+    });
+    const emission = {
+      'ci-failure-progress-freshness': {
+        freshDecision: result.reason,
+      },
+    };
+    expect(emission['ci-failure-progress-freshness'].freshDecision).toBe('suppressed-live-worker');
+    console.log(JSON.stringify(emission));
+  });
+
+  it('defaults progressFreshnessMs below report-stale backstop', () => {
+    expect(DEFAULT_PROGRESS_FRESHNESS_MS).toBeGreaterThan(0);
+    expect(DEFAULT_PROGRESS_FRESHNESS_MS).toBe(progressPins().defaultProgressFreshnessMs);
+    expect(resolveProgressFreshnessMs({})).toBeLessThan(30 * 60 * 1000);
+  });
+});
+
+describe('ci-failure-progress-stale (Issue #439 AC#2)', () => {
+  it('stale same-head fixing_ci escalates via progress_stale SEND path', () => {
+    const pins = progressPins();
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-stale-same-head-fixing-ci.json'),
+      ...staleProgressClock(),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).toBe('progress_stale');
+    expect(result.audit!.reason).toBe('progress_stale');
+    expect(result.diagnostics!.progress_stale).toMatchObject({
+      prNumber: episode.prNumber,
+      headSha: episode.headSha,
+      targetId: episode.targetId,
+      targetGeneration: episode.targetGeneration,
+      progressFreshnessMs: pins.defaultProgressFreshnessMs,
+      latestReportTimestampUtc: pins.reportedAt,
+    });
+    const emission = {
+      'ci-failure-progress-stale': {
+        auditReason: result.audit!.reason,
+      },
+    };
+    expect(emission['ci-failure-progress-stale'].auditReason).toBe('progress_stale');
+    console.log(JSON.stringify(emission));
+  });
+
+  it('positive-outcome: stale progress arms SEND instead of suppressed-live-worker', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-stale-same-head-fixing-ci.json'),
+      ...staleProgressClock(),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).not.toBe('suppressed-live-worker');
+    expect(result.audit!.terminal_action).toBe('SEND');
+  });
+});
+
+describe('CI failure progress freshness lifecycle (Issue #439 AC#3–AC#8)', () => {
+  it('newer same-head report within progressFreshnessMs returns to SUPPRESS (AC#3)', () => {
+    const pins = progressPins();
+    const ws = captureWorkerState('live-worker-stale-same-head-fixing-ci.json');
+    ws.sessions[0].reports = [
+      { reportState: 'fixing_ci', reportedAt: pins.reportedAt, accepted: true },
+      { reportState: 'fixing_ci', reportedAt: '2026-06-18T13:24:00.000Z', accepted: true },
+    ];
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: ws,
+      nowMs: pins.staleEvaluationMs,
+      config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
+    });
+    expect(result.terminal_action).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+  });
+
+  it('new red-period episode may SEND when stale even if prior episode served (AC#3)', () => {
+    const pins = progressPins();
+    const priorEvent = { ...fixture<any>('reaction-action-succeeded.json'), episode };
+    const result = decideCiFailureNotification({
+      episode: nextRedSameSha,
+      workerState: captureWorkerState('live-worker-stale-same-head-fixing-ci.json'),
+      reactionEvents: [priorEvent],
+      ...staleProgressClock(),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).toBe('progress_stale');
+  });
+
+  it('stale-head fixing_ci remains no-suppress not progress_stale (AC#4)', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: captureWorkerState('live-worker-stale-head-fixing-ci.json'),
+      ...staleProgressClock(),
+    });
+    expect(result.terminal_action).toBe('SEND');
+    expect(result.reason).toBe('no_suppressor');
+    expect(result.reason).not.toBe('progress_stale');
+  });
+
+  it('degraded unreadable report timestamp fails safe without SEND (AC#7)', () => {
+    const result = decideCiFailureNotification({
+      episode,
+      workerState: workerState({
+        status: 'stuck',
+        reports: [{
+          reportState: 'fixing_ci',
+          headRefOid: episode.headSha,
+          accepted: true,
+        }],
+      }),
+      ...freshProgressClock(),
+    });
+    expect(result.hard_failure).toBe(true);
+    expect(result.diagnostic!.error_kind).toBe('progress_freshness_evidence_unreadable');
+    expect(result.terminal_action).toBeUndefined();
+  });
+
+  it('evaluateProgressFreshness honors AO_CI_FAILURE_PROGRESS_FRESHNESS_MS override', () => {
+    const prior = process.env[PROGRESS_FRESHNESS_ENV];
+    process.env[PROGRESS_FRESHNESS_ENV] = '600000';
+    try {
+      expect(resolveProgressFreshnessMs({})).toBe(600_000);
+      const freshness = evaluateProgressFreshness({
+        reportedAtMs: Date.parse('2026-06-18T13:05:00.000Z'),
+        nowMs: Date.parse('2026-06-18T13:14:00.000Z'),
+      });
+      expect(freshness.ok).toBe(true);
+      expect(freshness.fresh).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env[PROGRESS_FRESHNESS_ENV];
+      else process.env[PROGRESS_FRESHNESS_ENV] = prior;
+    }
+  });
+
+  it('evaluateLiveWorkerSuppressor exposes progress_stale audit context (AC#5)', () => {
+    const pins = progressPins();
+    const live = evaluateLiveWorkerSuppressor({
+      episode,
+      workerState: captureWorkerState('live-worker-stale-same-head-fixing-ci.json'),
+      nowMs: pins.staleEvaluationMs,
+      config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
+    });
+    expect(live.status).toBe('progress_stale');
+    expect(live.reason).toBe('progress_stale');
+    expect(live.progressFreshnessMs).toBe(pins.defaultProgressFreshnessMs);
+    expect(live.reportedAtMs).toBe(Date.parse(pins.reportedAt));
   });
 });

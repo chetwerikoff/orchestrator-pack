@@ -1422,6 +1422,22 @@ delivery against live PR-owner `fixing_ci` state (not episode-key report binding
    checkout (reads live gitignored yaml). Both workerState wiring and durable submit-ack must pass.
 5. Verify: red CI + worker in `fixing_ci` → audit `suppressed-live-worker`; idle owner → `sent`.
 
+## CI-failure progress-stale escalation (Issue #439)
+
+Issue #439 narrows the #342 live-worker suppressor: same-head `fixing_ci` suppresses only while the
+head-scoped report timestamp is within `progressFreshnessMs` (default 15 minutes, strictly below the
+30-minute `report-stale` backstop). Stale same-head progress escalates as audit reason `progress_stale`
+through the existing `ci-failure-notification-reconcile.ps1` delivery path (no parallel send surface).
+
+1. Pull merged pack; no `agent-orchestrator.yaml.example` schema change is required for this issue.
+2. Optional override: set `AO_CI_FAILURE_PROGRESS_FRESHNESS_MS` (positive integer milliseconds, must stay
+   below `REPORT_STALE_BACKSTOP_MS` / ~30 minutes) in the operator environment for supervised reconcile
+   children if the default 15-minute window is too tight or too loose.
+3. `ao stop` then `ao start` so reconcile children reload helper code after merge.
+4. Verify with golden fixtures / `npm test -- ci-failure-progress-freshness` and
+   `npm test -- ci-failure-progress-stale`: fresh same-head `fixing_ci` → `suppressed-live-worker`;
+   stale same-head `fixing_ci` on unchanged red head → `progress_stale` + `SEND`.
+
 
 ## Per-cycle review/nudge settle gate (Issue #332)
 
