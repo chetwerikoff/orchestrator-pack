@@ -1,23 +1,17 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from './_test-pwsh-helpers.js';
 import {
-  buildIssueTupleKey,
-  buildTupleKey,
-  evaluateBoundary,
-  evaluateNudgeGate,
-  findForbiddenAutonomousWorkerSendInvocations,
-  normalizeIssueNumber,
+  TASK_CONTINUATION_ISSUE_NUMBER,
+  TASK_CONTINUATION_PROJECT_ID,
+  TASK_CONTINUATION_SESSION_ID,
   resolveIssueOwnerSessionForNudge,
   resolveWorkerTargetFromIssueClaim,
   syncIssueOwnershipClaimRecord,
-} from '../docs/worker-nudge-gate.mjs';
+} from './_test-worker-nudge-task-continuation.js';
 
 describe('worker-nudge-issue-owner-bootstrap (#430)', () => {
-  const projectId = 'orchestrator-pack';
-  const issueNumber = 417;
-  const sessionId = 'opk-430';
+  const projectId = TASK_CONTINUATION_PROJECT_ID;
+  const issueNumber = TASK_CONTINUATION_ISSUE_NUMBER;
+  const sessionId = TASK_CONTINUATION_SESSION_ID;
 
   it('binds exactly one live issue owner', () => {
     const owner = resolveIssueOwnerSessionForNudge({

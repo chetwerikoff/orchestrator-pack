@@ -1,0 +1,25 @@
+{
+  "issue_number": 430,
+  "iteration_id": "opk-10",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T07:24:30.000Z",
+  "baseline": {
+    "commit_sha": "1bcb59dd5f3638249a836965d0dc656d56b4e53e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/declarations/430.opk-10.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "docs/worker-nudge-gate.mjs",
+    "docs/worker-nudge-gate.d.mts",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "agent-orchestrator.yaml.example",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}

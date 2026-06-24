@@ -1,24 +1,19 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from './_test-pwsh-helpers.js';
 import {
+  TASK_CONTINUATION_GENERATION,
+  TASK_CONTINUATION_ISSUE_NUMBER,
+  TASK_CONTINUATION_PROJECT_ID,
+  TASK_CONTINUATION_SESSION_ID,
   buildIssueTupleKey,
   buildTupleKey,
-  evaluateBoundary,
   evaluateNudgeGate,
-  findForbiddenAutonomousWorkerSendInvocations,
-  normalizeIssueNumber,
-  resolveIssueOwnerSessionForNudge,
-  resolveWorkerTargetFromIssueClaim,
-  syncIssueOwnershipClaimRecord,
-} from '../docs/worker-nudge-gate.mjs';
+} from './_test-worker-nudge-task-continuation.js';
 
 describe('worker-nudge-task-continuation-tuple (#430)', () => {
-  const projectId = 'orchestrator-pack';
-  const issueNumber = 417;
-  const sessionId = 'opk-430';
-  const generation = 'a1b2c3d4e5f6';
+  const projectId = TASK_CONTINUATION_PROJECT_ID;
+  const issueNumber = TASK_CONTINUATION_ISSUE_NUMBER;
+  const sessionId = TASK_CONTINUATION_SESSION_ID;
+  const generation = TASK_CONTINUATION_GENERATION;
 
   it('forms a complete issue-keyed tuple without prNumber as dedup anchor', () => {
     const tuple = buildIssueTupleKey({

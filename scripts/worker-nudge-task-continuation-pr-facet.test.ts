@@ -1,24 +1,23 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from './_test-pwsh-helpers.js';
 import {
+  TASK_CONTINUATION_GENERATION,
+  TASK_CONTINUATION_ISSUE_NUMBER,
+  TASK_CONTINUATION_PR_NUMBER,
+  TASK_CONTINUATION_PROJECT_ID,
+  TASK_CONTINUATION_SESSION_ID,
   buildIssueTupleKey,
-  buildTupleKey,
-  evaluateBoundary,
   evaluateNudgeGate,
-  findForbiddenAutonomousWorkerSendInvocations,
   normalizeIssueNumber,
-  resolveIssueOwnerSessionForNudge,
-  resolveWorkerTargetFromIssueClaim,
-  syncIssueOwnershipClaimRecord,
-} from '../docs/worker-nudge-gate.mjs';
+  repoRoot,
+} from './_test-worker-nudge-task-continuation.js';
 
 describe('worker-nudge-task-continuation-pr-facet (#430)', () => {
-  const projectId = 'orchestrator-pack';
-  const issueNumber = 417;
-  const prNumber = 427;
-  const sessionId = 'opk-430';
+  const projectId = TASK_CONTINUATION_PROJECT_ID;
+  const issueNumber = TASK_CONTINUATION_ISSUE_NUMBER;
+  const prNumber = TASK_CONTINUATION_PR_NUMBER;
+  const sessionId = TASK_CONTINUATION_SESSION_ID;
   const generation = 'facetgen001';
 
   it('retains issue on post-PR capture fixture', () => {
@@ -58,7 +57,8 @@ describe('worker-nudge-task-continuation-pr-facet (#430)', () => {
     });
     expect(gate.allow).toBe(false);
     expect(gate.reason).toBe('already_served');
-    expect(gate.tuple?.issueKeyed).toBe(true);
-    expect(gate.tuple?.tupleKey).not.toContain(`|${prNumber}|`);
+    const resolvedTuple = gate.tuple as { issueKeyed?: boolean; tupleKey?: string };
+    expect(resolvedTuple.issueKeyed).toBe(true);
+    expect(resolvedTuple.tupleKey).not.toContain(`|${prNumber}|`);
   });
 });
