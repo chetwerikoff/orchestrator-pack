@@ -74,6 +74,14 @@
       "path": "captures/ao-review-run/waiting_update.raw.json",
       "contentHash": "sha256:197f6ac9ada374e31408c51e7e0acd18771f0655b8a19901e075a73e09ad1f32"
     },
+    "ao-status-session/issue-with-pr-facet": {
+      "id": "ao-status-session/issue-with-pr-facet",
+      "producer": "ao",
+      "sourceCommand": "ao status --json --reports full",
+      "kind": "structured",
+      "path": "captures/ao-status-session/issue-with-pr-facet.raw.json",
+      "contentHash": "sha256:0b3a0e160318490397e15a4ee7532cc111fad867b37374a628d2a3db09fc827a"
+    },
     "ao-status-session/runtime-alive": {
       "id": "ao-status-session/runtime-alive",
       "producer": "ao",
@@ -201,6 +209,14 @@
       "kind": "structured",
       "path": "captures/ao-worker-report/working.raw.json",
       "contentHash": "sha256:8f97b7e395f0c2abe53cfb8ab24a2109e47267f7ef836d8512e0ed0cc8dd9710"
+    },
+    "gh-pr-checks/representative-pr": {
+      "id": "gh-pr-checks/representative-pr",
+      "producer": "gh-pr-checks",
+      "sourceCommand": "gh pr checks 435 --json name,state,bucket,link,startedAt,completedAt,workflow,description",
+      "kind": "structured",
+      "path": "captures/gh-pr-checks/representative-pr.raw.json",
+      "contentHash": "sha256:6185f3b213ce86814a344001917f862d75196e8183015a005acf9b2c310d8fcb"
     },
     "gh-pr-open/open": {
       "id": "gh-pr-open/open",

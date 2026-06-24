@@ -59,7 +59,8 @@ projects:
           # Out-of-band real-binary resolution (gitignored). Copy docs/autonomous-real-binaries.example.json
           # to .ao/autonomous-real-binaries.json with pack scripts/git-real-binary + gitSystemBinary host path
           # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
-          # Prepend pack scripts/ so orchestrator turns resolve `ao` and `git` to scripts/ao + scripts/git.
+          # Prepend pack scripts/ so orchestrator turns resolve `ao`, `git`, and `gh` to
+          # scripts/ao + scripts/git + scripts/gh (always-REST inventory reads for gh; Issue #431).
           # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
           # (pwsh, python3, dirname, readlink) resolve; BASH_ENV bootstrap prepends scripts/,
           # maps live AO_TMUX_NAME *orchestrator* when agentConfig.env does not reach tmux,
@@ -384,7 +385,7 @@ projects:
       Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
       AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, resolve real ao/git out-of-band via
       .ao/autonomous-real-binaries.json (never turn-visible AO_REAL_BINARY/GIT_REAL_BINARY),
-      and prepend pack scripts/ to PATH so `ao` and `git` resolve to pack shims (deny spawn and
+      and prepend pack scripts/ to PATH so `ao`, `git`, and `gh` resolve to pack shims (deny spawn and
       direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
       only the claimed entry point may launch review runs. Gate capability markers:
       orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
@@ -490,6 +491,17 @@ projects:
            respawned via ao spawn --claim-pr <PR> (ping/respawn discipline below).
         5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL
            above; verify via gh pr view, not session status alone).
+
+
+      TASK CONTINUATION (Issue #430 — issue-keyed, pre- and post-PR). When exactly one live
+      issue-bound worker owns the task (ao status issue match + runtime alive) and no prior
+      task-continuation tuple was served for the current issue generation, send exactly ONE
+      continuation via the gated worker-nudge command (never raw ao send):
+        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
+          -SessionId <session> -IssueNumber <issue> -IntentClass task-continuation -Surface orchestrator-turn
+        Optional -PrNumber is audit context only after PR open; dedup stays issue-keyed.
+        Message file should remind the worker to commit, rebase, open PR, and report when ready.
+        Gate version: worker-nudge-gate/v1.
 
       PING DISCIPLINE (one ping per pending episode). On the next orchestrator turn
       while still in waiting_worker_review_response, if there is no worker

@@ -16,7 +16,9 @@ $rules = Get-Content -LiteralPath $yaml -Raw
 $requiredPhrases = @(
     'invoke-gated-worker-nudge.ps1',
     'worker-nudge-gate/v1',
-    'journaled-worker-send.ps1'
+    'journaled-worker-send.ps1',
+    '-IntentClass task-continuation',
+    '-IssueNumber'
 )
 $missing = @($requiredPhrases | Where-Object { $rules -notmatch [regex]::Escape($_) })
 if ($missing.Count -gt 0) {

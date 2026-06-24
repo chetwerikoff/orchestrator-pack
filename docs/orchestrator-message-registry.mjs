@@ -830,6 +830,10 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'docs/review-wake-trigger.mjs',
     'docs/review-handoff-wake-admission.mjs',
   ],
+  417: [
+    'scripts/lib/Review-StartClaim.ps1',
+    'scripts/review-run-recovery.ps1',
+  ],
   384: [
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',

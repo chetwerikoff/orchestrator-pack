@@ -108,35 +108,43 @@ function ConvertTo-WorkerNudgeClaimSafeSegment {
 
 function Get-WorkerNudgeClaimKey {
     param(
-        [int]$PrNumber,
+        [int]$PrNumber = 0,
+        [int]$IssueNumber = 0,
         [string]$CycleKey,
         [string]$IntentClass,
         [string]$WorkerTarget
     )
-    return "pr-$PrNumber-$(ConvertTo-WorkerNudgeClaimSafeSegment $IntentClass)-$(ConvertTo-WorkerNudgeClaimSafeSegment $CycleKey)-$(ConvertTo-WorkerNudgeClaimSafeSegment $WorkerTarget)"
+    $prefix = if ($IssueNumber -gt 0 -and $IntentClass -eq 'task-continuation') {
+        "issue-$IssueNumber"
+    } else {
+        "pr-$PrNumber"
+    }
+    return "$prefix-$(ConvertTo-WorkerNudgeClaimSafeSegment $IntentClass)-$(ConvertTo-WorkerNudgeClaimSafeSegment $CycleKey)-$(ConvertTo-WorkerNudgeClaimSafeSegment $WorkerTarget)"
 }
 
 function Get-WorkerNudgeClaimPath {
     param(
         [string]$Namespace,
-        [int]$PrNumber,
+        [int]$PrNumber = 0,
+        [int]$IssueNumber = 0,
         [string]$CycleKey,
         [string]$IntentClass,
         [string]$WorkerTarget
     )
-    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
     return (Join-Path $Namespace "$key.json")
 }
 
 function Get-WorkerNudgeClaimLockDir {
     param(
         [string]$Namespace,
-        [int]$PrNumber,
+        [int]$PrNumber = 0,
+        [int]$IssueNumber = 0,
         [string]$CycleKey,
         [string]$IntentClass,
         [string]$WorkerTarget
     )
-    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
     return (Join-Path $Namespace ".lock-$key")
 }
 
@@ -166,8 +174,15 @@ function Test-WorkerNudgeClaimTokenIdentityFields {
     param([object]$Token)
 
     if (-not $Token) { return $false }
+    $intentClass = [string]$Token.intentClass
+    $issueNumber = 0
     $prNumber = 0
-    if (-not [int]::TryParse([string]$Token.prNumber, [ref]$prNumber) -or $prNumber -le 0) { return $false }
+    $hasIssue = [int]::TryParse([string]$Token.issueNumber, [ref]$issueNumber) -and $issueNumber -gt 0
+    $hasPr = [int]::TryParse([string]$Token.prNumber, [ref]$prNumber) -and $prNumber -gt 0
+    if ($intentClass -eq 'task-continuation') {
+        if (-not $hasIssue) { return $false }
+    }
+    elseif (-not $hasPr) { return $false }
     foreach ($field in @('cycleKey', 'intentClass', 'workerTarget', 'tupleKey', 'processGuid', 'claimId')) {
         if (-not [string]$Token.$field) { return $false }
     }
@@ -234,8 +249,10 @@ function Resolve-WorkerNudgeClaimTokenBinding {
     }
 
     $canonicalNamespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $tokenProjectId
+    $issueNumber = 0
+    [void][int]::TryParse([string]$Token.issueNumber, [ref]$issueNumber)
     $canonicalPath = Get-WorkerNudgeClaimPath -Namespace $canonicalNamespace `
-        -PrNumber ([int]$Token.prNumber) -CycleKey ([string]$Token.cycleKey) `
+        -PrNumber ([int]$Token.prNumber) -IssueNumber $issueNumber -CycleKey ([string]$Token.cycleKey) `
         -IntentClass ([string]$Token.intentClass) -WorkerTarget ([string]$Token.workerTarget)
 
     $canonicalNamespacePath = Get-WorkerNudgeClaimStorePathCanonical -Path $canonicalNamespace
@@ -273,7 +290,11 @@ function Test-WorkerNudgeClaimTokenMatchesRecord {
         [object]$Record
     )
 
-    if ([int]$Record.prNumber -ne [int]$Token.prNumber) { return 'token_pr_mismatch' }
+    $intentClass = [string]$Token.intentClass
+    if ($intentClass -eq 'task-continuation') {
+        if ([int]$Record.issueNumber -ne [int]$Token.issueNumber) { return 'token_issue_mismatch' }
+    }
+    elseif ([int]$Record.prNumber -ne [int]$Token.prNumber) { return 'token_pr_mismatch' }
     if ([string]$Record.cycleKey -ne [string]$Token.cycleKey) { return 'token_cycle_mismatch' }
     if ([string]$Record.intentClass -ne [string]$Token.intentClass) { return 'token_intent_mismatch' }
     if ([string]$Record.workerTarget -ne [string]$Token.workerTarget) { return 'token_worker_target_mismatch' }
@@ -529,7 +550,8 @@ function Find-WorkerNudgeClaimTerminalRecord {
 
 function New-WorkerNudgeClaimActiveRecord {
     param(
-        [int]$PrNumber,
+        [int]$PrNumber = 0,
+        [int]$IssueNumber = 0,
         [string]$CycleKey,
         [string]$IntentClass,
         [string]$WorkerTarget,
@@ -537,16 +559,19 @@ function New-WorkerNudgeClaimActiveRecord {
         [string]$TargetId,
         [string]$TargetGeneration,
         [string]$Surface,
-        [string]$TupleKey
+        [string]$TupleKey,
+        [string]$ProjectId = ''
     )
     $leaseMs = Get-WorkerNudgeClaimLeaseMs
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+    $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
     return @{
         schemaVersion         = 1
         key                   = $key
         tupleKey              = $TupleKey
         prNumber              = $PrNumber
+        issueNumber           = $IssueNumber
+        projectId             = $ProjectId
         cycleKey              = $CycleKey
         intentClass           = $IntentClass
         workerTarget          = $WorkerTarget
@@ -606,6 +631,7 @@ function New-WorkerNudgeClaimToken {
         projectId             = $projectId
         claimId               = [string]$claim.tokenNonce
         prNumber              = [int]$claim.prNumber
+        issueNumber           = [int]($claim.issueNumber)
         cycleKey              = [string]$claim.cycleKey
         intentClass           = [string]$claim.intentClass
         workerTarget          = [string]$claim.workerTarget
@@ -719,7 +745,8 @@ function Resolve-WorkerNudgeClaimAgainstExisting {
 
 function Acquire-WorkerNudgeClaim {
     param(
-        [int]$PrNumber,
+        [int]$PrNumber = 0,
+        [int]$IssueNumber = 0,
         [string]$CycleKey,
         [string]$IntentClass,
         [string]$WorkerTarget,
@@ -740,21 +767,25 @@ function Acquire-WorkerNudgeClaim {
         if (-not $TargetId) { $TargetId = $SessionId }
         if (-not $TargetGeneration) { $TargetGeneration = $TargetId }
         if (-not $TupleKey) {
-            $TupleKey = "$PrNumber|$CycleKey|$IntentClass|$WorkerTarget"
+            if ($IssueNumber -gt 0 -and $IntentClass -eq 'task-continuation') {
+                $TupleKey = "$ProjectId|$IssueNumber|$CycleKey|$IntentClass|$WorkerTarget"
+            } else {
+                $TupleKey = "$PrNumber|$CycleKey|$IntentClass|$WorkerTarget"
+            }
         }
-        $path = Get-WorkerNudgeClaimPath -Namespace $resolved -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
-        $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $resolved -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+        $path = Get-WorkerNudgeClaimPath -Namespace $resolved -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+        $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $resolved -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
         $staleMinutes = Get-WorkerNudgeClaimStaleMinutes -LogWriter $LogWriter
-        $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
+        $key = Get-WorkerNudgeClaimKey -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass -WorkerTarget $WorkerTarget
 
         if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
             return (Add-WorkerNudgeClaimProjectId -Result @{ acquired = $false; reason = 'mutex_contended'; path = $path; namespace = $resolved; key = $key } -ProjectId $ProjectId)
         }
 
         try {
-            $record = New-WorkerNudgeClaimActiveRecord -PrNumber $PrNumber -CycleKey $CycleKey -IntentClass $IntentClass `
+            $record = New-WorkerNudgeClaimActiveRecord -PrNumber $PrNumber -IssueNumber $IssueNumber -CycleKey $CycleKey -IntentClass $IntentClass `
                 -WorkerTarget $WorkerTarget -SessionId $SessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
-                -Surface $Surface -TupleKey $TupleKey
+                -Surface $Surface -TupleKey $TupleKey -ProjectId $ProjectId
             $existing = Read-WorkerNudgeClaimRecord -Path $path
             if ($existing.ok) {
                 return (Add-WorkerNudgeClaimProjectId -Result (Resolve-WorkerNudgeClaimAgainstExisting -Namespace $resolved -Path $path -Existing $existing `
@@ -829,7 +860,7 @@ function Set-WorkerNudgeClaimMessageContentHash {
         return @{ ok = $false; reason = 'missing_args' }
     }
     $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace `
-        -PrNumber ([int]$ClaimResult.claim.prNumber) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
+        -PrNumber ([int]$ClaimResult.claim.prNumber) -IssueNumber ([int]($ClaimResult.claim.issueNumber)) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
         -IntentClass ([string]$ClaimResult.claim.intentClass) -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
     if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
         return @{ ok = $false; reason = 'mutex_contended' }
@@ -861,7 +892,7 @@ function Set-WorkerNudgeClaimSendAttempted {
     param([hashtable]$ClaimResult)
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
     $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace `
-        -PrNumber ([int]$ClaimResult.claim.prNumber) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
+        -PrNumber ([int]$ClaimResult.claim.prNumber) -IssueNumber ([int]($ClaimResult.claim.issueNumber)) -CycleKey ([string]$ClaimResult.claim.cycleKey) `
         -IntentClass ([string]$ClaimResult.claim.intentClass) -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
     if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
         return @{ ok = $false; reason = 'mutex_contended' }
@@ -904,7 +935,7 @@ function Release-WorkerNudgeActiveClaim {
         return @{ ok = $false; reason = 'no_claim' }
     }
     $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace -PrNumber ([int]$ClaimResult.claim.prNumber) `
-        -CycleKey ([string]$ClaimResult.claim.cycleKey) -IntentClass ([string]$ClaimResult.claim.intentClass) `
+        -IssueNumber ([int]($ClaimResult.claim.issueNumber)) -CycleKey ([string]$ClaimResult.claim.cycleKey) -IntentClass ([string]$ClaimResult.claim.intentClass) `
         -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
     if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
         return @{ ok = $false; reason = 'busy' }
@@ -958,7 +989,7 @@ function Finalize-WorkerNudgeClaim {
         return @{ ok = $false; reason = 'no_claim' }
     }
     $lockDir = Get-WorkerNudgeClaimLockDir -Namespace $ClaimResult.namespace -PrNumber ([int]$ClaimResult.claim.prNumber) `
-        -CycleKey ([string]$ClaimResult.claim.cycleKey) -IntentClass ([string]$ClaimResult.claim.intentClass) `
+        -IssueNumber ([int]($ClaimResult.claim.issueNumber)) -CycleKey ([string]$ClaimResult.claim.cycleKey) -IntentClass ([string]$ClaimResult.claim.intentClass) `
         -WorkerTarget ([string]$ClaimResult.claim.workerTarget)
     if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
         return @{ ok = $false; reason = 'busy' }
@@ -1255,6 +1286,146 @@ function Resolve-WorkerNudgeTargetFromPrClaim {
         sessions   = @($Sessions)
         prClaims   = @($sync.record)
         claimRecord = $sync.record
+    }
+}
+
+
+
+function Get-WorkerIssueOwnershipClaimStorePath {
+    param(
+        [string]$ProjectId = 'orchestrator-pack',
+        [int]$IssueNumber
+    )
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $dir = Join-Path (Join-Path (Join-Path $base 'projects') $ProjectId) 'issue-ownership-claims'
+    return (Join-Path $dir "issue-$IssueNumber.json")
+}
+
+function Get-WorkerIssueOwnershipClaimLockDir {
+    param(
+        [string]$ProjectId = 'orchestrator-pack',
+        [int]$IssueNumber
+    )
+    $storeDir = Split-Path -Parent (Get-WorkerIssueOwnershipClaimStorePath -ProjectId $ProjectId -IssueNumber $IssueNumber)
+    return (Join-Path $storeDir ".lock-issue-$IssueNumber")
+}
+
+function Test-WorkerIssueOwnershipClaimLegacyLockAbandoned {
+    param([string]$LockPath)
+    if (-not (Test-Path -LiteralPath $LockPath)) { return $false }
+    try {
+        $info = Get-Item -LiteralPath $LockPath -Force
+        if ($info.PSIsContainer) { return $false }
+        $ageSeconds = ((Get-Date).ToUniversalTime() - $info.LastWriteTimeUtc).TotalSeconds
+        return ($ageSeconds -ge $Script:WorkerNudgeClaimMutexStaleSeconds)
+    }
+    catch {
+        return $true
+    }
+}
+
+function Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile {
+    param([string]$LockPath)
+    if (Test-WorkerIssueOwnershipClaimLegacyLockAbandoned -LockPath $LockPath) {
+        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-WorkerIssueOwnershipClaimRecord {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-WorkerIssueOwnershipClaimRecord {
+    param(
+        [string]$Path,
+        [object]$Record
+    )
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $tmp = "$Path.tmp-$([guid]::NewGuid().ToString('n'))"
+    ($Record | ConvertTo-Json -Depth 12 -Compress) | Set-Content -LiteralPath $tmp -Encoding utf8NoBOM
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Resolve-WorkerNudgeTargetFromIssueClaim {
+    param(
+        [int]$IssueNumber,
+        [string]$SessionId,
+        [string]$ProjectId = 'orchestrator-pack',
+        [object[]]$Sessions = @(),
+        [string]$SessionsDir = ''
+    )
+
+    $libDir = $PSScriptRoot
+    . (Join-Path $libDir 'Invoke-AoCliJson.ps1')
+    . (Join-Path $libDir 'Worker-AutonomousNudgeGate.ps1')
+
+    if (-not $Sessions -or $Sessions.Count -eq 0) {
+        $Sessions = @(Get-AoStatusSessions)
+    }
+    if (-not $SessionsDir) {
+        $SessionsDir = Get-WorkerPrOwnershipSessionsDir -ProjectId $ProjectId
+    }
+
+    $ownerResolve = Invoke-WorkerNudgeFilterCli -Subcommand 'resolveIssueOwnerSession' -Payload @{
+        issueNumber = $IssueNumber
+        sessionId   = $SessionId
+        projectId   = $ProjectId
+        sessions    = @($Sessions)
+    }
+    if (-not $ownerResolve.ok) {
+        return @{ ok = $false; reason = [string]$ownerResolve.reason }
+    }
+    $ownerSessionId = [string]$ownerResolve.ownerSessionId
+    if (-not $ownerSessionId) {
+        return @{ ok = $false; reason = 'no_issue_owner' }
+    }
+
+    $storePath = Get-WorkerIssueOwnershipClaimStorePath -ProjectId $ProjectId -IssueNumber $IssueNumber
+    Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile -LockPath "$storePath.lock"
+    $lockDir = Get-WorkerIssueOwnershipClaimLockDir -ProjectId $ProjectId -IssueNumber $IssueNumber
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'issue_owner_lock_contended' }
+    }
+    try {
+        $existing = Read-WorkerIssueOwnershipClaimRecord -Path $storePath
+        $syncPayload = @{
+            projectId      = $ProjectId
+            issueNumber    = $IssueNumber
+            ownerSessionId = $ownerSessionId
+            existingClaim  = $existing
+        }
+        $sync = Invoke-WorkerNudgeFilterCli -Subcommand 'syncIssueOwnershipClaim' -Payload $syncPayload
+        if (-not $sync.ok) {
+            return @{ ok = $false; reason = [string]$sync.reason }
+        }
+        if ($sync.changed) {
+            $reread = Read-WorkerIssueOwnershipClaimRecord -Path $storePath
+            if ($reread -and [string]$reread.ownerSessionId -ne $ownerSessionId) {
+                return @{ ok = $false; reason = 'issue_owner_bootstrap_lost' }
+            }
+            Write-WorkerIssueOwnershipClaimRecord -Path $storePath -Record $sync.record
+        }
+
+        return Invoke-WorkerNudgeFilterCli -Subcommand 'resolveIssueWorkerTarget' -Payload @{
+            issueNumber = $IssueNumber
+            sessionId   = $SessionId
+            projectId   = $ProjectId
+            issueClaims = @($sync.record)
+            claimRecord = $sync.record
+        }
+    }
+    finally {
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
     }
 }
 

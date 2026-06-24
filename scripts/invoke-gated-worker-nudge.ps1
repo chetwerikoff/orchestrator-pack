@@ -1,18 +1,19 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Gated worker nudge entry point for the LLM orchestrator turn (Issue #384).
+  Gated worker nudge entry point for the LLM orchestrator turn (Issue #384, #430).
 
 .DESCRIPTION
   Classifies intent, acquires the shared worker-nudge claim, sends via
   journaled-worker-send with a single-use token, and finalizes the claim lifecycle.
+  task-continuation uses issue-keyed tuples; all other intent classes remain PR-keyed.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$SessionId,
-    [Parameter(Mandatory = $true)]
-    [int]$PrNumber,
+    [int]$PrNumber = 0,
+    [int]$IssueNumber = 0,
     [string]$HeadSha = '',
     [string]$IntentClass = '',
     [string]$Source = 'orchestrator-turn',
@@ -62,6 +63,7 @@ $classifyPayload = @{
     message     = $payloadText
     intentClass = $IntentClass
     prNumber    = $PrNumber
+    issueNumber = $IssueNumber
     headSha     = $HeadSha
     sessionId   = $SessionId
     reviewRunId = $ReviewRunId
@@ -69,31 +71,68 @@ $classifyPayload = @{
     episodeKey  = $EpisodeKey
     targetId    = $TargetId
     targetGeneration = $TargetGeneration
+    projectId   = $ProjectId
 }
 $classified = Invoke-WorkerNudgeFilterCli -Subcommand 'classifyIntent' -Payload $classifyPayload
 $resolvedIntent = [string]$classified.intentClass
+$issueKeyed = $resolvedIntent -eq 'task-continuation'
+
+if ($issueKeyed -and $IssueNumber -le 0) {
+    throw 'task-continuation requires -IssueNumber (issue-keyed tuple)'
+}
+if (-not $issueKeyed -and $PrNumber -le 0) {
+    throw 'PR-keyed worker nudge requires -PrNumber'
+}
 
 if ($Probe -and -not $HeadSha) {
     $HeadSha = ('f' * 40)
 }
 
-$resolveParams = @{
-    PrNumber  = $PrNumber
-    SessionId = $SessionId
-    HeadSha   = $HeadSha
-    ProjectId = $ProjectId
+if ($issueKeyed) {
+    $resolveParams = @{
+        IssueNumber = $IssueNumber
+        SessionId   = $SessionId
+        ProjectId   = $ProjectId
+    }
+    if ($Probe) {
+        $resolveParams.Sessions = @(@{
+            name    = $SessionId
+            role    = 'worker'
+            issue   = [string]$IssueNumber
+            project = $ProjectId
+            status  = 'working'
+        })
+    }
+    $targetResolution = Resolve-WorkerNudgeTargetFromIssueClaim @resolveParams
 }
-if ($Probe) {
-    $resolveParams.Sessions = @(@{
-        name         = $SessionId
-        role         = 'worker'
-        prNumber     = $PrNumber
-        ownedHeadSha = $HeadSha
-        runtime      = 'alive'
-    })
+else {
+    $resolveParams = @{
+        PrNumber  = $PrNumber
+        SessionId = $SessionId
+        HeadSha   = $HeadSha
+        ProjectId = $ProjectId
+    }
+    if ($Probe) {
+        $resolveParams.Sessions = @(@{
+            name         = $SessionId
+            role         = 'worker'
+            prNumber     = $PrNumber
+            ownedHeadSha = $HeadSha
+            runtime      = 'alive'
+        })
+    }
+    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim @resolveParams
 }
-$targetResolution = Resolve-WorkerNudgeTargetFromPrClaim @resolveParams
+
 if (-not $targetResolution.ok) {
+    if ($issueKeyed) {
+        @{
+            sent       = $false
+            reason     = [string]$targetResolution.reason
+            suppressed = $true
+        } | ConvertTo-Json -Compress -Depth 6
+        exit 0
+    }
     throw "worker nudge gate could not resolve PR-claim worker target: $($targetResolution.reason)"
 }
 if (-not $TargetId) { $TargetId = [string]$targetResolution.targetId }
@@ -106,6 +145,8 @@ $sendSessionId = if ($ownerSessionId) { $ownerSessionId } else { $SessionId }
 
 $cyclePayload = @{
     prNumber         = $PrNumber
+    issueNumber      = $IssueNumber
+    projectId        = $ProjectId
     headSha          = $HeadSha
     sessionId        = $SessionId
     reviewRunId      = $ReviewRunId
@@ -121,12 +162,20 @@ $cycleKey = [string]$cycle.cycleKey
 if (-not $cycleKey) {
     throw 'worker nudge gate could not derive cycle key (fail-closed)'
 }
-$tupleKey = "$PrNumber|$cycleKey|$resolvedIntent|$workerTarget"
+
+if ($issueKeyed) {
+    $tupleKey = "$ProjectId|$IssueNumber|$cycleKey|$resolvedIntent|$workerTarget"
+}
+else {
+    $tupleKey = "$PrNumber|$cycleKey|$resolvedIntent|$workerTarget"
+}
 $namespace = Resolve-WorkerNudgeClaimNamespace -ProjectId $ProjectId
 $storePath = $namespace
 
 $gatePayload = @{
     prNumber               = $PrNumber
+    issueNumber            = $IssueNumber
+    projectId              = $ProjectId
     headSha                = $HeadSha
     sessionId              = $SessionId
     sendTarget             = $sendSessionId
@@ -155,9 +204,26 @@ if (-not $gate.allow) {
     exit 0
 }
 
-$claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $resolvedIntent `
-    -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $TargetId -TargetGeneration $TargetGeneration `
-    -TupleKey $tupleKey -Surface $Surface -ProjectId $ProjectId -Message $payloadText
+$claimParams = @{
+    CycleKey         = $cycleKey
+    IntentClass      = $resolvedIntent
+    WorkerTarget     = $workerTarget
+    SessionId        = $sendSessionId
+    TargetId         = $TargetId
+    TargetGeneration = $TargetGeneration
+    TupleKey         = $tupleKey
+    Surface          = $Surface
+    ProjectId        = $ProjectId
+    Message          = $payloadText
+}
+if ($issueKeyed) {
+    $claimParams.IssueNumber = $IssueNumber
+    $claimParams.PrNumber = 0
+}
+else {
+    $claimParams.PrNumber = $PrNumber
+}
+$claim = Acquire-WorkerNudgeClaim @claimParams
 if (-not $claim.acquired) {
     $claimReason = [string]$claim.reason
     if ($claimReason -in @('storage_failure', 'ambiguous_claim')) {

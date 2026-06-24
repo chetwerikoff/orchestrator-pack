@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pack gh shim — always-REST inventory reads; unknown argv passthrough (Issue #431).
+# Prepend pack scripts/ to PATH (#318 / #128) so this intercepts gh invocations.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
+  # Terminal delegation: resolve native gh, not next wrapper on PATH (Issue #442).
+  real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
+  exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" "$@"
+fi
+
+exec node "${SCRIPT_DIR}/lib/gh-wrapper.mjs" "$@"

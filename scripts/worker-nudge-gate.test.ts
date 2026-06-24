@@ -1330,6 +1330,14 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(cycleIdx).toBeGreaterThan(targetIdx);
   });
 
+  it('keeps PR-claim target resolution fail-closed on the gated invoke path', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    expect(invokeText).toMatch(
+      /throw "worker nudge gate could not resolve PR-claim worker target: \$\(\$targetResolution\.reason\)"/,
+    );
+    expect(invokeText).toMatch(/if \(\$issueKeyed\) \{[\s\S]*suppressed = \$true[\s\S]*exit 0[\s\S]*\}/);
+  });
+
   it('derives liveness cycle keys after worker target is populated', () => {
     const headSha = 'c'.repeat(40);
     const cycleKey = deriveCycleKey('unknown-worker-nudge', {
@@ -1363,6 +1371,48 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('recovers stale issue-ownership legacy lock files and mutex dirs', () => {
+    const dir = tempClaimDir();
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $legacyLock = Join-Path ${psString(dir)} 'issue-430.json.lock'
+        New-Item -ItemType File -Path $legacyLock -Force | Out-Null
+        (Get-Item -LiteralPath $legacyLock).LastWriteTimeUtc = (Get-Date).AddSeconds(-($Script:WorkerNudgeClaimMutexStaleSeconds + 5)).ToUniversalTime()
+        Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile -LockPath $legacyLock
+        $abandonedMutexDir = Join-Path ${psString(dir)} 'mutex-abandoned'
+        New-Item -ItemType Directory -Path $abandonedMutexDir -Force | Out-Null
+        @{
+          pid = 999999
+          acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $abandonedMutexDir 'owner.json') -Encoding UTF8
+        [pscustomobject]@{
+          legacyRemoved = -not (Test-Path -LiteralPath $legacyLock)
+          abandoned = [bool](Test-WorkerNudgeClaimMutexAbandoned -LockDir $abandonedMutexDir)
+          entered = [bool](Enter-WorkerNudgeClaimMutex -LockDir $abandonedMutexDir)
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.legacyRemoved).toBe(true);
+      expect(result.abandoned).toBe(true);
+      expect(result.entered).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses claim mutex for issue-owner bootstrap locking', () => {
+    const claimText = readFileSync(helperPath, 'utf8');
+    expect(claimText).toMatch(/Get-WorkerIssueOwnershipClaimLockDir/);
+    expect(claimText).toMatch(/Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile/);
+    const fnStart = claimText.indexOf('function Resolve-WorkerNudgeTargetFromIssueClaim');
+    const fnEnd = claimText.indexOf('function Invoke-ConsumeWorkerNudgeClaimTokenForSend');
+    const fnBody = claimText.slice(fnStart, fnEnd);
+    expect(fnBody).toMatch(/Enter-WorkerNudgeClaimMutex -LockDir \$lockDir/);
+    expect(fnBody).toMatch(/Exit-WorkerNudgeClaimMutex -LockDir \$lockDir/);
+    expect(fnBody).not.toMatch(/\$lockPath = "\$storePath\.lock"/);
   });
 
   it('routes gated transport to PR-resolved owner session', () => {
@@ -1807,4 +1857,3 @@ describe('worker nudge claim namespace and lease (#384 opk-rev-772)', () => {
     expect(result.lease).toBe(30 * 60 * 1000);
   });
 });
-
