@@ -1,0 +1,28 @@
+{
+  "issue_number": 439,
+  "iteration_id": "opk-18",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T09:40:00.000Z",
+  "baseline": {
+    "commit_sha": "HEAD",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:issue-439-ci-failure-progress-stale-escalation"
+  },
+  "declared_paths": [
+    "docs/ci-failure-notification.d.mts",
+    "docs/ci-failure-notification.mjs",
+    "docs/declarations/439.opk-18.json",
+    "docs/migration_notes.md",
+    "scripts/ci-failure-notification.test.ts",
+    "scripts/contract-evidence-reverify-production-commands.json",
+    "scripts/fixtures/ci-failure-notification/README.md",
+    "scripts/fixtures/ci-failure-notification/ci-failure-progress-pinned.json",
+    "scripts/fixtures/ci-failure-notification/live-worker-stale-same-head-fixing-ci.json",
+    "scripts/lib/ci-failure-progress-proof.mjs",
+    "scripts/run-ci-failure-progress-freshness-proof.mjs",
+    "scripts/run-ci-failure-progress-stale-proof.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
