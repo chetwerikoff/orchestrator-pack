@@ -1,4 +1,20 @@
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const gateCli = path.join(repoRoot, 'docs/worker-nudge-gate.mjs');
+
+function invokeGateCli(subcommand: string, payload: Record<string, unknown>) {
+  const result = spawnSync('node', [gateCli, subcommand], {
+    cwd: repoRoot,
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  });
+  expect(result.status, result.stderr || result.stdout).toBe(0);
+  return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+}
 import {
   TASK_CONTINUATION_ISSUE_NUMBER,
   TASK_CONTINUATION_PROJECT_ID,
@@ -77,6 +93,34 @@ describe('worker-nudge-issue-owner-bootstrap (#430)', () => {
     });
     expect(owner.ok).toBe(false);
     expect(owner.reason).toBe('session_not_issue_owner');
+  });
+
+  it('registers issue-keyed CLI subcommands for PowerShell invoke path', () => {
+    const owner = invokeGateCli('resolveIssueOwnerSession', {
+      issueNumber,
+      sessionId,
+      projectId,
+      sessions: [{ name: sessionId, role: 'worker', issue: '417', project: projectId, status: 'working' }],
+    });
+    expect(owner.ok).toBe(true);
+    expect(owner.ownerSessionId).toBe(sessionId);
+
+    const synced = invokeGateCli('syncIssueOwnershipClaim', {
+      projectId,
+      issueNumber,
+      ownerSessionId: sessionId,
+      existingClaim: null,
+    });
+    expect(synced.ok).toBe(true);
+
+    const target = invokeGateCli('resolveIssueWorkerTarget', {
+      issueNumber,
+      sessionId,
+      projectId,
+      issueClaims: [synced.record],
+    });
+    expect(target.ok).toBe(true);
+    expect(String(target.workerTarget)).toContain(sessionId);
   });
 
   it('concurrent bootstrap resolves to one owner binding', () => {

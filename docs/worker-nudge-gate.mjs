@@ -1236,6 +1236,9 @@ runStdinJsonCli('worker-nudge-gate.mjs', {
   syncPrOwnershipClaim: () => syncPrOwnershipClaimRecord(readStdinJson()),
   resolveWorkerTarget: () => resolveWorkerTargetFromPrClaim(readStdinJson()),
   resolvePrOwnerSession: () => resolvePrOwnerSessionForNudge(readStdinJson()),
+  resolveIssueOwnerSession: () => resolveIssueOwnerSessionForNudge(readStdinJson()),
+  syncIssueOwnershipClaim: () => syncIssueOwnershipClaimRecord(readStdinJson()),
+  resolveIssueWorkerTarget: () => resolveWorkerTargetFromIssueClaim(readStdinJson()),
   hashMessageContent: () => {
     const input = readStdinJson();
     const messageContentHash = hashNudgeMessageContent(input.message ?? '');

@@ -125,13 +125,15 @@ else {
 }
 
 if (-not $targetResolution.ok) {
-    $detail = if ($issueKeyed) { 'issue-claim' } else { 'PR-claim' }
-    @{
-        sent       = $false
-        reason     = [string]$targetResolution.reason
-        suppressed = $true
-    } | ConvertTo-Json -Compress -Depth 6
-    exit 0
+    if ($issueKeyed) {
+        @{
+            sent       = $false
+            reason     = [string]$targetResolution.reason
+            suppressed = $true
+        } | ConvertTo-Json -Compress -Depth 6
+        exit 0
+    }
+    throw "worker nudge gate could not resolve PR-claim worker target: $($targetResolution.reason)"
 }
 if (-not $TargetId) { $TargetId = [string]$targetResolution.targetId }
 if (-not $TargetGeneration) { $TargetGeneration = [string]$targetResolution.targetGeneration }

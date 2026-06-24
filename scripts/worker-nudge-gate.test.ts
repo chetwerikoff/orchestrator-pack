@@ -1028,6 +1028,14 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(cycleIdx).toBeGreaterThan(targetIdx);
   });
 
+  it('keeps PR-claim target resolution fail-closed on the gated invoke path', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    expect(invokeText).toMatch(
+      /throw "worker nudge gate could not resolve PR-claim worker target: \$\(\$targetResolution\.reason\)"/,
+    );
+    expect(invokeText).toMatch(/if \(\$issueKeyed\) \{[\s\S]*suppressed = \$true[\s\S]*exit 0[\s\S]*\}/);
+  });
+
   it('derives liveness cycle keys after worker target is populated', () => {
     const headSha = 'c'.repeat(40);
     const cycleKey = deriveCycleKey('unknown-worker-nudge', {
