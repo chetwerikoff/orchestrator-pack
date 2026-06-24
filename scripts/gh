@@ -6,8 +6,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
-  # Recursion guard: gh api delegation must not re-enter the wrapper.
-  exec /usr/bin/env -u GH_WRAPPER_ACTIVE gh "$@"
+  # Terminal delegation: resolve native gh, not next wrapper on PATH (Issue #442).
+  real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
+  exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" "$@"
 fi
 
 exec node "${SCRIPT_DIR}/lib/gh-wrapper.mjs" "$@"

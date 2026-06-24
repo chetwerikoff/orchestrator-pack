@@ -12,7 +12,7 @@ $required = @(
     @{ Path = 'scripts/lib/gh-wrapper.mjs'; Pattern = 'exitCodeForPrChecks' },
     @{ Path = 'scripts/lib/gh-inventory-match.mjs'; Pattern = 'pr-checks' },
     @{ Path = 'scripts/lib/gh-rest-routes.mjs'; Pattern = 'routePrChecks' },
-    @{ Path = 'scripts/lib/gh-resolve-real-binary.mjs'; Pattern = 'resolveRealGhBinary' },
+    @{ Path = 'scripts/lib/gh-resolve-real-binary.mjs'; Pattern = 'isNativeGhExecutable|resolveRealGhBinary' },
     @{ Path = 'agent-orchestrator.yaml.example'; Pattern = 'scripts/gh' }
 )
 
