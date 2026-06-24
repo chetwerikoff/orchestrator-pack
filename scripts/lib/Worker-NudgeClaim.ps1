@@ -1301,6 +1301,36 @@ function Get-WorkerIssueOwnershipClaimStorePath {
     return (Join-Path $dir "issue-$IssueNumber.json")
 }
 
+function Get-WorkerIssueOwnershipClaimLockDir {
+    param(
+        [string]$ProjectId = 'orchestrator-pack',
+        [int]$IssueNumber
+    )
+    $storeDir = Split-Path -Parent (Get-WorkerIssueOwnershipClaimStorePath -ProjectId $ProjectId -IssueNumber $IssueNumber)
+    return (Join-Path $storeDir ".lock-issue-$IssueNumber")
+}
+
+function Test-WorkerIssueOwnershipClaimLegacyLockAbandoned {
+    param([string]$LockPath)
+    if (-not (Test-Path -LiteralPath $LockPath)) { return $false }
+    try {
+        $info = Get-Item -LiteralPath $LockPath -Force
+        if ($info.PSIsContainer) { return $false }
+        $ageSeconds = ((Get-Date).ToUniversalTime() - $info.LastWriteTimeUtc).TotalSeconds
+        return ($ageSeconds -ge $Script:WorkerNudgeClaimMutexStaleSeconds)
+    }
+    catch {
+        return $true
+    }
+}
+
+function Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile {
+    param([string]$LockPath)
+    if (Test-WorkerIssueOwnershipClaimLegacyLockAbandoned -LockPath $LockPath) {
+        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Read-WorkerIssueOwnershipClaimRecord {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -1361,27 +1391,12 @@ function Resolve-WorkerNudgeTargetFromIssueClaim {
     }
 
     $storePath = Get-WorkerIssueOwnershipClaimStorePath -ProjectId $ProjectId -IssueNumber $IssueNumber
-    $lockPath = "$storePath.lock"
-    $lockDir = Split-Path -Parent $lockPath
-    if (-not (Test-Path -LiteralPath $lockDir)) {
-        New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+    Recover-StaleWorkerIssueOwnershipClaimLegacyLockFile -LockPath "$storePath.lock"
+    $lockDir = Get-WorkerIssueOwnershipClaimLockDir -ProjectId $ProjectId -IssueNumber $IssueNumber
+    if (-not (Enter-WorkerNudgeClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'issue_owner_lock_contended' }
     }
-    $lockAcquired = $false
     try {
-        for ($i = 0; $i -lt 40; $i++) {
-            try {
-                New-Item -ItemType File -Path $lockPath -ErrorAction Stop | Out-Null
-                $lockAcquired = $true
-                break
-            }
-            catch {
-                Start-Sleep -Milliseconds 25
-            }
-        }
-        if (-not $lockAcquired) {
-            return @{ ok = $false; reason = 'issue_owner_lock_contended' }
-        }
-
         $existing = Read-WorkerIssueOwnershipClaimRecord -Path $storePath
         $syncPayload = @{
             projectId      = $ProjectId
@@ -1410,9 +1425,7 @@ function Resolve-WorkerNudgeTargetFromIssueClaim {
         }
     }
     finally {
-        if ($lockAcquired -and (Test-Path -LiteralPath $lockPath)) {
-            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-        }
+        Exit-WorkerNudgeClaimMutex -LockDir $lockDir
     }
 }
 
