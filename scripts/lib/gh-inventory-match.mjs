@@ -4,6 +4,15 @@ import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
+ * @param {string[]} allowed
+ */
+export function hasOnlyAllowedFlags(parsed, allowed) {
+  const allowedSet = new Set(allowed);
+  return Object.keys(parsed.flags).every((key) => allowedSet.has(key));
+}
+
+/**
+ * @param {ReturnType<typeof parseGhArgv>} parsed
  * @returns {{ id: InventoryRouteId, prNumber?: number, branch?: string } | null}
  */
 export function matchInventoryRoute(parsed) {
@@ -17,6 +26,9 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (root === 'repo' && sub === 'view') {
+    if (!hasOnlyAllowedFlags(parsed, [])) {
+      return null;
+    }
     if (!jsonFieldsEqual(parsed.jsonFields, ['nameWithOwner'])) {
       return null;
     }
@@ -27,6 +39,9 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (root === 'issue' && sub === 'view') {
+    if (!hasOnlyAllowedFlags(parsed, [])) {
+      return null;
+    }
     const num = Number(parsed.positionals[0]);
     if (!Number.isFinite(num) || num <= 0) {
       return null;
@@ -45,6 +60,9 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (sub === 'diff') {
+    if (!hasOnlyAllowedFlags(parsed, ['--name-only'])) {
+      return null;
+    }
     const num = Number(parsed.positionals[0]);
     if (!Number.isFinite(num) || num <= 0) {
       return null;
@@ -52,15 +70,13 @@ export function matchInventoryRoute(parsed) {
     if (parsed.flags['--name-only'] !== true && parsed.flags['--name-only'] !== 'true') {
       return null;
     }
-    if (Object.keys(parsed.flags).some((k) => k !== '--name-only' && k !== '--repo' && k !== '-R')) {
-      if (parsed.jsonFields || parsed.jq) {
-        return null;
-      }
-    }
     return { id: 'pr-diff-name-only', prNumber: num };
   }
 
   if (sub === 'checks') {
+    if (!hasOnlyAllowedFlags(parsed, [])) {
+      return null;
+    }
     const num = Number(parsed.positionals[0]);
     if (!Number.isFinite(num) || num <= 0) {
       return null;
@@ -81,15 +97,15 @@ export function matchInventoryRoute(parsed) {
     if (parsed.jq) {
       return null;
     }
-    if (parsed.flags['--required']) {
-      return null;
-    }
     return { id: 'pr-checks', prNumber: num };
   }
 
   if (sub === 'list') {
     const headFlag = parsed.flags['--head'];
     if (headFlag && typeof headFlag === 'string') {
+      if (!hasOnlyAllowedFlags(parsed, ['--head'])) {
+        return null;
+      }
       if (!jsonFieldsEqual(parsed.jsonFields, ['number'])) {
         return null;
       }
@@ -97,12 +113,12 @@ export function matchInventoryRoute(parsed) {
       if (parsed.jq && !allowedJq.includes(parsed.jq)) {
         return null;
       }
-      if (parsed.flags['--state']) {
-        return null;
-      }
       return { id: 'pr-list-head', branch: headFlag };
     }
 
+    if (!hasOnlyAllowedFlags(parsed, ['--state', '--limit'])) {
+      return null;
+    }
     if (parsed.flags['--state'] !== 'open') {
       return null;
     }
@@ -126,6 +142,9 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (sub === 'view') {
+    if (!hasOnlyAllowedFlags(parsed, [])) {
+      return null;
+    }
     const num = Number(parsed.positionals[0]);
     if (!Number.isFinite(num) || num <= 0) {
       return null;

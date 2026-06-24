@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyArgv } from './lib/gh-inventory-match.mjs';
+import { classifyArgv, hasOnlyAllowedFlags } from './lib/gh-inventory-match.mjs';
 import {
   aggregateChecks,
   bucketForState,
@@ -22,6 +22,28 @@ describe('gh inventory matcher', () => {
   it('passthrough near-miss with extra json field', () => {
     const { route } = classifyArgv([
       'pr', 'list', '--state', 'open', '--json', 'number,headRefOid,commits', '--limit', '200',
+    ]);
+    expect(route).toBeNull();
+  });
+
+  it('passthrough pr list with unsupported native filter flags', () => {
+    const { route } = classifyArgv([
+      'pr', 'list', '--state', 'open', '--base', 'main', '--json', 'number,headRefOid',
+    ]);
+    expect(route).toBeNull();
+  });
+
+  it('passthrough pr list with unsupported limit alias', () => {
+    const { route } = classifyArgv([
+      'pr', 'list', '--state', 'open', '-L', '5', '--json', 'number,headRefOid',
+    ]);
+    expect(route).toBeNull();
+  });
+
+  it('passthrough pr checks with --required flag', () => {
+    const { route } = classifyArgv([
+      'pr', 'checks', '42', '--required', '--json',
+      'name,state,bucket,link,startedAt,completedAt,workflow,description',
     ]);
     expect(route).toBeNull();
   });
@@ -132,6 +154,23 @@ describe('gh recursion guard', () => {
   });
 });
 
+describe('gh flag allowlists', () => {
+  it('rejects unknown flags for open pr list', () => {
+    const parsed = parseGhArgv([
+      'pr', 'list', '--state', 'open', '--author', 'octocat', '--json', 'number',
+    ]);
+    expect(hasOnlyAllowedFlags(parsed, ['--state', '--limit'])).toBe(false);
+    expect(classifyArgv(parsed.raw).route).toBeNull();
+  });
+
+  it('allows only inventory flags for open pr list', () => {
+    const parsed = parseGhArgv([
+      'pr', 'list', '--state', 'open', '--limit', '50', '--json', 'number,headRefOid',
+    ]);
+    expect(hasOnlyAllowedFlags(parsed, ['--state', '--limit'])).toBe(true);
+    expect(classifyArgv(parsed.raw).route?.id).toBe('pr-list-open');
+  });
+});
 describe('argv flag permutations', () => {
   it('accepts --repo before subcommand', () => {
     const parsed = parseGhArgv(['--repo', 'o/r', 'pr', 'view', '3', '--json', 'body']);

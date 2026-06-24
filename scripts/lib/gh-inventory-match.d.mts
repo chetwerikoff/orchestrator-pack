@@ -10,3 +10,5 @@ export function matchInventoryRoute(parsed: ParsedGhArgv): {
   prNumber?: number;
   branch?: string;
 } | null;
+
+export function hasOnlyAllowedFlags(parsed: ParsedGhArgv, allowed: string[]): boolean;
