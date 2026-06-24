@@ -4,10 +4,14 @@
  * Shared reclaim, hold-budget, launch-pending, and post-run visibility rules
  * consumed by the claim reaper, acquire path, and automated starters.
  */
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
-import { classifyReviewerLiveness } from './review-run-recovery.mjs';
+import {
+  asRecord,
+  classifyReviewerLiveness,
+  readCurrentBootHash,
+  readProcStartTimeTicks,
+  toArray,
+} from './review-run-recovery.mjs';
 
 export const CLAIM_LIFECYCLE_SCHEMA_VERSION = 1;
 export const DEFAULT_READINESS_ENVELOPE_MS = 30_000;
@@ -47,16 +51,6 @@ export const TERMINAL_OUTCOME_RETRY_ELIGIBLE = {
   operator_resolved_rearmed: true,
   operator_resolved_ambiguous: false,
 };
-
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-}
-
-function toArray(value) {
-  if (value == null) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
 function normalizeHeadSha(headSha) {
   return String(headSha ?? '').trim().toLowerCase();
 }
@@ -109,27 +103,6 @@ export function resolveClaimLifecycleConfig(config = {}, env = process.env) {
     reaperPeriodSeconds,
   };
 }
-
-function readCurrentBootHash() {
-  try {
-    const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-    return createHash('sha256').update(bootId).digest('hex').slice(0, 16);
-  } catch {
-    return null;
-  }
-}
-
-function readProcStartTimeTicks(pid) {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const end = stat.lastIndexOf(')');
-    const rest = stat.slice(end + 2).trim().split(/\s+/);
-    return rest[19] ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export function holderToLivenessSidecar(holder) {
   const h = asRecord(holder) ?? {};
   return {
