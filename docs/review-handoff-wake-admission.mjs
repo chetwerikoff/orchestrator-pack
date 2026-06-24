@@ -18,8 +18,32 @@ export const REVIEW_PENDING_HANDOFF_SEMANTIC_TYPE = 'review.pending';
 export const REVIEW_PENDING_HANDOFF_EVENT_TYPE = 'review.pending';
 export const HANDOFF_RECEIPT_TO_RUN_MAX_MS = 30_000;
 export const HANDOFF_LISTENER_RECOVERY_MAX_MS = 30_000;
+export const HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL = 3;
+export const HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS = 10_000;
 
 export const HANDOFF_AUDIT_PREFIX = 'review-handoff-wake';
+
+/** @typedef {'openPr' | 'session' | 'supervisedRepo'} HandoffLookupDimension */
+
+/**
+ * @param {object} audit
+ * @param {HandoffLookupDimension} lookupDimension
+ */
+function admissionLookupUnknownResult(audit, lookupDimension) {
+  return {
+    admitted: false,
+    outcome: 'unknown',
+    reason: 'admission_lookup_unknown',
+    retryable: true,
+    lookupDimension,
+    audit: {
+      ...audit,
+      outcome: 'unknown',
+      reason: 'admission_lookup_unknown',
+      lookupDimension,
+    },
+  };
+}
 
 const NOTIFICATION_ENVELOPE_TYPES = new Set(['notification', 'notification_with_actions']);
 
@@ -241,13 +265,7 @@ export function evaluateHandoffIdentityAdmission(input) {
   }
 
   if (supervisedProject && Boolean(input.supervisedRepoLookupFailed)) {
-    return {
-      admitted: false,
-      outcome: 'unknown',
-      reason: 'admission_lookup_unknown',
-      retryable: true,
-      audit: { ...audit, outcome: 'unknown', reason: 'admission_lookup_unknown' },
-    };
+    return admissionLookupUnknownResult(audit, 'supervisedRepo');
   }
 
   const supervisedRepo = nonEmptyString(input.supervisedRepoSlug)?.toLowerCase();
@@ -273,13 +291,7 @@ export function evaluateHandoffIdentityAdmission(input) {
     input.supervisedSessions !== undefined || Boolean(input.sessionLookupFailed);
   if (sessionMembershipRequired) {
     if (Boolean(input.sessionLookupFailed)) {
-      return {
-        admitted: false,
-        outcome: 'unknown',
-        reason: 'admission_lookup_unknown',
-        retryable: true,
-        audit: { ...audit, outcome: 'unknown', reason: 'admission_lookup_unknown' },
-      };
+      return admissionLookupUnknownResult(audit, 'session');
     }
     const supervisedSessions = toArray(input.supervisedSessions);
     const matchedSession = findSessionById(supervisedSessions, subjectSessionId);
@@ -294,13 +306,7 @@ export function evaluateHandoffIdentityAdmission(input) {
   }
 
   if (Boolean(input.openPrLookupFailed)) {
-    return {
-      admitted: false,
-      outcome: 'unknown',
-      reason: 'admission_lookup_unknown',
-      retryable: true,
-      audit: { ...audit, outcome: 'unknown', reason: 'admission_lookup_unknown' },
-    };
+    return admissionLookupUnknownResult(audit, 'openPr');
   }
 
   const openPrs = toArray(input.openPrs);
@@ -361,6 +367,7 @@ export function formatHandoffWakeAuditLine(audit) {
   if (audit?.priority) parts.push(`priority=${audit.priority}`);
   if (audit?.sessionId) parts.push(`session=${audit.sessionId}`);
   if (audit?.prNumber != null) parts.push(`pr=#${audit.prNumber}`);
+  if (audit?.lookupDimension) parts.push(`lookupDimension=${audit.lookupDimension}`);
   if (audit?.claimOutcome) parts.push(`claim=${audit.claimOutcome}`);
   return parts.join(' ');
 }
@@ -562,6 +569,55 @@ function pendingAdmissionRetryKey(bodyJson) {
  * @param {string} input.bodyJson
  * @param {number} [input.nowMs]
  */
+/**
+ * @param {string | undefined} lookupDimension
+ * @returns {HandoffLookupDimension}
+ */
+function normalizeLookupDimension(lookupDimension) {
+  const raw = nonEmptyString(lookupDimension);
+  if (raw === 'session' || raw === 'supervisedRepo' || raw === 'openPr') {
+    return raw;
+  }
+  return 'openPr';
+}
+
+/**
+ * @param {string} key
+ * @param {HandoffLookupDimension} lookupDimension
+ */
+function pendingLookupFailureIdentity(key, lookupDimension) {
+  return `${lookupDimension}|${key}`;
+}
+
+/**
+ * @param {string} key
+ * @param {Record<string, unknown>} prior
+ * @param {HandoffLookupDimension} lookupDimension
+ * @param {number} nowMs
+ */
+function resolvePendingLookupAttemptState(key, prior, lookupDimension, nowMs) {
+  const failureIdentity = pendingLookupFailureIdentity(key, lookupDimension);
+  const priorIdentity = nonEmptyString(prior.failureIdentity);
+  const dimensionChanged = Boolean(priorIdentity) && priorIdentity !== failureIdentity;
+  if (dimensionChanged) {
+    return {
+      lookupDimension,
+      failureIdentity,
+      lookupAttemptCount: 1,
+      lastLookupAttemptAtMs: nowMs,
+      lookupDegraded: false,
+    };
+  }
+  const priorAttempts = Number(prior.lookupAttemptCount ?? 0);
+  return {
+    lookupDimension,
+    failureIdentity,
+    lookupAttemptCount: priorAttempts > 0 ? priorAttempts : 1,
+    lastLookupAttemptAtMs: Number(prior.lastLookupAttemptAtMs ?? nowMs),
+    lookupDegraded: Boolean(prior.lookupDegraded),
+  };
+}
+
 export function seedPendingAdmissionRetry(input) {
   const bodyJson = nonEmptyString(input.bodyJson);
   if (!bodyJson) {
@@ -573,15 +629,150 @@ export function seedPendingAdmissionRetry(input) {
   }
   const nowMs = Number(input.nowMs ?? Date.now());
   const existing = isRecord(input.existing) ? input.existing : {};
+  const prior = isRecord(existing[key]) ? existing[key] : {};
+  const lookupDimension = normalizeLookupDimension(
+    nonEmptyString(input.lookupDimension) ?? nonEmptyString(prior.lookupDimension),
+  );
+  const attemptState = resolvePendingLookupAttemptState(key, prior, lookupDimension, nowMs);
   const record = {
     key,
     bodyJson,
     reason: 'admission_lookup_unknown',
-    receivedAtMs: nowMs,
+    ...attemptState,
+    receivedAtMs: Number(prior.receivedAtMs ?? nowMs),
     updatedAtMs: nowMs,
   };
   return {
     seeded: true,
+    key,
+    record,
+    pendingRetries: { ...existing, [key]: record },
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.record]
+ * @param {number} [input.nowMs]
+ */
+export function evaluatePendingAdmissionLookupRetry(input) {
+  const record = isRecord(input.record) ? input.record : {};
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const lookupDimension = normalizeLookupDimension(nonEmptyString(record.lookupDimension));
+  const attemptCount = Number(record.lookupAttemptCount ?? 0);
+  const lastAttemptMs = Number(record.lastLookupAttemptAtMs ?? record.receivedAtMs ?? 0);
+
+  if (record.lookupDegraded === true) {
+    return {
+      shouldAttempt: false,
+      reason: 'lookup_degraded',
+      yieldToBackstop: true,
+      lookupDimension,
+      attemptCount,
+    };
+  }
+
+  if (attemptCount >= HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL) {
+    return {
+      shouldAttempt: false,
+      reason: 'lookup_retry_exhausted',
+      yieldToBackstop: true,
+      lookupDimension,
+      attemptCount,
+    };
+  }
+
+  if (attemptCount > 1 && nowMs - lastAttemptMs < HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS) {
+    return {
+      shouldAttempt: false,
+      reason: 'lookup_retry_backoff',
+      yieldToBackstop: false,
+      lookupDimension,
+      attemptCount,
+      retryAfterMs: HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS - (nowMs - lastAttemptMs),
+    };
+  }
+
+  return {
+    shouldAttempt: true,
+    reason: 'lookup_retry_eligible',
+    yieldToBackstop: false,
+    lookupDimension,
+    attemptCount,
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.existing]
+ * @param {string} input.key
+ * @param {string} [input.lookupDimension]
+ * @param {number} [input.nowMs]
+ */
+export function recordPendingAdmissionLookupAttempt(input) {
+  const key = nonEmptyString(input.key);
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
+  const prior = isRecord(existing[key]) ? existing[key] : null;
+  if (!key || !prior) {
+    return { recorded: false, reason: 'missing_pending_retry', pendingRetries: existing };
+  }
+
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const lookupDimension = normalizeLookupDimension(
+    nonEmptyString(input.lookupDimension) ?? nonEmptyString(prior.lookupDimension),
+  );
+  const failureIdentity = pendingLookupFailureIdentity(key, lookupDimension);
+  const priorIdentity = nonEmptyString(prior.failureIdentity);
+  const dimensionChanged = priorIdentity !== failureIdentity;
+  const nextAttemptCount = dimensionChanged ? 1 : Number(prior.lookupAttemptCount ?? 0) + 1;
+  const lookupDegraded = dimensionChanged
+    ? false
+    : nextAttemptCount >= HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL;
+  const record = {
+    ...prior,
+    lookupDimension,
+    failureIdentity,
+    lookupAttemptCount: nextAttemptCount,
+    lastLookupAttemptAtMs: nowMs,
+    lookupDegraded,
+    updatedAtMs: nowMs,
+  };
+
+  return {
+    recorded: true,
+    key,
+    record,
+    lookupDegraded,
+    pendingRetries: { ...existing, [key]: record },
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} [input.existing]
+ * @param {string} input.key
+ * @param {number} [input.nowMs]
+ */
+export function markPendingAdmissionLookupDegraded(input) {
+  const key = nonEmptyString(input.key);
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
+  const prior = isRecord(existing[key]) ? existing[key] : null;
+  if (!key || !prior) {
+    return { marked: false, reason: 'missing_pending_retry', pendingRetries: existing };
+  }
+
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const lookupDimension = normalizeLookupDimension(nonEmptyString(prior.lookupDimension));
+  const record = {
+    ...prior,
+    lookupDimension,
+    failureIdentity: pendingLookupFailureIdentity(key, lookupDimension),
+    lookupDegraded: true,
+    updatedAtMs: nowMs,
+  };
+
+  return {
+    marked: true,
     key,
     record,
     pendingRetries: { ...existing, [key]: record },
@@ -673,6 +864,12 @@ runStdinJsonCli('review-handoff-wake-admission.mjs', {
   seed: () => seedHandoffAdmissionRecord(readStdinJson()),
   replay: () => selectHandoffAdmissionReplay(readStdinJson()),
   seedPendingRetry: () => seedPendingAdmissionRetry(readStdinJson()),
+  evaluatePendingLookupRetry: () => {
+    const payload = readStdinJson();
+    return evaluatePendingAdmissionLookupRetry({ record: payload.record, nowMs: payload.nowMs });
+  },
+  recordPendingLookupAttempt: () => recordPendingAdmissionLookupAttempt(readStdinJson()),
+  markPendingLookupDegraded: () => markPendingAdmissionLookupDegraded(readStdinJson()),
   listPendingRetries: () => selectPendingAdmissionRetries(readStdinJson()),
   clearPendingRetry: () => clearPendingAdmissionRetry(readStdinJson()),
   receiptBound: () => {

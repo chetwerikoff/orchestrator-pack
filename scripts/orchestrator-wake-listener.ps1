@@ -430,9 +430,15 @@ try {
                     $reason = $filterResult.reason
                     $detail = $filterResult.detail
                     if ($filterResult.retryable -and $reason -eq 'admission_lookup_unknown' -and $listenerHandoffStateRoot) {
-                        $retryRecord = Record-ReviewHandoffWakePendingRetry -StateRoot $listenerHandoffStateRoot -BodyJson $body -DryRun:$DryRun
+                        $lookupDimension = ''
+                        if ($filterResult.audit -and $filterResult.audit.lookupDimension) {
+                            $lookupDimension = [string]$filterResult.audit.lookupDimension
+                        }
+                        $retryRecord = Record-ReviewHandoffWakePendingRetry -StateRoot $listenerHandoffStateRoot -BodyJson $body `
+                            -LookupDimension $lookupDimension -DryRun:$DryRun
                         if ($retryRecord.recorded) {
-                            Write-ListenerLog "review-handoff-wake: retained retryable admission_lookup_unknown key=$($retryRecord.key)"
+                            $dimSuffix = if ($lookupDimension) { " lookupDimension=$lookupDimension" } else { '' }
+                            Write-ListenerLog "review-handoff-wake: retained retryable admission_lookup_unknown key=$($retryRecord.key)$dimSuffix"
                         }
                     }
                     if ($reason -eq 'missing_session_id') {

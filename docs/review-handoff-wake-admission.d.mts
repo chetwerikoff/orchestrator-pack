@@ -3,6 +3,9 @@ import type { OpenPr } from './review-trigger-reconcile.d.mts';
 export declare const HANDOFF_WAKE_KIND: 'ready_for_review';
 export declare const HANDOFF_RECEIPT_TO_RUN_MAX_MS: 30000;
 export declare const HANDOFF_LISTENER_RECOVERY_MAX_MS: 30000;
+export declare const HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL: 3;
+export declare const HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS: 10000;
+export type HandoffLookupDimension = 'openPr' | 'session' | 'supervisedRepo';
 export declare const HANDOFF_AUDIT_PREFIX: 'review-handoff-wake';
 
 export interface HandoffWakeAudit {
@@ -14,6 +17,7 @@ export interface HandoffWakeAudit {
   sessionId?: string;
   prNumber?: number;
   claimOutcome?: string;
+  lookupDimension?: HandoffLookupDimension;
 }
 
 export declare function isReadyForReviewHandoffEnvelope(
@@ -93,6 +97,22 @@ export declare function evaluateHandoffReceiptToRunBound(
   boundMs: number;
   reason?: string;
 };
+
+
+export declare function evaluatePendingAdmissionLookupRetry(input: {
+  record?: Record<string, unknown>;
+  nowMs?: number;
+}): {
+  shouldAttempt: boolean;
+  reason: string;
+  yieldToBackstop: boolean;
+  lookupDimension: HandoffLookupDimension;
+  attemptCount?: number;
+  retryAfterMs?: number;
+};
+
+export declare function recordPendingAdmissionLookupAttempt(input: Record<string, unknown>): Record<string, unknown>;
+export declare function markPendingAdmissionLookupDegraded(input: Record<string, unknown>): Record<string, unknown>;
 
 export declare function seedPendingAdmissionRetry(input: Record<string, unknown>): Record<string, unknown>;
 
