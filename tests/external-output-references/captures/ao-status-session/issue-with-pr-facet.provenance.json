@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao status --json --reports full",
+  "toolVersion": "0.9.2",
+  "capturedAt": "2026-06-24T05:00:00.000Z",
+  "context": "opk-430 worker row after PR open; issue and prNumber on same session row",
+  "scrubLog": ["Synthetic fixture for Issue #430 contract evidence"]
+}
