@@ -100,27 +100,25 @@ function parseRepoFlag(repoFlag) {
  */
 export function resolveRepoContext(options) {
   const cwd = options.cwd ?? process.cwd();
-  const envRepo = process.env.GH_REPO ? parseRepoFlag(process.env.GH_REPO) : null;
-  const flagRepo = parseRepoFlag(options.repoFlag ?? null);
-  const gitSlug = (() => {
-    const top = gitToplevel(cwd);
-    if (!top) {
-      return null;
-    }
-    return gitOriginSlug(top);
-  })();
-
-  const candidates = [flagRepo, envRepo, gitSlug].filter(Boolean);
-  const unique = [...new Set(candidates)];
-  if (unique.length > 1) {
-    throw new Error('gh-wrapper: ambiguous repository slug resolution');
-  }
-  if (unique.length === 0) {
-    throw new Error('gh-wrapper: could not resolve repository slug');
-  }
-
   const host = readGhHostname(options.realGh, options.hostname ?? null);
-  return { slug: unique[0], host };
+
+  const flagRepo = parseRepoFlag(options.repoFlag ?? null);
+  if (flagRepo) {
+    return { slug: flagRepo, host };
+  }
+
+  const envRepo = process.env.GH_REPO ? parseRepoFlag(process.env.GH_REPO) : null;
+  if (envRepo) {
+    return { slug: envRepo, host };
+  }
+
+  const top = gitToplevel(cwd);
+  const gitSlug = top ? gitOriginSlug(top) : null;
+  if (gitSlug) {
+    return { slug: gitSlug, host };
+  }
+
+  throw new Error('gh-wrapper: could not resolve repository slug');
 }
 
 /**

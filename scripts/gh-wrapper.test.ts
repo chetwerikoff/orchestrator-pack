@@ -7,7 +7,7 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { applyListedJq, mapPullState } from './lib/gh-repo-resolve.mjs';
+import { applyListedJq, mapPullState, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
 import { resolveRealGhBinary } from './lib/gh-resolve-real-binary.mjs';
 import { join } from 'node:path';
 
@@ -135,6 +135,34 @@ describe('gh jq listed patterns', () => {
 
   it('applies nameWithOwner jq as plain slug string', () => {
     expect(applyListedJq({ nameWithOwner: 'owner/repo' }, '.nameWithOwner')).toBe('owner/repo');
+  });
+});
+
+describe('gh repo resolution precedence', () => {
+  it('honors explicit --repo over ambient checkout', () => {
+    const realGh = resolveRealGhBinary(join(import.meta.dirname, 'gh'));
+    const ctx = resolveRepoContext({
+      realGh,
+      repoFlag: 'other-owner/other-repo',
+      cwd: process.cwd(),
+    });
+    expect(ctx.slug).toBe('other-owner/other-repo');
+  });
+
+  it('honors GH_REPO over ambient checkout when no --repo flag', () => {
+    const realGh = resolveRealGhBinary(join(import.meta.dirname, 'gh'));
+    const prev = process.env.GH_REPO;
+    process.env.GH_REPO = 'env-owner/env-repo';
+    try {
+      const ctx = resolveRepoContext({ realGh, cwd: process.cwd() });
+      expect(ctx.slug).toBe('env-owner/env-repo');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.GH_REPO;
+      } else {
+        process.env.GH_REPO = prev;
+      }
+    }
   });
 });
 
