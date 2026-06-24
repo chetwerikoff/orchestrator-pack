@@ -166,6 +166,11 @@ describe('checkContractEvidence fixtures', () => {
     checkFixture('cli-behavior-structured-pass.md', true);
   });
 
+  it('keeps CLI-behavior structured expected values literal (no predicate tokens)', () => {
+    const result = checkFixture('cli-behavior-structured-reserved-token-fail.md', false);
+    expect(result.errors.join(' ')).toMatch(/does not match expected boolean/i);
+  });
+
   it('rejects CLI option bindings that bypass exit checks via help-text captures', () => {
     const result = checkFixture('cli-option-help-bypass.md', false);
     expect(result.errors.join(' ')).toMatch(/binding-type cli-behavior|requires binding-type cli-behavior/i);

@@ -854,7 +854,11 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: selector ${row.selector} did not resolve in capture (${redactCaptureContent(captureContent)})`);
         continue;
       }
-      const matched = matches.some((item) => expectedMatchesValue(item.value, row.expected));
+      const matched = matches.some((item) => (
+        isCliBehavior
+          ? valuesEqualLiteral(item.value, (row.expected ?? '').trim())
+          : expectedMatchesValue(item.value, row.expected)
+      ));
       if (!matched) {
         errors.push(`${rowLabel}: selector ${row.selector} value does not match expected ${row.expected} (${redactCaptureContent(captureContent)})`);
         continue;
