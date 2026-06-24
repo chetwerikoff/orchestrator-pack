@@ -24,6 +24,12 @@ export function classifyClaimHolderLiveness(
   options?: Record<string, unknown>,
 ): { outcome: string; reason: string };
 
+export function evaluateMatchingRunEvidenceForKey(
+  reviewRuns: unknown[],
+  prNumber: number,
+  headSha: string,
+): { corruptEvidence: boolean; ambiguousRuns: Array<{ runId: string; status: string }> };
+
 export function findCoveringRunForKey(
   reviewRuns: unknown[],
   prNumber: number,

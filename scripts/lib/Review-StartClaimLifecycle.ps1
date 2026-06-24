@@ -367,6 +367,20 @@ function Test-ReviewStartClaimHoldBudgetExceeded {
     }
 }
 
+
+function Write-ReviewStartClaimRunStartedAudit {
+    param(
+        [hashtable]$ClaimResult,
+        [object]$PriorRecord,
+        [string]$TerminalPath,
+        [string]$DecisionSource = 'post_run_invoke'
+    )
+
+    if (-not $ClaimResult -or -not $PriorRecord) { return '' }
+    return Write-ReviewStartClaimTransitionAudit -Namespace $ClaimResult.namespace -PriorRecord $PriorRecord `
+        -Outcome 'run_started' -DecisionSource $DecisionSource -Extra @{ terminalPath = $TerminalPath }
+}
+
 function Wait-ReviewStartClaimPostInvokeVisibility {
     param(
         [hashtable]$ClaimResult,
@@ -383,12 +397,14 @@ function Wait-ReviewStartClaimPostInvokeVisibility {
         if ($ResolveReviewRuns) {
             $runs = @(& $ResolveReviewRuns)
         }
-        Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $runs | Out-Null
-        $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $runs
-        if ($complete.ok) { return $complete }
-
         $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
         if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
+        Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $runs | Out-Null
+        $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $runs
+        if ($complete.ok) {
+            $auditPath = Write-ReviewStartClaimRunStartedAudit -ClaimResult $ClaimResult -PriorRecord $read.record -TerminalPath $complete.terminalPath -DecisionSource 'post_run_visibility'
+            return @{ ok = $true; terminalPath = $complete.terminalPath; outcome = 'run_started'; auditPath = $auditPath }
+        }
         $fence = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'visibility-fence' -Payload @{
             claim      = $read.record
             reviewRuns = @($runs)
@@ -445,9 +461,17 @@ function Complete-ReviewStartClaimAfterRunInvoke {
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $priorRead = Read-ReviewStartClaimRecord -Path $ClaimResult.path
     Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns | Out-Null
     $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $ReviewRuns
-    if ($complete.ok) { return $complete }
+    if ($complete.ok) {
+        $auditPath = ''
+        if ($priorRead.ok) {
+            $auditPath = Write-ReviewStartClaimRunStartedAudit -ClaimResult $ClaimResult -PriorRecord $priorRead.record `
+                -TerminalPath $complete.terminalPath -DecisionSource 'post_run_invoke'
+        }
+        return @{ ok = $true; terminalPath = $complete.terminalPath; outcome = 'run_started'; auditPath = $auditPath }
+    }
 
     if ($complete.reason -eq 'run_not_visible') {
         $now = (Get-Date).ToUniversalTime().ToString('o')

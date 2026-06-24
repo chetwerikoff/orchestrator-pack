@@ -4,6 +4,7 @@ import {
   classifyClaimHolderLiveness,
   evaluateHoldBudget,
   evaluateLaunchPending,
+  evaluateMatchingRunEvidenceForKey,
   evaluateReadinessEnvelope,
   evaluateReclaimDecision,
   evaluateSweep,
@@ -31,6 +32,54 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(config.readinessEnvelopeMs).toBe(30_000);
     expect(config.holdBudgetMs).toBeLessThanOrEqual(30_000);
     expect(config.reaperPeriodSeconds).toBe(30);
+  });
+
+  it('caps readiness envelope operator override at 30 seconds', () => {
+    const config = resolveClaimLifecycleConfig(
+      { readinessEnvelopeMs: 60_000 },
+      { AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS: '90000' },
+    );
+    expect(config.readinessEnvelopeMs).toBe(30_000);
+  });
+
+  it('blocks reclaim when matching run records have ambiguous status', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        key: `pr-266-${fullSha}`,
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder(),
+        acquiredAtUtc: '2026-06-24T12:00:00.000Z',
+        holdStartedAtUtc: '2026-06-24T12:00:00.000Z',
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [{ id: 'run-ambiguous', prNumber: 266, targetSha: fullSha, status: 'mystery' }],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+    });
+    expect(decision.action).toBe('block');
+    expect(decision.reason).toBe('corrupt_run_store_evidence');
+  });
+
+  it('fences dead legacy holders with invoke evidence instead of reclaiming', () => {
+    const acquired = '2026-06-24T12:00:00.000Z';
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
+        acquiredAtUtc: acquired,
+        holdStartedAtUtc: acquired,
+        boundRunId: 'opk-rev-old',
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('run_not_visible_fenced');
+    expect(decision.reason).toBe('bound_run_id_present');
   });
 
   it('reclaims dead local holder without waiting for stale age', () => {

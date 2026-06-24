@@ -32,6 +32,8 @@ export const COVERED_RUN_STATUSES = [
 
 export const IN_FLIGHT_RUN_STATUSES = ['queued', 'preparing', 'running', 'reviewing'];
 
+export const KNOWN_NON_COVERING_RUN_STATUSES = ['failed', 'cancelled'];
+
 /** Terminal outcomes introduced by #417 and their retry eligibility. */
 export const TERMINAL_OUTCOME_RETRY_ELIGIBLE = {
   recovered_stale: true,
@@ -69,7 +71,7 @@ export function resolveClaimLifecycleConfig(config = {}, env = process.env) {
     config.readinessEnvelopeMs ?? env.AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS,
     DEFAULT_READINESS_ENVELOPE_MS,
     5_000,
-    120_000,
+    DEFAULT_READINESS_ENVELOPE_MS,
   );
   const holdBudgetMs = clampInt(
     config.holdBudgetMs ?? env.AO_REVIEW_CLAIM_HOLD_BUDGET_MS,
@@ -152,6 +154,28 @@ function runMatchesKey(run, prNumber, normalizedHeadSha) {
   const runPr = Number(run?.prNumber);
   if (!Number.isInteger(runPr) || runPr !== prNumber) return false;
   return normalizeHeadSha(run?.targetSha) === normalizedHeadSha;
+}
+
+
+export function evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha) {
+  const normalized = normalizeHeadSha(headSha);
+  const ambiguousRuns = [];
+  for (const run of toArray(reviewRuns)) {
+    if (!runMatchesKey(run, prNumber, normalized)) continue;
+    const status = normalizeStatus(run?.status);
+    if (!status) {
+      ambiguousRuns.push({ runId: String(run?.id ?? run?.runId ?? ''), status: '' });
+      continue;
+    }
+    if (COVERED_RUN_STATUSES.includes(status) || KNOWN_NON_COVERING_RUN_STATUSES.includes(status)) {
+      continue;
+    }
+    ambiguousRuns.push({ runId: String(run?.id ?? run?.runId ?? ''), status });
+  }
+  return {
+    corruptEvidence: ambiguousRuns.length > 0,
+    ambiguousRuns,
+  };
 }
 
 export function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
@@ -343,12 +367,17 @@ export function evaluateReclaimDecision({
   if (String(claim?.state ?? '') !== 'active') {
     return { action: 'skip', reason: 'not_active' };
   }
-  if (corruptEvidence) {
-    return { action: 'block', reason: 'corrupt_run_store_evidence' };
-  }
-
   const prNumber = Number(claim?.prNumber);
   const headSha = String(claim?.headSha ?? '');
+  const matchingEvidence = evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha);
+  if (corruptEvidence || matchingEvidence.corruptEvidence) {
+    return {
+      action: 'block',
+      reason: 'corrupt_run_store_evidence',
+      ambiguousRuns: matchingEvidence.ambiguousRuns,
+    };
+  }
+
   const covered = findCoveringRunForKey(reviewRuns, prNumber, headSha);
   if (covered && IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
     return { action: 'skip', reason: 'in_flight_covering_run', runId: covered.runId };
@@ -396,6 +425,22 @@ export function evaluateReclaimDecision({
   }
 
   if (liveness.outcome === 'provably_not_alive') {
+    const legacy = evaluateLegacyPreInvokeOrphan({ claim, reviewRuns });
+    if (!legacy.reclaimable) {
+      if (
+        legacy.reason === 'bound_run_id_present'
+        || legacy.reason === 'invoke_evidence_present'
+        || legacy.reason === 'launch_pending_present'
+      ) {
+        return {
+          action: 'terminalize',
+          outcome: 'run_not_visible_fenced',
+          reason: legacy.reason,
+          legacy,
+        };
+      }
+      return { action: 'skip', reason: legacy.reason, legacy };
+    }
     if (covered && !IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
       return {
         action: 'terminalize',
@@ -468,13 +513,18 @@ export function evaluateSweep({
   for (const claim of toArray(activeClaims)) {
     const key = String(claim?.key ?? '');
     const holderLiveness = classifyClaimHolderLiveness(claim?.holder, { localHost });
+    const matchingEvidence = evaluateMatchingRunEvidenceForKey(
+      reviewRuns,
+      Number(claim?.prNumber),
+      String(claim?.headSha ?? ''),
+    );
     const decision = evaluateReclaimDecision({
       claim,
       holderLiveness,
       reviewRuns,
       nowMs,
       config,
-      corruptEvidence: corruptSet.has(key),
+      corruptEvidence: corruptSet.has(key) || matchingEvidence.corruptEvidence,
     });
     actions.push({
       key,
