@@ -69,6 +69,35 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(decision.reason).toBe('corrupt_run_store_evidence');
   });
 
+  it('treats outdated review runs as known non-covering evidence', () => {
+    const evidence = evaluateMatchingRunEvidenceForKey(
+      [{ id: 'run-old', prNumber: 266, targetSha: fullSha, status: 'outdated' }],
+      266,
+      fullSha,
+    );
+    expect(evidence.corruptEvidence).toBe(false);
+    expect(evidence.ambiguousRuns).toEqual([]);
+  });
+
+  it('reclaims dead local holder when only outdated runs match the key', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        key: `pr-266-${fullSha}`,
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ host: 'local-host' }),
+        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+        holdStartedAtUtc: '2026-06-24T11:00:00.000Z',
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [{ id: 'run-old', prNumber: 266, targetSha: fullSha, status: 'outdated' }],
+      nowMs: Date.parse('2026-06-24T12:00:00.000Z'),
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('recovered_orphan_liveness');
+  });
+
   it('fences dead legacy holders with invoke evidence instead of reclaiming', () => {
     const acquired = '2026-06-24T12:00:00.000Z';
     const decision = evaluateReclaimDecision({

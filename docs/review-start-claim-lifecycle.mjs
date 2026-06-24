@@ -32,7 +32,7 @@ export const COVERED_RUN_STATUSES = [
 
 export const IN_FLIGHT_RUN_STATUSES = ['queued', 'preparing', 'running', 'reviewing'];
 
-export const KNOWN_NON_COVERING_RUN_STATUSES = ['failed', 'cancelled'];
+export const KNOWN_NON_COVERING_RUN_STATUSES = ['failed', 'cancelled', 'outdated'];
 
 /** Terminal outcomes introduced by #417 and their retry eligibility. */
 export const TERMINAL_OUTCOME_RETRY_ELIGIBLE = {
