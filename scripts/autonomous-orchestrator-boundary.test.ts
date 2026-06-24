@@ -207,7 +207,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           $env:AO_BASE_DIR = ${psString(aoBase)}
           $env:AO_PROJECT_ID = ${psString(projectId)}
           $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
-          New-Item -ItemType Directory -Force -Path $ns | Out-Null
+          Initialize-ReviewStartClaimNamespace -Namespace $ns
           $record = New-ReviewStartClaimActiveRecord -PrNumber 324 -HeadSha ${psString(headSha)} -Surface 'orchestrator-turn' -Reason 'fixture'
           Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 324 -HeadSha ${psString(headSha)}) -Record $record
           . ${psString(boundaryLibPath)}
@@ -1199,7 +1199,7 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
       ? `
       . ${claimLib}
       $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
-      New-Item -ItemType Directory -Force -Path $ns | Out-Null
+      Initialize-ReviewStartClaimNamespace -Namespace $ns
       $record = New-ReviewStartClaimActiveRecord -PrNumber ${seed.prNumber} -HeadSha ${psString(seed.headSha)} -Surface 'orchestrator-turn' -Reason 'fixture'
       ${seed.holderPid ? `$record.holder.pid = ${seed.holderPid}` : ''}
       ${seed.holderStartTimeTicks !== undefined ? `$record.holder.startTimeTicks = ${psString(seed.holderStartTimeTicks)}` : ''}
@@ -1338,6 +1338,28 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
       `);
       const parsed = JSON.parse(output);
       expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies replay after claim is consumed by first worktree allow', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-replay-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '7'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const targetFirst = path.join(workspaces, 'opk-rev-429-first');
+    const targetSecond = path.join(workspaces, 'opk-rev-429-second');
+    try {
+      const first = evaluateClaimBound(['worktree', 'add', '--detach', targetFirst, headSha], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect(first.denied).toBe(false);
+      expect(first.reason).toBe('claimed_worktree_allow');
+
+      const second = evaluateClaimBound(['worktree', 'add', '--detach', targetSecond, headSha], aoBase, projectId);
+      expect(second.denied).toBe(true);
     } finally {
       rmSync(aoBase, { recursive: true, force: true });
     }

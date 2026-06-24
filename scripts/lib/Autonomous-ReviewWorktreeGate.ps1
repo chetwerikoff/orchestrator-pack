@@ -305,6 +305,62 @@ function Find-LiveReviewStartClaimForHeadSha {
     return @{ ok = $true; claim = $matches[0] }
 }
 
+function Consume-ReviewStartClaimForAutonomousWorktreeAllow {
+    param(
+        [hashtable]$ClaimMatch,
+        [string]$CanonicalPath
+    )
+
+    if (-not $ClaimMatch -or -not $ClaimMatch.path -or -not $ClaimMatch.namespace -or -not $ClaimMatch.record) {
+        return @{ ok = $false; reason = 'claim_consume_invalid' }
+    }
+
+    $path = [string]$ClaimMatch.path
+    $namespace = [string]$ClaimMatch.namespace
+    $record = $ClaimMatch.record
+    $prNumber = [int]$record.prNumber
+    $headSha = [string]$record.headSha
+
+    $lockDir = Get-ReviewStartClaimLockDir -Namespace $namespace -PrNumber $prNumber -HeadSha $headSha
+    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'claim_consume_busy' }
+    }
+    try {
+        Initialize-ReviewStartClaimNamespace -Namespace $namespace
+        $read = Read-ReviewStartClaimRecord -Path $path
+        if (-not $read.ok) {
+            return @{ ok = $false; reason = 'claim_consume_ambiguous' }
+        }
+        if ([string]$read.record.state -ne 'active') {
+            return @{ ok = $false; reason = 'claim_already_consumed' }
+        }
+        if ([string]$read.record.holder.processGuid -ne [string]$record.holder.processGuid) {
+            return @{ ok = $false; reason = 'claim_lost' }
+        }
+        if ([string]$read.record.headSha -ne $headSha) {
+            return @{ ok = $false; reason = 'claim_head_mismatch' }
+        }
+        if (-not (Test-ReviewStartClaimRecordIsLive -Record $read.record)) {
+            return @{ ok = $false; reason = 'claim_holder_not_live' }
+        }
+
+        try {
+            $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $namespace -ActivePath $path -Record $read.record `
+                -Outcome 'worktree_allow_consumed' -Extra @{
+                    worktreeCanonicalPath = $CanonicalPath
+                    consumedBy            = 'autonomous-review-worktree-gate'
+                }
+        }
+        catch {
+            return @{ ok = $false; reason = 'claim_consume_failed'; detail = [string]$_ }
+        }
+        return @{ ok = $true; reason = 'worktree_allow_consumed'; terminalPath = $terminalPath }
+    }
+    finally {
+        Exit-ReviewStartClaimMutex -LockDir $lockDir
+    }
+}
+
 function Test-AutonomousReviewWorktreeClaimBoundAllow {
     param([string[]]$Argv)
 
@@ -326,6 +382,11 @@ function Test-AutonomousReviewWorktreeClaimBoundAllow {
     $pathCheck = Test-AutonomousReviewWorktreeTargetPathHardened -TargetPath $shape.path -ProjectId $claimProjectId
     if (-not $pathCheck.allowed) {
         return @{ allowed = $false; reason = $pathCheck.reason }
+    }
+
+    $consume = Consume-ReviewStartClaimForAutonomousWorktreeAllow -ClaimMatch $claimLookup.claim -CanonicalPath $pathCheck.canonicalPath
+    if (-not $consume.ok) {
+        return @{ allowed = $false; reason = $consume.reason }
     }
 
     return @{
