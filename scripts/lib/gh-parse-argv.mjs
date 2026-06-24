@@ -2,6 +2,16 @@
  * Normalize gh argv into a structured form for inventory matching.
  */
 
+/** gh boolean flags that must not consume the next token as a value. */
+const BOOLEAN_ONLY_FLAGS = new Set([
+  '--fail-fast',
+  '--name-only',
+  '--required',
+  '--watch',
+  '--web',
+  '-w',
+]);
+
 /**
  * @param {string[]} argv
  * @returns {{
@@ -67,7 +77,7 @@ export function parseGhArgv(argv) {
       }
       const key = arg;
       const next = argv[i + 1];
-      if (next && !next.startsWith('-')) {
+      if (next && !next.startsWith('-') && !BOOLEAN_ONLY_FLAGS.has(key)) {
         result.flags[key] = next;
         i += 2;
         continue;

@@ -315,13 +315,17 @@ export function executeRestRoute(routeId, ctx) {
         const body = routeIssueViewBody(realGh, repo, route.prNumber, cwd);
         return applyListedJq(body, parsed.jq);
       }
-      case 'repo-view-name-with-owner':
-        return { nameWithOwner: resolveNameWithOwner({
-          cwd,
-          repoFlag: parsed.repo,
-          realGh,
-          hostname: parsed.hostname,
-        }) };
+      case 'repo-view-name-with-owner': {
+        const repoView = {
+          nameWithOwner: resolveNameWithOwner({
+            cwd,
+            repoFlag: parsed.repo,
+            realGh,
+            hostname: parsed.hostname,
+          }),
+        };
+        return applyListedJq(repoView, parsed.jq);
+      }
       default:
         throw new Error(`${REST_ERROR_MARKER}: unknown route ${routeId}`);
     }

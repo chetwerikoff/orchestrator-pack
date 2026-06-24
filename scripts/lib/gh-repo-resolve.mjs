@@ -158,6 +158,9 @@ export function applyListedJq(value, jq) {
   if (normalized === '.body') {
     return value.body;
   }
+  if (normalized === '.nameWithOwner') {
+    return value.nameWithOwner;
+  }
   if (normalized === '.[0].number') {
     return Array.isArray(value) && value.length > 0 ? value[0].number : null;
   }

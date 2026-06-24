@@ -13,7 +13,7 @@ function formatStdout(result, parsed, route) {
     return `${result.join('\n')}\n`;
   }
 
-  if (parsed.jq && (parsed.jq === '.baseRefName' || parsed.jq === '.body')) {
+  if (parsed.jq && (parsed.jq === '.baseRefName' || parsed.jq === '.body' || parsed.jq === '.nameWithOwner')) {
     if (typeof result === 'string' || typeof result === 'number') {
       return `${result}\n`;
     }

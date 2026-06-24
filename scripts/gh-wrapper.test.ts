@@ -45,6 +45,12 @@ describe('gh inventory matcher', () => {
     expect(route?.id).toBe('pr-diff-name-only');
   });
 
+  it('routes pr diff when --name-only precedes the PR number', () => {
+    const { route } = classifyArgv(['pr', 'diff', '--name-only', '9']);
+    expect(route?.id).toBe('pr-diff-name-only');
+    expect(route?.prNumber).toBe(9);
+  });
+
   it('routes reviewer jq shape', () => {
     const { route } = classifyArgv([
       'pr', 'view', '12', '--json', 'number,body', '--jq', '{number: .number, body: .body}',
@@ -103,6 +109,10 @@ describe('gh jq listed patterns', () => {
 
   it('applies first element number jq', () => {
     expect(applyListedJq([{ number: 9 }], '.[0].number')).toBe(9);
+  });
+
+  it('applies nameWithOwner jq as plain slug string', () => {
+    expect(applyListedJq({ nameWithOwner: 'owner/repo' }, '.nameWithOwner')).toBe('owner/repo');
   });
 });
 
