@@ -985,7 +985,7 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
     $productionManifest = Join-Path $Root 'tests/external-output-references/capture-manifest.json'
     node (Join-Path $Root 'scripts/generate-capture-manifest.mjs') --verify $productionManifest 2>$null
     if ($LASTEXITCODE -ne 0) {
-        node -e "import { verifyCaptureManifestIntegrity } from './scripts/contract-evidence.mjs'; const r = verifyCaptureManifestIntegrity(process.cwd(), 'tests/external-output-references/capture-manifest.json'); if (!r.ok) { console.error(r.errors.join('\n')); process.exit(1); }" 
+        node -e "import { verifyCaptureManifestIntegrity } from './scripts/contract-evidence-validator.mjs'; const r = verifyCaptureManifestIntegrity(process.cwd(), 'tests/external-output-references/capture-manifest.json'); if (!r.ok) { console.error(r.errors.join('\n')); process.exit(1); }" 
     }
     if ($LASTEXITCODE -ne 0) {
         Write-Check 'contract-evidence/manifest-integrity' 'FAIL' "exit=$LASTEXITCODE"

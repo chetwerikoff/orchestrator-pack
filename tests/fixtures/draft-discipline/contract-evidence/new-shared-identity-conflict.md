@@ -3,15 +3,17 @@
 GitHub Issue: TBD
 
 ```contract-evidence
-binding-id: orchestrator-pack:custom-field
+binding-id: orchestrator-pack:custom-field:first
 binding: first NEW obligation
 producer: orchestrator-pack
+selector: custom-field
 evidence: NEW(produced-by AC#1)
 expected: x
 
-binding-id: orchestrator-pack:custom-field
+binding-id: orchestrator-pack:custom-field:second
 binding: conflicting NEW obligation
 producer: orchestrator-pack
+selector: custom-field
 evidence: NEW(produced-by AC#1)
 expected: y
 ```

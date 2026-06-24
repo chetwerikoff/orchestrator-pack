@@ -13,7 +13,9 @@
     "packages/core/**",
     ".ao/**",
     "docs/declarations/**",
-    "node_modules/**"
+    "node_modules/**",
+    "scripts/contract-evidence-validator.mjs",
+    "scripts/contract-evidence-validator.d.mts"
   ],
   "scriptExtensions": [".ps1", ".sh", ".bash", ".js", ".ts", ".mjs", ".cjs"],
   "templateExtensions": [".md", ".yaml", ".yml", ".json", ".example", ".template", ".tpl"],
