@@ -87,6 +87,14 @@
       "path": "captures/path with spaces/sample.raw.json",
       "contentHash": "sha256:12b34da73b0c67a0319e6eddbd3582af66e3b558b4d44e4a6860e0cec20d726f"
     },
+    "scalar-json/predicate-shapes": {
+      "id": "scalar-json/predicate-shapes",
+      "producer": "ao",
+      "sourceCommand": "echo predicate-shape-fixture > capture",
+      "kind": "structured",
+      "path": "captures/scalar-json/predicate-shapes.raw.json",
+      "contentHash": "sha256:8972680f8b4724c808a7dbf885198aed59e9fdb0cd92e50bfbbd344c8bce006d"
+    },
     "scalar-json/value": {
       "id": "scalar-json/value",
       "producer": "ao",
