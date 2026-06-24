@@ -1,0 +1,74 @@
+{
+  "checks": [
+    {
+      "bucket": "pass",
+      "completedAt": "2026-06-24T06:12:55Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018946/job/83129627252",
+      "name": "PR scope guard",
+      "startedAt": "2026-06-24T06:12:34Z",
+      "state": "SUCCESS",
+      "workflow": "scope-guard"
+    },
+    {
+      "bucket": "skipping",
+      "completedAt": "2026-06-24T06:11:15Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018946/job/83129628234",
+      "name": "Run pack contract tests",
+      "startedAt": "2026-06-24T06:12:31Z",
+      "state": "SKIPPED",
+      "workflow": "scope-guard"
+    },
+    {
+      "bucket": "skipping",
+      "completedAt": "2026-06-24T06:11:15Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018946/job/83129628273",
+      "name": "Self-architect lint",
+      "startedAt": "2026-06-24T06:12:31Z",
+      "state": "SKIPPED",
+      "workflow": "scope-guard"
+    },
+    {
+      "bucket": "pass",
+      "completedAt": "2026-06-24T06:11:25Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018934/job/83129442623",
+      "name": "Read-delegation audit fixtures",
+      "startedAt": "2026-06-24T06:11:10Z",
+      "state": "SUCCESS",
+      "workflow": "read-delegation-audit"
+    },
+    {
+      "bucket": "pass",
+      "completedAt": "2026-06-24T06:11:15Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018946/job/83129628004",
+      "name": "Classify PR changes",
+      "startedAt": "2026-06-24T06:11:10Z",
+      "state": "SUCCESS",
+      "workflow": "scope-guard"
+    },
+    {
+      "bucket": "pass",
+      "completedAt": "2026-06-24T06:12:08Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018946/job/83129642035",
+      "name": "Verify orchestrator-pack structure",
+      "startedAt": "2026-06-24T06:11:10Z",
+      "state": "SUCCESS",
+      "workflow": "scope-guard"
+    },
+    {
+      "bucket": "pass",
+      "completedAt": "2026-06-24T06:11:18Z",
+      "description": "",
+      "link": "https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28079018103/job/83129439818",
+      "name": "Contract evidence legacy list guard",
+      "startedAt": "2026-06-24T06:11:09Z",
+      "state": "SUCCESS",
+      "workflow": "contract-evidence-legacy-list-guard"
+    }
+  ]
+}

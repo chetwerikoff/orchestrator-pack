@@ -12,6 +12,11 @@
       "variantDir": "variants/gh-pr-open",
       "defaultVariant": "open"
     },
+    "gh-pr-checks": {
+      "source": "gh pr checks <n> --json name,state,bucket,link,startedAt,completedAt,workflow,description",
+      "variantDir": "variants/gh-pr-checks",
+      "defaultVariant": "representative-pr"
+    },
     "ao-review-run": {
       "source": "ao review list <project> --json",
       "variantDir": "variants/ao-review-run",

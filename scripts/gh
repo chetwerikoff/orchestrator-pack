@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Pack gh shim — always-REST inventory reads; unknown argv passthrough (Issue #431).
+# Prepend pack scripts/ to PATH (#318 / #128) so this intercepts gh invocations.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
+  # Recursion guard: gh api delegation must not re-enter the wrapper.
+  exec /usr/bin/env -u GH_WRAPPER_ACTIVE gh "$@"
+fi
+
+exec node "${SCRIPT_DIR}/lib/gh-wrapper.mjs" "$@"

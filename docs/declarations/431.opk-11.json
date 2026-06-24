@@ -1,0 +1,48 @@
+{
+  "issue_number": 431,
+  "iteration_id": "opk-11",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T07:35:00.000Z",
+  "baseline": {
+    "commit_sha": "64ec4588788e577dbcb66a0c0dc656998bbd3f95",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/431.opk-11.json",
+    "docs/migration_notes.md",
+    "prompts/agent_rules.md",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/check-gh-wrapper.ps1",
+    "scripts/gh",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-inventory-match.d.mts",
+    "scripts/lib/gh-parse-argv.mjs",
+    "scripts/lib/gh-parse-argv.d.mts",
+    "scripts/lib/gh-pr-checks.mjs",
+    "scripts/lib/gh-pr-checks.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-resolve-real-binary.mjs",
+    "scripts/lib/gh-resolve-real-binary.d.mts",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/verify.ps1",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/gh-pr-checks/representative-pr.provenance.json",
+    "tests/external-output-references/captures/gh-pr-checks/representative-pr.raw.json",
+    "tests/external-output-references/manifest.json",
+    "tests/external-output-references/variants/gh-pr-checks/representative-pr.json"
+  ],
+  "declared_globs": [],
+  "denylist": [
+    "vendor/**",
+    "packages/core/**",
+    ".ao/**",
+    "agent-orchestrator.yaml"
+  ],
+  "amendments": []
+}
