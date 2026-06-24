@@ -15,6 +15,25 @@ $required = @(
     @{ Path = 'agent-orchestrator.yaml.example'; Pattern = 'scripts/gh' }
 )
 
+$ghShim = Join-Path $Root 'scripts/gh'
+if (-not (Test-Path -LiteralPath $ghShim -PathType Leaf)) {
+    Write-Host 'Missing required file: scripts/gh'
+    exit 1
+}
+# PATH intercept requires the shim to be executable (git index 100755, same as scripts/ao).
+$gitMode = (git -C $Root ls-files -s -- scripts/gh 2>$null) -split '\s+' | Select-Object -First 1
+if ($gitMode -ne '100755') {
+    Write-Host "scripts/gh must be git mode 100755 for PATH intercept (got: $gitMode)"
+    exit 1
+}
+if ($IsLinux -or $IsMacOS) {
+    bash -lc "test -x '$ghShim'" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'scripts/gh must be executable on disk (chmod +x)'
+        exit 1
+    }
+}
+
 foreach ($item in $required) {
     $full = Join-Path $Root $item.Path
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
