@@ -4,7 +4,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { classifyArgv } from './gh-inventory-match.mjs';
-import { resolveRealGhBinary, WRAPPER_PATH } from './gh-resolve-real-binary.mjs';
+import { exitCodeForPrChecks } from './gh-pr-checks.mjs';
+import { resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
 import { executeRestRoute } from './gh-rest-routes.mjs';
 import { REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
 
@@ -42,16 +43,8 @@ function passthrough(argv) {
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    encoding: 'buffer',
-    stdio: ['inherit', 'pipe', 'pipe'],
+    stdio: 'inherit',
   });
-
-  if (result.stdout?.length) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr?.length) {
-    process.stderr.write(result.stderr);
-  }
   process.exit(result.status ?? 1);
 }
 
@@ -78,6 +71,9 @@ function main() {
     const result = executeRestRoute(route.id, { realGh, parsed, route, cwd: process.cwd() });
     const out = formatStdout(result, parsed, route);
     process.stdout.write(out);
+    if (route.id === 'pr-checks') {
+      process.exit(exitCodeForPrChecks(result));
+    }
     process.exit(0);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

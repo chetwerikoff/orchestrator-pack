@@ -90,6 +90,25 @@ function resolveState(c) {
 }
 
 /**
+ * Native `gh pr checks` exit parity (v2.93.0): 0 all pass, 1 any fail, 8 pending (no fail).
+ *
+ * @param {Array<{ bucket?: string }>} checks
+ */
+export function exitCodeForPrChecks(checks) {
+  let hasPending = false;
+  for (const check of checks) {
+    const bucket = check.bucket ?? '';
+    if (bucket === 'fail') {
+      return 1;
+    }
+    if (bucket === 'pending') {
+      hasPending = true;
+    }
+  }
+  return hasPending ? 8 : 0;
+}
+
+/**
  * @param {CheckContext[]} checkContexts
  */
 export function aggregateChecks(checkContexts) {

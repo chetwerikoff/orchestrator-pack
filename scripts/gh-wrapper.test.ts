@@ -4,6 +4,7 @@ import {
   aggregateChecks,
   bucketForState,
   eliminateDuplicates,
+  exitCodeForPrChecks,
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
@@ -120,6 +121,14 @@ describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
 
   it('aggregates zero-check contexts to empty array before route error', () => {
     expect(aggregateChecks([])).toEqual([]);
+  });
+
+  it('maps pr checks exit codes per native gh parity', () => {
+    expect(exitCodeForPrChecks([{ bucket: 'pass' }])).toBe(0);
+    expect(exitCodeForPrChecks([{ bucket: 'skipping' }, { bucket: 'cancel' }])).toBe(0);
+    expect(exitCodeForPrChecks([{ bucket: 'fail' }])).toBe(1);
+    expect(exitCodeForPrChecks([{ bucket: 'pending' }])).toBe(8);
+    expect(exitCodeForPrChecks([{ bucket: 'fail' }, { bucket: 'pending' }])).toBe(1);
   });
 });
 

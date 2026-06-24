@@ -8,7 +8,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 
 $required = @(
     @{ Path = 'scripts/gh'; Pattern = 'gh-wrapper\.mjs' },
-    @{ Path = 'scripts/lib/gh-wrapper.mjs'; Pattern = 'matchInventoryRoute|passthrough' },
+    @{ Path = 'scripts/lib/gh-wrapper.mjs'; Pattern = 'matchInventoryRoute|passthrough|stdio:\s*''inherit''' },
+    @{ Path = 'scripts/lib/gh-wrapper.mjs'; Pattern = 'exitCodeForPrChecks' },
     @{ Path = 'scripts/lib/gh-inventory-match.mjs'; Pattern = 'pr-checks' },
     @{ Path = 'scripts/lib/gh-rest-routes.mjs'; Pattern = 'routePrChecks' },
     @{ Path = 'scripts/lib/gh-resolve-real-binary.mjs'; Pattern = 'resolveRealGhBinary' },
