@@ -39,7 +39,7 @@ function Get-ClaimReaperIntervalSeconds {
         }
     }
     if ($seconds -lt 5) { return 5 }
-    if ($seconds -gt 120) { return 120 }
+    if ($seconds -gt 30) { return 30 }
     return $seconds
 }
 

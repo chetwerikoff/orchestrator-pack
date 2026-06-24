@@ -45,7 +45,8 @@ function Write-ReviewStartClaimTransitionAudit {
         [object]$PriorRecord,
         [string]$Outcome,
         [string]$DecisionSource,
-        [hashtable]$Extra = @{}
+        [hashtable]$Extra = @{},
+        [string]$NewState = 'terminal'
     )
 
     $auditDir = Initialize-ReviewStartClaimAuditDir -Namespace $Namespace
@@ -56,7 +57,7 @@ function Write-ReviewStartClaimTransitionAudit {
         prNumber       = [int]$PriorRecord.prNumber
         headSha        = [string]$PriorRecord.headSha
         priorState     = [string]$PriorRecord.state
-        newState       = 'terminal'
+        newState       = $NewState
         outcome        = $Outcome
         decisionSource = $DecisionSource
         atUtc          = (Get-Date).ToUniversalTime().ToString('o')
@@ -214,6 +215,32 @@ function Invoke-ReviewStartClaimTerminalizeFromDecision {
     }
 }
 
+
+function Test-ReviewStartClaimPostAcquireSideEffectAudit {
+    param(
+        [string]$Namespace,
+        [string]$ClaimKey
+    )
+
+    if (-not $Namespace -or -not $ClaimKey) { return $false }
+    $auditDir = Get-ReviewStartClaimAuditDir -Namespace $Namespace
+    if (-not (Test-Path -LiteralPath $auditDir)) { return $false }
+    foreach ($file in @(Get-ChildItem -LiteralPath $auditDir -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
+        try {
+            $record = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+        catch {
+            continue
+        }
+        if ([string]$record.key -ne [string]$ClaimKey) { continue }
+        $source = [string]$record.decisionSource
+        $outcome = [string]$record.outcome
+        if ($source -in @('post_run_invoke', 'post_run_visibility', 'hold_budget')) { return $true }
+        if ($outcome -eq 'run_started') { return $true }
+    }
+    return $false
+}
+
 function Mark-ReviewStartClaimForeignHolderBlocking {
     param(
         [string]$Namespace,
@@ -234,6 +261,9 @@ function Mark-ReviewStartClaimForeignHolderBlocking {
         if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
             return @{ ok = $false; reason = 'lost_ownership' }
         }
+        if ($read.record.manualResolutionRequired) {
+            return @{ ok = $true; skipped = $true; blocking = $true; outcome = [string]$read.record.manualResolutionRequired.outcome }
+        }
         $now = (Get-Date).ToUniversalTime().ToString('o')
         $record = @{}
         $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
@@ -250,7 +280,7 @@ function Mark-ReviewStartClaimForeignHolderBlocking {
             blocking       = $true
         }
         $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
-            -Outcome ([string]$Decision.outcome) -DecisionSource $DecisionSource -Extra $extra
+            -Outcome ([string]$Decision.outcome) -DecisionSource $DecisionSource -Extra $extra -NewState 'active'
         if ($LogWriter) {
             & $LogWriter "review-start-claim: WARN foreign holder blocking key=$($Record.key) audit=$auditPath"
         }
@@ -272,10 +302,11 @@ function Invoke-ReviewStartClaimReclaimOrphan {
     )
 
     $decision = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'evaluate' -Payload @{
-        claim      = $Record
-        reviewRuns = @($ReviewRuns)
-        localHost  = Get-ReviewStartClaimLocalHostName
-        nowMs      = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        claim                       = $Record
+        reviewRuns                  = @($ReviewRuns)
+        localHost                   = Get-ReviewStartClaimLocalHostName
+        nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        postAcquireSideEffectAudit  = (Test-ReviewStartClaimPostAcquireSideEffectAudit -Namespace $Namespace -ClaimKey ([string]$Record.key))
     }
     if ($decision.action -eq 'skip' -or $decision.action -eq 'block') {
         return @{ reclaimed = $false; decision = $decision }

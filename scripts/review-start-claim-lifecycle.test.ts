@@ -42,6 +42,14 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(config.readinessEnvelopeMs).toBe(30_000);
   });
 
+  it('caps reaper period operator override at 30 seconds', () => {
+    const config = resolveClaimLifecycleConfig(
+      {},
+      { AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS: '120' },
+    );
+    expect(config.reaperPeriodSeconds).toBe(30);
+  });
+
   it('blocks reclaim when matching run records have ambiguous status', () => {
     const decision = evaluateReclaimDecision({
       claim: {
@@ -311,5 +319,67 @@ describe('review-start-claim-lifecycle predicates', () => {
     });
     expect(decision.action).toBe('mark_manual');
     expect(decision.outcome).toBe('foreign_holder_manual');
+  });
+
+  it('skips foreign-holder marking when manual resolution is already pending', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ host: 'remote-host' }),
+        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+        manualResolutionRequired: {
+          outcome: 'foreign_holder_manual',
+          reason: 'non_local_holder',
+          decisionSource: 'reaper',
+          atUtc: '2026-06-24T11:05:00.000Z',
+        },
+      },
+      holderLiveness: { outcome: 'foreign_host', reason: 'non_local_holder' },
+      reviewRuns: [],
+      nowMs: Date.now(),
+    });
+    expect(decision.action).toBe('skip');
+    expect(decision.reason).toBe('foreign_holder_manual_pending');
+  });
+
+  it('terminalizes dead holder when a terminal covering run exists', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder(),
+        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+        holdStartedAtUtc: '2026-06-24T11:00:00.000Z',
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [{ id: 'run-done', prNumber: 266, targetSha: fullSha, status: 'clean' }],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('orphan_covered_run_unbound');
+    expect(decision.reason).toBe('dead_holder_terminal_covered_run');
+  });
+
+  it('fences dead legacy holder when post-acquire side-effect audit exists', () => {
+    const decision = evaluateReclaimDecision({
+      claim: {
+        state: 'active',
+        prNumber: 266,
+        headSha: fullSha,
+        holder: fakeHolder({ startTimeTicks: '', bootIdHash: '' }),
+        acquiredAtUtc: '2026-06-24T11:00:00.000Z',
+        holdStartedAtUtc: '2026-06-24T11:00:00.000Z',
+      },
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+      postAcquireSideEffectAudit: true,
+    });
+    expect(decision.action).toBe('terminalize');
+    expect(decision.outcome).toBe('run_not_visible_fenced');
+    expect(decision.reason).toBe('side_effect_audit_present');
   });
 });

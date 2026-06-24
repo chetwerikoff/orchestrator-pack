@@ -95,7 +95,7 @@ export function resolveClaimLifecycleConfig(config = {}, env = process.env) {
     config.reaperPeriodSeconds ?? env.AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS,
     DEFAULT_REAPER_PERIOD_SECONDS,
     5,
-    120,
+    DEFAULT_REAPER_PERIOD_SECONDS,
   );
   return {
     readinessEnvelopeMs,
@@ -305,7 +305,11 @@ export function evaluateVisibilityFence({ claim, reviewRuns, nowMs, config = res
   return { shouldFence: false, reason: 'within_visibility_budget', ageMs, budgetMs, envelope };
 }
 
-export function evaluateLegacyPreInvokeOrphan({ claim, reviewRuns }) {
+export function evaluateLegacyPreInvokeOrphan({
+  claim,
+  reviewRuns,
+  postAcquireSideEffectAudit = false,
+}) {
   const boundRunId = String(claim?.boundRunId ?? '').trim();
   if (boundRunId) {
     return { reclaimable: false, reason: 'bound_run_id_present' };
@@ -316,8 +320,11 @@ export function evaluateLegacyPreInvokeOrphan({ claim, reviewRuns }) {
   if (claim?.invokeCompletedAtUtc || claim?.launchPendingInvokedAtUtc) {
     return { reclaimable: false, reason: 'invoke_evidence_present' };
   }
+  if (postAcquireSideEffectAudit) {
+    return { reclaimable: false, reason: 'side_effect_audit_present' };
+  }
   const covered = findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''));
-  if (covered) {
+  if (covered && IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
     return { reclaimable: false, reason: 'covering_run_present' };
   }
   return { reclaimable: true, reason: 'legacy_pre_invoke_orphan' };
@@ -363,6 +370,7 @@ export function evaluateReclaimDecision({
   nowMs,
   config = resolveClaimLifecycleConfig(),
   corruptEvidence = false,
+  postAcquireSideEffectAudit = false,
 }) {
   if (String(claim?.state ?? '') !== 'active') {
     return { action: 'skip', reason: 'not_active' };
@@ -388,6 +396,9 @@ export function evaluateReclaimDecision({
   const liveness = holderLiveness ?? { outcome: 'ambiguous', reason: 'not_evaluated' };
 
   if (liveness.outcome === 'foreign_host') {
+    if (claim?.manualResolutionRequired) {
+      return { action: 'skip', reason: 'foreign_holder_manual_pending' };
+    }
     return {
       action: 'mark_manual',
       outcome: 'foreign_holder_manual',
@@ -425,12 +436,13 @@ export function evaluateReclaimDecision({
   }
 
   if (liveness.outcome === 'provably_not_alive') {
-    const legacy = evaluateLegacyPreInvokeOrphan({ claim, reviewRuns });
+    const legacy = evaluateLegacyPreInvokeOrphan({ claim, reviewRuns, postAcquireSideEffectAudit });
     if (!legacy.reclaimable) {
       if (
         legacy.reason === 'bound_run_id_present'
         || legacy.reason === 'invoke_evidence_present'
         || legacy.reason === 'launch_pending_present'
+        || legacy.reason === 'side_effect_audit_present'
       ) {
         return {
           action: 'terminalize',
@@ -558,6 +570,7 @@ async function main() {
       nowMs,
       config,
       corruptEvidence: Boolean(payload?.corruptEvidence),
+      postAcquireSideEffectAudit: Boolean(payload?.postAcquireSideEffectAudit),
     });
   }
   if (subcommand === 'sweep') {
