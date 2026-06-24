@@ -491,6 +491,17 @@ projects:
         5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL
            above; verify via gh pr view, not session status alone).
 
+
+      TASK CONTINUATION (Issue #430 — issue-keyed, pre- and post-PR). When exactly one live
+      issue-bound worker owns the task (ao status issue match + runtime alive) and no prior
+      task-continuation tuple was served for the current issue generation, send exactly ONE
+      continuation via the gated worker-nudge command (never raw ao send):
+        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
+          -SessionId <session> -IssueNumber <issue> -IntentClass task-continuation -Surface orchestrator-turn
+        Optional -PrNumber is audit context only after PR open; dedup stays issue-keyed.
+        Message file should remind the worker to commit, rebase, open PR, and report when ready.
+        Gate version: worker-nudge-gate/v1.
+
       PING DISCIPLINE (one ping per pending episode). On the next orchestrator turn
       while still in waiting_worker_review_response, if there is no worker
       addressing_reviews report since the send timestamp and no new PR commit, and

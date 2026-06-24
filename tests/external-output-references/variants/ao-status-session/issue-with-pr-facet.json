@@ -1,0 +1,10 @@
+{
+  "id": "ao-status-session/issue-with-pr-facet",
+  "command": "ao status",
+  "variant": "issue-with-pr-facet",
+  "version": 1,
+  "extends": "_shared.json",
+  "captureRef": "captures/ao-status-session/issue-with-pr-facet.raw.json",
+  "provenanceRef": "captures/ao-status-session/issue-with-pr-facet.provenance.json",
+  "requiredFields": ["issue", "prNumber"]
+}
