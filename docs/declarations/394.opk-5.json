@@ -16,6 +16,7 @@
     "scripts/contract-evidence-validator.mjs",
     "scripts/contract-evidence.test.ts",
     "scripts/draft-discipline.mjs",
+    "scripts/lint-self-architect.config.json",
     "scripts/lib/contract-evidence-reverify.ts",
     "scripts/verify.ps1",
     "tests/fixtures/contract-evidence/capture-manifest.json",
