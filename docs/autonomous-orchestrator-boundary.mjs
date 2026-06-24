@@ -217,6 +217,12 @@ export function evaluateAutonomousGitBoundary(input) {
   if (!isMutatingGitArgv(argv)) {
     return { allowed: true, reason: 'read_only_git' };
   }
+  if (isGitArgvAoOwnedWorktreeAdd(argv)) {
+    if (input.claimBoundWorktreeAllow) {
+      return { allowed: true, reason: 'claimed_worktree_allow' };
+    }
+    return { allowed: false, reason: 'autonomous_mutating_git_denied' };
+  }
   if (
     input.sanctionedProvenance
     || hasSanctionedGitParentChain(input.parentChain, argv)
@@ -398,12 +404,10 @@ export function classifySanctionedGitProvenance(parentChain, maxDepth) {
  */
 export function hasSanctionedGitParentChain(parentChain, argv = [], claimedBypass = false, maxDepth) {
   void claimedBypass;
+  void argv;
   const provenance = classifySanctionedGitProvenance(parentChain, maxDepth);
   if (provenance === 'preflight') {
     return true;
-  }
-  if (provenance === 'claimed_review_run' || provenance === 'review_run_worktree_command') {
-    return isGitArgvAoOwnedWorktreeAdd(argv);
   }
   return false;
 }

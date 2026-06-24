@@ -179,7 +179,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     ).toBe(false);
   });
 
-  it('positive-outcome: denies direct branch -m and allows ao-review-run child worktree add', () => {
+  it('positive-outcome: denies direct branch -m and allows claim-bound worktree add', () => {
     withTempGitRepo((dir) => {
       const deny = spawnSync(
         'bash',
@@ -194,17 +194,33 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       expect(deny.stderr).toMatch(/autonomous tree-mutating git denied/i);
 
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
-      const allow = runPwsh(`
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-        $env:PATH = ${psString(path.join(repoRoot, 'scripts'))} + ':' + $env:PATH
-        . ${psString(boundaryLibPath)}
-        $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','${dir.replace(/\\/g, '/')}/wt','main') -FixtureParentChain @('pwsh -NoProfile -File scripts/Invoke-OrchestratorClaimedReviewRun.ps1')
-        [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
-      `);
-      const parsed = JSON.parse(allow);
-      expect(parsed.denied).toBe(false);
-      expect(parsed.reason).toBe('sanctioned_git_child');
-      expect(before.stdout.trim()).toBe('main');
+      const headSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+      const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-324-'));
+      const projectId = 'orchestrator-pack';
+      const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+      mkdirSync(workspaces, { recursive: true });
+      const target = path.join(workspaces, 'opk-rev-324-positive');
+      try {
+        const allow = runPwsh(`
+          . ${psString(path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1'))}
+          $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+          $env:AO_BASE_DIR = ${psString(aoBase)}
+          $env:AO_PROJECT_ID = ${psString(projectId)}
+          $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
+          New-Item -ItemType Directory -Force -Path $ns | Out-Null
+          $record = New-ReviewStartClaimActiveRecord -PrNumber 324 -HeadSha ${psString(headSha)} -Surface 'orchestrator-turn' -Reason 'fixture'
+          Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 324 -HeadSha ${psString(headSha)}) -Record $record
+          . ${psString(boundaryLibPath)}
+          $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','--detach',${psString(target)},${psString(headSha)})
+          [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
+        `);
+        const parsed = JSON.parse(allow);
+        expect(parsed.denied).toBe(false);
+        expect(parsed.reason).toBe('claimed_worktree_allow');
+        expect(before.stdout.trim()).toBe('main');
+      } finally {
+        rmSync(aoBase, { recursive: true, force: true });
+      }
     });
   });
 
@@ -231,8 +247,8 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       ),
     ).toBe(false);
     expect(
-      hasSanctionedGitParentChain([claimedParent], ['worktree', 'add', 'wt', 'main']),
-    ).toBe(true);
+      hasSanctionedGitParentChain([claimedParent], ['worktree', 'add', '--detach', 'wt', 'main']),
+    ).toBe(false);
 
     const deny = runPwsh(`
       $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
@@ -748,11 +764,10 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          env: autonomousBashEnv({
             AO_AUTONOMOUS_GIT_INTERNAL_EXEC: '1',
-          },
+            PATH: `${path.join(repoRoot, 'scripts')}:${gitFixtureEnv().PATH ?? '/usr/bin:/bin'}`,
+          }),
         },
       );
       expect(denySpoofedInternal.status).toBe(93);
@@ -764,11 +779,10 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+          env: autonomousBashEnv({
             AO_AUTONOMOUS_GIT_INTERNAL_EXEC: '1',
-          },
+            PATH: `${path.join(repoRoot, 'scripts')}:${gitFixtureEnv().PATH ?? '/usr/bin:/bin'}`,
+          }),
         },
       );
       expect(denySpoofedRealBinary.status).toBe(93);
@@ -1089,6 +1103,258 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('autonomous review worktree path hardening (#429)', () => {
+  function withPathFixture(run: (ctx: { aoBase: string; projectId: string; workspaces: string }) => void) {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-worktree-path-'));
+    const projectId = 'orchestrator-pack';
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    try {
+      run({ aoBase, projectId, workspaces });
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  }
+
+  function evaluatePathHardening(targetPath: string, aoBase: string, projectId: string) {
+    return JSON.parse(runPwsh(`
+      $env:AO_BASE_DIR = ${psString(aoBase)}
+      $env:AO_PROJECT_ID = ${psString(projectId)}
+      . ${psString(boundaryLibPath)}
+      $result = Test-AutonomousReviewWorktreeTargetPathHardened -TargetPath ${psString(targetPath)} -ProjectId ${psString(projectId)}
+      [pscustomobject]@{ allowed = [bool]$result.allowed; reason = [string]$result.reason } | ConvertTo-Json -Compress
+    `));
+  }
+
+  it('worktree-path-hardening: allows a new workspace under the canonical prefix', () => {
+    withPathFixture(({ aoBase, projectId, workspaces }) => {
+      const target = path.join(workspaces, 'opk-rev-429-new');
+      const result = evaluatePathHardening(target, aoBase, projectId);
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  it('worktree-path-hardening: denies traversal escape attempts', () => {
+    withPathFixture(({ aoBase, projectId, workspaces }) => {
+      const escape = path.join(workspaces, '..', '..', 'escaped-workspace');
+      const result = evaluatePathHardening(escape, aoBase, projectId);
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  it('worktree-path-hardening: denies symlink escape attempts', () => {
+    withPathFixture(({ aoBase, projectId, workspaces }) => {
+      const outside = path.join(aoBase, 'outside-escape');
+      mkdirSync(outside, { recursive: true });
+      const link = path.join(workspaces, 'escape-link');
+      const linked = spawnSync('ln', ['-s', outside, link], { encoding: 'utf8' });
+      if (linked.status !== 0) {
+        return;
+      }
+      const result = evaluatePathHardening(path.join(link, 'nested'), aoBase, projectId);
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  it('worktree-path-hardening: denies projectId namespace mismatch', () => {
+    withPathFixture(({ aoBase }) => {
+      const otherRoot = path.join(aoBase, 'projects', 'other-project', 'code-reviews', 'workspaces', 'opk-rev-other');
+      const result = evaluatePathHardening(otherRoot, aoBase, 'orchestrator-pack');
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  it('worktree-path-hardening: denies pre-existing workspace directories', () => {
+    withPathFixture(({ aoBase, projectId, workspaces }) => {
+      const existing = path.join(workspaces, 'opk-rev-existing');
+      mkdirSync(existing, { recursive: true });
+      const result = evaluatePathHardening(existing, aoBase, projectId);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe('target_preexists');
+    });
+  });
+});
+
+describe('autonomous review worktree claim-bound allow (#429)', () => {
+  function evaluateClaimBound(
+    argv: string[],
+    aoBase: string,
+    projectId: string,
+    options: {
+      extraEnv?: Record<string, string>;
+      seedClaim?: { prNumber: number; headSha: string; holderPid?: number };
+    } = {},
+  ) {
+    const argvLiteral = argv.map((part) => psString(part)).join(',');
+    const extra = Object.entries(options.extraEnv ?? {})
+      .map(([key, value]) => `$env:${key} = ${psString(value)}`)
+      .join('\n      ');
+    const claimLib = psString(path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1'));
+    const seed = options.seedClaim;
+    const seedBlock = seed
+      ? `
+      . ${claimLib}
+      $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
+      New-Item -ItemType Directory -Force -Path $ns | Out-Null
+      $record = New-ReviewStartClaimActiveRecord -PrNumber ${seed.prNumber} -HeadSha ${psString(seed.headSha)} -Surface 'orchestrator-turn' -Reason 'fixture'
+      ${seed.holderPid ? `$record.holder.pid = ${seed.holderPid}` : ''}
+      Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber ${seed.prNumber} -HeadSha ${psString(seed.headSha)}) -Record $record`
+      : '';
+    return JSON.parse(runPwsh(`
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_BASE_DIR = ${psString(aoBase)}
+      $env:AO_PROJECT_ID = ${psString(projectId)}
+      ${extra}
+      ${seedBlock}
+      . ${psString(boundaryLibPath)}
+      $verdict = Test-AutonomousGitDenied -Argv @(${argvLiteral})
+      [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
+    `));
+  }
+  it('claim-bound-worktree: allows live owned claim with explicit commit and detach', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-bound-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'b'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-allow');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect(parsed.denied).toBe(false);
+      expect(parsed.reason).toBe('claimed_worktree_allow');
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies when claim is missing', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-missing-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'c'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-missing');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId);
+      expect(parsed.denied).toBe(true);
+      expect(parsed.reason).toBe('autonomous_mutating_git_denied');
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies active claim with dead holder', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-dead-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'd'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-dead');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha, holderPid: 99999999 },
+      });
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies wrong head sha', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-wrong-head-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'e'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-wrong');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, 'f'.repeat(40)], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies implicit commit worktree add', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-implicit-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '1'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-implicit');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies env bypass without live claim', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-bypass-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '2'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-bypass');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId, {
+        extraEnv: { AO_CLAIMED_REVIEW_RUN_BYPASS: '1' },
+      });
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies regex ancestor without live claim (retired provenance)', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-regex-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '3'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-regex');
+    try {
+      const output = runPwsh(`
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_BASE_DIR = ${psString(aoBase)}
+        $env:AO_PROJECT_ID = ${psString(projectId)}
+        . ${psString(boundaryLibPath)}
+        $chain = @('pwsh -NoProfile -File scripts/Invoke-OrchestratorClaimedReviewRun.ps1')
+        $verdict = Test-AutonomousGitDenied -Argv @('worktree','add','--detach',${psString(target)},${psString(headSha)}) -FixtureParentChain $chain
+        [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
+      `);
+      const parsed = JSON.parse(output);
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('documents cooperative residual: concurrent live claim may allow armed-manual worktree add', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-residual-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '4'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-residual');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect([true, false]).toContain(parsed.denied);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
     }
   });
 });
