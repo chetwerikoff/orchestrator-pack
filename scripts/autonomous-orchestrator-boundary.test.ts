@@ -1186,7 +1186,7 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
     projectId: string,
     options: {
       extraEnv?: Record<string, string>;
-      seedClaim?: { prNumber: number; headSha: string; holderPid?: number };
+      seedClaim?: { prNumber: number; headSha: string; holderPid?: number; holderStartTimeTicks?: string; holderBootIdHash?: string };
     } = {},
   ) {
     const argvLiteral = argv.map((part) => psString(part)).join(',');
@@ -1202,6 +1202,8 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
       New-Item -ItemType Directory -Force -Path $ns | Out-Null
       $record = New-ReviewStartClaimActiveRecord -PrNumber ${seed.prNumber} -HeadSha ${psString(seed.headSha)} -Surface 'orchestrator-turn' -Reason 'fixture'
       ${seed.holderPid ? `$record.holder.pid = ${seed.holderPid}` : ''}
+      ${seed.holderStartTimeTicks !== undefined ? `$record.holder.startTimeTicks = ${psString(seed.holderStartTimeTicks)}` : ''}
+      ${seed.holderBootIdHash !== undefined ? `$record.holder.bootIdHash = ${psString(seed.holderBootIdHash)}` : ''}
       Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber ${seed.prNumber} -HeadSha ${psString(seed.headSha)}) -Record $record`
       : '';
     return JSON.parse(runPwsh(`
@@ -1335,6 +1337,51 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
         [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
       `);
       const parsed = JSON.parse(output);
+      expect(parsed.denied).toBe(true);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies non-SHA commit refs without throwing', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-non-sha-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '5'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-non-sha');
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, 'main'], aoBase, projectId, {
+        seedClaim: { prNumber: 429, headSha },
+      });
+      expect(parsed.denied).toBe(true);
+      expect(parsed.reason).toBe('autonomous_mutating_git_denied');
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
+
+  it('claim-bound-worktree: denies stale claim when holder PID is reused with wrong startTimeTicks', () => {
+    if (process.platform !== 'linux') {
+      return;
+    }
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-claim-pid-reuse-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = '6'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    mkdirSync(workspaces, { recursive: true });
+    const target = path.join(workspaces, 'opk-rev-429-pid-reuse');
+    const holderPid = Number(process.pid);
+    try {
+      const parsed = evaluateClaimBound(['worktree', 'add', '--detach', target, headSha], aoBase, projectId, {
+        seedClaim: {
+          prNumber: 429,
+          headSha,
+          holderPid,
+          holderStartTimeTicks: '1',
+          holderBootIdHash: 'dead-boot-hash',
+        },
+      });
       expect(parsed.denied).toBe(true);
     } finally {
       rmSync(aoBase, { recursive: true, force: true });

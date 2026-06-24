@@ -5,6 +5,7 @@
 
 $Script:AutonomousReviewWorktreeGateRoot = $PSScriptRoot
 . (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaim.ps1')
+. (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaimLifecycle.ps1')
 
 $Script:AutonomousReviewWorktreeClaimSchemaVersion = 1
 
@@ -219,18 +220,25 @@ function Test-AutonomousReviewWorktreeTargetPathHardened {
     return @{ allowed = $true; reason = 'path_ok'; canonicalPath = $canonicalTarget }
 }
 
+function Test-ReviewStartClaimHeadShaFormat {
+    param([string]$HeadSha)
+
+    $normalized = ([string]$HeadSha).Trim().ToLowerInvariant()
+    if ($normalized -match '^[0-9a-f]{40}$') {
+        return @{ ok = $true; headSha = $normalized }
+    }
+    return @{ ok = $false; reason = 'invalid_head_sha' }
+}
+
 function Test-AutonomousReviewWorktreeClaimHolderLive {
     param([object]$Holder)
 
-    try {
-        $holderPid = [int]$Holder.pid
-        if ($holderPid -le 0) { return $false }
-        $process = Get-Process -Id $holderPid -ErrorAction Stop
-        return [bool]$process
+    if (-not $Holder) { return $false }
+    $liveness = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'classify-holder' -Payload @{
+        holder    = $Holder
+        localHost = (Get-ReviewStartClaimLocalHostName)
     }
-    catch {
-        return $false
-    }
+    return ([string]$liveness.outcome -eq 'alive')
 }
 
 function Test-ReviewStartClaimRecordIsLive {
@@ -269,7 +277,11 @@ function Find-LiveReviewStartClaimForHeadSha {
         return @{ ok = $false; reason = 'claim_namespace_missing' }
     }
 
-    $normalizedHead = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
+    $headShape = Test-ReviewStartClaimHeadShaFormat -HeadSha $HeadSha
+    if (-not $headShape.ok) {
+        return @{ ok = $false; reason = $headShape.reason }
+    }
+    $normalizedHead = $headShape.headSha
     $matches = @()
     foreach ($file in Get-ChildItem -LiteralPath $Namespace -Filter '*.json' -File -ErrorAction SilentlyContinue) {
         $read = Read-ReviewStartClaimRecord -Path $file.FullName

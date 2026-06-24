@@ -50,8 +50,13 @@ describe('autonomous review worktree e2e smoke (#429)', () => {
             $env:AO_PROJECT_ID = ${psString(projectId)}
             $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
             New-Item -ItemType Directory -Force -Path $ns | Out-Null
+            . ${psString(path.join(repoRoot, 'scripts/lib/Review-RunLiveness.ps1'))}
             $record = New-ReviewStartClaimActiveRecord -PrNumber 429 -HeadSha ${psString(headSha)} -Surface 'orchestrator-turn' -Reason 'e2e-smoke'
             $record.holder.pid = ${holderPid}
+            $holderStartTicks = Get-ReviewRecoveryProcessStartTicks -ProcessId ${holderPid}
+            $holderBootHash = Get-ReviewRecoveryBootIdHash
+            if ($holderStartTicks) { $record.holder.startTimeTicks = $holderStartTicks }
+            if ($holderBootHash) { $record.holder.bootIdHash = $holderBootHash }
             Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 429 -HeadSha ${psString(headSha)}) -Record $record
           `);
 
