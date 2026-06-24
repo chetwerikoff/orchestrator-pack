@@ -364,6 +364,8 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             -SessionId ([string]$FilterResult.sessionId) -PrNumber ([int]$planned.prNumber) -LogWriter $LogWriter
     }
 
+    $holdRuns = if ($FixtureSnapshot) { @($FixtureSnapshot.reviewRuns) } else { @($claimRuns) }
+
     try {
         $fresh = if ($FixtureSnapshot) {
             $FixtureSnapshot
@@ -439,14 +441,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         & $LogWriter "review-wake-trigger: dry-run would run: $commandLine (PR #$($planned.prNumber) head=$($planned.headSha))"
     }
     else {
-        if (-not (Test-ReviewStartClaimOwnership -ClaimResult $claim)) {
-            & $LogWriter "review-wake-trigger: review-start-claim ownership lost before invocation PR #$($planned.prNumber) key=$($claim.key); aborting"
-            return @{
-                triggered = $false
-                reason    = 'claim_ownership_lost'
-                mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
-            }
-        }
         if (-not (Enter-ReviewWakeTriggerSideEffectFence -LockPath $lockPath -Metadata @{
                 prNumber  = $planned.prNumber
                 headSha   = $planned.headSha
@@ -467,7 +461,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         }
         $handoffReceiptAbort = $false
         try {
-            & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             try {
                 Invoke-ReviewerWorkspacePreflight -RepoRoot $RepoRoot
             }
@@ -475,6 +468,16 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
                 throw
             }
+            $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
+            if (-not $launchGate.ok) {
+                & $LogWriter "review-wake-trigger: launch gate denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($launchGate.reason)"
+                return @{
+                    triggered = $false
+                    reason    = [string]$launchGate.reason
+                    mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+                }
+            }
+            & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             if ($isHandoffWake) {
                 $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
@@ -527,8 +530,14 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     if (-not $DryRun) {
-        Bind-ReviewStartClaimToVisibleRun -ClaimResult $claim -ReviewRuns $postRuns | Out-Null
-        $complete = Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'run_started' -ReviewRuns $postRuns
+        $resolveRuns = if ($FixtureSnapshot) {
+            { @($FixtureSnapshot.reviewRuns) }
+        }
+        else {
+            { @(Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot).reviewRuns }
+        }
+        $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
+            -ResolveReviewRuns $resolveRuns -LogWriter $LogWriter
         if (-not $complete.ok) {
             & $LogWriter "review-wake-trigger: ESCALATE review-start-claim PR #$($planned.prNumber) head=$($planned.headSha) key=$($claim.key): run-start completion $($complete.reason)"
         }
