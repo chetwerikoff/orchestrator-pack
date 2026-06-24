@@ -345,6 +345,14 @@ Canonical references — do **not** invent parallel worktree/git procedures:
 | Launch health after orchestrator respawn | `scripts/wait-orchestrator-launch.ps1` (recovery runbook Step 3) |
 | Fresh spawn when session metadata keeps stale prompts/rules | [`.claude/skills/change-orchestrator-runtime/SKILL.md`](../change-orchestrator-runtime/SKILL.md) — **APPLY PROCEDURE** (operator terminal only) |
 | Merged PR review-loop policy (not worktree repair) | `docs/orchestrator-recovery-runbook.md` — **After manual PR merge** |
+| Journaled worker-send adoption after AO restart | `docs/migration_notes.md` — **Journaled worker-send wrapper adoption (Issue #281)**; `docs/orchestrator-recovery-runbook.md` — worker message stuck / adoption; Step **8e** below |
+
+**Journaled worker-send adoption (Step 8e):** run **only** after a factual AO
+restart/reload in Step 8c (or `change-orchestrator-runtime` APPLY PROCEDURE). Skip when
+Step 8 is skipped, when no restart occurred, or when the merge did not require runtime
+reload and live worker-send routing was unchanged. Adoption binding is keyed to the
+**AO epoch** and the **hash of the config path string** (resolved live
+`agent-orchestrator.yaml` path) — not to a hash of YAML file contents.
 
 ### 8a — Resolve orchestrator session id and worktree path
 
@@ -450,7 +458,125 @@ WT_AFTER_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSIN
 ao status --project orchestrator-pack --reports full
 ```
 
-### 8e — Success criteria
+### 8e — Journaled worker-send adoption (mandatory after AO restart in Step 8)
+
+Run this block **after** Step 8c restart (and optional 8d worktree re-probe). Skip when
+Step 8 was skipped or when no AO restart/reload occurred in this merge flow.
+
+From the operator pack checkout (`orchestrator-pack` repo root):
+
+```bash
+cd /path/to/orchestrator-pack   # live checkout, not the AO orchestrator worktree
+
+pwsh -NoProfile -Command '
+. ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
+$b = Get-WorkerMessageAdoptionBinding -PackRoot (Get-Location).Path
+& ./scripts/worker-message-send-adoption-preflight.ps1 `
+  -AoEpoch $b.AoEpoch `
+  -ConfigPath $b.ConfigPath `
+  -WriteProbeEntries
+exit $LASTEXITCODE
+'
+```
+
+**Binding:** `Get-WorkerMessageAdoptionBinding` resolves the running AO epoch and the
+loaded config path; preflight validates probe journal entries for that epoch plus the
+**path-string hash** (not YAML content).
+
+**Canonical preflight (`-WriteProbeEntries`):** invokes `ao send` into session
+`synthetic-adoption-probe`. The live `orchestratorRules` routing rule must pipe through
+`scripts/journaled-worker-send.ps1`. Success stdout includes
+`[worker-message-send-adoption-preflight] effective routing adopted`.
+
+**Outcome A — canonical preflight OK (adoption confirmed):**
+
+- Command above exits 0.
+- Stdout includes `[worker-message-send-adoption-preflight] effective routing adopted`.
+- Live YAML routing through `ao send` → `journaled-worker-send.ps1` is **verified**.
+- Record Step 9 journaled worker-send as **canonical preflight OK**.
+
+**If canonical preflight fails with `Session 'synthetic-adoption-probe' does not exist` or
+`probe_route_failed`:**
+
+- **Do not** treat live YAML routing as verified.
+- Tell the operator that session `synthetic-adoption-probe` must exist (or be created and
+  kept) and canonical preflight must be re-run before **runtime adoption confirmed**.
+- **Outcome B — wrapper/journal fallback only** (routing **not** confirmed): use only to
+  validate wrapper/journal health and clear the adoption escalation when canonical routing
+  proof is unavailable.
+  `docs/migration_notes.md` Issue #281 and the recovery runbook describe canonical
+  `-WriteProbeEntries` adoption only — they do **not** document this direct-wrapper path.
+
+```bash
+cd /path/to/orchestrator-pack
+
+pwsh -NoProfile -Command '
+$ErrorActionPreference = "Stop"
+. ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
+. ./scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1
+. ./scripts/lib/Record-WorkerMessageDispatch.ps1
+$root = (Get-Location).Path
+$b = Get-WorkerMessageAdoptionBinding -PackRoot $root
+$epoch = [string]$b.AoEpoch
+$config = [string]$b.ConfigPath
+$epochHash = ConvertTo-WorkerMessageSafeHashText $epoch
+$configHash = ConvertTo-WorkerMessageSafeHashText $config
+$runId = ConvertTo-WorkerMessageSafeHashText ([guid]::NewGuid().ToString("n"))
+$journal = if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
+  $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
+} else {
+  Join-Path ([IO.Path]::GetTempPath()) "orchestrator-worker-message-dispatch-journal.json"
+}
+$wrapper = Join-Path $root "scripts/journaled-worker-send.ps1"
+foreach ($branch in @("plain-ao-send:pending-draft", "plain-ao-send:self-submitted")) {
+  $payload = New-WorkerMessageAdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $runId
+  $env:AO_WORKER_MESSAGE_ADOPTION_PROBE = "1"
+  $env:AO_WORKER_MESSAGE_ADOPTION_BRANCH = $branch
+  $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH = $epoch
+  $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH = $config
+  $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH = $epochHash
+  $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH = $configHash
+  $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH = $runId
+  $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL = $journal
+  $payload | & $wrapper -SessionId synthetic-adoption-probe -AdoptionProbe `
+    -JournalPath $journal -AoEpoch $epoch -ConfigPath $config `
+    -AoEpochHash $epochHash -ConfigPathHash $configHash -AdoptionProbeRunIdHash $runId
+  if ($LASTEXITCODE -ne 0) { throw "wrapper probe failed branch=$branch exit=$LASTEXITCODE" }
+}
+$r = Test-WorkerMessageSendAdoptionPreflight -JournalPath $journal -AoEpoch $epoch -ConfigPath $config -PersistState
+if (-not $r.ok) { Write-Host $r.diagnosis; exit 46 }
+Write-Host "[merge-8e-fallback] wrapper/journal probes validated; live YAML routing not verified"
+exit 0
+'
+```
+
+- Outcome B validates wrapper + journal for the current binding only.
+- Even if journal validation prints `effective routing adopted`, **do not** equate that with
+  Outcome A — no `-WriteProbeEntries` / no `ao send` routing proof.
+- Record Step 9 journaled worker-send as **fallback wrapper only (routing не доказан)**.
+- **Do not** report **runtime adoption confirmed** on Outcome B alone; list operator follow-up:
+  create/keep `synthetic-adoption-probe`, rerun canonical preflight (command above).
+
+**Post-8e checks** (health only — not adoption source of truth):
+
+```bash
+pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+```
+
+Do **not** claim adoption passed based on reconcile `-DryRun` alone — dry-run skips live
+adoption-preflight side effects.
+
+**Health expected after Outcome A or B:**
+
+- `worker-message-submit-reconcile` shows **working** in supervisor Status.
+- No `STATE FENCES UNTRUSTED` / `wrong_state_root_active_deliveries` on that child.
+
+If health checks fail, stop and escalate via `docs/orchestrator-recovery-runbook.md`
+worker-message section. Outcome B additionally leaves **runtime adoption unconfirmed** until
+canonical preflight succeeds.
+
+### 8f — Success criteria
 
 Report **runtime adoption confirmed** only when **all** hold:
 
@@ -468,12 +594,20 @@ Report **runtime adoption confirmed** only when **all** hold:
 3. **Surfaces:** at least one runtime-sensitive path from Step 4 is present in the
    worktree at the expected content (spot-check: `git -C "$WT" show HEAD:<path>` or
    `test -f "$WT/<path>"` for a changed prompt/script named in the PR).
+4. **Journaled worker-send (when Step 8c restart ran):**
+   - **Outcome A (canonical `-WriteProbeEntries`):** required for **runtime adoption
+     confirmed** — preflight `effective routing adopted`; `worker-message-submit-reconcile`
+     **working**; no `STATE FENCES UNTRUSTED`.
+   - **Outcome B (wrapper fallback only):** may satisfy health checks above, but **does
+     not** satisfy this criterion — record **runtime adoption: routing не подтверждён**
+     and operator follow-up to rerun canonical preflight.
+   - If restart did not run, note **8e skipped (no restart)**.
 
 Do **not** claim restart succeeded without recording `WT_AFTER_HEAD`.
 
-### 8f — Stale worktree after restart — stop and escalate
+### 8g — Stale worktree after restart — stop and escalate
 
-If `WT_AFTER_HEAD` is `MISSING`, or either commit check in 8e fails (worktree does not
+If `WT_AFTER_HEAD` is `MISSING`, or either commit check in 8f fails (worktree does not
 contain `MERGE_SHA`, or `origin/main` does not contain `MERGE_SHA`):
 
 - **Do not** run destructive git inside `$WT` or the live checkout to “fix” it.
@@ -521,7 +655,9 @@ Reply in the user’s language (Russian if they wrote Russian):
 - **Runtime worktree before:** <WT> @ <WT_BEFORE_HEAD> (<WT_BEFORE_BRANCH>)
 - **Restart:** выполнен / не требовался / не удался (<команды>)
 - **Runtime worktree after:** <WT> @ <WT_AFTER_HEAD> (<WT_AFTER_BRANCH>)
-- **Runtime adoption:** подтверждён / stale / пропущен (не runtime-sensitive)
+- **Journaled worker-send (8e):** пропущен (без рестарта) / Outcome A canonical OK / Outcome B fallback only (routing не доказан) / failed (<причина>)
+- **worker-message-submit-reconcile:** working / degraded (<причина>)
+- **Runtime adoption:** подтверждён (только Outcome A) / routing не подтверждён (Outcome B) / stale / пропущен (не runtime-sensitive)
 - **Escalation:** <recovery runbook step / change-orchestrator-runtime / contract gap / —>
 
 ### Проверка
@@ -545,3 +681,6 @@ Do not claim CI/adoption/restart succeeded without the commands you actually ran
 - Run `ao stop` / `ao start` from an AO-managed worker session
 - `git pull`, `reset`, `checkout`, or hand-edit inside the AO orchestrator worktree
 - Delete AO worktrees manually or claim restart succeeded without post-start HEAD check
+- Claim journaled worker-send adoption from `worker-message-submit-reconcile -DryRun` alone
+  (dry-run skips adoption preflight; use `worker-message-send-adoption-preflight.ps1`)
+- Treat direct wrapper probe fallback as proof that live YAML routing rule works
