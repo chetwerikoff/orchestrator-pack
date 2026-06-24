@@ -8,7 +8,7 @@ import {
   diffLegacyPathSets,
   loadLegacyPathSet,
 } from './contract-evidence-path.mjs';
-import { checkContractEvidence } from './contract-evidence-validator.mjs';
+import { checkContractEvidence } from './contract-evidence.mjs';
 import {
   runLegacyListGuardWorkflowOrderingCheck,
   validateLegacyListGuardWorkflowOrdering,
