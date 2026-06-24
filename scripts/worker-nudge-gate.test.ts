@@ -1505,4 +1505,3 @@ describe('worker nudge claim namespace and lease (#384 opk-rev-772)', () => {
     expect(result.lease).toBe(30 * 60 * 1000);
   });
 });
-

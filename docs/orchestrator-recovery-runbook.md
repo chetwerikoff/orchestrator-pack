@@ -1075,4 +1075,4 @@ When the LLM orchestrator turn repeats worker nudges within the same review roun
 verify `scripts/invoke-gated-worker-nudge.ps1` is named in live `orchestratorRules` and
 `pwsh -NoProfile -File scripts/check-worker-nudge-gate-adoption.ps1` passes. Audit rows live under
 `~/.agent-orchestrator/projects/<project>/worker-nudge-gate-audit/`. See
-[`docs/migration_notes.md`](migration_notes.md#llm-orchestrator-gated-worker-nudge-gate-issue-384).
+[`docs/migration_notes.md`](migration_notes.md#llm-orchestrator-gated-worker-nudge-gate-issue-384). Issue #430 adds issue-keyed `task-continuation` (`-IssueNumber` + `-IntentClass task-continuation`); PR-keyed classes unchanged.

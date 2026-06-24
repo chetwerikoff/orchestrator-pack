@@ -15,6 +15,7 @@ import {
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from './review-trigger-reconcile.mjs';
+import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 export { validateCapabilityInventory };
 
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
@@ -34,6 +35,7 @@ export const INTENT_CLASSES = Object.freeze([
   'ci-green-handoff',
   'ci-failure',
   'liveness',
+  'task-continuation',
   'unknown-worker-nudge',
 ]);
 
@@ -168,6 +170,39 @@ function getSessionIdentifier(session) {
 /**
  * @param {Record<string, unknown> | null | undefined} session
  */
+
+/**
+ * @param {unknown} value
+ */
+export function normalizeIssueNumber(value) {
+  const raw = String(value ?? '')
+    .trim()
+    .replace(/^#/, '');
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} session
+ * @param {number} issueNumber
+ */
+function sessionMatchesIssue(session, issueNumber) {
+  return normalizeIssueNumber(session?.issue) === issueNumber;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} session
+ * @param {string} projectId
+ */
+function sessionMatchesProject(session, projectId) {
+  const expected = String(projectId ?? '').trim();
+  if (!expected) {
+    return true;
+  }
+  const actual = String(session?.project ?? '').trim();
+  return !actual || actual === expected;
+}
+
 function deriveTargetGeneration(session) {
   for (const key of ['targetGeneration', 'sessionGeneration', 'generation']) {
     const value = String(session?.[key] ?? '').trim();
@@ -383,6 +418,145 @@ export function resolveWorkerTargetFromPrClaim(input) {
   };
 }
 
+
+/**
+ * @param {object} input
+ */
+export function syncIssueOwnershipClaimRecord(input) {
+  const projectId = String(input.projectId ?? 'orchestrator-pack').trim();
+  const issueNumber = normalizeIssueNumber(input.issueNumber);
+  const ownerSessionId = String(input.ownerSessionId ?? '').trim();
+  const existing = input.existingClaim ?? null;
+  const nowIso = new Date().toISOString();
+  const nowMs = Number(input.nowMs ?? Date.now());
+  if (!projectId || !issueNumber || !ownerSessionId) {
+    return { ok: false, reason: 'missing_owner' };
+  }
+  if (existing) {
+    const priorOwner = String(existing.ownerSessionId ?? '').trim();
+    if (priorOwner !== ownerSessionId) {
+      return { ok: false, reason: 'issue_owner_mismatch' };
+    }
+    return {
+      ok: true,
+      changed: false,
+      reason: 'same_owner',
+      record: {
+        ...existing,
+        projectId,
+        issueNumber,
+        ownerSessionId,
+        updatedAtUtc: nowIso,
+      },
+    };
+  }
+  const generation = createHash('sha256')
+    .update(`${projectId}:${issueNumber}:${ownerSessionId}:${nowMs}`)
+    .digest('hex')
+    .slice(0, 12);
+  return {
+    ok: true,
+    changed: true,
+    reason: 'initialized',
+    record: {
+      projectId,
+      issueNumber,
+      ownerSessionId,
+      generation,
+      lineageId: generation,
+      logicalWorkerId: ownerSessionId,
+      claimedAtUtc: nowIso,
+      updatedAtUtc: nowIso,
+    },
+  };
+}
+
+/**
+ * @param {object} input
+ */
+export function resolveIssueOwnerSessionForNudge(input) {
+  const issueNumber = normalizeIssueNumber(input.issueNumber);
+  const sessionId = String(input.sessionId ?? '').trim();
+  const projectId = String(input.projectId ?? 'orchestrator-pack').trim();
+  const sessions = toArray(input.sessions);
+  if (!issueNumber) {
+    return { ok: false, reason: 'missing_issue' };
+  }
+  const candidates = sessions.filter((session) => {
+    const role = String(session?.role ?? '').toLowerCase();
+    if (role !== 'worker' && role !== 'coding') {
+      return false;
+    }
+    if (!sessionMatchesIssue(session, issueNumber)) {
+      return false;
+    }
+    if (!sessionMatchesProject(session, projectId)) {
+      return false;
+    }
+    return isSessionAlive(session);
+  });
+  if (candidates.length === 0) {
+    return { ok: false, reason: 'no_issue_owner' };
+  }
+  if (candidates.length > 1) {
+    return { ok: false, reason: 'ambiguous_issue_owner' };
+  }
+  const ownerSessionId = getSessionIdentifier(candidates[0]);
+  if (!ownerSessionId) {
+    return { ok: false, reason: 'no_issue_owner' };
+  }
+  if (sessionId && sessionId !== ownerSessionId) {
+    return { ok: false, reason: 'session_not_issue_owner' };
+  }
+  return { ok: true, ownerSessionId };
+}
+
+export function resolveWorkerTargetFromIssueClaim(input) {
+  const issueNumber = normalizeIssueNumber(input.issueNumber);
+  const sessionId = String(input.sessionId ?? '').trim();
+  const projectId = String(input.projectId ?? 'orchestrator-pack').trim();
+  const issueClaims = toArray(input.issueClaims);
+  if (!issueNumber || !sessionId) {
+    return { ok: false, reason: 'missing_issue_or_session', verifiable: false };
+  }
+  const claimRecord =
+    issueClaims.find((row) => normalizeIssueNumber(row?.issueNumber) === issueNumber) ??
+    input.claimRecord ??
+    null;
+  if (!claimRecord?.generation) {
+    return { ok: false, reason: 'issue_claim_unresolved', verifiable: false };
+  }
+  const ownerSessionId = String(claimRecord.ownerSessionId ?? '').trim();
+  if (!ownerSessionId) {
+    return { ok: false, reason: 'issue_claim_unresolved', verifiable: false };
+  }
+  if (ownerSessionId !== sessionId) {
+    return { ok: false, reason: 'session_not_issue_owner', verifiable: false };
+  }
+  const targetGeneration = String(claimRecord.generation).trim();
+  const targetId = String(
+    claimRecord.logicalWorkerId ?? claimRecord.lineageId ?? ownerSessionId,
+  ).trim();
+  if (!targetId || !targetGeneration) {
+    return { ok: false, reason: 'issue_claim_unresolved', verifiable: false };
+  }
+  return {
+    ok: true,
+    verifiable: true,
+    targetId,
+    targetGeneration,
+    workerTarget: `${targetId}:${targetGeneration}`,
+    logicalWorkerId: targetId,
+    sessionGeneration: targetGeneration,
+    rawSessionId: sessionId,
+    ownerSessionId,
+    lineageId: String(claimRecord.lineageId ?? targetGeneration),
+    targetResolutionSource: issueClaims.length ? 'issue-claim-record' : 'ao-issue-ownership-claim',
+    projectId,
+    issueNumber,
+  };
+}
+
 export function buildWorkerTarget(input) {
   const targetId = String(input.targetId ?? input.sessionId ?? input.workerSessionId ?? '').trim();
   const targetGeneration = String(
@@ -495,6 +669,15 @@ export function deriveCycleKey(intentClass, input) {
       }
       return '';
     }
+    case 'task-continuation': {
+      const generation = String(
+        input.targetGeneration ?? input.taskGeneration ?? input.generation ?? '',
+      ).trim();
+      if (!generation) {
+        return '';
+      }
+      return `task-gen:${generation}`;
+    }
     case 'liveness':
     case 'unknown-worker-nudge':
       if (!headSha || !target.workerTarget) {
@@ -509,8 +692,50 @@ export function deriveCycleKey(intentClass, input) {
 /**
  * @param {object} input
  */
+
+/**
+ * @param {object} input
+ */
+export function buildIssueTupleKey(input) {
+  const intentClass = classifyIntent(input);
+  if (intentClass !== 'task-continuation') {
+    return { ok: false, reason: 'not_issue_keyed_intent', intentClass };
+  }
+  const projectId = String(input.projectId ?? 'orchestrator-pack').trim();
+  const issueNumber = normalizeIssueNumber(input.issueNumber);
+  const cycleKey = deriveCycleKey(intentClass, input);
+  const target = buildWorkerTarget(input);
+  if (!projectId || !issueNumber || !cycleKey || !intentClass || !target.workerTarget) {
+    return {
+      ok: false,
+      reason: 'tuple_incomplete',
+      intentClass,
+      cycleKey,
+      workerTarget: target.workerTarget,
+      issueNumber,
+      projectId,
+    };
+  }
+  return {
+    ok: true,
+    projectId,
+    issueNumber,
+    intentClass,
+    cycleKey,
+    workerTarget: target.workerTarget,
+    targetId: target.targetId,
+    targetGeneration: target.targetGeneration,
+    targetVerifiable: target.verifiable,
+    issueKeyed: true,
+    tupleKey: `${projectId}|${issueNumber}|${cycleKey}|${intentClass}|${target.workerTarget}`,
+  };
+}
+
 export function buildTupleKey(input) {
   const intentClass = classifyIntent(input);
+  if (intentClass === 'task-continuation') {
+    return buildIssueTupleKey(input);
+  }
   const cycleKey = deriveCycleKey(intentClass, input);
   const target = buildWorkerTarget(input);
   const prNumber = Number(input.prNumber ?? 0);
@@ -568,7 +793,6 @@ export function remapLegacy332Record(record) {
  */
 export function buildAuditRecord(input) {
   const required = [
-    'prNumber',
     'logicalWorkerId',
     'sessionGeneration',
     'rawSessionId',
@@ -596,6 +820,12 @@ export function buildAuditRecord(input) {
       out.missingAuditField = key;
       break;
     }
+  }
+  const hasPr = out.prNumber !== undefined && out.prNumber !== null && out.prNumber !== '';
+  const hasIssue = out.issueNumber !== undefined && out.issueNumber !== null && out.issueNumber !== '';
+  if (!hasPr && !hasIssue) {
+    out.auditIncomplete = true;
+    out.missingAuditField = 'prNumber|issueNumber';
   }
   return out;
 }
@@ -635,6 +865,8 @@ export function evaluateNudgeGate(input) {
       failClosed: true,
       audit: buildAuditRecord({
         prNumber: input.prNumber ?? null,
+        issueNumber: input.issueNumber ?? null,
+        projectId: input.projectId ?? null,
         logicalWorkerId: input.targetId ?? input.sessionId ?? null,
         sessionGeneration: input.targetGeneration ?? null,
         rawSessionId: input.sessionId ?? null,
@@ -673,7 +905,7 @@ export function evaluateNudgeGate(input) {
           diagnosis: `${OPERATOR_ESCALATION_PREFIX} tuple ${tuple.tupleKey} was already ${phase} but incoming message content differs; tuple remains suppressed.`,
           tuple,
           audit: buildAuditRecord({
-            prNumber: tuple.prNumber,
+            ...tupleAuditFields(tuple, input),
             logicalWorkerId: tuple.targetId,
             sessionGeneration: tuple.targetGeneration,
             rawSessionId: input.sessionId ?? tuple.targetId,
@@ -722,15 +954,21 @@ export function evaluateNudgeGate(input) {
 
   const cycleState = input.cycleState ?? {};
   const repoId = String(cycleState.repoId ?? input.repoId ?? 'orchestrator-pack');
-  const owner = getOwnerCycleRecord(cycleState, repoId, tuple.prNumber, tuple.targetId);
-  if (tuple.intentClass === 'ci-green-handoff' && owner?.nudgeArmed) {
+  const owner = tuple.issueKeyed
+    ? null
+    : getOwnerCycleRecord(cycleState, repoId, tuple.prNumber, tuple.targetId);
+  if (!tuple.issueKeyed && tuple.intentClass === 'ci-green-handoff' && owner?.nudgeArmed) {
     return suppress('already_nudged_this_cycle', tuple, input, storeId, 'SENT');
   }
 
   const legacyNudged = input.legacyNudged ?? {};
-  const bootstrapped = bootstrapLegacyNudgedCycle(cycleState, legacyNudged, tuple.prNumber, tuple.targetId);
-  const bootOwner = getOwnerCycleRecord(bootstrapped, repoId, tuple.prNumber, tuple.targetId);
-  if (tuple.intentClass === 'ci-green-handoff' && bootOwner?.nudgeArmed && !owner?.nudgeArmed) {
+  const bootstrapped = tuple.issueKeyed
+    ? cycleState
+    : bootstrapLegacyNudgedCycle(cycleState, legacyNudged, tuple.prNumber, tuple.targetId);
+  const bootOwner = tuple.issueKeyed
+    ? null
+    : getOwnerCycleRecord(bootstrapped, repoId, tuple.prNumber, tuple.targetId);
+  if (!tuple.issueKeyed && tuple.intentClass === 'ci-green-handoff' && bootOwner?.nudgeArmed && !owner?.nudgeArmed) {
     return suppress('legacy_nudged_cycle', tuple, input, storeId, 'SENT');
   }
 
@@ -748,7 +986,7 @@ export function evaluateNudgeGate(input) {
       escalate,
       unresolvedCount,
       audit: buildAuditRecord({
-        prNumber: tuple.prNumber,
+        ...tupleAuditFields(tuple, input),
         logicalWorkerId: tuple.targetId,
         sessionGeneration: tuple.targetGeneration,
         rawSessionId: input.sessionId ?? tuple.targetId,
@@ -771,7 +1009,7 @@ export function evaluateNudgeGate(input) {
     reason: 'gate_allow',
     tuple,
     audit: buildAuditRecord({
-      prNumber: tuple.prNumber,
+      ...tupleAuditFields(tuple, input),
       logicalWorkerId: tuple.targetId,
       sessionGeneration: tuple.targetGeneration,
       rawSessionId: input.sessionId ?? tuple.targetId,
@@ -795,6 +1033,21 @@ export function evaluateNudgeGate(input) {
  * @param {string} storeId
  * @param {string} claimPhase
  */
+function tupleAuditFields(tuple, input) {
+  if (tuple.issueKeyed) {
+    return {
+      projectId: tuple.projectId,
+      issueNumber: tuple.issueNumber,
+      prNumber: input.prNumber ?? null,
+    };
+  }
+  return {
+    prNumber: tuple.prNumber,
+    issueNumber: input.issueNumber ?? null,
+    projectId: input.projectId ?? null,
+  };
+}
+
 function suppress(reason, tuple, input, storeId, claimPhase) {
   return {
     allow: false,
@@ -802,7 +1055,7 @@ function suppress(reason, tuple, input, storeId, claimPhase) {
     reason,
     tuple,
     audit: buildAuditRecord({
-      prNumber: tuple.prNumber,
+      ...tupleAuditFields(tuple, input),
       logicalWorkerId: tuple.targetId,
       sessionGeneration: tuple.targetGeneration,
       rawSessionId: input.sessionId ?? tuple.targetId,
