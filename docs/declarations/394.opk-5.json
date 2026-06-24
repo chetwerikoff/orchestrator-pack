@@ -22,6 +22,7 @@
     "tests/fixtures/contract-evidence/capture-manifest.json",
     "tests/fixtures/contract-evidence/captures/scalar-json/predicate-shapes.provenance.json",
     "tests/fixtures/contract-evidence/captures/scalar-json/predicate-shapes.raw.json",
+    "tests/fixtures/draft-discipline/contract-evidence/cli-behavior-structured-reserved-token-fail.md",
     "tests/fixtures/draft-discipline/contract-evidence/literal-predicate-disambiguation-pass.md",
     "tests/fixtures/draft-discipline/contract-evidence/literal-predicate-disambiguation-predicate.md",
     "tests/fixtures/draft-discipline/contract-evidence/mixed-literal-predicate-pass.md",
