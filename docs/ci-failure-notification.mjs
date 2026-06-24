@@ -21,6 +21,7 @@ import {
 } from './ci-green-wake-reconcile.mjs';
 import { findLatestReportForHead, isCiCheckFailure, normalizeCiState } from './review-ready-stuck-guard.mjs';
 import { getReportState } from './review-finding-delivery-confirm.mjs';
+import { getReportTimestampMs } from './review-trigger-reconcile.mjs';
 import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
 
 export const TERMINAL_ACTIONS = Object.freeze(['SEND', 'SUPPRESS']);
@@ -31,10 +32,13 @@ export const DEFAULT_MAX_ELIGIBLE_EVALUATION_AGE_MS = 180_000;
 export const DEFAULT_PENDING_EXPIRY_MS = 30 * 60 * 1000;
 export const DEFAULT_CLAIM_STALE_MS = 60 * 1000;
 export const REPORT_STALE_BACKSTOP_MS = 30 * 60 * 1000;
+export const DEFAULT_PROGRESS_FRESHNESS_MS = 15 * 60 * 1000;
+export const PROGRESS_FRESHNESS_ENV = 'AO_CI_FAILURE_PROGRESS_FRESHNESS_MS';
 
 export const TERMINAL_REASONS = Object.freeze([
   'sent',
   'delivery-failed',
+  'progress_stale',
   'suppressed-live-worker',
   'suppressed-dedup',
   'suppressed-intent-token',
@@ -48,6 +52,7 @@ export const TERMINAL_REASONS = Object.freeze([
   'helper_error_safe_suppress',
   'ci_source_disagreement_safe_suppress',
   'no_suppressor',
+  'progress_freshness_evidence_unreadable',
 ]);
 
 export const EPISODE_OUTBOX_STATES = Object.freeze([
@@ -174,6 +179,17 @@ export function validateWorkerStateInput(workerState) {
   return { ok: true };
 }
 
+export function resolveProgressFreshnessMs(input = {}) {
+  const fromInput = input.progressFreshnessMs ?? input.progress_freshness_ms;
+  const fromEnv = typeof process !== 'undefined' ? process.env?.[PROGRESS_FRESHNESS_ENV] : undefined;
+  const raw = fromInput ?? fromEnv;
+  const parsed = Number(raw);
+  const fallback = DEFAULT_PROGRESS_FRESHNESS_MS;
+  const resolved = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const capped = Math.min(resolved, REPORT_STALE_BACKSTOP_MS - 1);
+  return Math.max(1, capped);
+}
+
 export function resolveConfig(input = {}) {
   const reconcileIntervalMs = resolveBoundedInt(input.reconcileIntervalMs, DEFAULT_RECONCILE_INTERVAL_MS, 1_000);
   const maxEligibleEvaluationAgeMs = resolveBoundedInt(
@@ -196,6 +212,7 @@ export function resolveConfig(input = {}) {
     maxEligibleEvaluationAgeMs: Math.min(maxEligibleEvaluationAgeMs, REPORT_STALE_BACKSTOP_MS - 1),
     pendingExpiryMs: Math.min(pendingExpiryMs, REPORT_STALE_BACKSTOP_MS),
     claimStaleMs,
+    progressFreshnessMs: resolveProgressFreshnessMs(input),
   };
 }
 
@@ -216,11 +233,11 @@ export function evaluateSnapshotCoherence({ openPrs, prNumber, headShaFirst, hea
   return { skew: false, currentHead: currentHead || first || second };
 }
 
-export function resolveHeadScopedReportState(session, headSha, openPrs, prNumber) {
+export function resolveHeadScopedLatestReport(session, headSha, openPrs, prNumber) {
   const headCommittedAtMs = resolveHeadCommittedAtMs(openPrs, prNumber);
   const latest = findLatestReportForHead(session, headSha, { headCommittedAtMs });
   if (!latest) {
-    return { ok: true, reportState: null };
+    return { ok: true, report: null, reportState: null, reportedAtMs: null };
   }
   if (
     !Object.prototype.hasOwnProperty.call(latest, 'reportState')
@@ -233,7 +250,42 @@ export function resolveHeadScopedReportState(session, headSha, openPrs, prNumber
       field: 'reportState',
     };
   }
-  return { ok: true, reportState: getReportState(latest) || null };
+  const reportedAtMs = getReportTimestampMs(latest);
+  return {
+    ok: true,
+    report: latest,
+    reportState: getReportState(latest) || null,
+    reportedAtMs: reportedAtMs > 0 ? reportedAtMs : null,
+  };
+}
+
+export function resolveHeadScopedReportState(session, headSha, openPrs, prNumber) {
+  const scoped = resolveHeadScopedLatestReport(session, headSha, openPrs, prNumber);
+  if (!scoped.ok) {
+    return scoped;
+  }
+  return { ok: true, reportState: scoped.reportState };
+}
+
+export function evaluateProgressFreshness({ reportedAtMs, nowMs, config = resolveConfig() }) {
+  const evaluationMs = Number(nowMs);
+  const timestampMs = Number(reportedAtMs);
+  const progressFreshnessMs = resolveProgressFreshnessMs(config);
+  if (!Number.isFinite(evaluationMs) || evaluationMs <= 0) {
+    return { ok: false, error: 'invalid_evaluation_time' };
+  }
+  if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return { ok: false, error: 'progress_freshness_evidence_unreadable' };
+  }
+  const ageMs = Math.max(0, evaluationMs - timestampMs);
+  return {
+    ok: true,
+    fresh: ageMs <= progressFreshnessMs,
+    ageMs,
+    progressFreshnessMs,
+    reportedAtMs: timestampMs,
+    evaluationMs,
+  };
 }
 
 export function resolveLivePrOwner({ workerState, episode }) {
@@ -258,7 +310,16 @@ export function resolveLivePrOwner({ workerState, episode }) {
   return { ok: true, ownerId, owner, live, reportState, targetGeneration };
 }
 
-export function evaluateLiveWorkerSuppressor({ episode, workerState, headShaFirst, headShaSecond, versionMarkerFirst, versionMarkerSecond }) {
+export function evaluateLiveWorkerSuppressor({
+  episode,
+  workerState,
+  headShaFirst,
+  headShaSecond,
+  versionMarkerFirst,
+  versionMarkerSecond,
+  nowMs,
+  config: inputConfig,
+}) {
   const validation = validateWorkerStateInput(workerState);
   if (!validation.ok) {
     return { status: 'input_error', error_kind: validation.error, code: validation.code, field: validation.field };
@@ -300,7 +361,58 @@ export function evaluateLiveWorkerSuppressor({ episode, workerState, headShaFirs
     };
   }
   if (ownerResolution.reportState === 'fixing_ci') {
-    return { status: 'matched', reason: 'suppressed-live-worker', ownerId: ownerResolution.ownerId, reportState: ownerResolution.reportState };
+    const config = resolveConfig(inputConfig ?? {});
+    const scoped = resolveHeadScopedLatestReport(
+      ownerResolution.owner,
+      ep.headSha,
+      workerState.openPrs,
+      ep.prNumber,
+    );
+    if (!scoped.ok) {
+      return {
+        status: 'input_error',
+        error_kind: scoped.error,
+        code: scoped.code,
+        field: scoped.field,
+      };
+    }
+    const freshness = evaluateProgressFreshness({
+      reportedAtMs: scoped.reportedAtMs,
+      nowMs: Number(nowMs) || Date.now(),
+      config,
+    });
+    if (!freshness.ok) {
+      return {
+        status: 'progress_freshness_unreadable',
+        reason: freshness.error,
+        ownerId: ownerResolution.ownerId,
+        reportState: ownerResolution.reportState,
+      };
+    }
+    if (freshness.fresh) {
+      return {
+        status: 'matched',
+        reason: 'suppressed-live-worker',
+        ownerId: ownerResolution.ownerId,
+        reportState: ownerResolution.reportState,
+        reportedAtMs: freshness.reportedAtMs,
+        progressFreshnessMs: freshness.progressFreshnessMs,
+        ageMs: freshness.ageMs,
+      };
+    }
+    return {
+      status: 'progress_stale',
+      reason: 'progress_stale',
+      ownerId: ownerResolution.ownerId,
+      reportState: ownerResolution.reportState,
+      reportedAtMs: freshness.reportedAtMs,
+      progressFreshnessMs: freshness.progressFreshnessMs,
+      ageMs: freshness.ageMs,
+      targetId: ep.targetId,
+      targetGeneration: ep.targetGeneration,
+      headSha: ep.headSha,
+      prNumber: ep.prNumber,
+    };
   }
   return {
     status: 'not_suppressing',
@@ -730,7 +842,9 @@ export function buildDiagnosticAudit({ episode, errorKind, detail = null, nowUtc
 }
 
 export function mapReasonToTerminalAction(reason) {
-  if (reason === 'sent' || reason === 'delivery-failed' || reason === 'no_suppressor') return 'SEND';
+  if (reason === 'sent' || reason === 'delivery-failed' || reason === 'no_suppressor' || reason === 'progress_stale') {
+    return 'SEND';
+  }
   return 'SUPPRESS';
 }
 
@@ -786,6 +900,8 @@ export function evaluateEpisodeTerminal(input) {
     headShaSecond: input?.headShaSecond,
     versionMarkerFirst: input?.versionMarkerFirst,
     versionMarkerSecond: input?.versionMarkerSecond,
+    nowMs: input?.nowMs,
+    config,
   });
 
   if (live.status === 'snapshot_skew') {
@@ -814,6 +930,26 @@ export function evaluateEpisodeTerminal(input) {
         episode,
         errorKind: live.error_kind,
         detail: live.field ?? live.code ?? null,
+      }),
+    };
+  }
+
+  if (live.status === 'progress_freshness_unreadable') {
+    return {
+      hard_failure: true,
+      reevaluable: true,
+      episode_key: episode,
+      episode_key_digest: digest,
+      diagnostic: {
+        error_kind: 'progress_freshness_evidence_unreadable',
+        reason: live.reason,
+        owner_id: live.ownerId ?? null,
+        report_state: live.reportState ?? null,
+      },
+      audit: buildDiagnosticAudit({
+        episode,
+        errorKind: 'progress_freshness_evidence_unreadable',
+        detail: live.reason ?? null,
       }),
     };
   }
@@ -891,7 +1027,36 @@ export function evaluateEpisodeTerminal(input) {
       episode,
       terminal_action: 'SUPPRESS',
       reason: 'suppressed-live-worker',
-      diagnostics,
+      diagnostics: {
+        ...diagnostics,
+        progress_freshness: {
+          reportedAtMs: live.reportedAtMs,
+          progressFreshnessMs: live.progressFreshnessMs,
+          ageMs: live.ageMs,
+        },
+      },
+      readSource,
+    });
+  }
+
+  if (live.status === 'progress_stale') {
+    return finalizeTerminal({
+      episode,
+      terminal_action: 'SEND',
+      reason: 'progress_stale',
+      diagnostics: {
+        ...diagnostics,
+        progress_stale: {
+          prNumber: live.prNumber ?? episode.prNumber,
+          headSha: live.headSha ?? episode.headSha,
+          targetId: live.targetId ?? episode.targetId,
+          targetGeneration: live.targetGeneration ?? episode.targetGeneration,
+          latestReportTimestampMs: live.reportedAtMs,
+          latestReportTimestampUtc: live.reportedAtMs ? new Date(live.reportedAtMs).toISOString() : null,
+          progressFreshnessMs: live.progressFreshnessMs,
+          ageMs: live.ageMs,
+        },
+      },
       readSource,
     });
   }
@@ -1392,15 +1557,17 @@ export function resolveSubmittedDelivery(input) {
     return { resolved: false, reason: 'not_in_flight', record };
   }
   if (input?.acknowledged) {
+    const isProgressStale = record.sendEscalationReason === 'progress_stale';
     const sent = terminalizeEpisode({
       storeDir,
       episode,
-      terminalReason: 'sent',
+      terminalReason: isProgressStale ? 'progress_stale' : 'sent',
       terminalAction: 'SEND',
-      readSource: 'delivery_resolution_ack',
+      readSource: isProgressStale ? 'delivery_resolution_ack_progress_stale' : 'delivery_resolution_ack',
+      diagnostics: isProgressStale ? (record.sendEscalationDiagnostics ?? {}) : undefined,
       nowMs: input?.nowMs,
     });
-    return { ...sent, terminalReason: 'sent', resolved: true };
+    return { ...sent, terminalReason: isProgressStale ? 'progress_stale' : 'sent', resolved: true };
   }
   if (input?.retryExhausted) {
     const failed = terminalizeEpisode({
@@ -1443,7 +1610,16 @@ export function evaluatePreflightRevalidation(input) {
     });
     return { action: 'suppressed', terminal, decision };
   }
-  return { action: 'send_allowed', decision, record };
+  let workingRecord = record;
+  if (decision.reason === 'progress_stale') {
+    workingRecord = {
+      ...record,
+      sendEscalationReason: 'progress_stale',
+      sendEscalationDiagnostics: decision.diagnostics ?? {},
+    };
+    writeEpisodeRecord(storeDir, workingRecord);
+  }
+  return { action: 'send_allowed', decision, record: workingRecord };
 }
 
 export function scanExpiredPendingRecords(storeDir, nowMs = Date.now()) {

@@ -12,6 +12,18 @@
       "proofCommand": "npm test -- legacy-list-guard",
       "independentProducerCommand": "node scripts/run-contract-evidence-legacy-list-guard.mjs",
       "trustedNodePrefix": "scripts/run-contract-evidence-legacy-list-guard.mjs"
+    },
+    {
+      "id": "issue-439-ci-failure-progress-freshness",
+      "proofCommand": "npm test -- ci-failure-progress-freshness",
+      "independentProducerCommand": "node scripts/run-ci-failure-progress-freshness-proof.mjs",
+      "trustedNodePrefix": "scripts/run-ci-failure-progress-freshness-proof.mjs"
+    },
+    {
+      "id": "issue-439-ci-failure-progress-stale",
+      "proofCommand": "npm test -- ci-failure-progress-stale",
+      "independentProducerCommand": "node scripts/run-ci-failure-progress-stale-proof.mjs",
+      "trustedNodePrefix": "scripts/run-ci-failure-progress-stale-proof.mjs"
     }
   ]
 }
