@@ -8,7 +8,8 @@ import {
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
 import { applyListedJq, mapPullState } from './lib/gh-repo-resolve.mjs';
-import { resolveRealGhBinary, WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
+import { resolveRealGhBinary } from './lib/gh-resolve-real-binary.mjs';
+import { join } from 'node:path';
 
 describe('gh inventory matcher', () => {
   it('routes open pr list with listed json fields', () => {
@@ -63,7 +64,7 @@ describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
   });
 
   it('dedupes check runs by name/workflow/event', () => {
-    const mk = (startedAt, conclusion) => ({
+    const mk = (startedAt: string, conclusion: string) => ({
       name: 'test',
       startedAt,
       status: 'COMPLETED',
@@ -115,8 +116,9 @@ describe('gh pull state mapping', () => {
 
 describe('gh recursion guard', () => {
   it('resolveRealGhBinary does not return pack wrapper path', () => {
-    const real = resolveRealGhBinary(WRAPPER_PATH);
-    expect(real).not.toBe(WRAPPER_PATH);
+    const wrapperPath = join(import.meta.dirname, 'gh');
+    const real = resolveRealGhBinary(wrapperPath);
+    expect(real).not.toBe(wrapperPath);
   });
 });
 
