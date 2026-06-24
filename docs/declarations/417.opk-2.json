@@ -23,6 +23,7 @@
     "scripts/lib/Review-StartClaimLifecycle.ps1",
     "scripts/orchestrator-message-audit-roots.manifest.json",
     "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/review-run-recovery.ps1",
     "scripts/review-start-claim-lifecycle.test.ts",
     "scripts/review-start-claim-reaper.ps1",
