@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
-import { checkContractEvidence } from './contract-evidence.mjs';
+import { checkContractEvidence } from './contract-evidence-validator.mjs';
 
 const require = createRequire(import.meta.url);
 const taxonomy = require('./draft-discipline-action-taxonomy.json');
