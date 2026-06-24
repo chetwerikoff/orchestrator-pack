@@ -25,7 +25,7 @@ function buildEpisode() {
 /**
  * @param {'freshness' | 'stale'} mode
  */
-export function emitCiFailureProgressProof(mode) {
+export function buildCiFailureProgressProofPayload(mode) {
   const pins = loadJson('ci-failure-progress-pinned.json');
   const scenarioFixture = mode === 'freshness'
     ? 'live-worker-fixing-ci-captured.json'
@@ -37,9 +37,14 @@ export function emitCiFailureProgressProof(mode) {
     config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
   });
 
-  const payload = mode === 'freshness'
+  return mode === 'freshness'
     ? { 'ci-failure-progress-freshness': { freshDecision: decision.reason } }
     : { 'ci-failure-progress-stale': { auditReason: decision.audit?.reason ?? decision.reason } };
+}
 
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+/**
+ * @param {'freshness' | 'stale'} mode
+ */
+export function emitCiFailureProgressProof(mode) {
+  process.stdout.write(`${JSON.stringify(buildCiFailureProgressProofPayload(mode))}\n`);
 }

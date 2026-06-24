@@ -17,6 +17,8 @@
     "docs/issues_drafts/135-ci-failure-suppressor-progress-stale-escalation.md",
     "docs/migration_notes.md",
     "scripts/ci-failure-notification.test.ts",
+    "scripts/ci-failure-progress-freshness.test.ts",
+    "scripts/ci-failure-progress-stale.test.ts",
     "scripts/contract-evidence-reverify-production-commands.json",
     "scripts/fixtures/ci-failure-notification/README.md",
     "scripts/fixtures/ci-failure-notification/ci-failure-progress-pinned.json",

@@ -1557,15 +1557,17 @@ export function resolveSubmittedDelivery(input) {
     return { resolved: false, reason: 'not_in_flight', record };
   }
   if (input?.acknowledged) {
+    const isProgressStale = record.sendEscalationReason === 'progress_stale';
     const sent = terminalizeEpisode({
       storeDir,
       episode,
-      terminalReason: 'sent',
+      terminalReason: isProgressStale ? 'progress_stale' : 'sent',
       terminalAction: 'SEND',
-      readSource: 'delivery_resolution_ack',
+      readSource: isProgressStale ? 'delivery_resolution_ack_progress_stale' : 'delivery_resolution_ack',
+      diagnostics: isProgressStale ? (record.sendEscalationDiagnostics ?? {}) : undefined,
       nowMs: input?.nowMs,
     });
-    return { ...sent, terminalReason: 'sent', resolved: true };
+    return { ...sent, terminalReason: isProgressStale ? 'progress_stale' : 'sent', resolved: true };
   }
   if (input?.retryExhausted) {
     const failed = terminalizeEpisode({
@@ -1608,7 +1610,16 @@ export function evaluatePreflightRevalidation(input) {
     });
     return { action: 'suppressed', terminal, decision };
   }
-  return { action: 'send_allowed', decision, record };
+  let workingRecord = record;
+  if (decision.reason === 'progress_stale') {
+    workingRecord = {
+      ...record,
+      sendEscalationReason: 'progress_stale',
+      sendEscalationDiagnostics: decision.diagnostics ?? {},
+    };
+    writeEpisodeRecord(storeDir, workingRecord);
+  }
+  return { action: 'send_allowed', decision, record: workingRecord };
 }
 
 export function scanExpiredPendingRecords(storeDir, nowMs = Date.now()) {
