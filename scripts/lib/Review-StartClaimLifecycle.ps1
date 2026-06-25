@@ -241,6 +241,68 @@ function Test-ReviewStartClaimPostAcquireSideEffectAudit {
     return $false
 }
 
+function Annotate-ReviewStartClaimWorktreeAllowConsumed {
+    param(
+        [string]$Namespace,
+        [string]$Path,
+        [object]$Record,
+        [string]$CanonicalPath
+    )
+
+    if (-not $Namespace -or -not $Path -or -not $Record -or -not $CanonicalPath) {
+        return @{ ok = $false; reason = 'claim_consume_invalid' }
+    }
+
+    $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
+    if (-not (Enter-ReviewStartClaimMutexWithRetry -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'busy' }
+    }
+    try {
+        $read = Read-ReviewStartClaimRecord -Path $Path
+        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
+        if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
+        if ([string]$read.record.headSha -ne [string]$Record.headSha) {
+            return @{ ok = $false; reason = 'claim_head_mismatch' }
+        }
+        if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
+            return @{ ok = $false; reason = 'claim_lost' }
+        }
+        if ($read.record.worktreeAllowConsumed) {
+            return @{ ok = $false; reason = 'claim_already_consumed' }
+        }
+        $liveness = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'classify-holder' -Payload @{
+            holder    = $read.record.holder
+            localHost = (Get-ReviewStartClaimLocalHostName)
+        }
+        if ([string]$liveness.outcome -ne 'alive') {
+            return @{ ok = $false; reason = 'claim_holder_not_live'; detail = [string]$liveness.outcome }
+        }
+        $now = (Get-Date).ToUniversalTime().ToString('o')
+        $gateHolder = New-ReviewStartClaimHolder -Surface 'autonomous-review-worktree-gate'
+        $annotation = @{
+            atUtc                  = $now
+            worktreeCanonicalPath  = $CanonicalPath
+            consumedBy             = 'autonomous-review-worktree-gate'
+            annotatedByProcessGuid = [string]$gateHolder.processGuid
+        }
+        $updated = @{}
+        $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
+        $updated.worktreeAllowConsumed = $annotation
+        ($updated | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $Path -Encoding UTF8
+        $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
+            -Outcome 'worktree_allow_consumed' -DecisionSource 'worktree_gate' -Extra @{
+                worktreeCanonicalPath = $CanonicalPath
+                consumedBy            = 'autonomous-review-worktree-gate'
+                holderProcessGuid     = [string]$read.record.holder.processGuid
+                foreignWriter         = $true
+            } -NewState 'active'
+        return @{ ok = $true; reason = 'worktree_allow_consumed'; auditPath = $auditPath }
+    }
+    finally {
+        Exit-ReviewStartClaimMutex -LockDir $lockDir
+    }
+}
+
 function Mark-ReviewStartClaimForeignHolderBlocking {
     param(
         [string]$Namespace,
@@ -408,8 +470,12 @@ function Write-ReviewStartClaimRunStartedAudit {
     )
 
     if (-not $ClaimResult -or -not $PriorRecord) { return '' }
+    $extra = @{ terminalPath = $TerminalPath }
+    if ($PriorRecord.worktreeAllowConsumed) {
+        $extra.worktreeAllowConsumed = $PriorRecord.worktreeAllowConsumed
+    }
     return Write-ReviewStartClaimTransitionAudit -Namespace $ClaimResult.namespace -PriorRecord $PriorRecord `
-        -Outcome 'run_started' -DecisionSource $DecisionSource -Extra @{ terminalPath = $TerminalPath }
+        -Outcome 'run_started' -DecisionSource $DecisionSource -Extra $extra
 }
 
 function Wait-ReviewStartClaimPostInvokeVisibility {
