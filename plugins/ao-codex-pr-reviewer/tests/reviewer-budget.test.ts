@@ -79,6 +79,14 @@ describe('reviewer test budget guard (AC#2)', () => {
       classifyReviewShellCommand(['npx', 'vitest', 'run', '--coverage']),
     ).toBe('full_suite');
     expect(
+      classifyReviewShellCommand(['npx', 'vitest', 'run', '--config', 'vitest.config.ts']),
+    ).toBe('full_suite');
+    expect(
+      classifyReviewShellCommand(['npm', 'test', '--', '--reporter', 'verbose']),
+    ).toBe('full_suite');
+    expect(classifyReviewShellCommand(['yarn', 'test'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['pnpm', 'test'])).toBe('full_suite');
+    expect(
       classifyReviewShellCommand(['npm', 'test', '--', 'reviewer-budget.test.ts']),
     ).toBe('cheap_targeted');
     expect(
@@ -181,6 +189,47 @@ describe('reviewer test budget guard (AC#2)', () => {
       { encoding: 'utf8' },
     );
     expect(npmOptionOnly.stdout.trim()).toBe('full_suite');
+
+    const configOnly = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npx vitest run --config vitest.config.ts`],
+      { encoding: 'utf8' },
+    );
+    expect(configOnly.stdout.trim()).toBe('full_suite');
+
+    const reporterOnly = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npm test -- --reporter verbose`],
+      { encoding: 'utf8' },
+    );
+    expect(reporterOnly.stdout.trim()).toBe('full_suite');
+
+    const yarnFullSuite = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command yarn test`],
+      { encoding: 'utf8' },
+    );
+    expect(yarnFullSuite.stdout.trim()).toBe('full_suite');
+  });
+
+  it('exec-level PATH guard blocks yarn test via wrapper', () => {
+    const ledger = createReviewerBudgetLedger({
+      AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS: '600000',
+    });
+    const guardYarn = join(GUARD_DIR, 'yarn');
+    const result = spawnSync('sh', [guardYarn, 'test'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${process.env.PATH ?? '/usr/bin'}`,
+        AO_REVIEW_EFFECTIVE_BUDGET_MS: String(ledger.effectiveBudgetMs),
+        AO_REVIEW_TEST_BUDGET_MS: String(ledger.testBudgetMs),
+        AO_REVIEW_HARD_DEADLINE_MS: String(ledger.startedAtMs + ledger.effectiveBudgetMs),
+        AO_REVIEW_BUDGET_STARTED_MS: String(ledger.startedAtMs),
+      },
+    });
+    expect(result.status ?? result.signal).toBe(127);
+    expect(result.stderr).toContain('"commandClass":"full_suite"');
   });
 
   it('exec-level PATH guard uses millisecond clock under budget', () => {

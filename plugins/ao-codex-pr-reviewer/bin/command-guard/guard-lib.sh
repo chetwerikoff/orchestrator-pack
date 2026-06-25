@@ -29,34 +29,59 @@ remaining_review_ms() {
   fi
 }
 
+option_consumes_value() {
+  arg="$1"
+  case "$arg" in
+    -|-*) ;;
+    *) return 1 ;;
+  esac
+  case "$arg" in
+    *=*) return 1 ;;
+    --coverage|--watch|--run|--passWithNoTests|--silent|--bail|--changed|--standalone|--merge-reports|-h|--help|--version) return 1 ;;
+    --*) return 0 ;;
+    -?) return 0 ;;
+    -*) return 1 ;;
+  esac
+}
+
+has_positional_selector() {
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    shift
+    case "$arg" in
+      -*)
+        case "$arg" in
+          *=*) ;;
+          *)
+            if option_consumes_value "$arg"; then
+              if [ $# -gt 0 ]; then
+                shift
+              fi
+            fi
+            ;;
+        esac
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 has_targeted_test_selector() {
-  after_npm_test_separator=0
-  after_vitest_run=0
+  set -- "$@"
   prev=""
-  for arg in "$@"; do
-    if [ "$after_npm_test_separator" -eq 1 ]; then
-      case "$arg" in
-        -*) ;;
-        *) return 0 ;;
-      esac
-      continue
-    fi
-    if [ "$after_vitest_run" -eq 1 ]; then
-      case "$arg" in
-        -*) ;;
-        *) return 0 ;;
-      esac
-      continue
-    fi
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    shift
     if [ "$arg" = "--" ] && [ "$prev" = "test" ]; then
-      after_npm_test_separator=1
-      prev=""
-      continue
+      has_positional_selector "$@"
+      return $?
     fi
     if [ "$arg" = "run" ] && [ "$prev" = "vitest" ]; then
-      after_vitest_run=1
-      prev=""
-      continue
+      has_positional_selector "$@"
+      return $?
     fi
     prev="$arg"
   done
@@ -101,7 +126,7 @@ deny_slow_command() {
 resolve_real_binary() {
   name="$1"
   case "$name" in
-    npm|npx|pwsh)
+    npm|npx|pwsh|yarn|pnpm|vitest)
       for dir in $(echo "${PATH:-}" | tr ':' ' '); do
         case "$dir" in
           ""|*command-guard*) continue ;;

@@ -28,34 +28,72 @@ function isOptionToken(token: string): boolean {
   return token.startsWith('-');
 }
 
+const BOOLEAN_FLAGS = new Set([
+  '--coverage',
+  '--watch',
+  '--run',
+  '--passWithNoTests',
+  '--silent',
+  '--bail',
+  '--changed',
+  '--standalone',
+  '--merge-reports',
+  '-h',
+  '--help',
+  '--version',
+]);
+
+function optionConsumesValue(token: string): boolean {
+  if (!isOptionToken(token) || token === '-') {
+    return false;
+  }
+  if (token.includes('=')) {
+    return false;
+  }
+  if (BOOLEAN_FLAGS.has(token)) {
+    return false;
+  }
+  if (token.startsWith('-') && !token.startsWith('--') && token.length > 2) {
+    return false;
+  }
+  return true;
+}
+
+export function hasPositionalSelector(argv: string[], startIndex: number): boolean {
+  let index = startIndex;
+  while (index < argv.length) {
+    const token = argv[index]?.trim();
+    if (!token) {
+      index += 1;
+      continue;
+    }
+    if (!isOptionToken(token)) {
+      return true;
+    }
+    if (token.includes('=')) {
+      index += 1;
+      continue;
+    }
+    if (optionConsumesValue(token)) {
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return false;
+}
+
 export function hasTargetedTestSelector(argv: string[]): boolean {
   const parts = argv.map((part) => part.trim()).filter(Boolean);
-  let afterNpmTestSeparator = false;
-  let afterVitestRun = false;
   let previous = '';
 
-  for (const part of parts) {
-    if (afterNpmTestSeparator) {
-      if (!isOptionToken(part)) {
-        return true;
-      }
-      continue;
-    }
-    if (afterVitestRun) {
-      if (!isOptionToken(part)) {
-        return true;
-      }
-      continue;
-    }
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
     if (part === '--' && previous === 'test') {
-      afterNpmTestSeparator = true;
-      previous = '';
-      continue;
+      return hasPositionalSelector(parts, index + 1);
     }
     if (part === 'run' && previous === 'vitest') {
-      afterVitestRun = true;
-      previous = '';
-      continue;
+      return hasPositionalSelector(parts, index + 1);
     }
     previous = part;
   }
