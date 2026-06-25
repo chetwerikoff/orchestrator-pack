@@ -1,0 +1,59 @@
+{
+  "issue_number": 442,
+  "iteration_id": "opk-29",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T17:40:05.301Z",
+  "baseline": {
+    "commit_sha": "814b3e8588acc856626dc19702dafea3630deaca",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:274979ed04aa1d804189a0c0f477fd8c78d651b0807c49a0eae1b3a215d6713b"
+  },
+  "declared_paths": [
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/check-gh-wrapper.ps1",
+    "scripts/gh",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.d.mts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-parse-argv.d.mts",
+    "scripts/lib/gh-parse-argv.mjs",
+    "scripts/lib/gh-pr-checks.d.mts",
+    "scripts/lib/gh-pr-checks.mjs",
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-resolve-real-binary.d.mts",
+    "scripts/lib/gh-resolve-real-binary.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:63e8ce6e1bf7754581e93bd5ac3a15fc4eb9bd47de67a41432d988ea2b8a951c",
+      "new_active_scope_hash": "sha256:274979ed04aa1d804189a0c0f477fd8c78d651b0807c49a0eae1b3a215d6713b",
+      "changed": {
+        "added": [
+          "scripts/check-gh-inventory-static.ps1",
+          "scripts/lib/gh-inventory-match.d.mts",
+          "scripts/lib/gh-inventory-match.mjs",
+          "scripts/lib/gh-parse-argv.d.mts",
+          "scripts/lib/gh-parse-argv.mjs",
+          "scripts/lib/gh-pr-checks.d.mts",
+          "scripts/lib/gh-pr-checks.mjs",
+          "scripts/lib/gh-repo-resolve.d.mts",
+          "scripts/lib/gh-repo-resolve.mjs",
+          "scripts/lib/gh-rest-routes.mjs",
+          "scripts/lib/gh-wrapper.mjs",
+          "scripts/verify.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Declare stacked #431 gh wrapper scripts included when PR is reviewed against main; #442 delta remains resolver + tests",
+      "actor": "opk-29",
+      "timestamp": "2026-06-24T18:15:00.000Z",
+      "applied": true
+    }
+  ]
+}

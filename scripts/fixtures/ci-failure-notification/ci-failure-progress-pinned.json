@@ -1,0 +1,7 @@
+{
+  "description": "Issue #439 golden pins for progressFreshnessMs default and evaluation clock",
+  "defaultProgressFreshnessMs": 900000,
+  "reportedAt": "2026-06-18T13:05:00.000Z",
+  "freshEvaluationMs": 1781788200000,
+  "staleEvaluationMs": 1781789100000
+}

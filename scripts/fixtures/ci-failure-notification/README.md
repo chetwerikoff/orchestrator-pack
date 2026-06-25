@@ -9,5 +9,7 @@ Minimized, redacted captures for Issues #283 / #342 predicate and lifecycle test
 - `live-worker-fixing-ci-captured.json` — capture-backed positive-outcome scenario delta (session `stuck`, head report `fixing_ci`)
 - `live-worker-same-head-recency.json` — newer non-`fixing_ci` report wins over older `fixing_ci` for same head
 - `live-worker-stale-head-fixing-ci.json` — `fixing_ci` only on a head older than the episode head
+- `live-worker-stale-same-head-fixing-ci.json` — same-head `fixing_ci` older than pinned `progressFreshnessMs`
+- `ci-failure-progress-pinned.json` — golden default `progressFreshnessMs` and evaluation clock pins (#439)
 
 Fixtures omit secrets, absolute paths, env values, and `.ao` payloads.

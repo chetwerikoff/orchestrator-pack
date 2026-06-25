@@ -1,0 +1,14 @@
+{
+  "id": "gh-pr-checks/representative-pr",
+  "command": "gh pr checks",
+  "variant": "representative-pr",
+  "version": 1,
+  "captureRef": "captures/gh-pr-checks/representative-pr.raw.json",
+  "provenanceRef": "captures/gh-pr-checks/representative-pr.provenance.json",
+  "allowedFields": ["checks"],
+  "nestedAllowedFields": {
+    "checks": ["name", "state", "bucket", "link", "startedAt", "completedAt", "workflow", "description"]
+  },
+  "forbiddenFields": [],
+  "forbiddenTogether": []
+}

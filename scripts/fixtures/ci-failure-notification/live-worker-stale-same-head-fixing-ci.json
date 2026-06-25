@@ -1,0 +1,12 @@
+{
+  "description": "Issue #439: same-head fixing_ci report older than progressFreshnessMs",
+  "status": "stuck",
+  "lastActivity": "25m ago",
+  "reports": [
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T13:05:00.000Z",
+      "accepted": true
+    }
+  ]
+}

@@ -33,6 +33,8 @@ export declare const DEFAULT_MAX_ELIGIBLE_EVALUATION_AGE_MS: number;
 export declare const DEFAULT_PENDING_EXPIRY_MS: number;
 export declare const DEFAULT_CLAIM_STALE_MS: number;
 export declare const REPORT_STALE_BACKSTOP_MS: number;
+export declare const DEFAULT_PROGRESS_FRESHNESS_MS: number;
+export declare const PROGRESS_FRESHNESS_ENV: string;
 export declare const TERMINAL_REASONS: readonly string[];
 export declare const EPISODE_OUTBOX_STATES: readonly string[];
 export declare const WORKER_STATE_REQUIRED_TOP: readonly string[];
@@ -48,6 +50,7 @@ export declare function eventEpisode(event: unknown): Partial<CiFailureEpisodeKe
 export declare function deriveTargetGeneration(session: unknown): string;
 export declare function findSessionByIdentifier(sessions: unknown, identifier: unknown): Record<string, unknown> | null;
 export declare function validateWorkerStateInput(workerState: unknown): { ok: boolean; error?: string; code?: string; field?: string };
+export declare function resolveProgressFreshnessMs(input?: unknown): number;
 export declare function resolveConfig(input?: unknown): {
   reconcileIntervalMs?: number;
   maxEligibleEvaluationAgeMs?: number;
@@ -55,7 +58,9 @@ export declare function resolveConfig(input?: unknown): {
   [key: string]: unknown;
 };
 export declare function evaluateSnapshotCoherence(input: unknown): Record<string, unknown>;
+export declare function resolveHeadScopedLatestReport(session: unknown, headSha: unknown, openPrs: unknown, prNumber: unknown): { ok: boolean; report?: unknown; reportState?: string | null; reportedAtMs?: number | null; error?: string; code?: string; field?: string };
 export declare function resolveHeadScopedReportState(session: unknown, headSha: unknown, openPrs: unknown, prNumber: unknown): { ok: boolean; reportState?: string | null; error?: string; code?: string; field?: string };
+export declare function evaluateProgressFreshness(input: unknown): Record<string, unknown>;
 export declare function resolveLivePrOwner(input: unknown): Record<string, unknown>;
 export declare function evaluateLiveWorkerSuppressor(input: unknown): Record<string, unknown>;
 export declare function bindReactionEvent(episode: unknown, events?: unknown[], options?: unknown): { status: string; eventId: string | null; event?: unknown };
