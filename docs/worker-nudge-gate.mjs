@@ -14,6 +14,7 @@ import {
   validateCapabilityInventory,
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { evaluateCiFailureSuppressorDecision } from './ci-failure-notification.mjs';
 import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from './review-trigger-reconcile.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 export { validateCapabilityInventory };
@@ -855,6 +856,67 @@ function resolveUnresolvedEscalationBounds(input) {
 /**
  * @param {object} input
  */
+
+function buildCiFailureEpisodeFromGateInput(input) {
+  const prNumber = Number(input.prNumber ?? 0);
+  const headSha = normalizeHeadSha(input.headSha);
+  const targetId = String(input.targetId ?? input.sessionId ?? '').trim();
+  const targetGeneration = String(input.targetGeneration ?? targetId).trim();
+  const episodeKey = String(input.episodeKey ?? input.redPeriod ?? '').trim();
+  const redPeriod = episodeKey.startsWith('episode:') ? episodeKey.slice('episode:'.length) : (episodeKey || `${prNumber}:${headSha}`);
+  const repo = String(input.repo ?? 'chetwerikoff/orchestrator-pack').trim();
+  return {
+    repo,
+    prNumber,
+    headSha,
+    redPeriod,
+    targetId,
+    targetGeneration,
+  };
+}
+
+function evaluateCiFailureNudgeSuppressor(input, tuple) {
+  if (!input?.workerState) {
+    return {
+      suppress: true,
+      reason: 'ci_failure_worker_state_unreadable',
+      failClosed: true,
+    };
+  }
+  const episode = buildCiFailureEpisodeFromGateInput({
+    ...input,
+    targetId: tuple.targetId ?? input.targetId,
+    targetGeneration: tuple.targetGeneration ?? input.targetGeneration,
+  });
+  const decision = evaluateCiFailureSuppressorDecision({
+    episode,
+    workerState: input.workerState,
+    surface: input.surface ?? input.source ?? 'unknown',
+    storeDir: input.ciFailureStoreDir ?? input.storeDir ?? null,
+    nowMs: input.nowMs,
+    config: input.ciFailureConfig ?? input.config,
+    headShaFirst: input.headShaFirst,
+    headShaSecond: input.headShaSecond,
+    versionMarkerFirst: input.versionMarkerFirst,
+    versionMarkerSecond: input.versionMarkerSecond,
+  });
+  if (decision.decision === 'SUPPRESS') {
+    return {
+      suppress: true,
+      reason: decision.reason,
+      audit: decision.audit,
+      stintClass: decision.stintClass,
+      postStaleLock: decision.postStaleLock ?? false,
+    };
+  }
+  return {
+    suppress: false,
+    reason: decision.reason,
+    audit: decision.audit,
+    stintClass: decision.stintClass,
+  };
+}
+
 export function evaluateNudgeGate(input) {
   const tuple = buildTupleKey(input);
   if (!tuple.ok) {
@@ -970,6 +1032,37 @@ export function evaluateNudgeGate(input) {
     : getOwnerCycleRecord(bootstrapped, repoId, tuple.prNumber, tuple.targetId);
   if (!tuple.issueKeyed && tuple.intentClass === 'ci-green-handoff' && bootOwner?.nudgeArmed && !owner?.nudgeArmed) {
     return suppress('legacy_nudged_cycle', tuple, input, storeId, 'SENT');
+  }
+
+  if (tuple.intentClass === 'ci-failure') {
+    const ciSuppressor = evaluateCiFailureNudgeSuppressor(input, tuple);
+    if (ciSuppressor.suppress) {
+      return {
+        allow: false,
+        decision: 'SUPPRESS',
+        reason: ciSuppressor.reason,
+        failClosed: Boolean(ciSuppressor.failClosed),
+        stintClass: ciSuppressor.stintClass,
+        postStaleLock: ciSuppressor.postStaleLock ?? false,
+        tuple,
+        audit: buildAuditRecord({
+          ...tupleAuditFields(tuple, input),
+          logicalWorkerId: tuple.targetId,
+          sessionGeneration: tuple.targetGeneration,
+          rawSessionId: input.sessionId ?? tuple.targetId,
+          targetResolutionSource: input.targetResolutionSource ?? 'session',
+          surface: input.surface ?? input.source ?? 'unknown',
+          cycleKey: tuple.cycleKey,
+          intentClass: tuple.intentClass,
+          storeId,
+          decision: 'SUPPRESS',
+          reason: ciSuppressor.reason,
+          claimPhase: 'none',
+          sendTarget: input.sessionId ?? tuple.targetId,
+          ciFailureFixingStint: ciSuppressor.audit ?? null,
+        }),
+      };
+    }
   }
 
   if (input.stateUnreadable) {

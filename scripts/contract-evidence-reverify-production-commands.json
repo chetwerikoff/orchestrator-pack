@@ -24,6 +24,12 @@
       "proofCommand": "npm test -- ci-failure-progress-stale",
       "independentProducerCommand": "node scripts/run-ci-failure-progress-stale-proof.mjs",
       "trustedNodePrefix": "scripts/run-ci-failure-progress-stale-proof.mjs"
+    },
+    {
+      "id": "issue-459-ci-failure-fixing-stint-orchestrator-turn",
+      "proofCommand": "npm test -- ci-failure-fixing-stint-orchestrator-turn",
+      "independentProducerCommand": "node scripts/run-ci-failure-fixing-stint-proof.mjs",
+      "trustedNodePrefix": "scripts/run-ci-failure-fixing-stint-proof.mjs"
     }
   ]
 }

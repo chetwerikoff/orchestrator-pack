@@ -39,6 +39,8 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Ci-Failure-Notification-Common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $payloadText = [Console]::In.ReadToEnd()
 if ($null -eq $payloadText) { $payloadText = '' }
@@ -189,6 +191,34 @@ $gatePayload = @{
     storePath              = $storePath
     targetResolutionSource = $(if ($targetResolutionSource) { $targetResolutionSource } else { 'orchestrator-turn' })
     claims                 = @(Get-WorkerNudgeClaimRecordsForGate -Namespace $namespace)
+}
+if ($resolvedIntent -eq 'ci-failure') {
+    $openPrs = @()
+    if ($Probe) {
+        $openPrs = @(@{ number = $PrNumber; headRefOid = $HeadSha })
+    }
+    else {
+        try {
+            $openPrs = @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+        }
+        catch {
+            if ($HeadSha) {
+                $openPrs = @(@{ number = $PrNumber; headRefOid = $HeadSha })
+            }
+        }
+    }
+    $gatePayload.workerState = @{
+        sessions = if ($Probe) { @($resolveParams.Sessions) } else { @(Get-AoStatusSessions) }
+        openPrs  = @($openPrs)
+    }
+    $gatePayload.ciFailureStoreDir = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
+    $gatePayload.episodeKey = $EpisodeKey
+    try {
+        $gatePayload.repo = Get-RepoIdentity
+    }
+    catch {
+        $gatePayload.repo = 'chetwerikoff/orchestrator-pack'
+    }
 }
 $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload $gatePayload
 if (-not $gate.allow) {
