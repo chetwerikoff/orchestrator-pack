@@ -1,205 +1,29 @@
-import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  cleanupSupervisorTests,
+  fixtureDir,
+  isAlive,
+  makeStateDir,
+  managedChildRoles,
+  readMarker,
+  repoRoot,
+  runSupervisor,
+  startSupervisorBackground,
+  waitForMarkers,
+  type ManagedChildRole,
+} from './supervisor-recovery.test-helpers';
 
-const repoRoot = path.resolve(import.meta.dirname, '..');
-const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
-const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 const aoStub = path.join(fixtureDir, 'ao-stub.sh');
-
-const tmpRoots: string[] = [];
 const supervisorHookTimeoutMs = 120_000;
 
 afterEach(() => {
-  for (const root of tmpRoots.splice(0)) {
-    try {
-      execFileSync(
-        'pwsh',
-        [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          supervisorScript,
-          '-Action',
-          'Stop',
-          '-StateDir',
-          root,
-        ],
-        { cwd: repoRoot, stdio: 'pipe', timeout: supervisorHookTimeoutMs },
-      );
-    } catch {
-      // best effort
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  cleanupSupervisorTests();
 }, supervisorHookTimeoutMs);
-
-function makeStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-supervisor-test-'));
-  tmpRoots.push(dir);
-  return dir;
-}
-
-function runSupervisor(
-  args: string[],
-  env: Record<string, string> = {},
-): { stdout: string; stderr: string; status: number | null } {
-  const savedEnv: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(env)) {
-    savedEnv[key] = process.env[key];
-    process.env[key] = value;
-  }
-  const result = spawnSync(
-    'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
-    {
-      cwd: repoRoot,
-      env: process.env,
-      encoding: 'utf8',
-      timeout: 120_000,
-    },
-  );
-  for (const [key, previous] of Object.entries(savedEnv)) {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
-  }
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    status: result.status,
-  };
-}
-
-function startSupervisorBackground(
-  stateDir: string,
-  extraArgs: string[] = [],
-  env: Record<string, string> = {},
-) {
-  const args = [
-    '-Action',
-    'Start',
-    '-Foreground',
-    '-TestMode',
-    '-SkipInitialWait',
-    '-StateDir',
-    stateDir,
-    '-PollSeconds',
-    '1',
-    ...extraArgs,
-  ];
-  const savedEnv: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(env)) {
-    savedEnv[key] = process.env[key];
-    process.env[key] = value;
-  }
-  const child = spawn(
-    'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
-    {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: 'ignore',
-    },
-  );
-  child.on('exit', () => {
-    for (const [key, previous] of Object.entries(savedEnv)) {
-      if (previous === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = previous;
-      }
-    }
-  });
-  return child;
-}
 
 const detachedSupervisorTimeoutMs = 60_000;
 
-const managedChildRoles = [
-  'listener',
-  'heartbeat',
-  'review-trigger-reconcile',
-  'review-trigger-reeval',
-  'review-ready-report-state-seed',
-  'ci-green-wake-reconcile',
-  'review-run-recovery',
-  'review-start-claim-reaper',
-  'ci-failure-notification-reconcile',
-  'ci-failure-notification-reaction',
-  'review-send-reconcile',
-  'review-finding-delivery-confirm',
-  'worker-message-submit-reconcile',
-] as const;
-
-type ManagedChildRole = (typeof managedChildRoles)[number];
-
-async function waitForMarkers(
-  stateDir: string,
-  timeoutMs = 25_000,
-  roles: readonly ManagedChildRole[] = managedChildRoles,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ready = roles.every((role) =>
-      fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`)),
-    );
-    if (ready) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(`timed out waiting for supervisor child markers: ${roles.join(', ')}`);
-}
-
-type WakeMarker = {
-  role: string;
-  pid: number;
-  orchestratorSessionId: string;
-  projectId?: string;
-};
-
-async function readMarker(
-  stateDir: string,
-  role: ManagedChildRole,
-  timeoutMs = 5000,
-): Promise<WakeMarker> {
-  const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    if (!fs.existsSync(markerPath)) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      continue;
-    }
-    try {
-      const raw = fs.readFileSync(markerPath, 'utf8').trim();
-      if (!raw) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        continue;
-      }
-      return JSON.parse(raw) as WakeMarker;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe('orchestrator-wake-supervisor', () => {
   it('starts all registered managed children as separate processes', async () => {

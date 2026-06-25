@@ -10,6 +10,31 @@ export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wak
 const supervisorHookTimeoutMs = 120_000;
 const tmpRoots: string[] = [];
 
+export const managedChildRoles = [
+  'listener',
+  'heartbeat',
+  'review-trigger-reconcile',
+  'review-trigger-reeval',
+  'review-ready-report-state-seed',
+  'ci-green-wake-reconcile',
+  'review-run-recovery',
+  'review-start-claim-reaper',
+  'ci-failure-notification-reconcile',
+  'ci-failure-notification-reaction',
+  'review-send-reconcile',
+  'review-finding-delivery-confirm',
+  'worker-message-submit-reconcile',
+] as const;
+
+export type ManagedChildRole = (typeof managedChildRoles)[number];
+
+export type WakeMarker = {
+  role: string;
+  pid: number;
+  orchestratorSessionId: string;
+  projectId?: string;
+};
+
 export function makeStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-supervisor-test-'));
   tmpRoots.push(dir);
@@ -118,15 +143,42 @@ export function startSupervisorBackground(
   return child;
 }
 
-export type WakeMarker = {
-  role: string;
-  pid: number;
-  orchestratorSessionId: string;
-};
+export async function waitForMarkers(
+  stateDir: string,
+  timeoutMs = 25_000,
+  roles: readonly ManagedChildRole[] = managedChildRoles,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ready = roles.every((role) =>
+      fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`)),
+    );
+    if (ready) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for supervisor child markers: ${roles.join(', ')}`);
+}
+
+export async function waitForMarker(
+  stateDir: string,
+  role: string,
+  timeoutMs = 25_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`))) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for ${role} marker`);
+}
 
 export async function readMarker(
   stateDir: string,
-  role: string,
+  role: ManagedChildRole | string,
   timeoutMs = 5000,
 ): Promise<WakeMarker> {
   const markerPath = path.join(stateDir, 'markers', `${role}.marker.json`);
@@ -149,22 +201,7 @@ export async function readMarker(
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
-  throw lastError ?? new Error(`timed out reading ${role} marker`);
-}
-
-export async function waitForMarker(
-  stateDir: string,
-  role: string,
-  timeoutMs = 25_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`))) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(`timed out waiting for ${role} marker`);
+  throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
 }
 
 export function isAlive(pid: number): boolean {
