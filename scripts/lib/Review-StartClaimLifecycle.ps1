@@ -270,6 +270,13 @@ function Annotate-ReviewStartClaimWorktreeAllowConsumed {
         if ($read.record.worktreeAllowConsumed) {
             return @{ ok = $false; reason = 'claim_already_consumed' }
         }
+        $liveness = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'classify-holder' -Payload @{
+            holder    = $read.record.holder
+            localHost = (Get-ReviewStartClaimLocalHostName)
+        }
+        if ([string]$liveness.outcome -ne 'alive') {
+            return @{ ok = $false; reason = 'claim_holder_not_live'; detail = [string]$liveness.outcome }
+        }
         $now = (Get-Date).ToUniversalTime().ToString('o')
         $gateHolder = New-ReviewStartClaimHolder -Surface 'autonomous-review-worktree-gate'
         $annotation = @{

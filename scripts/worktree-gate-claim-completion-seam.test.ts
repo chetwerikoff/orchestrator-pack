@@ -153,4 +153,43 @@ describe('worktree gate claim completion seam (#454)', () => {
       rmSync(aoBase, { recursive: true, force: true });
     }
   });
+
+  it('worktree-gate-claim-completion-seam: denies when holder dies before mutex re-read', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-seam-dead-holder-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'f'.repeat(40);
+    const workspaces = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces');
+    const target = path.join(workspaces, 'opk-rev-454-dead');
+    try {
+      const result = runSeamFixture(`
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_BASE_DIR = ${psString(aoBase)}
+        $env:AO_PROJECT_ID = ${psString(projectId)}
+        . ${psString(claimLibPath)}
+        . ${psString(lifecycleLibPath)}
+        $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $claim = Acquire-ReviewStartClaim -PrNumber 454 -HeadSha ${psString(headSha)} -Surface 'orchestrator-turn' -ProjectId ${psString(projectId)} -ReviewRuns @() -StartReason 'fixture'
+        $read = Read-ReviewStartClaimRecord -Path $claim.path
+        $read.record.holder.pid = 99999999
+        ($read.record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $claim.path -Encoding UTF8
+        New-Item -ItemType Directory -Path ${psString(workspaces)} -Force | Out-Null
+        $annotate = Annotate-ReviewStartClaimWorktreeAllowConsumed -Namespace $ns -Path $claim.path -Record $claim.claim -CanonicalPath ${psString(target)}
+        [pscustomobject]@{
+          ok = [bool]$annotate.ok
+          reason = [string]$annotate.reason
+          annotated = if (Test-Path -LiteralPath $claim.path) {
+            $after = Read-ReviewStartClaimRecord -Path $claim.path
+            if ($after.ok) { $null -ne $after.record.worktreeAllowConsumed } else { $false }
+          } else { $false }
+        } | ConvertTo-Json -Compress
+      `);
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('claim_holder_not_live');
+      expect(result.annotated).toBe(false);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
+  });
 });
