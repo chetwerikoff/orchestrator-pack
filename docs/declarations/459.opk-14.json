@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "HEAD",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:e4eea09b20b5a7b2e22b974d23628fb660a99024a732041658a245d2d6700c5c"
+    "active_scope_hash": "sha256:7d63dea85daf37f1d4f2a6ec344914fe0d4ae5646c07b9d036d8edd8a11b079e"
   },
   "declared_paths": [
     "docs/ci-failure-notification.d.mts",
@@ -24,7 +24,8 @@
     "scripts/invoke-gated-worker-nudge.ps1",
     "scripts/lib/ci-failure-capture-worker-state.mjs",
     "scripts/lib/ci-failure-fixing-stint-proof.mjs",
-    "scripts/run-ci-failure-fixing-stint-proof.mjs"
+    "scripts/run-ci-failure-fixing-stint-proof.mjs",
+    "scripts/worker-nudge-gate.test.ts"
   ],
   "declared_globs": [],
   "amendments": [
@@ -41,6 +42,20 @@
       "reason": "Review opk-rev-974: register evaluate-suppressor in PowerShell wrapper and add wrapper regression test",
       "actor": "opk-16",
       "timestamp": "2026-06-25T06:15:00.000Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:e4eea09b20b5a7b2e22b974d23628fb660a99024a732041658a245d2d6700c5c",
+      "new_active_scope_hash": "sha256:7d63dea85daf37f1d4f2a6ec344914fe0d4ae5646c07b9d036d8edd8a11b079e",
+      "changed": {
+        "added": [
+          "scripts/worker-nudge-gate.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Review opk-rev-978: worker-nudge-gate regression tests for headSha resolution and PS 5.1 invoke wrapper",
+      "actor": "opk-19",
+      "timestamp": "2026-06-25T08:40:40Z",
       "applied": true
     }
   ]
