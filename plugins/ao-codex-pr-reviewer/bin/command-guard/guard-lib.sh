@@ -169,6 +169,59 @@ deny_slow_command() {
   return 0
 }
 
+is_executable_candidate() {
+  [ -n "${1:-}" ] && [ -f "$1" ] && [ -x "$1" ]
+}
+
+probe_real_binary_in_dir() {
+  dir="$1"
+  name="$2"
+  for ext in '' .exe .cmd .bat; do
+    candidate="$dir/$name$ext"
+    if is_executable_candidate "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  if [ -n "${PATHEXT:-}" ]; then
+    oldifs=$IFS
+    IFS=';'
+    for pathext in $PATHEXT; do
+      IFS=$oldifs
+      case "$pathext" in
+        .*) candidate="$dir/$name$pathext" ;;
+        *) candidate="$dir/$name.$pathext" ;;
+      esac
+      if is_executable_candidate "$candidate"; then
+        echo "$candidate"
+        return 0
+      fi
+    done
+    IFS=$oldifs
+  fi
+  return 1
+}
+
+path_without_command_guard() {
+  path_remain="${PATH:-}"
+  filtered=""
+  while [ -n "$path_remain" ]; do
+    case "$path_remain" in
+      *:*) dir="${path_remain%%:*}"; path_remain="${path_remain#*:}" ;;
+      *) dir="$path_remain"; path_remain="" ;;
+    esac
+    case "$dir" in
+      ""|*command-guard*) continue ;;
+    esac
+    if [ -z "$filtered" ]; then
+      filtered="$dir"
+    else
+      filtered="$filtered:$dir"
+    fi
+  done
+  printf '%s' "$filtered"
+}
+
 resolve_real_binary() {
   name="$1"
   path_remain="${PATH:-}"
@@ -182,19 +235,33 @@ resolve_real_binary() {
     esac
     case "$name" in
       npm|npx|pwsh|yarn|pnpm|vitest)
-        candidate="$dir/$name"
-        if [ -x "$candidate" ]; then
-          echo "$candidate"
+        resolved="$(probe_real_binary_in_dir "$dir" "$name" || true)"
+        if [ -n "$resolved" ]; then
+          echo "$resolved"
           return 0
         fi
         ;;
     esac
   done
-  resolved="$(command -v "$name" 2>/dev/null || true)"
-  case "$resolved" in
-    ""|*command-guard*) return 1 ;;
-    *) echo "$resolved" ;;
-  esac
+  guard_free_path="$(path_without_command_guard)"
+  if [ -n "$guard_free_path" ]; then
+    PATH="$guard_free_path" resolved="$(command -v "$name" 2>/dev/null || true)"
+    case "$resolved" in
+      ""|*command-guard*) ;;
+      *)
+        if is_executable_candidate "$resolved"; then
+          echo "$resolved"
+          return 0
+        fi
+        resolved="$(probe_real_binary_in_dir "$(dirname "$resolved")" "$name" || true)"
+        if [ -n "$resolved" ]; then
+          echo "$resolved"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  return 1
 }
 
 guard_dispatch() {
