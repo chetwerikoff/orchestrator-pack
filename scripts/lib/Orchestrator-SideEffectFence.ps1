@@ -69,7 +69,12 @@ function Test-OrchestratorSideEffectLockStale {
     }
 
     if ($hasPid) {
-        return -not (Test-ProcessAlive -ProcessId $ownerPid)
+        if (-not (Test-ProcessAlive -ProcessId $ownerPid)) {
+            return $true
+        }
+        if ($MaxAgeSeconds -le 0) {
+            return $false
+        }
     }
 
     $startedAt = $null
