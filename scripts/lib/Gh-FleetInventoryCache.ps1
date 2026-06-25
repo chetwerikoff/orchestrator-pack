@@ -298,6 +298,7 @@ function Clear-GhFleetStalePopulateLockIfNeeded {
 function Enter-GhFleetPopulateLock {
     param([string]$LockPath)
 
+    Clear-GhFleetStalePopulateLockIfNeeded -LockPath $LockPath | Out-Null
     return Enter-OrchestratorSideEffectFence -LockPath $LockPath
 }
 
@@ -364,56 +365,62 @@ function Invoke-GhFleetCachedOpenPrListRaw {
         return @($warm.envelope.prs)
     }
 
-    $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
-    if ($acquired) {
-        try {
-            $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.SnapshotPath -TtlSeconds $ttl
-            if ($warmAfterLock) {
-                if ($warmAfterLock.kind -eq 'error') {
-                    throw [string]$warmAfterLock.message
-                }
-                Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_hit' -Fields @{ key = $cacheKey; afterLock = $true }
-                return @($warmAfterLock.envelope.prs)
-            }
-
-            Push-Location -LiteralPath $RepoRoot
+    for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
+        $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
+        if ($acquired) {
             try {
-                $prs = Invoke-GhFleetFetchOpenPrListUpstream
-            }
-            catch {
+                $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.SnapshotPath -TtlSeconds $ttl
+                if ($warmAfterLock) {
+                    if ($warmAfterLock.kind -eq 'error') {
+                        throw [string]$warmAfterLock.message
+                    }
+                    Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_hit' -Fields @{ key = $cacheKey; afterLock = $true }
+                    return @($warmAfterLock.envelope.prs)
+                }
+
+                Push-Location -LiteralPath $RepoRoot
+                try {
+                    $prs = Invoke-GhFleetFetchOpenPrListUpstream
+                }
+                catch {
+                    $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
+                    Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope @{
+                        storedAt  = (Get-Date).ToUniversalTime().ToString('o')
+                        expiresAt = $expiresAt
+                        error     = $_.Exception.Message
+                    }
+                    throw
+                }
+                finally {
+                    Pop-Location
+                }
+
                 $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
                 Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope @{
                     storedAt  = (Get-Date).ToUniversalTime().ToString('o')
                     expiresAt = $expiresAt
-                    error     = $_.Exception.Message
+                    prs       = @($prs)
                 }
-                throw
+                Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_populate' -Fields @{ key = $cacheKey; count = @($prs).Count }
+                return @($prs)
             }
             finally {
-                Pop-Location
+                Exit-GhFleetPopulateLock -LockPath $paths.LockPath
             }
+        }
 
-            $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
-            Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope @{
-                storedAt  = (Get-Date).ToUniversalTime().ToString('o')
-                expiresAt = $expiresAt
-                prs       = @($prs)
+        $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.SnapshotPath -LockPath $paths.LockPath -TtlSeconds $ttl
+        if ($waited) {
+            if ($waited.kind -eq 'error') {
+                throw [string]$waited.message
             }
-            Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_populate' -Fields @{ key = $cacheKey; count = @($prs).Count }
-            return @($prs)
+            Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_wait_hit' -Fields @{ key = $cacheKey }
+            return @($waited.envelope.prs)
         }
-        finally {
-            Exit-GhFleetPopulateLock -LockPath $paths.LockPath
-        }
-    }
 
-    $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.SnapshotPath -LockPath $paths.LockPath -TtlSeconds $ttl
-    if ($waited) {
-        if ($waited.kind -eq 'error') {
-            throw [string]$waited.message
+        if (Test-Path -LiteralPath $paths.LockPath -PathType Leaf) {
+            break
         }
-        Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_wait_hit' -Fields @{ key = $cacheKey }
-        return @($waited.envelope.prs)
     }
 
     Push-Location -LiteralPath $RepoRoot
@@ -475,56 +482,62 @@ function Invoke-GhFleetResolveCommitDate {
         return [string]$warm.envelope.committedDate
     }
 
-    $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
-    if ($acquired) {
-        try {
-            $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.MemoPath -TtlSeconds $memoTtl
-            if (-not $warmAfterLock) {
-                $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.MemoPath -TtlSeconds $negativeTtl
-            }
-            if ($warmAfterLock) {
-                if ($warmAfterLock.kind -eq 'error' -or $warmAfterLock.envelope.negative) {
-                    return $null
+    for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
+        $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
+        if ($acquired) {
+            try {
+                $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.MemoPath -TtlSeconds $memoTtl
+                if (-not $warmAfterLock) {
+                    $warmAfterLock = Read-GhFleetCacheEnvelope -Path $paths.MemoPath -TtlSeconds $negativeTtl
                 }
-                return [string]$warmAfterLock.envelope.committedDate
-            }
+                if ($warmAfterLock) {
+                    if ($warmAfterLock.kind -eq 'error' -or $warmAfterLock.envelope.negative) {
+                        return $null
+                    }
+                    return [string]$warmAfterLock.envelope.committedDate
+                }
 
-            $committedDate = Invoke-GhFleetFetchCommitDateUpstream -RepoRoot $RepoRoot -HeadSha $HeadSha
-            if ($committedDate) {
-                $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($memoTtl).ToString('o')
+                $committedDate = Invoke-GhFleetFetchCommitDateUpstream -RepoRoot $RepoRoot -HeadSha $HeadSha
+                if ($committedDate) {
+                    $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($memoTtl).ToString('o')
+                    Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.MemoPath -TempPath $paths.TempPath -Envelope @{
+                        storedAt       = (Get-Date).ToUniversalTime().ToString('o')
+                        expiresAt      = $expiresAt
+                        committedDate  = $committedDate
+                        negative       = $false
+                    }
+                    Write-GhFleetInventoryCacheAudit -Event 'commit_memo_populate' -Fields @{ sha = $HeadSha }
+                    return $committedDate
+                }
+
+                $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($negativeTtl).ToString('o')
                 Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.MemoPath -TempPath $paths.TempPath -Envelope @{
-                    storedAt       = (Get-Date).ToUniversalTime().ToString('o')
-                    expiresAt      = $expiresAt
-                    committedDate  = $committedDate
-                    negative       = $false
+                    storedAt  = (Get-Date).ToUniversalTime().ToString('o')
+                    expiresAt = $expiresAt
+                    negative  = $true
                 }
-                Write-GhFleetInventoryCacheAudit -Event 'commit_memo_populate' -Fields @{ sha = $HeadSha }
-                return $committedDate
+                return $null
             }
-
-            $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($negativeTtl).ToString('o')
-            Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.MemoPath -TempPath $paths.TempPath -Envelope @{
-                storedAt  = (Get-Date).ToUniversalTime().ToString('o')
-                expiresAt = $expiresAt
-                negative  = $true
+            finally {
+                Exit-GhFleetPopulateLock -LockPath $paths.LockPath
             }
-            return $null
         }
-        finally {
-            Exit-GhFleetPopulateLock -LockPath $paths.LockPath
-        }
-    }
 
-    $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.MemoPath -LockPath $paths.LockPath -TtlSeconds $memoTtl
-    if (-not $waited) {
-        $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.MemoPath -LockPath $paths.LockPath -TtlSeconds $negativeTtl
-    }
-    if ($waited) {
-        if ($waited.kind -eq 'error' -or $waited.envelope.negative) {
-            return $null
+        $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.MemoPath -LockPath $paths.LockPath -TtlSeconds $memoTtl
+        if (-not $waited) {
+            $waited = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.MemoPath -LockPath $paths.LockPath -TtlSeconds $negativeTtl
         }
-        Write-GhFleetInventoryCacheAudit -Event 'commit_memo_wait_hit' -Fields @{ sha = $HeadSha }
-        return [string]$waited.envelope.committedDate
+        if ($waited) {
+            if ($waited.kind -eq 'error' -or $waited.envelope.negative) {
+                return $null
+            }
+            Write-GhFleetInventoryCacheAudit -Event 'commit_memo_wait_hit' -Fields @{ sha = $HeadSha }
+            return [string]$waited.envelope.committedDate
+        }
+
+        if (Test-Path -LiteralPath $paths.LockPath -PathType Leaf) {
+            break
+        }
     }
 
     return Invoke-GhFleetFetchCommitDateUpstream -RepoRoot $RepoRoot -HeadSha $HeadSha
