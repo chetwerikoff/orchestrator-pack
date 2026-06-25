@@ -29,6 +29,40 @@ remaining_review_ms() {
   fi
 }
 
+has_targeted_test_selector() {
+  after_npm_test_separator=0
+  after_vitest_run=0
+  prev=""
+  for arg in "$@"; do
+    if [ "$after_npm_test_separator" -eq 1 ]; then
+      case "$arg" in
+        -*) ;;
+        *) return 0 ;;
+      esac
+      continue
+    fi
+    if [ "$after_vitest_run" -eq 1 ]; then
+      case "$arg" in
+        -*) ;;
+        *) return 0 ;;
+      esac
+      continue
+    fi
+    if [ "$arg" = "--" ] && [ "$prev" = "test" ]; then
+      after_npm_test_separator=1
+      prev=""
+      continue
+    fi
+    if [ "$arg" = "run" ] && [ "$prev" = "vitest" ]; then
+      after_vitest_run=1
+      prev=""
+      continue
+    fi
+    prev="$arg"
+  done
+  return 1
+}
+
 classify_command() {
   executable="$1"
   shift
@@ -39,11 +73,11 @@ classify_command() {
       return
       ;;
   esac
+  if has_targeted_test_selector "$@"; then
+    echo cheap_targeted
+    return
+  fi
   case "$joined" in
-    *"npm test --"*|*"npm run test --"*|*"vitest run "*)
-      echo cheap_targeted
-      return
-      ;;
     *"npm test"*|*"npm run test"*|*"vitest run"*|*"pnpm test"*|*"yarn test"*)
       echo full_suite
       return

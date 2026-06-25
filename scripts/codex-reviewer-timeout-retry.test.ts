@@ -7,6 +7,7 @@ import {
   evaluateTimeoutRetryEligibility,
   extractReviewerFailureClass,
   REPEATED_TIMEOUT_ESCALATION_REASON,
+  resolveTimeoutRetryMax,
   TIMEOUT_NO_VERDICT_FAILURE_CLASS,
 } from '../docs/codex-reviewer-timeout-retry.mjs';
 import {
@@ -38,6 +39,16 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     expect(extractReviewerFailureClass({ terminationReason, status: 'failed' })).toBe(
       TIMEOUT_NO_VERDICT_FAILURE_CLASS,
     );
+  });
+
+  it('honors zero as a valid timeout retry limit', () => {
+    expect(resolveTimeoutRetryMax({ AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX: '0' })).toBe(0);
+    const runs = [buildTimeoutRun()];
+    const state = evaluateTimeoutRetryEligibility(runs, runs[0].prNumber, runs[0].targetSha, {
+      maxRetries: resolveTimeoutRetryMax({ AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX: '0' }),
+    });
+    expect(state.retryEligible).toBe(false);
+    expect(state.escalationReason).toBe(REPEATED_TIMEOUT_ESCALATION_REASON);
   });
 
   it('allows one retry after first timeout_no_verdict failure', () => {

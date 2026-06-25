@@ -73,6 +73,15 @@ describe('reviewer test budget guard (AC#2)', () => {
     ).toBe('slow_test');
     expect(classifyReviewShellCommand(['npm', 'test'])).toBe('full_suite');
     expect(
+      classifyReviewShellCommand(['npm', 'test', '--', '--coverage']),
+    ).toBe('full_suite');
+    expect(
+      classifyReviewShellCommand(['npx', 'vitest', 'run', '--coverage']),
+    ).toBe('full_suite');
+    expect(
+      classifyReviewShellCommand(['npm', 'test', '--', 'reviewer-budget.test.ts']),
+    ).toBe('cheap_targeted');
+    expect(
       classifyReviewShellCommand(['pwsh', '-NoProfile', '-File', 'scripts/verify.ps1']),
     ).toBe('slow_test');
   });
@@ -158,6 +167,20 @@ describe('reviewer test budget guard (AC#2)', () => {
       { encoding: 'utf8' },
     );
     expect(targeted.stdout.trim()).toBe('cheap_targeted');
+
+    const optionOnly = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npx vitest run --coverage`],
+      { encoding: 'utf8' },
+    );
+    expect(optionOnly.stdout.trim()).toBe('full_suite');
+
+    const npmOptionOnly = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npm test -- --coverage`],
+      { encoding: 'utf8' },
+    );
+    expect(npmOptionOnly.stdout.trim()).toBe('full_suite');
   });
 
   it('exec-level PATH guard uses millisecond clock under budget', () => {

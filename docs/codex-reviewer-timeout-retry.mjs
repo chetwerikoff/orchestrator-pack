@@ -21,8 +21,16 @@ function parsePositiveInt(raw, fallback) {
   return Math.floor(parsed);
 }
 
+function parseNonNegativeInt(raw, fallback) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
 export function resolveTimeoutRetryMax(env = process.env) {
-  return parsePositiveInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
+  return parseNonNegativeInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
 }
 
 /**

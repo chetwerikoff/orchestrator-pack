@@ -19,17 +19,59 @@ const SLOW_TEST_MARKERS = [
 const FULL_SUITE_MARKERS = [
   /\bnpm\s+test\b(?!\s+--\s)/i,
   /\bnpm\s+run\s+test\b(?!\s+--\s)/i,
-  /\bvitest\s+run\b(?!\s+[^\s-])/i,
+  /\bvitest\s+run\b/i,
   /\bpnpm\s+test\b/i,
   /\byarn\s+test\b/i,
 ];
 
-const CHEAP_TARGETED_MARKERS = [
-  /\bnpm\s+test\s+--\s+/i,
-  /\bnpm\s+run\s+test\s+--\s+/i,
-  /\bvitest\s+run\s+[^\s]/i,
-  /\bnpx\s+vitest\s+run\s+[^\s]/i,
-];
+function isOptionToken(token: string): boolean {
+  return token.startsWith('-');
+}
+
+export function hasTargetedTestSelector(argv: string[]): boolean {
+  const parts = argv.map((part) => part.trim()).filter(Boolean);
+  let afterNpmTestSeparator = false;
+  let afterVitestRun = false;
+  let previous = '';
+
+  for (const part of parts) {
+    if (afterNpmTestSeparator) {
+      if (!isOptionToken(part)) {
+        return true;
+      }
+      continue;
+    }
+    if (afterVitestRun) {
+      if (!isOptionToken(part)) {
+        return true;
+      }
+      continue;
+    }
+    if (part === '--' && previous === 'test') {
+      afterNpmTestSeparator = true;
+      previous = '';
+      continue;
+    }
+    if (part === 'run' && previous === 'vitest') {
+      afterVitestRun = true;
+      previous = '';
+      continue;
+    }
+    previous = part;
+  }
+  return false;
+}
+
+function hasNpmTestSeparator(argv: string[]): boolean {
+  let previous = '';
+  for (const part of argv.map((token) => token.trim()).filter(Boolean)) {
+    if (part === '--' && previous === 'test') {
+      return true;
+    }
+    previous = part;
+  }
+  return false;
+}
 
 export function flattenCommandArgv(argv: string[]): string {
   return argv.map((part) => part.trim()).filter(Boolean).join(' ');
@@ -44,10 +86,10 @@ export function classifyReviewShellCommand(argv: string[]): ReviewCommandClass {
   if (SLOW_TEST_MARKERS.some((pattern) => pattern.test(joined))) {
     return 'slow_test';
   }
-  if (CHEAP_TARGETED_MARKERS.some((pattern) => pattern.test(joined))) {
+  if (hasTargetedTestSelector(argv)) {
     return 'cheap_targeted';
   }
-  if (FULL_SUITE_MARKERS.some((pattern) => pattern.test(joined))) {
+  if (hasNpmTestSeparator(argv) || FULL_SUITE_MARKERS.some((pattern) => pattern.test(joined))) {
     return 'full_suite';
   }
   if (/\btest\b/i.test(joined) && /\b(ps1|pwsh|npm|pnpm|yarn|vitest)\b/i.test(joined)) {

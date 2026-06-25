@@ -37,6 +37,14 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
   return Math.floor(parsed);
 }
 
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
 export function resolveEffectiveBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
   return parsePositiveInt(env.AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS, DEFAULT_EFFECTIVE_BUDGET_MS);
 }
@@ -67,7 +75,7 @@ export function resolveTestBudgetMs(
 }
 
 export function resolveTimeoutRetryMax(env: NodeJS.ProcessEnv = process.env): number {
-  return parsePositiveInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
+  return parseNonNegativeInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
 }
 
 export interface ReviewerBudgetLedger {
