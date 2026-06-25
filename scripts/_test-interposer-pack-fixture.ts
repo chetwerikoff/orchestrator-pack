@@ -46,6 +46,21 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
   const scriptsDir = path.join(packRoot, 'scripts');
   mkdirSync(scriptsDir, { recursive: true });
   cpSync(path.join(repoRoot, 'scripts/lib'), path.join(scriptsDir, 'lib'), { recursive: true });
+  mkdirSync(path.join(packRoot, 'docs'), { recursive: true });
+  cpSync(
+    path.join(repoRoot, 'docs/autonomous-spawn-policy.json'),
+    path.join(packRoot, 'docs/autonomous-spawn-policy.json'),
+  );
+  for (const doc of [
+    'autonomous-orchestrator-boundary.mjs',
+    'orchestrator-claimed-review-run.mjs',
+    'review-mechanical-cli.mjs',
+    'mechanical-reconcile-bounds.mjs',
+    'autonomous-review-start-capabilities.json',
+    'autonomous-shared-capabilities.json',
+  ]) {
+    cpSync(path.join(repoRoot, 'docs', doc), path.join(packRoot, 'docs', doc));
+  }
   for (const name of CANONICAL_INTERPOSER_SCRIPT_NAMES) {
     cpSync(path.join(repoRoot, 'scripts', name), path.join(scriptsDir, name));
     chmodSync(path.join(scriptsDir, name), 0o755);

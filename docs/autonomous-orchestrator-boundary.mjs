@@ -1,8 +1,8 @@
 /**
- * Autonomous orchestrator spawn/git boundary (Issue #324).
+ * Autonomous orchestrator spawn/git boundary (Issue #324 / #458).
  * Vitest: scripts/autonomous-orchestrator-boundary.test.ts
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
@@ -13,6 +13,8 @@ import {
 
 export const AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION =
   'autonomous-orchestrator-boundary/v1';
+export const AUTONOMOUS_SPAWN_POLICY_VERSION = 'autonomous-spawn-policy/v1';
+export const AUTONOMOUS_SPAWN_POLICY_RELATIVE_PATH = 'docs/autonomous-spawn-policy.json';
 export const TURN_VISIBLE_REAL_BINARY_ENV_VARS = ['AO_REAL_BINARY', 'GIT_REAL_BINARY'];
 const PREFLIGHT_GIT_PARENTS = [
   'reviewer-workspace-preflight.ps1',
@@ -187,19 +189,311 @@ export function isRawSpawnInvocation(commandLine) {
 }
 
 /**
- * @param {object} input
- * @param {boolean} [input.autonomousSurface]
+ * @param {string[]} argv
  */
-export function evaluateAutonomousSpawnBoundary(input) {
-  const commandLine = String(input.commandLine ?? '');
-  if (!isRawSpawnInvocation(commandLine)) {
-    return { allowed: true, reason: 'not_spawn' };
+export function hasClaimPrFlagInSpawnArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (const token of list) {
+    if (token === '--claim-pr' || /^--claim-pr=/i.test(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function classifySpawnAction(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  if (!isSpawnAoArgv(list)) {
+    return 'not-spawn';
+  }
+  if (hasClaimPrFlagInSpawnArgv(list)) {
+    if (parseClaimPrNumberFromSpawnArgv(list) !== null) {
+      return 'claim-pr-resume';
+    }
+    return 'claim-pr-malformed';
+  }
+  return 'spawn-new';
+}
+
+/**
+ * @param {string} raw
+ * @returns {number | null}
+ */
+function parseStrictPositiveClaimPrValue(raw) {
+  const value = String(raw).trim();
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {number | null}
+ */
+export function parseClaimPrNumberFromSpawnArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (let index = 0; index < list.length; index += 1) {
+    const token = list[index];
+    if (token === '--claim-pr' && index + 1 < list.length) {
+      return parseStrictPositiveClaimPrValue(list[index + 1]);
+    }
+    const eqMatch = /^--claim-pr=(.+)$/i.exec(token);
+    if (eqMatch) {
+      return parseStrictPositiveClaimPrValue(eqMatch[1]);
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {unknown} policy
+ */
+export function validateAutonomousSpawnPolicy(policy) {
+  if (!policy || typeof policy !== 'object') {
+    return { ok: false, reason: 'spawn_policy_missing_or_unreadable' };
+  }
+  const version = String(/** @type {{ version?: string }} */ (policy).version ?? '').trim();
+  if (version !== AUTONOMOUS_SPAWN_POLICY_VERSION) {
+    return { ok: false, reason: 'spawn_policy_unknown_version' };
+  }
+  const allowSpawnNew = /** @type {{ allowSpawnNew?: unknown }} */ (policy).allowSpawnNew;
+  const allowClaimPrResume = /** @type {{ allowClaimPrResume?: unknown }} */ (policy).allowClaimPrResume;
+  if (typeof allowSpawnNew !== 'boolean' || typeof allowClaimPrResume !== 'boolean') {
+    return { ok: false, reason: 'spawn_policy_non_boolean_toggle' };
+  }
+  return {
+    ok: true,
+    reason: 'spawn_policy_ok',
+    policy: {
+      allowSpawnNew,
+      allowClaimPrResume,
+    },
+  };
+}
+
+/**
+ * @param {string} [packRoot]
+ */
+export function loadAutonomousSpawnPolicy(packRoot) {
+  const root = String(packRoot ?? process.cwd());
+  const policyPath = join(root, AUTONOMOUS_SPAWN_POLICY_RELATIVE_PATH);
+  if (!existsSync(policyPath)) {
+    return { ok: false, reason: 'spawn_policy_missing_or_unreadable', policy: null };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(policyPath, 'utf8'));
+    const validated = validateAutonomousSpawnPolicy(parsed);
+    if (!validated.ok) {
+      return { ok: false, reason: validated.reason, policy: null };
+    }
+    return { ok: true, reason: validated.reason, policy: validated.policy };
+  }
+  catch {
+    return { ok: false, reason: 'spawn_policy_malformed', policy: null };
+  }
+}
+
+/**
+ * @param {object} input
+ * @param {string[]} [input.argv]
+ * @param {boolean} [input.autonomousSurface]
+ * @param {{ allowSpawnNew: boolean, allowClaimPrResume: boolean } | null} [input.policy]
+ * @param {boolean} [input.policyLoadOk]
+ * @param {string} [input.policyLoadReason]
+ */
+export function evaluateAutonomousSpawnPolicyDecision(input) {
+  const argv = Array.isArray(input.argv) ? input.argv.map((part) => String(part)) : [];
+  const action = classifySpawnAction(argv);
+  if (action === 'not-spawn') {
+    return { allowed: true, denied: false, reason: 'not_spawn', action, auditLine: '' };
   }
   if (!input.autonomousSurface) {
-    return { allowed: true, reason: 'manual_surface' };
+    return { allowed: true, denied: false, reason: 'manual_surface', action, auditLine: '' };
   }
-  return { allowed: false, reason: 'autonomous_spawn_denied' };
+  if (action === 'claim-pr-malformed') {
+    return {
+      allowed: false,
+      denied: true,
+      reason: 'claim_pr_resume_invalid_pr',
+      action,
+      auditLine: 'autonomous spawn policy deny: action=claim-pr-malformed reason=claim_pr_resume_invalid_pr',
+    };
+  }
+  if (!input.policyLoadOk || !input.policy) {
+    const reason = String(input.policyLoadReason ?? 'spawn_policy_missing_or_unreadable');
+    return {
+      allowed: false,
+      denied: true,
+      reason,
+      action,
+      auditLine: `autonomous spawn policy deny: action=${action} reason=${reason}`,
+    };
+  }
+  const toggleAllowed =
+    action === 'spawn-new'
+      ? input.policy.allowSpawnNew
+      : action === 'claim-pr-resume'
+        ? input.policy.allowClaimPrResume
+        : false;
+  if (!toggleAllowed) {
+    const reason =
+      action === 'spawn-new' ? 'spawn_policy_allowSpawnNew_false' : 'spawn_policy_allowClaimPrResume_false';
+    return {
+      allowed: false,
+      denied: true,
+      reason,
+      action,
+      auditLine: `autonomous spawn policy deny: action=${action} reason=${reason}`,
+    };
+  }
+  return {
+    allowed: true,
+    denied: false,
+    reason: 'spawn_policy_allowed',
+    action,
+    auditLine: `autonomous spawn policy allow: action=${action} allowSpawnNew=${input.policy.allowSpawnNew} allowClaimPrResume=${input.policy.allowClaimPrResume}`,
+  };
 }
+
+/**
+ * @param {object} input
+ * @param {number} [input.prNumber]
+ * @param {boolean} [input.resumeMutexHeld]
+ * @param {boolean} [input.liveOwnerPresent]
+ * @param {boolean} [input.ownerLivenessKnown]
+ * @param {boolean} [input.concurrentAttemptLost]
+ */
+export function evaluateClaimPrResumeSafety(input) {
+  const prNumber = Number(input.prNumber);
+  if (!Number.isFinite(prNumber) || prNumber <= 0) {
+    return { allowed: false, reason: 'claim_pr_resume_invalid_pr' };
+  }
+  if (input.concurrentAttemptLost) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_already_in_progress',
+    };
+  }
+  if (input.resumeMutexHeld) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_already_in_progress',
+    };
+  }
+  if (input.liveOwnerPresent) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
+  if (input.ownerLivenessKnown === false) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
+  if (input.staleArtifactPresent) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
+  if (input.staleArtifactKnown === false) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
+  return { allowed: true, reason: 'claim_pr_resume_safe' };
+}
+
+/**
+ * @param {object} input
+ * @param {boolean} [input.autonomousSurface]
+ * @param {string} [input.commandLine]
+ * @param {string[]} [input.argv]
+ * @param {{ allowSpawnNew: boolean, allowClaimPrResume: boolean } | null} [input.policy]
+ * @param {boolean} [input.policyLoadOk]
+ * @param {string} [input.policyLoadReason]
+ * @param {boolean} [input.claimPrResumeSafe]
+ * @param {string} [input.claimPrResumeReason]
+ */
+export function evaluateAutonomousSpawnPolicyBoundary(input) {
+  const argv = Array.isArray(input.argv)
+    ? input.argv.map((part) => String(part))
+    : tokenizeProcessCommandLine(String(input.commandLine ?? '')).slice(1);
+  const decision = evaluateAutonomousSpawnPolicyDecision({
+    argv,
+    autonomousSurface: input.autonomousSurface,
+    policy: input.policy ?? null,
+    policyLoadOk: input.policyLoadOk,
+    policyLoadReason: input.policyLoadReason,
+  });
+  if (!decision.allowed) {
+    return decision;
+  }
+  if (decision.action === 'claim-pr-resume') {
+    if (input.claimPrResumeSafe === false) {
+      const reason = String(input.claimPrResumeReason ?? 'claim_pr_resume_cleanup_required');
+      return {
+        allowed: false,
+        denied: true,
+        reason,
+        action: decision.action,
+        auditLine: `autonomous spawn policy deny: action=${decision.action} reason=${reason}`,
+      };
+    }
+  }
+  return decision;
+}
+
+/**
+ * @param {object} input
+ * @param {boolean} [input.autonomousSurface]
+ * @param {string} [input.commandLine]
+ * @param {string[]} [input.argv]
+ * @param {{ allowSpawnNew: boolean, allowClaimPrResume: boolean } | null} [input.policy]
+ * @param {boolean} [input.policyLoadOk]
+ */
+export function evaluateAutonomousSpawnBoundary(input) {
+  const argv = Array.isArray(input.argv)
+    ? input.argv.map((part) => String(part))
+    : undefined;
+  const commandLine = String(input.commandLine ?? '');
+  if (argv) {
+    return evaluateAutonomousSpawnPolicyBoundary({
+      argv,
+      autonomousSurface: input.autonomousSurface,
+      policy: input.policy ?? null,
+      policyLoadOk: input.policyLoadOk ?? Boolean(input.policy),
+      policyLoadReason: input.policyLoadReason,
+      claimPrResumeSafe: input.claimPrResumeSafe,
+      claimPrResumeReason: input.claimPrResumeReason,
+    });
+  }
+  if (!isRawSpawnInvocation(commandLine)) {
+    return { allowed: true, denied: false, reason: 'not_spawn', action: 'not-spawn', auditLine: '' };
+  }
+  if (!input.autonomousSurface) {
+    return { allowed: true, denied: false, reason: 'manual_surface', action: 'spawn-new', auditLine: '' };
+  }
+  const defaultPolicy = input.policy ?? { allowSpawnNew: true, allowClaimPrResume: true };
+  const tokens = tokenizeProcessCommandLine(commandLine);
+  const spawnIndex = tokens.findIndex((token) => token.toLowerCase() === 'spawn');
+  const aoArgv = spawnIndex >= 0 ? tokens.slice(spawnIndex) : ['spawn'];
+  return evaluateAutonomousSpawnPolicyBoundary({
+    argv: aoArgv,
+    autonomousSurface: true,
+    policy: defaultPolicy,
+    policyLoadOk: input.policyLoadOk ?? true,
+    policyLoadReason: input.policyLoadReason,
+    claimPrResumeSafe: input.claimPrResumeSafe ?? true,
+    claimPrResumeReason: input.claimPrResumeReason,
+  });
+}
+
 
 /**
  * @param {object} input
@@ -499,6 +793,10 @@ export function validateBoundaryCapabilityInventory(input) {
 
 runStdinJsonCli('autonomous-orchestrator-boundary.mjs', {
   evaluateSpawnBoundary: () => evaluateAutonomousSpawnBoundary(readStdinJson()),
+  evaluateSpawnPolicy: () => evaluateAutonomousSpawnPolicyBoundary(readStdinJson()),
+  evaluateSpawnPolicyDecision: () => evaluateAutonomousSpawnPolicyDecision(readStdinJson()),
+  evaluateClaimPrResumeSafety: () => evaluateClaimPrResumeSafety(readStdinJson()),
+  validateSpawnPolicy: () => validateAutonomousSpawnPolicy(readStdinJson()),
   evaluateGitBoundary: () => evaluateAutonomousGitBoundary(readStdinJson()),
   evaluateTurnBypass: () => evaluateTurnVisibleRealBinaryBypass(readStdinJson()),
   evaluatePreflight: () => evaluateBoundaryCapabilityPreflight(readStdinJson()),

@@ -1,0 +1,6 @@
+{
+  "version": "autonomous-spawn-policy/v1",
+  "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
+  "allowSpawnNew": true,
+  "allowClaimPrResume": true
+}

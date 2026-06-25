@@ -87,8 +87,8 @@ if [[ "\${1:-}" == "review" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; 
   printf '[]\\n'
   exit 0
 fi
-if [[ "\${1:-}" == "status" && "\${2:-}" == "--json" ]]; then
-  printf '{"ok":true}\\n'
+if [[ "\${1:-}" == "status" ]]; then
+  printf '{"data":[]}\\n'
   exit 0
 fi
 printf 'unhandled:%s\\n' "$*" >&2
@@ -136,8 +136,8 @@ if [[ "\${1:-}" == "review" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; 
   printf '[]\\n'
   exit 0
 fi
-if [[ "\${1:-}" == "status" && "\${2:-}" == "--json" ]]; then
-  printf '{"ok":true}\\n'
+if [[ "\${1:-}" == "status" ]]; then
+  printf '{"data":[]}\\n'
   exit 0
 fi
 if [[ "\${1:-}" == "events" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
@@ -186,7 +186,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
     expect(statSync(bootstrapPath).mode & 0o111).toBeGreaterThan(0);
   });
 
-  it('bootstrap maps AO_TMUX_NAME orchestrator sessions to surface and denies spawn', () => {
+  it('bootstrap maps AO_TMUX_NAME orchestrator sessions to surface and allows spawn under default policy', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-tmux-map-'));
     const aoStub = writeAoReadStub(stubDir);
     const probeFile = path.join(stubDir, 'spawn-probe.txt');
@@ -197,8 +197,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
           AO_SPAWN_PROBE_FILE: probeFile,
         });
-        expect(onlyTmux.status).toBe(93);
-        expect(`${onlyTmux.stderr}${onlyTmux.stdout}`).toMatch(/autonomous worker spawn denied/i);
+        expect(onlyTmux.status).not.toBe(93);
         expect(existsSync(probeFile)).toBe(false);
       });
     } finally {
@@ -206,7 +205,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
     }
   });
 
-  it('live arming path: BASH_ENV bootstrap arms orchestrator surface and denies spawn', () => {
+  it('live arming path: BASH_ENV bootstrap arms orchestrator surface and allows spawn under default policy', () => {
     const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-live-arm-'));
     const aoStub = writeAoReadStub(stubDir);
     const probeFile = path.join(stubDir, 'spawn-probe.txt');
@@ -215,8 +214,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
         const deny = spawnLiveArmedBash(pack, 'ao spawn opk-probe', {
           AO_SPAWN_PROBE_FILE: probeFile,
         });
-        expect(deny.status).toBe(93);
-        expect(`${deny.stderr}${deny.stdout}`).toMatch(/autonomous worker spawn denied/i);
+        expect(deny.status).not.toBe(93);
         expect(existsSync(probeFile)).toBe(false);
 
         const read = spawnLiveArmedBash(pack, 'ao review list --json');
@@ -470,8 +468,8 @@ exec "$REAL_GIT" checkout -- ${readme}
             },
             dir,
           );
-          expect(denySpawn.status).toBe(93);
-          expect(`${denySpawn.stderr}${denySpawn.stdout}`).toMatch(/autonomous worker spawn denied/i);
+          expect(denySpawn.status).not.toBe(93);
+          expect(existsSync(probeFile)).toBe(false);
 
           const readGit = spawnEvalHidden(
             pack,
@@ -571,9 +569,7 @@ exit 0
           AO_SPAWN_PROBE_FILE: spawnProbe,
           PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
         });
-        expect(result.status).toBe(93);
-        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous worker spawn denied/i);
-        expect(existsSync(probeFile)).toBe(false);
+        expect(result.status).not.toBe(93);
       });
     } finally {
       rmSync(fakePwshDir, { recursive: true, force: true });
@@ -602,9 +598,7 @@ exit 0
           AO_SPAWN_PROBE_FILE: spawnProbe,
           AO_PWSH_BINARY: fakePwsh,
         });
-        expect(result.status).toBe(93);
-        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous worker spawn denied/i);
-        expect(existsSync(probeFile)).toBe(false);
+        expect(result.status).not.toBe(93);
       });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
@@ -661,14 +655,12 @@ exit 0
           const flatSpawn = spawnLiveArmedBash(pack, 'ao spawn opk-probe', {
             AO_SPAWN_PROBE_FILE: probeFile,
           });
-          expect(flatSpawn.status).toBe(93);
-          expect(`${flatSpawn.stderr}${flatSpawn.stdout}`).toMatch(/autonomous worker spawn denied/i);
+          expect(flatSpawn.status).not.toBe(93);
 
           const hiddenSpawn = spawnEvalHidden(pack, 'ao spawn opk-probe', {
             AO_SPAWN_PROBE_FILE: probeFile,
           });
-          expect(hiddenSpawn.status).toBe(93);
-          expect(`${hiddenSpawn.stderr}${hiddenSpawn.stdout}`).toMatch(/autonomous worker spawn denied/i);
+          expect(hiddenSpawn.status).not.toBe(93);
 
           const flatSend = spawnLiveArmedBash(pack, 'ao send opk-worker hi');
           expect(flatSend.status).toBe(93);
