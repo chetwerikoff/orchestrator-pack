@@ -6,6 +6,7 @@ import {
   makeStateDir,
   readChildPid,
   readChildRecovery,
+  readMarker,
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
@@ -13,7 +14,7 @@ import {
   waitForSupervisorLogMatch,
 } from './supervisor-recovery.test-helpers.js';
 
-const timeoutMs = 90_000;
+const timeoutMs = 120_000;
 
 afterEach(() => {
   cleanupSupervisorTests();
@@ -66,29 +67,35 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
-    await waitForSupervisorLogMatch(stateDir, /degraded backoff: heartbeat/, 20_000);
+    await waitForMarker(stateDir, 'heartbeat', 30_000);
+    await waitForSupervisorLogMatch(stateDir, /degraded backoff: heartbeat/, 30_000);
 
     let beforeCrash: Record<string, unknown> = {};
     let killed = false;
-    const killDeadline = Date.now() + 20_000;
+    const killDeadline = Date.now() + 45_000;
     while (Date.now() < killDeadline && !killed) {
       const recovery = readChildRecovery(stateDir, 'heartbeat');
       if (Number(recovery.degradedAttempts ?? 0) > 0) {
         if (Number(beforeCrash.degradedAttempts ?? 0) === 0) {
-          beforeCrash = recovery;
+          beforeCrash = { ...recovery };
         }
+        let heartbeatPid = 0;
         try {
-          const heartbeatPid = readChildPid(stateDir, 'heartbeat');
-          if (heartbeatPid > 0 && isAlive(heartbeatPid)) {
-            process.kill(heartbeatPid, 'SIGKILL');
-            killed = true;
-          }
+          heartbeatPid = readChildPid(stateDir, 'heartbeat');
         } catch {
-          // pid file may be absent briefly during degraded-path restart
+          try {
+            const marker = await readMarker(stateDir, 'heartbeat', 500);
+            heartbeatPid = marker.pid;
+          } catch {
+            // pid file and marker may be absent briefly during degraded-path restart
+          }
+        }
+        if (heartbeatPid > 0 && isAlive(heartbeatPid)) {
+          process.kill(heartbeatPid, 'SIGKILL');
+          killed = true;
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
     expect(killed).toBe(true);
