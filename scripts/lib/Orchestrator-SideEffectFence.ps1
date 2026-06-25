@@ -52,7 +52,10 @@ function Get-OrchestratorSideEffectLockRecord {
 }
 
 function Test-OrchestratorSideEffectLockStale {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [int]$MaxAgeSeconds = 0
+    )
 
     if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
         return $false
@@ -66,7 +69,12 @@ function Test-OrchestratorSideEffectLockStale {
     }
 
     if ($hasPid) {
-        return -not (Test-ProcessAlive -ProcessId $ownerPid)
+        if (-not (Test-ProcessAlive -ProcessId $ownerPid)) {
+            return $true
+        }
+        if ($MaxAgeSeconds -le 0) {
+            return $false
+        }
     }
 
     $startedAt = $null
@@ -79,7 +87,19 @@ function Test-OrchestratorSideEffectLockStale {
         }
     }
     if (-not $startedAt) {
-        $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
+        if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+            return $false
+        }
+        try {
+            $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
+        }
+        catch {
+            return $false
+        }
+    }
+
+    if ($MaxAgeSeconds -gt 0) {
+        return ((Get-Date).ToUniversalTime() - $startedAt).TotalSeconds -gt $MaxAgeSeconds
     }
 
     $maxAgeMinutes = Get-OrchestratorSideEffectLockMaxAgeMinutes
@@ -87,12 +107,15 @@ function Test-OrchestratorSideEffectLockStale {
 }
 
 function Clear-OrchestratorStaleSideEffectLockIfNeeded {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [int]$MaxAgeSeconds = 0
+    )
 
     if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
         return $false
     }
-    if (-not (Test-OrchestratorSideEffectLockStale -LockPath $LockPath)) {
+    if (-not (Test-OrchestratorSideEffectLockStale -LockPath $LockPath -MaxAgeSeconds $MaxAgeSeconds)) {
         return $false
     }
 

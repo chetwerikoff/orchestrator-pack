@@ -203,6 +203,22 @@ Operator adoption after merge:
 3. Confirm a gh-using child resolves the shim, e.g. from a child log tick or
    `command -v gh` inside a test marker when running supervisor tests locally.
 
+
+## GitHub fleet inventory read-through cache (Issue #453)
+
+Wake-supervisor children now share a cross-process open-PR list snapshot (short TTL) and
+SHA→committed-date memo in `AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/`. Inventory helpers
+(`Invoke-GhOpenPrList`, `Invoke-GhOpenPrListForNumbers`) route list/commit enrichment through
+this layer above the Issue #447 `scripts/gh` REST shim.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Optional observability: `export GH_FLEET_CACHE_AUDIT=1` and inspect
+   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `open_pr_list_hit` under routine ticks.
+4. Run the ≥72h measurement in `docs/github-fleet-cache-measurement.md` before opening Phase 2 (`#142`).
+
 ## Issue-keyed task-continuation nudge (Issue #430)
 
 Extends the #384 worker-nudge gate with `task-continuation` — issue-keyed tuples that stay
