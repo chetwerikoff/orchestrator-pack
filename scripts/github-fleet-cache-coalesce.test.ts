@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
-import { createGithubFleetCacheHarness, type FleetHarness } from './github-fleet-cache-test-harness.ts';
+import { createGithubFleetCacheHarness, type FleetHarness } from './github-fleet-cache-test-harness.js';
 
 const repoRoot = join(import.meta.dirname, '..');
 const scriptsDir = join(repoRoot, 'scripts');
