@@ -169,27 +169,27 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     if ($updatedCrash.rapidExits -ge $terminalRapidExits) {
         $terminalReason = "crash-loop circuit breaker: $($updatedCrash.rapidExits) rapid exits within ${rapidThresholdMs}ms lifespan threshold"
         & $LogWriter "$($ChildId) $terminalReason"
-        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
             attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
             terminal       = $true
             reason         = $terminalReason
             rapidExits     = $updatedCrash.rapidExits
             backoffUntilMs = 0
             lastExitMs     = $updatedCrash.lastExitMs
-        }
+        })
         return @{ allowed = $false; reason = 'circuit_breaker'; recovery = $recovery }
     }
 
     if ($updatedCrash.backoffSeconds -gt 0) {
         & $LogWriter "crash backoff: $($ChildId) rapidExits=$($updatedCrash.rapidExits); next restart in $($updatedCrash.backoffSeconds)s"
-        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
             attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
             terminal       = $false
             reason         = if ($recovery.reason) { [string]$recovery.reason } else { '' }
             rapidExits     = $updatedCrash.rapidExits
             backoffUntilMs = $updatedCrash.backoffUntilMs
             lastExitMs     = $updatedCrash.lastExitMs
-        }
+        })
         return @{
             allowed    = $false
             reason     = 'backoff_scheduled'
@@ -198,14 +198,14 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
         }
     }
 
-    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
         attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
         terminal       = $false
         reason         = if ($recovery.reason) { [string]$recovery.reason } else { '' }
         rapidExits     = $updatedCrash.rapidExits
         backoffUntilMs = $updatedCrash.backoffUntilMs
         lastExitMs     = $updatedCrash.lastExitMs
-    }
+    })
 
     return @{ allowed = $true; reason = 'restart'; rapidExit = $rapidExit; rapidExits = $updatedCrash.rapidExits }
 }

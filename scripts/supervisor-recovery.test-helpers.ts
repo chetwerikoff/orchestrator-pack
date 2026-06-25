@@ -222,6 +222,41 @@ export function readSupervisorLog(stateDir: string): string {
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
 }
 
+export function readChildRecovery(
+  stateDir: string,
+  childId: string,
+): Record<string, unknown> {
+  const statePath = path.join(stateDir, 'state.json');
+  if (!fs.existsSync(statePath)) {
+    return {};
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+    childRecovery?: Record<string, Record<string, unknown>>;
+  };
+  return state.childRecovery?.[childId] ?? {};
+}
+
+export function readChildPid(stateDir: string, childId: string): number {
+  const pidPath = path.join(stateDir, `${childId}.pid`);
+  return Number(fs.readFileSync(pidPath, 'utf8').trim());
+}
+
+export async function waitForSupervisorLogMatch(
+  stateDir: string,
+  pattern: RegExp,
+  timeoutMs = 20_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const log = readSupervisorLog(stateDir);
+    if (pattern.test(log)) {
+      return log;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  throw new Error(`timed out waiting for supervisor log match: ${pattern}`);
+}
+
 export function runPwsh(script: string): { stdout: string; stderr: string; status: number | null } {
   const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     cwd: repoRoot,
