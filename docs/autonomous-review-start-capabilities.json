@@ -76,12 +76,18 @@
       "surface": "shell",
       "path": "scripts/invoke-manual-review-run.ps1",
       "provenance": "manual-operator"
+    },
+    {
+      "id": "git-claimed-worktree-add",
+      "classification": "gated",
+      "surface": "claim-store",
+      "path": "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+      "provenance": "live-review-start-claim"
     }
   ],
   "sanctionedGitParents": [
     "reviewer-workspace-preflight.ps1",
-    "orchestrator-worktree-preflight.ps1",
-    "Invoke-OrchestratorClaimedReviewRun.ps1"
+    "orchestrator-worktree-preflight.ps1"
   ],
   "sanctionedGitParentMaxDepth": 2
 }
