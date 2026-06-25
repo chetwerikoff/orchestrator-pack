@@ -965,6 +965,55 @@ else {
 }
 
 Write-Host ''
+
+Write-Host ''
+Write-Host '== github fleet inventory cache (Issue #453) =='
+$fleetCacheBypassCheck = Join-Path $Root 'scripts/check-github-fleet-cache-bypass.ps1'
+if (Test-Path -LiteralPath $fleetCacheBypassCheck -PathType Leaf) {
+    & $fleetCacheBypassCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-github-fleet-cache-bypass.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'github fleet cache bypass guard failed (Issue #453)'
+    }
+    else {
+        Write-Check 'scripts/check-github-fleet-cache-bypass.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-github-fleet-cache-bypass.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing github fleet cache bypass guard (Issue #453)'
+}
+
+if (Test-Path -LiteralPath (Join-Path $Root 'package.json') -PathType Leaf) {
+    Push-Location $Root
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+            npm ci --no-audit --no-fund 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'github-fleet-cache/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+                Add-Failure 'github-fleet-cache vitest prerequisites failed (Issue #453)'
+            }
+        }
+        if ($LASTEXITCODE -eq 0) {
+            & npx vitest run scripts/github-fleet-cache-coalesce.test.ts scripts/github-fleet-cache-memo.test.ts scripts/github-fleet-cache-bypass-guard.test.ts scripts/github-fleet-cache-stale-snapshot.test.ts
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'github-fleet-cache/vitest' 'FAIL' "exit=$LASTEXITCODE"
+                Add-Failure 'github-fleet-cache vitest suite failed (Issue #453)'
+            }
+            else {
+                Write-Check 'github-fleet-cache/vitest' 'PASS' 'completed'
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+else {
+    Write-Check 'github-fleet-cache/vitest' 'FAIL' 'missing package.json'
+    Add-Failure 'Missing github-fleet-cache vitest prerequisites (Issue #453)'
+}
+
 Write-Host '== Draft discipline guards (Issue #221) =='
 $draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'
 $draftDisciplineFixtureDir = Join-Path $Root 'tests/fixtures/draft-discipline'

@@ -45,6 +45,7 @@ $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $Script:DeliveryDefaultState = @{ runs = @{}; lastTickMs = $null }
 
@@ -210,16 +211,17 @@ function Merge-DeliveryTickTracking {
 }
 
 function Get-OpenPrList {
-    $output = gh pr list --state open --json number,headRefOid --limit 200 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-        throw "gh pr list failed (exit ${LASTEXITCODE}): $text"
+    # Fail tick when gh pr list failed (exit) propagates from Invoke-GhOpenPrList.
+    try {
+        return @(Invoke-GhOpenPrList -RepoRoot $PackRoot)
     }
-    $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
-    if (-not $text.Trim()) {
-        return @()
+    catch {
+        $message = $_.Exception.Message
+        if ($message -match 'gh pr list failed') {
+            throw $message
+        }
+        throw
     }
-    return @($text | ConvertFrom-Json)
 }
 
 function Get-FixtureDeliveryPayload {
