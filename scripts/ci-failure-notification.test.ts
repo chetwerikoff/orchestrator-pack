@@ -903,6 +903,17 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     expect(result.reason).toBe('suppressed-live-worker');
   });
 
+  it('wrapper evaluate-suppressor mode returns live-worker suppression (review opk-rev-974)', () => {
+    const result = runWrapper('evaluate-suppressor', {
+      episode,
+      surface: 'orchestrator-turn',
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+      ...freshProgressClock(),
+    });
+    expect(result.decision).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+  });
+
   it('wrapper record mode enqueues pending episode', () => {
     const dir = tempStore();
     try {
