@@ -152,7 +152,16 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     if ($crashFields.backoffUntilMs -gt $nowMs) {
         $waitSeconds = [Math]::Ceiling(($crashFields.backoffUntilMs - $nowMs) / 1000.0)
         & $LogWriter "crash backoff: $($ChildId) waiting ${waitSeconds}s before restart (rapidExits=$($crashFields.rapidExits))"
-        if ($crashFields.lastExitMs -lt $nowMs) {
+        # Stamp the first observed exit for this child generation once; do not slide lastExitMs on
+        # every poll or rapid-exit math treats backoff end as the exit and resets rapidExits.
+        $needsExitStamp = $false
+        if ($ChildStartedMs -gt 0) {
+            $needsExitStamp = ($crashFields.lastExitMs -lt $ChildStartedMs)
+        }
+        elseif ($crashFields.lastExitMs -eq 0) {
+            $needsExitStamp = $true
+        }
+        if ($needsExitStamp) {
             Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
                 lastExitMs = $nowMs
             })
