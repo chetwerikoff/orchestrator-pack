@@ -89,7 +89,7 @@ function Get-ReviewTriggerReevalSnapshot {
         @($OpenPrs)
     }
     else {
-        @(ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+        ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     }
 
     $reviewRuns = Get-AoReviewRuns -Project $ProjectId

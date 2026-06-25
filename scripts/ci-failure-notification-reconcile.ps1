@@ -65,7 +65,7 @@ function Get-CiFailurePreSendSnapshot {
         [int]$PrNumber
     )
 
-    $resolvedOpenPrs = @(ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+    $resolvedOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
         @($resolvedOpenPrs | Where-Object { [int]$_.number -eq $PrNumber })
@@ -533,7 +533,7 @@ function Invoke-CiFailureEpisodeDelivery {
 function Get-CiFailureWorkerStateSnapshot {
     param([array]$OpenPrs = @())
 
-    $resolvedOpenPrs = if ($OpenPrs.Count -gt 0) { @($OpenPrs) } else { @(ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)) }
+    $resolvedOpenPrs = if ($OpenPrs.Count -gt 0) { @($OpenPrs) } else { ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot) }
     $sessions = Get-AoStatusSessions
     return @{
         sessions = @($sessions)
