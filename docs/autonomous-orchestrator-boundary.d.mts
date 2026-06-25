@@ -78,6 +78,8 @@ export declare function evaluateClaimPrResumeSafety(input: {
   prNumber?: number;
   liveOwnerPresent?: boolean;
   ownerLivenessKnown?: boolean;
+  staleArtifactPresent?: boolean;
+  staleArtifactKnown?: boolean;
   resumeMutexHeld?: boolean;
   concurrentAttemptLost?: boolean;
 }): ClaimPrResumeSafetyVerdict;

@@ -394,6 +394,18 @@ export function evaluateClaimPrResumeSafety(input) {
       reason: 'claim_pr_resume_cleanup_required',
     };
   }
+  if (input.staleArtifactPresent) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
+  if (input.staleArtifactKnown === false) {
+    return {
+      allowed: false,
+      reason: 'claim_pr_resume_cleanup_required',
+    };
+  }
   return { allowed: true, reason: 'claim_pr_resume_safe' };
 }
 

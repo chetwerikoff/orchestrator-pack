@@ -129,6 +129,7 @@ function Test-AutonomousSpawnDenied {
         [string]$PackRoot = '',
         [object]$FixturePolicy = $null,
         [object[]]$FixtureSessions = @(),
+        [hashtable]$FixtureResidualWorktrees = @{},
         [switch]$FixtureMode
     )
 
@@ -150,7 +151,7 @@ function Test-AutonomousSpawnDenied {
         $prNumber = Get-SpawnClaimPrNumberFromArgv -Argv $Argv
         if ($prNumber -gt 0) {
             $resumeGate = Test-AutonomousClaimPrResumePreconditions -PrNumber $prNumber `
-                -FixtureSessions $FixtureSessions -FixtureMode:$FixtureMode
+                -FixtureSessions $FixtureSessions -FixtureMode:$FixtureMode -FixtureResidualWorktrees $FixtureResidualWorktrees
             if (-not $resumeGate.safe) {
                 $claimPrResumeSafe = $false
                 $claimPrResumeReason = [string]$resumeGate.reason

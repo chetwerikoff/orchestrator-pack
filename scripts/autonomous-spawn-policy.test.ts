@@ -184,6 +184,13 @@ describe('claim-pr collision safety', () => {
         ownerLivenessKnown: false,
       }).reason,
     ).toBe('claim_pr_resume_cleanup_required');
+
+    expect(
+      evaluateClaimPrResumeSafety({
+        prNumber: 458,
+        staleArtifactPresent: true,
+      }).reason,
+    ).toBe('claim_pr_resume_cleanup_required');
   });
 
   it('duplicate resume: concurrent attempt loses mutex', () => {
@@ -223,6 +230,37 @@ describe('claim-pr collision safety', () => {
     const parsed = JSON.parse(output.trim());
     expect(parsed.liveOwnerPresent).toBe(false);
     expect(parsed.livenessKnown).toBe(true);
+  });
+
+  it('cleanup-required: denies claim-pr when terminated owner left residual worktree', () => {
+    const output = runPwsh(`
+      . ${psString(spawnGateLibPath)}
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $fixtureSessions = @(
+        @{ role = 'worker'; prNumber = 458; status = 'terminated'; name = 'opk-stale' }
+      )
+      $residual = @{ 'opk-stale' = $true }
+      $result = Test-AutonomousSpawnDenied -Argv @('spawn','--claim-pr','458') -FixtureMode -FixtureSessions $fixtureSessions -FixtureResidualWorktrees $residual
+      $result | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(output.trim());
+    expect(parsed.denied).toBe(true);
+    expect(parsed.reason).toBe('claim_pr_resume_cleanup_required');
+  });
+
+  it('allows claim-pr when terminated owner has no residual worktree artifacts', () => {
+    const output = runPwsh(`
+      . ${psString(spawnGateLibPath)}
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $fixtureSessions = @(
+        @{ role = 'worker'; prNumber = 458; status = 'terminated'; name = 'opk-clean' }
+      )
+      $result = Test-AutonomousClaimPrResumePreconditions -PrNumber 458 -FixtureMode -FixtureSessions $fixtureSessions
+      $result | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(output.trim());
+    expect(parsed.safe).toBe(true);
+    expect(parsed.reason).toBe('claim_pr_resume_safe');
   });
 
   it('internal git: mutating git still denied during allowed claim-pr path', () => {

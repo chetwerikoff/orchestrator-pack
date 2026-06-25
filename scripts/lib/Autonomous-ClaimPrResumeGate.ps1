@@ -195,6 +195,167 @@ function Get-AutonomousGateStatusSessions {
     return $sessions
 }
 
+function Get-AutonomousGateSessionPrNumber {
+    param([object]$Session)
+
+    $sessionPrNumber = 0
+    if ($null -ne $Session.prNumber) {
+        $sessionPrNumber = [int]$Session.prNumber
+    }
+    elseif ($Session.pr -match 'pull/(\d+)') {
+        $sessionPrNumber = [int]$Matches[1]
+    }
+    elseif ($Session.pr -match '^#?(\d+)$') {
+        $sessionPrNumber = [int]$Matches[1]
+    }
+    return $sessionPrNumber
+}
+
+function Get-AutonomousGateSessionId {
+    param([object]$Session)
+
+    foreach ($key in @('name', 'id', 'sessionId')) {
+        $value = [string]$Session.$key
+        if ($value) {
+            return $value.Trim()
+        }
+    }
+    return ''
+}
+
+function Test-AutonomousGateSessionRoleIsWorkerLike {
+    param([object]$Session)
+
+    return [string]$Session.role -match '^(?i)(worker|coding)$'
+}
+
+function Test-AutonomousGateSessionStatusIsTerminal {
+    param([object]$Session)
+
+    return [string]$Session.status -match '^(?i)(terminated|killed|exited|dead|closed)$'
+}
+
+function Get-AutonomousClaimPrProjectPaths {
+    param([string]$ProjectId = 'orchestrator-pack')
+
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $projectRoot = Join-Path (Join-Path $base 'projects') $ProjectId
+    return @{
+        ProjectRoot          = $projectRoot
+        WorktreesDir         = Join-Path $projectRoot 'worktrees'
+        OwnershipClaimsDir   = Join-Path $projectRoot 'pr-ownership-claims'
+        SessionsDir          = Join-Path $projectRoot 'sessions'
+    }
+}
+
+function Test-AutonomousClaimPrWorktreePathExists {
+    param(
+        [string]$Path,
+        [string]$SessionId,
+        [string]$WorktreesDir
+    )
+
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+    if ($SessionId -and $WorktreesDir) {
+        $defaultPath = Join-Path $WorktreesDir $SessionId
+        if (Test-Path -LiteralPath $defaultPath) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-AutonomousClaimPrStalePrArtifacts {
+    param(
+        [int]$PrNumber,
+        [object[]]$FixtureSessions = @(),
+        [hashtable]$FixtureResidualWorktrees = @{},
+        [switch]$FixtureMode,
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    $sessions = @()
+    if ($FixtureMode) {
+        $sessions = @($FixtureSessions)
+    }
+    else {
+        try {
+            $sessions = @(Get-AutonomousGateStatusSessions -IncludeTerminated)
+        }
+        catch {
+            return @{ staleArtifactPresent = $false; livenessKnown = $false }
+        }
+    }
+
+    $paths = Get-AutonomousClaimPrProjectPaths -ProjectId $ProjectId
+    $candidateSessionIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($session in $sessions) {
+        if (-not (Test-AutonomousGateSessionRoleIsWorkerLike -Session $session)) { continue }
+        if ((Get-AutonomousGateSessionPrNumber -Session $session) -ne $PrNumber) { continue }
+        if (-not (Test-AutonomousGateSessionStatusIsTerminal -Session $session)) { continue }
+        $sessionId = Get-AutonomousGateSessionId -Session $session
+        if ($sessionId) {
+            [void]$candidateSessionIds.Add($sessionId)
+        }
+    }
+
+    if (-not $FixtureMode) {
+        $claimPath = Join-Path $paths.OwnershipClaimsDir "pr-$PrNumber.json"
+        if (Test-Path -LiteralPath $claimPath -PathType Leaf) {
+            try {
+                $claim = Get-Content -LiteralPath $claimPath -Raw | ConvertFrom-Json
+                $ownerSessionId = [string]$claim.ownerSessionId
+                if ($ownerSessionId) {
+                    [void]$candidateSessionIds.Add($ownerSessionId)
+                }
+                $claimWorktree = [string]$claim.worktree
+                if ($claimWorktree -and (Test-Path -LiteralPath $claimWorktree)) {
+                    return @{
+                        staleArtifactPresent = $true
+                        livenessKnown        = $true
+                        detail               = "ownership_claim_worktree=$claimWorktree"
+                    }
+                }
+            }
+            catch { }
+        }
+    }
+
+    foreach ($sessionId in $candidateSessionIds) {
+        $hasResidual = $false
+        if ($FixtureMode) {
+            $hasResidual = $FixtureResidualWorktrees.ContainsKey($sessionId) -and [bool]$FixtureResidualWorktrees[$sessionId]
+        }
+        else {
+            $sessionWorktree = ''
+            $sessionMetaPath = Join-Path $paths.SessionsDir "$sessionId.json"
+            if (Test-Path -LiteralPath $sessionMetaPath -PathType Leaf) {
+                try {
+                    $meta = Get-Content -LiteralPath $sessionMetaPath -Raw | ConvertFrom-Json
+                    $sessionWorktree = [string]$meta.worktree
+                    if (-not $sessionWorktree -and $meta.runtimeHandle.data.workspacePath) {
+                        $sessionWorktree = [string]$meta.runtimeHandle.data.workspacePath
+                    }
+                }
+                catch { }
+            }
+            $hasResidual = Test-AutonomousClaimPrWorktreePathExists -Path $sessionWorktree -SessionId $sessionId -WorktreesDir $paths.WorktreesDir
+        }
+        if ($hasResidual) {
+            return @{
+                staleArtifactPresent = $true
+                livenessKnown        = $true
+                detail               = "residual_worktree_session=$sessionId"
+            }
+        }
+    }
+
+    return @{ staleArtifactPresent = $false; livenessKnown = $true; detail = '' }
+}
+
 function Test-AutonomousClaimPrLiveOwner {
     param(
         [int]$PrNumber,
@@ -221,17 +382,7 @@ function Test-AutonomousClaimPrLiveOwner {
             if ($role -notmatch '^(?i)(worker|coding)$') { continue }
             $status = [string]$session.status
             if ($status -match '^(?i)(terminated|killed|exited|dead|closed)$') { continue }
-            $sessionPrNumber = 0
-            if ($null -ne $session.prNumber) {
-                $sessionPrNumber = [int]$session.prNumber
-            }
-            elseif ($session.pr -match 'pull/(\d+)') {
-                $sessionPrNumber = [int]$Matches[1]
-            }
-            elseif ($session.pr -match '^#?(\d+)$') {
-                $sessionPrNumber = [int]$Matches[1]
-            }
-            if ($sessionPrNumber -eq $PrNumber) {
+            if ((Get-AutonomousGateSessionPrNumber -Session $session) -eq $PrNumber) {
                 $session
             }
         }
@@ -247,6 +398,7 @@ function Test-AutonomousClaimPrResumePreconditions {
     param(
         [int]$PrNumber,
         [object[]]$FixtureSessions = @(),
+        [hashtable]$FixtureResidualWorktrees = @{},
         [switch]$FixtureMode
     )
 
@@ -261,6 +413,13 @@ function Test-AutonomousClaimPrResumePreconditions {
 
     $owner = Test-AutonomousClaimPrLiveOwner -PrNumber $PrNumber -FixtureSessions $FixtureSessions -FixtureMode:$FixtureMode
     if ($owner.liveOwnerPresent -or -not $owner.livenessKnown) {
+        Release-AutonomousClaimPrResumeMutex -Mutex $mutex
+        return @{ safe = $false; reason = 'claim_pr_resume_cleanup_required' }
+    }
+
+    $stale = Test-AutonomousClaimPrStalePrArtifacts -PrNumber $PrNumber -FixtureSessions $FixtureSessions `
+        -FixtureResidualWorktrees $FixtureResidualWorktrees -FixtureMode:$FixtureMode
+    if (-not $stale.livenessKnown -or $stale.staleArtifactPresent) {
         Release-AutonomousClaimPrResumeMutex -Mutex $mutex
         return @{ safe = $false; reason = 'claim_pr_resume_cleanup_required' }
     }
