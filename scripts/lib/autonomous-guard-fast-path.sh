@@ -79,6 +79,32 @@ __ao_autonomous_git_argv_tail_has_positional_operand_from() {
   return 1
 }
 
+__ao_autonomous_git_token_is_config_get_option() {
+  case "${1,,}" in
+    --get | --get-all | --get-regexp | --get-urlmatch) return 0 ;;
+    --get=* | --get-all=* | --get-regexp=* | --get-urlmatch=*) return 0 ;;
+  esac
+  return 1
+}
+
+__ao_autonomous_git_argv_config_tail_is_get_read_only_from() {
+  local sub_index="$1"
+  shift
+  local saw_get=0 j config_token
+  for ((j = sub_index + 1; j <= $#; j++)); do
+    config_token="${!j}"
+    if __ao_autonomous_git_token_is_config_get_option "${config_token}"; then
+      saw_get=1
+      continue
+    fi
+    [[ "${config_token}" == -* ]] && continue
+    [[ ${saw_get} -eq 1 ]] && continue
+    return 1
+  done
+  [[ ${saw_get} -eq 1 ]] && return 0
+  return 1
+}
+
 __ao_autonomous_git_argv_is_read_only() {
   if [[ $# -eq 0 ]]; then
     return 0
@@ -117,14 +143,7 @@ __ao_autonomous_git_argv_is_read_only() {
       return 1
       ;;
     config)
-      local j config_token
-      for ((j = sub_index + 1; j <= $#; j++)); do
-        config_token="${!j}"
-        case "${config_token,,}" in
-          --get | --get-all | --get-regexp | --get-urlmatch) return 0 ;;
-          --get=* | --get-all=* | --get-regexp=* | --get-urlmatch=*) return 0 ;;
-        esac
-      done
+      __ao_autonomous_git_argv_config_tail_is_get_read_only_from "${sub_index}" "$@" && return 0
       return 1
       ;;
     branch)

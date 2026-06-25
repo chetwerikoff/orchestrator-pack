@@ -45,6 +45,8 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
     expect(isMutatingGitArgv(['branch', '--show-current'])).toBe(false);
     expect(isMutatingGitArgv(['branch', 'foo--show-current'])).toBe(true);
     expect(isMutatingGitArgv(['config', 'user.name', 'foo--get'])).toBe(true);
+    expect(isMutatingGitArgv(['config', 'user.name', '--get'])).toBe(true);
+    expect(isMutatingGitArgv(['config', '--get', 'user.name'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin--dry-run'])).toBe(true);
     expect(isAutonomousGitReadFastPath(['status', '--short', '--branch'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['status', '--json', '--reports', 'full'])).toBe(true);
@@ -73,6 +75,7 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
       '__ao_autonomous_git_argv_is_read_only branch foo--show-current && exit 2',
       '__ao_autonomous_git_argv_is_read_only config --get remote.origin.url || exit 3',
       '__ao_autonomous_git_argv_is_read_only config user.name foo--get && exit 4',
+      '__ao_autonomous_git_argv_is_read_only config user.name --get && exit 7',
       '__ao_autonomous_git_argv_is_read_only fetch --dry-run || exit 5',
       '__ao_autonomous_git_argv_is_read_only fetch origin--dry-run && exit 6',
       'exit 0',

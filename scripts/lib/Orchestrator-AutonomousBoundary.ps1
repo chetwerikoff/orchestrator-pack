@@ -628,6 +628,39 @@ function Test-GitArgvTailHasPositionalOperand {
     return $false
 }
 
+function Test-GitTokenIsConfigGetOption {
+    param([string]$Token)
+
+    switch -Regex ($Token) {
+        '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)$' { return $true }
+        '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)=' { return $true }
+    }
+    return $false
+}
+
+function Test-GitArgvConfigTailIsGetReadOnly {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex
+    )
+
+    $sawGet = $false
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        $token = [string]$Argv[$i]
+        if (Test-GitTokenIsConfigGetOption -Token $token) {
+            $sawGet = $true
+            continue
+        }
+        if ($token.StartsWith('-')) {
+            continue
+        }
+        if (-not $sawGet) {
+            return $false
+        }
+    }
+    return $sawGet
+}
+
 function Test-GitArgvIsMutating {
     param([string[]]$Argv)
 
@@ -663,12 +696,8 @@ function Test-GitArgvIsMutating {
             return $true
         }
         '^(?i)config$' {
-            for ($i = $index + 1; $i -lt $Argv.Count; $i++) {
-                $token = [string]$Argv[$i]
-                switch -Regex ($token) {
-                    '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)$' { return $false }
-                    '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)=' { return $false }
-                }
+            if (Test-GitArgvConfigTailIsGetReadOnly -Argv $Argv -StartIndex ($index + 1)) {
+                return $false
             }
             return $true
         }

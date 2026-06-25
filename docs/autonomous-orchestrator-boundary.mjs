@@ -162,6 +162,43 @@ function gitArgvTailHasExactOption(list, startIndex, option) {
  * @param {string[]} list
  * @param {number} startIndex
  */
+
+function gitTokenIsConfigGetOption(token) {
+  const lowered = String(token).toLowerCase();
+  return (
+    lowered === '--get'
+    || lowered === '--get-all'
+    || lowered === '--get-regexp'
+    || lowered === '--get-urlmatch'
+    || lowered.startsWith('--get=')
+    || lowered.startsWith('--get-all=')
+    || lowered.startsWith('--get-regexp=')
+    || lowered.startsWith('--get-urlmatch=')
+  );
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ */
+function gitArgvConfigTailIsGetReadOnly(list, startIndex) {
+  let sawGet = false;
+  for (let tokenIndex = startIndex; tokenIndex < list.length; tokenIndex += 1) {
+    const token = list[tokenIndex];
+    if (gitTokenIsConfigGetOption(token)) {
+      sawGet = true;
+      continue;
+    }
+    if (String(token).startsWith('-')) {
+      continue;
+    }
+    if (!sawGet) {
+      return false;
+    }
+  }
+  return sawGet;
+}
+
 function gitArgvTailHasPositionalOperand(list, startIndex) {
   for (let index = startIndex; index < list.length; index += 1) {
     if (!String(list[index]).startsWith('-')) {
@@ -195,22 +232,7 @@ export function isMutatingGitArgv(argv) {
     return stashSub !== 'list' && stashSub !== 'show';
   }
   if (sub === 'config') {
-    for (let tokenIndex = index + 1; tokenIndex < list.length; tokenIndex += 1) {
-      const token = list[tokenIndex].toLowerCase();
-      if (
-        token === '--get'
-        || token === '--get-all'
-        || token === '--get-regexp'
-        || token === '--get-urlmatch'
-        || token.startsWith('--get=')
-        || token.startsWith('--get-all=')
-        || token.startsWith('--get-regexp=')
-        || token.startsWith('--get-urlmatch=')
-      ) {
-        return false;
-      }
-    }
-    return true;
+    return !gitArgvConfigTailIsGetReadOnly(list, index + 1);
   }
   if (sub === 'branch') {
     if (gitArgvTailHasPositionalOperand(list, index + 1)) {

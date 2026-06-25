@@ -147,6 +147,8 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(isMutatingGitArgv(['branch', '--show-current'])).toBe(false);
     expect(isMutatingGitArgv(['branch', 'foo--show-current'])).toBe(true);
     expect(isMutatingGitArgv(['config', 'user.name', 'foo--get'])).toBe(true);
+    expect(isMutatingGitArgv(['config', 'user.name', '--get'])).toBe(true);
+    expect(isMutatingGitArgv(['config', '--get', 'user.name'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin--dry-run'])).toBe(true);
     expect(isMutatingGitArgv(['branch', '-m', 'a', 'b'])).toBe(true);
     expect(isMutatingGitArgv(['fetch', '--dry-run'])).toBe(false);
