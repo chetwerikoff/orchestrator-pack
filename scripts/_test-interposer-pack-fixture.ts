@@ -7,6 +7,7 @@ import { repoRoot } from './_test-pwsh-helpers.js';
 
 export const CANONICAL_INTERPOSER_SCRIPT_NAMES = [
   '_resolve-pwsh.sh',
+  '_resolve-system-git.sh',
   '_invoke-system-git.sh',
   'ao',
   'git',

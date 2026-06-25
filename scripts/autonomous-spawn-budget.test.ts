@@ -24,14 +24,15 @@ import { repoRoot } from './_test-pwsh-helpers.js';
 describe('autonomous spawn budget contract (Issue #462)', () => {
   const budgetLoad = loadAutonomousSpawnBudget(repoRoot);
   expect(budgetLoad.ok).toBe(true);
-  const budget = budgetLoad.budget!;
+  const budget = budgetLoad.budget as Record<string, any>;
+  const classes = budget.classes as Record<string, Record<string, unknown>>;
 
   it('loads spawn budget manifest with mandatory load-bearing classes', () => {
     expect(budget.version).toBe('autonomous-spawn-budget/v1');
-    expect(budget.classes['noop-shell']).toBeTruthy();
-    expect(budget.classes['git-ao-read']).toBeTruthy();
-    expect(budget.classes['denied-actions']).toBeTruthy();
-    expect(budget.classes['supervisor-child-tick']).toBeTruthy();
+    expect(classes['noop-shell']).toBeTruthy();
+    expect(classes['git-ao-read']).toBeTruthy();
+    expect(classes['denied-actions']).toBeTruthy();
+    expect(classes['supervisor-child-tick']).toBeTruthy();
   });
 
   it('classifies mandatory incident read shapes as read fast-path eligible', () => {
@@ -64,7 +65,7 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
 
   it('load-bearing B: mandatory read-only git/ao mix eliminates per-command pwsh guard startup', () => {
     runGitRepoSpawnBudgetCase(({ pack, auditFile, repoDir }) => {
-      const repetitions = Number(budget.classes['git-ao-read'].repetitionsPerCommand ?? 8);
+      const repetitions = Number(classes['git-ao-read'].repetitionsPerCommand ?? 8);
       const measured = runMandatoryReadCommandMix(pack, auditFile, repoDir, repetitions);
       const legacyTotal = simulateLegacyGuardPerCommand(
         measured.commandCount,

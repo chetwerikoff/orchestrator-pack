@@ -13,37 +13,8 @@ GUARD="$SCRIPT_DIR/git-autonomous-guard.ps1"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/autonomous-guard-fast-path.sh"
 
-resolve_system_git_for_fast_path() {
-  local pack_root config system_path configured
-  pack_root="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  config="${pack_root}/.ao/autonomous-real-binaries.json"
-  if [[ -f "${config}" ]]; then
-    system_path="$(python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(c.get('gitSystemBinary') or '')" "${config}" 2>/dev/null || true)"
-    if [[ -n "${system_path}" && -x "${system_path}" ]]; then
-      printf '%s\n' "${system_path}"
-      return 0
-    fi
-    configured="$(python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(c.get('git',''))" "${config}" 2>/dev/null || true)"
-    if [[ -n "${configured}" && "${configured}" != *git-real-binary* && -x "${configured}" ]]; then
-      printf '%s\n' "${configured}"
-      return 0
-    fi
-  fi
-
-  if [[ -n "${GIT_SYSTEM_BINARY:-}" && -x "${GIT_SYSTEM_BINARY}" ]]; then
-    printf '%s\n' "${GIT_SYSTEM_BINARY}"
-    return 0
-  fi
-
-  for candidate in /usr/bin/git /bin/git /usr/local/bin/git; do
-    if [[ -x "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-
-  printf 'git\n'
-}
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/_resolve-system-git.sh"
 
 resolve_real_git() {
   local pack_root config candidate resolved dir self
@@ -87,7 +58,7 @@ resolve_real_git() {
 
 if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]]; then
   if __ao_autonomous_git_argv_is_read_only "$@"; then
-    exec "$(resolve_system_git_for_fast_path)" "$@"
+    exec "$(resolve_system_git)" "$@"
   fi
   __ao_autonomous_audit_guard_pwsh_spawn "git"
   exec "$(resolve_pwsh)" -NoProfile -ExecutionPolicy Bypass -File "$GUARD" "$@"
