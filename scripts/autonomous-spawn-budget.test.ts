@@ -23,6 +23,7 @@ import {
   simulateLegacyGuardPerCommand,
   withSpawnBudgetPack,
 } from './_test-spawn-budget-fixture.js';
+import { createIsolatedInterposerPack } from './_test-interposer-pack-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
 describe('autonomous spawn budget contract (Issue #462)', () => {
@@ -109,6 +110,62 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
       { encoding: 'utf8' },
     );
     expect(result.status).toBe(0);
+  });
+
+  it('resolve_system_git rejects pack git wrapper paths from gitSystemBinary config', () => {
+    const pack = createIsolatedInterposerPack();
+    try {
+      for (const misconfigured of [pack.gitShimPath, path.join(pack.scriptsDir, 'git-real-binary')]) {
+        writeFileSync(
+          path.join(pack.packRoot, '.ao/autonomous-real-binaries.json'),
+          `${JSON.stringify({ gitSystemBinary: misconfigured }, null, 2)}\n`,
+        );
+        const result = spawnSync(
+          'bash',
+          [
+            '-c',
+            [
+              `source "${path.join(pack.scriptsDir, '_resolve-system-git.sh')}"`,
+              'resolved="$(resolve_system_git)"',
+              `shim="${pack.gitShimPath}"`,
+              `realBinary="${path.join(pack.scriptsDir, 'git-real-binary')}"`,
+              '[[ "${resolved}" == "${shim}" ]] && exit 1',
+              '[[ "${resolved}" == "${realBinary}" ]] && exit 2',
+              '[[ -x "${resolved}" || "${resolved}" == git ]] || exit 3',
+              'exit 0',
+            ].join('\n'),
+          ],
+          { encoding: 'utf8' },
+        );
+        expect(result.status).toBe(0);
+      }
+    } finally {
+      pack.cleanup();
+    }
+  });
+
+  it('git read fast path stays spawn-free when gitSystemBinary mispoints at pack git shim', () => {
+    runGitRepoSpawnBudgetCase(({ pack, auditFile, repoDir }) => {
+      writeFileSync(
+        path.join(pack.packRoot, '.ao/autonomous-real-binaries.json'),
+        `${JSON.stringify(
+          {
+            ao: path.join(pack.packRoot, 'ao-read-stub.sh'),
+            gitSystemBinary: pack.gitShimPath,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const result = runAutonomousSurfaceCommand(
+        pack,
+        ['git', 'status', '--short'],
+        { AO_AUTONOMOUS_GUARD_SPAWN_AUDIT_FILE: auditFile },
+        repoDir,
+      );
+      expect(result.status).toBe(0);
+      expect(result.pwshGuardSpawns).toBe(0);
+    });
   });
 
   it('ao read fast path ignores turn-visible AO_REAL_BINARY on autonomous surface', () => {
