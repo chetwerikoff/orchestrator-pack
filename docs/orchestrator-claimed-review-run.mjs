@@ -22,6 +22,10 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import {
+  REPEATED_TIMEOUT_ESCALATION_REASON,
+  resolveFailedRunRetryEligibility,
+} from './codex-reviewer-timeout-retry.mjs';
+import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
   loadMergedAutonomousCapabilitiesInventory,
@@ -36,6 +40,23 @@ export const ATOMIC_REVIEW_START_CLAIM_CAPABILITY = 'review-start-claim-atomic/v
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
 export const AUTONOMOUS_SURFACE_ENV = 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE';
 export const CLAIMED_REVIEW_RUN_BYPASS_ENV = 'AO_CLAIMED_REVIEW_RUN_BYPASS';
+
+
+function resolveCoverageRetryEligible(latest, rows) {
+  const prNumber = Number(latest?.prNumber);
+  const headSha = normalizeSha(latest?.targetSha);
+  if (!prNumber || !headSha) {
+    return {
+      retryEligible: (latest?.retryEligible ?? latest?.retryCount == null) !== false,
+      escalationReason: null,
+    };
+  }
+  const retryState = resolveFailedRunRetryEligibility(latest, rows, prNumber, headSha);
+  return {
+    retryEligible: retryState.retryEligible !== false,
+    escalationReason: retryState.escalationReason ?? null,
+  };
+}
 
 const KNOWN_RUN_STATUSES = new Set([
   ...IN_FLIGHT_REVIEW_STATUSES,
@@ -124,19 +145,22 @@ export function classifyCurrentHeadCoverage(rows) {
   const status = String(latest?.status ?? '').toLowerCase();
   if (status === 'failed' || status === 'cancelled') {
     const findingCount = Number(latest?.findingCount ?? 0);
+    const retry = resolveCoverageRetryEligible(latest, list);
     if (findingCount === 0 && status === 'failed') {
       return {
         verdict: 'failed_or_cancelled',
         reason: 'empty_failed_not_clean',
         status,
-        retryEligible: latest?.retryEligible ?? latest?.retryCount == null,
+        retryEligible: retry.retryEligible,
+        escalationReason: retry.escalationReason ?? undefined,
       };
     }
     return {
       verdict: 'failed_or_cancelled',
       reason: 'failed_or_cancelled_on_head',
       status,
-      retryEligible: latest?.retryEligible ?? latest?.retryCount == null,
+      retryEligible: retry.retryEligible,
+      escalationReason: retry.escalationReason ?? undefined,
     };
   }
   if (isRunCoveringHead(latest)) {
@@ -255,8 +279,13 @@ export function evaluateOrchestratorTurnGate(input) {
   });
   if (!headReady.eligible && hasFailedOrCancelledOnHead(toArray(input.reviewRuns), prNumber, currentHead)) {
     const failed = findFailedOrCancelledRunForHead(toArray(input.reviewRuns), prNumber, currentHead);
-    const retryEligible = failed?.retryEligible ?? failed?.retryCount == null;
-    if (retryEligible === false) {
+    const retryState = resolveFailedRunRetryEligibility(
+      failed,
+      toArray(input.reviewRuns),
+      prNumber,
+      currentHead,
+    );
+    if (retryState.retryEligible === false) {
       return {
         launch: false,
         reason: 'retry_bound_exhausted',
@@ -264,6 +293,7 @@ export function evaluateOrchestratorTurnGate(input) {
         auditShape: 'per_start_denial',
         currentHeadSha: currentHead,
         staleEventHead,
+        escalationReason: retryState.escalationReason ?? REPEATED_TIMEOUT_ESCALATION_REASON,
       };
     }
   } else if (!headReady.eligible) {

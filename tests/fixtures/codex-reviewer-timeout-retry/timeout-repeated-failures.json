@@ -1,0 +1,24 @@
+{
+  "prNumber": 461,
+  "headSha": "abc46100000000000000000000000000000000000",
+  "runs": [
+    {
+      "id": "timeout-first",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict (effectiveBudgetMs=600000, softDeadlineMs=510000)",
+      "createdAt": "2026-06-20T00:00:00.000Z"
+    },
+    {
+      "id": "timeout-second",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict (effectiveBudgetMs=600000, softDeadlineMs=510000)",
+      "createdAt": "2026-06-20T01:00:00.000Z"
+    }
+  ]
+}

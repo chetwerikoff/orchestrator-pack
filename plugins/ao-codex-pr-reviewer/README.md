@@ -15,6 +15,13 @@ Run PR-level review with Codex CLI while AO planning and coding stay on Cursor C
 - Reviewer: Codex CLI, via AO's built-in review mechanism (primary) or GitHub
   Actions workflow (alternative for CI-based review).
 
+## Reviewer time budget (Issue #461)
+
+- Effective hard budget defaults to **10 minutes** (`AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`).
+- Slow/full-suite test commands are blocked by `bin/command-guard/*` wrappers prepended to `PATH` for trusted local review.
+- Timeout before verdict emits `reviewer-evidence` with `failureClass: timeout_no_verdict` (distinct from empty-output failure).
+- Repeated same-head `timeout_no_verdict` failures stop automatic retries at review-start with `escalationReason: repeated_timeout_no_verdict`.
+
 ## How review works
 
 Local Codex PR review **is active**. AO drives it through `ao review run`,

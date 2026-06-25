@@ -15,6 +15,12 @@ import {
   scopeUnavailableWarningFinding,
 } from './scope_context.js';
 import { runCodexReview, type RunCodexReviewResult } from './run_review.js';
+import { createReviewerBudgetLedger } from './reviewer_budget.js';
+import {
+  buildReviewerFailureLogLines,
+  classifyReviewerFailure,
+  isSpawnTimeoutResult,
+} from './reviewer_failure.js';
 import type { ReviewSource, StructuredFinding } from './types.js';
 
 const REVIEW_FAILURE_LINE =
@@ -66,6 +72,7 @@ export interface ReviewOptions {
   fixtureStdout?: string;
   fixtureProcessJsonl?: string;
   fixtureSessionJsonl?: string;
+  fixtureTimedOut?: boolean;
   githubCommentFile?: string;
   skipCodex?: boolean;
 }
@@ -143,6 +150,8 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     };
   }
 
+  const budgetLedger = createReviewerBudgetLedger();
+
   const codex = runCodexReview({
     repoRoot: options.repoRoot,
     baseRef: options.baseRef,
@@ -153,7 +162,20 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     fixtureStdout: options.fixtureStdout,
     fixtureProcessJsonl: options.fixtureProcessJsonl,
     fixtureSessionJsonl: options.fixtureSessionJsonl,
+    fixtureTimedOut: options.fixtureTimedOut,
+    budgetLedger,
   });
+
+  if (isSpawnTimeoutResult(codex)) {
+    const failureClass = classifyReviewerFailure({ codex, ledger: codex.budgetLedger });
+    logLines.push(...buildReviewerFailureLogLines(codex.budgetLedger, failureClass));
+    return {
+      exitCode: 1,
+      logLines,
+      aoStdout: '',
+      structuredFindings: [],
+    };
+  }
 
   if (codex.exitCode !== 0) {
     logLines.push(...summarizeReviewerProcessFailure(codex));
@@ -175,6 +197,8 @@ export function executeReview(options: ReviewOptions): ReviewResult {
   });
 
   if (parsed.kind === 'error') {
+    const failureClass = classifyReviewerFailure({ codex, parsed, ledger: codex.budgetLedger });
+    logLines.push(...buildReviewerFailureLogLines(codex.budgetLedger, failureClass));
     logLines.push(parsed.message);
     return {
       exitCode: 1,

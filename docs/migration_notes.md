@@ -614,6 +614,31 @@ Regression guards: `scripts/check-orchestrator-review-head-coverage.ps1`,
 `scripts/review-orchestrator-loop.test.ts` (via `npm test`), plus updated
 `scripts/check-orchestrator-review-idempotency.ps1` (via `scripts/verify.ps1`).
 
+### Codex reviewer time budget and timeout escalation (Issue #461)
+
+The Codex reviewer wrapper now exposes a single effective wall-clock budget
+(default **600s**) with a softer deadline before hard kill. Reviewer-spawned
+slow/full-suite local tests are denied by exec-level PATH guards — prompt text
+alone is not enforcement.
+
+**Distinguish failure shapes in `terminationReason` / `ao review list --json`:**
+
+| Signal | Meaning |
+| --- | --- |
+| `reviewer-evidence` with `failureClass: timeout_no_verdict` | Hard/soft budget elapsed before a verdict; not empty-output parse failure |
+| `reviewer produced empty output` | Codex exited but emitted no valid review payload |
+| `review-test-budget:` / `testBudgetDecision: skipped_or_denied_slow_test` | Slow/full-suite command blocked to preserve review budget |
+| `escalationReason: repeated_timeout_no_verdict` | Same-head timeout failures exhausted automatic retries at review-start |
+
+Optional env overrides (operator checkout only):
+
+- `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`
+- `AO_CODEX_REVIEW_SOFT_DEADLINE_MS`
+- `AO_CODEX_REVIEW_TEST_BUDGET_MS`
+- `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` (default `1` retry after first timeout)
+
+No AO restart required for env-only tuning; wrapper reads env per run.
+
 ### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 
 **REVIEW_COMMAND** is reviewer-agnostic: `scripts/invoke-pack-review.ps1` (see
