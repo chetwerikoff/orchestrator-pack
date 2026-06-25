@@ -546,24 +546,28 @@ export function evaluateAutonomousSpawnPolicyBoundary(input) {
 export function isAutonomousAoReadFastPath(argv) {
   const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
   let sub = '';
+  let next = '';
   for (const token of list) {
     if (token.startsWith('-')) {
       continue;
     }
-    sub = token.toLowerCase();
+    if (!sub) {
+      sub = token.toLowerCase();
+      continue;
+    }
+    next = token.toLowerCase();
     break;
   }
   if (!sub) {
     return false;
   }
-  if (sub === 'spawn' || sub === 'send') {
-    return false;
+  if (sub === 'status') {
+    return true;
   }
-  const lowered = list.map((part) => part.toLowerCase());
-  if (lowered.includes('review') && lowered.includes('run')) {
-    return false;
+  if (sub === 'review') {
+    return next === 'list';
   }
-  return true;
+  return false;
 }
 
 /**

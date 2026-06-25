@@ -169,23 +169,28 @@ __ao_autonomous_git_argv_is_read_only() {
 }
 
 __ao_autonomous_ao_argv_is_read_fast_path() {
-  local sub="" found=0 arg
+  local sub="" next="" found=0 arg
   for arg in "$@"; do
     [[ "${arg}" == -* ]] && continue
-    sub="${arg,,}"
-    found=1
+    if [[ ${found} -eq 0 ]]; then
+      sub="${arg,,}"
+      found=1
+      continue
+    fi
+    next="${arg,,}"
     break
   done
   [[ ${found} -eq 0 ]] && return 1
-  [[ "${sub}" == "spawn" ]] && return 1
-  if [[ "${sub}" == "send" ]]; then
-    return 1
-  fi
-  for arg in "$@"; do
-    [[ "${arg,,}" == "run" ]] || continue
-    for probe in "$@"; do
-      [[ "${probe,,}" == "review" ]] && return 1
-    done
-  done
-  return 0
+  case "${sub}" in
+    status)
+      return 0
+      ;;
+    review)
+      [[ "${next}" == "list" ]] && return 0
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }

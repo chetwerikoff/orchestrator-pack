@@ -53,6 +53,9 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
     expect(isAutonomousAoReadFastPath(['review', 'list', '--json'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['send', 'opk-worker', 'ping'])).toBe(false);
     expect(isAutonomousAoReadFastPath(['review', 'run', 'opk-1'])).toBe(false);
+    expect(isAutonomousAoReadFastPath(['stop'])).toBe(false);
+    expect(isAutonomousAoReadFastPath(['start', 'orchestrator-pack'])).toBe(false);
+    expect(isAutonomousAoReadFastPath(['spawn', 'opk-worker'])).toBe(false);
   });
 
   it('bash fast path classifies git stash list/show without bad substitution', () => {
@@ -78,6 +81,21 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
       '__ao_autonomous_git_argv_is_read_only config user.name --get && exit 7',
       '__ao_autonomous_git_argv_is_read_only fetch --dry-run || exit 5',
       '__ao_autonomous_git_argv_is_read_only fetch origin--dry-run && exit 6',
+      'exit 0',
+    ].join('\n');
+    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+  });
+
+  it('bash ao fast path allowlists only status and review list', () => {
+    const script = [
+      `source "${repoRoot}/scripts/lib/autonomous-guard-fast-path.sh"`,
+      '__ao_autonomous_ao_argv_is_read_fast_path status --json || exit 1',
+      '__ao_autonomous_ao_argv_is_read_fast_path review list --json || exit 2',
+      '__ao_autonomous_ao_argv_is_read_fast_path stop && exit 3',
+      '__ao_autonomous_ao_argv_is_read_fast_path start orchestrator-pack && exit 4',
+      '__ao_autonomous_ao_argv_is_read_fast_path send opk-worker ping && exit 5',
+      '__ao_autonomous_ao_argv_is_read_fast_path review run opk-1 && exit 6',
       'exit 0',
     ].join('\n');
     const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
