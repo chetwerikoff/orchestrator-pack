@@ -41,6 +41,7 @@ $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
@@ -229,7 +230,7 @@ function Get-FixtureDeliveryPayload {
     return @{
         reviewRuns          = @($fixture.reviewRuns)
         sessions            = @($fixture.sessions)
-        openPrs             = @($fixture.openPrs)
+        openPrs             = ConvertTo-GhOpenPrArray -OpenPrs $fixture.openPrs
         tracking            = $fixture.tracking
         nowMs               = [long]$fixture.nowMs
         config              = $fixture.config
@@ -260,7 +261,7 @@ function Invoke-PlannedReviewSend {
 
     $intentClass = 'review-findings-redelivery'
     $cycleKey = "redelivery:${RunId}:${Attempt}"
-    $openPrs = @(Get-OpenPrList)
+    $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
     $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
         -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
     if (-not $targetResolution.ok) {
@@ -356,7 +357,7 @@ function Invoke-DeliveryTick {
         $payload = Get-FixtureDeliveryPayload -Path $Fixture
         $reviewRuns = $payload.reviewRuns
         $sessions = $payload.sessions
-        $openPrs = @($payload.openPrs)
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs $payload.openPrs
         $tracking = if ($payload.tracking) { $payload.tracking } else { $TrackingState }
         $now = if ($payload.nowMs) { [long]$payload.nowMs } else { $NowMs }
         $tickConfig = if ($payload.config) { $payload.config } else { $Config }
@@ -374,7 +375,7 @@ function Invoke-DeliveryTick {
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
-        $openPrs = Get-OpenPrList
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
         $tracking = $TrackingState
         $now = $NowMs
         $tickConfig = $Config
@@ -385,7 +386,7 @@ function Invoke-DeliveryTick {
     $plan = Invoke-DeliveryFilterCli -Subcommand 'plan' -Payload @{
         reviewRuns          = @($reviewRuns)
         sessions            = @($sessions)
-        openPrs             = @($openPrs)
+        openPrs             = ConvertTo-GhOpenPrArray -OpenPrs $openPrs
         tracking            = $tracking
         nowMs               = $now
         config              = $tickConfig

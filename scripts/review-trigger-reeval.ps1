@@ -89,7 +89,7 @@ function Get-ReviewTriggerReevalSnapshot {
         @($OpenPrs)
     }
     else {
-        @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+        @(ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot))
     }
 
     $reviewRuns = Get-AoReviewRuns -Project $ProjectId
@@ -121,7 +121,7 @@ function Get-ReviewTriggerReevalScopedOpenPrsFromGitHub {
         return @()
     }
 
-    $openPrList = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
+    $openPrList = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     return @($openPrList | Where-Object { $activePrNumbers.ContainsKey([string][int]$_.number) })
 }
 
@@ -206,7 +206,7 @@ function Invoke-ReviewTriggerReevalTick {
                     ProjectId            = $ProjectId
                     ResolveFreshSnapshot = {
                         param($planned)
-                        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+                        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
                         $targetPr = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
                         Get-ReviewTriggerReevalSnapshot -OpenPrs $targetPr -ScopedOnly
                     }

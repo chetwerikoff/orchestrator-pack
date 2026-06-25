@@ -10,7 +10,7 @@ param(
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
     [string]$MarkerDir = '',
-    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error', 'instant-exit')]
+    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error', 'instant-exit', 'deterministic-defect')]
     [string]$Mode = 'normal'
 )
 
@@ -72,6 +72,11 @@ if ($Mode -eq 'instant-exit') {
     exit 1
 }
 
+$errorUntilMs = 0
+if ($env:AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS -and [long]::TryParse($env:AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS, [ref]$null)) {
+    $errorUntilMs = [long]$env:AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS
+}
+
 Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'started'
 
 while ($true) {
@@ -89,7 +94,23 @@ while ($true) {
     }
 
     if ($Mode -eq 'tick-error') {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if ($errorUntilMs -gt 0 -and $nowMs -ge $errorUntilMs) {
+            Write-OrchestratorSideProcessTickSuccess -ChildId $Role
+            Start-Sleep -Seconds 1
+            continue
+        }
         Write-OrchestratorSideProcessTickError -ChildId $Role -ErrorMessage 'synthetic sustained tick failure'
+        Start-Sleep -Seconds 1
+        continue
+    }
+
+    if ($Mode -eq 'deterministic-defect') {
+        Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'tick_error' -Extra @{
+            failureClass = 'deterministic'
+            lastError    = 'deterministic code defect: same stack every restart'
+        }
+        Write-OrchestratorSideProcessTickError -ChildId $Role -ErrorMessage 'deterministic code defect: same stack every restart'
         Start-Sleep -Seconds 1
         continue
     }

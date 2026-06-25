@@ -11,8 +11,9 @@ function Get-ReconcileChecksByPr {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [AllowEmptyCollection()]
+        [AllowNull()]
         [array]$OpenPrs,
         [string]$PackRoot = ''
     )
@@ -22,7 +23,7 @@ function Get-ReconcileChecksByPr {
     }
     $ciGreenWakeFilterCli = Join-Path $PackRoot 'docs/ci-green-wake-reconcile.mjs'
 
-    return Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @($OpenPrs) `
+    return Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs (ConvertTo-GhOpenPrArray -OpenPrs $OpenPrs) `
         -MergeRequiredNames {
             param($payload)
             Invoke-MechanicalNodeFilterCli -FilterCliPath $ciGreenWakeFilterCli -Subcommand 'merge-required-names' `

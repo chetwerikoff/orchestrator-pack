@@ -9,6 +9,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessHealth.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessCrashBackoff.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
@@ -795,13 +796,30 @@ function Get-OrchestratorWakeSupervisorChildRecoveryState {
 
     $state = Read-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson
     if (-not $state -or -not $state.childRecovery) {
-        return @{ attempts = 0; terminal = $false; reason = '' }
+        $emptyDegraded = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $null
+        return @{
+            attempts       = 0
+            terminal       = $false
+            reason         = ''
+            rapidExits     = 0
+            backoffUntilMs = 0
+            lastExitMs     = 0
+        } + $emptyDegraded
     }
     $entry = $state.childRecovery.$ChildId
     if (-not $entry) {
-        return @{ attempts = 0; terminal = $false; reason = ''; rapidExits = 0; backoffUntilMs = 0; lastExitMs = 0 }
+        $emptyDegraded = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $null
+        return @{
+            attempts       = 0
+            terminal       = $false
+            reason         = ''
+            rapidExits     = 0
+            backoffUntilMs = 0
+            lastExitMs     = 0
+        } + $emptyDegraded
     }
     $crashFields = Get-OrchestratorWakeSupervisorChildCrashBackoffFields -RecoveryEntry $entry
+    $degradedFields = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $entry
     return @{
         attempts       = if ($entry.attempts) { [int]$entry.attempts } else { 0 }
         terminal       = [bool]$entry.terminal
@@ -809,7 +827,7 @@ function Get-OrchestratorWakeSupervisorChildRecoveryState {
         rapidExits     = $crashFields.rapidExits
         backoffUntilMs = $crashFields.backoffUntilMs
         lastExitMs     = $crashFields.lastExitMs
-    }
+    } + $degradedFields
 }
 
 function Set-OrchestratorWakeSupervisorChildRecoveryState {
@@ -840,6 +858,23 @@ function Set-OrchestratorWakeSupervisorChildRecoveryState {
     }
 }
 
+function Reset-OrchestratorWakeSupervisorChildCrashRecoveryState {
+    param(
+        [hashtable]$Paths,
+        [string]$ChildId
+    )
+
+    $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
+    if ($recovery.rapidExits -eq 0 -and $recovery.backoffUntilMs -eq 0 -and $recovery.lastExitMs -eq 0) {
+        return
+    }
+    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
+            rapidExits     = 0
+            backoffUntilMs = 0
+            lastExitMs     = 0
+        })
+}
+
 function Reset-OrchestratorWakeSupervisorChildRecoveryState {
     param(
         [hashtable]$Paths,
@@ -847,16 +882,29 @@ function Reset-OrchestratorWakeSupervisorChildRecoveryState {
     )
 
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
-    if ($recovery.attempts -eq 0 -and -not $recovery.terminal -and $recovery.rapidExits -eq 0 -and $recovery.backoffUntilMs -eq 0) {
+    $degradedFields = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $recovery
+    if ($recovery.attempts -eq 0 -and -not $recovery.terminal -and $recovery.rapidExits -eq 0 -and $recovery.backoffUntilMs -eq 0 `
+            -and $degradedFields.degradedAttempts -eq 0 -and $degradedFields.degradedBackoffUntilMs -eq 0 `
+            -and -not $degradedFields.lastDegradedReason -and $degradedFields.repeatedReasonCount -eq 0 `
+            -and $degradedFields.stableWorkingPolls -eq 0 -and $degradedFields.deterministicReasonStreak -eq 0 `
+            -and -not $degradedFields.failureClass) {
         return
     }
     Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
-        attempts       = 0
-        terminal       = $false
-        reason         = ''
-        rapidExits     = 0
-        backoffUntilMs = 0
-        lastExitMs     = 0
+        attempts                    = 0
+        terminal                    = $false
+        reason                      = ''
+        rapidExits                  = 0
+        backoffUntilMs              = 0
+        lastExitMs                  = 0
+        degradedAttempts            = 0
+        degradedBackoffUntilMs      = 0
+        lastDegradedReason          = ''
+        repeatedReasonCount         = 0
+        repeatedReasonWindowStartMs = 0
+        stableWorkingPolls          = 0
+        deterministicReasonStreak   = 0
+        failureClass                = ''
     }
 }
 
@@ -965,6 +1013,10 @@ function Test-OrchestratorWakeSupervisorChildStalled {
         [hashtable]$Paths,
         $ChildEntry
     )
+
+    if (-not $ChildEntry) {
+        return $false
+    }
 
     $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id
     if (-not $status.Alive) {
@@ -1251,79 +1303,87 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             }
 
             foreach ($child in $registry) {
-                $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id `
-                    -SupervisorPhase $phase
-                if ($status.Health -eq 'waiting') {
+                if (-not $child -or -not $child.Id) {
                     continue
                 }
-
-                if ($status.Health -eq 'working' -and $status.Alive) {
-                    Reset-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
-                }
-
-                if (-not $status.Alive) {
-                    if ($child.SideEffecting) {
-                        Wait-OrchestratorWakeSupervisorSideEffectDrain -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog | Out-Null
+                try {
+                    Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id
+                    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id `
+                        -SupervisorPhase $phase
+                    if ($status.Health -eq 'waiting') {
+                        continue
                     }
-                    $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
-                    $childStartedMs = 0
-                    if (Test-Path -LiteralPath $pidFile) {
-                        $childStartedMs = [long]([System.IO.File]::GetCreationTimeUtc($pidFile)).Subtract([datetime]'1970-01-01').TotalMilliseconds
+
+                    if ($status.Health -eq 'working' -and $status.Alive) {
+                        Update-OrchestratorWakeSupervisorChildStableWorkingRecovery -Paths $Paths -ChildId $child.Id
+                        if (-not (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)) {
+                            continue
+                        }
                     }
-                    $restartDecision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed `
-                        -Paths $Paths -ChildId $child.Id -ChildStartedMs $childStartedMs `
+
+                    if (-not $status.Alive) {
+                        if ($child.SideEffecting) {
+                            Wait-OrchestratorWakeSupervisorSideEffectDrain -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog | Out-Null
+                        }
+                        $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
+                        $childStartedMs = 0
+                        if (Test-Path -LiteralPath $pidFile) {
+                            $childStartedMs = [long]([System.IO.File]::GetCreationTimeUtc($pidFile)).Subtract([datetime]'1970-01-01').TotalMilliseconds
+                        }
+                        $restartDecision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed `
+                            -Paths $Paths -ChildId $child.Id -ChildStartedMs $childStartedMs `
+                            -LogWriter {
+                                param([string]$Message)
+                                Write-OrchestratorWakeSupervisorLog -Message $Message -LogPath $Paths.SupervisorLog
+                            }
+                        if (-not $restartDecision.allowed) {
+                            continue
+                        }
+                        Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) exited; restarting" -LogPath $Paths.SupervisorLog
+                        Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
+                            -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
+                        continue
+                    }
+
+                    $needsRecovery = $status.Health -in @('degraded', 'stalled') -or
+                        (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)
+                    if ($needsRecovery -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -ChildId $child.Id)) {
+                        continue
+                    }
+                    if (-not $needsRecovery) {
+                        continue
+                    }
+
+                    $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
+                    $reason = if ($status.Reason) { $status.Reason } else { $status.Health }
+                    Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) non-working ($($status.Health)): $reason" -LogPath $Paths.SupervisorLog
+
+                    if ($recovery.terminal) {
+                        continue
+                    }
+
+                    $failureClass = Get-OrchestratorWakeSupervisorChildFailureClassFromProgress -Paths $Paths -ChildId $child.Id
+                    $degradedDecision = Test-OrchestratorWakeSupervisorChildDegradedRestartAllowed `
+                        -Paths $Paths -ChildId $child.Id -DegradedReason $reason -FailureClass $failureClass `
                         -LogWriter {
                             param([string]$Message)
                             Write-OrchestratorWakeSupervisorLog -Message $Message -LogPath $Paths.SupervisorLog
                         }
-                    if (-not $restartDecision.allowed) {
+                    if (-not $degradedDecision.allowed) {
                         continue
                     }
-                    Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) exited; restarting" -LogPath $Paths.SupervisorLog
+
+                    $maxAttempts = Get-OrchestratorSideProcessHealthRecoveryMaxAttempts
+                    $attemptLabel = if ($degradedDecision.degradedAttempts) { $degradedDecision.degradedAttempts } else { 1 }
+                    Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) recovering (attempt $attemptLabel/$maxAttempts)" -LogPath $Paths.SupervisorLog
+                    Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
+                    Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
                     Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
                         -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
-                    continue
                 }
-
-                $needsRecovery = $status.Health -in @('degraded', 'stalled') -or
-                    (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)
-                if ($needsRecovery -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -ChildId $child.Id)) {
-                    continue
+                catch {
+                    Write-OrchestratorWakeSupervisorLog -Message "fault boundary: $($child.Id): $_" -LogPath $Paths.SupervisorLog
                 }
-                if (-not $needsRecovery) {
-                    continue
-                }
-
-                $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
-                $maxAttempts = Get-OrchestratorSideProcessHealthRecoveryMaxAttempts
-                $reason = if ($status.Reason) { $status.Reason } else { $status.Health }
-                Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) non-working ($($status.Health)): $reason" -LogPath $Paths.SupervisorLog
-
-                if ($recovery.terminal) {
-                    continue
-                }
-
-                $nextAttempts = $recovery.attempts + 1
-                if (Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts $recovery.attempts -MaxAttempts $maxAttempts) {
-                    $terminalReason = "recovery exhausted after $maxAttempts attempts: $reason"
-                    Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) terminal degraded: $terminalReason" -LogPath $Paths.SupervisorLog
-                    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id -RecoveryEntry @{
-                        attempts = $nextAttempts
-                        terminal = $true
-                        reason   = $terminalReason
-                    } -SupervisorPhase $phase -SessionId $currentSessionId -ProjectId $ProjectId
-                    continue
-                }
-
-                Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id -RecoveryEntry @{
-                    attempts = $nextAttempts
-                    terminal = $false
-                    reason   = $reason
-                } -SupervisorPhase $phase -SessionId $currentSessionId -ProjectId $ProjectId
-                Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) recovering (attempt $nextAttempts/$maxAttempts)" -LogPath $Paths.SupervisorLog
-                Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
-                Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
-                    -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
             }
         }
 
