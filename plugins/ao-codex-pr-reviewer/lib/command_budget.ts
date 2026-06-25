@@ -83,8 +83,11 @@ export function hasPositionalSelector(argv: string[], startIndex: number): boole
   return false;
 }
 
-export function hasTargetedTestSelector(argv: string[]): boolean {
+export function hasTargetedTestSelector(argv: string[], executable?: string): boolean {
   const parts = argv.map((part) => part.trim()).filter(Boolean);
+  if (executable === 'vitest' && parts[0] === 'run') {
+    return hasPositionalSelector(parts, 1);
+  }
   let previous = '';
 
   for (let index = 0; index < parts.length; index += 1) {
@@ -117,6 +120,8 @@ export function flattenCommandArgv(argv: string[]): string {
 
 export function classifyReviewShellCommand(argv: string[]): ReviewCommandClass {
   const joined = flattenCommandArgv(argv);
+  const executable = argv[0]?.trim();
+  const commandArgs = argv.slice(1);
   if (!joined) {
     return 'cheap_targeted';
   }
@@ -124,7 +129,7 @@ export function classifyReviewShellCommand(argv: string[]): ReviewCommandClass {
   if (SLOW_TEST_MARKERS.some((pattern) => pattern.test(joined))) {
     return 'slow_test';
   }
-  if (hasTargetedTestSelector(argv)) {
+  if (hasTargetedTestSelector(commandArgs, executable)) {
     return 'cheap_targeted';
   }
   if (hasNpmTestSeparator(argv) || FULL_SUITE_MARKERS.some((pattern) => pattern.test(joined))) {

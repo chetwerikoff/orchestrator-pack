@@ -70,6 +70,13 @@ has_positional_selector() {
 }
 
 has_targeted_test_selector() {
+  executable="$1"
+  shift
+  if [ "$executable" = "vitest" ] && [ "${1:-}" = "run" ]; then
+    shift
+    has_positional_selector "$@"
+    return $?
+  fi
   set -- "$@"
   prev=""
   while [ $# -gt 0 ]; do
@@ -98,7 +105,7 @@ classify_command() {
       return
       ;;
   esac
-  if has_targeted_test_selector "$@"; then
+  if has_targeted_test_selector "$executable" "$@"; then
     echo cheap_targeted
     return
   fi
