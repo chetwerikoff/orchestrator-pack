@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { supervisorTestTimeoutMs } from './supervisor-recovery.test-setup.js';
+import { describe, expect, it } from 'vitest';
 import {
-  cleanupSupervisorTests,
   countLogMatches,
   isAlive,
   makeStateDir,
@@ -9,13 +9,7 @@ import {
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
-} from './supervisor-recovery.test-helpers';
-
-const timeoutMs = 60_000;
-
-afterEach(() => {
-  cleanupSupervisorTests();
-}, timeoutMs);
+} from './supervisor-recovery.test-helpers.js';
 
 describe('supervisor-auto-recovery (Issue #450 C3)', () => {
   it('auto-resumes a degraded child after dependency failure clears without operator intervention', async () => {
@@ -62,5 +56,5 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  }, timeoutMs);
+  }, supervisorTestTimeoutMs);
 });

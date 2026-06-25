@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { psString, repoRoot, runPwsh } from './supervisor-recovery.test-helpers';
+import { psString, repoRoot, runPwsh } from './supervisor-recovery.test-helpers.js';
 
 const scriptsDir = path.join(repoRoot, 'scripts');
 const libDir = path.join(scriptsDir, 'lib');

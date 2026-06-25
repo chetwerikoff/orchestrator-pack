@@ -16,7 +16,7 @@ import {
   waitForMarkers,
   type ManagedChildRole,
   type WakeMarker,
-} from './supervisor-recovery.test-helpers';
+} from './supervisor-recovery.test-helpers.js';
 
 const aoStub = path.join(fixtureDir, 'ao-stub.sh');
 const supervisorHookTimeoutMs = 120_000;

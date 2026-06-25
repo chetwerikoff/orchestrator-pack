@@ -1,20 +1,14 @@
+import { supervisorTestTimeoutMs } from './supervisor-recovery.test-setup.js';
 import fs from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  cleanupSupervisorTests,
   isAlive,
   makeStateDir,
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
-} from './supervisor-recovery.test-helpers';
-
-const timeoutMs = 60_000;
-
-afterEach(() => {
-  cleanupSupervisorTests();
-}, timeoutMs);
+} from './supervisor-recovery.test-helpers.js';
 
 describe.sequential('supervisor-fault-boundary (Issue #450 C5)', () => {
   for (const [label, inject] of [
@@ -50,7 +44,7 @@ describe.sequential('supervisor-fault-boundary (Issue #450 C5)', () => {
       child.kill('SIGTERM');
       await new Promise((resolve) => setTimeout(resolve, 1000));
       runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-    }, timeoutMs);
+    }, supervisorTestTimeoutMs);
   }
 });
 
@@ -90,5 +84,5 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  }, timeoutMs);
+  }, supervisorTestTimeoutMs);
 });

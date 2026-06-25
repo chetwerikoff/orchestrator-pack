@@ -8,7 +8,7 @@ import {
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
-} from './supervisor-recovery.test-helpers';
+} from './supervisor-recovery.test-helpers.js';
 
 const timeoutMs = 45_000;
 
