@@ -186,6 +186,21 @@ describe('claim-pr collision safety', () => {
     expect(parsed.reason).toBe('claim_pr_resume_cleanup_required');
   });
 
+  it('allows claim-pr when live owner holds a different PR (no param shadowing)', () => {
+    const output = runPwsh(`
+      . ${psString(spawnGateLibPath)}
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $fixtureSessions = @(
+        @{ role = 'worker'; prNumber = 460; status = 'working'; name = 'opk-other' }
+      )
+      $result = Test-AutonomousClaimPrLiveOwner -PrNumber 458 -FixtureMode -FixtureSessions $fixtureSessions
+      $result | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(output.trim());
+    expect(parsed.liveOwnerPresent).toBe(false);
+    expect(parsed.livenessKnown).toBe(true);
+  });
+
   it('internal git: mutating git still denied during allowed claim-pr path', () => {
     withAoSpawnProbeStub(({ probeFile }) => {
       const result = spawnSync(

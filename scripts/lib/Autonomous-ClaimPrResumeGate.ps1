@@ -221,17 +221,17 @@ function Test-AutonomousClaimPrLiveOwner {
             if ($role -notmatch '^(?i)(worker|coding)$') { continue }
             $status = [string]$session.status
             if ($status -match '^(?i)(terminated|killed|exited|dead|closed)$') { continue }
-            $prNumber = 0
+            $sessionPrNumber = 0
             if ($null -ne $session.prNumber) {
-                $prNumber = [int]$session.prNumber
+                $sessionPrNumber = [int]$session.prNumber
             }
             elseif ($session.pr -match 'pull/(\d+)') {
-                $prNumber = [int]$Matches[1]
+                $sessionPrNumber = [int]$Matches[1]
             }
             elseif ($session.pr -match '^#?(\d+)$') {
-                $prNumber = [int]$Matches[1]
+                $sessionPrNumber = [int]$Matches[1]
             }
-            if ($prNumber -eq $PrNumber) {
+            if ($sessionPrNumber -eq $PrNumber) {
                 $session
             }
         }
