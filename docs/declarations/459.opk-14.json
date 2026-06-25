@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "HEAD",
     "worktree_dirty": true,
-    "active_scope_hash": "sha256:7d63dea85daf37f1d4f2a6ec344914fe0d4ae5646c07b9d036d8edd8a11b079e"
+    "active_scope_hash": "sha256:14cf00537d8ccf340b5a428fa4b3c145a69cc0bc23854039a2794cb27de952d5"
   },
   "declared_paths": [
     "docs/ci-failure-notification.d.mts",
     "docs/ci-failure-notification.mjs",
     "docs/declarations/459.opk-14.json",
+    "docs/worker-nudge-gate.d.mts",
     "docs/worker-nudge-gate.mjs",
     "scripts/ci-failure-fixing-stint-orchestrator-turn.test.ts",
     "scripts/ci-failure-notification.ps1",
@@ -31,9 +32,10 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:issue-459-ci-failure-orchestrator-turn-fixing-stint-suppression",
-      "new_active_scope_hash": "sha256:7d63dea85daf37f1d4f2a6ec344914fe0d4ae5646c07b9d036d8edd8a11b079e",
+      "new_active_scope_hash": "sha256:14cf00537d8ccf340b5a428fa4b3c145a69cc0bc23854039a2794cb27de952d5",
       "changed": {
         "added": [
+          "docs/worker-nudge-gate.d.mts",
           "scripts/ci-failure-notification.ps1",
           "scripts/ci-failure-notification.test.ts",
           "scripts/worker-nudge-gate.test.ts"
