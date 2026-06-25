@@ -4,7 +4,7 @@
   Cross-process read-through cache for wake-supervisor fleet GitHub inventory (Issue #453).
 #>
 
-. (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 
 $Script:GhFleetOpenPrListTtlSeconds = 15
 $Script:GhFleetCommitMemoTtlSeconds = 2592000
@@ -193,118 +193,24 @@ function Write-GhFleetCacheEnvelopeAtomic {
     Move-Item -LiteralPath $TempPath -Destination $TargetPath -Force
 }
 
-function Get-GhFleetPopulateLockRecord {
-    param([string]$LockPath)
-
-    if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
-        return $null
-    }
-
-    try {
-        return Get-Content -LiteralPath $LockPath -Raw | ConvertFrom-Json
-    }
-    catch {
-        return $null
-    }
-}
-
-function Test-GhFleetPopulateLockStale {
-    param([string]$LockPath)
-
-    if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
-        return $false
-    }
-
-    $record = Get-GhFleetPopulateLockRecord -LockPath $LockPath
-    $ownerPid = 0
-    if ($record -and $null -ne $record.pid -and [int]::TryParse([string]$record.pid, [ref]$ownerPid)) {
-        if (-not (Test-ProcessAlive -ProcessId $ownerPid)) {
-            return $true
-        }
-    }
-
-    $startedAt = $null
-    if ($record -and $record.startedAt) {
-        try {
-            $startedAt = [datetimeoffset]::Parse([string]$record.startedAt).UtcDateTime
-        }
-        catch {
-            $startedAt = $null
-        }
-    }
-    if (-not $startedAt) {
-        $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
-    }
-
-    return ((Get-Date).ToUniversalTime() - $startedAt).TotalSeconds -gt $Script:GhFleetPopulateLockMaxAgeSeconds
-}
-
 function Clear-GhFleetStalePopulateLockIfNeeded {
     param([string]$LockPath)
 
-    if (-not (Test-GhFleetPopulateLockStale -LockPath $LockPath)) {
-        return $false
-    }
-
-    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-    return $true
+    return Clear-OrchestratorStaleSideEffectLockIfNeeded `
+        -LockPath $LockPath `
+        -MaxAgeSeconds $Script:GhFleetPopulateLockMaxAgeSeconds
 }
 
 function Enter-GhFleetPopulateLock {
     param([string]$LockPath)
 
-    if (-not $LockPath) { return $false }
-
-    $dir = Split-Path -Parent $LockPath
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-
-    $payload = @{
-        pid       = $PID
-        startedAt = (Get-Date).ToString('o')
-    } | ConvertTo-Json -Compress
-
-    Clear-GhFleetStalePopulateLockIfNeeded -LockPath $LockPath | Out-Null
-
-    for ($attempt = 0; $attempt -lt 2; $attempt++) {
-        try {
-            $stream = [System.IO.FileStream]::new(
-                $LockPath,
-                [System.IO.FileMode]::CreateNew,
-                [System.IO.FileAccess]::Write,
-                [System.IO.FileShare]::None
-            )
-            try {
-                $writer = New-Object System.IO.StreamWriter($stream, [System.Text.UTF8Encoding]::new($false))
-                $writer.Write($payload)
-                $writer.Flush()
-            }
-            finally {
-                $stream.Dispose()
-            }
-            return $true
-        }
-        catch [System.IO.IOException] {
-            if ($attempt -eq 0 -and (Clear-GhFleetStalePopulateLockIfNeeded -LockPath $LockPath)) {
-                continue
-            }
-            return $false
-        }
-        catch [System.UnauthorizedAccessException] {
-            return $false
-        }
-    }
-
-    return $false
+    return Enter-OrchestratorSideEffectFence -LockPath $LockPath
 }
 
 function Exit-GhFleetPopulateLock {
     param([string]$LockPath)
 
-    if ($LockPath -and (Test-Path -LiteralPath $LockPath)) {
-        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-    }
+    Exit-OrchestratorSideEffectFence -LockPath $LockPath
 }
 
 function Wait-GhFleetSnapshotEnvelope {

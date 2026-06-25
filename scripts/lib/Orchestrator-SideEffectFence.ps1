@@ -52,7 +52,10 @@ function Get-OrchestratorSideEffectLockRecord {
 }
 
 function Test-OrchestratorSideEffectLockStale {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [int]$MaxAgeSeconds = 0
+    )
 
     if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
         return $false
@@ -82,17 +85,24 @@ function Test-OrchestratorSideEffectLockStale {
         $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
     }
 
+    if ($MaxAgeSeconds -gt 0) {
+        return ((Get-Date).ToUniversalTime() - $startedAt).TotalSeconds -gt $MaxAgeSeconds
+    }
+
     $maxAgeMinutes = Get-OrchestratorSideEffectLockMaxAgeMinutes
     return ((Get-Date).ToUniversalTime() - $startedAt).TotalMinutes -gt $maxAgeMinutes
 }
 
 function Clear-OrchestratorStaleSideEffectLockIfNeeded {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [int]$MaxAgeSeconds = 0
+    )
 
     if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
         return $false
     }
-    if (-not (Test-OrchestratorSideEffectLockStale -LockPath $LockPath)) {
+    if (-not (Test-OrchestratorSideEffectLockStale -LockPath $LockPath -MaxAgeSeconds $MaxAgeSeconds)) {
         return $false
     }
 

@@ -1,43 +1,11 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
+import { createGithubFleetCacheHarness, type FleetHarness } from './github-fleet-cache-test-harness.ts';
 
 const repoRoot = join(import.meta.dirname, '..');
 const scriptsDir = join(repoRoot, 'scripts');
-const fakeGh = join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh');
-
-type FleetHarness = {
-  root: string;
-  auditFile: string;
-  env: NodeJS.ProcessEnv;
-  cleanup: () => void;
-};
-
-function createFleetHarness(): FleetHarness {
-  const root = mkdtempSync(join(tmpdir(), 'gh-fleet-cache-'));
-  const auditFile = join(root, 'audit.log');
-  writeFileSync(auditFile, '');
-  chmodSync(fakeGh, 0o755);
-  const binDir = join(root, 'bin');
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(join(binDir, 'gh'), readFileSync(fakeGh));
-  chmodSync(join(binDir, 'gh'), 0o755);
-  const env = {
-    ...process.env,
-    AO_SIDE_PROCESS_STATE_DIR: join(root, 'supervisor-state'),
-    GH_FLEET_OPEN_PR_LIST_TTL_SECONDS: '30',
-    GH_FLEET_TEST_AUDIT_FILE: auditFile,
-    PATH: `${binDir}:${process.env.PATH ?? ''}`,
-  };
-  return {
-    root,
-    auditFile,
-    env,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
-  };
-}
 
 function countAuditMatches(auditFile: string, pattern: RegExp): number {
   const lines = readFileSync(auditFile, 'utf8').split('\n').filter(Boolean);
@@ -63,7 +31,7 @@ describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
   });
 
   it('cold single reader performs one upstream gh pr list populate', () => {
-    harness = createFleetHarness();
+    harness = createGithubFleetCacheHarness();
     const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', invokeOpenPrListScript(repoRoot)], {
       cwd: repoRoot,
       env: harness.env,
@@ -74,7 +42,7 @@ describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
   });
 
   it('warm snapshot serves concurrent readers with zero additional gh pr list calls', () => {
-    harness = createFleetHarness();
+    harness = createGithubFleetCacheHarness();
     const warm = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', invokeOpenPrListScript(repoRoot)], {
       cwd: repoRoot,
       env: harness.env,
@@ -97,7 +65,7 @@ describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
   });
 
   it('cold concurrent readers coalesce populate to at most two gh pr list calls', () => {
-    harness = createFleetHarness();
+    harness = createGithubFleetCacheHarness();
     const workerScript = `
 $ErrorActionPreference = 'Stop'
 . '${join(scriptsDir, 'lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
@@ -120,7 +88,7 @@ Write-Output 'done'
   });
 
   it('propagates populate errors to waiters without silent per-child fallback', () => {
-    harness = createFleetHarness();
+    harness = createGithubFleetCacheHarness();
     writeFileSync(
       join(harness.root, 'bin/gh'),
       `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"\necho 'rate limited' >&2\nexit 1\n`,
