@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   evaluateSpawnBudgetClass,
   formatSpawnBudgetReport,
@@ -57,6 +60,29 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
     const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stderr).not.toMatch(/bad substitution/i);
+  });
+
+  it('resolve_system_git scans PATH outside pack scripts before bare git fallback', () => {
+    const externalBin = mkdtempSync(path.join(tmpdir(), 'external-git-bin-'));
+    const externalGit = path.join(externalBin, 'git');
+    writeFileSync(externalGit, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$0"\n');
+    chmodSync(externalGit, 0o755);
+    const scriptsDir = path.join(repoRoot, 'scripts');
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        [
+          `source "${scriptsDir}/_resolve-system-git.sh"`,
+          `PATH="${externalBin}:${scriptsDir}"`,
+          'resolved="$(resolve_system_git)"',
+          '[[ "${resolved}" != git ]] || exit 3',
+          'exit 0',
+        ].join('\n'),
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
   });
 
   it('load-bearing A: no-op shell fixture has no per-command helper growth', () => {

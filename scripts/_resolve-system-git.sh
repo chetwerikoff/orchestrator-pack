@@ -6,6 +6,7 @@ _AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 resolve_system_git() {
   local pack_root config configured system_path
+  local self dir candidate resolved
   pack_root="$(cd "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/.." && pwd)"
   config="${pack_root}/.ao/autonomous-real-binaries.json"
 
@@ -22,7 +23,7 @@ resolve_system_git() {
     fi
   fi
 
-  if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" != "1" && -n "${GIT_SYSTEM_BINARY:-}" && -x "${GIT_SYSTEM_BINARY}" ]]; then
+  if [[ -n "${GIT_SYSTEM_BINARY:-}" && -x "${GIT_SYSTEM_BINARY}" ]]; then
     printf '%s\n' "${GIT_SYSTEM_BINARY}"
     return 0
   fi
@@ -30,6 +31,19 @@ resolve_system_git() {
   for candidate in /usr/bin/git /bin/git /usr/local/bin/git; do
     if [[ -x "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  self="$(readlink -f "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git" 2>/dev/null || realpath "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git" 2>/dev/null || printf '%s' "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git")"
+  IFS=':' read -ra path_dirs <<< "${PATH:-}"
+  for dir in "${path_dirs[@]}"; do
+    [[ -z "${dir}" || "${dir}" == "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}" ]] && continue
+    candidate="${dir%/}/git"
+    [[ -x "${candidate}" ]] || continue
+    resolved="$(readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
+    if [[ "${resolved}" != "${self}" && "${resolved}" != *git-autonomous-guard* ]]; then
+      printf '%s\n' "${resolved}"
       return 0
     fi
   done
