@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  ao process-boundary guard for autonomous orchestrator sessions (Issue #318).
+  ao process-boundary guard for autonomous orchestrator sessions (Issue #318 / #458).
 #>
 # No [CmdletBinding()] -- avoids PS 7.3+ ambiguity where -p matches both
 # -ProgressAction and -PipelineVariable as common parameters.
@@ -11,8 +11,15 @@ $ErrorActionPreference = 'Stop'
 
 $spawnDeny = Test-AutonomousSpawnDenied -Argv $args
 if ($spawnDeny.denied) {
+    if ($spawnDeny.auditLine) {
+        [Console]::Error.WriteLine($spawnDeny.auditLine)
+    }
     [Console]::Error.WriteLine("autonomous worker spawn denied by boundary gate: $($spawnDeny.reason). Workers are started by the operator or automated reconcilers, not orchestrator turns.")
     exit 93
+}
+
+if ($spawnDeny.auditLine) {
+    [Console]::Error.WriteLine($spawnDeny.auditLine)
 }
 
 $deny = Test-AutonomousRawReviewRunDenied -Argv $args
@@ -28,10 +35,15 @@ if ($sendDeny.denied) {
 }
 
 $realAo = Resolve-RealAoExecutable
-if ($realAo -eq 'ao') {
-    & ao @args
+try {
+    if ($realAo -eq 'ao') {
+        & ao @args
+    }
+    else {
+        & $realAo @args
+    }
+    exit $LASTEXITCODE
 }
-else {
-    & $realAo @args
+finally {
+    Clear-AutonomousClaimPrResumeActiveMutex
 }
-exit $LASTEXITCODE

@@ -30,6 +30,21 @@ function Merge-AutonomousSharedCapabilities {
     return $Inventory
 }
 
+function Get-AoArgvSubcommand {
+    param([string[]]$Argv)
+
+    if (-not $Argv -or $Argv.Count -eq 0) {
+        return ''
+    }
+    foreach ($token in $Argv) {
+        if ([string]$token -match '^-') {
+            continue
+        }
+        return [string]$token
+    }
+    return ''
+}
+
 function Get-MergedAutonomousCapabilityInventory {
     param(
         [string]$InventoryPath,

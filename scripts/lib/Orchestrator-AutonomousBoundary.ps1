@@ -290,35 +290,6 @@ function Resolve-RealGitExecutable {
     return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
 }
 
-function Get-AoArgvSubcommand {
-    param([string[]]$Argv)
-
-    if (-not $Argv -or $Argv.Count -eq 0) {
-        return ''
-    }
-    foreach ($token in $Argv) {
-        if ([string]$token -match '^-') {
-            continue
-        }
-        return [string]$token
-    }
-    return ''
-}
-
-function Test-AutonomousSpawnDenied {
-    param([string[]]$Argv)
-
-    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
-        return @{ denied = $false; reason = 'manual_surface' }
-    }
-
-    $sub = Get-AoArgvSubcommand -Argv $Argv
-    if ($sub -match '^(?i)spawn$') {
-        return @{ denied = $true; reason = 'autonomous_spawn_denied' }
-    }
-    return @{ denied = $false; reason = 'not_spawn' }
-}
-
 function Get-LinuxParentProcessId {
     param([int]$ProcessId)
 
@@ -685,3 +656,5 @@ function Test-AutonomousGitDenied {
 
     return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
 }
+
+. (Join-Path $PSScriptRoot 'Orchestrator-AutonomousSpawnGate.ps1')
