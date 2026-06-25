@@ -62,6 +62,23 @@ __ao_autonomous_git_argv_defines_alias() {
   return 1
 }
 
+__ao_autonomous_git_token_is_exact_option() {
+  local token="${1,,}"
+  local option="${2,,}"
+  [[ "${token}" == "${option}" || "${token}" == "${option}="* ]]
+}
+
+__ao_autonomous_git_argv_tail_has_positional_operand_from() {
+  local sub_index="$1"
+  shift
+  local i token
+  for ((i = sub_index + 1; i <= $#; i++)); do
+    token="${!i}"
+    [[ "${token}" == -* ]] || return 0
+  done
+  return 1
+}
+
 __ao_autonomous_git_argv_is_read_only() {
   if [[ $# -eq 0 ]]; then
     return 0
@@ -70,7 +87,7 @@ __ao_autonomous_git_argv_is_read_only() {
     return 1
   fi
 
-  local sub_index sub tail joined
+  local sub_index sub
   sub_index="$(__ao_autonomous_git_argv_subcommand_index "$@")"
   if [[ ${sub_index} -gt $# ]]; then
     return 0
@@ -80,12 +97,13 @@ __ao_autonomous_git_argv_is_read_only() {
 
   case "${sub}" in
     fetch)
-      tail=""
-      local i
+      local i fetch_token
       for ((i = sub_index + 1; i <= $#; i++)); do
-        tail+="${!i} "
+        fetch_token="${!i}"
+        if __ao_autonomous_git_token_is_exact_option "${fetch_token}" "--dry-run"; then
+          return 0
+        fi
       done
-      [[ "${tail}" == *"--dry-run"* ]] && return 0
       return 1
       ;;
     stash)
@@ -99,21 +117,27 @@ __ao_autonomous_git_argv_is_read_only() {
       return 1
       ;;
     config)
-      joined=""
-      local j
+      local j config_token
       for ((j = sub_index + 1; j <= $#; j++)); do
-        joined+="${!j} "
+        config_token="${!j}"
+        case "${config_token,,}" in
+          --get | --get-all | --get-regexp | --get-urlmatch) return 0 ;;
+          --get=* | --get-all=* | --get-regexp=* | --get-urlmatch=*) return 0 ;;
+        esac
       done
-      [[ "${joined}" == *"--get"* ]] && return 0
       return 1
       ;;
     branch)
-      joined=""
-      local k
+      if __ao_autonomous_git_argv_tail_has_positional_operand_from "${sub_index}" "$@"; then
+        return 1
+      fi
+      local k branch_token
       for ((k = sub_index + 1; k <= $#; k++)); do
-        joined+="${!k} "
+        branch_token="${!k}"
+        if __ao_autonomous_git_token_is_exact_option "${branch_token}" "--show-current"; then
+          return 0
+        fi
       done
-      [[ "${joined}" == *"--show-current"* ]] && return 0
       return 1
       ;;
     status | log | rev-parse | diff | show | ls-files | ls-tree | cat-file | merge-base | grep | check-ignore | check-attr | describe | for-each-ref | show-ref | name-rev | var | version | help | rev-list)

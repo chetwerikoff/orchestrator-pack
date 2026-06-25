@@ -40,7 +40,7 @@ resolve_real_git() {
     fi
   fi
 
-  if __ao_scan_path_for_host_git "${SCRIPT_DIR}"; then
+  if __ao_scan_path_for_host_git "${SCRIPT_DIR}" "${pack_root}"; then
     return 0
   fi
 

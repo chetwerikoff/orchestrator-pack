@@ -135,6 +135,43 @@ export function gitArgvDefinesAlias(argv) {
 }
 
 /**
+ * @param {string} token
+ * @param {string} option
+ */
+function gitTokenIsExactOption(token, option) {
+  const lowered = String(token).toLowerCase();
+  const opt = String(option).toLowerCase();
+  return lowered === opt || lowered.startsWith(`${opt}=`);
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ * @param {string} option
+ */
+function gitArgvTailHasExactOption(list, startIndex, option) {
+  for (let index = startIndex; index < list.length; index += 1) {
+    if (gitTokenIsExactOption(list[index], option)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ */
+function gitArgvTailHasPositionalOperand(list, startIndex) {
+  for (let index = startIndex; index < list.length; index += 1) {
+    if (!String(list[index]).startsWith('-')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @param {string[]} argv
  */
 export function isMutatingGitArgv(argv) {
@@ -148,8 +185,7 @@ export function isMutatingGitArgv(argv) {
   }
   const sub = list[index].toLowerCase();
   if (sub === 'fetch') {
-    const tail = list.slice(index + 1).join(' ');
-    return !/--dry-run/i.test(tail);
+    return !gitArgvTailHasExactOption(list, index + 1, '--dry-run');
   }
   if (sub === 'stash') {
     if (index + 1 >= list.length) {
@@ -159,12 +195,28 @@ export function isMutatingGitArgv(argv) {
     return stashSub !== 'list' && stashSub !== 'show';
   }
   if (sub === 'config') {
-    const tail = list.slice(index + 1).join(' ');
-    return !/--get/i.test(tail);
+    for (let tokenIndex = index + 1; tokenIndex < list.length; tokenIndex += 1) {
+      const token = list[tokenIndex].toLowerCase();
+      if (
+        token === '--get'
+        || token === '--get-all'
+        || token === '--get-regexp'
+        || token === '--get-urlmatch'
+        || token.startsWith('--get=')
+        || token.startsWith('--get-all=')
+        || token.startsWith('--get-regexp=')
+        || token.startsWith('--get-urlmatch=')
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
   if (sub === 'branch') {
-    const tail = list.slice(index + 1).join(' ');
-    return !/--show-current/i.test(tail);
+    if (gitArgvTailHasPositionalOperand(list, index + 1)) {
+      return true;
+    }
+    return !gitArgvTailHasExactOption(list, index + 1, '--show-current');
   }
   if (READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
     return false;

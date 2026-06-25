@@ -43,6 +43,9 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
   it('classifies mandatory incident read shapes as read fast-path eligible', () => {
     expect(isMutatingGitArgv(['config', '--get', 'remote.origin.url'])).toBe(false);
     expect(isMutatingGitArgv(['branch', '--show-current'])).toBe(false);
+    expect(isMutatingGitArgv(['branch', 'foo--show-current'])).toBe(true);
+    expect(isMutatingGitArgv(['config', 'user.name', 'foo--get'])).toBe(true);
+    expect(isMutatingGitArgv(['fetch', 'origin--dry-run'])).toBe(true);
     expect(isAutonomousGitReadFastPath(['status', '--short', '--branch'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['status', '--json', '--reports', 'full'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['review', 'list', '--json'])).toBe(true);
@@ -61,6 +64,33 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
     const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(result.stderr).not.toMatch(/bad substitution/i);
+  });
+
+  it('bash fast path rejects substring-only read-only git option matches', () => {
+    const script = [
+      `source "${repoRoot}/scripts/lib/autonomous-guard-fast-path.sh"`,
+      '__ao_autonomous_git_argv_is_read_only branch --show-current || exit 1',
+      '__ao_autonomous_git_argv_is_read_only branch foo--show-current && exit 2',
+      '__ao_autonomous_git_argv_is_read_only config --get remote.origin.url || exit 3',
+      '__ao_autonomous_git_argv_is_read_only config user.name foo--get && exit 4',
+      '__ao_autonomous_git_argv_is_read_only fetch --dry-run || exit 5',
+      '__ao_autonomous_git_argv_is_read_only fetch origin--dry-run && exit 6',
+      'exit 0',
+    ].join('\n');
+    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+  });
+
+  it('scripts/git resolves host git outside autonomous surface without pack_root unbound error', () => {
+    const result = spawnSync(path.join(repoRoot, 'scripts/git'), ['--version'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/git version/i);
   });
 
   it('resolve_system_git scans PATH outside pack scripts before bare git fallback', () => {

@@ -588,6 +588,46 @@ function Test-GitArgvDefinesAlias {
     return $false
 }
 
+function Test-GitTokenIsExactOption {
+    param(
+        [string]$Token,
+        [string]$Option
+    )
+
+    $lowered = $Token.ToLowerInvariant()
+    $opt = $Option.ToLowerInvariant()
+    return ($lowered -eq $opt) -or $lowered.StartsWith("${opt}=")
+}
+
+function Test-GitArgvTailHasExactOption {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex,
+        [string]$Option
+    )
+
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        if (Test-GitTokenIsExactOption -Token $Argv[$i] -Option $Option) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-GitArgvTailHasPositionalOperand {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex
+    )
+
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        if (-not $Argv[$i].StartsWith('-')) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-GitArgvIsMutating {
     param([string[]]$Argv)
 
@@ -607,8 +647,7 @@ function Test-GitArgvIsMutating {
     $sub = [string]$Argv[$index]
     switch -Regex ($sub) {
         '^(?i)fetch$' {
-            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
-            if ($tail -match '(?i)--dry-run') {
+            if (Test-GitArgvTailHasExactOption -Argv $Argv -StartIndex ($index + 1) -Option '--dry-run') {
                 return $false
             }
             return $true
@@ -624,15 +663,20 @@ function Test-GitArgvIsMutating {
             return $true
         }
         '^(?i)config$' {
-            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
-            if ($tail -match '(?i)--get') {
-                return $false
+            for ($i = $index + 1; $i -lt $Argv.Count; $i++) {
+                $token = [string]$Argv[$i]
+                switch -Regex ($token) {
+                    '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)$' { return $false }
+                    '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)=' { return $false }
+                }
             }
             return $true
         }
         '^(?i)branch$' {
-            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
-            if ($tail -match '(?i)--show-current') {
+            if (Test-GitArgvTailHasPositionalOperand -Argv $Argv -StartIndex ($index + 1)) {
+                return $true
+            }
+            if (Test-GitArgvTailHasExactOption -Argv $Argv -StartIndex ($index + 1) -Option '--show-current') {
                 return $false
             }
             return $true
