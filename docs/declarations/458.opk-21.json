@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-06-25T09:25:00.000Z",
   "baseline": {
-    "commit_sha": "db8ab5be5d51cdc6504caf1ea2f83b4e09befa4c",
+    "commit_sha": "585eff13c9ae6a02b86d495f9d035caf7dfd67d2",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:38121c6d05d2b9c93b7c78567a480819975e6c2e802b4906d1b14c06f519d3f2"
+    "active_scope_hash": "sha256:d37c961a74daf1661e07de0ceb0ac68614a924b5786c48778d44e21175cc698a"
   },
   "declared_paths": [
     "docs/autonomous-orchestrator-boundary.d.mts",
@@ -26,8 +26,27 @@
     "scripts/lib/Autonomous-GateCommon.ps1",
     "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
     "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+    "scripts/orchestrator-message-registry.test.ts",
     "scripts/verify.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:38121c6d05d2b9c93b7c78567a480819975e6c2e802b4906d1b14c06f519d3f2",
+      "new_active_scope_hash": "sha256:d37c961a74daf1661e07de0ceb0ac68614a924b5786c48778d44e21175cc698a",
+      "changed": {
+        "added": [
+          "docs/autonomous-orchestrator-boundary.d.mts",
+          "scripts/_test-autonomous-ao-stub-fixture.ts",
+          "scripts/lib/Autonomous-GateCommon.ps1",
+          "scripts/orchestrator-message-registry.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "CI fixes: d.mts exports, shared test fixture, dedupe helper, registry test Actions env isolation",
+      "actor": "opk-21",
+      "timestamp": "2026-06-25T09:52:00.000Z",
+      "applied": true
+    }
+  ]
 }

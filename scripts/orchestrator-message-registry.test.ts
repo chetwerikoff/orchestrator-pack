@@ -759,9 +759,26 @@ describe('orchestrator message registry (Issue #298)', () => {
           'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
         ]),
       ).toEqual([]);
-      const result = checkProtectedRuntimeForRepo(root, execFileSync('git', ['rev-parse', 'HEAD^'], { cwd: root, encoding: 'utf8' }).trim());
-      expect(result.ok).toBe(false);
-      expect(result.violations.some((v: string) => v.includes('Orchestrator-SideProcessSupervisor.ps1'))).toBe(true);
+      const parentSha = execFileSync('git', ['rev-parse', 'HEAD^'], { cwd: root, encoding: 'utf8' }).trim();
+      const envKeys = [
+        'GITHUB_EVENT_PATH',
+        'GITHUB_BASE_SHA',
+        'GITHUB_HEAD_SHA',
+        'PR_BASE_SHA',
+        'ORCHESTRATOR_MESSAGE_LINKED_ISSUES',
+      ] as const;
+      const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      for (const key of envKeys) delete process.env[key];
+      try {
+        const result = checkProtectedRuntimeForRepo(root, parentSha);
+        expect(result.ok).toBe(false);
+        expect(result.violations.some((v: string) => v.includes('Orchestrator-SideProcessSupervisor.ps1'))).toBe(true);
+      } finally {
+        for (const key of envKeys) {
+          if (savedEnv[key] === undefined) delete process.env[key];
+          else process.env[key] = savedEnv[key];
+        }
+      }
     } finally {
       removeTempDir(root);
     }
