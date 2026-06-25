@@ -34,11 +34,21 @@ $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 
+function Get-InvokeGatedWorkerNudgeCiFailureStoreDir {
+    param([string]$ProjectIdOverride = '')
+    if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
+    $resolvedProjectId = if ($ProjectIdOverride) { $ProjectIdOverride } else { 'orchestrator-pack' }
+    $safeProject = ($resolvedProjectId -replace '[^\w\-.]', '_').Trim('_')
+    if (-not $safeProject) { $safeProject = 'orchestrator-pack' }
+    return Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification') $safeProject
+}
+
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $payloadText = [Console]::In.ReadToEnd()
 if ($null -eq $payloadText) { $payloadText = '' }
@@ -189,6 +199,29 @@ $gatePayload = @{
     storePath              = $storePath
     targetResolutionSource = $(if ($targetResolutionSource) { $targetResolutionSource } else { 'orchestrator-turn' })
     claims                 = @(Get-WorkerNudgeClaimRecordsForGate -Namespace $namespace)
+}
+if ($resolvedIntent -eq 'ci-failure') {
+    $openPrs = @()
+    if ($Probe) {
+        $openPrs = @(@{ number = $PrNumber; headRefOid = $HeadSha })
+    }
+    else {
+        try {
+            $openPrs = @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+        }
+        catch {
+            if ($HeadSha) {
+                $openPrs = @(@{ number = $PrNumber; headRefOid = $HeadSha })
+            }
+        }
+    }
+    $gatePayload.workerState = @{
+        sessions = if ($Probe) { @($resolveParams.Sessions) } else { @(Get-AoStatusSessions) }
+        openPrs  = @($openPrs)
+    }
+    $gatePayload.ciFailureStoreDir = Get-InvokeGatedWorkerNudgeCiFailureStoreDir -ProjectIdOverride $ProjectId
+    $gatePayload.episodeKey = $EpisodeKey
+    $gatePayload.repo = 'chetwerikoff/orchestrator-pack'
 }
 $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload $gatePayload
 if (-not $gate.allow) {

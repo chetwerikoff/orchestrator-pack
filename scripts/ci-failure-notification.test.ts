@@ -18,6 +18,7 @@ import {
   evaluateEpisodeTerminal,
   evaluateHelperErrorEscalation,
   evaluateLiveWorkerSuppressor,
+  findCrossHeadFixingCiBridge,
   evaluateProgressFreshness,
   evaluatePreflightRevalidation,
   evaluateSnapshotCoherence,
@@ -903,6 +904,17 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
     expect(result.reason).toBe('suppressed-live-worker');
   });
 
+  it('wrapper evaluate-suppressor mode returns live-worker suppression (review opk-rev-974)', () => {
+    const result = runWrapper('evaluate-suppressor', {
+      episode,
+      surface: 'orchestrator-turn',
+      workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
+      ...freshProgressClock(),
+    });
+    expect(result.decision).toBe('SUPPRESS');
+    expect(result.reason).toBe('suppressed-live-worker');
+  });
+
   it('wrapper record mode enqueues pending episode', () => {
     const dir = tempStore();
     try {
@@ -1163,6 +1175,68 @@ describe('CI failure progress freshness lifecycle (Issue #439 AC#3–AC#8)', () 
       if (prior === undefined) delete process.env[PROGRESS_FRESHNESS_ENV];
       else process.env[PROGRESS_FRESHNESS_ENV] = prior;
     }
+  });
+
+  it('findCrossHeadFixingCiBridge does not bridge when latest prior-head report is non-fixing (opk-rev-985)', () => {
+    const pins = progressPins();
+    const h1 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const h2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const owner = {
+      reports: [
+        {
+          reportState: 'fixing_ci',
+          reportedAt: '2026-06-18T13:05:00.000Z',
+          accepted: true,
+          headRefOid: h1,
+        },
+        {
+          reportState: 'working',
+          reportedAt: '2026-06-18T13:10:00.000Z',
+          accepted: true,
+          headRefOid: h1,
+        },
+      ],
+    };
+    const bridge = findCrossHeadFixingCiBridge({
+      owner,
+      episode: { ...newHead, prNumber: episode.prNumber },
+      openPrs: [{ number: episode.prNumber, headRefOid: h2, headCommittedAt: '2026-06-18T13:20:00.000Z' }],
+      nowMs: pins.freshEvaluationMs,
+      config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
+    });
+    expect(bridge.bridged).toBe(false);
+    expect(bridge.reason).toBe('no_qualifying_bridge');
+  });
+
+    it('findCrossHeadFixingCiBridge does not bridge after non-fixing catch-up on new head (opk-rev-977)', () => {
+    const pins = progressPins();
+    const h1 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const h2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const owner = {
+      reports: [
+        {
+          reportState: 'fixing_ci',
+          reportedAt: '2026-06-18T13:05:00.000Z',
+          accepted: true,
+          headRefOid: h1,
+        },
+        {
+          reportState: 'working',
+          reportedAt: '2026-06-18T13:18:00.000Z',
+          accepted: true,
+          headRefOid: h2,
+        },
+      ],
+    };
+    const bridge = findCrossHeadFixingCiBridge({
+      owner,
+      episode: { ...newHead, prNumber: episode.prNumber },
+      openPrs: [{ number: episode.prNumber, headRefOid: h2, headCommittedAt: '2026-06-18T13:20:00.000Z' }],
+      nowMs: pins.freshEvaluationMs,
+      config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
+    });
+    expect(bridge.bridged).toBe(false);
+    expect(bridge.reason).toBe('current_head_catch_up_reported');
   });
 
   it('evaluateLiveWorkerSuppressor exposes progress_stale audit context (AC#5)', () => {
