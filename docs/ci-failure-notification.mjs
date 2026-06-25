@@ -10,7 +10,7 @@ import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, re
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
-import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs } from './review-trigger-reconcile.mjs';
+import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from './review-trigger-reconcile.mjs';
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 import {
@@ -310,6 +310,349 @@ export function resolveLivePrOwner({ workerState, episode }) {
   return { ok: true, ownerId, owner, live, reportState, targetGeneration };
 }
 
+
+/**
+ * Class B cross-head stint bridge: fresh fixing_ci on an earlier explicit head after
+ * one or more head advances before the worker reports on the newest head.
+ *
+ * @param {object} input
+ */
+export function findCrossHeadFixingCiBridge({
+  owner,
+  episode,
+  openPrs,
+  nowMs,
+  config: inputConfig,
+}) {
+  const ep = normalizeEpisodeKey(episode);
+  const currentHead = ep.headSha;
+  const currentHeadCommittedAtMs = resolveHeadCommittedAtMs(openPrs, ep.prNumber);
+  const currentScoped = resolveHeadScopedLatestReport(owner, currentHead, openPrs, ep.prNumber);
+  if (!currentScoped.ok) {
+    return { bridged: false, error: currentScoped.error, code: currentScoped.code, field: currentScoped.field };
+  }
+  if (currentScoped.reportState === 'fixing_ci') {
+    return { bridged: false, reason: 'current_head_has_fixing_ci' };
+  }
+  if (currentScoped.report && currentScoped.reportState) {
+    return { bridged: false, reason: 'current_head_catch_up_reported' };
+  }
+
+  const config = resolveConfig(inputConfig ?? {});
+  const evaluationMs = Number(nowMs) || Date.now();
+  /** @type {{ report: Record<string, unknown>, headSha: string, reportedAtMs: number, ageMs: number, progressFreshnessMs: number } | null} */
+  let best = null;
+  let bestMs = -1;
+
+  const priorHeads = new Set();
+  for (const report of toArray(owner?.reports)) {
+    const priorHead = getStoredReportHeadSha(report);
+    if (priorHead && priorHead !== currentHead) {
+      priorHeads.add(priorHead);
+    }
+  }
+
+  for (const priorHead of priorHeads) {
+    const priorScoped = resolveHeadScopedLatestReport(owner, priorHead, openPrs, ep.prNumber);
+    if (!priorScoped.ok) {
+      return { bridged: false, error: priorScoped.error, code: priorScoped.code, field: priorScoped.field };
+    }
+    if (priorScoped.reportState !== 'fixing_ci') {
+      continue;
+    }
+    const reportedAtMs = Number(priorScoped.reportedAtMs ?? 0);
+    if (reportedAtMs <= 0) {
+      continue;
+    }
+    if (Number.isFinite(currentHeadCommittedAtMs) && currentHeadCommittedAtMs > 0 && reportedAtMs > currentHeadCommittedAtMs) {
+      continue;
+    }
+    const freshness = evaluateProgressFreshness({
+      reportedAtMs,
+      nowMs: evaluationMs,
+      config,
+    });
+    if (!freshness.ok || !freshness.fresh) {
+      continue;
+    }
+    if (reportedAtMs >= bestMs) {
+      bestMs = reportedAtMs;
+      best = {
+        report: priorScoped.report,
+        headSha: priorHead,
+        reportedAtMs,
+        ageMs: freshness.ageMs,
+        progressFreshnessMs: freshness.progressFreshnessMs,
+      };
+    }
+  }
+
+  if (!best) {
+    return { bridged: false, reason: 'no_qualifying_bridge' };
+  }
+  return {
+    bridged: true,
+    stintClass: 'B',
+    bridgeHeadSha: best.headSha,
+    reportedAtMs: best.reportedAtMs,
+    ageMs: best.ageMs,
+    progressFreshnessMs: best.progressFreshnessMs,
+  };
+}
+
+function isOrchestratorTurnSurface(surface) {
+  const normalized = String(surface ?? '').trim().toLowerCase();
+  return normalized === 'orchestrator-turn' || normalized.includes('orchestrator-turn');
+}
+
+/**
+ * @param {string} storeDir
+ * @param {{ prNumber: number, headSha: string, targetId: string, targetGeneration: string }} match
+ */
+export function readPostStaleEscalationLock(storeDir, match) {
+  const dir = path.join(String(storeDir ?? ''), 'episodes');
+  if (!storeDir || !existsSync(dir)) {
+    return { open: false };
+  }
+  const prNumber = Number(match?.prNumber ?? 0);
+  const headSha = normalizeSha(match?.headSha);
+  const targetId = String(match?.targetId ?? '').trim();
+  const targetGeneration = String(match?.targetGeneration ?? targetId).trim();
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.episode.json')) {
+      continue;
+    }
+    const record = tryReadEpisodeFile(path.join(dir, name));
+    if (!record || record.sendEscalationReason !== 'progress_stale') {
+      continue;
+    }
+    const episode = record.episode ?? {};
+    if (Number(episode.prNumber) !== prNumber) {
+      continue;
+    }
+    if (normalizeSha(episode.headSha) !== headSha) {
+      continue;
+    }
+    if (String(episode.targetId ?? '') !== targetId) {
+      continue;
+    }
+    if (String(episode.targetGeneration ?? episode.targetId ?? '') !== targetGeneration) {
+      continue;
+    }
+    if (record.staleEscalationCleared) {
+      continue;
+    }
+    return {
+      open: true,
+      owner: record.staleEscalationOwner ?? 'reconcile',
+      record,
+      digest: record.digest ?? episodeKeyDigest(episode),
+    };
+  }
+  return { open: false };
+}
+
+/**
+ * Shared ci-failure suppression / stale-escalation predicate for reconcile and orchestrator-turn.
+ *
+ * @param {object} input
+ */
+export function evaluateCiFailureSuppressorDecision(input) {
+  const episode = normalizeEpisodeKey(input?.episode);
+  const surface = String(input?.surface ?? input?.source ?? 'unknown');
+  const storeDir = input?.storeDir ?? null;
+  const nowMs = Number(input?.nowMs) || Date.now();
+  const config = resolveConfig(input?.config);
+  const orchestratorTurn = isOrchestratorTurnSurface(surface);
+
+  const auditBase = {
+    surface,
+    prNumber: episode.prNumber,
+    headSha: episode.headSha,
+    targetId: episode.targetId,
+    targetGeneration: episode.targetGeneration,
+  };
+
+  const live = evaluateLiveWorkerSuppressor({
+    episode,
+    workerState: input?.workerState,
+    headShaFirst: input?.headShaFirst,
+    headShaSecond: input?.headShaSecond,
+    versionMarkerFirst: input?.versionMarkerFirst,
+    versionMarkerSecond: input?.versionMarkerSecond,
+    nowMs,
+    config,
+  });
+
+  if (live.status === 'snapshot_skew' || live.status === 'input_error' || live.status === 'progress_freshness_unreadable') {
+    return {
+      decision: 'SUPPRESS',
+      reason: live.reason ?? live.error_kind ?? 'degraded_fail_closed',
+      failClosed: true,
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: live.reason ?? live.error_kind ?? 'degraded_fail_closed',
+        stintClass: 'C',
+        postStaleLock: false,
+      },
+    };
+  }
+
+  if (orchestratorTurn && storeDir) {
+    const lock = readPostStaleEscalationLock(storeDir, episode);
+    if (lock.open) {
+      if (live.status === 'matched') {
+        clearPostStaleEscalationLock(storeDir, lock);
+      } else {
+        return {
+          decision: 'SUPPRESS',
+          reason: 'post_stale_escalation_lock',
+          stintClass: 'C',
+          postStaleLock: true,
+          live,
+          audit: {
+            ...auditBase,
+            postStaleLock: true,
+            staleEscalationOwner: lock.owner,
+            suppressReason: 'post_stale_escalation_lock',
+          },
+        };
+      }
+    }
+  }
+
+  if (live.status === 'matched') {
+    return {
+      decision: 'SUPPRESS',
+      reason: 'suppressed-live-worker',
+      stintClass: live.stintClass ?? 'A',
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: 'suppressed-live-worker',
+        stintClass: live.stintClass ?? 'A',
+        bridgeHeadSha: live.bridgeHeadSha ?? null,
+        postStaleLock: false,
+        reportedAtMs: live.reportedAtMs ?? null,
+        progressFreshnessMs: live.progressFreshnessMs ?? null,
+        ageMs: live.ageMs ?? null,
+      },
+    };
+  }
+
+  if (live.status === 'progress_stale') {
+    if (orchestratorTurn) {
+      return {
+        decision: 'SUPPRESS',
+        reason: 'progress_stale_reconcile_owned',
+        stintClass: 'A',
+        live,
+        audit: {
+          ...auditBase,
+          suppressReason: 'progress_stale_reconcile_owned',
+          stintClass: 'A',
+          postStaleLock: false,
+        },
+      };
+    }
+    armPostStaleEscalationLock(storeDir, episode, input?.staleEscalationOwner ?? 'reconcile');
+    return {
+      decision: 'SEND',
+      reason: 'progress_stale',
+      stintClass: 'A',
+      live,
+      audit: {
+        ...auditBase,
+        auditReason: 'progress_stale',
+        stintClass: 'A',
+        postStaleLock: true,
+      },
+    };
+  }
+
+  if (live.status === 'superseded' || live.status === 'no_live_owner') {
+    const reason = live.reason ?? (live.status === 'no_live_owner' ? 'abandoned-no-live-owner' : 'abandoned-superseded');
+    return {
+      decision: 'SUPPRESS',
+      reason,
+      stintClass: 'C',
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: reason,
+        stintClass: 'C',
+        postStaleLock: false,
+        currentHead: live.currentHead ?? null,
+        currentTargetId: live.currentTargetId ?? null,
+        currentTargetGeneration: live.currentTargetGeneration ?? null,
+      },
+    };
+  }
+
+  if (live.status === 'not_suppressing') {
+    return {
+      decision: 'SEND',
+      reason: 'no_suppressor',
+      stintClass: live.stintClass ?? 'C',
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: 'no_suppressor',
+        stintClass: live.stintClass ?? 'C',
+        postStaleLock: false,
+      },
+    };
+  }
+
+  return {
+    decision: 'SUPPRESS',
+    reason: live.reason ?? 'degraded_fail_closed',
+    failClosed: true,
+    live,
+    audit: {
+      ...auditBase,
+      suppressReason: live.reason ?? 'degraded_fail_closed',
+      stintClass: 'C',
+      postStaleLock: false,
+    },
+  };
+}
+
+export function armPostStaleEscalationLock(storeDir, episode, owner = 'reconcile') {
+  if (!storeDir) {
+    return { armed: false, reason: 'missing_store_dir' };
+  }
+  const ep = normalizeEpisodeKey(episode);
+  const record = readEpisodeRecord(storeDir, ep);
+  if (!record) {
+    return { armed: false, reason: 'missing_record' };
+  }
+  const updated = {
+    ...record,
+    sendEscalationReason: 'progress_stale',
+    staleEscalationOwner: owner,
+    staleEscalationArmedAtMs: Number(record.staleEscalationArmedAtMs ?? Date.now()),
+    staleEscalationCleared: false,
+  };
+  writeEpisodeRecord(storeDir, updated);
+  return { armed: true, record: updated };
+}
+
+export function clearPostStaleEscalationLock(storeDir, lock) {
+  if (!storeDir || !lock?.record) {
+    return { cleared: false };
+  }
+  const record = lock.record;
+  const updated = {
+    ...record,
+    staleEscalationCleared: true,
+    staleEscalationClearedAtMs: Date.now(),
+  };
+  writeEpisodeRecord(storeDir, updated);
+  return { cleared: true, record: updated };
+}
+
 export function evaluateLiveWorkerSuppressor({
   episode,
   workerState,
@@ -393,6 +736,7 @@ export function evaluateLiveWorkerSuppressor({
       return {
         status: 'matched',
         reason: 'suppressed-live-worker',
+        stintClass: 'A',
         ownerId: ownerResolution.ownerId,
         reportState: ownerResolution.reportState,
         reportedAtMs: freshness.reportedAtMs,
@@ -403,6 +747,7 @@ export function evaluateLiveWorkerSuppressor({
     return {
       status: 'progress_stale',
       reason: 'progress_stale',
+      stintClass: 'A',
       ownerId: ownerResolution.ownerId,
       reportState: ownerResolution.reportState,
       reportedAtMs: freshness.reportedAtMs,
@@ -414,8 +759,39 @@ export function evaluateLiveWorkerSuppressor({
       prNumber: ep.prNumber,
     };
   }
+
+  const bridge = findCrossHeadFixingCiBridge({
+    owner: ownerResolution.owner,
+    episode: ep,
+    openPrs: workerState.openPrs,
+    nowMs,
+    config: resolveConfig(inputConfig ?? {}),
+  });
+  if (bridge.error) {
+    return {
+      status: 'input_error',
+      error_kind: bridge.error,
+      code: bridge.code,
+      field: bridge.field,
+    };
+  }
+  if (bridge.bridged) {
+    return {
+      status: 'matched',
+      reason: 'suppressed-live-worker',
+      stintClass: 'B',
+      bridgeHeadSha: bridge.bridgeHeadSha,
+      ownerId: ownerResolution.ownerId,
+      reportState: 'fixing_ci',
+      reportedAtMs: bridge.reportedAtMs,
+      progressFreshnessMs: bridge.progressFreshnessMs,
+      ageMs: bridge.ageMs,
+    };
+  }
+
   return {
     status: 'not_suppressing',
+    stintClass: 'C',
     ownerId: ownerResolution.ownerId,
     reportState: ownerResolution.reportState,
   };
@@ -1616,6 +1992,9 @@ export function evaluatePreflightRevalidation(input) {
       ...record,
       sendEscalationReason: 'progress_stale',
       sendEscalationDiagnostics: decision.diagnostics ?? {},
+      staleEscalationOwner: 'reconcile',
+      staleEscalationArmedAtMs: Number(record.staleEscalationArmedAtMs ?? input?.nowMs ?? Date.now()),
+      staleEscalationCleared: false,
     };
     writeEpisodeRecord(storeDir, workingRecord);
   }
@@ -1928,6 +2307,7 @@ function cli() {
   if (sub === 'reaction-record-plan') return planCiFailureReactionRecords(input);
   if (sub === 'list-intent-tokens') return { tokens: listIntentTokensFromStore(input?.storeDir) };
   if (sub === 'pre-send-recheck') return preSendCiRedRecheck(input?.episode, input?.fresh);
+  if (sub === 'evaluate-suppressor') return evaluateCiFailureSuppressorDecision(input);
   throw new Error(`unsupported subcommand: ${sub}`);
 }
 
@@ -1958,4 +2338,5 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'append-audit': cli,
   'helper-error': cli,
   'adoption-artifact': cli,
+  'evaluate-suppressor': cli,
 });
