@@ -202,7 +202,9 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
     const processJsonl = (result.stdout ?? '').toString();
     const fromFile = readOutputFile(outputFile);
     const lastMessage = (fromFile ?? '').trim();
-    const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
+    const timedOut =
+      (result.error && 'code' in result.error && result.error.code === 'ETIMEDOUT') ||
+      result.signal === 'SIGTERM';
 
     return {
       exitCode: timedOut ? 1 : (result.status ?? 1),

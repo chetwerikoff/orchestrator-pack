@@ -247,6 +247,7 @@ export declare function buildFailedCancelledObserved(
   run: ReviewRun | null,
   prNumber: number,
   headSha: string,
+  reviewRuns?: ReviewRun[],
 ): Record<string, unknown>;
 
 export interface NoStartDecisionRecord {

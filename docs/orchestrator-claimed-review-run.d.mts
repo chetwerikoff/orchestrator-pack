@@ -16,6 +16,7 @@ export interface CoverageVerdict {
   reason: string;
   status?: string;
   retryEligible?: boolean;
+  escalationReason?: string;
 }
 
 export interface ScenarioCellResult {
