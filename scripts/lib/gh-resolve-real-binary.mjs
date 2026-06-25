@@ -123,19 +123,23 @@ function resolvePathCandidate(candidate, wrapperRealPath) {
  * @param {{ nonNativeCount: number }} stats
  * @returns {string | null}
  */
+function throwHopBudgetExceeded(nonNativeCount) {
+  throw new Error(
+    `gh-resolve-real-binary: wrapper hop budget exceeded (${nonNativeCount} non-native gh candidates on PATH)`,
+  );
+}
+
 function acceptNativeCandidate(candidate, wrapperRealPath, stats) {
   const resolved = resolve(candidate);
-  if (resolved === wrapperRealPath) {
-    return null;
-  }
-  if (isNativeGhExecutable(resolved)) {
+  if (isNativeGhExecutable(resolved) && resolved !== wrapperRealPath) {
     return resolved;
+  }
+  if (!isExecutable(resolved)) {
+    return null;
   }
   stats.nonNativeCount += 1;
   if (stats.nonNativeCount >= maxNonNativeBudget()) {
-    throw new Error(
-      `gh-resolve-real-binary: wrapper hop budget exceeded (${stats.nonNativeCount} non-native gh candidates on PATH)`,
-    );
+    throwHopBudgetExceeded(stats.nonNativeCount);
   }
   return null;
 }
@@ -178,10 +182,17 @@ export function resolveRealGhBinary(wrapperRealPath = resolve(WRAPPER_PATH)) {
     }
   }
 
+  if (stats.nonNativeCount > 0) {
+    throwHopBudgetExceeded(stats.nonNativeCount);
+  }
+
   for (const fallback of SYSTEM_FALLBACKS) {
-    const native = acceptNativeCandidate(fallback, wrapperRealPath, stats);
-    if (native) {
-      return native;
+    const resolved = resolve(fallback);
+    if (resolved === wrapperRealPath) {
+      continue;
+    }
+    if (isNativeGhExecutable(resolved)) {
+      return resolved;
     }
   }
 

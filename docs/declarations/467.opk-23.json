@@ -1,0 +1,17 @@
+{
+  "issue_number": 467,
+  "iteration_id": "opk-23",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-25T11:23:33.618Z",
+  "baseline": {
+    "commit_sha": "59ed280454a7cb61522a61d92605a4ed81b047ca",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0fb0eea7f99f2c6fcfc2155aa460d1184c80d216c8e39a5e3f3108b91bbbfee9"
+  },
+  "declared_paths": [
+    "scripts/lib/gh-resolve-real-binary.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
