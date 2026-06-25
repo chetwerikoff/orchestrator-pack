@@ -1177,7 +1177,38 @@ describe('CI failure progress freshness lifecycle (Issue #439 AC#3–AC#8)', () 
     }
   });
 
-  it('findCrossHeadFixingCiBridge does not bridge after non-fixing catch-up on new head (opk-rev-977)', () => {
+  it('findCrossHeadFixingCiBridge does not bridge when latest prior-head report is non-fixing (opk-rev-985)', () => {
+    const pins = progressPins();
+    const h1 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const h2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const owner = {
+      reports: [
+        {
+          reportState: 'fixing_ci',
+          reportedAt: '2026-06-18T13:05:00.000Z',
+          accepted: true,
+          headRefOid: h1,
+        },
+        {
+          reportState: 'working',
+          reportedAt: '2026-06-18T13:10:00.000Z',
+          accepted: true,
+          headRefOid: h1,
+        },
+      ],
+    };
+    const bridge = findCrossHeadFixingCiBridge({
+      owner,
+      episode: { ...newHead, prNumber: episode.prNumber },
+      openPrs: [{ number: episode.prNumber, headRefOid: h2, headCommittedAt: '2026-06-18T13:20:00.000Z' }],
+      nowMs: pins.freshEvaluationMs,
+      config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
+    });
+    expect(bridge.bridged).toBe(false);
+    expect(bridge.reason).toBe('no_qualifying_bridge');
+  });
+
+    it('findCrossHeadFixingCiBridge does not bridge after non-fixing catch-up on new head (opk-rev-977)', () => {
     const pins = progressPins();
     const h1 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const h2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';

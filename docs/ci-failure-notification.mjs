@@ -344,15 +344,23 @@ export function findCrossHeadFixingCiBridge({
   let best = null;
   let bestMs = -1;
 
+  const priorHeads = new Set();
   for (const report of toArray(owner?.reports)) {
-    if (getReportState(report) !== 'fixing_ci') {
-      continue;
-    }
     const priorHead = getStoredReportHeadSha(report);
-    if (!priorHead || priorHead === currentHead) {
+    if (priorHead && priorHead !== currentHead) {
+      priorHeads.add(priorHead);
+    }
+  }
+
+  for (const priorHead of priorHeads) {
+    const priorScoped = resolveHeadScopedLatestReport(owner, priorHead, openPrs, ep.prNumber);
+    if (!priorScoped.ok) {
+      return { bridged: false, error: priorScoped.error, code: priorScoped.code, field: priorScoped.field };
+    }
+    if (priorScoped.reportState !== 'fixing_ci') {
       continue;
     }
-    const reportedAtMs = getReportTimestampMs(report);
+    const reportedAtMs = Number(priorScoped.reportedAtMs ?? 0);
     if (reportedAtMs <= 0) {
       continue;
     }
@@ -370,7 +378,7 @@ export function findCrossHeadFixingCiBridge({
     if (reportedAtMs >= bestMs) {
       bestMs = reportedAtMs;
       best = {
-        report,
+        report: priorScoped.report,
         headSha: priorHead,
         reportedAtMs,
         ageMs: freshness.ageMs,

@@ -996,7 +996,14 @@ function evaluateCiFailureNudgeSuppressor(input, tuple) {
 }
 
 export function evaluateNudgeGate(input) {
-  const tuple = buildTupleKey(input);
+  let gateInput = input;
+  if (classifyIntent(input) === 'ci-failure') {
+    const resolvedHeadSha = resolveCiFailureHeadShaFromGateInput(input);
+    if (VALID_HEAD_SHA.test(resolvedHeadSha)) {
+      gateInput = { ...input, headSha: resolvedHeadSha };
+    }
+  }
+  const tuple = buildTupleKey(gateInput);
   if (!tuple.ok) {
     return {
       allow: false,
@@ -1113,7 +1120,7 @@ export function evaluateNudgeGate(input) {
   }
 
   if (tuple.intentClass === 'ci-failure') {
-    const ciSuppressor = evaluateCiFailureNudgeSuppressor(input, tuple);
+    const ciSuppressor = evaluateCiFailureNudgeSuppressor(gateInput, tuple);
     if (ciSuppressor.suppress) {
       return {
         allow: false,

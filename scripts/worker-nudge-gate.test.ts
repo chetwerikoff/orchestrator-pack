@@ -1376,6 +1376,25 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(gate.reason).toBeTruthy();
   });
 
+  it('resolves openPrs headSha before ci-failure tuple derivation', () => {
+    const headSha = 'c'.repeat(40);
+    const gate = evaluateNudgeGate({
+      prNumber: 460,
+      sessionId: 'opk-19',
+      targetId: 'opk-19',
+      targetGeneration: 'gen-1',
+      intentClass: 'ci-failure',
+      source: 'orchestrator-turn',
+      surface: 'orchestrator-turn',
+      workerState: { sessions: [], openPrs: [{ number: 460, headRefOid: headSha }] },
+      storePath: '/tmp/test-claims',
+      claims: [],
+      nowMs: Date.now(),
+    });
+    expect(gate.reason).not.toBe('tuple_incomplete');
+    expect((gate.tuple as { tupleKey?: string })?.tupleKey ?? '').toContain(headSha);
+  });
+
   it('fail-closes ci-failure gate when headSha cannot be resolved from episodeKey', () => {
     const gate = evaluateNudgeGate({
       prNumber: 460,
