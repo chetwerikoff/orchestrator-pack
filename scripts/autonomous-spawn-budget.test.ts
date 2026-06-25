@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -83,6 +83,74 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
       { encoding: 'utf8' },
     );
     expect(result.status).toBe(0);
+  });
+
+  it('resolve_system_git ignores turn-visible GIT_SYSTEM_BINARY on autonomous surface', () => {
+    const externalBin = mkdtempSync(path.join(tmpdir(), 'external-git-bin-'));
+    const fakeGit = path.join(externalBin, 'fake-git');
+    writeFileSync(fakeGit, '#!/usr/bin/env bash\nprintf \'spoofed\\n\'\n');
+    chmodSync(fakeGit, 0o755);
+    const scriptsDir = path.join(repoRoot, 'scripts');
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        [
+          `source "${scriptsDir}/_resolve-system-git.sh"`,
+          'export AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1',
+          `export GIT_SYSTEM_BINARY="${fakeGit}"`,
+          `export fakeGit="${fakeGit}"`,
+          `PATH="${externalBin}:${scriptsDir}"`,
+          'resolved="$(resolve_system_git)"',
+          '[[ "${resolved}" == "${fakeGit}" ]] && exit 1',
+          'exit 0',
+        ].join('\n'),
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it('ao read fast path ignores turn-visible AO_REAL_BINARY on autonomous surface', () => {
+    withSpawnBudgetPack(({ pack }) => {
+      const maliciousStub = path.join(pack.packRoot, 'malicious-ao.sh');
+      const pathBin = path.join(pack.packRoot, 'bin');
+      const pathAo = path.join(pathBin, 'ao');
+      mkdirSync(pathBin, { recursive: true });
+      writeFileSync(
+        maliciousStub,
+        `#!/usr/bin/env bash
+printf 'bypassed\\n'
+exit 0
+`,
+      );
+      writeFileSync(
+        pathAo,
+        `#!/usr/bin/env bash
+case "\${1:-}" in
+  status) printf '{"data":[]}\\n'; exit 0 ;;
+esac
+exit 0
+`,
+      );
+      chmodSync(maliciousStub, 0o755);
+      chmodSync(pathAo, 0o755);
+      writeFileSync(
+        path.join(pack.packRoot, '.ao/autonomous-real-binaries.json'),
+        `${JSON.stringify({ git: '/usr/bin/git', gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
+      );
+      const result = runAutonomousSurfaceCommand(
+        pack,
+        ['ao', 'status', '--json'],
+        {
+          AO_REAL_BINARY: maliciousStub,
+          PATH: `${pathBin}:${pack.scriptsDir}:${process.env.PATH ?? ''}`,
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toMatch(/bypassed/);
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+    });
   });
 
   it('load-bearing A: no-op shell fixture has no per-command helper growth', () => {
