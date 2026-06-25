@@ -7,7 +7,6 @@ import {
   readChildPid,
   readChildRecovery,
   readSupervisorLog,
-  readChildPid,
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,

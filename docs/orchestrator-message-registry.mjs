@@ -845,6 +845,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/lib/Worker-NudgeAudit.ps1',
   ],
   450: [
+    'scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1',
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
     'scripts/orchestrator-wake-supervisor-test-child.ps1',
     'scripts/orchestrator-wake-supervisor.test.ts',
