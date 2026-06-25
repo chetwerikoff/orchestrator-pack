@@ -63,6 +63,11 @@ export declare function resolveHeadScopedReportState(session: unknown, headSha: 
 export declare function evaluateProgressFreshness(input: unknown): Record<string, unknown>;
 export declare function resolveLivePrOwner(input: unknown): Record<string, unknown>;
 export declare function evaluateLiveWorkerSuppressor(input: unknown): Record<string, unknown>;
+export declare function evaluateCiFailureSuppressorDecision(input: unknown): Record<string, unknown>;
+export declare function findCrossHeadFixingCiBridge(input: unknown): Record<string, unknown>;
+export declare function readPostStaleEscalationLock(storeDir: string, match: unknown): Record<string, unknown>;
+export declare function armPostStaleEscalationLock(storeDir: string, episode: unknown, owner?: string): Record<string, unknown>;
+export declare function clearPostStaleEscalationLock(storeDir: string, lock: unknown): Record<string, unknown>;
 export declare function bindReactionEvent(episode: unknown, events?: unknown[], options?: unknown): { status: string; eventId: string | null; event?: unknown };
 export declare function exactIntentTokenLookup(episode: unknown, tokens?: unknown[], options?: unknown): { status: string; tokenId: string | null };
 

@@ -14,7 +14,8 @@ param(
         'decide','evaluate','record','claim-preflight','preflight-revalidate','reserve-intent',
         'mark-submitted','mark-send-issued','mark-send-delivered','release-submit-intent','resolve-delivery','terminalize','expire-scan','expire','reconcile-plan',
         'health','init-gate','claim','mark-send-failure','append-audit','helper-error','adoption-artifact',
-        'sync-red-period-trackers','reaction-record-plan','list-intent-tokens','pre-send-recheck'
+        'sync-red-period-trackers','reaction-record-plan','list-intent-tokens','pre-send-recheck',
+        'evaluate-suppressor'
     )]
     [string]$Mode,
     [string]$InputPath = '',
