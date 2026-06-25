@@ -162,6 +162,17 @@ finding. Checkpoint-2 must **never auto-blocks** review availability.
 
 {{SCOPE_SECTION}}
 
+## Local test budget (reviewer path)
+
+CI owns exhaustive test execution. During local review, only **cheap, targeted**
+checks are allowed when they fit the remaining review budget.
+
+- Do **not** run full-suite commands (`npm test`, `vitest run`, `scripts/verify.ps1`,
+  supervisor integration tests, or other slow suites) from the reviewer workspace.
+- Prefer narrow, file-scoped checks only when they are likely to finish quickly.
+- The pack wrapper enforces this with exec-level command guards outside your turn.
+  A skipped or denied slow test is **not** a clean-review signal.
+
 ## Finding bar and calibration
 
 Report only **material** findings — issues that matter for correctness, contract compliance, tests, CI, spec adherence, or real risk in this PR. **Suppress** pure style, naming, formatting preferences, low-value cleanup, and speculative concerns that lack evidence in the diff or the provided context.

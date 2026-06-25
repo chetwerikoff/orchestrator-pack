@@ -12,7 +12,9 @@ import {
   evaluateHeadReadyForReview,
   preRunHeadReadyRecheck,
   resolveCurrentPrHeadSha,
+  buildFailedCancelledObserved,
 } from './review-head-ready.mjs';
+import { resolveFailedRunRetryEligibility } from './codex-reviewer-timeout-retry.mjs';
 import {
   evaluateHandoffPreClaimRecheck,
   formatHandoffWakeAuditLine,
@@ -193,14 +195,29 @@ export function evaluateWakeReviewTrigger(input) {
   const reviewRuns = toArray(input.reviewRuns);
   const sessions = toArray(input.sessions);
   const failedRun = findFailedOrCancelledRunOnHead(reviewRuns, prNumber, headSha);
-  if (failedRun) {
+  const retryState = failedRun
+    ? resolveFailedRunRetryEligibility(failedRun, reviewRuns, prNumber, headSha)
+    : { retryEligible: true, escalationReason: null, failureClass: null };
+  const failedRetryEligible =
+    failedRun != null &&
+    !isHeadCovered(reviewRuns, prNumber, headSha) &&
+    retryState.retryEligible !== false;
+
+  if (failedRun && !failedRetryEligible) {
+    const observed = buildFailedCancelledObserved(failedRun, prNumber, headSha, reviewRuns);
     return {
       triggerReviewRun: false,
-      reason: 'failed_or_cancelled_on_head',
+      reason:
+        retryState.escalationReason != null
+          ? 'retry_bound_exhausted'
+          : 'failed_or_cancelled_on_head',
       route: 'empty_review_trap',
       terminationReason: String(failedRun.terminationReason ?? ''),
+      escalationReason: retryState.escalationReason ?? observed.escalationReason,
+      observed,
       processingMs,
-      withinLatencyBound,
+      withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
+      withinReceiptBound,
     };
   }
 
@@ -249,6 +266,7 @@ export function evaluateWakeReviewTrigger(input) {
     requiredCheckNames: toArray(input.requiredCheckNames),
     requiredCheckLookupFailed: Boolean(input.requiredCheckLookupFailed),
     headCommittedAtMs: resolveHeadCommittedAtMs(openPrs, prNumber),
+    allowFailedRetry: failedRetryEligible,
   });
 
   if (!decision.eligible) {

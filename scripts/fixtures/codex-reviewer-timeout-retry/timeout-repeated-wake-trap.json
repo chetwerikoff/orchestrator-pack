@@ -1,0 +1,31 @@
+{
+  "description": "Repeated timeout_no_verdict on head escalates at wake start",
+  "headCommittedAt": "2026-06-20T01:00:00.000Z",
+  "reportedAt": "2026-06-20T01:00:00.000Z",
+  "reviewRuns": [
+    {
+      "id": "timeout-first",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict",
+      "createdAt": "2026-06-20T00:00:00.000Z"
+    },
+    {
+      "id": "timeout-second",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict",
+      "createdAt": "2026-06-20T01:00:00.000Z"
+    }
+  ],
+  "expect": {
+    "triggerReviewRun": false,
+    "route": "empty_review_trap",
+    "reason": "retry_bound_exhausted",
+    "escalationReason": "repeated_timeout_no_verdict"
+  }
+}

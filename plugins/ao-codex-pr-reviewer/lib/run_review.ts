@@ -1,7 +1,13 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import {
+  buildReviewerBudgetSpawnEnv,
+  createReviewerBudgetLedger,
+  type ReviewerBudgetLedger,
+} from './reviewer_budget.js';
 import type { ReviewSource } from './types.js';
 
 export interface RunCodexReviewOptions {
@@ -16,6 +22,9 @@ export interface RunCodexReviewOptions {
   fixtureProcessJsonl?: string;
   /** When set with fixtureStdout, supplies persisted session JSONL (tests). */
   fixtureSessionJsonl?: string;
+  /** When set, simulates a hard-timeout kill with no verdict (tests). */
+  fixtureTimedOut?: boolean;
+  budgetLedger?: ReviewerBudgetLedger;
 }
 
 export interface RunCodexReviewResult {
@@ -27,6 +36,8 @@ export interface RunCodexReviewResult {
   stderr: string;
   /** @deprecated Use {@link lastMessage}. */
   stdout: string;
+  timedOut?: boolean;
+  budgetLedger: ReviewerBudgetLedger;
 }
 
 const CODEX_SPAWN_ENV_STRIP = [
@@ -77,15 +88,28 @@ export function isTrustedLocalReviewContext(
   return true;
 }
 
+function resolveCommandGuardDir(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', 'bin', 'command-guard');
+}
+
 export function buildCodexSpawnEnv(
-  _source?: ReviewSource,
+  source?: ReviewSource,
   env: NodeJS.ProcessEnv = process.env,
+  budgetLedger?: ReviewerBudgetLedger,
 ): NodeJS.ProcessEnv {
-  const childEnv = { ...env };
+  const childEnv = budgetLedger ? buildReviewerBudgetSpawnEnv(budgetLedger, env) : { ...env };
   // Always strip exfiltratable tokens — trusted local review grants network access
   // and reviews attacker-controlled PR diffs; Codex auth uses ~/.codex on disk.
   for (const key of CODEX_SPAWN_ENV_STRIP) {
     delete childEnv[key];
+  }
+  if (isTrustedLocalReviewContext(source, childEnv)) {
+    const guardDir = resolveCommandGuardDir();
+    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+    const existingPath = childEnv[pathKey] ?? env[pathKey] ?? '';
+    // Windows resolves npm/pwsh/etc. via .cmd/.ps1 shims in the same directory.
+    childEnv[pathKey] = existingPath ? `${guardDir}${delimiter}${existingPath}` : guardDir;
   }
   return childEnv;
 }
@@ -119,6 +143,20 @@ export function buildCodexExecReviewArgs(options: {
 }
 
 export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewResult {
+  const budgetLedger = options.budgetLedger ?? createReviewerBudgetLedger();
+
+  if (options.fixtureTimedOut) {
+    return {
+      exitCode: 1,
+      processJsonl: options.fixtureProcessJsonl ?? '',
+      lastMessage: options.fixtureStdout ?? '',
+      stdout: options.fixtureStdout ?? '',
+      stderr: 'reviewer timeout before verdict',
+      timedOut: true,
+      budgetLedger,
+    };
+  }
+
   if (options.fixtureStdout !== undefined) {
     const lastMessage = options.fixtureStdout;
     return {
@@ -127,6 +165,7 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
       lastMessage,
       stdout: lastMessage,
       stderr: '',
+      budgetLedger,
     };
   }
 
@@ -145,8 +184,8 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
       input: options.prompt,
       encoding: 'utf8' as const,
       maxBuffer: 8 * 1024 * 1024,
-      timeout: 10 * 60_000,
-      env: buildCodexSpawnEnv(options.source),
+      timeout: budgetLedger.effectiveBudgetMs,
+      env: buildCodexSpawnEnv(options.source, process.env, budgetLedger),
     };
 
     let result: ReturnType<typeof spawnSync>;
@@ -164,13 +203,18 @@ export function runCodexReview(options: RunCodexReviewOptions): RunCodexReviewRe
     const processJsonl = (result.stdout ?? '').toString();
     const fromFile = readOutputFile(outputFile);
     const lastMessage = (fromFile ?? '').trim();
+    const timedOut =
+      (result.error && 'code' in result.error && result.error.code === 'ETIMEDOUT') ||
+      result.signal === 'SIGTERM';
 
     return {
-      exitCode: result.status ?? 1,
+      exitCode: timedOut ? 1 : (result.status ?? 1),
       processJsonl,
       lastMessage,
       stdout: lastMessage,
       stderr,
+      timedOut,
+      budgetLedger,
     };
   } finally {
     try {
