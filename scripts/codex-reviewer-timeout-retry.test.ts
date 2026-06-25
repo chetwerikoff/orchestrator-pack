@@ -9,7 +9,10 @@ import {
   REPEATED_TIMEOUT_ESCALATION_REASON,
   TIMEOUT_NO_VERDICT_FAILURE_CLASS,
 } from '../docs/codex-reviewer-timeout-retry.mjs';
-import { evaluateScenarioMatrixCell } from '../docs/orchestrator-claimed-review-run.mjs';
+import {
+  evaluateOrchestratorTurnGate,
+  evaluateScenarioMatrixCell,
+} from '../docs/orchestrator-claimed-review-run.mjs';
 import { buildFailedCancelledObserved } from '../docs/review-head-ready.mjs';
 
 const fixturesDir = path.join(
@@ -89,6 +92,51 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     expect(gate.launch).toBe(false);
     expect(gate.reason).toBe('retry_bound_exhausted');
     expect(gate.coverage.escalationReason).toBe(REPEATED_TIMEOUT_ESCALATION_REASON);
+  });
+
+  it('does not label non-timeout retry exhaustion as repeated_timeout_no_verdict', () => {
+    const runs = [
+      {
+        id: 'empty-fail',
+        prNumber: 461,
+        targetSha: 'abc46100000000000000000000000000000000000',
+        status: 'failed',
+        findingCount: 0,
+        terminationReason: 'reviewer produced empty output',
+        retryEligible: false,
+        retryCount: 1,
+        createdAt: '2026-06-20T00:00:00.000Z',
+      },
+    ];
+    const gate = evaluateOrchestratorTurnGate({
+      prNumber: 461,
+      sessionId: 'opk-22',
+      openPrs: [
+        {
+          number: 461,
+          headRefOid: 'abc46100000000000000000000000000000000000',
+          headCommittedAt: '2026-06-20T00:00:00.000Z',
+        },
+      ],
+      reviewRuns: runs,
+      sessions: [
+        {
+          name: 'opk-22',
+          sessionId: 'opk-22',
+          role: 'worker',
+          prNumber: 461,
+          status: 'ready_for_review',
+          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-20T00:00:00.000Z' }],
+        },
+      ],
+      ciChecks: [{ name: 'Verify orchestrator-pack structure', state: 'SUCCESS' }],
+      requiredCheckNames: ['Verify orchestrator-pack structure'],
+      claimWindow: 'free',
+      provenanceAutonomous: true,
+    });
+    expect(gate.launch).toBe(false);
+    expect(gate.reason).toBe('retry_bound_exhausted');
+    expect(gate.escalationReason).toBeUndefined();
   });
 
   it('counts only matching failure class on same head', () => {

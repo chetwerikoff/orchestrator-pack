@@ -2,7 +2,11 @@
 set -eu
 
 now_ms() {
-  date +%s%3N 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time; print(int(time.time() * 1000))'
+    return
+  fi
+  echo $(($(date +%s) * 1000))
 }
 
 effective_budget_ms="${AO_REVIEW_EFFECTIVE_BUDGET_MS:-600000}"
@@ -26,7 +30,9 @@ remaining_review_ms() {
 }
 
 classify_command() {
-  joined="$*"
+  executable="$1"
+  shift
+  joined="$executable $*"
   case "$joined" in
     *orchestrator-wake-supervisor.test.ts*|*orchestrator-wake-supervisor-test-child*|*scripts/verify.ps1*|*check-reusable.ps1*|*supervisor*)
       echo slow_test
@@ -49,12 +55,12 @@ classify_command() {
 deny_slow_command() {
   executable="$1"
   shift
-  command_class="$(classify_command "$@")"
+  command_class="$(classify_command "$executable" "$@")"
   review_remaining="$(remaining_review_ms)"
   if [ "$command_class" = "cheap_targeted" ] && [ "$review_remaining" -gt 0 ]; then
     return 1
   fi
-  echo "review-test-budget:{\"executable\":\"$executable\",\"command\":\"$*\",\"commandClass\":\"$command_class\",\"decision\":\"skipped_or_denied_slow_test\",\"reason\":\"slow/full-suite reviewer checks are denied; CI owns exhaustive tests\",\"testBudgetMs\":$test_budget_ms,\"elapsedMs\":$(elapsed_ms)}" >&2
+  echo "review-test-budget:{\"executable\":\"$executable\",\"command\":\"$executable $*\",\"commandClass\":\"$command_class\",\"decision\":\"skipped_or_denied_slow_test\",\"reason\":\"slow/full-suite reviewer checks are denied; CI owns exhaustive tests\",\"testBudgetMs\":$test_budget_ms,\"elapsedMs\":$(elapsed_ms)}" >&2
   return 0
 }
 

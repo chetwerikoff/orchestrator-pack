@@ -123,6 +123,65 @@ describe('reviewer test budget guard (AC#2)', () => {
     expect(result.stderr).toContain('skipped_or_denied_slow_test');
   });
 
+  it('exec-level PATH guard blocks bare npm test as full_suite', () => {
+    const ledger = createReviewerBudgetLedger({
+      AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS: '600000',
+    });
+    const guardNpm = join(GUARD_DIR, 'npm');
+    const result = spawnSync('sh', [guardNpm, 'test'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${process.env.PATH ?? '/usr/bin'}`,
+        AO_REVIEW_EFFECTIVE_BUDGET_MS: String(ledger.effectiveBudgetMs),
+        AO_REVIEW_TEST_BUDGET_MS: String(ledger.testBudgetMs),
+        AO_REVIEW_HARD_DEADLINE_MS: String(ledger.startedAtMs + ledger.effectiveBudgetMs),
+        AO_REVIEW_BUDGET_STARTED_MS: String(ledger.startedAtMs),
+      },
+    });
+    expect(result.status ?? result.signal).toBe(127);
+    expect(result.stderr).toContain('"commandClass":"full_suite"');
+  });
+
+  it('exec-level PATH guard classifies bare npm test as full_suite', () => {
+    const guardLib = join(GUARD_DIR, 'guard-lib.sh');
+    const fullSuite = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npm test`],
+      { encoding: 'utf8' },
+    );
+    expect(fullSuite.stdout.trim()).toBe('full_suite');
+
+    const targeted = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npm test -- reviewer-budget.test.ts`],
+      { encoding: 'utf8' },
+    );
+    expect(targeted.stdout.trim()).toBe('cheap_targeted');
+  });
+
+  it('exec-level PATH guard uses millisecond clock under budget', () => {
+    const guardLib = join(GUARD_DIR, 'guard-lib.sh');
+    const startedMs = String(Date.now());
+    const hardDeadlineMs = String(Date.now() + 600_000);
+    const remaining = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; remaining_review_ms`],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_REVIEW_BUDGET_STARTED_MS: startedMs,
+          AO_REVIEW_HARD_DEADLINE_MS: hardDeadlineMs,
+          AO_REVIEW_EFFECTIVE_BUDGET_MS: '600000',
+        },
+      },
+    );
+    const value = Number(remaining.stdout.trim());
+    expect(value).toBeGreaterThan(500_000);
+    expect(value).toBeLessThanOrEqual(600_000);
+  });
+
   it('prompt-only skip guidance is insufficient without guard enforcement', () => {
     const ledger = createReviewerBudgetLedger();
     const slowAttempt = evaluateCommandBudget(ledger, [

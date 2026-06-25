@@ -21,10 +21,7 @@ import {
   resolveHeadCommittedAtMs,
   toArray,
 } from './review-trigger-reconcile.mjs';
-import {
-  REPEATED_TIMEOUT_ESCALATION_REASON,
-  resolveFailedRunRetryEligibility,
-} from './codex-reviewer-timeout-retry.mjs';
+import { resolveFailedRunRetryEligibility } from './codex-reviewer-timeout-retry.mjs';
 import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
@@ -293,7 +290,7 @@ export function evaluateOrchestratorTurnGate(input) {
         auditShape: 'per_start_denial',
         currentHeadSha: currentHead,
         staleEventHead,
-        escalationReason: retryState.escalationReason ?? REPEATED_TIMEOUT_ESCALATION_REASON,
+        escalationReason: retryState.escalationReason ?? undefined,
       };
     }
   } else if (!headReady.eligible) {
