@@ -58,6 +58,10 @@ function freshClock() {
   };
 }
 
+function auditRecord(value: unknown): Record<string, unknown> {
+  return (value ?? {}) as Record<string, unknown>;
+}
+
 function staleClock() {
   const pins = progressPins();
   return {
@@ -82,7 +86,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     expect(decision.decision).toBe('SUPPRESS');
     expect(decision.reason).toBe('suppressed-live-worker');
     expect(decision.stintClass).toBe('B');
-    expect(decision.audit?.suppressReason).toBe('suppressed-live-worker');
+    expect(auditRecord(decision.audit).suppressReason).toBe('suppressed-live-worker');
 
     const gate = evaluateNudgeGate({
       prNumber: 283,
@@ -100,7 +104,9 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     });
     expect(gate.allow).toBe(false);
     expect(gate.reason).toBe('suppressed-live-worker');
-    expect(gate.audit?.ciFailureFixingStint?.suppressReason).toBe('suppressed-live-worker');
+    expect((gate.audit as Record<string, unknown>)?.ciFailureFixingStint).toMatchObject({
+      suppressReason: 'suppressed-live-worker',
+    });
   });
 
   it('AC#2 same-head dedup preserved with open stint and prior SENT claim', () => {
@@ -296,7 +302,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       claims: [],
       ...freshClock(),
     });
-    const audit = gate.audit?.ciFailureFixingStint as Record<string, unknown>;
+    const audit = auditRecord(gate.audit).ciFailureFixingStint as Record<string, unknown>;
     expect(audit?.surface).toBe('orchestrator-turn');
     expect(audit?.stintClass).toBe('B');
     expect(audit?.headSha).toBe(H2);
@@ -314,7 +320,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     });
     const emission = {
       'ci-failure-fixing-stint': {
-        suppressReason: decision.audit?.suppressReason ?? decision.reason,
+        suppressReason: auditRecord(decision.audit).suppressReason ?? decision.reason,
       },
     };
     expect(emission['ci-failure-fixing-stint'].suppressReason).toBe('suppressed-live-worker');
@@ -360,7 +366,7 @@ describe('ci-failure-progress-stale post-stale lock (Issue #459 AC#4 emission)',
       });
       const emission = {
         'ci-failure-progress-stale': {
-          auditReason: decision.audit?.auditReason ?? decision.reason,
+          auditReason: auditRecord(decision.audit).auditReason ?? decision.reason,
         },
       };
       expect(emission['ci-failure-progress-stale'].auditReason).toBe('progress_stale');
