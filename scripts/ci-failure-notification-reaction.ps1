@@ -36,7 +36,7 @@ function Invoke-CiFailureReactionRecordTick {
     )
 
     $repo = Get-RepoIdentity
-    $openPrs = @((Invoke-GhOpenPrList -RepoRoot $RepoRoot))
+    $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
     $plan = Invoke-CiFailureHelper -Mode 'reaction-record-plan' -Payload @{

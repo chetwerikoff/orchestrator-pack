@@ -738,6 +738,10 @@ describe('orchestrator message registry (Issue #298)', () => {
 
   it('ignores worktree-only declaration snapshots in committed resolver', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-324-decl-worktree-only-'));
+    const prevEvent = process.env.GITHUB_EVENT_PATH;
+    const prevLinked = process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+    delete process.env.GITHUB_EVENT_PATH;
+    delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
     try {
       execFileSync('git', ['init', '-b', 'main'], { cwd: root });
       execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
@@ -780,6 +784,10 @@ describe('orchestrator message registry (Issue #298)', () => {
         }
       }
     } finally {
+      if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
+      else process.env.GITHUB_EVENT_PATH = prevEvent;
+      if (prevLinked === undefined) delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
+      else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       removeTempDir(root);
     }
   });
