@@ -70,6 +70,53 @@ export function normalizeHeadSha(sha) {
     .toLowerCase();
 }
 
+const VALID_HEAD_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * @param {string} episodeKey
+ */
+function extractHeadShaFromEpisodeKey(episodeKey) {
+  const key = String(episodeKey ?? '').trim();
+  if (!key) {
+    return '';
+  }
+  const headRed = key.match(/^head-red:([0-9a-f]{40}):stint-\d+$/i);
+  if (headRed) {
+    return headRed[1].toLowerCase();
+  }
+  const episodePrHead = key.match(/^(?:episode:)?(\d+):([0-9a-f]{40})$/i);
+  if (episodePrHead) {
+    return episodePrHead[2].toLowerCase();
+  }
+  if (VALID_HEAD_SHA.test(key)) {
+    return key.toLowerCase();
+  }
+  return '';
+}
+
+/**
+ * @param {object} input
+ */
+export function resolveCiFailureHeadShaFromGateInput(input) {
+  const direct = normalizeHeadSha(input?.headSha ?? '');
+  if (VALID_HEAD_SHA.test(direct)) {
+    return direct;
+  }
+  const episodeKey = String(input?.episodeKey ?? input?.redPeriod ?? '').trim();
+  const fromKey = extractHeadShaFromEpisodeKey(episodeKey);
+  if (fromKey) {
+    return fromKey;
+  }
+  const prNumber = Number(input?.prNumber ?? 0);
+  const openPrs = toArray(input?.workerState?.openPrs);
+  const pr = openPrs.find((row) => Number(row?.number) === prNumber);
+  const fromPr = normalizeHeadSha(pr?.headRefOid ?? '');
+  if (VALID_HEAD_SHA.test(fromPr)) {
+    return fromPr;
+  }
+  return '';
+}
+
 /**
  * @param {string} storePath
  */
@@ -859,11 +906,13 @@ function resolveUnresolvedEscalationBounds(input) {
 
 function buildCiFailureEpisodeFromGateInput(input) {
   const prNumber = Number(input.prNumber ?? 0);
-  const headSha = normalizeHeadSha(input.headSha);
+  const headSha = resolveCiFailureHeadShaFromGateInput(input);
   const targetId = String(input.targetId ?? input.sessionId ?? '').trim();
   const targetGeneration = String(input.targetGeneration ?? targetId).trim();
   const episodeKey = String(input.episodeKey ?? input.redPeriod ?? '').trim();
-  const redPeriod = episodeKey.startsWith('episode:') ? episodeKey.slice('episode:'.length) : (episodeKey || `${prNumber}:${headSha}`);
+  const redPeriod = episodeKey.startsWith('episode:')
+    ? episodeKey.slice('episode:'.length)
+    : (episodeKey || (headSha ? `${prNumber}:${headSha}` : ''));
   const repo = String(input.repo ?? 'chetwerikoff/orchestrator-pack').trim();
   return {
     repo,
@@ -883,23 +932,52 @@ function evaluateCiFailureNudgeSuppressor(input, tuple) {
       failClosed: true,
     };
   }
-  const episode = buildCiFailureEpisodeFromGateInput({
+  const suppressorInput = {
     ...input,
     targetId: tuple.targetId ?? input.targetId,
     targetGeneration: tuple.targetGeneration ?? input.targetGeneration,
-  });
-  const decision = evaluateCiFailureSuppressorDecision({
-    episode,
-    workerState: input.workerState,
-    surface: input.surface ?? input.source ?? 'unknown',
-    storeDir: input.ciFailureStoreDir ?? input.storeDir ?? null,
-    nowMs: input.nowMs,
-    config: input.ciFailureConfig ?? input.config,
-    headShaFirst: input.headShaFirst,
-    headShaSecond: input.headShaSecond,
-    versionMarkerFirst: input.versionMarkerFirst,
-    versionMarkerSecond: input.versionMarkerSecond,
-  });
+  };
+  const headSha = resolveCiFailureHeadShaFromGateInput(suppressorInput);
+  if (!VALID_HEAD_SHA.test(headSha)) {
+    return {
+      suppress: true,
+      reason: 'ci_failure_head_sha_unresolvable',
+      failClosed: true,
+    };
+  }
+  let episode;
+  try {
+    episode = buildCiFailureEpisodeFromGateInput({ ...suppressorInput, headSha });
+  } catch (error) {
+    return {
+      suppress: true,
+      reason: 'ci_failure_episode_unreadable',
+      failClosed: true,
+      diagnosis: error instanceof Error ? error.message : String(error),
+    };
+  }
+  let decision;
+  try {
+    decision = evaluateCiFailureSuppressorDecision({
+      episode,
+      workerState: input.workerState,
+      surface: input.surface ?? input.source ?? 'unknown',
+      storeDir: input.ciFailureStoreDir ?? input.storeDir ?? null,
+      nowMs: input.nowMs,
+      config: input.ciFailureConfig ?? input.config,
+      headShaFirst: input.headShaFirst,
+      headShaSecond: input.headShaSecond,
+      versionMarkerFirst: input.versionMarkerFirst,
+      versionMarkerSecond: input.versionMarkerSecond,
+    });
+  } catch (error) {
+    return {
+      suppress: true,
+      reason: 'ci_failure_suppressor_unreadable',
+      failClosed: true,
+      diagnosis: error instanceof Error ? error.message : String(error),
+    };
+  }
   if (decision.decision === 'SUPPRESS') {
     return {
       suppress: true,

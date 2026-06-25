@@ -34,12 +34,33 @@ $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 
+function Get-InvokeGatedWorkerNudgeCiFailureStoreDir {
+    param([string]$ProjectIdOverride = '')
+    if ($env:AO_CI_FAILURE_NOTIFICATION_STORE) { return $env:AO_CI_FAILURE_NOTIFICATION_STORE.Trim() }
+    $resolvedProjectId = if ($ProjectIdOverride) { $ProjectIdOverride } else { 'orchestrator-pack' }
+    $safeProject = ($resolvedProjectId -replace '[^\w\-.]', '_').Trim('_')
+    if (-not $safeProject) { $safeProject = 'orchestrator-pack' }
+    return Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification') $safeProject
+}
+
+function Get-InvokeGatedWorkerNudgeRepoIdentity {
+    param([string]$Root)
+    Push-Location -LiteralPath $Root
+    try {
+        $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
+        return [string]$raw.Trim()
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
-. (Join-Path $PSScriptRoot 'lib/Ci-Failure-Notification-Common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $payloadText = [Console]::In.ReadToEnd()
@@ -211,10 +232,10 @@ if ($resolvedIntent -eq 'ci-failure') {
         sessions = if ($Probe) { @($resolveParams.Sessions) } else { @(Get-AoStatusSessions) }
         openPrs  = @($openPrs)
     }
-    $gatePayload.ciFailureStoreDir = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
+    $gatePayload.ciFailureStoreDir = Get-InvokeGatedWorkerNudgeCiFailureStoreDir -ProjectIdOverride $ProjectId
     $gatePayload.episodeKey = $EpisodeKey
     try {
-        $gatePayload.repo = Get-RepoIdentity
+        $gatePayload.repo = Get-InvokeGatedWorkerNudgeRepoIdentity -Root $RepoRoot
     }
     catch {
         $gatePayload.repo = 'chetwerikoff/orchestrator-pack'

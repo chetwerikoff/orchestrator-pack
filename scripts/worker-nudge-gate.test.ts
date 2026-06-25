@@ -27,6 +27,7 @@ import {
   findForbiddenAutonomousWorkerSendInvocations,
   remapLegacy332Record,
   resolvePrOwnerSessionForNudge,
+  resolveCiFailureHeadShaFromGateInput,
   resolveWorkerTargetFromPrClaim,
   syncPrOwnershipClaimRecord,
 } from '../docs/worker-nudge-gate.mjs';
@@ -1320,6 +1321,80 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const claimText = readFileSync(helperPath, 'utf8');
     expect(claimText).not.toMatch(/File\]::Move\(\$tmp, \$Path, \$/);
     expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
+  });
+
+  it('keeps invoke-gated-worker-nudge PS 5.1-compatible without dot-sourcing PS7 common helpers', () => {
+    const invokeText = readFileSync(invokePath, 'utf8');
+    expect(invokeText).not.toMatch(/Ci-Failure-Notification-Common\.ps1/);
+    expect(invokeText).toMatch(/function Get-InvokeGatedWorkerNudgeCiFailureStoreDir/);
+    expect(invokeText).toMatch(/function Get-InvokeGatedWorkerNudgeRepoIdentity/);
+  });
+
+  it('resolves ci-failure headSha from episodeKey when headSha is omitted', () => {
+    const headSha = 'a'.repeat(40);
+    const episodeKey = `head-red:${headSha}:stint-2`;
+    expect(
+      resolveCiFailureHeadShaFromGateInput({
+        prNumber: 460,
+        episodeKey,
+        workerState: { openPrs: [{ number: 460, headRefOid: 'b'.repeat(40) }] },
+      }),
+    ).toBe(headSha);
+    const gate = evaluateNudgeGate({
+      prNumber: 460,
+      episodeKey,
+      sessionId: 'opk-19',
+      targetId: 'opk-19',
+      targetGeneration: 'gen-1',
+      intentClass: 'ci-failure',
+      source: 'orchestrator-turn',
+      surface: 'orchestrator-turn',
+      workerState: {
+        sessions: [
+          {
+            name: 'opk-19',
+            role: 'worker',
+            prNumber: 460,
+            ownedHeadSha: headSha,
+            runtime: 'alive',
+            reports: [
+              {
+                reportState: 'fixing_ci',
+                reportedAt: new Date().toISOString(),
+                accepted: true,
+                headSha,
+              },
+            ],
+          },
+        ],
+        openPrs: [{ number: 460, headRefOid: headSha }],
+      },
+      storePath: '/tmp/test-claims',
+      claims: [],
+      nowMs: Date.now(),
+    });
+    expect(gate.decision).toBe('SUPPRESS');
+    expect(gate.reason).toBeTruthy();
+  });
+
+  it('fail-closes ci-failure gate when headSha cannot be resolved from episodeKey', () => {
+    const gate = evaluateNudgeGate({
+      prNumber: 460,
+      episodeKey: 'suite-200-attempt-1',
+      sessionId: 'opk-19',
+      targetId: 'opk-19',
+      targetGeneration: 'gen-1',
+      intentClass: 'ci-failure',
+      source: 'orchestrator-turn',
+      surface: 'orchestrator-turn',
+      workerState: { sessions: [], openPrs: [] },
+      storePath: '/tmp/test-claims',
+      claims: [],
+      nowMs: Date.now(),
+    });
+    expect(gate.decision).toBe('SUPPRESS');
+    expect(gate.reason).toBe('ci_failure_head_sha_unresolvable');
+    expect(gate.failClosed).toBe(true);
   });
 
   it('resolves worker target before deriving fallback cycles', () => {
