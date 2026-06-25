@@ -32,14 +32,61 @@ type WakeFixture = {
   wakeKind?: string;
   sessionId?: string;
   prNumber?: number;
+  headRefOid?: string;
+  headCommittedAt?: string;
+  reportedAt?: string;
   openPrs?: OpenPr[];
   reviewRuns?: ReviewRun[];
   sessions?: AoSession[];
   ciChecksByPr?: Record<string, Array<{ name: string; state: string }>>;
 };
 
+type WakeCommonFixture = {
+  wakeKind: string;
+  sessionId: string;
+  prNumber: number;
+  headRefOid: string;
+  ciChecksByPr: Record<string, Array<{ name: string; state: string }>>;
+};
+
+type WakeScenarioFixture = WakeFixture & {
+  description?: string;
+  expect?: Record<string, unknown>;
+};
+
+const wakeCommonFixture = JSON.parse(
+  readFileSync(path.join(fixturesDir, 'timeout-wake-common.json'), 'utf8'),
+) as WakeCommonFixture;
+
 function loadWakeFixture(name: string): WakeFixture {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as WakeFixture;
+  const scenario = JSON.parse(
+    readFileSync(path.join(fixturesDir, name), 'utf8'),
+  ) as WakeScenarioFixture;
+  const headCommittedAt = scenario.headCommittedAt ?? '2026-06-20T00:00:00.000Z';
+  const reportedAt = scenario.reportedAt ?? headCommittedAt;
+  return {
+    wakeKind: wakeCommonFixture.wakeKind,
+    sessionId: wakeCommonFixture.sessionId,
+    prNumber: wakeCommonFixture.prNumber,
+    openPrs: [
+      {
+        number: wakeCommonFixture.prNumber,
+        headRefOid: wakeCommonFixture.headRefOid,
+        headCommittedAt,
+      },
+    ],
+    reviewRuns: scenario.reviewRuns,
+    sessions: [
+      {
+        name: wakeCommonFixture.sessionId,
+        role: 'worker',
+        prNumber: wakeCommonFixture.prNumber,
+        status: 'working',
+        reports: [{ reportState: 'ready_for_review', reportedAt }],
+      },
+    ],
+    ciChecksByPr: wakeCommonFixture.ciChecksByPr,
+  };
 }
 
 function evaluateWakeFixture(fixture: WakeFixture) {

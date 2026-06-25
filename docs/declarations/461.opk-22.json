@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "670af17cb9260c7293f5f22b187e84bba561f77",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:740ee21108c720f4b6b5ec9362de085993c32edfd28fea95e8f08369981eaf16"
+    "active_scope_hash": "sha256:0adf26297bb422a581e2e6de8e60a5dc8b8a6dfe18f6ccb2222ee990c5c032ad"
   },
   "declared_paths": [
     "docs/codex-reviewer-timeout-retry.d.mts",
@@ -53,7 +53,8 @@
     "scripts/fixtures/codex-reviewer-timeout-retry/timeout-first-wake-retry.json",
     "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-scenario.json",
     "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-wake-trap.json",
-    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-run.json"
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-run.json",
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-wake-common.json"
   ],
   "declared_globs": [],
   "amendments": []
