@@ -158,6 +158,14 @@ export function isMutatingGitArgv(argv) {
     const stashSub = list[index + 1].toLowerCase();
     return stashSub !== 'list' && stashSub !== 'show';
   }
+  if (sub === 'config') {
+    const tail = list.slice(index + 1).join(' ');
+    return !/--get/i.test(tail);
+  }
+  if (sub === 'branch') {
+    const tail = list.slice(index + 1).join(' ');
+    return !/--show-current/i.test(tail);
+  }
   if (READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
     return false;
   }
@@ -457,6 +465,40 @@ export function evaluateAutonomousSpawnPolicyBoundary(input) {
  * @param {{ allowSpawnNew: boolean, allowClaimPrResume: boolean } | null} [input.policy]
  * @param {boolean} [input.policyLoadOk]
  */
+
+/**
+ * @param {string[]} argv
+ */
+export function isAutonomousAoReadFastPath(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  let sub = '';
+  for (const token of list) {
+    if (token.startsWith('-')) {
+      continue;
+    }
+    sub = token.toLowerCase();
+    break;
+  }
+  if (!sub) {
+    return false;
+  }
+  if (sub === 'spawn' || sub === 'send') {
+    return false;
+  }
+  const lowered = list.map((part) => part.toLowerCase());
+  if (lowered.includes('review') && lowered.includes('run')) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isAutonomousGitReadFastPath(argv) {
+  return !isMutatingGitArgv(argv);
+}
+
 export function evaluateAutonomousSpawnBoundary(input) {
   const argv = Array.isArray(input.argv)
     ? input.argv.map((part) => String(part))

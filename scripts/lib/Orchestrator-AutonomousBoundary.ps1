@@ -623,6 +623,20 @@ function Test-GitArgvIsMutating {
             }
             return $true
         }
+        '^(?i)config$' {
+            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
+            if ($tail -match '(?i)--get') {
+                return $false
+            }
+            return $true
+        }
+        '^(?i)branch$' {
+            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
+            if ($tail -match '(?i)--show-current') {
+                return $false
+            }
+            return $true
+        }
         '^(?i)(status|log|rev-parse|diff|show|ls-files|ls-tree|cat-file|merge-base|grep|check-ignore|check-attr|describe|for-each-ref|show-ref|name-rev|var|version|help|rev-list)$' { return $false }
         default { return $true }
     }

@@ -142,6 +142,10 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(isMutatingGitArgv(['ls-files'])).toBe(false);
     expect(isMutatingGitArgv(['-C', '/tmp/repo', 'ls-files'])).toBe(false);
     expect(isMutatingGitArgv(['merge-base', 'HEAD', 'main'])).toBe(false);
+    expect(isMutatingGitArgv(['config', '--get', 'remote.origin.url'])).toBe(false);
+    expect(isMutatingGitArgv(['config', 'user.name', 'blocked'])).toBe(true);
+    expect(isMutatingGitArgv(['branch', '--show-current'])).toBe(false);
+    expect(isMutatingGitArgv(['branch', '-m', 'a', 'b'])).toBe(true);
     expect(isMutatingGitArgv(['fetch', '--dry-run'])).toBe(false);
     expect(isMutatingGitArgv(['fetch', 'origin'])).toBe(true);
     expect(isMutatingGitArgv(['commit', '-m', 'blocked'])).toBe(true);

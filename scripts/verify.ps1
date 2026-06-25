@@ -1374,6 +1374,47 @@ else {
     Add-Failure 'Missing autonomous spawn policy vitest suite (Issue #458)'
 }
 
+$autonomousSpawnBudgetCheck = Join-Path $Root 'scripts/check-autonomous-spawn-budget.ps1'
+if (Test-Path -LiteralPath $autonomousSpawnBudgetCheck -PathType Leaf) {
+    & $autonomousSpawnBudgetCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-spawn-budget.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-spawn-budget.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous spawn budget guard failed (Issue #462)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-spawn-budget.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous spawn budget check (Issue #462)'
+}
+
+$autonomousSpawnBudgetVitest = Join-Path $Root 'scripts/autonomous-spawn-budget.test.ts'
+if (Test-Path -LiteralPath $autonomousSpawnBudgetVitest -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+        & npm ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn budget vitest prerequisites failed (Issue #462)'
+        }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        & npx vitest run scripts/autonomous-spawn-budget.test.ts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn budget vitest suite failed (Issue #462)'
+        }
+        else {
+            Write-Check 'autonomous-spawn-budget/vitest' 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous spawn budget vitest suite (Issue #462)'
+}
+
 $autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
 if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {

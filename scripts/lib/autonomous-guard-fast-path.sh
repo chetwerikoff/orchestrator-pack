@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Bash-side guard fast-path classification (Issue #462).
+# Mirrors docs/autonomous-orchestrator-boundary.mjs for read-only git/ao shapes so
+# autonomous shims can exec real binaries without per-command pwsh guard startup.
+set -euo pipefail
+
+__ao_autonomous_audit_guard_pwsh_spawn() {
+  local shim="${1:-unknown}"
+  if [[ -n "${AO_AUTONOMOUS_GUARD_SPAWN_AUDIT_FILE:-}" ]]; then
+    printf 'pwsh-guard:%s\n' "${shim}" >>"${AO_AUTONOMOUS_GUARD_SPAWN_AUDIT_FILE}"
+  fi
+}
+
+__ao_autonomous_git_argv_subcommand_index() {
+  local index=0
+  local token=""
+  while [[ ${index} -lt $# ]]; do
+    index=$((index + 1))
+    token="${!index}"
+    case "${token}" in
+      -C | -c | --git-dir | --work-tree | --exec-path | --namespace)
+        index=$((index + 1))
+        continue
+        ;;
+      --*=*)
+        continue
+        ;;
+      -c* | -C*)
+        if [[ "${token}" != "-c" && "${token}" != "-C" ]]; then
+          continue
+        fi
+        ;;
+      -*)
+        continue
+        ;;
+      *)
+        printf '%s' "${index}"
+        return 0
+        ;;
+    esac
+  done
+  printf '%s' $((index + 1))
+}
+
+__ao_autonomous_git_argv_defines_alias() {
+  local index=0
+  local token=""
+  while [[ ${index} -lt $# ]]; do
+    index=$((index + 1))
+    token="${!index}"
+    if [[ "${token}" == "-c" ]]; then
+      index=$((index + 1))
+      [[ ${index} -le $# ]] || return 1
+      token="${!index}"
+      [[ "${token}" == alias.* ]] && return 0
+      continue
+    fi
+    if [[ "${token}" == -c* && "${token}" != "-c" ]]; then
+      [[ "${token#-c}" == alias.* ]] && return 0
+    fi
+  done
+  return 1
+}
+
+__ao_autonomous_git_argv_is_read_only() {
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+  if __ao_autonomous_git_argv_defines_alias "$@"; then
+    return 1
+  fi
+
+  local sub_index sub tail joined
+  sub_index="$(__ao_autonomous_git_argv_subcommand_index "$@")"
+  if [[ ${sub_index} -gt $# ]]; then
+    return 0
+  fi
+  sub="${!sub_index}"
+  sub="${sub,,}"
+
+  case "${sub}" in
+    fetch)
+      tail=""
+      local i
+      for ((i = sub_index + 1; i <= $#; i++)); do
+        tail+="${!i} "
+      done
+      [[ "${tail}" == *"--dry-run"* ]] && return 0
+      return 1
+      ;;
+    stash)
+      if [[ $((sub_index + 1)) -gt $# ]]; then
+        return 1
+      fi
+      local stash_sub="${!((sub_index + 1))}"
+      stash_sub="${stash_sub,,}"
+      [[ "${stash_sub}" == "list" || "${stash_sub}" == "show" ]] && return 0
+      return 1
+      ;;
+    config)
+      joined=""
+      local j
+      for ((j = sub_index + 1; j <= $#; j++)); do
+        joined+="${!j} "
+      done
+      [[ "${joined}" == *"--get"* ]] && return 0
+      return 1
+      ;;
+    branch)
+      joined=""
+      local k
+      for ((k = sub_index + 1; k <= $#; k++)); do
+        joined+="${!k} "
+      done
+      [[ "${joined}" == *"--show-current"* ]] && return 0
+      return 1
+      ;;
+    status | log | rev-parse | diff | show | ls-files | ls-tree | cat-file | merge-base | grep | check-ignore | check-attr | describe | for-each-ref | show-ref | name-rev | var | version | help | rev-list)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+__ao_autonomous_ao_argv_is_read_fast_path() {
+  local sub="" found=0 arg
+  for arg in "$@"; do
+    [[ "${arg}" == -* ]] && continue
+    sub="${arg,,}"
+    found=1
+    break
+  done
+  [[ ${found} -eq 0 ]] && return 1
+  [[ "${sub}" == "spawn" ]] && return 1
+  if [[ "${sub}" == "send" ]]; then
+    return 1
+  fi
+  for arg in "$@"; do
+    [[ "${arg,,}" == "run" ]] || continue
+    for probe in "$@"; do
+      [[ "${probe,,}" == "review" ]] && return 1
+    done
+  done
+  return 0
+}
