@@ -92,7 +92,8 @@ __ao_autonomous_git_argv_is_read_only() {
       if [[ $((sub_index + 1)) -gt $# ]]; then
         return 1
       fi
-      local stash_sub="${!((sub_index + 1))}"
+      local stash_arg_index=$((sub_index + 1))
+      local stash_sub="${!stash_arg_index}"
       stash_sub="${stash_sub,,}"
       [[ "${stash_sub}" == "list" || "${stash_sub}" == "show" ]] && return 0
       return 1

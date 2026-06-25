@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import {
   evaluateSpawnBudgetClass,
   formatSpawnBudgetReport,
@@ -43,6 +44,19 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
     expect(isAutonomousAoReadFastPath(['review', 'list', '--json'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['send', 'opk-worker', 'ping'])).toBe(false);
     expect(isAutonomousAoReadFastPath(['review', 'run', 'opk-1'])).toBe(false);
+  });
+
+  it('bash fast path classifies git stash list/show without bad substitution', () => {
+    const script = [
+      `source "${repoRoot}/scripts/lib/autonomous-guard-fast-path.sh"`,
+      '__ao_autonomous_git_argv_is_read_only stash list || exit 2',
+      '__ao_autonomous_git_argv_is_read_only stash show || exit 3',
+      '__ao_autonomous_git_argv_is_read_only stash push && exit 4',
+      'exit 0',
+    ].join('\n');
+    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toMatch(/bad substitution/i);
   });
 
   it('load-bearing A: no-op shell fixture has no per-command helper growth', () => {
