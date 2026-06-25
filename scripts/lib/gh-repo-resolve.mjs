@@ -212,6 +212,7 @@ export function mapPullState(pull) {
 export function mapPullToGhJson(pull, fields) {
   const base = {
     number: pull.number,
+    url: pull.html_url ?? null,
     headRefOid: pull.head?.sha ?? null,
     baseRefName: pull.base?.ref ?? null,
     state: mapPullState(pull),

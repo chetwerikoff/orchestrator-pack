@@ -25,6 +25,7 @@ function Test-InventoryGhReadLine {
         'gh issue view .+--json body',
         'gh repo view --json nameWithOwner',
         'gh pr list --head',
+        'gh pr list --head .+--json number,url --limit 1',
         'gh pr view .+--json ''number,body''',
         'gh pr view .+--jq'
     )

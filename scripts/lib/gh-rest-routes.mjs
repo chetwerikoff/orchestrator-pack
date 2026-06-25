@@ -79,15 +79,18 @@ export function routePrView(realGh, repo, prNumber, fields, jq, cwd) {
  * @param {string} realGh
  * @param {{ slug: string, host: string }} repo
  * @param {string} branch
+ * @param {string[]} fields
  * @param {string | null} jq
+ * @param {number | null} limit
  * @param {string} cwd
  */
-export function routePrListHead(realGh, repo, branch, jq, cwd) {
+export function routePrListHead(realGh, repo, branch, fields, jq, limit, cwd) {
   const perPage = 100;
   const filtered = [];
   let page = 1;
+  const maxCollect = limit ?? 200;
 
-  while (filtered.length < 200) {
+  outer: while (filtered.length < maxCollect) {
     const pulls = ghApiJson(
       realGh,
       `repos/${repo.slug}/pulls?state=open&per_page=${perPage}&page=${page}`,
@@ -98,7 +101,10 @@ export function routePrListHead(realGh, repo, branch, jq, cwd) {
     }
     for (const pull of pulls) {
       if (pull.head?.ref === branch) {
-        filtered.push({ number: pull.number });
+        filtered.push(mapPullToGhJson(pull, fields));
+        if (filtered.length >= maxCollect) {
+          break outer;
+        }
       }
     }
     if (pulls.length < perPage) {
@@ -107,11 +113,10 @@ export function routePrListHead(realGh, repo, branch, jq, cwd) {
     page += 1;
   }
 
-  if (filtered.length > 1) {
+  if (!limit && filtered.length > 1) {
     throw new Error(`${REST_ERROR_MARKER}: ambiguous head ref ${branch}`);
   }
-  const result = filtered.map((p) => pickJsonFields(p, ['number']));
-  return applyListedJq(result, jq);
+  return applyListedJq(filtered, jq);
 }
 
 /**
@@ -301,8 +306,12 @@ export function executeRestRoute(routeId, ctx) {
         const rows = fetchOpenPrList(realGh, repo, 'open', limit, fields, cwd);
         return applyListedJq(rows, parsed.jq);
       }
-      case 'pr-list-head':
-        return routePrListHead(realGh, repo, route.branch, parsed.jq, cwd);
+      case 'pr-list-head': {
+        const fields = parsed.jsonFields ?? ['number'];
+        const limitFlag = parsed.flags['--limit'];
+        const limit = limitFlag ? Number(limitFlag) : null;
+        return routePrListHead(realGh, repo, route.branch, fields, parsed.jq, limit, cwd);
+      }
       case 'pr-view':
         return routePrView(realGh, repo, route.prNumber, parsed.jsonFields ?? [], parsed.jq, cwd);
       case 'pr-checks':

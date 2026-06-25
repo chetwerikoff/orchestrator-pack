@@ -87,6 +87,22 @@ describe('gh inventory matcher', () => {
     ]);
     expect(route?.id).toBe('pr-view');
   });
+
+  it('routes detectPR head list with number,url and limit 1 (Issue #443)', () => {
+    const { route } = classifyArgv([
+      'pr', 'list', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--head', 'feat/issue-443', '--json', 'number,url', '--limit', '1',
+    ]);
+    expect(route?.id).toBe('pr-list-head');
+    expect(route?.branch).toBe('feat/issue-443');
+  });
+
+  it('passthrough detectPR shape without limit', () => {
+    const { route } = classifyArgv([
+      'pr', 'list', '--head', 'feat/x', '--json', 'number,url',
+    ]);
+    expect(route).toBeNull();
+  });
 });
 
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
@@ -248,16 +264,17 @@ function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
   };
 }
 
-/** Passthrough argv (route: null) — detectPR multi-field --json shape from Issue #442. */
-const PASSTHROUGH_DETECT_PR_ARGV = [
+/** detectPR argv — AO branch→PR lookup (Issue #443 inventory; #442 terminality). */
+const DETECT_PR_ARGV = [
   'pr', 'list', '--repo', 'chetwerikoff/orchestrator-pack',
   '--head', 'feat/issue-442', '--json', 'number,url', '--limit', '1',
 ];
 
 describe('gh mutual-recursion terminality (Issue #442)', () => {
-  it('classifies detectPR multi-field argv as passthrough (route null)', () => {
-    const { route } = classifyArgv(PASSTHROUGH_DETECT_PR_ARGV);
-    expect(route).toBeNull();
+  it('classifies detectPR multi-field argv as pr-list-head REST route (Issue #443)', () => {
+    const { route } = classifyArgv(DETECT_PR_ARGV);
+    expect(route?.id).toBe('pr-list-head');
+    expect(route?.branch).toBe('feat/issue-442');
   });
 
   it('resolveRealGhBinary skips AO bash wrapper on PATH (ao before pack)', () => {
@@ -295,7 +312,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
   it('passthrough smoke completes without hang under two-wrapper PATH (ao first)', () => {
     const fixture = twoWrapperPathFixture('ao-first');
     try {
-      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+      const result = spawnSync(fixture.packGh, DETECT_PR_ARGV, {
         env: fixture.env,
         encoding: 'utf8',
         timeout: 15_000,
@@ -310,7 +327,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
   it('passthrough smoke completes without hang under two-wrapper PATH (pack first)', () => {
     const fixture = twoWrapperPathFixture('pack-first');
     try {
-      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+      const result = spawnSync(fixture.packGh, DETECT_PR_ARGV, {
         env: fixture.env,
         encoding: 'utf8',
         timeout: 15_000,
@@ -326,7 +343,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
     const fixture = twoWrapperPathFixture('ao-first');
     try {
       const env = { ...fixture.env, GH_WRAPPER_ACTIVE: '1' };
-      const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+      const result = spawnSync(fixture.packGh, DETECT_PR_ARGV, {
         env,
         encoding: 'utf8',
         timeout: 15_000,
@@ -345,7 +362,7 @@ describe('gh mutual-recursion terminality (Issue #442)', () => {
       for (let i = 0; i < 5; i += 1) {
         const before = spawnSync('pgrep', ['-c', '-f', 'gh-two-wrapper-'], { encoding: 'utf8' });
         const beforeCount = Number.parseInt(String(before.stdout).trim(), 10) || 0;
-        const result = spawnSync(fixture.packGh, PASSTHROUGH_DETECT_PR_ARGV, {
+        const result = spawnSync(fixture.packGh, DETECT_PR_ARGV, {
           env: fixture.env,
           encoding: 'utf8',
           timeout: 15_000,

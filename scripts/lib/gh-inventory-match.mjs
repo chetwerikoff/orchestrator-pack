@@ -103,6 +103,19 @@ export function matchInventoryRoute(parsed) {
   if (sub === 'list') {
     const headFlag = parsed.flags['--head'];
     if (headFlag && typeof headFlag === 'string') {
+      if (jsonFieldsEqual(parsed.jsonFields, ['number', 'url'])) {
+        if (!hasOnlyAllowedFlags(parsed, ['--head', '--limit'])) {
+          return null;
+        }
+        if (parsed.flags['--limit'] !== '1') {
+          return null;
+        }
+        if (parsed.jq) {
+          return null;
+        }
+        return { id: 'pr-list-head', branch: headFlag };
+      }
+
       if (!hasOnlyAllowedFlags(parsed, ['--head'])) {
         return null;
       }
