@@ -40,6 +40,10 @@ import {
   resolveReconcileEvaluationSession,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import {
+  buildTimeoutRetryObserved,
+  resolveFailedRunRetryEligibility,
+} from './codex-reviewer-timeout-retry.mjs';
 
 /** Sustained-quiescence debounce — tied to review-ready stuck grace (Issue #174 / #261). */
 export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
@@ -986,10 +990,13 @@ export function preRunHeadReadyRecheck(planned, fresh) {
 
   const reviewRuns = toArray(fresh.reviewRuns);
   const failedRun = findFailedOrCancelledRunForHead(reviewRuns, prNumber, currentHead);
+  const retryState = failedRun
+    ? resolveFailedRunRetryEligibility(failedRun, reviewRuns, prNumber, currentHead)
+    : { retryEligible: false, escalationReason: null };
   const failedRetryEligible =
     failedRun != null &&
     !isHeadCovered(reviewRuns, prNumber, currentHead) &&
-    (failedRun.retryEligible ?? failedRun.retryCount == null) !== false;
+    retryState.retryEligible !== false;
 
   const decision = evaluateHeadReadyForReview({
     reviewRuns,
@@ -1338,14 +1345,22 @@ export function buildCoveredSkipObserved(run, prNumber, headSha) {
  * @param {number} prNumber
  * @param {string} headSha
  */
-export function buildFailedCancelledObserved(run, prNumber, headSha) {
+export function buildFailedCancelledObserved(run, prNumber, headSha, reviewRuns = []) {
+  const retryState = run
+    ? resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, headSha)
+    : { retryEligible: true, escalationReason: null };
+  const timeoutObserved = buildTimeoutRetryObserved(run);
   return {
     prNumber,
     currentHeadSha: normalizeSha(headSha),
     runId: String(run?.id ?? run?.runId ?? ''),
     status: String(run?.status ?? ''),
     terminationReason: String(run?.terminationReason ?? ''),
-    retryEligible: run?.retryEligible ?? run?.retryCount == null,
+    retryEligible: retryState.retryEligible,
+    failureClass: timeoutObserved.failureClass ?? undefined,
+    escalationReason: retryState.escalationReason ?? timeoutObserved.escalationReason ?? undefined,
+    effectiveBudgetMs: timeoutObserved.effectiveBudgetMs ?? undefined,
+    testBudgetDecision: timeoutObserved.testBudgetDecision ?? undefined,
   };
 }
 
@@ -1384,7 +1399,7 @@ export function buildNoStartDecisionRecord({
       reason: 'failed_or_cancelled_on_head',
       primary: 'failed_or_cancelled_on_head',
       failedComponents: ['failed_or_cancelled_on_head'],
-      observed: buildFailedCancelledObserved(failedRun, prNumber, normalizedHead),
+      observed: buildFailedCancelledObserved(failedRun, prNumber, normalizedHead, reviewRuns),
     };
   }
 

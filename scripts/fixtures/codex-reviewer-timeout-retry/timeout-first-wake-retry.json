@@ -1,0 +1,20 @@
+{
+  "description": "First timeout_no_verdict on head allows wake-triggered retry",
+  "headCommittedAt": "2026-06-20T00:00:00.000Z",
+  "reportedAt": "2026-06-20T00:00:00.000Z",
+  "reviewRuns": [
+    {
+      "id": "timeout-first",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict (effectiveBudgetMs=600000, softDeadlineMs=510000)",
+      "createdAt": "2026-06-20T00:00:00.000Z"
+    }
+  ],
+  "expect": {
+    "triggerReviewRun": true,
+    "route": "start_review"
+  }
+}

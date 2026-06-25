@@ -16,6 +16,7 @@ export interface CoverageVerdict {
   reason: string;
   status?: string;
   retryEligible?: boolean;
+  escalationReason?: string;
 }
 
 export interface ScenarioCellResult {
@@ -33,6 +34,7 @@ export interface TurnGateResult {
   staleEventHead?: boolean;
   sessionId?: string;
   coverage?: CoverageVerdict;
+  escalationReason?: string;
 }
 
 export interface BoundaryVerdict {
