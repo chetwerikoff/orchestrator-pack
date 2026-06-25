@@ -147,7 +147,7 @@ function Get-ReviewSendPreSendSnapshot {
     return @{
         reviewRuns = @(Get-AoReviewRuns -Project $Project)
         sessions   = @(Get-AoStatusSessions)
-        openPrs    = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot)
+        openPrs    = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     }
 }
 
@@ -311,7 +311,7 @@ function Invoke-ReviewSendTick {
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
-        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $mergedPrNumbers = @()
     }
 

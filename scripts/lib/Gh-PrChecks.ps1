@@ -29,6 +29,19 @@ function ConvertFrom-GhJsonArrayOutput {
     return @($text.Substring($start) | ConvertFrom-Json)
 }
 
+function ConvertTo-GhOpenPrArray {
+    param($OpenPrs)
+
+    if ($null -eq $OpenPrs) {
+        return ,@()
+    }
+    $normalized = @($OpenPrs | Where-Object { $null -ne $_ })
+    if ($normalized.Count -eq 0) {
+        return ,@()
+    }
+    return ,$normalized
+}
+
 function Invoke-GhOpenPrList {
     param(
         [Parameter(Mandatory = $true)]
@@ -176,8 +189,9 @@ function Get-GhChecksBundleByPr {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [AllowEmptyCollection()]
+        [AllowNull()]
         [array]$OpenPrs,
         [Parameter(Mandatory = $true)]
         [scriptblock]$MergeRequiredNames,
@@ -189,7 +203,8 @@ function Get-GhChecksBundleByPr {
     $ciChecksByPr = @{}
     $requiredCheckNamesByPr = @{}
     $requiredCheckLookupFailedByPr = @{}
-    if (-not @($OpenPrs).Count) {
+    $OpenPrs = ConvertTo-GhOpenPrArray -OpenPrs $OpenPrs
+    if (-not $OpenPrs.Count) {
         return @{
             ciChecksByPr                  = $ciChecksByPr
             requiredCheckNamesByPr        = $requiredCheckNamesByPr

@@ -301,9 +301,7 @@ function Invoke-ListenerHandoffAdmissionRecovery {
                 -OpenPrs $OpenPrs `
                 -OpenPrLookupFailed:$OpenPrLookupFailed
         } `
-        -ResolveOpenPrs {
-            Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot
-        } `
+        -ResolveOpenPrs { ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot) } `
         -InvokeTrigger {
             param($FilterResult, $WakeReceivedMs)
             return Invoke-HandoffWakeTriggerFromFilter `
@@ -410,7 +408,7 @@ try {
                 $sessionAdmission = @{ sessions = @(); lookupFailed = $false }
                 if ($needsHandoffAdmissionLookups) {
                     try {
-                        $openPrsForAdmission = @(Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot)
+                        $openPrsForAdmission = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $Script:OrchestratorWakeRepoRoot)
                     }
                     catch {
                         $openPrLookupFailed = $true

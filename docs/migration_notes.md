@@ -169,6 +169,26 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## Wake supervisor degraded backoff and fault boundary (Issue #450)
+
+Wake supervisor children under sustained dependency outage or inventory failure now use
+degraded-alive exponential backoff (sticky counter, repeated-reason circuit breaker) instead
+of per-tick kill-restart storms. The supervisor poll loop wraps each child's management in a
+fault boundary so redirect races and child-management exceptions cannot exit the supervisor.
+Gh-fed children tolerate null or empty open-PR inventory without binding crashes.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Under an active `gh` rate-limit or degraded fixture, confirm the supervisor stays
+   `running`, child logs show `degraded backoff` (not thousands of `recovering (attempt 1/3)`
+   per hour), and children auto-resume when quota resets without operator intervention.
+
+Optional env overrides (safe defaults when unset): `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS`,
+`AO_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS`, `AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS`,
+`AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD`, `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS`.
+
 ## Wake-supervisor child gh PATH (Issue #447)
 
 Wake-supervisor managed children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,

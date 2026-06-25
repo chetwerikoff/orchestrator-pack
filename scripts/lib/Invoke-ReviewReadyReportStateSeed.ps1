@@ -21,6 +21,8 @@ function Get-ReviewReadyReportStateSeedTerminalClaimKeys {
         [array]$OpenPrs
     )
 
+    $OpenPrs = ConvertTo-GhOpenPrArray -OpenPrs $OpenPrs
+
     $keys = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($pr in @($OpenPrs)) {
         $prNumber = [int]$pr.number
@@ -186,7 +188,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
 
     if ($FixturePayload) {
-        $openPrs = @($FixturePayload.openPrs)
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs $FixturePayload.openPrs
         $sessions = @($FixturePayload.sessions)
         $reviewRuns = @($FixturePayload.reviewRuns)
         $checksBundle = @{
@@ -212,7 +214,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
             -SupervisedProject $ProjectId `
             -CachedSnapshot $seedState.githubSnapshot `
             -NowMs $nowMs
-        $openPrs = @($githubSnapshot.openPrs)
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs $githubSnapshot.openPrs
         $checksBundle = @{
             ciChecksByPr                  = $githubSnapshot.ciChecksByPr
             requiredCheckNamesByPr        = $githubSnapshot.requiredCheckNamesByPr
