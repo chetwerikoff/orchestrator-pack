@@ -4,6 +4,8 @@
   Shared gh pr list / checks / branch-protection helpers for mechanical reconcile scripts.
 #>
 
+. (Join-Path $PSScriptRoot 'Gh-FleetInventoryCache.ps1')
+
 function Write-GhPrChecksLog {
     param([string]$Message)
 
@@ -33,32 +35,13 @@ function Invoke-GhOpenPrList {
         [string]$RepoRoot
     )
 
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        # Keep the list query cheap. Requesting the `commits` connection here
-        # pulls every commit (and its `authors` connection) for up to --limit
-        # PRs, whose static GraphQL cost exceeds GitHub's 500k node limit and
-        # fails the whole query. The head commit's committed date is resolved
-        # per-PR below via a single-commit REST lookup instead.
-        $raw = gh pr list --state open --json number,headRefOid,baseRefName --limit 200 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "gh pr list failed (exit $LASTEXITCODE): $raw"
-        }
-
-        $prs = @($raw | ConvertFrom-Json)
-        foreach ($pr in $prs) {
-            $headSha = [string]$pr.headRefOid
-            if (-not $headSha) { continue }
-            $committedDate = gh api "repos/{owner}/{repo}/commits/$headSha" --jq '.commit.committer.date' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $committedDate) {
-                $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$committedDate).Trim() -Force
-            }
-        }
-        return $prs
+    # List query stays cheap (no commits connection). Head commit dates use the
+    # fleet SHA memo; open-PR rows use the shared short-TTL snapshot (#453).
+    $prs = @(Invoke-GhFleetCachedOpenPrListRaw -RepoRoot $RepoRoot)
+    foreach ($pr in $prs) {
+        Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
     }
-    finally {
-        Pop-Location
-    }
+    return $prs
 }
 
 
@@ -88,14 +71,7 @@ function Invoke-GhOpenPrListForNumbers {
             if ([string]$pr.state -ne 'OPEN') {
                 continue
             }
-            $headSha = [string]$pr.headRefOid
-            if (-not $headSha) {
-                continue
-            }
-            $committedDate = gh api "repos/{owner}/{repo}/commits/$headSha" --jq '.commit.committer.date' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $committedDate) {
-                $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue ([string]$committedDate).Trim() -Force
-            }
+            Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
             $prs += $pr
         }
         return $prs
