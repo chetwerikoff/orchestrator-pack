@@ -1327,7 +1327,6 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     const invokeText = readFileSync(invokePath, 'utf8');
     expect(invokeText).not.toMatch(/Ci-Failure-Notification-Common\.ps1/);
     expect(invokeText).toMatch(/function Get-InvokeGatedWorkerNudgeCiFailureStoreDir/);
-    expect(invokeText).toMatch(/function Get-InvokeGatedWorkerNudgeRepoIdentity/);
   });
 
   it('resolves ci-failure headSha from episodeKey when headSha is omitted', () => {

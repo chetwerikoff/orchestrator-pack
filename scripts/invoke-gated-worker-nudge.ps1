@@ -43,19 +43,6 @@ function Get-InvokeGatedWorkerNudgeCiFailureStoreDir {
     return Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-ci-failure-notification') $safeProject
 }
 
-function Get-InvokeGatedWorkerNudgeRepoIdentity {
-    param([string]$Root)
-    Push-Location -LiteralPath $Root
-    try {
-        $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
-        return [string]$raw.Trim()
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
@@ -234,12 +221,7 @@ if ($resolvedIntent -eq 'ci-failure') {
     }
     $gatePayload.ciFailureStoreDir = Get-InvokeGatedWorkerNudgeCiFailureStoreDir -ProjectIdOverride $ProjectId
     $gatePayload.episodeKey = $EpisodeKey
-    try {
-        $gatePayload.repo = Get-InvokeGatedWorkerNudgeRepoIdentity -Root $RepoRoot
-    }
-    catch {
-        $gatePayload.repo = 'chetwerikoff/orchestrator-pack'
-    }
+    $gatePayload.repo = 'chetwerikoff/orchestrator-pack'
 }
 $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload $gatePayload
 if (-not $gate.allow) {
