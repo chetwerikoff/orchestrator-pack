@@ -106,11 +106,11 @@ while ($true) {
     }
 
     if ($Mode -eq 'deterministic-defect') {
-        Write-OrchestratorSideProcessProgress -ChildId $Role -Phase 'tick_error' -Extra @{
-            failureClass = 'deterministic'
-            lastError    = 'deterministic code defect: same stack every restart'
-        }
-        Write-OrchestratorSideProcessTickError -ChildId $Role -ErrorMessage 'deterministic code defect: same stack every restart'
+        Write-OrchestratorSideProcessTickError -ChildId $Role `
+            -ErrorMessage 'deterministic code defect: same stack every restart' `
+            -Extra @{
+                failureClass = 'deterministic'
+            }
         Start-Sleep -Seconds 1
         continue
     }

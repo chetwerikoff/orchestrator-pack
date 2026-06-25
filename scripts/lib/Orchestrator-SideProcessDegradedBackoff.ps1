@@ -283,6 +283,13 @@ function Update-OrchestratorWakeSupervisorChildStableWorkingRecovery {
 
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
     $fields = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $recovery
+    if ($fields.failureClass -eq 'deterministic') {
+        return
+    }
+    $progressFailureClass = Get-OrchestratorWakeSupervisorChildFailureClassFromProgress -Paths $Paths -ChildId $ChildId
+    if ($progressFailureClass -eq 'deterministic') {
+        return
+    }
     $hasDegradedState = ($fields.degradedAttempts -gt 0) -or ($fields.degradedBackoffUntilMs -gt 0) `
         -or $fields.lastDegradedReason -or ($fields.repeatedReasonCount -gt 0)
 
