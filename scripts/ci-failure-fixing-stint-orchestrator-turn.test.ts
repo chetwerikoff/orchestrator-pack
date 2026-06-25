@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   armPostStaleEscalationLock,
@@ -347,6 +348,56 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     });
     expect(result.terminal_action).toBe('SUPPRESS');
     expect(result.reason).toBe('suppressed-live-worker');
+  });
+
+  it('superseded episode suppresses on orchestrator-turn instead of SEND (review opk-rev-968)', () => {
+    const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
+    ws.openPrs = [{ number: 283, headRefOid: H3, headCommittedAt: '2026-06-18T13:25:00.000Z' }];
+    const episode = episodeForHead(H2);
+    const decision = evaluateCiFailureSuppressorDecision({
+      episode,
+      workerState: ws,
+      surface: 'orchestrator-turn',
+      ...freshClock(),
+    });
+    expect(decision.decision).toBe('SUPPRESS');
+    expect(decision.reason).toBe('abandoned-superseded');
+
+    const gate = evaluateNudgeGate({
+      prNumber: 283,
+      headSha: H2,
+      sessionId: 'session-active-redacted',
+      targetId: 'session-active-redacted',
+      targetGeneration: 'generation-active-redacted',
+      intentClass: 'ci-failure',
+      source: 'orchestrator-turn',
+      surface: 'orchestrator-turn',
+      workerState: ws,
+      storePath: '/tmp/test-claims',
+      claims: [],
+      ...freshClock(),
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.reason).toBe('abandoned-superseded');
+  });
+
+  it('evaluate-suppressor CLI subcommand is registered (review opk-rev-968)', () => {
+    const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
+    const payload = {
+      episode: episodeForHead(H2),
+      workerState: ws,
+      surface: 'orchestrator-turn',
+      ...freshClock(),
+    };
+    const result = spawnSync(
+      'node',
+      [path.join(repoRoot, 'docs/ci-failure-notification.mjs'), 'evaluate-suppressor'],
+      { input: JSON.stringify(payload), encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+    const out = JSON.parse(result.stdout);
+    expect(out.decision).toBe('SUPPRESS');
+    expect(out.reason).toBe('suppressed-live-worker');
   });
 });
 

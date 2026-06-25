@@ -561,14 +561,48 @@ export function evaluateCiFailureSuppressorDecision(input) {
     };
   }
 
+  if (live.status === 'superseded' || live.status === 'no_live_owner') {
+    const reason = live.reason ?? (live.status === 'no_live_owner' ? 'abandoned-no-live-owner' : 'abandoned-superseded');
+    return {
+      decision: 'SUPPRESS',
+      reason,
+      stintClass: 'C',
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: reason,
+        stintClass: 'C',
+        postStaleLock: false,
+        currentHead: live.currentHead ?? null,
+        currentTargetId: live.currentTargetId ?? null,
+        currentTargetGeneration: live.currentTargetGeneration ?? null,
+      },
+    };
+  }
+
+  if (live.status === 'not_suppressing') {
+    return {
+      decision: 'SEND',
+      reason: 'no_suppressor',
+      stintClass: live.stintClass ?? 'C',
+      live,
+      audit: {
+        ...auditBase,
+        suppressReason: 'no_suppressor',
+        stintClass: live.stintClass ?? 'C',
+        postStaleLock: false,
+      },
+    };
+  }
+
   return {
-    decision: 'SEND',
-    reason: 'no_suppressor',
-    stintClass: 'C',
+    decision: 'SUPPRESS',
+    reason: live.reason ?? 'degraded_fail_closed',
+    failClosed: true,
     live,
     audit: {
       ...auditBase,
-      suppressReason: 'no_suppressor',
+      suppressReason: live.reason ?? 'degraded_fail_closed',
       stintClass: 'C',
       postStaleLock: false,
     },
@@ -2294,4 +2328,5 @@ runStdinJsonCli('ci-failure-notification.mjs', {
   'append-audit': cli,
   'helper-error': cli,
   'adoption-artifact': cli,
+  'evaluate-suppressor': cli,
 });
