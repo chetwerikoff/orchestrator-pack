@@ -15,7 +15,12 @@ import {
   evaluateScenarioMatrixCell,
 } from '../docs/orchestrator-claimed-review-run.mjs';
 import { buildFailedCancelledObserved } from '../docs/review-head-ready.mjs';
-import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
+import {
+  evaluateWakeReviewTrigger,
+  type AoSession,
+  type OpenPr,
+  type ReviewRun,
+} from '../docs/review-wake-trigger.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -23,21 +28,30 @@ const fixturesDir = path.join(
   'codex-reviewer-timeout-retry',
 );
 
-function loadWakeFixture(name: string) {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
+type WakeFixture = {
+  wakeKind?: string;
+  sessionId?: string;
+  prNumber?: number;
+  openPrs?: OpenPr[];
+  reviewRuns?: ReviewRun[];
+  sessions?: AoSession[];
+  ciChecksByPr?: Record<string, Array<{ name: string; state: string }>>;
+};
+
+function loadWakeFixture(name: string): WakeFixture {
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as WakeFixture;
 }
 
-function evaluateWakeFixture(fixture: Record<string, unknown>) {
+function evaluateWakeFixture(fixture: WakeFixture) {
   const prKey = String(fixture.prNumber);
-  const ciChecksByPr = fixture.ciChecksByPr as Record<string, unknown[]> | undefined;
   return evaluateWakeReviewTrigger({
-    wakeKind: fixture.wakeKind as string,
-    sessionId: fixture.sessionId as string,
-    prNumber: fixture.prNumber as number,
-    openPrs: fixture.openPrs as unknown[],
-    reviewRuns: fixture.reviewRuns as unknown[],
-    sessions: fixture.sessions as unknown[],
-    ciChecks: ciChecksByPr?.[prKey],
+    wakeKind: fixture.wakeKind,
+    sessionId: fixture.sessionId,
+    prNumber: fixture.prNumber,
+    openPrs: fixture.openPrs,
+    reviewRuns: fixture.reviewRuns,
+    sessions: fixture.sessions,
+    ciChecks: fixture.ciChecksByPr?.[prKey],
   });
 }
 
