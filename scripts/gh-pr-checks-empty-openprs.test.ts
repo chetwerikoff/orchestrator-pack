@@ -23,4 +23,24 @@ Write-Output 'ok'
     expect(result.stdout).toContain('ok');
     expect(result.stderr ?? '').not.toMatch(/empty collection/i);
   });
+
+  it('preserves empty arrays from ConvertTo-GhOpenPrArray in scalar hashtable assignments', () => {
+    const scriptsDir = path.join(repoRoot, 'scripts');
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${path.join(scriptsDir, 'lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
+$payload = @{ openPrs = (ConvertTo-GhOpenPrArray -OpenPrs $null) }
+if ($null -eq $payload.openPrs) { throw 'expected empty array, got null' }
+if ($payload.openPrs.Count -ne 0) { throw 'expected count 0' }
+$filtered = @{ openPrs = (ConvertTo-GhOpenPrArray -OpenPrs @($null)) }
+if ($null -eq $filtered.openPrs) { throw 'expected filtered empty array, got null' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: scriptsDir,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
 });

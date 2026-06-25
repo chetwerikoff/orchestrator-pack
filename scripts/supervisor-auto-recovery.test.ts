@@ -38,7 +38,7 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const log = readSupervisorLog(stateDir);
-      recoveringAfterHeal = countLogMatches(log, /heartbeat recovering \(attempt/g);
+      recoveringAfterHeal = countLogMatches(log, /heartbeat recovering \(degraded attempt/g);
       if (Date.now() > Number(errorUntilMs) + 8000) {
         break;
       }

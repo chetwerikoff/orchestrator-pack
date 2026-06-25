@@ -31,9 +31,13 @@ function ConvertTo-GhOpenPrArray {
     param($OpenPrs)
 
     if ($null -eq $OpenPrs) {
-        return @()
+        return ,@()
     }
-    return @($OpenPrs | Where-Object { $null -ne $_ })
+    $normalized = @($OpenPrs | Where-Object { $null -ne $_ })
+    if ($normalized.Count -eq 0) {
+        return ,@()
+    }
+    return ,$normalized
 }
 
 function Invoke-GhOpenPrList {
