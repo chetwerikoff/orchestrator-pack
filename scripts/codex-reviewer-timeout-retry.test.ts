@@ -22,6 +22,10 @@ function loadFixture(name: string) {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
 }
 
+function buildTimeoutRun(overrides: Record<string, unknown> = {}) {
+  return { ...loadFixture('timeout-run.json'), ...overrides };
+}
+
 describe('same-head timeout retry escalation (AC#4)', () => {
   it('extracts timeout_no_verdict from reviewer-evidence marker', () => {
     const terminationReason = [
@@ -34,11 +38,12 @@ describe('same-head timeout retry escalation (AC#4)', () => {
   });
 
   it('allows one retry after first timeout_no_verdict failure', () => {
-    const fixture = loadFixture('timeout-first-failure.json');
+    const scenario = loadFixture('timeout-repeated-scenario.json');
+    const runs = [buildTimeoutRun()];
     const state = evaluateTimeoutRetryEligibility(
-      fixture.runs,
-      fixture.prNumber,
-      fixture.headSha,
+      runs,
+      scenario.prNumber,
+      scenario.headSha,
       { maxRetries: 1 },
     );
     expect(state.retryEligible).toBe(true);
@@ -47,11 +52,18 @@ describe('same-head timeout retry escalation (AC#4)', () => {
   });
 
   it('escalates repeated timeout_no_verdict failures at review-start layer', () => {
-    const fixture = loadFixture('timeout-repeated-failures.json');
+    const scenario = loadFixture('timeout-repeated-scenario.json');
+    const runs = [
+      buildTimeoutRun(),
+      buildTimeoutRun({
+        id: scenario.repeatRunId,
+        createdAt: '2026-06-20T01:00:00.000Z',
+      }),
+    ];
     const state = evaluateTimeoutRetryEligibility(
-      fixture.runs,
-      fixture.prNumber,
-      fixture.headSha,
+      runs,
+      scenario.prNumber,
+      scenario.headSha,
       { maxRetries: 1 },
     );
     expect(state.retryEligible).toBe(false);
@@ -59,10 +71,10 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     expect(state.timeoutFailureCount).toBe(2);
 
     const observed = buildFailedCancelledObserved(
-      fixture.runs[1],
-      fixture.prNumber,
-      fixture.headSha,
-      fixture.runs,
+      runs[1],
+      scenario.prNumber,
+      scenario.headSha,
+      runs,
     );
     expect(observed.retryEligible).toBe(false);
     expect(observed.escalationReason).toBe(REPEATED_TIMEOUT_ESCALATION_REASON);
@@ -70,9 +82,9 @@ describe('same-head timeout retry escalation (AC#4)', () => {
 
     const gate = evaluateScenarioMatrixCell({
       claimWindow: 'free',
-      reviewRuns: fixture.runs,
-      prNumber: fixture.prNumber,
-      headSha: fixture.headSha,
+      reviewRuns: runs,
+      prNumber: scenario.prNumber,
+      headSha: scenario.headSha,
     });
     expect(gate.launch).toBe(false);
     expect(gate.reason).toBe('retry_bound_exhausted');

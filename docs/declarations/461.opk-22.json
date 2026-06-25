@@ -7,11 +7,12 @@
   "baseline": {
     "commit_sha": "670af17cb9260c7293f5f22b187e84bba561f77",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:bcc7d48bdfa1e24918012ac8cf747cb8d18c15ace7aa8003f2aa5480ba63c8ad"
+    "active_scope_hash": "sha256:5b1202dd65d5fd0685a6a2103bdfd7165cca68fdacb7a021a996f69febda2efc"
   },
   "declared_paths": [
     "docs/codex-reviewer-timeout-retry.d.mts",
     "docs/codex-reviewer-timeout-retry.mjs",
+    "docs/declarations/461.opk-22.json",
     "docs/migration_notes.md",
     "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
@@ -30,9 +31,8 @@
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts",
     "prompts/codex_review_prompt.md",
     "scripts/codex-reviewer-timeout-retry.test.ts",
-    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-first-failure.json",
-    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-failures.json",
-    "docs/declarations/461.opk-22.json"
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-scenario.json",
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-run.json"
   ],
   "declared_globs": [],
   "amendments": []
