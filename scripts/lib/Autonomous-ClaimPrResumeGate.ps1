@@ -1,0 +1,269 @@
+#requires -Version 5.1
+<#
+  Claim-pr resume safety: live-owner check + single-flight mutex (Issue #458).
+#>
+
+$Script:AutonomousClaimPrResumeMutexStaleSeconds = 5
+
+function Get-AutonomousClaimPrResumeNamespace {
+    param([string]$ProjectId = 'orchestrator-pack')
+
+    $project = ([string]$ProjectId).Trim()
+    if (-not $project) { $project = 'orchestrator-pack' }
+    $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'claim-pr-resume-claims')
+}
+
+function Get-AutonomousClaimPrResumeLockDir {
+    param(
+        [string]$Namespace,
+        [int]$PrNumber
+    )
+    return (Join-Path (Join-Path $Namespace '.locks') "pr-$PrNumber")
+}
+
+function Get-AutonomousClaimPrResumeMutexOwnerPath {
+    param([string]$LockDir)
+    return (Join-Path $LockDir 'owner.json')
+}
+
+function Test-AutonomousClaimPrResumeProcessAlive {
+    param([object]$Owner)
+
+    try {
+        $ownerPid = [int]$Owner.pid
+        if ($ownerPid -le 0) { return $false }
+        $process = Get-Process -Id $ownerPid -ErrorAction Stop
+        return [bool]$process
+    }
+    catch {
+        return $false
+    }
+}
+
+function Read-AutonomousClaimPrResumeMutexOwner {
+    param([string]$LockDir)
+
+    $ownerPath = Get-AutonomousClaimPrResumeMutexOwnerPath -LockDir $LockDir
+    try {
+        if (-not (Test-Path -LiteralPath $ownerPath -PathType Leaf)) {
+            return @{ ok = $false; reason = 'missing' }
+        }
+        $record = Get-Content -LiteralPath $ownerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return @{ ok = $true; record = $record }
+    }
+    catch {
+        return @{ ok = $false; reason = 'unreadable' }
+    }
+}
+
+function Test-AutonomousClaimPrResumeMutexAbandoned {
+    param([string]$LockDir)
+
+    if (-not (Test-Path -LiteralPath $LockDir -PathType Container)) {
+        return $false
+    }
+    $owner = Read-AutonomousClaimPrResumeMutexOwner -LockDir $LockDir
+    if ($owner.ok) {
+        return -not (Test-AutonomousClaimPrResumeProcessAlive -Owner $owner.record)
+    }
+    try {
+        $item = Get-Item -LiteralPath $LockDir -ErrorAction Stop
+        $ageSeconds = ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds
+        return ($ageSeconds -ge $Script:AutonomousClaimPrResumeMutexStaleSeconds)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Enter-AutonomousClaimPrResumeMutex {
+    param(
+        [int]$PrNumber,
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    $namespace = Get-AutonomousClaimPrResumeNamespace -ProjectId $ProjectId
+    New-Item -ItemType Directory -Path (Join-Path $namespace '.locks') -Force -ErrorAction SilentlyContinue | Out-Null
+    $lockDir = Get-AutonomousClaimPrResumeLockDir -Namespace $namespace -PrNumber $PrNumber
+
+    if (Test-AutonomousClaimPrResumeMutexAbandoned -LockDir $lockDir) {
+        Remove-Item -LiteralPath $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    try {
+        New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
+    }
+    catch {
+        return @{ acquired = $false; reason = 'claim_pr_resume_already_in_progress'; lockDir = $lockDir }
+    }
+
+    $hostName = 'unknown-host'
+    try { $hostName = [System.Net.Dns]::GetHostName() } catch { }
+    $owner = @{
+        pid           = $PID
+        host          = $hostName
+        processGuid   = [guid]::NewGuid().ToString('n')
+        acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        prNumber      = $PrNumber
+    }
+    $ownerPath = Get-AutonomousClaimPrResumeMutexOwnerPath -LockDir $lockDir
+    $tmp = Join-Path $lockDir ".$([guid]::NewGuid().ToString('n')).tmp"
+    ($owner | ConvertTo-Json -Compress -Depth 5) | Set-Content -LiteralPath $tmp -Encoding UTF8
+    try {
+        [System.IO.File]::Move($tmp, $ownerPath, $false)
+    }
+    catch [System.Management.Automation.MethodException] {
+        [System.IO.File]::Move($tmp, $ownerPath)
+    }
+    catch {
+        Remove-Item -LiteralPath $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+        return @{ acquired = $false; reason = 'claim_pr_resume_already_in_progress'; lockDir = $lockDir }
+    }
+
+    $verify = Read-AutonomousClaimPrResumeMutexOwner -LockDir $lockDir
+    if (-not $verify.ok -or [string]$verify.record.processGuid -ne [string]$owner.processGuid) {
+        return @{ acquired = $false; reason = 'claim_pr_resume_already_in_progress'; lockDir = $lockDir }
+    }
+
+    return @{ acquired = $true; reason = 'mutex_acquired'; lockDir = $lockDir; owner = $owner }
+}
+
+function Release-AutonomousClaimPrResumeMutex {
+    param([hashtable]$Mutex)
+
+    if (-not $Mutex -or -not $Mutex.lockDir) { return }
+    Remove-Item -LiteralPath $Mutex.lockDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-AutonomousGateResolvedAoCliJson {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$AoArgs,
+        [string]$FailureLabel = ''
+    )
+
+    $packRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
+    $realAo = 'ao'
+    $configPath = Join-Path $packRoot '.ao' 'autonomous-real-binaries.json'
+    if (Test-Path -LiteralPath $configPath) {
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $configured = [string]$config.ao
+            if ($configured -and $configured -ne 'ao' -and (Test-Path -LiteralPath $configured)) {
+                $realAo = (Resolve-Path -LiteralPath $configured).Path
+            }
+        }
+        catch { }
+    }
+
+    $label = if ($FailureLabel) { $FailureLabel } else { "resolved ao $($AoArgs -join ' ')" }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = if ($realAo -eq 'ao') { & ao @AoArgs 2>&1 } else { & $realAo @AoArgs 2>&1 }
+        if ($LASTEXITCODE -ne 0) {
+            throw "$label failed (exit $LASTEXITCODE)"
+        }
+        $text = ($raw | ForEach-Object {
+                if ($_ -is [string]) { $_ }
+                elseif ($null -ne $_) { $_.ToString() }
+            }) -join "`n"
+        $start = $text.IndexOf('{')
+        if ($start -lt 0) {
+            throw "$label produced no JSON output"
+        }
+        return $text.Substring($start) | ConvertFrom-Json
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Get-AutonomousGateStatusSessions {
+    param([switch]$IncludeTerminated)
+
+    $args = @('status', '--json', '--reports', 'full')
+    if ($IncludeTerminated) {
+        $args += '--include-terminated'
+    }
+    $payload = Invoke-AutonomousGateResolvedAoCliJson -AoArgs $args -FailureLabel 'autonomous gate ao status'
+    $sessions = @($payload.data)
+    if (-not $sessions -and $payload.sessions) {
+        $sessions = @($payload.sessions)
+    }
+    return $sessions
+}
+
+function Test-AutonomousClaimPrLiveOwner {
+    param(
+        [int]$PrNumber,
+        [object[]]$FixtureSessions = @(),
+        [switch]$FixtureMode
+    )
+
+    $sessions = @()
+    if ($FixtureMode) {
+        $sessions = @($FixtureSessions)
+    }
+    else {
+        try {
+            $sessions = @(Get-AutonomousGateStatusSessions -IncludeTerminated)
+        }
+        catch {
+            return @{ liveOwnerPresent = $false; livenessKnown = $false }
+        }
+    }
+
+    $liveMatches = @(
+        foreach ($session in $sessions) {
+            $role = [string]$session.role
+            if ($role -notmatch '^(?i)(worker|coding)$') { continue }
+            $status = [string]$session.status
+            if ($status -match '^(?i)(terminated|killed|exited|dead|closed)$') { continue }
+            $prNumber = 0
+            if ($null -ne $session.prNumber) {
+                $prNumber = [int]$session.prNumber
+            }
+            elseif ($session.pr -match 'pull/(\d+)') {
+                $prNumber = [int]$Matches[1]
+            }
+            elseif ($session.pr -match '^#?(\d+)$') {
+                $prNumber = [int]$Matches[1]
+            }
+            if ($prNumber -eq $PrNumber) {
+                $session
+            }
+        }
+    )
+
+    if ($liveMatches.Count -gt 0) {
+        return @{ liveOwnerPresent = $true; livenessKnown = $true }
+    }
+    return @{ liveOwnerPresent = $false; livenessKnown = $true }
+}
+
+function Test-AutonomousClaimPrResumePreconditions {
+    param(
+        [int]$PrNumber,
+        [object[]]$FixtureSessions = @(),
+        [switch]$FixtureMode
+    )
+
+    if ($PrNumber -le 0) {
+        return @{ safe = $false; reason = 'claim_pr_resume_invalid_pr' }
+    }
+
+    $mutex = Enter-AutonomousClaimPrResumeMutex -PrNumber $PrNumber
+    if (-not $mutex.acquired) {
+        return @{ safe = $false; reason = [string]$mutex.reason }
+    }
+
+    $owner = Test-AutonomousClaimPrLiveOwner -PrNumber $PrNumber -FixtureSessions $FixtureSessions -FixtureMode:$FixtureMode
+    if ($owner.liveOwnerPresent -or -not $owner.livenessKnown) {
+        Release-AutonomousClaimPrResumeMutex -Mutex $mutex
+        return @{ safe = $false; reason = 'claim_pr_resume_cleanup_required' }
+    }
+
+    return @{ safe = $true; reason = 'claim_pr_resume_safe'; mutex = $mutex }
+}

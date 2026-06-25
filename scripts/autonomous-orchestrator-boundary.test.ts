@@ -49,19 +49,32 @@ function spawnAutonomousBashTurn(cwd: string, command: string) {
   });
 }
 
-/** Isolated AO_REAL_BINARY stub: records argv to probeFile, exits 0 — no live ao spawn. */
+/** Isolated ao stub via .ao/autonomous-real-binaries.json — records argv to probeFile. */
 function withAoSpawnProbeStub(run: (ctx: { aoStub: string; probeFile: string }) => void) {
   const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-stub-'));
   const aoStub = path.join(stubDir, 'ao-stub.sh');
   const probeFile = path.join(stubDir, 'spawn-probe.txt');
+  const aoDir = path.join(repoRoot, '.ao');
+  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
+  const priorConfig = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
   try {
     writeFileSync(
       aoStub,
-      '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$@" > "${AO_SPAWN_PROBE_FILE:?}"\n',
+      '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${1:-}" == "spawn" ]]; then printf \'%s\\n\' "$@" > "${AO_SPAWN_PROBE_FILE:?}"; exit 0; fi\nif [[ "${1:-}" == "status" ]]; then printf \'{"data":[]}\n\'; exit 0; fi\nexit 0\n',
     );
     chmodSync(aoStub, 0o755);
+    mkdirSync(aoDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({ ao: aoStub, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2),
+    );
     run({ aoStub, probeFile });
   } finally {
+    if (priorConfig === null) {
+      if (existsSync(configPath)) rmSync(configPath);
+    } else {
+      writeFileSync(configPath, priorConfig);
+    }
     rmSync(stubDir, { recursive: true, force: true });
   }
 }
@@ -138,13 +151,13 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     expect(TURN_VISIBLE_REAL_BINARY_ENV_VARS).toContain('GIT_REAL_BINARY');
   });
 
-  it('denies autonomous spawn across command spellings', () => {
+  it('policy-aware spawn boundary allows default-on autonomous spawn', () => {
     for (const commandLine of [
       'ao spawn opk-1',
       'ao spawn --claim-pr 322',
       '/usr/local/bin/ao spawn opk-1',
     ]) {
-      expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: true }).allowed).toBe(false);
+      expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: true }).allowed).toBe(true);
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: false }).allowed).toBe(true);
     }
     expect(isSpawnAoArgv(['spawn', 'opk-1'])).toBe(true);
@@ -597,6 +610,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('interposes custom absolute git and ao real-binary paths', () => {
+    withAoSpawnProbeStub(({ probeFile }) => {
     const fakeBinRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-bin-'));
     try {
       const customGitDir = path.join(fakeBinRoot, 'opt', 'homebrew', 'bin');
@@ -627,26 +641,28 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           before.stdout.trim(),
         );
 
-        const denyCustomAo = spawnSync(
+        const allowCustomAo = spawnSync(
           'bash',
           ['-c', `source ${bashEnvPath}; ${customAo} spawn opk-1`],
           {
             cwd: dir,
             encoding: 'utf8',
-            env: autonomousBashEnv(),
+            env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
           },
         );
-        expect(denyCustomAo.status).toBe(93);
-        expect(denyCustomAo.stderr || denyCustomAo.stdout).toMatch(/autonomous worker spawn denied/i);
-        expect(denyCustomAo.stdout).not.toMatch(/spawn-ok/);
+        expect(allowCustomAo.status).toBe(0);
+        expect(`${allowCustomAo.stderr}${allowCustomAo.stdout}`).toMatch(/autonomous spawn policy allow: action=spawn-new/i);
+        expect(existsSync(probeFile)).toBe(true);
       });
     } finally {
       rmSync(fakeBinRoot, { recursive: true, force: true });
     }
+    });
   });
 
   it('denies git and ao paths hidden behind shell variable expansion', () => {
-    withTempGitRepo((dir) => {
+    withAoSpawnProbeStub(({ probeFile }) => {
+      withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const denyGitVar = spawnSync(
         'bash',
@@ -682,23 +698,27 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const fakeAo = path.join(mkdtempSync(path.join(tmpdir(), 'autonomous-fake-ao-')), 'ao');
       writeFileSync(fakeAo, '#!/usr/bin/env bash\nprintf \'spawn-ok\\n\'\n');
       chmodSync(fakeAo, 0o755);
-      const denyAoVar = spawnSync(
+      const allowAoVar = spawnSync(
         'bash',
         ['-c', `source ${bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
         {
           cwd: dir,
           encoding: 'utf8',
-          env: autonomousBashEnv(),
+          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
-      expect(denyAoVar.status).toBe(93);
-      expect(denyAoVar.stderr || denyAoVar.stdout).toMatch(/autonomous worker spawn denied/i);
-      expect(denyAoVar.stdout).not.toMatch(/spawn-ok/);
+      expect(allowAoVar.status).toBe(0);
+      expect(`${allowAoVar.stderr}${allowAoVar.stdout}`).toMatch(
+        /autonomous spawn policy allow: action=spawn-new/i,
+      );
+      expect(existsSync(probeFile)).toBe(true);
+      });
     });
   });
 
   it('denies absolute git and ao invocations from bash script files under BASH_ENV', () => {
-    withTempGitRepo((dir) => {
+    withAoSpawnProbeStub(({ probeFile }) => {
+      withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const gitScript = path.join(dir, 'mutate-git.sh');
       writeFileSync(gitScript, '#!/usr/bin/env bash\n/usr/bin/git branch -m script-file-bypass\n');
@@ -718,24 +738,20 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         before.stdout.trim(),
       );
 
-      const fakeAo = path.join(mkdtempSync(path.join(tmpdir(), 'autonomous-fake-ao-script-')), 'ao');
-      writeFileSync(fakeAo, '#!/usr/bin/env bash\nprintf \'spawn-ok\\n\'\n');
-      chmodSync(fakeAo, 0o755);
       const aoScript = path.join(dir, 'mutate-ao.sh');
-      writeFileSync(aoScript, `#!/usr/bin/env bash\n${fakeAo} spawn opk-1\n`);
+      writeFileSync(aoScript, '#!/usr/bin/env bash\nao spawn opk-1\n');
       chmodSync(aoScript, 0o755);
-      const denyAoScript = spawnSync('bash', [aoScript], {
+      const allowAoScript = spawnSync('bash', [aoScript], {
         cwd: dir,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-          BASH_ENV: bashEnvPath,
-        },
+        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: bashEnvPath }),
       });
-      expect(denyAoScript.status).toBe(93);
-      expect(denyAoScript.stderr || denyAoScript.stdout).toMatch(/autonomous worker spawn denied/i);
-      expect(denyAoScript.stdout).not.toMatch(/spawn-ok/);
+      expect(allowAoScript.status).toBe(0);
+      expect(`${allowAoScript.stderr}${allowAoScript.stdout}`).toMatch(
+        /autonomous spawn policy allow: action=spawn-new/i,
+      );
+      expect(existsSync(probeFile)).toBe(true);
+      });
     });
   });
 
@@ -865,32 +881,43 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     ).toBe(false);
   });
 
-  it('autonomous ao guard denies spawn when surface marker is set', () => {
-    const result = spawnSync(
-      'pwsh',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: autonomousBashEnv(),
-      },
-    );
-    expect(result.status).toBe(93);
-    expect(result.stderr).toMatch(/autonomous worker spawn denied/i);
+  it('autonomous ao guard allows spawn when default policy is on', () => {
+    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: autonomousBashEnv({
+            AO_REAL_BINARY: aoStub,
+            AO_SPAWN_PROBE_FILE: probeFile,
+          }),
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stderr).toMatch(/autonomous spawn policy allow: action=spawn-new/i);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-1']);
+    });
   });
 
-  it('scripts/ao shim denies spawn --claim-pr on autonomous surface', () => {
-    const result = spawnSync(
-      aoShimPath,
-      ['spawn', '--claim-pr', '322'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: autonomousBashEnv(),
-      },
-    );
-    expect(result.status).toBe(93);
-    expect(result.stderr).toMatch(/autonomous worker spawn denied/i);
+  it('scripts/ao shim allows spawn --claim-pr on autonomous surface when policy and safety pass', () => {
+    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+      const result = spawnSync(
+        aoShimPath,
+        ['spawn', '--claim-pr', '322'],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: autonomousBashEnv({
+            AO_REAL_BINARY: aoStub,
+            AO_SPAWN_PROBE_FILE: probeFile,
+          }),
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
+    });
   });
 
   it('without marker, spawn and mutating git pass through shims', () => {

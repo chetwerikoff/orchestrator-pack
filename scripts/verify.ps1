@@ -1333,6 +1333,22 @@ else {
     Add-Failure 'Missing autonomous orchestrator spawn/git boundary check (Issue #324)'
 }
 
+$autonomousSpawnPolicyCheck = Join-Path $Root 'scripts/check-autonomous-spawn-policy.ps1'
+if (Test-Path -LiteralPath $autonomousSpawnPolicyCheck -PathType Leaf) {
+    & $autonomousSpawnPolicyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous orchestrator spawn policy drift (Issue #458)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous orchestrator spawn policy check (Issue #458)'
+}
+
 $autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
 if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {

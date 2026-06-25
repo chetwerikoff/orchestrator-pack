@@ -305,19 +305,6 @@ function Get-AoArgvSubcommand {
     return ''
 }
 
-function Test-AutonomousSpawnDenied {
-    param([string[]]$Argv)
-
-    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
-        return @{ denied = $false; reason = 'manual_surface' }
-    }
-
-    $sub = Get-AoArgvSubcommand -Argv $Argv
-    if ($sub -match '^(?i)spawn$') {
-        return @{ denied = $true; reason = 'autonomous_spawn_denied' }
-    }
-    return @{ denied = $false; reason = 'not_spawn' }
-}
 
 function Get-LinuxParentProcessId {
     param([int]$ProcessId)
@@ -685,3 +672,5 @@ function Test-AutonomousGitDenied {
 
     return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
 }
+
+. (Join-Path $PSScriptRoot 'Orchestrator-AutonomousSpawnGate.ps1')
