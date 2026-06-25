@@ -14,21 +14,6 @@ function Test-OrchestratorAutonomousSurfaceActiveForSpawnGate {
     return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
 }
 
-function Get-SpawnGateAoArgvSubcommand {
-    param([string[]]$Argv)
-
-    if (-not $Argv -or $Argv.Count -eq 0) {
-        return ''
-    }
-    foreach ($token in $Argv) {
-        if ([string]$token -match '^-') {
-            continue
-        }
-        return [string]$token
-    }
-    return ''
-}
-
 function Get-AutonomousSpawnPolicyPath {
     param([string]$PackRoot = '')
 
@@ -151,7 +136,7 @@ function Test-AutonomousSpawnDenied {
         return @{ denied = $false; reason = 'manual_surface'; auditLine = '' }
     }
 
-    $sub = Get-SpawnGateAoArgvSubcommand -Argv $Argv
+    $sub = Get-AoArgvSubcommand -Argv $Argv
     if ($sub -notmatch '^(?i)spawn$') {
         return @{ denied = $false; reason = 'not_spawn'; auditLine = '' }
     }

@@ -26,6 +26,7 @@ import {
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 import { autonomousBashEnv, gitFixtureEnv, withTempGitRepo } from './_test-git-fixture.js';
+import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -47,36 +48,6 @@ function spawnAutonomousBashTurn(cwd: string, command: string) {
       BASH_ENV: bashEnvPath,
     },
   });
-}
-
-/** Isolated ao stub via .ao/autonomous-real-binaries.json — records argv to probeFile. */
-function withAoSpawnProbeStub(run: (ctx: { aoStub: string; probeFile: string }) => void) {
-  const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-stub-'));
-  const aoStub = path.join(stubDir, 'ao-stub.sh');
-  const probeFile = path.join(stubDir, 'spawn-probe.txt');
-  const aoDir = path.join(repoRoot, '.ao');
-  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
-  const priorConfig = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
-  try {
-    writeFileSync(
-      aoStub,
-      '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${1:-}" == "spawn" ]]; then printf \'%s\\n\' "$@" > "${AO_SPAWN_PROBE_FILE:?}"; exit 0; fi\nif [[ "${1:-}" == "status" ]]; then printf \'{"data":[]}\n\'; exit 0; fi\nexit 0\n',
-    );
-    chmodSync(aoStub, 0o755);
-    mkdirSync(aoDir, { recursive: true });
-    writeFileSync(
-      configPath,
-      JSON.stringify({ ao: aoStub, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2),
-    );
-    run({ aoStub, probeFile });
-  } finally {
-    if (priorConfig === null) {
-      if (existsSync(configPath)) rmSync(configPath);
-    } else {
-      writeFileSync(configPath, priorConfig);
-    }
-    rmSync(stubDir, { recursive: true, force: true });
-  }
 }
 
 function initCoordinatedIssue324Fixture() {

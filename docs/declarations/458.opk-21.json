@@ -1,0 +1,33 @@
+{
+  "issue_number": 458,
+  "iteration_id": "opk-21",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-25T09:25:00.000Z",
+  "baseline": {
+    "commit_sha": "db8ab5be5d51cdc6504caf1ea2f83b4e09befa4c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:38121c6d05d2b9c93b7c78567a480819975e6c2e802b4906d1b14c06f519d3f2"
+  },
+  "declared_paths": [
+    "docs/autonomous-orchestrator-boundary.d.mts",
+    "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/autonomous-spawn-policy.json",
+    "docs/declarations/458.opk-21.json",
+    "docs/migration_notes.md",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/_test-interposer-pack-fixture.ts",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/autonomous-orchestrator-interposer.test.ts",
+    "scripts/autonomous-spawn-policy.test.ts",
+    "scripts/check-autonomous-spawn-policy.ps1",
+    "scripts/lib/Autonomous-ClaimPrResumeGate.ps1",
+    "scripts/lib/Autonomous-GateCommon.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

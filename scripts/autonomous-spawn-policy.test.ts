@@ -15,6 +15,7 @@ import {
   validateAutonomousSpawnPolicy,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { autonomousBashEnv } from './_test-git-fixture.js';
+import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const aoShimPath = path.join(repoRoot, 'scripts/ao');
@@ -22,50 +23,6 @@ const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
 const migrationNotesPath = path.join(repoRoot, 'docs/migration_notes.md');
-
-function withAoSpawnProbeStub(run: (ctx: { aoStub: string; probeFile: string }) => void) {
-  const stubDir = mkdtempSync(path.join(tmpdir(), 'spawn-policy-ao-stub-'));
-  const aoStub = path.join(stubDir, 'ao-stub.sh');
-  const probeFile = path.join(stubDir, 'spawn-probe.txt');
-  const aoDir = path.join(repoRoot, '.ao');
-  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
-  const priorConfig = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
-  try {
-    writeFileSync(
-      aoStub,
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "spawn" ]]; then
-  printf '%s\\n' "$@" > "\${AO_SPAWN_PROBE_FILE:?}"
-  exit 0
-fi
-if [[ "\${1:-}" == "status" ]]; then
-  printf '{"data":[]}\\n'
-  exit 0
-fi
-exit 0
-`,
-    );
-    chmodSync(aoStub, 0o755);
-    mkdirSync(aoDir, { recursive: true });
-    writeFileSync(
-      configPath,
-      JSON.stringify(
-        { ao: aoStub, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' },
-        null,
-        2,
-      ),
-    );
-    run({ aoStub, probeFile });
-  } finally {
-    if (priorConfig === null) {
-      if (existsSync(configPath)) rmSync(configPath);
-    } else {
-      writeFileSync(configPath, priorConfig);
-    }
-    rmSync(stubDir, { recursive: true, force: true });
-  }
-}
 
 function withTempSpawnPolicy(
   policy: Record<string, unknown>,
