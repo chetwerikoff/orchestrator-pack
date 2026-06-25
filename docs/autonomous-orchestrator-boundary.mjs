@@ -216,6 +216,19 @@ export function classifySpawnAction(argv) {
 }
 
 /**
+ * @param {string} raw
+ * @returns {number | null}
+ */
+function parseStrictPositiveClaimPrValue(raw) {
+  const value = String(raw).trim();
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
  * @param {string[]} argv
  * @returns {number | null}
  */
@@ -224,14 +237,11 @@ export function parseClaimPrNumberFromSpawnArgv(argv) {
   for (let index = 0; index < list.length; index += 1) {
     const token = list[index];
     if (token === '--claim-pr' && index + 1 < list.length) {
-      const value = String(list[index + 1]).trim();
-      const parsed = Number.parseInt(value, 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      return parseStrictPositiveClaimPrValue(list[index + 1]);
     }
     const eqMatch = /^--claim-pr=(.+)$/i.exec(token);
     if (eqMatch) {
-      const parsed = Number.parseInt(String(eqMatch[1]).trim(), 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      return parseStrictPositiveClaimPrValue(eqMatch[1]);
     }
   }
   return null;
