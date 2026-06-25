@@ -334,6 +334,9 @@ export function findCrossHeadFixingCiBridge({
   if (currentScoped.reportState === 'fixing_ci') {
     return { bridged: false, reason: 'current_head_has_fixing_ci' };
   }
+  if (currentScoped.report && currentScoped.reportState) {
+    return { bridged: false, reason: 'current_head_catch_up_reported' };
+  }
 
   const config = resolveConfig(inputConfig ?? {});
   const evaluationMs = Number(nowMs) || Date.now();

@@ -381,6 +381,29 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     expect(gate.reason).toBe('abandoned-superseded');
   });
 
+  it('cross-head bridge closes after non-fixing catch-up on new head (opk-rev-977)', () => {
+    const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
+    ws.sessions[0].reports = [
+      ...ws.sessions[0].reports,
+      {
+        reportState: 'working',
+        reportedAt: '2026-06-18T13:18:00.000Z',
+        accepted: true,
+        headRefOid: H2,
+      },
+    ];
+    ws.sessions[0].status = 'working';
+    const decision = evaluateCiFailureSuppressorDecision({
+      episode: episodeForHead(H2),
+      surface: 'orchestrator-turn',
+      workerState: ws,
+      ...freshClock(),
+    });
+    expect(decision.decision).toBe('SEND');
+    expect(decision.reason).toBe('no_suppressor');
+    expect(decision.stintClass).toBe('C');
+  });
+
   it('evaluate-suppressor CLI subcommand is registered (review opk-rev-968)', () => {
     const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
     const payload = {
