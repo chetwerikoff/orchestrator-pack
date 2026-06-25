@@ -180,6 +180,17 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       });
       expect(turn.decision).toBe('SUPPRESS');
       expect(turn.reason).toBe('post_stale_escalation_lock');
+
+      const recovered = evaluateCiFailureSuppressorDecision({
+        episode,
+        workerState: captureWorkerState('live-worker-fixing-ci-captured.json', H1),
+        surface: 'orchestrator-turn',
+        storeDir,
+        ...freshClock(),
+      });
+      expect(recovered.decision).toBe('SUPPRESS');
+      expect(recovered.reason).toBe('suppressed-live-worker');
+      expect(readPostStaleEscalationLock(storeDir, episode).open).toBe(false);
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
     }

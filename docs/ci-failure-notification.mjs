@@ -465,24 +465,6 @@ export function evaluateCiFailureSuppressorDecision(input) {
     targetGeneration: episode.targetGeneration,
   };
 
-  if (orchestratorTurn && storeDir) {
-    const lock = readPostStaleEscalationLock(storeDir, episode);
-    if (lock.open) {
-      return {
-        decision: 'SUPPRESS',
-        reason: 'post_stale_escalation_lock',
-        stintClass: 'C',
-        postStaleLock: true,
-        audit: {
-          ...auditBase,
-          postStaleLock: true,
-          staleEscalationOwner: lock.owner,
-          suppressReason: 'post_stale_escalation_lock',
-        },
-      };
-    }
-  }
-
   const live = evaluateLiveWorkerSuppressor({
     episode,
     workerState: input?.workerState,
@@ -509,13 +491,30 @@ export function evaluateCiFailureSuppressorDecision(input) {
     };
   }
 
-  if (live.status === 'matched') {
-    if (orchestratorTurn && storeDir) {
-      const lock = readPostStaleEscalationLock(storeDir, episode);
-      if (lock.open) {
+  if (orchestratorTurn && storeDir) {
+    const lock = readPostStaleEscalationLock(storeDir, episode);
+    if (lock.open) {
+      if (live.status === 'matched') {
         clearPostStaleEscalationLock(storeDir, lock);
+      } else {
+        return {
+          decision: 'SUPPRESS',
+          reason: 'post_stale_escalation_lock',
+          stintClass: 'C',
+          postStaleLock: true,
+          live,
+          audit: {
+            ...auditBase,
+            postStaleLock: true,
+            staleEscalationOwner: lock.owner,
+            suppressReason: 'post_stale_escalation_lock',
+          },
+        };
       }
     }
+  }
+
+  if (live.status === 'matched') {
     return {
       decision: 'SUPPRESS',
       reason: 'suppressed-live-worker',
