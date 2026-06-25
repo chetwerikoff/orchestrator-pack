@@ -4,6 +4,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
+. (Join-Path $PSScriptRoot 'Autonomous-ReviewWorktreeGate.ps1')
 
 $Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
@@ -557,12 +558,6 @@ function Test-AutonomousGitSanctionedProvenance {
 
     switch (Get-AutonomousGitSanctionedProvenanceClass -FixtureParentChain $FixtureParentChain) {
         'preflight' { return $true }
-        'claimed_review_run' {
-            return Test-GitArgvIsAoOwnedWorktreeAdd -Argv $Argv
-        }
-        'review_run_worktree_command' {
-            return Test-GitArgvIsAoOwnedWorktreeAdd -Argv $Argv
-        }
         default { return $false }
     }
 }
@@ -674,6 +669,14 @@ function Test-AutonomousGitDenied {
 
     if (-not (Test-GitArgvIsMutating -Argv $Argv)) {
         return @{ denied = $false; reason = 'read_only_git' }
+    }
+
+    if (Test-GitArgvIsAoOwnedWorktreeAdd -Argv $Argv) {
+        $claimAllow = Test-AutonomousReviewWorktreeClaimBoundAllow -Argv $Argv
+        if ($claimAllow.allowed) {
+            return @{ denied = $false; reason = 'claimed_worktree_allow' }
+        }
+        return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
     }
 
     if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain -Argv $Argv) {

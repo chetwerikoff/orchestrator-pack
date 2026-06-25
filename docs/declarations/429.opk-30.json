@@ -1,0 +1,24 @@
+{
+  "issue_number": 429,
+  "iteration_id": "opk-30",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-24T17:48:11.783Z",
+  "baseline": {
+    "commit_sha": "34e7e266490c7223138ff740ffafaffa93fa0e3b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:47d66e1e390c9f35cf360edc9cf1eb03dc0e38717b998d5f77cb800a5b007bf5"
+  },
+  "declared_paths": [
+    "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/autonomous-review-start-capabilities.json",
+    "docs/declarations/429.opk-30.json",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/autonomous-review-worktree-e2e-smoke.test.ts",
+    "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "tests/external-output-references/autonomous-review-worktree-e2e-smoke/isolated-smoke-redacted.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
