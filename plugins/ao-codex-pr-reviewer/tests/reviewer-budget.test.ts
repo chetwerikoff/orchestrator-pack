@@ -104,8 +104,8 @@ describe('reviewer test budget guard (AC#2)', () => {
     const startedMs = String(ledger.startedAtMs);
     const guardNpm = join(GUARD_DIR, 'npm');
     const result = spawnSync(
-      guardNpm,
-      ['test', '--', 'scripts/orchestrator-wake-supervisor.test.ts'],
+      'sh',
+      [guardNpm, 'test', '--', 'scripts/orchestrator-wake-supervisor.test.ts'],
       {
         encoding: 'utf8',
         env: {
@@ -118,7 +118,7 @@ describe('reviewer test budget guard (AC#2)', () => {
         },
       },
     );
-    expect(result.status).toBe(127);
+    expect(result.status ?? result.signal).toBe(127);
     expect(result.stderr).toContain('review-test-budget:');
     expect(result.stderr).toContain('skipped_or_denied_slow_test');
   });
