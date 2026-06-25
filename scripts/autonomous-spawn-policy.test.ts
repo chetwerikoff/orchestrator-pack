@@ -135,6 +135,16 @@ describe('claim-pr classification', () => {
     expect(prefixMalformed.allowed).toBe(false);
     expect(prefixMalformed.reason).toBe('claim_pr_resume_invalid_pr');
     expect(prefixMalformed.action).toBe('claim-pr-malformed');
+
+    const manualMalformed = evaluateAutonomousSpawnPolicyDecision({
+      argv: ['spawn', '--claim-pr', 'abc'],
+      autonomousSurface: false,
+      policyLoadOk: true,
+      policy: { allowSpawnNew: true, allowClaimPrResume: true },
+    });
+    expect(manualMalformed.allowed).toBe(true);
+    expect(manualMalformed.reason).toBe('manual_surface');
+    expect(manualMalformed.action).toBe('claim-pr-malformed');
   });
 
 describe('spawn policy audit', () => {

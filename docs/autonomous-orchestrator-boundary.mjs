@@ -309,6 +309,9 @@ export function evaluateAutonomousSpawnPolicyDecision(input) {
   if (action === 'not-spawn') {
     return { allowed: true, denied: false, reason: 'not_spawn', action, auditLine: '' };
   }
+  if (!input.autonomousSurface) {
+    return { allowed: true, denied: false, reason: 'manual_surface', action, auditLine: '' };
+  }
   if (action === 'claim-pr-malformed') {
     return {
       allowed: false,
@@ -317,9 +320,6 @@ export function evaluateAutonomousSpawnPolicyDecision(input) {
       action,
       auditLine: 'autonomous spawn policy deny: action=claim-pr-malformed reason=claim_pr_resume_invalid_pr',
     };
-  }
-  if (!input.autonomousSurface) {
-    return { allowed: true, denied: false, reason: 'manual_surface', action, auditLine: '' };
   }
   if (!input.policyLoadOk || !input.policy) {
     const reason = String(input.policyLoadReason ?? 'spawn_policy_missing_or_unreadable');
