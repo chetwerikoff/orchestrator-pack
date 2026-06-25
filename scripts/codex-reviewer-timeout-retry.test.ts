@@ -14,8 +14,6 @@ import { buildFailedCancelledObserved } from '../docs/review-head-ready.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'tests',
   'fixtures',
   'codex-reviewer-timeout-retry',
 );
