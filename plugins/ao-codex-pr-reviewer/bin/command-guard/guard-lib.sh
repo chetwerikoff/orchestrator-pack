@@ -37,7 +37,7 @@ option_consumes_value() {
   esac
   case "$arg" in
     *=*) return 1 ;;
-    --coverage|--watch|--run|--passWithNoTests|--silent|--bail|--changed|--standalone|--merge-reports|-h|--help|--version) return 1 ;;
+    --|--coverage|--watch|--run|--passWithNoTests|--silent|--bail|--changed|--standalone|--merge-reports|-h|--help|--version|--yes|-y|--no-install|--no) return 1 ;;
     --*) return 0 ;;
     -?) return 0 ;;
     -*) return 1 ;;
@@ -49,14 +49,15 @@ has_positional_selector() {
     arg="$1"
     shift
     case "$arg" in
+      --)
+        [ $# -gt 0 ] && return 0
+        ;;
       -*)
         case "$arg" in
           *=*) ;;
           *)
             if option_consumes_value "$arg"; then
-              if [ $# -gt 0 ]; then
-                shift
-              fi
+              [ $# -gt 0 ] && shift
             fi
             ;;
         esac
@@ -69,25 +70,71 @@ has_positional_selector() {
   return 1
 }
 
+scan_for_vitest_token() {
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "vitest" ]; then
+      return 0
+    fi
+    shift
+  done
+  return 1
+}
+
+vitest_tail_has_positional_selector() {
+  executable="$1"
+  shift
+  case "$executable" in
+    vitest)
+      if [ "${1:-}" = "run" ]; then
+        shift
+      fi
+      has_positional_selector "$@"
+      return $?
+      ;;
+    npx|pnpm|yarn)
+      while [ $# -gt 0 ]; do
+        if [ "$1" = "vitest" ]; then
+          shift
+          if [ "${1:-}" = "run" ]; then
+            shift
+          fi
+          has_positional_selector "$@"
+          return $?
+        fi
+        case "$1" in
+          exec|dlx|run) shift ;;
+          --)
+            shift
+            has_positional_selector "$@"
+            return $?
+            ;;
+          *=*) shift ;;
+          -*)
+            if option_consumes_value "$1"; then
+              shift
+              [ $# -gt 0 ] && shift
+            else
+              shift
+            fi
+            ;;
+          *) shift ;;
+        esac
+      done
+      return 1
+      ;;
+  esac
+  return 1
+}
+
 has_targeted_test_selector() {
   executable="$1"
   shift
-  if [ "$executable" = "vitest" ]; then
-    if [ "${1:-}" = "run" ]; then
-      shift
-    fi
-    has_positional_selector "$@"
-    return $?
-  fi
-  if [ "$executable" = "npx" ] && [ "${1:-}" = "vitest" ]; then
-    shift
-    if [ "${1:-}" = "run" ]; then
-      shift
-    fi
-    has_positional_selector "$@"
-    return $?
-  fi
-  set -- "$@"
+  case "$executable" in
+    vitest|npx|pnpm|yarn)
+      vitest_tail_has_positional_selector "$executable" "$@"
+      return $?
+      ;;
+  esac
   prev=""
   while [ $# -gt 0 ]; do
     arg="$1"
@@ -109,25 +156,17 @@ is_bare_vitest_full_suite() {
   executable="$1"
   shift
   case "$executable" in
-    vitest)
-      if has_targeted_test_selector vitest "$@"; then
+    vitest|npx|pnpm|yarn)
+      if [ "$executable" != "vitest" ]; then
+        scan_for_vitest_token "$@" || return 1
+      fi
+      if vitest_tail_has_positional_selector "$executable" "$@"; then
         return 1
       fi
       return 0
-      ;;
-    npx)
-      if [ "${1:-}" != "vitest" ]; then
-        return 1
-      fi
-      if has_targeted_test_selector npx "$@"; then
-        return 1
-      fi
-      return 0
-      ;;
-    *)
-      return 1
       ;;
   esac
+  return 1
 }
 
 classify_command() {

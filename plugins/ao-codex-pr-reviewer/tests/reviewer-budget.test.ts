@@ -116,6 +116,17 @@ describe('reviewer test budget guard (AC#2)', () => {
     expect(classifyReviewShellCommand(['vitest', '--watch'])).toBe('full_suite');
     expect(classifyReviewShellCommand(['npx', 'vitest'])).toBe('full_suite');
     expect(classifyReviewShellCommand(['npx', 'vitest', 'run'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['npx', '--yes', 'vitest'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['pnpm', 'exec', 'vitest'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['yarn', 'vitest'])).toBe('full_suite');
+    expect(
+      classifyReviewShellCommand([
+        'vitest',
+        'run',
+        '--',
+        'plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts',
+      ]),
+    ).toBe('cheap_targeted');
     expect(
       classifyReviewShellCommand(['pwsh', '-NoProfile', '-File', 'scripts/verify.ps1']),
     ).toBe('slow_test');
@@ -264,6 +275,35 @@ describe('reviewer test budget guard (AC#2)', () => {
       encoding: 'utf8',
     });
     expect(npxVitest.stdout.trim()).toBe('full_suite');
+
+    const npxYesVitest = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command npx --yes vitest`],
+      { encoding: 'utf8' },
+    );
+    expect(npxYesVitest.stdout.trim()).toBe('full_suite');
+
+    const pnpmExecVitest = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command pnpm exec vitest`],
+      { encoding: 'utf8' },
+    );
+    expect(pnpmExecVitest.stdout.trim()).toBe('full_suite');
+
+    const yarnVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command yarn vitest`], {
+      encoding: 'utf8',
+    });
+    expect(yarnVitest.stdout.trim()).toBe('full_suite');
+
+    const vitestRunSeparator = spawnSync(
+      'sh',
+      [
+        '-c',
+        `. "${guardLib}"; classify_command vitest run -- plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts`,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(vitestRunSeparator.stdout.trim()).toBe('cheap_targeted');
   });
 
   it('exec-level PATH guard blocks yarn test via wrapper', () => {

@@ -31,6 +31,7 @@ function isOptionToken(token: string): boolean {
 }
 
 const BOOLEAN_FLAGS = new Set([
+  '--',
   '--coverage',
   '--watch',
   '--run',
@@ -43,6 +44,10 @@ const BOOLEAN_FLAGS = new Set([
   '-h',
   '--help',
   '--version',
+  '--yes',
+  '-y',
+  '--no-install',
+  '--no',
 ]);
 
 function optionConsumesValue(token: string): boolean {
@@ -69,6 +74,9 @@ export function hasPositionalSelector(argv: string[], startIndex: number): boole
       index += 1;
       continue;
     }
+    if (token === '--') {
+      return index + 1 < argv.length;
+    }
     if (!isOptionToken(token)) {
       return true;
     }
@@ -85,19 +93,26 @@ export function hasPositionalSelector(argv: string[], startIndex: number): boole
   return false;
 }
 
+function findVitestTail(argv: string[], executable?: string): string[] | null {
+  const parts = argv.map((part) => part.trim()).filter(Boolean);
+  if (executable === 'vitest') {
+    return parts;
+  }
+  if (executable === 'npx' || executable === 'pnpm' || executable === 'yarn') {
+    const index = parts.findIndex((part) => part === 'vitest');
+    if (index >= 0) {
+      return parts.slice(index + 1);
+    }
+  }
+  return null;
+}
+
 export function hasTargetedTestSelector(argv: string[], executable?: string): boolean {
   const parts = argv.map((part) => part.trim()).filter(Boolean);
-  let vitestArgs = parts;
-  let vitestExecutable = executable;
-
-  if (executable === 'npx' && parts[0] === 'vitest') {
-    vitestArgs = parts.slice(1);
-    vitestExecutable = 'vitest';
-  }
-
-  if (vitestExecutable === 'vitest') {
-    const selectorStart = vitestArgs[0] === 'run' ? 1 : 0;
-    return hasPositionalSelector(vitestArgs, selectorStart);
+  const vitestTail = findVitestTail(parts, executable);
+  if (vitestTail) {
+    const selectorStart = vitestTail[0] === 'run' ? 1 : 0;
+    return hasPositionalSelector(vitestTail, selectorStart);
   }
 
   let previous = '';
@@ -119,10 +134,10 @@ export function isBareVitestFullSuiteInvocation(
   executable: string | undefined,
   commandArgs: string[],
 ): boolean {
-  if (executable === 'vitest') {
-    return !hasTargetedTestSelector(commandArgs, executable);
-  }
-  if (executable === 'npx' && commandArgs[0]?.trim() === 'vitest') {
+  if (executable === 'vitest' || executable === 'npx' || executable === 'pnpm' || executable === 'yarn') {
+    if (executable !== 'vitest' && findVitestTail(commandArgs, executable) === null) {
+      return false;
+    }
     return !hasTargetedTestSelector(commandArgs, executable);
   }
   return false;
