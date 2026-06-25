@@ -152,6 +152,20 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     if ($crashFields.backoffUntilMs -gt $nowMs) {
         $waitSeconds = [Math]::Ceiling(($crashFields.backoffUntilMs - $nowMs) / 1000.0)
         & $LogWriter "crash backoff: $($ChildId) waiting ${waitSeconds}s before restart (rapidExits=$($crashFields.rapidExits))"
+        # Stamp the first observed exit for this child generation once; do not slide lastExitMs on
+        # every poll or rapid-exit math treats backoff end as the exit and resets rapidExits.
+        $needsExitStamp = $false
+        if ($ChildStartedMs -gt 0) {
+            $needsExitStamp = ($crashFields.lastExitMs -lt $ChildStartedMs)
+        }
+        elseif ($crashFields.lastExitMs -eq 0) {
+            $needsExitStamp = $true
+        }
+        if ($needsExitStamp) {
+            Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
+                lastExitMs = $nowMs
+            })
+        }
         return @{ allowed = $false; reason = 'backoff'; recovery = $recovery; waitSeconds = $waitSeconds }
     }
 
@@ -169,27 +183,27 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     if ($updatedCrash.rapidExits -ge $terminalRapidExits) {
         $terminalReason = "crash-loop circuit breaker: $($updatedCrash.rapidExits) rapid exits within ${rapidThresholdMs}ms lifespan threshold"
         & $LogWriter "$($ChildId) $terminalReason"
-        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
             attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
             terminal       = $true
             reason         = $terminalReason
             rapidExits     = $updatedCrash.rapidExits
             backoffUntilMs = 0
             lastExitMs     = $updatedCrash.lastExitMs
-        }
+        })
         return @{ allowed = $false; reason = 'circuit_breaker'; recovery = $recovery }
     }
 
     if ($updatedCrash.backoffSeconds -gt 0) {
         & $LogWriter "crash backoff: $($ChildId) rapidExits=$($updatedCrash.rapidExits); next restart in $($updatedCrash.backoffSeconds)s"
-        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
             attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
             terminal       = $false
             reason         = if ($recovery.reason) { [string]$recovery.reason } else { '' }
             rapidExits     = $updatedCrash.rapidExits
             backoffUntilMs = $updatedCrash.backoffUntilMs
             lastExitMs     = $updatedCrash.lastExitMs
-        }
+        })
         return @{
             allowed    = $false
             reason     = 'backoff_scheduled'
@@ -198,14 +212,14 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
         }
     }
 
-    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry @{
+    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
         attempts       = if ($recovery.attempts) { [int]$recovery.attempts } else { 0 }
         terminal       = $false
         reason         = if ($recovery.reason) { [string]$recovery.reason } else { '' }
         rapidExits     = $updatedCrash.rapidExits
         backoffUntilMs = $updatedCrash.backoffUntilMs
         lastExitMs     = $updatedCrash.lastExitMs
-    }
+    })
 
     return @{ allowed = $true; reason = 'restart'; rapidExit = $rapidExit; rapidExits = $updatedCrash.rapidExits }
 }
