@@ -11,6 +11,7 @@ export declare const TERMINAL_CLAIM_PHASES: readonly string[];
 export declare const ACTIVE_CLAIM_PHASES: readonly string[];
 
 export declare function normalizeHeadSha(sha: string | undefined | null): string;
+export declare function resolveCiFailureHeadShaFromGateInput(input: Record<string, unknown>): string;
 export declare function canonicalizeStorePath(storePath: string): string;
 export declare function canonicalStoreId(storePath: string): string;
 export declare function hashNudgeMessageContent(message: string): string;

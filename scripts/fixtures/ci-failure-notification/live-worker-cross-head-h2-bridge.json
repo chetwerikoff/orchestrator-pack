@@ -1,0 +1,20 @@
+{
+  "description": "Issue #459 Class B: fresh fixing_ci on H1, current open PR head H2 before catch-up report",
+  "status": "fixing_ci",
+  "openPrHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "openPrHeadCommittedAt": "2026-06-18T13:20:00.000Z",
+  "reports": [
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T13:05:00.000Z",
+      "accepted": true,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "reportState": "working",
+      "reportedAt": "2026-06-18T12:30:00.000Z",
+      "accepted": true,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

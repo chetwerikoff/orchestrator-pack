@@ -23,6 +23,7 @@ export function buildCaptureWorkerState(scenarioFixture, episode, fixtureDir = d
   const scenario = loadJson(fixtureDir, scenarioFixture);
   const openPrs = base.openPrs.map((row) => ({
     ...row,
+    ...(scenario.openPrHeadSha ? { headRefOid: scenario.openPrHeadSha } : {}),
     ...(scenario.openPrHeadCommittedAt ? { headCommittedAt: scenario.openPrHeadCommittedAt } : {}),
   }));
   return {
@@ -33,6 +34,7 @@ export function buildCaptureWorkerState(scenarioFixture, episode, fixtureDir = d
         lastActivity: scenario.lastActivity ?? base.sessionShell.lastActivity,
         targetGeneration: episode.targetGeneration,
         sessionGeneration: episode.targetGeneration,
+        ownedHeadSha: scenario.openPrHeadSha ?? base.sessionShell.ownedHeadSha,
         reports: scenario.reports,
       },
     ],
