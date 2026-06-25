@@ -5,6 +5,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
 
 $Script:GhFleetOpenPrListTtlSeconds = 15
 $Script:GhFleetCommitMemoTtlSeconds = 2592000
@@ -80,6 +81,94 @@ function Get-GhFleetCacheKeyHash {
     return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant().Substring(0, 16)
 }
 
+function Get-GhFleetRepoSlugCachePaths {
+    param([string]$RepoRoot)
+
+    $cacheRoot = Get-GhFleetInventoryCacheRoot
+    if (-not $cacheRoot) {
+        return $null
+    }
+
+    $normalizedRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+    $rootKey = Get-GhFleetCacheKeyHash -Text $normalizedRoot
+    $dir = Join-Path $cacheRoot 'repo-slug'
+    return @{
+        Dir          = $dir
+        SlugPath     = Join-Path $dir "$rootKey.json"
+        TempPath     = Join-Path $dir "$rootKey.tmp"
+        NormalizedRoot = $normalizedRoot
+    }
+}
+
+function Read-GhFleetRepoSlugCache {
+    param([string]$RepoRoot)
+
+    $paths = Get-GhFleetRepoSlugCachePaths -RepoRoot $RepoRoot
+    if (-not $paths -or -not (Test-Path -LiteralPath $paths.SlugPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $record = Get-Content -LiteralPath $paths.SlugPath -Raw | ConvertFrom-Json
+        if ($record.slug) {
+            return [string]$record.slug
+        }
+    }
+    catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Write-GhFleetRepoSlugCache {
+    param(
+        [string]$RepoRoot,
+        [string]$Slug
+    )
+
+    $paths = Get-GhFleetRepoSlugCachePaths -RepoRoot $RepoRoot
+    if (-not $paths) {
+        return
+    }
+
+    if (Test-Path -LiteralPath $paths.SlugPath -PathType Leaf) {
+        return
+    }
+
+    $dir = $paths.Dir
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    $envelope = @{
+        repoRoot = $paths.NormalizedRoot
+        slug     = [string]$Slug
+        storedAt = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $json = $envelope | ConvertTo-Json -Depth 30 -Compress
+
+    try {
+        $stream = [System.IO.FileStream]::new(
+            $paths.SlugPath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        try {
+            $writer = New-Object System.IO.StreamWriter($stream, [System.Text.UTF8Encoding]::new($false))
+            $writer.Write($json)
+            $writer.Flush()
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch [System.IO.IOException] {
+        return
+    }
+}
+
 function Resolve-GhFleetRepoSlug {
     param([string]$RepoRoot)
 
@@ -87,19 +176,24 @@ function Resolve-GhFleetRepoSlug {
         return $Script:GhFleetRepoSlugByRoot[$RepoRoot]
     }
 
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $slug = gh repo view --json nameWithOwner -q .nameWithOwner 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $slug) {
-            $slug = (Resolve-Path -LiteralPath $RepoRoot).Path
-        }
-        $slug = [string]$slug
-        $Script:GhFleetRepoSlugByRoot[$RepoRoot] = $slug
-        return $slug
+    $cached = Read-GhFleetRepoSlugCache -RepoRoot $RepoRoot
+    if ($cached) {
+        $Script:GhFleetRepoSlugByRoot[$RepoRoot] = $cached
+        return $cached
     }
-    finally {
-        Pop-Location
+
+    $slug = Get-SupervisedRepoSlug -RepoRoot $RepoRoot
+    if (-not $slug) {
+        $slug = (Resolve-Path -LiteralPath $RepoRoot).Path
     }
+    $slug = [string]$slug
+    Write-GhFleetRepoSlugCache -RepoRoot $RepoRoot -Slug $slug
+    $cachedAfterWrite = Read-GhFleetRepoSlugCache -RepoRoot $RepoRoot
+    if ($cachedAfterWrite) {
+        $slug = $cachedAfterWrite
+    }
+    $Script:GhFleetRepoSlugByRoot[$RepoRoot] = $slug
+    return $slug
 }
 
 function Get-GhFleetOpenPrListQueryIdentity {

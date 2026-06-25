@@ -1,6 +1,45 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, type SpawnSyncReturns } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+export type FleetHarness = {
+  root: string;
+  auditFile: string;
+  env: NodeJS.ProcessEnv;
+  cleanup: () => void;
+};
+
+export type PwshResult = Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr'>;
+
+export function spawnPwsh(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<PwshResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+export async function spawnPwshParallel(
+  count: number,
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<PwshResult[]> {
+  return Promise.all(Array.from({ length: count }, () => spawnPwsh(command, cwd, env)));
+}
 
 export type FleetHarness = {
   root: string;

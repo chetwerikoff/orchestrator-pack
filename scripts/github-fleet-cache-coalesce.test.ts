@@ -2,7 +2,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
-import { createGithubFleetCacheHarness, type FleetHarness } from './github-fleet-cache-test-harness.js';
+import {
+  createGithubFleetCacheHarness,
+  spawnPwshParallel,
+  type FleetHarness,
+} from './github-fleet-cache-test-harness.js';
 
 const repoRoot = join(import.meta.dirname, '..');
 const scriptsDir = join(repoRoot, 'scripts');
@@ -23,7 +27,7 @@ Write-Output "ok:$($prs[0].headRefOid)"
 `;
 }
 
-describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
+describe.sequential('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
   let harness: FleetHarness;
 
   afterEach(() => {
@@ -39,9 +43,10 @@ describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
     });
     expect(result.status).toBe(0);
     expect(countAuditMatches(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countAuditMatches(harness.auditFile, /\brepo view\b/)).toBe(0);
   });
 
-  it('warm snapshot serves concurrent readers with zero additional gh pr list calls', () => {
+  it('warm snapshot serves concurrent readers with zero additional gh pr list calls', async () => {
     harness = createGithubFleetCacheHarness();
     const warm = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', invokeOpenPrListScript(repoRoot)], {
       cwd: repoRoot,
@@ -51,20 +56,15 @@ describe('github-fleet-cache coalesce (Issue #453 AC#1)', () => {
     expect(warm.status).toBe(0);
 
     const workerScript = invokeOpenPrListScript(repoRoot).replace('Write-Output', '$null = $prs; Write-Output');
-    const parallel = Array.from({ length: 5 }, () =>
-      spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', workerScript], {
-        cwd: repoRoot,
-        env: harness.env,
-        encoding: 'utf8',
-      }),
-    );
+    const parallel = await spawnPwshParallel(5, workerScript, repoRoot, harness.env);
     for (const result of parallel) {
       expect(result.status).toBe(0);
     }
     expect(countAuditMatches(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countAuditMatches(harness.auditFile, /\brepo view\b/)).toBe(0);
   });
 
-  it('cold concurrent readers coalesce populate to at most two gh pr list calls', () => {
+  it('cold concurrent readers coalesce populate to at most two gh pr list calls', async () => {
     harness = createGithubFleetCacheHarness();
     const workerScript = `
 $ErrorActionPreference = 'Stop'
@@ -72,19 +72,14 @@ $ErrorActionPreference = 'Stop'
 $null = Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}'
 Write-Output 'done'
 `;
-    const parallel = Array.from({ length: 9 }, () =>
-      spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', workerScript], {
-        cwd: repoRoot,
-        env: harness.env,
-        encoding: 'utf8',
-      }),
-    );
-    for (const result of parallel) {
-      expect(result.status).toBe(0);
+    const parallel = await spawnPwshParallel(9, workerScript, repoRoot, harness.env);
+    for (const [index, result] of parallel.entries()) {
+      expect(result.status, `worker ${index} failed: ${result.stderr || result.stdout}`).toBe(0);
     }
     const listCalls = countAuditMatches(harness.auditFile, /\bpr list\b/);
     expect(listCalls).toBeGreaterThanOrEqual(1);
     expect(listCalls).toBeLessThanOrEqual(2);
+    expect(countAuditMatches(harness.auditFile, /\brepo view\b/)).toBe(0);
   });
 
   it('propagates populate errors to waiters without silent per-child fallback', () => {

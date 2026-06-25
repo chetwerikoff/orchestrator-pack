@@ -82,7 +82,15 @@ function Test-OrchestratorSideEffectLockStale {
         }
     }
     if (-not $startedAt) {
-        $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
+        if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+            return $false
+        }
+        try {
+            $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
+        }
+        catch {
+            return $false
+        }
     }
 
     if ($MaxAgeSeconds -gt 0) {
