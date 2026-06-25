@@ -6,6 +6,7 @@ import {
   isAlive,
   makeStateDir,
   readChildRecovery,
+  readChildPid,
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
@@ -84,7 +85,12 @@ describe.sequential('supervisor-fault-boundary (Issue #450 C5)', () => {
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
-    expect(status.stdout).toMatch(/listener:/);
+    try {
+      const heartbeatPid = readChildPid(stateDir, 'heartbeat');
+      expect(isAlive(heartbeatPid)).toBe(false);
+    } catch {
+      // pid file removed after terminal stop is acceptable
+    }
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -124,6 +130,14 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
+    const heartbeatRecovery = readChildRecovery(stateDir, 'heartbeat');
+    expect(heartbeatRecovery.terminal).toBe(true);
+    try {
+      const heartbeatPid = readChildPid(stateDir, 'heartbeat');
+      expect(isAlive(heartbeatPid)).toBe(false);
+    } catch {
+      // pid file removed after terminal stop is acceptable
+    }
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));

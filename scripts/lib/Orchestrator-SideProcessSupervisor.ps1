@@ -1326,6 +1326,10 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) non-working ($($status.Health)): $reason" -LogPath $Paths.SupervisorLog
 
                     if ($recovery.terminal) {
+                        if ($status.Alive) {
+                            Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                        }
                         continue
                     }
 
@@ -1337,6 +1341,11 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                             Write-OrchestratorWakeSupervisorLog -Message $Message -LogPath $Paths.SupervisorLog
                         }
                     if (-not $degradedDecision.allowed) {
+                        $recoveryAfterDecision = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
+                        if ($recoveryAfterDecision.terminal -and $status.Alive) {
+                            Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                        }
                         continue
                     }
 
