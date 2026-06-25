@@ -947,6 +947,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== wake-supervisor gh PATH guard (Issue #447) =='
+$wakeSupervisorGhPathCheck = Join-Path $Root 'scripts/check-orchestrator-wake-supervisor-gh-path.ps1'
+if (Test-Path -LiteralPath $wakeSupervisorGhPathCheck -PathType Leaf) {
+    & $wakeSupervisorGhPathCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-orchestrator-wake-supervisor-gh-path.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'wake-supervisor gh PATH guard failed (Issue #447)'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-wake-supervisor-gh-path.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-wake-supervisor-gh-path.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing wake-supervisor gh PATH guard (Issue #447)'
+}
+
+Write-Host ''
 Write-Host '== Draft discipline guards (Issue #221) =='
 $draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'
 $draftDisciplineFixtureDir = Join-Path $Root 'tests/fixtures/draft-discipline'
