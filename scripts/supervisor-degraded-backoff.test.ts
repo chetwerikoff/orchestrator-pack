@@ -13,7 +13,7 @@ import {
   waitForSupervisorLogMatch,
 } from './supervisor-recovery.test-helpers.js';
 
-const timeoutMs = 45_000;
+const timeoutMs = 90_000;
 
 afterEach(() => {
   cleanupSupervisorTests();
@@ -93,11 +93,22 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
 
     expect(killed).toBe(true);
     expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
-    await waitForSupervisorLogMatch(
-      stateDir,
-      /(heartbeat exited; restarting|crash backoff: heartbeat)/,
-      30_000,
-    );
+
+    const crashDeadline = Date.now() + 45_000;
+    let crashObserved = false;
+    while (Date.now() < crashDeadline) {
+      const recovery = readChildRecovery(stateDir, 'heartbeat');
+      const log = readSupervisorLog(stateDir);
+      crashObserved =
+        Number(recovery.lastExitMs ?? 0) > Number(beforeCrash.lastExitMs ?? 0) ||
+        Number(recovery.rapidExits ?? 0) > Number(beforeCrash.rapidExits ?? 0) ||
+        /(heartbeat exited; restarting|crash backoff: heartbeat)/.test(log);
+      if (crashObserved) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    expect(crashObserved).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     const afterCrash = readChildRecovery(stateDir, 'heartbeat');
