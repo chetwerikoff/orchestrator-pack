@@ -1,0 +1,14 @@
+{
+  "description": "Issue #459 Class C: stale fixing_ci on H1 does not bridge to H2",
+  "status": "fixing_ci",
+  "openPrHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "openPrHeadCommittedAt": "2026-06-18T13:20:00.000Z",
+  "reports": [
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T11:00:00.000Z",
+      "accepted": true,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

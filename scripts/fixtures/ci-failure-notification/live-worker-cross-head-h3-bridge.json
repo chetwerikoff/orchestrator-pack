@@ -1,0 +1,14 @@
+{
+  "description": "Issue #459 Class B: fresh fixing_ci on H1, H2 and H3 pushed before catch-up",
+  "status": "fixing_ci",
+  "openPrHeadSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "openPrHeadCommittedAt": "2026-06-18T13:25:00.000Z",
+  "reports": [
+    {
+      "reportState": "fixing_ci",
+      "reportedAt": "2026-06-18T13:05:00.000Z",
+      "accepted": true,
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}
