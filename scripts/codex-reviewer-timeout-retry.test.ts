@@ -186,6 +186,43 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     expect(result.escalationReason).toBe(REPEATED_TIMEOUT_ESCALATION_REASON);
   });
 
+  it('does not allow wake retry for non-timeout failures without explicit retryEligible', () => {
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: 'merge.ready',
+      sessionId: 'opk-fail',
+      prNumber: 214,
+      openPrs: [
+        {
+          number: 214,
+          headRefOid: 'fail214',
+          headCommittedAt: '2026-06-05T12:00:00.000Z',
+        },
+      ],
+      reviewRuns: [
+        {
+          id: 'run-failed',
+          prNumber: 214,
+          targetSha: 'fail214',
+          status: 'failed',
+          findingCount: 0,
+          terminationReason: 'reviewer command exited 1',
+        },
+      ],
+      sessions: [
+        {
+          name: 'opk-fail',
+          role: 'worker',
+          prNumber: 214,
+          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-05T12:00:00.000Z' }],
+        },
+      ],
+      ciChecks: [{ name: 'Verify orchestrator-pack structure', state: 'SUCCESS' }],
+    });
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.route).toBe('empty_review_trap');
+    expect(result.terminationReason).toContain('reviewer command exited');
+  });
+
   it('counts only matching failure class on same head', () => {
     const runs = [
       {

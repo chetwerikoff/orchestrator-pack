@@ -17,9 +17,7 @@
       "targetSha": "fail214",
       "status": "failed",
       "findingCount": 0,
-      "terminationReason": "reviewer command exited 1",
-      "retryEligible": false,
-      "retryCount": 1
+      "terminationReason": "reviewer command exited 1"
     }
   ],
   "sessions": [

@@ -113,10 +113,9 @@ export function evaluateTimeoutRetryEligibility(reviewRuns, prNumber, headSha, o
 
   const failureClass = extractReviewerFailureClass(failedRun);
   if (failureClass !== TIMEOUT_NO_VERDICT_FAILURE_CLASS) {
-    const retryEligible = (failedRun.retryEligible ?? failedRun.retryCount == null) !== false;
     return {
       failureClass,
-      retryEligible,
+      retryEligible: failedRun.retryEligible === true,
       escalationReason: null,
       timeoutFailureCount: 0,
     };
@@ -164,7 +163,7 @@ export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, head
   }
   return {
     failureClass: timeout.failureClass,
-    retryEligible: (run?.retryEligible ?? run?.retryCount == null) !== false,
+    retryEligible: run?.retryEligible === true,
     escalationReason: null,
     timeoutFailureCount: timeout.timeoutFailureCount,
   };
