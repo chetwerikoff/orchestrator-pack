@@ -85,9 +85,19 @@ export function hasPositionalSelector(argv: string[], startIndex: number): boole
 
 export function hasTargetedTestSelector(argv: string[], executable?: string): boolean {
   const parts = argv.map((part) => part.trim()).filter(Boolean);
-  if (executable === 'vitest' && parts[0] === 'run') {
-    return hasPositionalSelector(parts, 1);
+  let vitestArgs = parts;
+  let vitestExecutable = executable;
+
+  if (executable === 'npx' && parts[0] === 'vitest') {
+    vitestArgs = parts.slice(1);
+    vitestExecutable = 'vitest';
   }
+
+  if (vitestExecutable === 'vitest') {
+    const selectorStart = vitestArgs[0] === 'run' ? 1 : 0;
+    return hasPositionalSelector(vitestArgs, selectorStart);
+  }
+
   let previous = '';
 
   for (let index = 0; index < parts.length; index += 1) {
@@ -99,6 +109,19 @@ export function hasTargetedTestSelector(argv: string[], executable?: string): bo
       return hasPositionalSelector(parts, index + 1);
     }
     previous = part;
+  }
+  return false;
+}
+
+export function isBareVitestFullSuiteInvocation(
+  executable: string | undefined,
+  commandArgs: string[],
+): boolean {
+  if (executable === 'vitest') {
+    return !hasTargetedTestSelector(commandArgs, executable);
+  }
+  if (executable === 'npx' && commandArgs[0]?.trim() === 'vitest') {
+    return !hasTargetedTestSelector(commandArgs, executable);
   }
   return false;
 }
@@ -131,6 +154,9 @@ export function classifyReviewShellCommand(argv: string[]): ReviewCommandClass {
   }
   if (hasTargetedTestSelector(commandArgs, executable)) {
     return 'cheap_targeted';
+  }
+  if (isBareVitestFullSuiteInvocation(executable, commandArgs)) {
+    return 'full_suite';
   }
   if (hasNpmTestSeparator(argv) || FULL_SUITE_MARKERS.some((pattern) => pattern.test(joined))) {
     return 'full_suite';

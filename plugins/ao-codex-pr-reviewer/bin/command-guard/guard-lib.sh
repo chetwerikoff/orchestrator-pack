@@ -72,8 +72,18 @@ has_positional_selector() {
 has_targeted_test_selector() {
   executable="$1"
   shift
-  if [ "$executable" = "vitest" ] && [ "${1:-}" = "run" ]; then
+  if [ "$executable" = "vitest" ]; then
+    if [ "${1:-}" = "run" ]; then
+      shift
+    fi
+    has_positional_selector "$@"
+    return $?
+  fi
+  if [ "$executable" = "npx" ] && [ "${1:-}" = "vitest" ]; then
     shift
+    if [ "${1:-}" = "run" ]; then
+      shift
+    fi
     has_positional_selector "$@"
     return $?
   fi
@@ -95,6 +105,31 @@ has_targeted_test_selector() {
   return 1
 }
 
+is_bare_vitest_full_suite() {
+  executable="$1"
+  shift
+  case "$executable" in
+    vitest)
+      if has_targeted_test_selector vitest "$@"; then
+        return 1
+      fi
+      return 0
+      ;;
+    npx)
+      if [ "${1:-}" != "vitest" ]; then
+        return 1
+      fi
+      if has_targeted_test_selector npx "$@"; then
+        return 1
+      fi
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 classify_command() {
   executable="$1"
   shift
@@ -107,6 +142,10 @@ classify_command() {
   esac
   if has_targeted_test_selector "$executable" "$@"; then
     echo cheap_targeted
+    return
+  fi
+  if is_bare_vitest_full_suite "$executable" "$@"; then
+    echo full_suite
     return
   fi
   case "$joined" in

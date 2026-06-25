@@ -111,6 +111,10 @@ describe('reviewer test budget guard (AC#2)', () => {
         'plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts',
       ]),
     ).toBe('cheap_targeted');
+    expect(classifyReviewShellCommand(['vitest'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['vitest', '--watch'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['npx', 'vitest'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['npx', 'vitest', 'run'])).toBe('full_suite');
     expect(
       classifyReviewShellCommand(['pwsh', '-NoProfile', '-File', 'scripts/verify.ps1']),
     ).toBe('slow_test');
@@ -242,6 +246,16 @@ describe('reviewer test budget guard (AC#2)', () => {
       { encoding: 'utf8' },
     );
     expect(directVitest.stdout.trim()).toBe('cheap_targeted');
+
+    const bareVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command vitest`], {
+      encoding: 'utf8',
+    });
+    expect(bareVitest.stdout.trim()).toBe('full_suite');
+
+    const npxVitest = spawnSync('sh', ['-c', `. "${guardLib}"; classify_command npx vitest`], {
+      encoding: 'utf8',
+    });
+    expect(npxVitest.stdout.trim()).toBe('full_suite');
   });
 
   it('exec-level PATH guard blocks yarn test via wrapper', () => {
