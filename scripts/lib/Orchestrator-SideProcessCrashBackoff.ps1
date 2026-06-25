@@ -152,6 +152,11 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     if ($crashFields.backoffUntilMs -gt $nowMs) {
         $waitSeconds = [Math]::Ceiling(($crashFields.backoffUntilMs - $nowMs) / 1000.0)
         & $LogWriter "crash backoff: $($ChildId) waiting ${waitSeconds}s before restart (rapidExits=$($crashFields.rapidExits))"
+        if ($crashFields.lastExitMs -lt $nowMs) {
+            Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
+                lastExitMs = $nowMs
+            })
+        }
         return @{ allowed = $false; reason = 'backoff'; recovery = $recovery; waitSeconds = $waitSeconds }
     }
 

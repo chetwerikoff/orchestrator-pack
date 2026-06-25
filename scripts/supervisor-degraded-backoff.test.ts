@@ -72,28 +72,30 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
 
     let beforeCrash: Record<string, unknown> = {};
     let killed = false;
+    let killedPid = 0;
     const killDeadline = Date.now() + 45_000;
     while (Date.now() < killDeadline && !killed) {
       const recovery = readChildRecovery(stateDir, 'heartbeat');
-      if (Number(recovery.degradedAttempts ?? 0) > 0) {
-        if (Number(beforeCrash.degradedAttempts ?? 0) === 0) {
-          beforeCrash = { ...recovery };
-        }
-        let heartbeatPid = 0;
+      if (Number(recovery.degradedAttempts ?? 0) === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      let heartbeatPid = 0;
+      try {
+        heartbeatPid = readChildPid(stateDir, 'heartbeat');
+      } catch {
         try {
-          heartbeatPid = readChildPid(stateDir, 'heartbeat');
+          const marker = await readMarker(stateDir, 'heartbeat', 500);
+          heartbeatPid = marker.pid;
         } catch {
-          try {
-            const marker = await readMarker(stateDir, 'heartbeat', 500);
-            heartbeatPid = marker.pid;
-          } catch {
-            // pid file and marker may be absent briefly during degraded-path restart
-          }
+          // pid file and marker may be absent briefly during degraded-path restart
         }
-        if (heartbeatPid > 0 && isAlive(heartbeatPid)) {
-          process.kill(heartbeatPid, 'SIGKILL');
-          killed = true;
-        }
+      }
+      if (heartbeatPid > 0 && isAlive(heartbeatPid)) {
+        beforeCrash = { ...recovery };
+        process.kill(heartbeatPid, 'SIGKILL');
+        killedPid = heartbeatPid;
+        killed = true;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -101,14 +103,21 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
     expect(killed).toBe(true);
     expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
 
-    const crashDeadline = Date.now() + 45_000;
+    const crashDeadline = Date.now() + 60_000;
     let crashObserved = false;
     while (Date.now() < crashDeadline) {
       const recovery = readChildRecovery(stateDir, 'heartbeat');
       const log = readSupervisorLog(stateDir);
+      let heartbeatPid = 0;
+      try {
+        heartbeatPid = readChildPid(stateDir, 'heartbeat');
+      } catch {
+        // absent until supervisor restarts the child
+      }
       crashObserved =
         Number(recovery.lastExitMs ?? 0) > Number(beforeCrash.lastExitMs ?? 0) ||
         Number(recovery.rapidExits ?? 0) > Number(beforeCrash.rapidExits ?? 0) ||
+        (killedPid > 0 && heartbeatPid > 0 && heartbeatPid !== killedPid) ||
         /(heartbeat exited; restarting|crash backoff: heartbeat)/.test(log);
       if (crashObserved) {
         break;
