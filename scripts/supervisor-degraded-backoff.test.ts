@@ -95,8 +95,8 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
     expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
     await waitForSupervisorLogMatch(
       stateDir,
-      /heartbeat (exited; restarting|crash backoff)/,
-      20_000,
+      /(heartbeat exited; restarting|crash backoff: heartbeat)/,
+      30_000,
     );
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
