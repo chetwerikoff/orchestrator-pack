@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -30,6 +31,8 @@ const GUARD_DIR = join(
   'command-guard',
 );
 
+const GUARDED_EXECUTABLES = ['npm', 'npx', 'pwsh', 'yarn', 'pnpm', 'vitest'] as const;
+
 describe('reviewer effective budget (AC#1)', () => {
   it('records effectiveBudgetMs and derived soft/test budgets', () => {
     const ledger = createReviewerBudgetLedger({
@@ -55,6 +58,18 @@ describe('reviewer effective budget (AC#1)', () => {
     expect(evidence?.reviewer.effectiveBudgetMs).toBeGreaterThan(0);
     expect(evidence?.reviewer.failureClass).toBe('timeout_no_verdict');
     expect(result.logLines.join('\n')).toContain(TIMEOUT_NO_VERDICT_MESSAGE);
+  });
+});
+
+describe('command-guard platform shims', () => {
+  it('ships Windows cmd/ps1 shims beside POSIX wrappers', () => {
+    for (const executable of GUARDED_EXECUTABLES) {
+      expect(existsSync(join(GUARD_DIR, executable))).toBe(true);
+      expect(existsSync(join(GUARD_DIR, `${executable}.cmd`))).toBe(true);
+      expect(existsSync(join(GUARD_DIR, `${executable}.ps1`))).toBe(true);
+    }
+    expect(existsSync(join(GUARD_DIR, '_invoke-guard.cmd'))).toBe(true);
+    expect(existsSync(join(GUARD_DIR, '_invoke-guard.ps1'))).toBe(true);
   });
 });
 

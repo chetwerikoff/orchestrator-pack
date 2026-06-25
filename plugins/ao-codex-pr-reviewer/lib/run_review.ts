@@ -108,6 +108,7 @@ export function buildCodexSpawnEnv(
     const guardDir = resolveCommandGuardDir();
     const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
     const existingPath = childEnv[pathKey] ?? env[pathKey] ?? '';
+    // Windows resolves npm/pwsh/etc. via .cmd/.ps1 shims in the same directory.
     childEnv[pathKey] = existingPath ? `${guardDir}${delimiter}${existingPath}` : guardDir;
   }
   return childEnv;
