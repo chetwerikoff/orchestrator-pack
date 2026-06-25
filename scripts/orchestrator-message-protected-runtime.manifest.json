@@ -31,7 +31,6 @@
     "scripts/review-run-recovery.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-    "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
     "scripts/orchestrator-wake-supervisor-test-child.ps1",
     "scripts/orchestrator-wake-supervisor.test.ts",
     "docs/worker-message-submit-reconcile.mjs",

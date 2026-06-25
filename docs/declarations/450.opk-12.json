@@ -7,9 +7,19 @@
   "baseline": {
     "commit_sha": "1ac84b956e2e0f6e459929f6444b0ef742d38c85",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9c71791b4707ef2e87604d1ba06ee8e9c7492492f9910cddd5673baa5582d8fb"
+    "active_scope_hash": "sha256:cd1dd137613a4922809bac4bb9692c77e4834023e75f74e57a017f42d36e5f41"
   },
-  "declared_paths": [],
+  "declared_paths": [
+    "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/orchestrator-wake-listener.ps1",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/review-send-reconcile.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1"
+  ],
   "declared_globs": [
     "docs/**",
     "scripts/**"

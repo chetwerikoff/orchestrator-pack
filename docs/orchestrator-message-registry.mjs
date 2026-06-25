@@ -844,6 +844,17 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/lib/Worker-AutonomousNudgeGate.ps1',
     'scripts/lib/Worker-NudgeAudit.ps1',
   ],
+  450: [
+    'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+    'scripts/orchestrator-wake-supervisor-test-child.ps1',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+    'scripts/orchestrator-wake-listener.ps1',
+    'scripts/review-trigger-reconcile.ps1',
+    'scripts/review-trigger-reeval.ps1',
+    'scripts/ci-green-wake-reconcile.ps1',
+    'scripts/review-send-reconcile.ps1',
+    'scripts/review-finding-delivery-confirm.ps1',
+  ],
 };
 
 /**

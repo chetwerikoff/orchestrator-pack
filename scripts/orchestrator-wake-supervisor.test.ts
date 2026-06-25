@@ -1,3 +1,4 @@
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,8 +12,10 @@ import {
   repoRoot,
   runSupervisor,
   startSupervisorBackground,
+  supervisorScript,
   waitForMarkers,
   type ManagedChildRole,
+  type WakeMarker,
 } from './supervisor-recovery.test-helpers';
 
 const aoStub = path.join(fixtureDir, 'ao-stub.sh');
