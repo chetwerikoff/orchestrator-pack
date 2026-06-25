@@ -4,9 +4,27 @@ set -euo pipefail
 
 _AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Scan PATH for a host git binary, skipping the pack scripts dir and guard shims.
+__ao_scan_path_for_host_git() {
+  local scripts_dir="$1"
+  local self candidate resolved dir
+  self="$(readlink -f "${scripts_dir}/git" 2>/dev/null || realpath "${scripts_dir}/git" 2>/dev/null || printf '%s' "${scripts_dir}/git")"
+  IFS=':' read -ra path_dirs <<< "${PATH:-}"
+  for dir in "${path_dirs[@]}"; do
+    [[ -z "${dir}" || "${dir}" == "${scripts_dir}" ]] && continue
+    candidate="${dir%/}/git"
+    [[ -x "${candidate}" ]] || continue
+    resolved="$(readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
+    if [[ "${resolved}" != "${self}" && "${resolved}" != *git-autonomous-guard* ]]; then
+      printf '%s\n' "${resolved}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 resolve_system_git() {
   local pack_root config configured system_path
-  local self dir candidate resolved
   pack_root="$(cd "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/.." && pwd)"
   config="${pack_root}/.ao/autonomous-real-binaries.json"
 
@@ -35,18 +53,9 @@ resolve_system_git() {
     fi
   done
 
-  self="$(readlink -f "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git" 2>/dev/null || realpath "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git" 2>/dev/null || printf '%s' "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}/git")"
-  IFS=':' read -ra path_dirs <<< "${PATH:-}"
-  for dir in "${path_dirs[@]}"; do
-    [[ -z "${dir}" || "${dir}" == "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}" ]] && continue
-    candidate="${dir%/}/git"
-    [[ -x "${candidate}" ]] || continue
-    resolved="$(readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
-    if [[ "${resolved}" != "${self}" && "${resolved}" != *git-autonomous-guard* ]]; then
-      printf '%s\n' "${resolved}"
-      return 0
-    fi
-  done
+  if __ao_scan_path_for_host_git "${_AO_RESOLVE_SYSTEM_GIT_SCRIPT_DIR}"; then
+    return 0
+  fi
 
   printf 'git\n'
 }

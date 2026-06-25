@@ -17,7 +17,7 @@ GUARD="$SCRIPT_DIR/git-autonomous-guard.ps1"
 . "${SCRIPT_DIR}/_resolve-system-git.sh"
 
 resolve_real_git() {
-  local pack_root config candidate resolved dir self
+  local pack_root config git_path
   pack_root="$(cd "${SCRIPT_DIR}/.." && pwd)"
   config="${pack_root}/.ao/autonomous-real-binaries.json"
   if [[ -f "${config}" ]]; then
@@ -40,18 +40,9 @@ resolve_real_git() {
     fi
   fi
 
-  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
-  IFS=':' read -ra path_dirs <<< "${PATH:-}"
-  for dir in "${path_dirs[@]}"; do
-    [[ -z "${dir}" || "${dir}" == "${SCRIPT_DIR}" ]] && continue
-    candidate="${dir%/}/git"
-    [[ -x "${candidate}" ]] || continue
-    resolved="$(readlink -f "${candidate}" 2>/dev/null || realpath "${candidate}" 2>/dev/null || printf '%s' "${candidate}")"
-    if [[ "${resolved}" != "${self}" && "${resolved}" != *git-autonomous-guard* ]]; then
-      printf '%s\n' "${resolved}"
-      return 0
-    fi
-  done
+  if __ao_scan_path_for_host_git "${SCRIPT_DIR}"; then
+    return 0
+  fi
 
   printf 'git\n'
 }
