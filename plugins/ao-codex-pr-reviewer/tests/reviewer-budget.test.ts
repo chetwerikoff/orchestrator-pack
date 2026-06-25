@@ -100,6 +100,7 @@ describe('reviewer test budget guard (AC#2)', () => {
       classifyReviewShellCommand(['npm', 'test', '--', '--reporter', 'verbose']),
     ).toBe('full_suite');
     expect(classifyReviewShellCommand(['yarn', 'test'])).toBe('full_suite');
+    expect(classifyReviewShellCommand(['yarn', 'run', 'test'])).toBe('full_suite');
     expect(classifyReviewShellCommand(['pnpm', 'test'])).toBe('full_suite');
     expect(
       classifyReviewShellCommand(['npm', 'test', '--', 'reviewer-budget.test.ts']),
@@ -236,6 +237,13 @@ describe('reviewer test budget guard (AC#2)', () => {
       { encoding: 'utf8' },
     );
     expect(yarnFullSuite.stdout.trim()).toBe('full_suite');
+
+    const yarnRunTest = spawnSync(
+      'sh',
+      ['-c', `. "${guardLib}"; classify_command yarn run test`],
+      { encoding: 'utf8' },
+    );
+    expect(yarnRunTest.stdout.trim()).toBe('full_suite');
 
     const directVitest = spawnSync(
       'sh',

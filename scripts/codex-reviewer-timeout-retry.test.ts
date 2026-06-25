@@ -15,12 +15,37 @@ import {
   evaluateScenarioMatrixCell,
 } from '../docs/orchestrator-claimed-review-run.mjs';
 import { buildFailedCancelledObserved } from '../docs/review-head-ready.mjs';
+import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'fixtures',
   'codex-reviewer-timeout-retry',
 );
+
+
+const wakeFixturesDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../tests/fixtures/review-wake-trigger',
+);
+
+function loadWakeFixture(name: string) {
+  return JSON.parse(readFileSync(path.join(wakeFixturesDir, name), 'utf8'));
+}
+
+function evaluateWakeFixture(fixture: Record<string, unknown>) {
+  const prKey = String(fixture.prNumber);
+  const ciChecksByPr = fixture.ciChecksByPr as Record<string, unknown[]> | undefined;
+  return evaluateWakeReviewTrigger({
+    wakeKind: fixture.wakeKind as string,
+    sessionId: fixture.sessionId as string,
+    prNumber: fixture.prNumber as number,
+    openPrs: fixture.openPrs as unknown[],
+    reviewRuns: fixture.reviewRuns as unknown[],
+    sessions: fixture.sessions as unknown[],
+    ciChecks: ciChecksByPr?.[prKey],
+  });
+}
 
 function loadFixture(name: string) {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
@@ -148,6 +173,23 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     expect(gate.launch).toBe(false);
     expect(gate.reason).toBe('retry_bound_exhausted');
     expect(gate.escalationReason).toBeUndefined();
+  });
+
+
+  it('allows wake start after first timeout_no_verdict failure', () => {
+    const fixture = loadWakeFixture('timeout-first-wake-retry.json');
+    const result = evaluateWakeFixture(fixture);
+    expect(result.triggerReviewRun).toBe(true);
+    expect(result.route).toBe('start_review');
+  });
+
+  it('escalates repeated timeout_no_verdict at wake start', () => {
+    const fixture = loadWakeFixture('timeout-repeated-wake-trap.json');
+    const result = evaluateWakeFixture(fixture);
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('retry_bound_exhausted');
+    expect(result.route).toBe('empty_review_trap');
+    expect(result.escalationReason).toBe(REPEATED_TIMEOUT_ESCALATION_REASON);
   });
 
   it('counts only matching failure class on same head', () => {

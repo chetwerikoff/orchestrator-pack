@@ -149,7 +149,7 @@ classify_command() {
     return
   fi
   case "$joined" in
-    *"npm test"*|*"npm run test"*|*"vitest run"*|*"pnpm test"*|*"yarn test"*)
+    *"npm test"*|*"npm run test"*|*"vitest run"*|*"pnpm test"*|*"yarn test"*|*"yarn run test"*)
       echo full_suite
       return
       ;;

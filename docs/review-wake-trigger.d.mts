@@ -23,6 +23,8 @@ export interface WakeReviewTriggerResult {
   route: string;
   planned?: WakeReviewTriggerPlanned;
   terminationReason?: string;
+  escalationReason?: string;
+  observed?: Record<string, unknown>;
   processingMs: number;
   withinLatencyBound: boolean;
   withinReceiptBound?: boolean;

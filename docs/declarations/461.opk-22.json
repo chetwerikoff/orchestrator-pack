@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "670af17cb9260c7293f5f22b187e84bba561f77",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4b2912e1f94bb5d1af9997cdead031411ab13f3f91b576bf5e874e3f7831039e"
+    "active_scope_hash": "sha256:19f3d8dbd1fd4d33f05ef46bf575443aff46a1646e1f8d4439a920bfbb7a1922"
   },
   "declared_paths": [
     "docs/codex-reviewer-timeout-retry.d.mts",
@@ -18,6 +18,8 @@
     "docs/orchestrator-claimed-review-run.mjs",
     "docs/review-head-ready.d.mts",
     "docs/review-head-ready.mjs",
+    "docs/review-wake-trigger.d.mts",
+    "docs/review-wake-trigger.mjs",
     "plugins/ao-codex-pr-reviewer/README.md",
     "plugins/ao-codex-pr-reviewer/bin/command-guard/_invoke-guard.cmd",
     "plugins/ao-codex-pr-reviewer/bin/command-guard/_invoke-guard.ps1",

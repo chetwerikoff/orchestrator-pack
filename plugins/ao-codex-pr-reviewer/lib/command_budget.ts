@@ -22,6 +22,8 @@ const FULL_SUITE_MARKERS = [
   /\bvitest\s+run\b/i,
   /\bpnpm\s+test\b/i,
   /\byarn\s+test\b/i,
+  /\byarn\s+run\s+test\b/i,
+  /\bpnpm\s+run\s+test\b/i,
 ];
 
 function isOptionToken(token: string): boolean {

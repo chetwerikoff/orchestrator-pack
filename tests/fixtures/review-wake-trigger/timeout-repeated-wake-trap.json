@@ -1,0 +1,73 @@
+{
+  "description": "Repeated timeout_no_verdict on head escalates at wake start",
+  "wakeKind": "merge.ready",
+  "sessionId": "opk-22",
+  "prNumber": 461,
+  "openPrs": [
+    {
+      "number": 461,
+      "headRefOid": "abc46100000000000000000000000000000000000",
+      "headCommittedAt": "2026-06-20T01:00:00.000Z"
+    }
+  ],
+  "reviewRuns": [
+    {
+      "id": "timeout-first",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict",
+      "createdAt": "2026-06-20T00:00:00.000Z"
+    },
+    {
+      "id": "timeout-second",
+      "prNumber": 461,
+      "targetSha": "abc46100000000000000000000000000000000000",
+      "status": "failed",
+      "findingCount": 0,
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict",
+      "createdAt": "2026-06-20T01:00:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "opk-22",
+      "role": "worker",
+      "prNumber": 461,
+      "status": "working",
+      "reports": [
+        {
+          "reportState": "ready_for_review",
+          "reportedAt": "2026-06-20T01:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "ciChecksByPr": {
+    "461": [
+      {
+        "name": "Verify orchestrator-pack structure",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "PR scope guard",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Run pack contract tests",
+        "state": "SUCCESS"
+      },
+      {
+        "name": "Self-architect lint",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "expect": {
+    "triggerReviewRun": false,
+    "route": "empty_review_trap",
+    "reason": "retry_bound_exhausted",
+    "escalationReason": "repeated_timeout_no_verdict"
+  }
+}
