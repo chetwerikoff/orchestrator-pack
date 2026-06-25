@@ -41,13 +41,6 @@ export async function spawnPwshParallel(
   return Promise.all(Array.from({ length: count }, () => spawnPwsh(command, cwd, env)));
 }
 
-export type FleetHarness = {
-  root: string;
-  auditFile: string;
-  env: NodeJS.ProcessEnv;
-  cleanup: () => void;
-};
-
 export function createGithubFleetCacheHarness(prefix = 'gh-fleet-cache-'): FleetHarness {
   const repoRoot = join(import.meta.dirname, '..');
   const fakeGh = join(repoRoot, 'scripts/fixtures/github-fleet-cache/fake-gh.sh');
