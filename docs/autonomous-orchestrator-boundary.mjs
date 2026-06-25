@@ -191,13 +191,26 @@ export function isRawSpawnInvocation(commandLine) {
 /**
  * @param {string[]} argv
  */
+export function hasClaimPrFlagInSpawnArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (const token of list) {
+    if (token === '--claim-pr' || /^--claim-pr=/i.test(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function classifySpawnAction(argv) {
   const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
   if (!isSpawnAoArgv(list)) {
     return 'not-spawn';
   }
-  if (parseClaimPrNumberFromSpawnArgv(list) !== null) {
-    return 'claim-pr-resume';
+  if (hasClaimPrFlagInSpawnArgv(list)) {
+    if (parseClaimPrNumberFromSpawnArgv(list) !== null) {
+      return 'claim-pr-resume';
+    }
+    return 'claim-pr-malformed';
   }
   return 'spawn-new';
 }
@@ -286,6 +299,15 @@ export function evaluateAutonomousSpawnPolicyDecision(input) {
   if (action === 'not-spawn') {
     return { allowed: true, denied: false, reason: 'not_spawn', action, auditLine: '' };
   }
+  if (action === 'claim-pr-malformed') {
+    return {
+      allowed: false,
+      denied: true,
+      reason: 'claim_pr_resume_invalid_pr',
+      action,
+      auditLine: 'autonomous spawn policy deny: action=claim-pr-malformed reason=claim_pr_resume_invalid_pr',
+    };
+  }
   if (!input.autonomousSurface) {
     return { allowed: true, denied: false, reason: 'manual_surface', action, auditLine: '' };
   }
@@ -300,7 +322,11 @@ export function evaluateAutonomousSpawnPolicyDecision(input) {
     };
   }
   const toggleAllowed =
-    action === 'spawn-new' ? input.policy.allowSpawnNew : input.policy.allowClaimPrResume;
+    action === 'spawn-new'
+      ? input.policy.allowSpawnNew
+      : action === 'claim-pr-resume'
+        ? input.policy.allowClaimPrResume
+        : false;
   if (!toggleAllowed) {
     const reason =
       action === 'spawn-new' ? 'spawn_policy_allowSpawnNew_false' : 'spawn_policy_allowClaimPrResume_false';

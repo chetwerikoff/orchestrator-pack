@@ -101,10 +101,27 @@ describe('claim-pr classification', () => {
     expect(classifySpawnAction(['spawn', '322', '--claim-pr', '322'])).toBe('claim-pr-resume');
     expect(classifySpawnAction(['spawn', '--claim-pr=458'])).toBe('claim-pr-resume');
     expect(classifySpawnAction(['spawn', 'feat/claim-pr-branch'])).toBe('spawn-new');
+    expect(classifySpawnAction(['spawn', '--claim-pr', 'abc'])).toBe('claim-pr-malformed');
+    expect(classifySpawnAction(['spawn', '--claim-pr='])).toBe('claim-pr-malformed');
     expect(parseClaimPrNumberFromSpawnArgv(['spawn', 'feat/claim-pr-branch'])).toBeNull();
+    expect(parseClaimPrNumberFromSpawnArgv(['spawn', '--claim-pr', 'abc'])).toBeNull();
     expect(parseClaimPrNumberFromSpawnArgv(['spawn', '--claim-pr', '999991'])).toBe(999991);
   });
 });
+
+
+  it('denies malformed claim-pr spawns with invalid_pr instead of spawn-new', () => {
+    const malformed = evaluateAutonomousSpawnPolicyDecision({
+      argv: ['spawn', '--claim-pr', 'abc'],
+      autonomousSurface: true,
+      policyLoadOk: true,
+      policy: { allowSpawnNew: true, allowClaimPrResume: false },
+    });
+    expect(malformed.allowed).toBe(false);
+    expect(malformed.reason).toBe('claim_pr_resume_invalid_pr');
+    expect(malformed.action).toBe('claim-pr-malformed');
+    expect(malformed.auditLine).toMatch(/claim-pr-malformed reason=claim_pr_resume_invalid_pr/);
+  });
 
 describe('spawn policy audit', () => {
   it('spawn policy audit: emits allow and deny lines', () => {

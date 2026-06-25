@@ -12,7 +12,7 @@ export interface SpawnPolicyDecision {
   allowed: boolean;
   denied: boolean;
   reason: string;
-  action: 'spawn-new' | 'claim-pr-resume' | 'not-spawn' | '';
+  action: 'spawn-new' | 'claim-pr-resume' | 'claim-pr-malformed' | 'not-spawn' | '';
   auditLine: string;
 }
 
@@ -58,8 +58,11 @@ export declare function gitSubcommandFromArgv(argv: string[]): string;
 export declare function isMutatingGitArgv(argv: string[]): boolean;
 export declare function isSpawnAoArgv(argv: string[]): boolean;
 export declare function isRawSpawnInvocation(commandLine: string): boolean;
-export declare function classifySpawnAction(argv: string[]): 'spawn-new' | 'claim-pr-resume' | 'not-spawn';
-export declare function parseClaimPrNumberFromSpawnArgv(argv: string[]): number;
+export declare function hasClaimPrFlagInSpawnArgv(argv: string[]): boolean;
+export declare function classifySpawnAction(
+  argv: string[],
+): 'spawn-new' | 'claim-pr-resume' | 'claim-pr-malformed' | 'not-spawn';
+export declare function parseClaimPrNumberFromSpawnArgv(argv: string[]): number | null;
 export declare function validateAutonomousSpawnPolicy(policy: unknown): SpawnPolicyLoadResult;
 export declare function loadAutonomousSpawnPolicy(packRoot: string): SpawnPolicyLoadResult;
 export declare function evaluateAutonomousSpawnPolicyDecision(input: {
