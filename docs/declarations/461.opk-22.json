@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "670af17cb9260c7293f5f22b187e84bba561f77",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:19f3d8dbd1fd4d33f05ef46bf575443aff46a1646e1f8d4439a920bfbb7a1922"
+    "active_scope_hash": "sha256:740ee21108c720f4b6b5ec9362de085993c32edfd28fea95e8f08369981eaf16"
   },
   "declared_paths": [
     "docs/codex-reviewer-timeout-retry.d.mts",
@@ -50,7 +50,9 @@
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts",
     "prompts/codex_review_prompt.md",
     "scripts/codex-reviewer-timeout-retry.test.ts",
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-first-wake-retry.json",
     "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-scenario.json",
+    "scripts/fixtures/codex-reviewer-timeout-retry/timeout-repeated-wake-trap.json",
     "scripts/fixtures/codex-reviewer-timeout-retry/timeout-run.json"
   ],
   "declared_globs": [],

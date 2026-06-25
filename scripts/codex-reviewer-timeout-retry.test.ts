@@ -23,14 +23,8 @@ const fixturesDir = path.join(
   'codex-reviewer-timeout-retry',
 );
 
-
-const wakeFixturesDir = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../tests/fixtures/review-wake-trigger',
-);
-
 function loadWakeFixture(name: string) {
-  return JSON.parse(readFileSync(path.join(wakeFixturesDir, name), 'utf8'));
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
 }
 
 function evaluateWakeFixture(fixture: Record<string, unknown>) {

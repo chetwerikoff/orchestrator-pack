@@ -171,21 +171,30 @@ deny_slow_command() {
 
 resolve_real_binary() {
   name="$1"
-  case "$name" in
-    npm|npx|pwsh|yarn|pnpm|vitest)
-      for dir in $(echo "${PATH:-}" | tr ':' ' '); do
-        case "$dir" in
-          ""|*command-guard*) continue ;;
-        esac
+  path_remain="${PATH:-}"
+  while [ -n "$path_remain" ]; do
+    case "$path_remain" in
+      *:*) dir="${path_remain%%:*}"; path_remain="${path_remain#*:}" ;;
+      *) dir="$path_remain"; path_remain="" ;;
+    esac
+    case "$dir" in
+      ""|*command-guard*) continue ;;
+    esac
+    case "$name" in
+      npm|npx|pwsh|yarn|pnpm|vitest)
         candidate="$dir/$name"
         if [ -x "$candidate" ]; then
           echo "$candidate"
           return 0
         fi
-      done
-      ;;
+        ;;
+    esac
+  done
+  resolved="$(command -v "$name" 2>/dev/null || true)"
+  case "$resolved" in
+    ""|*command-guard*) return 1 ;;
+    *) echo "$resolved" ;;
   esac
-  command -v "$name"
 }
 
 guard_dispatch() {

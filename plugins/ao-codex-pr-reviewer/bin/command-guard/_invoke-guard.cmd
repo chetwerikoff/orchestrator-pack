@@ -2,7 +2,7 @@
 SETLOCAL EnableDelayedExpansion
 SET "GUARD_DIR=%~dp0"
 SET "EXECUTABLE=%~1"
-SHIFT
+SHIFT /1
 SET "SH="
 IF EXIST "%ProgramFiles%\Git\usr\bin\sh.exe" SET "SH=%ProgramFiles%\Git\usr\bin\sh.exe"
 IF NOT DEFINED SH IF EXIST "%ProgramFiles%\Git\bin\sh.exe" SET "SH=%ProgramFiles%\Git\bin\sh.exe"
@@ -16,5 +16,17 @@ IF NOT DEFINED SH (
   >&2 ECHO review-test-budget:{"executable":"%EXECUTABLE%","decision":"skipped_or_denied_slow_test","reason":"command guard sh unavailable on Windows"}
   EXIT /B 127
 )
-"%SH%" "%GUARD_DIR%%EXECUTABLE%" %*
+SET "FORWARD_ARGS=%1"
+SHIFT /1
+:collect_forward_args
+IF "%~1"=="" GOTO run_guard
+SET "FORWARD_ARGS=%FORWARD_ARGS% %1"
+SHIFT /1
+GOTO collect_forward_args
+:run_guard
+IF DEFINED FORWARD_ARGS (
+  "%SH%" "%GUARD_DIR%%EXECUTABLE%" %FORWARD_ARGS%
+) ELSE (
+  "%SH%" "%GUARD_DIR%%EXECUTABLE%"
+)
 EXIT /B %ERRORLEVEL%

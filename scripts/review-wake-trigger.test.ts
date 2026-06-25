@@ -121,23 +121,6 @@ describe('evaluateWakeReviewTrigger', () => {
     expect(result.reason).toBe('head_covered');
   });
 
-
-  it('Issue #461: first timeout_no_verdict on head allows wake retry', () => {
-    const fixture = loadFixture('timeout-first-wake-retry.json');
-    const result = evaluateFixture(fixture);
-    expect(result.triggerReviewRun).toBe(true);
-    expect(result.route).toBe('start_review');
-  });
-
-  it('Issue #461: repeated timeout_no_verdict escalates at wake start', () => {
-    const fixture = loadFixture('timeout-repeated-wake-trap.json');
-    const result = evaluateFixture(fixture);
-    expect(result.triggerReviewRun).toBe(false);
-    expect(result.reason).toBe('retry_bound_exhausted');
-    expect(result.route).toBe('empty_review_trap');
-    expect(result.escalationReason).toBe('repeated_timeout_no_verdict');
-  });
-
   it('Issue #207 (4): failed run precedence routes to EMPTY REVIEW TRAP', () => {
     const fixture = loadFixture('failed-precedence.json');
     const result = evaluateFixture(fixture);
