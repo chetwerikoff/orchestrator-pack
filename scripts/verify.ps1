@@ -1333,6 +1333,47 @@ else {
     Add-Failure 'Missing autonomous orchestrator spawn/git boundary check (Issue #324)'
 }
 
+$autonomousSpawnPolicyCheck = Join-Path $Root 'scripts/check-autonomous-spawn-policy.ps1'
+if (Test-Path -LiteralPath $autonomousSpawnPolicyCheck -PathType Leaf) {
+    & $autonomousSpawnPolicyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Autonomous orchestrator spawn policy drift (Issue #458)'
+    }
+}
+else {
+    Write-Check 'scripts/check-autonomous-spawn-policy.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous orchestrator spawn policy check (Issue #458)'
+}
+
+$autonomousSpawnPolicyVitest = Join-Path $Root 'scripts/autonomous-spawn-policy.test.ts'
+if (Test-Path -LiteralPath $autonomousSpawnPolicyVitest -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+        & npm ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn policy vitest prerequisites failed (Issue #458)'
+        }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        & npx vitest run scripts/autonomous-spawn-policy.test.ts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn policy vitest suite failed (Issue #458)'
+        }
+        else {
+            Write-Check 'autonomous-spawn-policy/vitest' 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous spawn policy vitest suite (Issue #458)'
+}
+
 $autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
 if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {

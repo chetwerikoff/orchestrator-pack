@@ -272,6 +272,32 @@ Operator adoption: follow the Issue #318 section above (shared marker + PATH shi
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
 
+## Autonomous orchestrator spawn policy (Issue #458)
+
+Committed spawn policy lives in `docs/autonomous-spawn-policy.json` with explicit default-on toggles
+`allowSpawnNew` and `allowClaimPrResume`. The autonomous `ao` guard reads that file on every spawn
+invocation; missing, malformed, or non-boolean policy denies protected spawn with exit 93.
+`ao spawn --claim-pr <PR>` additionally requires claim-pr resume safety (no live PR owner;
+single-flight mutex) before reaching real AO.
+
+**Operator adoption (live gitignored `agent-orchestrator.yaml`):**
+
+1. Replace the global `OPERATOR-GATED SPAWN — do NOT plan/spawn` override in live
+   `orchestratorRules` with policy-driven wording, e.g. spawn only when
+   `docs/autonomous-spawn-policy.json` permits the classified action (`spawn-new` vs
+   `claim-pr-resume`). Keep contextual review/CI/reconcile `never ao spawn` / `never --claim-pr`
+   fences from `agent-orchestrator.yaml.example` intact — do not delete per-path safety clauses.
+2. Verify committed policy defaults:
+   `pwsh -NoProfile -File scripts/check-autonomous-spawn-policy.ps1`.
+3. From an armed orchestrator turn, confirm audit lines on allowed spawn and exit 93 on denied
+   policy/toggle paths:
+   `npx vitest run scripts/autonomous-spawn-policy.test.ts`.
+4. Restart AO (`ao stop` / `ao start`) after live yaml edits so orchestrator turns load the updated
+   prose.
+
+Raw worker-send, raw review-run, mutating git, and `ao session kill` prose/process gates are
+unchanged.
+
 
 ## Autonomous bash-env interposer durability (Issue #406)
 
