@@ -5,13 +5,14 @@
   "supersedes": null,
   "created_at": "2026-06-25T03:02:46.912Z",
   "baseline": {
-    "commit_sha": "c9620ea1bc27c496df36d0645af8fc7d9eacfd63",
+    "commit_sha": "1ac84b956e2e0f6e459929f6444b0ef742d38c85",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ec9cf4992b9dd01b53de77ed06e18379365d83ba7f46c2bada971c95ca2c8e20"
+    "active_scope_hash": "sha256:9c71791b4707ef2e87604d1ba06ee8e9c7492492f9910cddd5673baa5582d8fb"
   },
   "declared_paths": [],
   "declared_globs": [
-    "docs/**"
+    "docs/**",
+    "scripts/**"
   ],
   "amendments": []
 }
