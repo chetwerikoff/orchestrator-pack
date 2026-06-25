@@ -5,15 +5,38 @@
   "supersedes": null,
   "created_at": "2026-06-25T02:02:06.001Z",
   "baseline": {
-    "commit_sha": "e46c6bee8cac25063309c7a3de6d367cb8041e9b",
+    "commit_sha": "9eda00c5140c9349036b499f1f79c7815d46164f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4b01d7f38e75cc8c54cefac5ae54306325d8b2cac3745f38151764df8e670245"
+    "active_scope_hash": "sha256:8bd9b221e07c7f6d4f5a75ca6864a2687ba83797de45e626d76141ccf2c824e8"
   },
-  "declared_paths": [],
+  "declared_paths": [
+    "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/worktree-gate-claim-completion-seam.test.ts",
+    "docs/declarations/454.opk-8.json"
+  ],
   "declared_globs": [
     "scripts/**",
     "tests/external-output-references/**",
     "docs/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:4b01d7f38e75cc8c54cefac5ae54306325d8b2cac3745f38151764df8e670245",
+      "new_active_scope_hash": "sha256:8bd9b221e07c7f6d4f5a75ca6864a2687ba83797de45e626d76141ccf2c824e8",
+      "changed": {
+        "added": [
+          "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+          "scripts/lib/Review-StartClaimLifecycle.ps1",
+          "scripts/worktree-gate-claim-completion-seam.test.ts",
+          "docs/declarations/454.opk-8.json"
+        ],
+        "removed": []
+      },
+      "reason": "Explicit declared_paths for reviewer scope context",
+      "actor": "opk-8",
+      "timestamp": "2026-06-25T02:21:57.758Z",
+      "applied": true
+    }
+  ]
 }
