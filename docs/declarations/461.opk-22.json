@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "670af17cb9260c7293f5f22b187e84bba561f77",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5b1202dd65d5fd0685a6a2103bdfd7165cca68fdacb7a021a996f69febda2efc"
+    "active_scope_hash": "sha256:51e463dead4dd068af73f4524d56eb3d3eec5a5d0af161794fc8983248d1be38"
   },
   "declared_paths": [
     "docs/codex-reviewer-timeout-retry.d.mts",
@@ -22,7 +22,10 @@
     "plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh",
     "plugins/ao-codex-pr-reviewer/bin/command-guard/npm",
     "plugins/ao-codex-pr-reviewer/bin/command-guard/npx",
+    "plugins/ao-codex-pr-reviewer/bin/command-guard/pnpm",
     "plugins/ao-codex-pr-reviewer/bin/command-guard/pwsh",
+    "plugins/ao-codex-pr-reviewer/bin/command-guard/vitest",
+    "plugins/ao-codex-pr-reviewer/bin/command-guard/yarn",
     "plugins/ao-codex-pr-reviewer/lib/command_budget.ts",
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
     "plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts",
