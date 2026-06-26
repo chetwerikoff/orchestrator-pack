@@ -8,6 +8,7 @@ import {
   classifySeedSideEffectOutcome,
   evaluateSeedPreSideEffectRevalidation,
 } from '../docs/review-ready-report-state-seed.mjs';
+import { runReviewReadySeedFixtureRunner } from './_review-ready-seed-fixture-test-helpers.js';
 import {
   REVIEW_READY_SEED_REVALIDATION_EXPECTED,
   REVIEW_READY_SEED_REVALIDATION_MATRIX,
@@ -33,12 +34,7 @@ type RevalidationFixture = {
 };
 
 function runFixture(fixtureName: string): { expected: string; ok: boolean; detail: string } {
-  const stdout = execFileSync(
-    'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', runnerScript, '-FixturePath', path.join(fixtureDir, fixtureName)],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
-  ).trim();
-  return JSON.parse(stdout) as { expected: string; ok: boolean; detail: string };
+  return runReviewReadySeedFixtureRunner(runnerScript, fixtureDir, fixtureName);
 }
 
 function loadSeedFixture(name: string): RevalidationFixture {

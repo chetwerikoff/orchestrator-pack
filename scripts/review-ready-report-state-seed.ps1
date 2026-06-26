@@ -47,34 +47,11 @@ function Get-ReviewReadyReportStateSeedStateRoot {
     return ''
 }
 
+. (Join-Path $PSScriptRoot 'lib/Review-ReadySeedFixturePayload.ps1')
+
 function Get-FixtureReviewReadyReportStateSeedPayload {
     param([string]$Path)
-
-    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    $payload = @{
-        openPrs    = @($fixture.openPrs)
-        reviewRuns = @($fixture.reviewRuns)
-        sessions   = @($fixture.sessions)
-    }
-    foreach ($name in @(
-            'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
-            'bindingByKey', 'seededKeys', 'deferredScanKeys', 'handoffRecords',
-            'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand',
-            'supervisedRepoSlug', 'freshSnapshot', 'boundaryRace'
-        )) {
-        if ($null -ne $fixture.$name) {
-            if ($name -in @(
-                    'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
-                    'bindingByKey', 'handoffRecords', 'watchEntries', 'freshSnapshot'
-                )) {
-                $payload[$name] = ConvertTo-MechanicalJsonMap -Value $fixture.$name
-            }
-            else {
-                $payload[$name] = $fixture.$name
-            }
-        }
-    }
-    return $payload
+    return (Get-ReviewReadySeedFixturePayload -Fixture (Resolve-ReviewReadySeedFixture -FixturePath $Path))
 }
 
 $stateRoot = Get-ReviewReadyReportStateSeedStateRoot

@@ -1,94 +1,10 @@
 {
+  "extends": "tick-plan-base.json",
   "expected": "boundary-race-blocked",
-  "scenario": "tick-revalidation",
-  "nowMs": 1719018494028,
-  "headSha": "2847a9ddeadbeef1234567890abcdef12345678",
-  "openPrs": [
-    {
-      "number": 475,
-      "headRefOid": "2847a9ddeadbeef1234567890abcdef12345678",
-      "headCommittedAt": "2026-06-22T01:07:00.000Z",
-      "baseRefName": "main"
-    }
-  ],
-  "sessions": [
-    {
-      "name": "opk-475-boundary",
-      "role": "worker",
-      "project": "orchestrator-pack",
-      "status": "review_pending",
-      "pr": "https://github.com/chetwerikoff/orchestrator-pack/pull/475",
-      "prNumber": 475,
-      "reports": [
-        {
-          "timestamp": "2026-06-22T01:08:14.028Z",
-          "reportState": "ready_for_review",
-          "accepted": true,
-          "prNumber": 475
-        }
-      ]
-    }
-  ],
-  "reviewRuns": [],
-  "ciChecksByPr": {
-    "475": [
-      { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-      { "name": "PR scope guard", "state": "SUCCESS" },
-      { "name": "Run pack contract tests", "state": "SUCCESS" },
-      { "name": "Self-architect lint", "state": "SUCCESS" }
-    ]
-  },
-  "requiredCheckNamesByPr": { "475": [] },
-  "requiredCheckLookupFailedByPr": { "475": false },
-  "bindingByKey": {},
-  "seededKeys": [],
-  "deferredScanKeys": [],
-  "handoffRecords": {},
-  "terminalClaimKeys": [],
-  "watchEntries": {},
   "boundaryRace": true,
   "preSeedClaim": {
     "surface": "review-trigger-reconcile",
     "holderPid": 9001
-  },
-  "freshSnapshot": {
-    "openPrs": [
-      {
-        "number": 475,
-        "headRefOid": "2847a9ddeadbeef1234567890abcdef12345678",
-        "headCommittedAt": "2026-06-22T01:07:00.000Z",
-        "baseRefName": "main"
-      }
-    ],
-    "reviewRuns": [],
-    "sessions": [
-      {
-        "name": "opk-475-boundary",
-        "role": "worker",
-        "project": "orchestrator-pack",
-        "status": "review_pending",
-        "pr": "https://github.com/chetwerikoff/orchestrator-pack/pull/475",
-        "prNumber": 475,
-        "reports": [
-          {
-            "timestamp": "2026-06-22T01:08:14.028Z",
-            "reportState": "ready_for_review",
-            "accepted": true,
-            "prNumber": 475
-          }
-        ]
-      }
-    ],
-    "ciChecksByPr": {
-      "475": [
-        { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-        { "name": "PR scope guard", "state": "SUCCESS" },
-        { "name": "Run pack contract tests", "state": "SUCCESS" },
-        { "name": "Self-architect lint", "state": "SUCCESS" }
-      ]
-    },
-    "requiredCheckNamesByPr": { "475": [] },
-    "requiredCheckLookupFailedByPr": { "475": false }
   },
   "expectStarted": 0,
   "expectOutcome": "boundary-race-blocked"
