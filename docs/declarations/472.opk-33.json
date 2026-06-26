@@ -1,0 +1,23 @@
+{
+  "issue_number": 472,
+  "iteration_id": "opk-33",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T07:25:00.000Z",
+  "baseline": {
+    "commit_sha": "2374ca42f42119169c75a00795413a4ac4947f4c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3e04f0f09d5b7a08f00a12069d74dde2a9a2c76eb41c64e1268db5d676fb2ca4"
+  },
+  "declared_paths": [
+    "docs/declarations/472.opk-33.json",
+    "docs/spawn-worktree-grant.d.mts",
+    "docs/spawn-worktree-grant.mjs",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.provenance.json",
+    "tests/external-output-references/captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.raw.txt"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

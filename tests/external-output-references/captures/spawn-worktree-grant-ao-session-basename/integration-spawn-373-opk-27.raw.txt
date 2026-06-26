@@ -1,0 +1,15 @@
+
+> test
+> vitest run scripts/autonomous-spawn-worktree-gate.test.ts -t spawn policy allow reaches sanctioned
+
+
+ RUN  v3.2.4 /home/che/<redacted>
+
+ ✓ scripts/autonomous-spawn-worktree-gate.test.ts (20 tests | 19 skipped) 866ms
+   ✓ spawn worktree grant (#470) > spawn policy allow reaches sanctioned worker-worktree mutation  865ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 19 skipped (20)
+   Start at  07:20:03
+   Duration  1.25s (transform 113ms, setup 0ms, collect 147ms, tests 866ms, environment 0ms, prepare 55ms)
+

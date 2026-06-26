@@ -193,14 +193,19 @@ describe('review-start-claim-lifecycle predicates', () => {
     expect(liveness.reason).toBe('pid_reused_or_wrong_instance');
   });
 
-  it('evaluates hold budget expiry for alive holders', () => {
+  it('evaluates hold budget expiry for alive holders after launch gate', () => {
     const nowMs = Date.parse('2026-06-24T12:00:20.000Z');
     const hold = evaluateHoldBudget({
-      claim: { acquiredAtUtc: '2026-06-24T12:00:00.000Z', holdStartedAtUtc: '2026-06-24T12:00:00.000Z' },
+      claim: {
+        acquiredAtUtc: '2026-06-24T12:00:00.000Z',
+        holdStartedAtUtc: '2026-06-24T12:00:00.000Z',
+        launchPending: { atUtc: '2026-06-24T12:00:00.000Z', budgetMs: 15_000 },
+      },
       nowMs,
       config: resolveClaimLifecycleConfig({ holdBudgetMs: 15_000 }),
     });
     expect(hold.exceeded).toBe(true);
+    expect(hold.phase).toBe('post_launch_gate');
   });
 
   it('fences post-run visibility after budget when run stays invisible', () => {
