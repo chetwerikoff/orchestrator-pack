@@ -36,3 +36,16 @@ function Write-PackGateCheckResult {
     Write-Host "[PASS] $Label"
     exit 0
 }
+
+function Invoke-PackGateInventoryScript {
+    param(
+        [string]$RepoRoot = '',
+        [string]$CallerScriptRoot,
+        [string]$PassLabel,
+        [scriptblock]$Body
+    )
+
+    $gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $CallerScriptRoot
+    & $Body $gate.RepoRoot $gate.Violations
+    Write-PackGateCheckResult -Label $PassLabel -Violations $gate.Violations
+}
