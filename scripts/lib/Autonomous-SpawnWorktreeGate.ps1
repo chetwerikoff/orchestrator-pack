@@ -318,6 +318,29 @@ function Test-AutonomousSpawnWorktreeTargetPathHardened {
 }
 
 
+
+function Write-AutonomousSpawnWorktreeGrantConsumeLockPayload {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        $writer = New-Object System.IO.StreamWriter($stream, $encoding)
+        try {
+            $writer.Write($Content)
+        }
+        finally {
+            $writer.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-AutonomousSpawnWorktreeGrantConsumeLockPath {
     param(
         [string]$Namespace,
@@ -343,14 +366,7 @@ function Enter-AutonomousSpawnWorktreeGrantConsumeMutex {
     $json = ($record | ConvertTo-Json -Compress -Depth 5)
 
     try {
-        $stream = [System.IO.File]::Open($LockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-        try {
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-            $stream.Write($bytes, 0, $bytes.Length)
-        }
-        finally {
-            $stream.Dispose()
-        }
+        Write-AutonomousSpawnWorktreeGrantConsumeLockPayload -Path $LockPath -Content $json
         return $true
     }
     catch [System.IO.IOException] {
@@ -362,14 +378,7 @@ function Enter-AutonomousSpawnWorktreeGrantConsumeMutex {
                 }
                 if (-not (Test-AutonomousSpawnWorktreeHolderAlive -Holder $owner)) {
                     Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-                    $stream = [System.IO.File]::Open($LockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-                    try {
-                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-                        $stream.Write($bytes, 0, $bytes.Length)
-                    }
-                    finally {
-                        $stream.Dispose()
-                    }
+                    Write-AutonomousSpawnWorktreeGrantConsumeLockPayload -Path $LockPath -Content $json
                     return $true
                 }
             }
