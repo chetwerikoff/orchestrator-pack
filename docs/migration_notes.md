@@ -92,6 +92,19 @@ Recovery / escalation:
   visible, automation treats it as coverage. A manual run racing an automated start inside AO's
   registration-lag window is the accepted operator-owned residual.
 
+## Review-start claim hold budget semantics (Issue #481)
+
+Hold budget now starts at the launch gate (when `Confirm-ReviewStartClaimLaunchGate` runs), not at
+claim acquisition. Mandatory pre-launch snapshot/revalidation/workspace-preflight work is bounded
+only by the shared readiness envelope (`AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS`, default 30s). Fresh
+self-expiry during healthy pre-launch work is classified as `readiness_envelope_exceeded` when the
+envelope closes, not `hold_budget_exceeded` / concurrent-review pressure.
+
+No operator adoption required beyond the usual supervised-child restart after deploy. Existing
+active claims with legacy acquire-time `holdStartedAtUtc` markers are interpreted as pre-launch
+until launch-pending evidence appears.
+
+
 ## LLM-orchestrator claimed review-start gate (Issue #318)
 
 Autonomous orchestrator turns must start reviews only through

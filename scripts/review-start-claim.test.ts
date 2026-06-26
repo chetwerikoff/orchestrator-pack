@@ -263,7 +263,7 @@ describe('Review-StartClaim single-flight contract', () => {
         [pscustomobject]@{
           first = @{ acquired=[bool]$first.acquired; recovered=[bool]$first.recovered; reason=[string]$first.reason }
           second = @{ acquired=[bool]$second.acquired; recovered=[bool]$second.recovered; reason=[string]$second.reason }
-          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
+          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -File -Filter '*.json').Name)
         } | ConvertTo-Json -Compress -Depth 6
       `;
       const result = JSON.parse(runPwsh(script));
@@ -328,16 +328,17 @@ describe('Review-StartClaim single-flight contract', () => {
         $fresh.record.acquiredAtUtc = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString('o')
         ($fresh.record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $firstPath -Encoding UTF8
         $second = Acquire-ReviewStartClaim -PrNumber 266 -HeadSha $sha -Surface 'recoverer-b' -Namespace $ns -ReviewRuns @()
+        $terminalDir = Get-ReviewStartClaimTerminalDir -Namespace $ns
         [pscustomobject]@{
           first = @{ acquired=[bool]$first.acquired; recovered=[bool]$first.recovered }
           second = @{ acquired=[bool]$second.acquired; recovered=[bool]$second.recovered; reason=[string]$second.reason }
-          terminal = @((Get-ChildItem -LiteralPath (Get-ReviewStartClaimTerminalDir -Namespace $ns) -Filter '*recovered_stale*.json').Name)
-        } | ConvertTo-Json -Compress -Depth 6
+          terminalCount = @((Get-ChildItem -LiteralPath $terminalDir -File -Filter '*.json' -ErrorAction SilentlyContinue)).Count
+        } | ConvertTo-Json -Compress
       `);
       const result = JSON.parse(output);
       expect(result.first).toMatchObject({ acquired: true, recovered: true });
       expect(result.second).toMatchObject({ acquired: true, recovered: true });
-      expect(result.terminal.length).toBeGreaterThanOrEqual(2);
+      expect(result.terminalCount).toBeGreaterThanOrEqual(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
