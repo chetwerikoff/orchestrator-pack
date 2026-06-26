@@ -2749,6 +2749,27 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
 
+  it('blocks re-seat when anchor active count exceeds terminal delivery evidence', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {
+          'delivery-one': {
+            deliveryId: 'delivery-one',
+            terminalState: 'escalated',
+            escalationReason: 'delivery_vanished',
+          },
+        },
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 2, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+    expect(result.evidence).toContain('anchorActiveDeliveryCount=2');
+    expect(result.evidence).toContain('terminalEvidenceCount=1');
+  });
+
   it('clears latched recovery and stamps identity with an audit record', () => {
     const nowMs = 1717603000000;
     const result = evaluateStateRootReSeat({

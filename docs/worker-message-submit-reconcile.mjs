@@ -1859,17 +1859,23 @@ export function evaluateStateRootReSeatEligibility({
 
   const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
   if (anchorActive > 0) {
-    const stateDeliveryIds = Object.keys(state?.deliveries ?? {}).filter((id) => id && !id.startsWith('_'));
-    if (stateDeliveryIds.length === 0 && unresolvedJournal.length === 0) {
-      const journalIds = Object.keys(journal ?? {}).filter((id) => id && !id.startsWith('_'));
-      if (journalIds.length === 0) {
-        return {
-          eligible: false,
-          reason: 'anchor_active_without_terminal_evidence',
-          priorRecoveryReason,
-          evidence: `anchorActiveDeliveryCount=${anchorActive}`,
-        };
-      }
+    const terminalStateDeliveryCount = Object.entries(state?.deliveries ?? {}).filter(
+      ([deliveryId, record]) =>
+        deliveryId &&
+        !deliveryId.startsWith('_') &&
+        isSubmitTrackingDeliveryTerminal(record),
+    ).length;
+    const journalEvidenceCount = Object.keys(journal ?? {}).filter(
+      (deliveryId) => deliveryId && !deliveryId.startsWith('_'),
+    ).length;
+    const totalEvidenceCount = terminalStateDeliveryCount + journalEvidenceCount;
+    if (totalEvidenceCount < anchorActive) {
+      return {
+        eligible: false,
+        reason: 'anchor_active_without_terminal_evidence',
+        priorRecoveryReason,
+        evidence: `anchorActiveDeliveryCount=${anchorActive};terminalEvidenceCount=${terminalStateDeliveryCount};journalEvidenceCount=${journalEvidenceCount}`,
+      };
     }
   }
 
