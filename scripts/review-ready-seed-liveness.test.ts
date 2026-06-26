@@ -39,7 +39,7 @@ beforeAll(() => {
     const bytes = Buffer.byteLength(readFileSync(full, 'utf8'), 'utf8');
     expect(bytes).toBeGreaterThan(500_000);
   }
-});
+}, 120_000);
 
 describe('review-ready-seed-liveness matrix coverage (Issue #473)', () => {
   it('maps every expected label to a named fixture', () => {

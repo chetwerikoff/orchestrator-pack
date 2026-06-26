@@ -37,27 +37,19 @@ function buildReviewRun(index) {
   };
 }
 
-function buildPayload({ sessions, runs, label }) {
-  const payload = {
+function buildPayload({ sessions, runs, label, targetBytes }) {
+  const paddingBytes = Math.max(0, targetBytes - 20_000);
+  const padding = 'x'.repeat(paddingBytes);
+  return JSON.stringify({
     label,
     sessions,
     runs,
     generatedAt: '2026-06-26T00:00:00.000Z',
     redacted: true,
     secretScanned: true,
-  };
-  let json = JSON.stringify(payload);
-  const targetBytes = label === 'review-list' ? 734_000 : 1_100_000;
-  const pad = {
-  kind: 'synthetic-padding',
-  repeat: 'x',
-  };
-  while (Buffer.byteLength(json, 'utf8') < targetBytes) {
-    pad.repeat += 'x'.repeat(1024);
-    payload._padding = { ...pad, bytes: Buffer.byteLength(JSON.stringify(pad), 'utf8') };
-    json = JSON.stringify(payload);
-  }
-  return json;
+    _padding: { kind: 'synthetic-padding', bytes: paddingBytes, repeat: padding.slice(0, 64) },
+    _paddingBody: padding,
+  });
 }
 
 mkdirSync(outDir, { recursive: true });
@@ -65,25 +57,26 @@ mkdirSync(outDir, { recursive: true });
 const statusSessions = Array.from({ length: 180 }, (_, index) => buildSession(index));
 const reviewRuns = Array.from({ length: 220 }, (_, index) => buildReviewRun(index));
 
-writeFileSync(
-  path.join(outDir, 'grown-status-sessions.json'),
-  buildPayload({ sessions: statusSessions, runs: [], label: 'status-reports' }),
-);
-writeFileSync(
-  path.join(outDir, 'grown-review-list.json'),
-  buildPayload({ sessions: [], runs: reviewRuns, label: 'review-list' }),
-);
+const statusJson = buildPayload({
+  sessions: statusSessions,
+  runs: [],
+  label: 'status-reports',
+  targetBytes: 1_100_000,
+});
+const reviewJson = buildPayload({
+  sessions: [],
+  runs: reviewRuns,
+  label: 'review-list',
+  targetBytes: 734_000,
+});
+
+writeFileSync(path.join(outDir, 'grown-status-sessions.json'), statusJson);
+writeFileSync(path.join(outDir, 'grown-review-list.json'), reviewJson);
 
 console.log(
   JSON.stringify({
-    statusBytes: Buffer.byteLength(
-      buildPayload({ sessions: statusSessions, runs: [], label: 'status-reports' }),
-      'utf8',
-    ),
-    reviewBytes: Buffer.byteLength(
-      buildPayload({ sessions: [], runs: reviewRuns, label: 'review-list' }),
-      'utf8',
-    ),
+    statusBytes: Buffer.byteLength(statusJson, 'utf8'),
+    reviewBytes: Buffer.byteLength(reviewJson, 'utf8'),
     outDir,
   }),
 );
