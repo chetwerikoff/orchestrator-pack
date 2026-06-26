@@ -78,6 +78,12 @@ export interface DeliveryTrackingRecord {
   vanishedSuppressedAtMs?: number;
 }
 
+export interface RecoveryLatch {
+  fenceTrusted?: boolean;
+  reason?: string;
+  quarantined?: string;
+}
+
 export interface SubmitTrackingState {
   deliveries?: Record<string, DeliveryTrackingRecord>;
   failedDeliveries?: Record<string, FailedDeliveryRecord>;
@@ -88,6 +94,7 @@ export interface SubmitTrackingState {
   adoptionConfigPathHash?: string;
   lastAdoptionEscalationKey?: string;
   stateRootIdentity?: string;
+  _recovery?: RecoveryLatch;
 }
 
 export interface SubmitDecision {
