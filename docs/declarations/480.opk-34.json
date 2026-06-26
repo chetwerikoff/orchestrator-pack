@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "000beeb32df88f921e330ed2febb78934f2bf08b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5"
+    "active_scope_hash": "sha256:5d6f1b2ece2d1dd179262b8c75c89bc2090d680f95ecd46a92afed08dbde74ab"
   },
   "declared_paths": [
     "docs/autonomous-spawn-budget.mjs",
@@ -35,7 +35,9 @@
     "tests/external-output-references/review-start-repeat-classifier/covered-in-flight.json",
     "tests/external-output-references/review-start-repeat-classifier/distinct-new-cycle.json",
     "tests/external-output-references/review-start-repeat-classifier/distinct-new-head.json",
-    "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json"
+    "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json",
+    "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json",
+    "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json"
   ],
   "declared_globs": [],
   "amendments": [
@@ -54,6 +56,21 @@
       "reason": "Merge spawn-budget gate scripts for self-architect lint dedupe",
       "actor": "opk-34",
       "timestamp": "2026-06-26T10:03:56.805Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5",
+      "new_active_scope_hash": "sha256:5d6f1b2ece2d1dd179262b8c75c89bc2090d680f95ecd46a92afed08dbde74ab",
+      "changed": {
+        "added": [
+          "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json",
+          "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json"
+        ],
+        "removed": []
+      },
+      "reason": "Review fix: stable repo-relative claim capture fixtures",
+      "actor": "opk-37",
+      "timestamp": "2026-06-26T13:52:00.000Z",
       "applied": true
     }
   ]
