@@ -197,7 +197,7 @@ the proposal's decision trail. See
 
 ## Iteration discipline
 
-- **Hard cap: 10 adversarial passes total**, and *you* carry the
+- **Hard cap: 5 adversarial passes total**, and *you* carry the
   cross-iteration memory — each re-run of the review step is a fresh **cold**
   Codex thread with no memory of prior passes (by design: a cold skeptic
   re-attacks without anchoring or sycophantic drift).
@@ -213,7 +213,7 @@ the proposal's decision trail. See
   ```
 
 - **Stop** when any holds: `verdict` is `approve`; every remaining finding is
-  rejected (nothing left to apply); or 10 passes done — record any still-open
+  rejected (nothing left to apply); or 5 passes done — record any still-open
   findings as **open questions**.
 - Never resume a single Codex thread across iterations (it softens into
   agreement and defeats the gate); keep cold restarts + the settled ledger.
