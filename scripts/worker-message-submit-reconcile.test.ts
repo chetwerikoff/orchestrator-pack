@@ -2770,6 +2770,45 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.evidence).toContain('terminalEvidenceCount=1');
   });
 
+  it('blocks re-seat when only failed-uncertain journal entries exist for anchor', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+      },
+      journal: {
+        'unrelated-delivery': {
+          deliveryId: 'unrelated-delivery',
+          fenceLifecycle: 'failed-uncertain',
+          dispatchOutcome: 'dispatched',
+        },
+      },
+      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+  });
+
+  it('blocks re-seat when unrelated completed journal entry is the only evidence', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+      },
+      journal: {
+        'unrelated-delivery': {
+          deliveryId: 'unrelated-delivery',
+          fenceLifecycle: 'completed',
+          dispatchOutcome: 'dispatched',
+        },
+      },
+      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+    expect(result.evidence).toContain('completedMatchingJournalCount=0');
+  });
+
   it('clears latched recovery and stamps identity with an audit record', () => {
     const nowMs = 1717603000000;
     const result = evaluateStateRootReSeat({

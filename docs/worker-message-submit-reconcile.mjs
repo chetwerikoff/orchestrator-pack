@@ -39,6 +39,7 @@ import {
   compactWorkerMessageSubmitTracking,
   convergeOversizedReconcileState,
   evaluateSubmitTrackingCapacity,
+  FENCE_LIFECYCLE_COMPLETED,
   FENCE_LIFECYCLE_PENDING,
   interpretDispatchFenceLifecycle,
 } from './mechanical-reconcile-bounds.mjs';
@@ -1803,6 +1804,40 @@ function findUnresolvedFailedDeliveries(failedDeliveries) {
 }
 
 /**
+ * @param {Record<string, unknown>} journal
+ * @param {Record<string, unknown>} stateDeliveries
+ */
+function countCompletedMatchingJournalEvidence(journal, stateDeliveries) {
+  const terminalDeliveryIds = new Set(
+    Object.entries(stateDeliveries ?? {})
+      .filter(
+        ([deliveryId, record]) =>
+          deliveryId &&
+          !deliveryId.startsWith('_') &&
+          isSubmitTrackingDeliveryTerminal(record),
+      )
+      .map(([deliveryId]) => deliveryId),
+  );
+  if (terminalDeliveryIds.size === 0) {
+    return 0;
+  }
+  let count = 0;
+  for (const [deliveryId, record] of Object.entries(journal ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (!terminalDeliveryIds.has(deliveryId)) {
+      continue;
+    }
+    if (interpretDispatchFenceLifecycle(record) !== FENCE_LIFECYCLE_COMPLETED) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+/**
  * @param {object} input
  */
 export function evaluateStateRootReSeatEligibility({
@@ -1859,22 +1894,24 @@ export function evaluateStateRootReSeatEligibility({
 
   const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
   if (anchorActive > 0) {
-    const terminalStateDeliveryCount = Object.entries(state?.deliveries ?? {}).filter(
+    const stateDeliveries = state?.deliveries ?? {};
+    const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
       ([deliveryId, record]) =>
         deliveryId &&
         !deliveryId.startsWith('_') &&
         isSubmitTrackingDeliveryTerminal(record),
     ).length;
-    const journalEvidenceCount = Object.keys(journal ?? {}).filter(
-      (deliveryId) => deliveryId && !deliveryId.startsWith('_'),
-    ).length;
-    const totalEvidenceCount = terminalStateDeliveryCount + journalEvidenceCount;
+    const completedMatchingJournalCount = countCompletedMatchingJournalEvidence(
+      journal ?? {},
+      stateDeliveries,
+    );
+    const totalEvidenceCount = terminalStateDeliveryCount;
     if (totalEvidenceCount < anchorActive) {
       return {
         eligible: false,
         reason: 'anchor_active_without_terminal_evidence',
         priorRecoveryReason,
-        evidence: `anchorActiveDeliveryCount=${anchorActive};terminalEvidenceCount=${terminalStateDeliveryCount};journalEvidenceCount=${journalEvidenceCount}`,
+        evidence: `anchorActiveDeliveryCount=${anchorActive};terminalEvidenceCount=${terminalStateDeliveryCount};completedMatchingJournalCount=${completedMatchingJournalCount}`,
       };
     }
   }
