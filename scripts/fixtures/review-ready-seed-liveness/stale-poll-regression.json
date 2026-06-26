@@ -1,0 +1,14 @@
+{
+  "expected": "stale-poll-regression",
+  "scenario": "freshness-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 17000000025000,
+  "childPid": 4242,
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "poll",
+    "pid": 4242,
+    "lastProgressMs": 1700000000000
+  },
+  "expectFreshness": { "status": "stale_poll" }
+}

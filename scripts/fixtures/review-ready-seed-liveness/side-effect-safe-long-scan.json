@@ -1,0 +1,7 @@
+{
+  "expected": "side-effect-safe-long-scan",
+  "scenario": "side-effect-drain",
+  "stallThresholdMs": 20000,
+  "nowMs": 17000000030000,
+  "childPid": 4242
+}

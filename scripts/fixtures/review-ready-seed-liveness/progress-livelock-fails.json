@@ -1,0 +1,30 @@
+{
+  "expected": "progress-livelock-fails",
+  "scenario": "freshness-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000001000,
+  "childPid": 4242,
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "poll",
+    "pid": 4242,
+    "lastProgressMs": 1700000000500,
+    "progressSchemaVersion": 2,
+    "workStep": "plan_seed",
+    "workCursor": 5,
+    "workTotal": 8,
+    "tickId": "seed-tick-lock"
+  },
+  "priorProgress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "poll",
+    "pid": 4242,
+    "lastProgressMs": 1700000000400,
+    "progressSchemaVersion": 2,
+    "workStep": "plan_seed",
+    "workCursor": 5,
+    "workTotal": 8,
+    "tickId": "seed-tick-lock"
+  },
+  "expectFreshness": { "status": "livelock" }
+}

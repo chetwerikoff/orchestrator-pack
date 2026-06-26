@@ -8,6 +8,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessHealth.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgressEvidence.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessCrashBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
@@ -994,8 +995,10 @@ function Test-OrchestratorWakeSupervisorChildStalled {
     }
 
     $progress = Read-OrchestratorWakeSupervisorChildProgress -Paths $Paths -ChildId $ChildEntry.Id
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $nowMs = Get-OrchestratorSideProcessNowMs
     $threshold = Get-OrchestratorWakeSupervisorChildStallThresholdMs -ChildEntry $ChildEntry
+    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id
+    $childPid = [int]$status.Pid
 
     if (-not $progress -or -not $progress.lastProgressMs) {
         $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $ChildEntry.Id
@@ -1008,8 +1011,9 @@ function Test-OrchestratorWakeSupervisorChildStalled {
         return $true
     }
 
-    $lastMs = [long]$progress.lastProgressMs
-    return (($nowMs - $lastMs) -ge $threshold)
+    $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $progress `
+        -ChildPid $childPid -StallThresholdMs $threshold -NowMs $nowMs
+    return -not $freshness.Fresh
 }
 
 function Find-OrchestratorWakeSupervisorAdoptableProcesses {

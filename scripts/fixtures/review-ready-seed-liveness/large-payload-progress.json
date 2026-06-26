@@ -1,0 +1,7 @@
+{
+  "expected": "large-payload-progress",
+  "scenario": "large-payload-tick",
+  "nowMs": 1700000000000,
+  "grownStatusRel": "tests/external-output-references/generated/review-ready-seed-liveness/grown-status-sessions.json",
+  "grownReviewRel": "tests/external-output-references/generated/review-ready-seed-liveness/grown-review-list.json"
+}
