@@ -299,6 +299,21 @@ Raw worker-send, raw review-run, mutating git, and `ao session kill` prose/proce
 unchanged.
 
 
+## Autonomous spawn worktree provenance (Issue #470)
+
+When spawn policy allows `ao spawn` or `ao spawn --claim-pr`, the pack `ao` guard mints a
+short-lived spawn-worktree grant (`AO_SPAWN_WORKTREE_GRANT_ID`) that authorizes exactly one
+worker `git worktree add` under `{AO_BASE_DIR}/projects/<project>/worktrees/` with hardened
+path checks. Direct unsanctioned mutating git remains exit 93. Fully escaped absolute-binary
+calls after surface/PATH stripping are not pack-enforceable; boundary-escape signals are
+audited under `boundary-escape-audit/events.jsonl` when bootstrap arms but surface/PATH drift
+is detected.
+
+**Operator adoption:** no live yaml change required beyond existing #458/#324 wiring. Verify:
+
+`npx vitest run scripts/autonomous-spawn-worktree-gate.test.ts`
+
+
 ## Autonomous bash-env interposer durability (Issue #406)
 
 Orchestrator bash turns arm through **tracked** wiring instead of operator-only

@@ -1374,6 +1374,31 @@ else {
     Add-Failure 'Missing autonomous spawn policy vitest suite (Issue #458)'
 }
 
+$autonomousSpawnWorktreeVitest = Join-Path $Root 'scripts/autonomous-spawn-worktree-gate.test.ts'
+if (Test-Path -LiteralPath $autonomousSpawnWorktreeVitest -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+        & npm ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn worktree vitest prerequisites failed (Issue #470)'
+        }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        & npx vitest run scripts/autonomous-spawn-worktree-gate.test.ts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'autonomous spawn worktree vitest suite failed (Issue #470)'
+        }
+        else {
+            Write-Check 'autonomous-spawn-worktree/vitest' 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing autonomous spawn worktree vitest suite (Issue #470)'
+}
+
 $autonomousSpawnBudgetCheck = Join-Path $Root 'scripts/check-autonomous-spawn-budget.ps1'
 if (Test-Path -LiteralPath $autonomousSpawnBudgetCheck -PathType Leaf) {
     & $autonomousSpawnBudgetCheck

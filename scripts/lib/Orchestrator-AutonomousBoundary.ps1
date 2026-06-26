@@ -5,6 +5,7 @@
 
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 . (Join-Path $PSScriptRoot 'Autonomous-ReviewWorktreeGate.ps1')
+. (Join-Path $PSScriptRoot 'Autonomous-SpawnWorktreeGate.ps1')
 
 $Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
@@ -733,6 +734,10 @@ function Test-AutonomousGitDenied {
         $claimAllow = Test-AutonomousReviewWorktreeClaimBoundAllow -Argv $Argv
         if ($claimAllow.allowed) {
             return @{ denied = $false; reason = 'claimed_worktree_allow' }
+        }
+        $spawnAllow = Test-AutonomousSpawnWorktreeGrantBoundAllow -Argv $Argv
+        if ($spawnAllow.allowed) {
+            return @{ denied = $false; reason = 'spawn_worktree_allow' }
         }
         return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
     }

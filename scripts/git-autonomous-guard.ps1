@@ -6,6 +6,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 
+Write-AutonomousBoundaryEscapeAudit | Out-Null
+
 $deny = Test-AutonomousGitDenied -Argv $args
 if ($deny.denied) {
     [Console]::Error.WriteLine("autonomous tree-mutating git denied by boundary gate: $($deny.reason). Use sanctioned pack review/preflight paths only.")
