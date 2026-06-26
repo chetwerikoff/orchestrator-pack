@@ -58,12 +58,24 @@ function wrapClaimedReviewFixture(relPath: string) {
 function runPwshFile(scriptRel: string, args: string[], events: SpawnEvent[], hints: { sourceHint?: string; childId?: string }) {
   const scriptPath = path.join(repoRoot, scriptRel);
   const line = `pwsh -NoProfile -File ${scriptPath} ${args.join(' ')}`;
-  pushEvent(events, line, hints);
-  spawnSync('pwsh', ['-NoProfile', '-File', scriptPath, ...args], {
+  const result = spawnSync('pwsh', ['-NoProfile', '-File', scriptPath, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: 45_000,
   });
+  if (result.error) {
+    throw new Error(`capture subprocess failed to start (${line}): ${result.error.message}`);
+  }
+  if (result.signal) {
+    throw new Error(`capture subprocess killed by signal ${result.signal} (${line})`);
+  }
+  if (result.status !== 0) {
+    const detail = `${result.stderr ?? ''}${result.stdout ?? ''}`.trim();
+    throw new Error(
+      `capture subprocess exited ${result.status} (${line})${detail ? `: ${detail}` : ''}`,
+    );
+  }
+  pushEvent(events, line, hints);
 }
 
 function runSupervisorFixture(script: string, fixture: string, events: SpawnEvent[]) {
