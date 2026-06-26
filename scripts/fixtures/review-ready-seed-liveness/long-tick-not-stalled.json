@@ -1,0 +1,15 @@
+{
+  "expected": "long-tick-not-stalled",
+  "scenario": "heartbeat-sequence",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000000000,
+  "childPid": 4242,
+  "checkAtElapsedMs": 35000,
+  "heartbeatSteps": [
+    { "atElapsedMs": 0, "workStep": "poll_start", "workCursor": 1, "workTotal": 8 },
+    { "atElapsedMs": 8000, "workStep": "load_status", "workCursor": 2, "workTotal": 8 },
+    { "atElapsedMs": 16000, "workStep": "refresh_github", "workCursor": 4, "workTotal": 8 },
+    { "atElapsedMs": 24000, "workStep": "plan_seed", "workCursor": 5, "workTotal": 8 },
+    { "atElapsedMs": 32000, "workStep": "plan_reeval", "workCursor": 7, "workTotal": 8 }
+  ]
+}

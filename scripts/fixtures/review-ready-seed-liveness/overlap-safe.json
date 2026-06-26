@@ -1,0 +1,4 @@
+{
+  "expected": "overlap-safe",
+  "scenario": "overlap-guard"
+}

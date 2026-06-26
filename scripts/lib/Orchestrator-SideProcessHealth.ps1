@@ -3,6 +3,8 @@
   Health / workability classification for orchestrator side-process children (Issue #248).
 #>
 
+. (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgressEvidence.ps1')
+
 function Get-OrchestratorSideProcessHealthDegradedThreshold {
     $fromEnv = $env:AO_SIDE_PROCESS_HEALTH_DEGRADED_THRESHOLD
     if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
@@ -140,15 +142,29 @@ function Get-OrchestratorSideProcessHealthVerdict {
             }
         }
 
-        if ($StallThresholdMs -gt 0 -and $Progress.lastProgressMs) {
-            $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            $lastMs = [long]$Progress.lastProgressMs
-            $phase = [string]$Progress.phase
-            $isProgressPhase = $phase -in @('tick_complete', 'tick_success', 'tick_error', 'poll', 'idle', 'listening', 'side_effect')
-            if ($isProgressPhase -and (($nowMs - $lastMs) -ge $StallThresholdMs)) {
+        if ($StallThresholdMs -gt 0) {
+            $nowMs = Get-OrchestratorSideProcessNowMs
+            $childId = ''
+            if ($ChildEntry -and $ChildEntry.Id) {
+                $childId = [string]$ChildEntry.Id
+            }
+            $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $Progress `
+                -ChildPid $ChildPid -StallThresholdMs $StallThresholdMs -NowMs $nowMs -ChildId $childId
+            if (-not $freshness.Fresh) {
+                $stallReason = [string]$freshness.Reason
+                if (-not $stallReason) {
+                    $stallReason = 'no fresh tick progress'
+                }
+                if ($freshness.Status -eq 'livelock') {
+                    return @{
+                        Status    = 'degraded'
+                        Reason    = $stallReason
+                        LastError = $lastError
+                    }
+                }
                 return @{
                     Status    = 'stalled'
-                    Reason    = 'no fresh tick progress'
+                    Reason    = $stallReason
                     LastError = $lastError
                 }
             }

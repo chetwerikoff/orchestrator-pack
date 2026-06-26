@@ -174,8 +174,17 @@ function Invoke-ReviewReadyReportStateSeedTick {
         [string]$SupervisedRepoSlug = '',
         [hashtable]$FixturePayload,
         [switch]$DryRun,
-        [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
+        [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message },
+        [scriptblock]$ProgressWriter = $null,
+        [string]$TickId = ''
     )
+
+    $emitProgress = {
+        param([string]$Step)
+        if ($ProgressWriter) {
+            & $ProgressWriter $Step
+        }
+    }
 
     $seedStatePath = Get-ReviewReadyReportStateSeedStatePath -StateRoot $StateRoot
     $watchPath = Get-ReviewTriggerReevalWatchPath -StateRoot $StateRoot
@@ -188,8 +197,10 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
 
     if ($FixturePayload) {
+        & $emitProgress 'load_status'
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs $FixturePayload.openPrs
         $sessions = @($FixturePayload.sessions)
+        & $emitProgress 'load_review_runs'
         $reviewRuns = @($FixturePayload.reviewRuns)
         $checksBundle = @{
             ciChecksByPr                  = $FixturePayload.ciChecksByPr
@@ -206,8 +217,11 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $(if ($FixturePayload.watchEntries) { $FixturePayload.watchEntries } else { @{} })
     }
     else {
+        & $emitProgress 'load_status'
         $sessions = @(Get-AoStatusSessionsIncludingTerminated)
         $seedState = Get-ReviewReadyReportStateSeedState -Path $seedStatePath
+        & $emitProgress 'load_review_runs'
+        & $emitProgress 'refresh_github'
         $githubSnapshot = Resolve-ReviewReadyReportStateSeedGitHubSnapshot `
             -RepoRoot $RepoRoot `
             -Sessions $sessions `
@@ -244,6 +258,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $watchEntriesForPlan[[string]$entry.Key] = $entry.Value
     }
 
+    & $emitProgress 'plan_seed'
     $plan = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'planTick' -Payload @{
         sessions               = $sessions
         openPrs                = $openPrs
@@ -261,6 +276,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
 
     $seedResult = @{ seededKeys = @() }
+    & $emitProgress 'apply_seed'
     if ($plan.candidates -and @($plan.candidates).Count -gt 0) {
         $seedResult = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'seedFromReportStatePoll' -Payload @{
             candidates      = @($plan.candidates)
@@ -297,6 +313,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
         Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath -IncomingWatchEntries $watchMap -NowMs $nowMs
     }
 
+    & $emitProgress 'plan_reeval'
     $reevalPlan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload @{
         watchEntries                  = $watchMap
         openPrs                       = @($openPrs)

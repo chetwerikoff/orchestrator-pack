@@ -1,0 +1,20 @@
+{
+  "expected": "progress-identity",
+  "scenario": "freshness-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000001000,
+  "childPid": 4242,
+  "tickId": "seed-tick-current",
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "poll",
+    "pid": 1111,
+    "lastProgressMs": 1700000000500,
+    "progressSchemaVersion": 2,
+    "workStep": "plan_seed",
+    "workCursor": 5,
+    "workTotal": 8,
+    "tickId": "seed-tick-prior"
+  },
+  "expectFreshness": { "status": "stale_identity" }
+}

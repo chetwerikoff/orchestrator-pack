@@ -74,12 +74,20 @@ function Write-OrchestratorSideProcessProgress {
         }
     }
 
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $nowMs = if ($env:AO_SIDE_PROCESS_NOW_MS -and [long]::TryParse($env:AO_SIDE_PROCESS_NOW_MS, [ref]$null)) {
+        [long]$env:AO_SIDE_PROCESS_NOW_MS
+    }
+    else {
+        [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
     $payload = @{
         childId        = $ChildId
         lastProgressMs = $nowMs
         phase          = $Phase
         pid            = $PID
+    }
+    if ($Extra.progressSchemaVersion) {
+        $payload.progressSchemaVersion = $Extra.progressSchemaVersion
     }
     if ($resolvedOutcome) {
         $payload.tickOutcome = $resolvedOutcome

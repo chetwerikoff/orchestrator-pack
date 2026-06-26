@@ -1,0 +1,4 @@
+{
+  "expected": "stale-lock-bounded",
+  "scenario": "stale-lock"
+}

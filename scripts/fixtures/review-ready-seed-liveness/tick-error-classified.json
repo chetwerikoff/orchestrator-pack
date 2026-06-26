@@ -1,0 +1,20 @@
+{
+  "expected": "tick-error-classified",
+  "scenario": "health-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000001000,
+  "childPid": 4242,
+  "childAlive": true,
+  "childStartedMs": 1700000000000,
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "tick_error",
+    "pid": 4242,
+    "lastProgressMs": 1700000000500,
+    "progressSchemaVersion": 2,
+    "tickId": "seed-tick-error",
+    "tickOutcome": "error",
+    "lastError": "synthetic fixture tick error"
+  },
+  "expectVerdict": { "status": "working" }
+}

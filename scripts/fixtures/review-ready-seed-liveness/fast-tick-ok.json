@@ -1,0 +1,22 @@
+{
+  "expected": "fast-tick-ok",
+  "scenario": "health-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000000000,
+  "childPid": 4242,
+  "childAlive": true,
+  "childStartedMs": 1699999970000,
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "tick_success",
+    "pid": 4242,
+    "lastProgressMs": 1699999995000,
+    "progressSchemaVersion": 2,
+    "tickId": "seed-tick-fast",
+    "workStep": "tick_finish",
+    "workCursor": 8,
+    "workTotal": 8,
+    "tickOutcome": "success"
+  },
+  "expectVerdict": { "status": "working" }
+}

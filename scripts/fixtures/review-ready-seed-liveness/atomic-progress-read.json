@@ -1,0 +1,5 @@
+{
+  "expected": "atomic-progress-read",
+  "scenario": "atomic-progress-read",
+  "nowMs": 1700000000000
+}
