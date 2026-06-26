@@ -1,0 +1,17 @@
+{
+  "issue_number": 466,
+  "iteration_id": "opk-32",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T06:53:00.769Z",
+  "baseline": {
+    "commit_sha": "198683c11169d5787a37e1d23ec0225df91197b2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6181a78ce587c6ef113c5049e5a70f005e4594c488bb3b0e092e164036d7ead6"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/opk-probe-pipeline-smoke.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
