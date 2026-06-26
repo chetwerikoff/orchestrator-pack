@@ -318,32 +318,72 @@ function Test-AutonomousSpawnWorktreeTargetPathHardened {
 }
 
 
-function Get-AutonomousSpawnWorktreeGrantConsumeLockDir {
+function Get-AutonomousSpawnWorktreeGrantConsumeLockPath {
     param(
         [string]$Namespace,
         [string]$GrantId
     )
 
-    return (Join-Path (Join-Path $Namespace '.consume-locks') $GrantId)
+    $safeGrantId = ($GrantId -replace '[^A-Za-z0-9._-]+', '_')
+    return (Join-Path (Join-Path $Namespace '.consume-locks') "$safeGrantId.lock")
 }
 
 function Enter-AutonomousSpawnWorktreeGrantConsumeMutex {
-    param([string]$LockDir)
+    param([string]$LockPath)
+
+    $lockParent = Split-Path -Parent $LockPath
+    if (-not (Test-Path -LiteralPath $lockParent -PathType Container)) {
+        New-Item -ItemType Directory -Path $lockParent -Force | Out-Null
+    }
+
+    $record = @{
+        pid           = $PID
+        acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $json = ($record | ConvertTo-Json -Compress -Depth 5)
 
     try {
-        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+        $stream = [System.IO.File]::Open($LockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            $stream.Write($bytes, 0, $bytes.Length)
+        }
+        finally {
+            $stream.Dispose()
+        }
         return $true
     }
-    catch {
+    catch [System.IO.IOException] {
+        try {
+            if (Test-Path -LiteralPath $LockPath -PathType Leaf) {
+                $owner = Get-Content -LiteralPath $LockPath -Raw | ConvertFrom-Json
+                if ($owner -and [int]$owner.pid -eq $PID) {
+                    return $true
+                }
+                if (-not (Test-AutonomousSpawnWorktreeHolderAlive -Holder $owner)) {
+                    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+                    $stream = [System.IO.File]::Open($LockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+                    try {
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                        $stream.Write($bytes, 0, $bytes.Length)
+                    }
+                    finally {
+                        $stream.Dispose()
+                    }
+                    return $true
+                }
+            }
+        }
+        catch { }
         return $false
     }
 }
 
 function Exit-AutonomousSpawnWorktreeGrantConsumeMutex {
-    param([string]$LockDir)
+    param([string]$LockPath)
 
-    if ($LockDir -and (Test-Path -LiteralPath $LockDir -PathType Container)) {
-        Remove-Item -LiteralPath $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($LockPath -and (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -365,8 +405,8 @@ function Consume-AutonomousSpawnWorktreeGrant {
         return @{ ok = $false; reason = 'grant_id_missing' }
     }
 
-    $lockDir = Get-AutonomousSpawnWorktreeGrantConsumeLockDir -Namespace ([string]$GrantLookup.namespace) -GrantId $grantId
-    if (-not (Enter-AutonomousSpawnWorktreeGrantConsumeMutex -LockDir $lockDir)) {
+    $lockPath = Get-AutonomousSpawnWorktreeGrantConsumeLockPath -Namespace ([string]$GrantLookup.namespace) -GrantId $grantId
+    if (-not (Enter-AutonomousSpawnWorktreeGrantConsumeMutex -LockPath $lockPath)) {
         return @{ ok = $false; reason = 'grant_consume_busy' }
     }
 
@@ -415,7 +455,7 @@ function Consume-AutonomousSpawnWorktreeGrant {
         }
     }
     finally {
-        Exit-AutonomousSpawnWorktreeGrantConsumeMutex -LockDir $lockDir
+        Exit-AutonomousSpawnWorktreeGrantConsumeMutex -LockPath $lockPath
     }
 }
 
