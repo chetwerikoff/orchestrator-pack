@@ -588,6 +588,79 @@ function Test-GitArgvDefinesAlias {
     return $false
 }
 
+function Test-GitTokenIsExactOption {
+    param(
+        [string]$Token,
+        [string]$Option
+    )
+
+    $lowered = $Token.ToLowerInvariant()
+    $opt = $Option.ToLowerInvariant()
+    return ($lowered -eq $opt) -or $lowered.StartsWith("${opt}=")
+}
+
+function Test-GitArgvTailHasExactOption {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex,
+        [string]$Option
+    )
+
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        if (Test-GitTokenIsExactOption -Token $Argv[$i] -Option $Option) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-GitArgvTailHasPositionalOperand {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex
+    )
+
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        if (-not $Argv[$i].StartsWith('-')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-GitTokenIsConfigGetOption {
+    param([string]$Token)
+
+    switch -Regex ($Token) {
+        '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)$' { return $true }
+        '^(?i)(--get|--get-all|--get-regexp|--get-urlmatch)=' { return $true }
+    }
+    return $false
+}
+
+function Test-GitArgvConfigTailIsGetReadOnly {
+    param(
+        [string[]]$Argv,
+        [int]$StartIndex
+    )
+
+    $sawGet = $false
+    for ($i = $StartIndex; $i -lt $Argv.Count; $i++) {
+        $token = [string]$Argv[$i]
+        if (Test-GitTokenIsConfigGetOption -Token $token) {
+            $sawGet = $true
+            continue
+        }
+        if ($token.StartsWith('-')) {
+            continue
+        }
+        if (-not $sawGet) {
+            return $false
+        }
+    }
+    return $sawGet
+}
+
 function Test-GitArgvIsMutating {
     param([string[]]$Argv)
 
@@ -607,8 +680,7 @@ function Test-GitArgvIsMutating {
     $sub = [string]$Argv[$index]
     switch -Regex ($sub) {
         '^(?i)fetch$' {
-            $tail = ($Argv[($index + 1)..($Argv.Count - 1)] -join ' ')
-            if ($tail -match '(?i)--dry-run') {
+            if (Test-GitArgvTailHasExactOption -Argv $Argv -StartIndex ($index + 1) -Option '--dry-run') {
                 return $false
             }
             return $true
@@ -619,6 +691,21 @@ function Test-GitArgvIsMutating {
             }
             $stashSub = [string]$Argv[$index + 1]
             if ($stashSub -match '^(?i)(list|show)$') {
+                return $false
+            }
+            return $true
+        }
+        '^(?i)config$' {
+            if (Test-GitArgvConfigTailIsGetReadOnly -Argv $Argv -StartIndex ($index + 1)) {
+                return $false
+            }
+            return $true
+        }
+        '^(?i)branch$' {
+            if (Test-GitArgvTailHasPositionalOperand -Argv $Argv -StartIndex ($index + 1)) {
+                return $true
+            }
+            if (Test-GitArgvTailHasExactOption -Argv $Argv -StartIndex ($index + 1) -Option '--show-current') {
                 return $false
             }
             return $true

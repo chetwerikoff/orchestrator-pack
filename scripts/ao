@@ -10,9 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 GUARD="$SCRIPT_DIR/ao-autonomous-guard.ps1"
 
-if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]]; then
-  exec "$(resolve_pwsh)" -NoProfile -ExecutionPolicy Bypass -File "$GUARD" "$@"
-fi
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/autonomous-guard-fast-path.sh"
 
 resolve_real_ao() {
   local pack_root config ao_path
@@ -26,14 +25,16 @@ resolve_real_ao() {
     fi
   fi
 
-  if [[ -n "${AO_REAL_BINARY:-}" && "${AO_REAL_BINARY}" != "ao" ]]; then
-    if [[ -x "${AO_REAL_BINARY}" ]]; then
-      printf '%s\n' "${AO_REAL_BINARY}"
-      return 0
-    fi
-    if command -v "${AO_REAL_BINARY}" >/dev/null 2>&1; then
-      command -v "${AO_REAL_BINARY}"
-      return 0
+  if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" != "1" ]]; then
+    if [[ -n "${AO_REAL_BINARY:-}" && "${AO_REAL_BINARY}" != "ao" ]]; then
+      if [[ -x "${AO_REAL_BINARY}" ]]; then
+        printf '%s\n' "${AO_REAL_BINARY}"
+        return 0
+      fi
+      if command -v "${AO_REAL_BINARY}" >/dev/null 2>&1; then
+        command -v "${AO_REAL_BINARY}"
+        return 0
+      fi
     fi
   fi
 
@@ -60,5 +61,13 @@ resolve_real_ao() {
 
   printf 'ao\n'
 }
+
+if [[ "${AO_AUTONOMOUS_ORCHESTRATOR_SURFACE:-}" == "1" ]]; then
+  if __ao_autonomous_ao_argv_is_read_fast_path "$@"; then
+    exec "$(resolve_real_ao)" "$@"
+  fi
+  __ao_autonomous_audit_guard_pwsh_spawn "ao"
+  exec "$(resolve_pwsh)" -NoProfile -ExecutionPolicy Bypass -File "$GUARD" "$@"
+fi
 
 exec "$(resolve_real_ao)" "$@"

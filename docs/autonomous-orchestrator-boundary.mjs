@@ -135,6 +135,80 @@ export function gitArgvDefinesAlias(argv) {
 }
 
 /**
+ * @param {string} token
+ * @param {string} option
+ */
+function gitTokenIsExactOption(token, option) {
+  const lowered = String(token).toLowerCase();
+  const opt = String(option).toLowerCase();
+  return lowered === opt || lowered.startsWith(`${opt}=`);
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ * @param {string} option
+ */
+function gitArgvTailHasExactOption(list, startIndex, option) {
+  for (let index = startIndex; index < list.length; index += 1) {
+    if (gitTokenIsExactOption(list[index], option)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ */
+
+function gitTokenIsConfigGetOption(token) {
+  const lowered = String(token).toLowerCase();
+  return (
+    lowered === '--get'
+    || lowered === '--get-all'
+    || lowered === '--get-regexp'
+    || lowered === '--get-urlmatch'
+    || lowered.startsWith('--get=')
+    || lowered.startsWith('--get-all=')
+    || lowered.startsWith('--get-regexp=')
+    || lowered.startsWith('--get-urlmatch=')
+  );
+}
+
+/**
+ * @param {string[]} list
+ * @param {number} startIndex
+ */
+function gitArgvConfigTailIsGetReadOnly(list, startIndex) {
+  let sawGet = false;
+  for (let tokenIndex = startIndex; tokenIndex < list.length; tokenIndex += 1) {
+    const token = list[tokenIndex];
+    if (gitTokenIsConfigGetOption(token)) {
+      sawGet = true;
+      continue;
+    }
+    if (String(token).startsWith('-')) {
+      continue;
+    }
+    if (!sawGet) {
+      return false;
+    }
+  }
+  return sawGet;
+}
+
+function gitArgvTailHasPositionalOperand(list, startIndex) {
+  for (let index = startIndex; index < list.length; index += 1) {
+    if (!String(list[index]).startsWith('-')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @param {string[]} argv
  */
 export function isMutatingGitArgv(argv) {
@@ -148,8 +222,7 @@ export function isMutatingGitArgv(argv) {
   }
   const sub = list[index].toLowerCase();
   if (sub === 'fetch') {
-    const tail = list.slice(index + 1).join(' ');
-    return !/--dry-run/i.test(tail);
+    return !gitArgvTailHasExactOption(list, index + 1, '--dry-run');
   }
   if (sub === 'stash') {
     if (index + 1 >= list.length) {
@@ -157,6 +230,15 @@ export function isMutatingGitArgv(argv) {
     }
     const stashSub = list[index + 1].toLowerCase();
     return stashSub !== 'list' && stashSub !== 'show';
+  }
+  if (sub === 'config') {
+    return !gitArgvConfigTailIsGetReadOnly(list, index + 1);
+  }
+  if (sub === 'branch') {
+    if (gitArgvTailHasPositionalOperand(list, index + 1)) {
+      return true;
+    }
+    return !gitArgvTailHasExactOption(list, index + 1, '--show-current');
   }
   if (READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
     return false;
@@ -457,6 +539,44 @@ export function evaluateAutonomousSpawnPolicyBoundary(input) {
  * @param {{ allowSpawnNew: boolean, allowClaimPrResume: boolean } | null} [input.policy]
  * @param {boolean} [input.policyLoadOk]
  */
+
+/**
+ * @param {string[]} argv
+ */
+export function isAutonomousAoReadFastPath(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  let sub = '';
+  let next = '';
+  for (const token of list) {
+    if (token.startsWith('-')) {
+      continue;
+    }
+    if (!sub) {
+      sub = token.toLowerCase();
+      continue;
+    }
+    next = token.toLowerCase();
+    break;
+  }
+  if (!sub) {
+    return false;
+  }
+  if (sub === 'status') {
+    return true;
+  }
+  if (sub === 'review') {
+    return next === 'list';
+  }
+  return false;
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isAutonomousGitReadFastPath(argv) {
+  return !isMutatingGitArgv(argv);
+}
+
 export function evaluateAutonomousSpawnBoundary(input) {
   const argv = Array.isArray(input.argv)
     ? input.argv.map((part) => String(part))

@@ -1,0 +1,48 @@
+{
+  "version": "autonomous-spawn-budget/v1",
+  "boundaryModule": "docs/autonomous-orchestrator-boundary.mjs",
+  "legacyPerCommandPwshGuardSpawns": 1,
+  "classes": {
+    "noop-shell": {
+      "id": "noop-shell",
+      "label": "Load-bearing A: shell builtin/no-op under BASH_ENV",
+      "maxHelperGrowthPerCommand": 0,
+      "fixtureCommandCounts": [5, 100]
+    },
+    "git-ao-read": {
+      "id": "git-ao-read",
+      "label": "Load-bearing B: guarded read-only git/ao inventory",
+      "maxPwshGuardSpawnsPerCommand": 0,
+      "mandatoryCommands": [
+        ["git", "config", "--get", "remote.origin.url"],
+        ["git", "log", "--since=60 seconds ago", "--format=%H"],
+        ["git", "branch", "--show-current"],
+        ["git", "status", "--short", "--branch"],
+        ["ao", "status", "--json", "--reports", "full"],
+        ["ao", "review", "list", "--json"]
+      ],
+      "repetitionsPerCommand": 8
+    },
+    "denied-actions": {
+      "id": "denied-actions",
+      "label": "Load-bearing C: fail-closed mutating git and denied ao",
+      "maxPwshGuardSpawnsPerDeniedCommand": 1,
+      "commands": [
+        {
+          "argv": ["git", "branch", "-m", "blocked-spawn-budget"],
+          "expectExit": 93
+        },
+        {
+          "argv": ["ao", "send", "opk-worker", "blocked-spawn-budget"],
+          "expectExit": 93
+        }
+      ]
+    },
+    "supervisor-child-tick": {
+      "id": "supervisor-child-tick",
+      "label": "Load-bearing D: wake-supervisor child representative tick",
+      "maxPwshGuardSpawnsPerTick": 0,
+      "tickCommandCount": 6
+    }
+  }
+}
