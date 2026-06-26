@@ -100,7 +100,7 @@ function Update-ReviewStartClaimRecordFields {
 function Set-ReviewStartClaimHoldStarted {
     param([hashtable]$ClaimResult)
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false } }
-    if ($ClaimResult.claim.holdStartedAtUtc) { return @{ ok = $true; skipped = $true } }
+    # Launch gate always (re)starts the hold clock so mandatory pre-launch work does not consume it.
     $now = (Get-Date).ToUniversalTime().ToString('o')
     return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{ holdStartedAtUtc = $now }
 }
@@ -114,6 +114,11 @@ function Confirm-ReviewStartClaimLaunchGate {
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $holdStart = Set-ReviewStartClaimHoldStarted -ClaimResult $ClaimResult
+    if (-not $holdStart.ok) {
+        $reason = if ([string]$holdStart.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$holdStart.reason }
+        return @{ ok = $false; reason = $reason }
+    }
     $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $ClaimResult
     if ($hold.exceeded) {
         Invoke-ReviewStartClaimReclaimOrphan -Namespace $ClaimResult.namespace -Path $ClaimResult.path -Record $ClaimResult.claim `
@@ -443,20 +448,9 @@ function Test-ReviewStartClaimHoldBudgetExceeded {
     $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
     if (-not $read.ok) { return @{ exceeded = $false; reason = 'unreadable' } }
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload @{
+    return Invoke-ReviewStartClaimLifecycleCli -Subcommand 'hold-budget' -Payload @{
         claim = $read.record
         nowMs = $nowMs
-    }
-    $config = Get-ReviewStartClaimLifecycleConfig
-    $started = if ($read.record.holdStartedAtUtc) { $read.record.holdStartedAtUtc } else { $read.record.acquiredAtUtc }
-    $startedMs = [DateTimeOffset]::Parse([string]$started).ToUnixTimeMilliseconds()
-    $ageMs = [Math]::Max(0, $nowMs - $startedMs)
-    $budgetMs = [Math]::Min([int]$config.config.holdBudgetMs, [int]$envelope.budgetMs)
-    return @{
-        exceeded = ([bool]$envelope.exceeded -or ($ageMs -ge $budgetMs))
-        ageMs    = $ageMs
-        budgetMs = $budgetMs
-        envelope = $envelope
     }
 }
 

@@ -567,7 +567,6 @@ function New-ReviewStartClaimActiveRecord {
         state         = 'active'
         holder        = New-ReviewStartClaimHolder -Surface $Surface
         acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-        holdStartedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         startReason   = $Reason
         recoveredFrom = $RecoveredFrom
     }
