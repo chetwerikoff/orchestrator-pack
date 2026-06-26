@@ -1,5 +1,6 @@
 export declare const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION: number;
 export declare const SPAWN_WORKTREE_GRANT_TTL_SECONDS: number;
+export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: string[];
 
 export interface SpawnTargetParse {
   action: string;

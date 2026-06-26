@@ -317,6 +317,35 @@ describe('spawn worktree grant (#470)', () => {
     expect(parseGitSpawnWorktreeAddArgv(['worktree', 'add', '/tmp/wt', 'HEAD']).ok).toBe(true);
     expect(parseSpawnTargetFromArgv(['spawn', '470']).targetKey).toBe('470');
     expect(parseSpawnTargetFromArgv(['spawn', '--claim-pr', '42']).targetKey).toBe('pr:42');
+    expect(parseSpawnTargetFromArgv(['spawn', '--prompt', 'checkpoint holder prompt']).targetKey).toBe('');
+    expect(parseSpawnTargetFromArgv(['spawn', '--prompt', 'checkpoint holder prompt']).issueTarget).toBeNull();
+    expect(parseSpawnTargetFromArgv(['spawn', '470', '--prompt', 'extra instructions']).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv(['spawn', '--agent', 'codex', '470']).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv(['spawn', '--prompt=inline prompt']).targetKey).toBe('');
     expect(pathIsUnderCanonicalPrefix('/tmp/a/worktrees/opk-1', '/tmp/a/worktrees')).toBe(true);
+  });
+
+  it('does not authorize prompt text as spawn worktree basename', () => {
+    const promptText = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '470', '--prompt', promptText],
+      grantId: 'grant-prompt-flag',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      extraAuthorizedWorktreeNames: ['opk-470'],
+    });
+    expect(built.ok).toBe(true);
+    expect(built.grant?.authorizedWorktreeNames).toEqual(expect.arrayContaining(['470', 'opk-470']));
+    expect(built.grant?.authorizedWorktreeNames).not.toContain(promptText);
+
+    const consume = evaluateSpawnWorktreeGrantConsume({
+      grant: built.grant,
+      argv: ['worktree', 'add', '/tmp/projects/orchestrator-pack/worktrees/opk-470', 'HEAD'],
+      canonicalPath: '/tmp/projects/orchestrator-pack/worktrees/opk-470',
+      worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
+      targetPreexists: false,
+    });
+    expect(consume.ok).toBe(true);
+    expect(consume.reason).toBe('spawn_worktree_allow');
   });
 });

@@ -10,6 +10,31 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION = 1;
 export const SPAWN_WORKTREE_GRANT_TTL_SECONDS = 120;
 
+/** `ao spawn` flags that consume the next argv token (see `ao spawn --help`). */
+export const SPAWN_ARGV_OPTIONS_WITH_VALUE = ['--agent', '--claim-pr', '--prompt'];
+
+/**
+ * @param {string} token
+ */
+function spawnArgvOptionInlineValue(token) {
+  const match = /^(--[^=]+)=(.*)$/i.exec(token);
+  if (!match) {
+    return null;
+  }
+  return { flag: match[1].toLowerCase(), value: match[2] };
+}
+
+/**
+ * @param {string} token
+ */
+function spawnArgvOptionConsumesNextToken(token) {
+  const inline = spawnArgvOptionInlineValue(token);
+  if (inline) {
+    return false;
+  }
+  return SPAWN_ARGV_OPTIONS_WITH_VALUE.includes(token.toLowerCase());
+}
+
 /**
  * @param {string[]} argv
  */
@@ -29,7 +54,8 @@ export function parseSpawnTargetFromArgv(argv) {
     return { action, targetKey: '', prNumber: null, issueTarget: null };
   }
   let sawSpawn = false;
-  for (const token of list) {
+  for (let index = 0; index < list.length; index += 1) {
+    const token = list[index];
     if (!sawSpawn) {
       if (token.toLowerCase() === 'spawn') {
         sawSpawn = true;
@@ -39,6 +65,15 @@ export function parseSpawnTargetFromArgv(argv) {
     if (token.startsWith('-')) {
       if (token === '--claim-pr' || /^--claim-pr=/i.test(token)) {
         break;
+      }
+      if (spawnArgvOptionInlineValue(token)) {
+        continue;
+      }
+      if (spawnArgvOptionConsumesNextToken(token)) {
+        if (index + 1 < list.length && !list[index + 1].startsWith('-')) {
+          index += 1;
+        }
+        continue;
       }
       continue;
     }
