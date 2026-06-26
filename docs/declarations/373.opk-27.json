@@ -1,0 +1,20 @@
+{
+  "issue_number": 373,
+  "iteration_id": "opk-27",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-48",
+  "created_at": "2026-06-26T05:46:33.103Z",
+  "baseline": {
+    "commit_sha": "b0650dcc7baa661f0392706436f14ee4c6821857",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8218fd6e535975c1756da8ae9746aae9ea346a7d84bb165c86df6be9b01c8989"
+  },
+  "declared_paths": [
+    "docs/worker-message-submit-reconcile.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
