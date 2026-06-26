@@ -8,7 +8,7 @@ import {
 } from '../docs/review-start-repeat-classifier.mjs';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
-const fixturesDir = path.join(repoRoot, 'tests/fixtures/review-start-repeat-classifier');
+const fixturesDir = path.join(repoRoot, 'tests/external-output-references/review-start-repeat-classifier');
 
 function loadSeries(name: string) {
   return JSON.parse(readFileSync(path.join(fixturesDir, `${name}.json`), 'utf8')).attempts as Array<

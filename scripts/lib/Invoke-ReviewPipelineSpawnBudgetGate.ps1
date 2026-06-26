@@ -20,8 +20,8 @@ function Invoke-ReviewPipelineSpawnBudgetGate {
         'scripts/review-pipeline-spawn-budget.test.ts',
         'scripts/review-start-repeat-classifier.test.ts',
         'scripts/generate-review-pipeline-spawn-captures.ts',
-        'tests/fixtures/review-pipeline-spawn-budget/storm-baseline.capture.json',
-        'tests/fixtures/review-pipeline-spawn-budget/reduced-post-change.capture.json'
+        'tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json',
+        'tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json'
     )
 
     foreach ($relative in $requiredPaths) {

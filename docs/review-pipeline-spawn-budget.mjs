@@ -404,11 +404,11 @@ export function verifyCommittedCaptureReplays(packRoot, budgetManifest) {
 
   const stormRel = String(
     /** @type {{ captures?: Record<string, string> }} */ (manifest).captures?.['storm-baseline'] ??
-      'tests/fixtures/review-pipeline-spawn-budget/storm-baseline.capture.json',
+      'tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json',
   );
   const reducedRel = String(
     /** @type {{ captures?: Record<string, string> }} */ (manifest).captures?.['reduced-post-change'] ??
-      'tests/fixtures/review-pipeline-spawn-budget/reduced-post-change.capture.json',
+      'tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json',
   );
 
   const stormPath = join(packRoot, stormRel);

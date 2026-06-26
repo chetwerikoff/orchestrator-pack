@@ -13,7 +13,7 @@ import {
 } from '../docs/review-pipeline-spawn-budget.mjs';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
-const fixturesDir = path.join(repoRoot, 'tests/fixtures/review-pipeline-spawn-budget');
+const fixturesDir = path.join(repoRoot, 'tests/external-output-references/review-pipeline-spawn-budget');
 
 function loadCapture(name: string) {
   return JSON.parse(readFileSync(path.join(fixturesDir, `${name}.capture.json`), 'utf8'));

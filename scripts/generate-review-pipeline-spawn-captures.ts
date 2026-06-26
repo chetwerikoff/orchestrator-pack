@@ -123,7 +123,7 @@ function recordReducedCapture(): SpawnEvent[] {
 function writeCapture(caseId: 'storm-baseline' | 'reduced-post-change', events: SpawnEvent[]) {
   const startedAtMs = events[0]?.atMs ?? Date.now();
   const endedAtMs = events[events.length - 1]?.atMs ?? startedAtMs + 1;
-  const outDir = path.join(repoRoot, 'tests/fixtures/review-pipeline-spawn-budget');
+  const outDir = path.join(repoRoot, 'tests/external-output-references/review-pipeline-spawn-budget');
   mkdirSync(outDir, { recursive: true });
   const capture = {
     version: 'review-pipeline-spawn-capture/v1',

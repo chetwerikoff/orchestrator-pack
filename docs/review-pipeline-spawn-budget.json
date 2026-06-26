@@ -14,7 +14,7 @@
   "stormBaselineCaseId": "storm-baseline",
   "reducedPassCaseId": "reduced-post-change",
   "captures": {
-    "storm-baseline": "tests/fixtures/review-pipeline-spawn-budget/storm-baseline.capture.json",
-    "reduced-post-change": "tests/fixtures/review-pipeline-spawn-budget/reduced-post-change.capture.json"
+    "storm-baseline": "tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json",
+    "reduced-post-change": "tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json"
   }
 }
