@@ -273,10 +273,14 @@ function Get-SubmitReconcileState {
                     reason       = 'wrong_state_root_active_deliveries'
                     quarantined  = $Path
                 }
-                return $state
+            }
+            else {
+                $state.stateRootIdentity = $identity
             }
         }
-        $state.stateRootIdentity = $identity
+        else {
+            $state.stateRootIdentity = $identity
+        }
     }
     return (Invoke-SubmitReconcileStateRootReSeatIfEligible -State $state -Path $Path -JournalPath $JournalPath -Identity $identity)
 }

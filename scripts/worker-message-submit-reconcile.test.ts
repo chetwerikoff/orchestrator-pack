@@ -2832,6 +2832,72 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(audit.some((row) => row.action === 'state_root_reseat' && row.priorRecoveryReason === STATE_ROOT_RECOVERY_REASON)).toBe(true);
   });
 
+  it('re-seats empty-root quarantine after terminal recovery', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-empty-root-reseat-'));
+    const journal = path.join(dir, 'journal.json');
+    const stateA = path.join(dir, 'state-a.json');
+    const stateB = path.join(dir, 'state-b.json');
+    const anchor = path.join(dir, 'worker-message-submit-state-root.anchor.json');
+    const deliveryId = 'opk-empty-root:1717601000000:ao-send:orphan';
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(stateA, JSON.stringify({
+      stateRootIdentity: 'identity-bound-to-state-a',
+      deliveries: {
+        'delivery-1': {
+          deliveryId: 'delivery-1',
+          sessionId: 'opk-test',
+          firstObservedAtMs: 1717601000000,
+        },
+      },
+      audit: [],
+    }));
+    writeFileSync(anchor, JSON.stringify({
+      stateRootIdentity: 'identity-bound-to-state-a',
+      statePath: stateA,
+      activeDeliveryCount: 1,
+      updatedAtMs: 1717601000000,
+    }));
+    writeFileSync(stateB, JSON.stringify({
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: stateB,
+      },
+      deliveries: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId: 'opk-empty-root',
+          source: DISPATCH_SOURCE_AO_SEND,
+          terminalState: 'escalated',
+          escalationReason: 'delivery_vanished',
+          firstObservedAtMs: 1717601000000,
+        },
+      },
+      audit: [],
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', stateB, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const persisted = JSON.parse(readFileSync(stateB, 'utf8')) as SubmitTrackingState & { _recovery?: unknown };
+    expect(persisted._recovery).toBeUndefined();
+    expect(persisted.stateRootIdentity).toBeTruthy();
+    expect(persisted.stateRootIdentity).not.toBe('identity-bound-to-state-a');
+    expect((persisted.audit ?? []).some((row) => row.action === 'state_root_reseat')).toBe(true);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/state-root re-seat/i);
+  });
+
   it('re-seats a persisted latch after terminal orphan escalation (opk-25 class)', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-reseat-'));
     const state = path.join(dir, 'state.json');
