@@ -1,0 +1,24 @@
+{
+  "issue_number": 481,
+  "iteration_id": "opk-35",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T09:48:47.947Z",
+  "baseline": {
+    "commit_sha": "8044e6e506c5c34b505df759ee828a0b19a195b7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:42e88f087e355bb35b5919e264a37cd761a3e80736525dc18165ba68518b8378"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/review-start-claim-lifecycle.d.mts",
+    "docs/review-start-claim-lifecycle.mjs",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/review-start-claim-budget-semantics.test.ts",
+    "scripts/review-start-claim-lifecycle.test.ts",
+    "scripts/review-start-claim.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
