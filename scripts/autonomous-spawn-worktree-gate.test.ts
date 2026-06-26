@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildSpawnWorktreeGrantRecord,
@@ -142,7 +142,78 @@ describe('spawn worktree grant (#470)', () => {
     expect(parsed.firstDenied).toBe(false);
     expect(parsed.firstReason).toBe('spawn_worktree_allow');
     expect(parsed.secondDenied).toBe(true);
-    expect(parsed.secondReason).toMatch(/grant_already_consumed|grant_not_found/);
+    expect(parsed.secondReason).toMatch(/grant_already_consumed|grant_not_found|grant_consume_busy/);
+  });
+
+  it('concurrent consume: only one parallel git child wins the same grant', async () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-grant-concurrent-consume-'));
+    tempRoots.push(aoBase);
+    const projectId = 'orchestrator-pack';
+    const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
+    mkdirSync(worktrees, { recursive: true });
+    const targetA = path.join(worktrees, 'opk-race-a');
+    const targetB = path.join(worktrees, 'opk-race-b');
+    const grantId = 'grant-concurrent';
+    const holderPid = String(process.pid);
+
+    const probeScript = (target: string) => `
+      . ${psString(spawnWorktreeGatePath)}
+      . ${psString(boundaryLibPath)}
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_BASE_DIR = ${psString(aoBase)}
+      $env:AO_PROJECT_ID = ${psString(projectId)}
+      $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
+      $verdict = Test-AutonomousGitDenied -Argv @('worktree','add',${psString(target)},'HEAD')
+      [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
+    `;
+
+    runPwsh(`
+      . ${psString(spawnWorktreeGatePath)}
+      $env:AO_BASE_DIR = ${psString(aoBase)}
+      $env:AO_PROJECT_ID = ${psString(projectId)}
+      $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
+        argv = @('spawn','opk-race')
+        grantId = ${psString(grantId)}
+        projectId = ${psString(projectId)}
+        holder = @{ pid = ${holderPid}; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
+        extraAuthorizedWorktreeNames = @('opk-race-a','opk-race-b')
+        expectedHeadRef = 'HEAD'
+      }
+      $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
+      Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
+    `);
+
+    const runProbe = (target: string) =>
+      new Promise<{ denied: boolean; reason: string }>((resolve, reject) => {
+        const child = spawn(
+          'pwsh',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', probeScript(target)],
+          { cwd: repoRoot, env: process.env },
+        );
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk.toString();
+        });
+        child.stderr.on('data', (chunk) => {
+          stderr += chunk.toString();
+        });
+        child.on('error', reject);
+        child.on('close', (code) => {
+          if (code !== 0) {
+            reject(new Error(`probe failed code=${code}\n${stdout}\n${stderr}`));
+            return;
+          }
+          resolve(JSON.parse(stdout.trim()) as { denied: boolean; reason: string });
+        });
+      });
+
+    const [first, second] = await Promise.all([runProbe(targetA), runProbe(targetB)]);
+    const winners = [first, second].filter((result) => !result.denied && result.reason === 'spawn_worktree_allow');
+    const losers = [first, second].filter((result) => result.denied);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0]?.reason).toMatch(/grant_already_consumed|grant_consume_busy/);
   });
 
   it('serializes concurrent mint for the same spawn target', () => {

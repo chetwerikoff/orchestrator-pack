@@ -317,6 +317,36 @@ function Test-AutonomousSpawnWorktreeTargetPathHardened {
     }
 }
 
+
+function Get-AutonomousSpawnWorktreeGrantConsumeLockDir {
+    param(
+        [string]$Namespace,
+        [string]$GrantId
+    )
+
+    return (Join-Path (Join-Path $Namespace '.consume-locks') $GrantId)
+}
+
+function Enter-AutonomousSpawnWorktreeGrantConsumeMutex {
+    param([string]$LockDir)
+
+    try {
+        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Exit-AutonomousSpawnWorktreeGrantConsumeMutex {
+    param([string]$LockDir)
+
+    if ($LockDir -and (Test-Path -LiteralPath $LockDir -PathType Container)) {
+        Remove-Item -LiteralPath $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Consume-AutonomousSpawnWorktreeGrant {
     param(
         [hashtable]$GrantLookup,
@@ -330,47 +360,62 @@ function Consume-AutonomousSpawnWorktreeGrant {
     }
 
     $projectId = [string]$GrantLookup.projectId
-    $prefix = Get-AutonomousSpawnWorktreePrefix -ProjectId $projectId
-    $prefixResolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $prefix
-    if (-not $prefixResolved.ok) {
-        return @{ ok = $false; reason = 'prefix_unresolvable' }
+    $grantId = [string]$GrantLookup.record.grantId
+    if (-not $grantId) {
+        return @{ ok = $false; reason = 'grant_id_missing' }
     }
 
-    $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
-        grant           = $GrantLookup.record
-        argv            = @($Argv)
-        canonicalPath   = $CanonicalPath
-        worktreesPrefix = $prefixResolved.path
-        targetPreexists = [bool]$TargetPreexists
-    }
-    if (-not $evaluation.ok) {
-        return @{ ok = $false; reason = [string]$evaluation.reason }
+    $lockDir = Get-AutonomousSpawnWorktreeGrantConsumeLockDir -Namespace ([string]$GrantLookup.namespace) -GrantId $grantId
+    if (-not (Enter-AutonomousSpawnWorktreeGrantConsumeMutex -LockDir $lockDir)) {
+        return @{ ok = $false; reason = 'grant_consume_busy' }
     }
 
-    $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $GrantLookup.path
-    if (-not $read.ok) {
-        return @{ ok = $false; reason = 'grant_consume_race' }
-    }
-    if ($read.record.consumed) {
-        return @{ ok = $false; reason = 'grant_already_consumed' }
-    }
-    if (-not (Test-AutonomousSpawnWorktreeHolderAlive -Holder $read.record.holder)) {
-        return @{ ok = $false; reason = 'grant_holder_not_live' }
-    }
+    try {
+        $prefix = Get-AutonomousSpawnWorktreePrefix -ProjectId $projectId
+        $prefixResolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $prefix
+        if (-not $prefixResolved.ok) {
+            return @{ ok = $false; reason = 'prefix_unresolvable' }
+        }
 
-    $updated = @{}
-    $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
-    $updated.consumed = $true
-    $updated.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    $updated.consumedCanonicalPath = $CanonicalPath
-    Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $GrantLookup.namespace -GrantId ([string]$read.record.grantId) -Record ($updated | ConvertTo-Json -Compress -Depth 20 | ConvertFrom-Json)
+        $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $GrantLookup.path
+        if (-not $read.ok) {
+            return @{ ok = $false; reason = 'grant_consume_race' }
+        }
+        if ($read.record.consumed) {
+            return @{ ok = $false; reason = 'grant_already_consumed' }
+        }
+        if (-not (Test-AutonomousSpawnWorktreeHolderAlive -Holder $read.record.holder)) {
+            return @{ ok = $false; reason = 'grant_holder_not_live' }
+        }
 
-    return @{
-        ok        = $true
-        reason    = 'spawn_worktree_allow'
-        grantId   = [string]$read.record.grantId
-        projectId = $projectId
-        path      = $CanonicalPath
+        $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
+            grant           = $read.record
+            argv            = @($Argv)
+            canonicalPath   = $CanonicalPath
+            worktreesPrefix = $prefixResolved.path
+            targetPreexists = [bool]$TargetPreexists
+        }
+        if (-not $evaluation.ok) {
+            return @{ ok = $false; reason = [string]$evaluation.reason }
+        }
+
+        $updated = @{}
+        $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
+        $updated.consumed = $true
+        $updated.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        $updated.consumedCanonicalPath = $CanonicalPath
+        Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $GrantLookup.namespace -GrantId $grantId -Record ($updated | ConvertTo-Json -Compress -Depth 20 | ConvertFrom-Json)
+
+        return @{
+            ok        = $true
+            reason    = 'spawn_worktree_allow'
+            grantId   = $grantId
+            projectId = $projectId
+            path      = $CanonicalPath
+        }
+    }
+    finally {
+        Exit-AutonomousSpawnWorktreeGrantConsumeMutex -LockDir $lockDir
     }
 }
 
