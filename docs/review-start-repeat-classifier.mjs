@@ -3,9 +3,9 @@
  * Composes with #332/#318 claim and cycle gates — diagnostic only, not a second state machine.
  * Vitest: scripts/review-start-repeat-classifier.test.ts
  */
-import { readFileSync } from 'node:fs';
 import { evaluateReviewCycleGate } from './worker-iteration-cycle.mjs';
 import { evaluateCurrentHeadCoverage } from './orchestrator-claimed-review-run.mjs';
+import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_START_REPEAT_CLASSIFIER_VERSION = 'review-start-repeat-classifier/v1';
 
@@ -149,22 +149,7 @@ export function classifyReviewStartAttemptSeries(attempts) {
   return rows;
 }
 
-const cliSubcommands = {
+runStdinJsonCli('review-start-repeat-classifier.mjs', {
   classify: () => classifyReviewStartAttempt(readStdinJson()),
   classifySeries: () => classifyReviewStartAttemptSeries(readStdinJson().attempts ?? []),
-};
-
-function readStdinJson() {
-  const raw = readFileSync(0, 'utf8');
-  return raw ? JSON.parse(raw) : {};
-}
-
-if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  const sub = process.argv[2] ?? '';
-  const handler = cliSubcommands[/** @type {keyof typeof cliSubcommands} */ (sub)];
-  if (!handler) {
-    console.error(`unknown subcommand: ${sub}`);
-    process.exit(2);
-  }
-  process.stdout.write(`${JSON.stringify(handler())}\n`);
-}
+});

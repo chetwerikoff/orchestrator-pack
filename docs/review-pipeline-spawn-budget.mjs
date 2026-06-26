@@ -5,6 +5,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { loadPackSpawnBudgetManifest } from './spawn-budget-manifest-loader.mjs';
+import { readStdinJson } from './review-mechanical-cli.mjs';
 
 export const REVIEW_PIPELINE_SPAWN_BUDGET_VERSION = 'review-pipeline-spawn-budget/v1';
 export const REVIEW_PIPELINE_SPAWN_CAPTURE_VERSION = 'review-pipeline-spawn-capture/v1';
@@ -130,20 +132,12 @@ export function validateReviewPipelineSpawnBudget(budget) {
  * @param {string} packRoot
  */
 export function loadReviewPipelineSpawnBudget(packRoot) {
-  const budgetPath = join(packRoot, REVIEW_PIPELINE_SPAWN_BUDGET_RELATIVE_PATH);
-  if (!existsSync(budgetPath)) {
-    return { ok: false, reason: 'spawn_budget_missing_or_unreadable', budget: null };
-  }
-  try {
-    const budget = JSON.parse(readFileSync(budgetPath, 'utf8'));
-    const validated = validateReviewPipelineSpawnBudget(budget);
-    if (!validated.ok) {
-      return { ok: false, reason: validated.reason, budget: null };
-    }
-    return { ok: true, reason: 'spawn_budget_ok', budget };
-  } catch {
-    return { ok: false, reason: 'spawn_budget_malformed', budget: null };
-  }
+  return loadPackSpawnBudgetManifest(
+    packRoot,
+    REVIEW_PIPELINE_SPAWN_BUDGET_RELATIVE_PATH,
+    validateReviewPipelineSpawnBudget,
+    { okReason: 'spawn_budget_ok' },
+  );
 }
 
 /**
@@ -503,11 +497,6 @@ const cliSubcommands = {
     return verifyCommittedCaptureReplays(input.packRoot ?? '.', input.budget);
   },
 };
-
-function readStdinJson() {
-  const raw = readFileSync(0, 'utf8');
-  return raw ? JSON.parse(raw) : {};
-}
 
 if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const sub = process.argv[2] ?? '';
