@@ -175,6 +175,44 @@ function Write-SubmitReconcileStateRootAnchor {
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
 
+function Invoke-SubmitReconcileStateRootReSeatIfEligible {
+    param(
+        [object]$State,
+        [string]$Path,
+        [string]$JournalPath,
+        [string]$Identity
+    )
+
+    if (-not $State) { return $State }
+    $reason = Get-MechanicalJsonStateRecoveryReason -State $State
+    if ($reason -ne 'wrong_state_root_active_deliveries') {
+        return $State
+    }
+
+    $journal = @{}
+    if ($JournalPath -and (Test-Path -LiteralPath $JournalPath -PathType Leaf)) {
+        $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
+    }
+    $anchor = Read-SubmitReconcileStateRootAnchor -Path (Get-SubmitReconcileStateRootAnchorPath -JournalPath $JournalPath)
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+
+    $result = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'stateRootReseat' `
+        -Payload @{
+            state    = $State
+            journal  = $journal
+            anchor   = $anchor
+            identity = $Identity
+            nowMs    = $nowMs
+        } -Label $Script:ReconcileLogPrefix -JsonDepth 30
+
+    if (-not $result.eligible) {
+        return $State
+    }
+
+    Write-SubmitReconcileLog "state-root re-seat: reason=$($result.reason) prior=$($result.priorRecoveryReason) evidence=$($result.evidence)"
+    return (ConvertTo-MechanicalJsonStateHashtable -Value $result.state)
+}
+
 function Get-SubmitReconcileIntervalSeconds {
     if ($IntervalSeconds -gt 0) { return $IntervalSeconds }
     $envSeconds = $env:AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS
@@ -240,7 +278,7 @@ function Get-SubmitReconcileState {
         }
         $state.stateRootIdentity = $identity
     }
-    return $state
+    return (Invoke-SubmitReconcileStateRootReSeatIfEligible -State $state -Path $Path -JournalPath $JournalPath -Identity $identity)
 }
 
 

@@ -36,6 +36,9 @@ import {
   resolveBusyDispatchCapability,
   resolveSubmitReconcileConfig,
   validateBusyDispatchMarker,
+  evaluateStateRootReSeatEligibility,
+  evaluateStateRootReSeat,
+  STATE_ROOT_RECOVERY_REASON,
 } from '../docs/worker-message-submit-reconcile.mjs';
 import type {
   SubmitTrackingState,
@@ -2670,6 +2673,200 @@ ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTR
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}
 ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTRUSTED/i);
+  });
+});
+
+describe('issue #373 state-root quarantine re-seat', () => {
+  const recoveryLatch = {
+    fenceTrusted: false,
+    reason: STATE_ROOT_RECOVERY_REASON,
+    quarantined: '/tmp/state.json',
+  };
+
+  it('is eligible when prior-epoch deliveries are terminal and journal is resolved', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {
+          'opk-25:1717601000000:ao-send:orphan': {
+            deliveryId: 'opk-25:1717601000000:ao-send:orphan',
+            terminalState: 'escalated',
+            escalationReason: 'delivery_vanished',
+          },
+        },
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('prior_epoch_work_terminal');
+  });
+
+  it('blocks re-seat when journal still has unresolved pending-draft records', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+      },
+      journal: {
+        'pending-delivery': {
+          deliveryId: 'pending-delivery',
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          fenceLifecycle: 'pending',
+          dispatchOutcome: 'dispatched',
+        },
+      },
+      anchor: { activeDeliveryCount: 0 },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('unresolved_journal_entry');
+  });
+
+  it('blocks re-seat when a tracked delivery is still non-terminal', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {
+          live: { deliveryId: 'live', sessionId: 'opk-live' },
+        },
+      },
+      journal: {},
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('unresolved_state_delivery');
+  });
+
+  it('blocks re-seat when anchor still reports active work without terminal evidence', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+  });
+
+  it('clears latched recovery and stamps identity with an audit record', () => {
+    const nowMs = 1717603000000;
+    const result = evaluateStateRootReSeat({
+      state: {
+        _recovery: recoveryLatch,
+        stateRootIdentity: 'stale-identity',
+        deliveries: {
+          'delivery-terminal': { deliveryId: 'delivery-terminal', terminalState: 'escalated' },
+        },
+        audit: [],
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 1 },
+      identity: 'fresh-identity',
+      nowMs,
+    });
+    expect(result.eligible).toBe(true);
+    expect((result.state as SubmitTrackingState)._recovery).toBeUndefined();
+    expect(result.state.stateRootIdentity).toBe('fresh-identity');
+    const audit = (result.state as SubmitTrackingState).audit ?? [];
+    expect(audit.some((row) => row.action === 'state_root_reseat' && row.priorRecoveryReason === STATE_ROOT_RECOVERY_REASON)).toBe(true);
+  });
+
+  it('re-seats a persisted latch after terminal orphan escalation (opk-25 class)', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-reseat-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    const anchor = path.join(dir, 'worker-message-submit-state-root.anchor.json');
+    const deliveryId = 'opk-25:1717601000000:ao-send:orphan';
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(anchor, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      statePath: state,
+      activeDeliveryCount: 1,
+      updatedAtMs: 1717601000000,
+    }));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: state,
+      },
+      deliveries: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId: 'opk-25',
+          source: DISPATCH_SOURCE_AO_SEND,
+          terminalState: 'escalated',
+          escalationReason: 'delivery_vanished',
+          firstObservedAtMs: 1717601000000,
+        },
+      },
+      audit: [],
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState & { _recovery?: unknown };
+    expect(persisted._recovery).toBeUndefined();
+    expect(persisted.stateRootIdentity).toBeTruthy();
+    expect(persisted.stateRootIdentity).not.toBe('stale-identity-hash');
+    expect((persisted.audit ?? []).some((row) => row.action === 'state_root_reseat')).toBe(true);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/state-root re-seat/i);
+  });
+
+  it('keeps quarantine when journal pending records remain after deliveries drain', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-reseat-blocked-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(journal, JSON.stringify({
+      'pending-journal': {
+        deliveryId: 'pending-journal',
+        deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+        fenceLifecycle: 'pending',
+        dispatchOutcome: 'dispatched',
+      },
+    }));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: state,
+      },
+      deliveries: {},
+      audit: [],
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTRUSTED/i);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as { _recovery?: { reason?: string } };
+    expect(persisted._recovery?.reason).toBe('wrong_state_root_active_deliveries');
   });
 });
 
