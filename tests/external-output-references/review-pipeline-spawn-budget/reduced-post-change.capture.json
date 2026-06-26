@@ -11,8 +11,8 @@
   },
   "window": {
     "startedAtMs": 1782461917162,
-    "endedAtMs": 1782461917955,
-    "elapsedMs": 793,
+    "endedAtMs": 1782461977162,
+    "elapsedMs": 60000,
     "callerCadencePerMinute": 12
   },
   "events": [
@@ -23,43 +23,43 @@
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "git config --get remote.origin.url",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "git log --since=60 seconds ago --format=%H",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "git branch --show-current",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "git status --short --branch",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "ao status --json --reports full",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "ao review list --json",
       "sourceHint": "supervisor-child-tick",
       "childId": "supervisor-child"
     },
     {
-      "atMs": 1782461917955,
+      "atMs": 1782461977162,
       "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
@@ -67,7 +67,7 @@
   ],
   "pointInTimePsSnapshot": {
     "processCount": 3,
-    "capturedAtMs": 1782461917955,
+    "capturedAtMs": 1782461977162,
     "note": "point-in-time snapshot may miss short-lived burst"
   },
   "measurementModel": "journal-rate-attribution"

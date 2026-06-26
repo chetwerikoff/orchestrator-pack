@@ -96,6 +96,41 @@ describe('review-pipeline spawn budget (Issue #480)', () => {
     expect(inflatedThreshold).toBeGreaterThan(Number(report.derivedBudgetThreshold));
   });
 
+  it('extrapolates per-minute rate from short capture windows without flooring elapsedMs', () => {
+    const capture = {
+      version: 'review-pipeline-spawn-capture/v1',
+      caseId: 'burst-short-window',
+      measurementModel: 'journal-rate-attribution',
+      window: {
+        startedAtMs: 0,
+        endedAtMs: 10_000,
+        elapsedMs: 10_000,
+        callerCadencePerMinute: 12,
+      },
+      captureProvenance: {
+        measurementModel: 'journal-rate-attribution',
+        subprocessInvocationCount: 1,
+        callerPath: 'test',
+      },
+      events: Array.from({ length: 20 }, (_, index) => ({
+        atMs: index * 100,
+        commandLine: 'pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun',
+        sourceHint: 'review-trigger-reconcile.ps1',
+      })),
+      pointInTimePsSnapshot: {
+        processCount: 2,
+        capturedAtMs: 10_000,
+        note: 'point-in-time snapshot may miss short-lived burst',
+      },
+    };
+    const report = buildSpawnBudgetReport(capture, budget);
+    expect(report.ok).toBe(true);
+    expect(report.observedRatePerMinute).toBeCloseTo(120, 5);
+    const verdict = evaluateSpawnBudgetReport(report);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toBe('aggregate_budget_exceeded');
+  });
+
   it('validateJournalRateAttribution rejects machine-specific command paths', () => {
     const storm = loadCapture('storm-baseline');
     const bad = structuredClone(storm);

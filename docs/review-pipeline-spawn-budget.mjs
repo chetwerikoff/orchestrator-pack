@@ -351,10 +351,9 @@ export function buildSpawnBudgetReport(capture, budgetManifest) {
     perStepCostFloor: Number(budgetManifest.perStepCostFloor ?? 1),
   });
 
-  const effectiveElapsedMs = Math.max(elapsedMs, 60_000);
   const observedRatePerMinute =
-    effectiveElapsedMs > 0
-      ? (aggregation.totalProcessCount / effectiveElapsedMs) * 60_000
+    elapsedMs > 0
+      ? (aggregation.totalProcessCount / elapsedMs) * 60_000
       : aggregation.totalProcessCount;
 
   const psSnapshot = cap.pointInTimePsSnapshot ?? null;
@@ -366,7 +365,7 @@ export function buildSpawnBudgetReport(capture, budgetManifest) {
     caseId: String(cap.caseId),
     callerPath: String(cap.captureProvenance?.callerPath ?? 'unknown'),
     elapsedMs,
-    effectiveElapsedMs,
+    effectiveElapsedMs: elapsedMs,
     windowMinutes,
     callerCadencePerMinute,
     totalProcessCount: aggregation.totalProcessCount,
