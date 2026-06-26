@@ -5,7 +5,7 @@
   "supersedes": "docs/declarations/480.opk-34.json",
   "created_at": "2026-06-26T13:55:00.000Z",
   "baseline": {
-    "commit_sha": "2515ee1d6fe2abcba27cfdb6e898b9b242eebedd",
+    "commit_sha": "1b954c0c1ab5c3a791dcf4b42dcb1c2d121b2516",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:02681383e751150da1bde20ecfa0a8189ef1eea4f94d21f8b6645f3ab2ea7783"
   },
