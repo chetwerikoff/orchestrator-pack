@@ -444,29 +444,34 @@ function Write-AutonomousBoundaryEscapeAudit {
         [hashtable]$ExtraEnv = @{}
     )
 
-    if (-not $PackScriptsDir) {
-        $PackScriptsDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+    try {
+        if (-not $PackScriptsDir) {
+            $PackScriptsDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+        }
+        $payload = @{
+            env            = @{}
+            packScriptsDir = $PackScriptsDir
+        }
+        foreach ($name in @('AO_TMUX_NAME', 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE', '__AO_AUTONOMOUS_SURFACE_BOOTSTRAP', 'PATH')) {
+            $payload.env[$name] = if ($ExtraEnv.ContainsKey($name)) { [string]$ExtraEnv[$name] } else { [string][Environment]::GetEnvironmentVariable($name) }
+        }
+        $signal = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateBoundaryEscape' -Payload $payload
+        if ($signal.detected) {
+            $projectId = Get-AutonomousSpawnWorktreeProjectId
+            $auditDir = Join-Path (Get-AutonomousSpawnWorktreeStateRoot -ProjectId $projectId) 'boundary-escape-audit'
+            New-Item -ItemType Directory -Path $auditDir -Force -ErrorAction SilentlyContinue | Out-Null
+            $line = @{
+                atUtc   = (Get-Date).ToUniversalTime().ToString('o')
+                reason  = [string]$signal.reason
+                signals = @($signal.signals)
+            } | ConvertTo-Json -Compress
+            Add-Content -LiteralPath (Join-Path $auditDir 'events.jsonl') -Value $line -Encoding UTF8
+            [Console]::Error.WriteLine("autonomous boundary escape audit: reason=$($signal.reason) signals=$($signal.signals -join ',')")
+            return @{ audited = $true; signal = $signal }
+        }
+        return @{ audited = $false; signal = $signal }
     }
-    $payload = @{
-        env            = @{}
-        packScriptsDir = $PackScriptsDir
+    catch {
+        return @{ audited = $false; reason = 'audit_unavailable' }
     }
-    foreach ($name in @('AO_TMUX_NAME', 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE', '__AO_AUTONOMOUS_SURFACE_BOOTSTRAP', 'PATH')) {
-        $payload.env[$name] = if ($ExtraEnv.ContainsKey($name)) { [string]$ExtraEnv[$name] } else { [string][Environment]::GetEnvironmentVariable($name) }
-    }
-    $signal = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateBoundaryEscape' -Payload $payload
-    if ($signal.detected) {
-        $projectId = Get-AutonomousSpawnWorktreeProjectId
-        $auditDir = Join-Path (Get-AutonomousSpawnWorktreeStateRoot -ProjectId $projectId) 'boundary-escape-audit'
-        New-Item -ItemType Directory -Path $auditDir -Force -ErrorAction SilentlyContinue | Out-Null
-        $line = @{
-            atUtc   = (Get-Date).ToUniversalTime().ToString('o')
-            reason  = [string]$signal.reason
-            signals = @($signal.signals)
-        } | ConvertTo-Json -Compress
-        Add-Content -LiteralPath (Join-Path $auditDir 'events.jsonl') -Value $line -Encoding UTF8
-        [Console]::Error.WriteLine("autonomous boundary escape audit: reason=$($signal.reason) signals=$($signal.signals -join ',')")
-        return @{ audited = $true; signal = $signal }
-    }
-    return @{ audited = $false; signal = $signal }
 }

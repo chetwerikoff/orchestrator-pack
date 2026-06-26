@@ -739,6 +739,9 @@ function Test-AutonomousGitDenied {
         if ($spawnAllow.allowed) {
             return @{ denied = $false; reason = 'spawn_worktree_allow' }
         }
+        if ($spawnAllow.reason -and [string]$spawnAllow.reason -ne 'grant_env_missing') {
+            return @{ denied = $true; reason = [string]$spawnAllow.reason }
+        }
         return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
     }
 

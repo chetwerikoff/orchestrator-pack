@@ -52,6 +52,7 @@ describe('spawn worktree grant (#470)', () => {
 
     const mint = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
+      . ${psString(boundaryLibPath)}
       $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}

@@ -7,12 +7,14 @@
   "baseline": {
     "commit_sha": "357c82d8e37b2434e931b5a249a3b90c44a5fe90",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c6388fe458da9d2ace5eb4f12ccecc508f6af4f2da2a0416dae32ad405f737a0"
+    "active_scope_hash": "sha256:87222cccce32dcd545c522122b69f24c62a8eafa4d09b5637bb151083341e7dc"
   },
   "declared_paths": [
+    "docs/autonomous-orchestrator-boundary.d.mts",
     "docs/autonomous-orchestrator-boundary.mjs",
     "docs/declarations/470.opk-26.json",
     "docs/migration_notes.md",
+    "docs/spawn-worktree-grant.d.mts",
     "docs/spawn-worktree-grant.mjs",
     "scripts/ao-autonomous-guard.ps1",
     "scripts/autonomous-spawn-worktree-gate.test.ts",
