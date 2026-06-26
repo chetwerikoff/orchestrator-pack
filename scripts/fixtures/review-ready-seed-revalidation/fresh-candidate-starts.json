@@ -1,0 +1,6 @@
+{
+  "extends": "tick-plan-base.json",
+  "expected": "fresh-candidate-starts",
+  "expectStarted": 1,
+  "expectOutcome": "fresh-candidate-starts"
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "tick-plan-base.json",
+  "expected": "stale-head-rejected",
+  "freshSnapshot": {
+    "openPrs": [
+      {
+        "number": 475,
+        "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headCommittedAt": "2026-06-22T01:09:00.000Z",
+        "baseRefName": "main"
+      }
+    ]
+  },
+  "expectStarted": 0,
+  "expectOutcome": "stale-head"
+}

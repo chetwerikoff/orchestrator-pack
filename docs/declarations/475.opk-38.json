@@ -1,0 +1,35 @@
+{
+  "issue_number": 475,
+  "iteration_id": "opk-38",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T13:40:00.000Z",
+  "baseline": {
+    "commit_sha": "c3a7640ac602664c6f07400ed39513113a51a7f5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:issue-475-review-ready-seed-revalidation"
+  },
+  "declared_paths": [
+    "docs/declarations/475.opk-38.json",
+    "docs/review-ready-report-state-seed.d.mts",
+    "docs/review-ready-report-state-seed.mjs",
+    "scripts/_review-ready-seed-fixture-test-helpers.ts",
+    "scripts/check-review-ready-report-state-seed.ps1",
+    "scripts/fixtures/review-ready-seed-revalidation/boundary-race-blocked.json",
+    "scripts/fixtures/review-ready-seed-revalidation/duplicate-prevented.json",
+    "scripts/fixtures/review-ready-seed-revalidation/fresh-candidate-starts.json",
+    "scripts/fixtures/review-ready-seed-revalidation/readiness-revalidated.json",
+    "scripts/fixtures/review-ready-seed-revalidation/stale-head-rejected.json",
+    "scripts/fixtures/review-ready-seed-revalidation/tick-plan-base.json",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Review-ReadySeedFixturePayload.ps1",
+    "scripts/lib/review-ready-seed-revalidation-matrix.d.mts",
+    "scripts/lib/review-ready-seed-revalidation-matrix.mjs",
+    "scripts/review-ready-report-state-seed.ps1",
+    "scripts/review-ready-seed-liveness.test.ts",
+    "scripts/review-ready-seed-revalidation.test.ts",
+    "scripts/run-review-ready-seed-revalidation-fixture.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

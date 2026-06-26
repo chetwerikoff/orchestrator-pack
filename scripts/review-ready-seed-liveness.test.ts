@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { runReviewReadySeedFixtureRunner } from './_review-ready-seed-fixture-test-helpers.js';
 import {
   REVIEW_READY_SEED_LIVENESS_EXPECTED,
   REVIEW_READY_SEED_LIVENESS_MATRIX,
@@ -17,12 +18,7 @@ const generatorScript = path.join(
 );
 
 function runFixture(fixtureName: string): { expected: string; ok: boolean; detail: string } {
-  const stdout = execFileSync(
-    'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', runnerScript, '-FixturePath', path.join(fixtureDir, fixtureName)],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
-  ).trim();
-  return JSON.parse(stdout) as { expected: string; ok: boolean; detail: string };
+  return runReviewReadySeedFixtureRunner(runnerScript, fixtureDir, fixtureName);
 }
 
 beforeAll(() => {

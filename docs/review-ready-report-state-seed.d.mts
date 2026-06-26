@@ -44,6 +44,19 @@ export declare function findLatestAcceptedReadyForReviewAcrossSessions(
   session: Record<string, unknown> | null;
 };
 export declare function planReportStatePollTick(input: Record<string, unknown>): Record<string, unknown>;
+export declare const SEED_REVALIDATION_OUTCOMES: Readonly<{
+  FRESH: 'fresh-candidate-starts';
+  STALE_HEAD: 'stale-head';
+  READINESS: 'readiness-revalidated';
+  DUPLICATE: 'duplicate-prevented';
+  BOUNDARY_RACE: 'boundary-race-blocked';
+}>;
+export declare function classifySeedSideEffectOutcome(input: Record<string, unknown>): {
+  outcome: string;
+  emitReviewStart: boolean;
+  reason: string;
+};
+export declare function evaluateSeedPreSideEffectRevalidation(input: Record<string, unknown>): Record<string, unknown>;
 export declare function seedWatchFromReportStatePoll(input: Record<string, unknown>): {
   watchEntries: Record<string, object>;
   seededKeys: string[];

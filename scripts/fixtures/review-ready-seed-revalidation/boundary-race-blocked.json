@@ -1,0 +1,11 @@
+{
+  "extends": "tick-plan-base.json",
+  "expected": "boundary-race-blocked",
+  "boundaryRace": true,
+  "preSeedClaim": {
+    "surface": "review-trigger-reconcile",
+    "holderPid": 9001
+  },
+  "expectStarted": 0,
+  "expectOutcome": "boundary-race-blocked"
+}
