@@ -107,6 +107,27 @@ if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) {
     exit 1
 }
 
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'freshSnapshot') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must support freshSnapshot for pre-side-effect revalidation (Issue #475)'
+    exit 1
+}
+
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'classifySideEffectOutcome') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must classify seed revalidation outcomes before side effects'
+    exit 1
+}
+
+if ((Get-Content -LiteralPath $seedMjs -Raw) -notmatch 'evaluateSeedPreSideEffectRevalidation') {
+    Write-Host 'docs/review-ready-report-state-seed.mjs missing evaluateSeedPreSideEffectRevalidation (Issue #475)'
+    exit 1
+}
+
+$revalidationTest = Join-Path $Root 'scripts/review-ready-seed-revalidation.test.ts'
+if (-not (Test-Path -LiteralPath $revalidationTest -PathType Leaf)) {
+    Write-Host 'scripts/review-ready-seed-revalidation.test.ts missing (Issue #475)'
+    exit 1
+}
+
 if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*Report-state review-start seed*') {
     Write-Host 'prompts/agent_rules.md missing report-state seed section'
     exit 1

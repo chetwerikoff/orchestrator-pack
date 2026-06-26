@@ -326,6 +326,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
 
     $started = 0
+    $revalidations = @()
     $watchEntriesToPersist = $reevalPlan.watchEntries
     foreach ($action in @($reevalPlan.actions)) {
         if ($action.type -ne 'start_review') { continue }
@@ -341,13 +342,31 @@ function Invoke-ReviewReadyReportStateSeedTick {
             LogWriter            = $LogWriter
         }
         if ($FixturePayload) {
-            $plannedRunParams['FixtureSnapshot'] = @{
-                openPrs                       = $openPrs
-                reviewRuns                    = $reviewRuns
-                sessions                      = $sessions
-                ciChecksByPr                  = $checksBundle.ciChecksByPr
-                requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
-                requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+            if ($FixturePayload.freshSnapshot) {
+                $plannedRunParams['ResolveFreshSnapshot'] = {
+                    param($planned)
+                    $fs = $FixturePayload.freshSnapshot
+                    $prKey = [string]$planned.prNumber
+                    @{
+                        openPrs                       = @($(if ($null -ne $fs.openPrs) { $fs.openPrs } else { $openPrs }))
+                        reviewRuns                    = @($(if ($null -ne $fs.reviewRuns) { $fs.reviewRuns } else { $reviewRuns }))
+                        sessions                      = @($(if ($null -ne $fs.sessions) { $fs.sessions } else { $sessions }))
+                        ciChecksByPr                  = $(if ($null -ne $fs.ciChecksByPr) { $fs.ciChecksByPr } else { $checksBundle.ciChecksByPr })
+                        requiredCheckNamesByPr        = $(if ($null -ne $fs.requiredCheckNamesByPr) { $fs.requiredCheckNamesByPr } else { $checksBundle.requiredCheckNamesByPr })
+                        requiredCheckLookupFailedByPr = $(if ($null -ne $fs.requiredCheckLookupFailedByPr) { $fs.requiredCheckLookupFailedByPr } else { $checksBundle.requiredCheckLookupFailedByPr })
+                        nowMs                         = $(if ($fs.nowMs) { [long]$fs.nowMs } else { $nowMs })
+                    }
+                }
+            }
+            else {
+                $plannedRunParams['FixtureSnapshot'] = @{
+                    openPrs                       = $openPrs
+                    reviewRuns                    = $reviewRuns
+                    sessions                      = $sessions
+                    ciChecksByPr                  = $checksBundle.ciChecksByPr
+                    requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+                    requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+                }
             }
         }
         else {
@@ -367,10 +386,23 @@ function Invoke-ReviewReadyReportStateSeedTick {
                     ciChecksByPr                  = $freshChecks.ciChecksByPr
                     requiredCheckNamesByPr        = $freshChecks.requiredCheckNamesByPr
                     requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
+                    nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 }
             }
         }
         $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
+        $classified = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'classifySideEffectOutcome' -Payload @{
+            triggered         = [bool]$result.triggered
+            sideEffectReason  = [string]$result.reason
+            boundaryRace      = [bool]($FixturePayload -and $FixturePayload.boundaryRace)
+        }
+        $revalidations += @{
+            prNumber  = [int]$action.prNumber
+            headSha   = [string]$action.headSha
+            outcome   = [string]$classified.outcome
+            reason    = [string]$classified.reason
+            triggered = [bool]$result.triggered
+        }
         if ($result.triggered) { $started++ }
         elseif ($result.retainWatch -and $action.watchKey) {
             $revert = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'revertTriggeredWatchOnAbort' -Payload @{
@@ -405,5 +437,6 @@ function Invoke-ReviewReadyReportStateSeedTick {
         candidates       = @($plan.candidates).Count
         deferredScanKeys = @($plan.deferredScanKeys)
         actions          = @($reevalPlan.actions)
+        revalidations    = @($revalidations)
     }
 }
