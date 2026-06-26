@@ -1,0 +1,28 @@
+{
+  "issue_number": 470,
+  "iteration_id": "opk-26",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T02:20:00.000Z",
+  "baseline": {
+    "commit_sha": "9f9f9a294e18af12dcae390cd085f8e464bc1fab",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c6388fe458da9d2ace5eb4f12ccecc508f6af4f2da2a0416dae32ad405f737a0"
+  },
+  "declared_paths": [
+    "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/declarations/470.opk-26.json",
+    "docs/migration_notes.md",
+    "docs/spawn-worktree-grant.mjs",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/git-autonomous-guard.ps1",
+    "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+    "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+    "scripts/verify.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

@@ -302,27 +302,17 @@ function Test-AutonomousSpawnWorktreeTargetPathHardened {
         [string]$ProjectId
     )
 
-    $resolved = Resolve-AutonomousReviewWorktreeCanonicalPath -TargetPath $TargetPath
-    if (-not $resolved.ok) {
-        return @{ allowed = $false; reason = $resolved.reason }
-    }
-
     $prefix = Get-AutonomousSpawnWorktreePrefix -ProjectId $ProjectId
-    $prefixResolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $prefix
-    if (-not $prefixResolved.ok) {
-        return @{ allowed = $false; reason = 'prefix_unresolvable' }
+    $pathCheck = Test-AutonomousCanonicalWorktreeTargetUnderPrefix -TargetPath $TargetPath -PrefixPath $prefix
+    if (-not $pathCheck.allowed) {
+        return $pathCheck
     }
 
-    $canonicalTarget = $resolved.path
-    if (-not (Test-PathIsUnderCanonicalPrefix -CandidatePath $canonicalTarget -PrefixPath $prefixResolved.path)) {
-        return @{ allowed = $false; reason = 'path_escape' }
-    }
-
-    $preexists = Test-Path -LiteralPath $canonicalTarget
+    $preexists = Test-Path -LiteralPath $pathCheck.canonicalPath
     return @{
         allowed         = $true
         reason          = 'path_ok'
-        canonicalPath   = $canonicalTarget
+        canonicalPath   = $pathCheck.canonicalPath
         targetPreexists = [bool]$preexists
     }
 }

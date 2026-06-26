@@ -190,10 +190,11 @@ function Test-PathIsUnderCanonicalPrefix {
     return $candidate.StartsWith($prefix + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-function Test-AutonomousReviewWorktreeTargetPathHardened {
+
+function Test-AutonomousCanonicalWorktreeTargetUnderPrefix {
     param(
         [string]$TargetPath,
-        [string]$ProjectId
+        [string]$PrefixPath
     )
 
     $resolved = Resolve-AutonomousReviewWorktreeCanonicalPath -TargetPath $TargetPath
@@ -201,23 +202,36 @@ function Test-AutonomousReviewWorktreeTargetPathHardened {
         return @{ allowed = $false; reason = $resolved.reason }
     }
 
-    $workspacePrefix = Get-AutonomousReviewWorktreeWorkspacePrefix -ProjectId $ProjectId
-    $prefixResolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $workspacePrefix
+    $prefixResolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $PrefixPath
     if (-not $prefixResolved.ok) {
         return @{ allowed = $false; reason = 'prefix_unresolvable' }
     }
 
     $canonicalTarget = $resolved.path
-
     if (-not (Test-PathIsUnderCanonicalPrefix -CandidatePath $canonicalTarget -PrefixPath $prefixResolved.path)) {
         return @{ allowed = $false; reason = 'path_escape' }
     }
 
-    if (Test-Path -LiteralPath $canonicalTarget) {
+    return @{ allowed = $true; reason = 'path_ok'; canonicalPath = $canonicalTarget }
+}
+
+function Test-AutonomousReviewWorktreeTargetPathHardened {
+    param(
+        [string]$TargetPath,
+        [string]$ProjectId
+    )
+
+    $workspacePrefix = Get-AutonomousReviewWorktreeWorkspacePrefix -ProjectId $ProjectId
+    $pathCheck = Test-AutonomousCanonicalWorktreeTargetUnderPrefix -TargetPath $TargetPath -PrefixPath $workspacePrefix
+    if (-not $pathCheck.allowed) {
+        return $pathCheck
+    }
+
+    if (Test-Path -LiteralPath $pathCheck.canonicalPath) {
         return @{ allowed = $false; reason = 'target_preexists' }
     }
 
-    return @{ allowed = $true; reason = 'path_ok'; canonicalPath = $canonicalTarget }
+    return @{ allowed = $true; reason = 'path_ok'; canonicalPath = $pathCheck.canonicalPath }
 }
 
 function Test-ReviewStartClaimHeadShaFormat {
