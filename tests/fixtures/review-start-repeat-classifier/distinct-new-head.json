@@ -1,0 +1,45 @@
+{
+  "description": "New head within same cycle is explainable distinct start",
+  "attempts": [
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 327,
+      "head": "head00000000000000000000000000000000000001",
+      "cycle": "cycle-9",
+      "claimId": "claim-1",
+      "reviewRunState": "clean",
+      "triggerSurface": "review-trigger-reconcile",
+      "started": true,
+      "reviewRuns": [
+        {
+          "id": "run-old",
+          "prNumber": 327,
+          "targetSha": "head00000000000000000000000000000000000001",
+          "status": "clean"
+        }
+      ],
+      "cycleState": {}
+    },
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 327,
+      "head": "head00000000000000000000000000000000000002",
+      "cycle": "cycle-9",
+      "claimId": "claim-2",
+      "reviewRunState": "",
+      "triggerSurface": "review-trigger-reconcile",
+      "started": true,
+      "reviewRuns": [
+        {
+          "id": "run-old",
+          "prNumber": 327,
+          "targetSha": "head00000000000000000000000000000000000001",
+          "status": "clean"
+        }
+      ],
+      "cycleState": {}
+    }
+  ]
+}

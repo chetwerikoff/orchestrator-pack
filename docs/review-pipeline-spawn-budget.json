@@ -1,0 +1,20 @@
+{
+  "version": "review-pipeline-spawn-budget/v1",
+  "captureVersion": "review-pipeline-spawn-capture/v1",
+  "sourceClasses": [
+    "supervisor-child",
+    "llm-orchestrator-review-start",
+    "worker-test-suite",
+    "autonomous-guard",
+    "unknown"
+  ],
+  "reductionFactor": 0.35,
+  "callerCadencePerMinute": 12,
+  "perStepCostFloor": 1,
+  "stormBaselineCaseId": "storm-baseline",
+  "reducedPassCaseId": "reduced-post-change",
+  "captures": {
+    "storm-baseline": "tests/fixtures/review-pipeline-spawn-budget/storm-baseline.capture.json",
+    "reduced-post-change": "tests/fixtures/review-pipeline-spawn-budget/reduced-post-change.capture.json"
+  }
+}

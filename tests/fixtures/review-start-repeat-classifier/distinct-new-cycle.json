@@ -1,0 +1,31 @@
+{
+  "description": "New worker-iteration cycle is explainable distinct start",
+  "attempts": [
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 327,
+      "head": "head00000000000000000000000000000000000001",
+      "cycle": "cycle-8",
+      "claimId": "claim-1",
+      "reviewRunState": "clean",
+      "triggerSurface": "review-trigger-reconcile",
+      "started": true,
+      "reviewRuns": [],
+      "cycleState": { "reviewArmed": true }
+    },
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 327,
+      "head": "head00000000000000000000000000000000000002",
+      "cycle": "cycle-9",
+      "claimId": "claim-2",
+      "reviewRunState": "",
+      "triggerSurface": "review-trigger-reconcile",
+      "started": true,
+      "reviewRuns": [],
+      "cycleState": {}
+    }
+  ]
+}

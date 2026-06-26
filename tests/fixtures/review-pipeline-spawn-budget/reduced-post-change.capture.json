@@ -1,0 +1,71 @@
+{
+  "version": "review-pipeline-spawn-capture/v1",
+  "caseId": "reduced-post-change",
+  "captureProvenance": {
+    "callerPath": "generate-review-pipeline-spawn-captures.ts",
+    "capturedAt": "2026-06-26T08:18:38.768Z",
+    "profile": "reduced-post-change",
+    "method": "real-main-dry-run-tick"
+  },
+  "window": {
+    "startedAtMs": 1782461917162,
+    "endedAtMs": 1782461917955,
+    "elapsedMs": 793,
+    "callerCadencePerMinute": 12
+  },
+  "events": [
+    {
+      "atMs": 1782461917162,
+      "commandLine": "pwsh -NoProfile -File /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-34/scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "sourceHint": "review-trigger-reconcile.ps1",
+      "childId": "review-trigger-reconcile"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "git config --get remote.origin.url",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "git log --since=60 seconds ago --format=%H",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "git branch --show-current",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "git status --short --branch",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "ao status --json --reports full",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "ao review list --json",
+      "sourceHint": "supervisor-child-tick",
+      "childId": "supervisor-child"
+    },
+    {
+      "atMs": 1782461917955,
+      "commandLine": "pwsh -NoProfile -File /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-34/scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath /tmp/opk480-claim-fixture-kTRnIn/snapshot.json -DryRun",
+      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "childId": "llm-orchestrator-review-start"
+    }
+  ],
+  "pointInTimePsSnapshot": {
+    "processCount": 3,
+    "capturedAtMs": 1782461917955,
+    "note": "point-in-time snapshot may miss short-lived burst"
+  }
+}

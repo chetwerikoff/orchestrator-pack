@@ -1,0 +1,31 @@
+{
+  "description": "Repeated review-start on same PR/head/cycle before terminal state is regression",
+  "attempts": [
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 476,
+      "head": "abc4760000000000000000000000000000000000",
+      "cycle": "cycle-1",
+      "claimId": "claim-a",
+      "reviewRunState": "",
+      "triggerSurface": "orchestrator-turn",
+      "started": true,
+      "reviewRuns": [],
+      "cycleState": { "reviewArmed": true }
+    },
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 476,
+      "head": "abc4760000000000000000000000000000000000",
+      "cycle": "cycle-1",
+      "claimId": "claim-b",
+      "reviewRunState": "",
+      "triggerSurface": "orchestrator-turn",
+      "started": false,
+      "reviewRuns": [],
+      "cycleState": { "reviewArmed": true }
+    }
+  ]
+}
