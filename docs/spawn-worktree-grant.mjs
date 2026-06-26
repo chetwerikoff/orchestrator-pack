@@ -10,6 +10,9 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION = 1;
 export const SPAWN_WORKTREE_GRANT_TTL_SECONDS = 120;
 
+/** AO worker session worktree basenames allocated by @aoagents/ao-plugin-workspace-worktree. */
+export const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
+
 /** Git globals that select a repository other than the process cwd. */
 export const GIT_SOURCE_SELECTING_GLOBAL_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
 
@@ -226,6 +229,34 @@ export function pathIsUnderCanonicalPrefix(candidatePath, prefixPath) {
 }
 
 /**
+ * @param {string} basename
+ */
+export function isAoSpawnWorktreeSessionBasename(basename) {
+  return AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN.test(String(basename ?? ''));
+}
+
+/**
+ * Basename authorization for spawn grant consume. Mint-time exact names remain
+ * allowed; AO session ids (opk-<digits>) are accepted under active grant lineage.
+ *
+ * @param {string} basename
+ * @param {string[]} allowedNames
+ */
+export function evaluateSpawnWorktreeBasenameBinding(basename, allowedNames) {
+  const name = String(basename ?? '');
+  if (!name) {
+    return { ok: false, reason: 'worktree_session_basename_invalid' };
+  }
+  if (allowedNames.includes(name)) {
+    return { ok: true, reason: 'mint_authorized_name' };
+  }
+  if (isAoSpawnWorktreeSessionBasename(name)) {
+    return { ok: true, reason: 'ao_session_basename' };
+  }
+  return { ok: false, reason: 'worktree_session_basename_invalid' };
+}
+
+/**
  * @param {object} input
  */
 export function evaluateSpawnWorktreeGrantConsume(input) {
@@ -273,8 +304,9 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   const allowedNames = Array.isArray(grant.authorizedWorktreeNames)
     ? grant.authorizedWorktreeNames.map((name) => String(name))
     : [];
-  if (allowedNames.length > 0 && !allowedNames.includes(basename)) {
-    return { ok: false, reason: 'worktree_name_mismatch' };
+  const basenameBinding = evaluateSpawnWorktreeBasenameBinding(basename, allowedNames);
+  if (!basenameBinding.ok) {
+    return { ok: false, reason: basenameBinding.reason };
   }
 
   const expectedHead = String(grant.expectedHeadRef ?? 'HEAD');

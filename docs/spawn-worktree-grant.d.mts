@@ -1,5 +1,6 @@
 export declare const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION: number;
 export declare const SPAWN_WORKTREE_GRANT_TTL_SECONDS: number;
+export declare const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN: RegExp;
 export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: string[];
 export declare const GIT_SOURCE_SELECTING_GLOBAL_FLAGS: ReadonlySet<string>;
 
@@ -33,6 +34,11 @@ export interface BoundaryEscapeVerdict {
 }
 
 export declare function parseSpawnTargetFromArgv(argv: string[]): SpawnTargetParse;
+export declare function isAoSpawnWorktreeSessionBasename(basename: string): boolean;
+export declare function evaluateSpawnWorktreeBasenameBinding(
+  basename: string,
+  allowedNames: string[],
+): { ok: boolean; reason: string };
 export declare function deriveSpawnAuthorizedWorktreeNames(parsed: SpawnTargetParse, extraAuthorizedWorktreeNames?: string[]): string[];
 export declare function gitArgvHasSourceSelectingGlobals(argv: string[]): boolean;
 export declare function canonicalRepositoryRootsEqual(left: string, right: string): boolean;

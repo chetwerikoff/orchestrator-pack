@@ -1,0 +1,8 @@
+{
+  "captureId": "spawn-worktree-grant-ao-session-basename-integration",
+  "issue": 472,
+  "proofCommand": "npm test -- scripts/autonomous-spawn-worktree-gate.test.ts -t \"spawn policy allow reaches sanctioned\"",
+  "context": "PowerShell guard integration: grant minted for ao spawn 373, git worktree add targets opk-27 (AO session basename), denied=false, reason=spawn_worktree_allow",
+  "scrubbed": true,
+  "liveFollowUp": "Operator or worker must record full autonomous ao spawn <issue> and ao spawn --claim-pr <PR> reaching in-band git worktree add without worktree_name_mismatch before closing #472"
+}
