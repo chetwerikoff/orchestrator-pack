@@ -1012,7 +1012,7 @@ function Test-OrchestratorWakeSupervisorChildStalled {
     }
 
     $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $progress `
-        -ChildPid $childPid -StallThresholdMs $threshold -NowMs $nowMs
+        -ChildPid $childPid -StallThresholdMs $threshold -NowMs $nowMs -ChildId ([string]$ChildEntry.Id)
     return -not $freshness.Fresh
 }
 

@@ -17,6 +17,7 @@
     "scripts/fixtures/review-ready-seed-liveness/fast-tick-ok.json",
     "scripts/fixtures/review-ready-seed-liveness/hang-still-stalled.json",
     "scripts/fixtures/review-ready-seed-liveness/large-payload-progress.json",
+    "scripts/fixtures/review-ready-seed-liveness/legacy-poll-compat.json",
     "scripts/fixtures/review-ready-seed-liveness/long-tick-not-stalled.json",
     "scripts/fixtures/review-ready-seed-liveness/overlap-safe.json",
     "scripts/fixtures/review-ready-seed-liveness/progress-identity.json",

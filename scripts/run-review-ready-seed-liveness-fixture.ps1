@@ -57,10 +57,15 @@ try {
             $result.detail = "status=$($verdict.Status) reason=$($verdict.Reason)"
         }
         'freshness-verdict' {
+            $childId = ''
+            if ($fixture.progress -and $fixture.progress.childId) {
+                $childId = [string]$fixture.progress.childId
+            }
             $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict `
                 -Progress $fixture.progress -ChildPid $childPid -StallThresholdMs $stallThresholdMs `
                 -NowMs $nowMs -TickId $(if ($fixture.tickId) { [string]$fixture.tickId } else { '' }) `
-                -PriorProgress $(if ($fixture.priorProgress) { $fixture.priorProgress } else { $null })
+                -PriorProgress $(if ($fixture.priorProgress) { $fixture.priorProgress } else { $null }) `
+                -ChildId $childId
             $expectStatus = [string]$fixture.expectFreshness.status
             $result.ok = ($freshness.Status -eq $expectStatus)
             $result.detail = "freshness=$($freshness.Status)"
@@ -83,7 +88,8 @@ try {
                 $env:AO_SIDE_PROCESS_NOW_MS = [string]$checkNow
                 $progress = Read-OrchestratorSideProcessProgress -ChildId 'review-ready-report-state-seed'
                 $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict `
-                    -Progress $progress -ChildPid $livePid -StallThresholdMs $stallThresholdMs -NowMs $checkNow -TickId $tickId
+                    -Progress $progress -ChildPid $livePid -StallThresholdMs $stallThresholdMs -NowMs $checkNow -TickId $tickId `
+                    -ChildId 'review-ready-report-state-seed'
                 $result.ok = [bool]$freshness.Fresh
                 $result.detail = "checkAt=${checkNow} freshness=$($freshness.Status)"
             }
@@ -102,7 +108,12 @@ try {
                 Exit-ReviewReadyReportStateSeedTick -StateRoot $stateDir
                 $third = Enter-ReviewReadyReportStateSeedTick -StateRoot $stateDir -TickId 'tick-c'
                 $result.ok = $result.ok -and $third.acquired
-                $result.detail = "first=$($first.acquired) second=$($second.acquired) third=$($third.acquired)"
+                $deadLockPath = Join-Path $stateDir 'review-ready-report-state-seed-tick.lock'
+                (@{ pid = 4194304; tickId = 'dead-owner'; atMs = 0 } | ConvertTo-Json -Compress) |
+                    Set-Content -LiteralPath $deadLockPath -Encoding utf8 -NoNewline
+                $fourth = Enter-ReviewReadyReportStateSeedTick -StateRoot $stateDir -TickId 'tick-d'
+                $result.ok = $result.ok -and $fourth.acquired
+                $result.detail = "first=$($first.acquired) second=$($second.acquired) third=$($third.acquired) deadReclaim=$($fourth.acquired)"
             }
             finally {
                 Exit-ReviewReadyReportStateSeedTick -StateRoot $stateDir

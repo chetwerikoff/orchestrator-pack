@@ -16,6 +16,7 @@ export const REVIEW_READY_SEED_LIVENESS_MATRIX = [
   { expected: 'stale-lock-bounded', fixture: 'stale-lock-bounded.json' },
   { expected: 'atomic-progress-read', fixture: 'atomic-progress-read.json' },
   { expected: 'upgrade-safe-progress', fixture: 'upgrade-safe-progress.json' },
+  { expected: 'legacy-poll-compat', fixture: 'legacy-poll-compat.json' },
   { expected: 'large-payload-progress', fixture: 'large-payload-progress.json' },
 ];
 

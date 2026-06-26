@@ -94,6 +94,25 @@ function Test-ReviewReadyReportStateSeedTickInFlight {
     }
 }
 
+function Clear-ReviewReadyReportStateSeedTickLockIfStale {
+    param([string]$LockPath)
+
+    if (-not $LockPath -or -not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $record = Get-Content -LiteralPath $LockPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $ownerPid = [int]$record.pid
+        if ($ownerPid -le 0 -or -not (Test-ProcessAlive -ProcessId $ownerPid)) {
+            Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Enter-ReviewReadyReportStateSeedTick {
     param(
         [string]$StateRoot = '',
@@ -119,6 +138,8 @@ function Enter-ReviewReadyReportStateSeedTick {
         atMs   = Get-OrchestratorSideProcessNowMs
     } | ConvertTo-Json -Compress
 
+    Clear-ReviewReadyReportStateSeedTickLockIfStale -LockPath $lockPath
+
     try {
         $fs = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {
@@ -131,7 +152,21 @@ function Enter-ReviewReadyReportStateSeedTick {
         return @{ acquired = $true; tickId = $TickId }
     }
     catch [System.IO.IOException] {
-        return @{ acquired = $false; tickId = $TickId }
+        Clear-ReviewReadyReportStateSeedTickLockIfStale -LockPath $lockPath
+        try {
+            $fs = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                $fs.Write($bytes, 0, $bytes.Length)
+            }
+            finally {
+                $fs.Dispose()
+            }
+            return @{ acquired = $true; tickId = $TickId }
+        }
+        catch [System.IO.IOException] {
+            return @{ acquired = $false; tickId = $TickId }
+        }
     }
 }
 

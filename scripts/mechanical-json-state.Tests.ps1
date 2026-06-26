@@ -381,6 +381,20 @@ Describe 'supervisor health classification' {
         $verdict.Status | Should -Be 'stalled'
         $verdict.Reason | Should -Be 'stale progress from prior process'
     }
+
+    It 'treats legacy sparse poll heartbeats as fresh for non-seed children' {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $progress = @{
+            childId        = 'ci-green-wake-reconcile'
+            phase          = 'poll'
+            pid            = $PID
+            lastProgressMs = $nowMs
+        }
+        $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $progress `
+            -ChildPid $PID -StallThresholdMs 20000 -NowMs $nowMs -ChildId 'ci-green-wake-reconcile'
+        $freshness.Fresh | Should -Be $true
+        $freshness.Status | Should -Be 'fresh'
+    }
 }
 
 Describe 'supervisor bounded recovery' {

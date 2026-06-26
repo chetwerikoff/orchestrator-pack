@@ -144,8 +144,12 @@ function Get-OrchestratorSideProcessHealthVerdict {
 
         if ($StallThresholdMs -gt 0) {
             $nowMs = Get-OrchestratorSideProcessNowMs
+            $childId = ''
+            if ($ChildEntry -and $ChildEntry.Id) {
+                $childId = [string]$ChildEntry.Id
+            }
             $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $Progress `
-                -ChildPid $ChildPid -StallThresholdMs $StallThresholdMs -NowMs $nowMs
+                -ChildPid $ChildPid -StallThresholdMs $StallThresholdMs -NowMs $nowMs -ChildId $childId
             if (-not $freshness.Fresh) {
                 $stallReason = [string]$freshness.Reason
                 if (-not $stallReason) {

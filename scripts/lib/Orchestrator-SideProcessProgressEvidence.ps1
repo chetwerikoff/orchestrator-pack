@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
 
 $Script:SideProcessProgressSchemaVersion = 2
+$Script:SideProcessProgressWorkEvidenceChildId = 'review-ready-report-state-seed'
 $Script:SideProcessProgressMaxWorkStepLength = 64
 $Script:SideProcessProgressMaxTickIdLength = 64
 
@@ -64,6 +65,20 @@ function Test-OrchestratorSideProcessProgressTerminalPhase {
     param([string]$Phase)
 
     return $Phase -in @('tick_success', 'tick_error', 'tick_complete', 'tick_skipped')
+}
+
+function Test-OrchestratorSideProcessProgressChildRequiresWorkEvidence {
+    param(
+        [string]$ChildId = '',
+        $Progress = $null
+    )
+
+    $resolvedId = $ChildId
+    if (-not $resolvedId -and $Progress -and $Progress.childId) {
+        $resolvedId = [string]$Progress.childId
+    }
+
+    return ($resolvedId -eq $Script:SideProcessProgressWorkEvidenceChildId)
 }
 
 function Test-OrchestratorSideProcessProgressHasWorkEvidence {
@@ -170,7 +185,8 @@ function Resolve-OrchestratorSideProcessProgressForFreshness {
         $Progress,
         [int]$ChildPid = 0,
         [string]$TickId = '',
-        [long]$NowMs = 0
+        [long]$NowMs = 0,
+        [string]$ChildId = ''
     )
 
     if (-not (Test-OrchestratorSideProcessProgressRecordTrusted -Progress $Progress -NowMs $NowMs)) {
@@ -183,7 +199,9 @@ function Resolve-OrchestratorSideProcessProgressForFreshness {
 
     $schema = Get-OrchestratorSideProcessProgressSchemaVersion -Progress $Progress
     $phase = [string]$Progress.phase
-    if ($schema -lt $Script:SideProcessProgressSchemaVersion -and $phase -eq 'poll' -and -not (Test-OrchestratorSideProcessProgressHasWorkEvidence -Progress $Progress)) {
+    if ((Test-OrchestratorSideProcessProgressChildRequiresWorkEvidence -ChildId $ChildId -Progress $Progress) -and
+        $schema -lt $Script:SideProcessProgressSchemaVersion -and $phase -eq 'poll' -and
+        -not (Test-OrchestratorSideProcessProgressHasWorkEvidence -Progress $Progress)) {
         return $null
     }
 
@@ -197,7 +215,8 @@ function Get-OrchestratorSideProcessProgressFreshnessVerdict {
         [int]$StallThresholdMs = 0,
         [long]$NowMs = 0,
         [string]$TickId = '',
-        $PriorProgress = $null
+        $PriorProgress = $null,
+        [string]$ChildId = ''
     )
 
     if ($NowMs -le 0) {
@@ -243,7 +262,7 @@ function Get-OrchestratorSideProcessProgressFreshnessVerdict {
         }
     }
 
-    $resolved = Resolve-OrchestratorSideProcessProgressForFreshness -Progress $Progress -ChildPid $ChildPid -TickId $TickId -NowMs $NowMs
+    $resolved = Resolve-OrchestratorSideProcessProgressForFreshness -Progress $Progress -ChildPid $ChildPid -TickId $TickId -NowMs $NowMs -ChildId $ChildId
     if (-not $resolved) {
         return @{
             Fresh  = $false
