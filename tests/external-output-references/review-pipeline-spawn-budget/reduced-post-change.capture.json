@@ -5,7 +5,9 @@
     "callerPath": "generate-review-pipeline-spawn-captures.ts",
     "capturedAt": "2026-06-26T08:18:38.768Z",
     "profile": "reduced-post-change",
-    "method": "real-main-dry-run-tick"
+    "method": "real-main-dry-run-tick",
+    "measurementModel": "journal-rate-attribution",
+    "subprocessInvocationCount": 2
   },
   "window": {
     "startedAtMs": 1782461917162,
@@ -16,7 +18,7 @@
   "events": [
     {
       "atMs": 1782461917162,
-      "commandLine": "pwsh -NoProfile -File /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-34/scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
@@ -58,7 +60,7 @@
     },
     {
       "atMs": 1782461917955,
-      "commandLine": "pwsh -NoProfile -File /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-34/scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath /tmp/opk480-claim-fixture-kTRnIn/snapshot.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     }
@@ -67,5 +69,6 @@
     "processCount": 3,
     "capturedAtMs": 1782461917955,
     "note": "point-in-time snapshot may miss short-lived burst"
-  }
+  },
+  "measurementModel": "journal-rate-attribution"
 }

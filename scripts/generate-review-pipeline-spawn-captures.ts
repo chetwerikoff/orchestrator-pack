@@ -1,8 +1,7 @@
 /**
  * Generate real-main review-pipeline spawn captures (Issue #480).
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { attributeSpawnSourceClass } from '../docs/review-pipeline-spawn-budget.mjs';
@@ -33,9 +32,27 @@ const MANDATORY_READ = [
   'ao review list --json',
 ] as const;
 
-function pushEvent(events: SpawnEvent[], commandLine: string, hints: { sourceHint?: string; childId?: string } = {}) {
+const WRAPPED_CLAIM_FIXTURES: Record<string, string> = {
+  'tests/fixtures/orchestrator-claimed-review-run/positive-uncovered-ready.json':
+    'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json',
+  'tests/fixtures/orchestrator-claimed-review-run/positive-covered-clean.json':
+    'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json',
+};
+
+function formatRepoRelativePwshLine(scriptRel: string, args: string[]) {
+  const normalizedArgs = args.join(' ');
+  return normalizedArgs
+    ? `pwsh -NoProfile -File ${scriptRel} ${normalizedArgs}`
+    : `pwsh -NoProfile -File ${scriptRel}`;
+}
+
+function pushEvent(
+  events: SpawnEvent[],
+  commandLine: string,
+  hints: { sourceHint?: string; childId?: string; atMs?: number } = {},
+) {
   events.push({
-    atMs: Date.now(),
+    atMs: hints.atMs ?? Date.now(),
     commandLine,
     sourceHint: hints.sourceHint ?? attributeSpawnSourceClass(commandLine, hints),
     childId: hints.childId,
@@ -57,7 +74,8 @@ function wrapClaimedReviewFixture(relPath: string) {
 
 function runPwshFile(scriptRel: string, args: string[], events: SpawnEvent[], hints: { sourceHint?: string; childId?: string }) {
   const scriptPath = path.join(repoRoot, scriptRel);
-  const line = `pwsh -NoProfile -File ${scriptPath} ${args.join(' ')}`;
+  const line = formatRepoRelativePwshLine(scriptRel, args);
+  const startedAtMs = Date.now();
   const result = spawnSync('pwsh', ['-NoProfile', '-File', scriptPath, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -75,7 +93,7 @@ function runPwshFile(scriptRel: string, args: string[], events: SpawnEvent[], hi
       `capture subprocess exited ${result.status} (${line})${detail ? `: ${detail}` : ''}`,
     );
   }
-  pushEvent(events, line, hints);
+  pushEvent(events, line, { ...hints, atMs: Math.max(startedAtMs, Date.now()) });
 }
 
 function runSupervisorFixture(script: string, fixture: string, events: SpawnEvent[]) {
@@ -87,20 +105,25 @@ function runSupervisorFixture(script: string, fixture: string, events: SpawnEven
   );
 }
 
-function runClaimedReviewDryRun(sourceFixture: string, events: SpawnEvent[]) {
-  const tmpDir = mkdtempSync(path.join(tmpdir(), 'opk480-claim-fixture-'));
-  const wrappedPath = path.join(tmpDir, 'snapshot.json');
-  writeFileSync(wrappedPath, `${JSON.stringify(wrapClaimedReviewFixture(sourceFixture), null, 2)}\n`);
-  try {
-    runPwshFile(
-      'scripts/invoke-orchestrator-claimed-review-run.ps1',
-      ['-PrNumber', '318', '-SessionId', 'opk-75', '-FixturePath', wrappedPath, '-DryRun'],
-      events,
-      { sourceHint: 'invoke-orchestrator-claimed-review-run.ps1', childId: 'llm-orchestrator-review-start' },
-    );
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+function ensureWrappedClaimFixture(sourceFixture: string) {
+  const wrappedRel = WRAPPED_CLAIM_FIXTURES[sourceFixture];
+  if (!wrappedRel) {
+    throw new Error(`no wrapped claim fixture mapping for ${sourceFixture}`);
   }
+  const wrappedPath = path.join(repoRoot, wrappedRel);
+  mkdirSync(path.dirname(wrappedPath), { recursive: true });
+  writeFileSync(wrappedPath, `${JSON.stringify(wrapClaimedReviewFixture(sourceFixture), null, 2)}\n`);
+  return wrappedRel;
+}
+
+function runClaimedReviewDryRun(sourceFixture: string, events: SpawnEvent[]) {
+  const wrappedRel = ensureWrappedClaimFixture(sourceFixture);
+  runPwshFile(
+    'scripts/invoke-orchestrator-claimed-review-run.ps1',
+    ['-PrNumber', '318', '-SessionId', 'opk-75', '-FixturePath', wrappedRel, '-DryRun'],
+    events,
+    { sourceHint: 'invoke-orchestrator-claimed-review-run.ps1', childId: 'llm-orchestrator-review-start' },
+  );
 }
 
 function recordStormCapture(): SpawnEvent[] {
@@ -132,19 +155,29 @@ function recordReducedCapture(): SpawnEvent[] {
   return events;
 }
 
+function countSubprocessScriptEvents(events: SpawnEvent[]) {
+  return events.filter((event) =>
+    /^pwsh -NoProfile -File scripts\//.test(String(event.commandLine ?? '')),
+  ).length;
+}
+
 function writeCapture(caseId: 'storm-baseline' | 'reduced-post-change', events: SpawnEvent[]) {
   const startedAtMs = events[0]?.atMs ?? Date.now();
   const endedAtMs = events[events.length - 1]?.atMs ?? startedAtMs + 1;
+  const subprocessInvocationCount = countSubprocessScriptEvents(events);
   const outDir = path.join(repoRoot, 'tests/external-output-references/review-pipeline-spawn-budget');
   mkdirSync(outDir, { recursive: true });
   const capture = {
     version: 'review-pipeline-spawn-capture/v1',
     caseId,
+    measurementModel: 'journal-rate-attribution',
     captureProvenance: {
       callerPath: 'generate-review-pipeline-spawn-captures.ts',
       capturedAt: new Date().toISOString(),
       profile: caseId,
       method: 'real-main-dry-run-tick',
+      measurementModel: 'journal-rate-attribution',
+      subprocessInvocationCount,
     },
     window: {
       startedAtMs,

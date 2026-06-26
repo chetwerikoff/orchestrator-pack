@@ -9,6 +9,7 @@ import {
   loadReviewPipelineSpawnBudget,
   replayCaptureBudgetCheck,
   REQUIRED_SOURCE_CLASSES,
+  validateJournalRateAttribution,
   verifyCommittedCaptureReplays,
 } from '../docs/review-pipeline-spawn-budget.mjs';
 import { repoRoot } from './_test-pwsh-helpers.js';
@@ -93,5 +94,23 @@ describe('review-pipeline spawn budget (Issue #480)', () => {
     });
     expect(verdict.ok).toBe(true);
     expect(inflatedThreshold).toBeGreaterThan(Number(report.derivedBudgetThreshold));
+  });
+
+  it('validateJournalRateAttribution rejects machine-specific command paths', () => {
+    const storm = loadCapture('storm-baseline');
+    const bad = structuredClone(storm);
+    bad.events[0].commandLine =
+      'pwsh -NoProfile -File /home/che/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-34/scripts/review-trigger-reconcile.ps1 -DryRun';
+    const result = validateJournalRateAttribution(bad);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('journal_rate_machine_specific_paths');
+  });
+
+  it('validateJournalRateAttribution accepts committed repo-relative captures', () => {
+    for (const name of ['storm-baseline', 'reduced-post-change']) {
+      const result = validateJournalRateAttribution(loadCapture(name));
+      expect(result.ok, `${name}: ${result.reason}`).toBe(true);
+      expect(result.reason).toBe('journal_rate_attribution_ok');
+    }
   });
 });

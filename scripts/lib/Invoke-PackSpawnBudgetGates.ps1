@@ -76,6 +76,8 @@ function Invoke-ReviewPipelineSpawnBudgetGate {
             'scripts/review-pipeline-spawn-budget.test.ts',
             'scripts/review-start-repeat-classifier.test.ts',
             'scripts/generate-review-pipeline-spawn-captures.ts',
+            'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json',
+            'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json',
             'tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json',
             'tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json'
         )

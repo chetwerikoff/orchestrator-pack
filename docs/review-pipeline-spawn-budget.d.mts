@@ -25,6 +25,15 @@ export declare function validateSpawnCapture(capture: unknown): {
   caseId?: string;
 };
 
+export declare function validateJournalRateAttribution(capture: unknown): {
+  ok: boolean;
+  reason: string;
+  observedRatePerMinute?: number;
+  subprocessInvocationCount?: number;
+  bySource?: Record<string, number>;
+  commandLine?: string;
+};
+
 export interface SpawnBudgetAggregation {
   totalProcessCount: number;
   bySource: Record<string, number>;
@@ -103,4 +112,6 @@ export declare function verifyCommittedCaptureReplays(
 
 export declare function collectLiveJournalSpawns(options?: {
   journalCommand?: string;
+  since?: string;
+  unit?: string;
 }): Record<string, unknown>;

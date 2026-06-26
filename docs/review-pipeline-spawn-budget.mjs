@@ -172,6 +172,82 @@ export function validateSpawnCapture(capture) {
   return { ok: true, reason: 'capture_ok', caseId };
 }
 
+const JOURNAL_RATE_MACHINE_PATH_RE =
+  /(?:^|\s)(?:\/(?:home|tmp|var|Users)\/|\b[A-Z]:\\)|worktrees\/opk-\d+/i;
+
+/**
+ * Fail-closed journal/rate attribution evidence for committed captures (Issue #480 AC#1).
+ * @param {unknown} capture
+ */
+export function validateJournalRateAttribution(capture) {
+  const validated = validateSpawnCapture(capture);
+  if (!validated.ok) {
+    return validated;
+  }
+
+  const cap = /** @type {Record<string, any>} */ (capture);
+  const events = /** @type {Array<Record<string, unknown>>} */ (cap.events ?? []);
+  const elapsedMs = Number(cap.window?.elapsedMs ?? 0);
+  const measurementModel = String(cap.measurementModel ?? cap.captureProvenance?.measurementModel ?? '');
+  if (measurementModel !== 'journal-rate-attribution') {
+    return { ok: false, reason: 'journal_rate_missing_measurement_model' };
+  }
+
+  for (const event of events) {
+    if (typeof event.atMs !== 'number' || !Number.isFinite(event.atMs)) {
+      return { ok: false, reason: 'journal_rate_missing_event_timestamps' };
+    }
+    const commandLine = String(event.commandLine ?? '');
+    if (JOURNAL_RATE_MACHINE_PATH_RE.test(commandLine)) {
+      return { ok: false, reason: 'journal_rate_machine_specific_paths', commandLine };
+    }
+  }
+
+  const subprocessScriptEvents = events.filter((event) =>
+    /^pwsh -NoProfile -File scripts\//.test(String(event.commandLine ?? '')),
+  );
+  const subprocessInvocationCount = Number(cap.captureProvenance?.subprocessInvocationCount ?? 0);
+  if (subprocessScriptEvents.length < 1) {
+    return { ok: false, reason: 'journal_rate_missing_subprocess_script_evidence' };
+  }
+  if (
+    !Number.isFinite(subprocessInvocationCount) ||
+    subprocessInvocationCount < subprocessScriptEvents.length
+  ) {
+    return { ok: false, reason: 'journal_rate_subprocess_count_mismatch' };
+  }
+
+  const observedRatePerMinute = (events.length / elapsedMs) * 60_000;
+  if (!Number.isFinite(observedRatePerMinute) || observedRatePerMinute <= 0) {
+    return { ok: false, reason: 'journal_rate_not_computable' };
+  }
+
+  const aggregation = aggregateSpawnEvents(events);
+  const supervisorCount = Number(aggregation.bySource?.['supervisor-child'] ?? 0);
+  const reviewStartCount = Number(aggregation.bySource?.['llm-orchestrator-review-start'] ?? 0);
+  if (supervisorCount < 1 || reviewStartCount < 1) {
+    return { ok: false, reason: 'journal_rate_insufficient_source_attribution' };
+  }
+
+  const unknownCount = Number(aggregation.bySource?.unknown ?? 0);
+  if (events.length > 0 && unknownCount === events.length) {
+    return { ok: false, reason: 'journal_rate_all_events_unknown' };
+  }
+
+  if (!cap.pointInTimePsSnapshot || typeof cap.pointInTimePsSnapshot !== 'object') {
+    return { ok: false, reason: 'journal_rate_missing_supplementary_ps_snapshot' };
+  }
+
+  return {
+    ok: true,
+    reason: 'journal_rate_attribution_ok',
+    observedRatePerMinute,
+    subprocessInvocationCount: subprocessScriptEvents.length,
+    bySource: aggregation.bySource,
+  };
+}
+
+
 /**
  * @param {Array<{ commandLine?: string, sourceHint?: string, childId?: string, atMs?: number }>} events
  */
@@ -357,6 +433,11 @@ export function replayCaptureBudgetCheck(capture, budgetManifest, expectedCaseId
     return { ok: false, reason: report.reason, expectedCaseId };
   }
 
+  const journalRate = validateJournalRateAttribution(capture);
+  if (!journalRate.ok) {
+    return { ok: false, reason: journalRate.reason, expectedCaseId, journalRate };
+  }
+
   const verdict = evaluateSpawnBudgetReport(report);
   const expectPass = expectedCaseId === String(budgetManifest.reducedPassCaseId ?? 'reduced-post-change');
   const expectFail = expectedCaseId === String(budgetManifest.stormBaselineCaseId ?? 'storm-baseline');
@@ -420,6 +501,15 @@ export function verifyCommittedCaptureReplays(packRoot, budgetManifest) {
   const stormCapture = JSON.parse(readFileSync(stormPath, 'utf8'));
   const reducedCapture = JSON.parse(readFileSync(reducedPath, 'utf8'));
 
+  const stormJournal = validateJournalRateAttribution(stormCapture);
+  if (!stormJournal.ok) {
+    return { ok: false, reason: `storm_${stormJournal.reason}`, stormJournal };
+  }
+  const reducedJournal = validateJournalRateAttribution(reducedCapture);
+  if (!reducedJournal.ok) {
+    return { ok: false, reason: `reduced_${reducedJournal.reason}`, reducedJournal };
+  }
+
   const storm = replayCaptureBudgetCheck(
     stormCapture,
     /** @type {Record<string, unknown>} */ (manifest),
@@ -449,15 +539,18 @@ export function verifyCommittedCaptureReplays(packRoot, budgetManifest) {
     return { ok: false, reason: 'reduced_threshold_not_below_storm_rate', storm, reduced };
   }
 
-  return { ok: true, reason: 'capture_replays_ok', storm, reduced };
+  return { ok: true, reason: 'capture_replays_ok', storm, reduced, stormJournal, reducedJournal };
 }
 
 /**
- * Live journal collection stub — degrades on unsupported hosts.
- * @param {{ journalCommand?: string }} [options]
+ * Verify journal/rate evidence is available on the host (live path only).
+ * Committed captures must pass {@link validateJournalRateAttribution} regardless.
+ * @param {{ journalCommand?: string, since?: string, unit?: string }} [options]
  */
 export function collectLiveJournalSpawns(options = {}) {
   const journalCommand = options.journalCommand ?? 'journalctl';
+  const since = options.since ?? '5 minutes ago';
+  const unit = options.unit ?? '';
   if (process.platform !== 'linux') {
     return { ok: false, reason: 'unsupported-host', platform: process.platform };
   }
@@ -466,9 +559,36 @@ export function collectLiveJournalSpawns(options = {}) {
     if (probe.status !== 0) {
       return { ok: false, reason: 'unsupported-host', detail: 'journalctl_missing' };
     }
-    return { ok: true, reason: 'live_collection_available' };
-  } catch {
-    return { ok: false, reason: 'unsupported-host', detail: 'probe_failed' };
+    const args = ['--since', since, '--output', 'short-iso', '--no-pager'];
+    if (unit) {
+      args.push('-u', unit);
+    }
+    const sample = spawnSync(journalCommand, args, { encoding: 'utf8', timeout: 10_000 });
+    if (sample.status !== 0) {
+      return {
+        ok: false,
+        reason: 'journal_query_failed',
+        detail: `${sample.stderr ?? ''}${sample.stdout ?? ''}`.trim().slice(0, 240),
+      };
+    }
+    const lines = String(sample.stdout ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const execLines = lines.filter((line) => /\b(Started|spawn|EXEC|COMMAND=)\b/i.test(line));
+    return {
+      ok: true,
+      reason: 'live_journal_rate_sample_ok',
+      lineCount: lines.length,
+      execLineCount: execLines.length,
+      sampleWindow: since,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'unsupported-host',
+      detail: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
