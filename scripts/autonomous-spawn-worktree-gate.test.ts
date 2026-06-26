@@ -382,7 +382,10 @@ describe('spawn worktree grant (#470)', () => {
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
-    expect(evaluateSpawnWorktreeBasenameBinding('opk-27', built.grant?.authorizedWorktreeNames ?? [])).toEqual({
+    const allowedNames = Array.isArray(built.grant?.authorizedWorktreeNames)
+      ? built.grant.authorizedWorktreeNames.map((name) => String(name))
+      : [];
+    expect(evaluateSpawnWorktreeBasenameBinding('opk-27', allowedNames)).toEqual({
       ok: true,
       reason: 'ao_session_basename',
     });

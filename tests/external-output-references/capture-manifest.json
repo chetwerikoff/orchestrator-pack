@@ -225,6 +225,14 @@
       "kind": "structured",
       "path": "captures/gh-pr-open/open.raw.json",
       "contentHash": "sha256:f8523a313d522ca149bb777731e13da43e3790950f3306b90bdb6683e32e7d0a"
+    },
+    "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27": {
+      "id": "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27",
+      "producer": "spawn-worktree-grant-ao-session-basename",
+      "sourceCommand": null,
+      "kind": "unstructured",
+      "path": "captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.raw.txt",
+      "contentHash": "sha256:459c49d2ea490604afce82290e10f7c88b6289a326d3db3a4710c8d6cdc3eff9"
     }
   }
 }

@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "2374ca42f42119169c75a00795413a4ac4947f4c",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7d8546de50202edbfea23e60a6d891d7c462a536f2d237bd806c468211ec38d2"
+    "active_scope_hash": "sha256:3e04f0f09d5b7a08f00a12069d74dde2a9a2c76eb41c64e1268db5d676fb2ca4"
   },
   "declared_paths": [
     "docs/declarations/472.opk-33.json",
     "docs/spawn-worktree-grant.d.mts",
     "docs/spawn-worktree-grant.mjs",
     "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "tests/external-output-references/capture-manifest.json",
     "tests/external-output-references/captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.provenance.json",
     "tests/external-output-references/captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.raw.txt"
   ],
