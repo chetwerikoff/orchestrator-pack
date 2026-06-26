@@ -60,7 +60,7 @@
     },
     {
       "atMs": 1782461917955,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     }

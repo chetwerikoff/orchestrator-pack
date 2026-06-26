@@ -34,9 +34,9 @@ const MANDATORY_READ = [
 
 const WRAPPED_CLAIM_FIXTURES: Record<string, string> = {
   'tests/fixtures/orchestrator-claimed-review-run/positive-uncovered-ready.json':
-    'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json',
+    'tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json',
   'tests/fixtures/orchestrator-claimed-review-run/positive-covered-clean.json':
-    'tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json',
+    'tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json',
 };
 
 function formatRepoRelativePwshLine(scriptRel: string, args: string[]) {

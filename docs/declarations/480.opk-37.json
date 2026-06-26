@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "1b954c0c1ab5c3a791dcf4b42dcb1c2d121b2516",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:02681383e751150da1bde20ecfa0a8189ef1eea4f94d21f8b6645f3ab2ea7783"
+    "active_scope_hash": "sha256:e4e5228f7cc059cac3d98ec74a46c1d877afc09ec524b469287dadd651d0f1cf"
   },
   "declared_paths": [
     "docs/autonomous-spawn-budget.mjs",
@@ -37,19 +37,19 @@
     "tests/external-output-references/review-start-repeat-classifier/distinct-new-cycle.json",
     "tests/external-output-references/review-start-repeat-classifier/distinct-new-head.json",
     "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json",
-    "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json",
-    "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json"
+    "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json",
+    "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5",
-      "new_active_scope_hash": "sha256:02681383e751150da1bde20ecfa0a8189ef1eea4f94d21f8b6645f3ab2ea7783",
+      "new_active_scope_hash": "sha256:e4e5228f7cc059cac3d98ec74a46c1d877afc09ec524b469287dadd651d0f1cf",
       "changed": {
         "added": [
           "docs/declarations/480.opk-37.json",
-          "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-covered-clean.json",
-          "tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json"
+          "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json",
+          "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json"
         ],
         "removed": []
       },

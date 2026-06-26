@@ -90,13 +90,13 @@
     },
     {
       "atMs": 1782461843841,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461844620,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -174,13 +174,13 @@
     },
     {
       "atMs": 1782461850385,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461851280,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -258,13 +258,13 @@
     },
     {
       "atMs": 1782461856884,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461857703,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -342,13 +342,13 @@
     },
     {
       "atMs": 1782461862861,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461863746,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -426,13 +426,13 @@
     },
     {
       "atMs": 1782461868862,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461869691,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -510,13 +510,13 @@
     },
     {
       "atMs": 1782461875137,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461876390,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -594,13 +594,13 @@
     },
     {
       "atMs": 1782461881592,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461882361,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -678,13 +678,13 @@
     },
     {
       "atMs": 1782461888007,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461888901,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -762,13 +762,13 @@
     },
     {
       "atMs": 1782461894451,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461895492,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -846,13 +846,13 @@
     },
     {
       "atMs": 1782461901818,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461902751,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -930,13 +930,13 @@
     },
     {
       "atMs": 1782461908411,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461909347,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
@@ -1014,13 +1014,13 @@
     },
     {
       "atMs": 1782461915100,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
       "atMs": 1782461916226,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/fixtures/orchestrator-claimed-review-run/capture-wrapped-positive-uncovered-ready.json -DryRun",
+      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
       "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
       "childId": "llm-orchestrator-review-start"
     }
