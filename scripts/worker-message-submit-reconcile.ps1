@@ -81,6 +81,30 @@ function Get-SubmitReconcileStateDeliveries {
     return $null
 }
 
+
+function Test-SubmitReconcileHasTerminalDeliveryEvidence {
+    param([object]$State)
+
+    $deliveries = Get-SubmitReconcileStateDeliveries -State $State
+    if (-not $deliveries) { return $false }
+    $deliveryIds = @()
+    if ($deliveries -is [System.Collections.IDictionary]) {
+        $deliveryIds = @($deliveries.Keys)
+    }
+    else {
+        $deliveryIds = @($deliveries.PSObject.Properties.Name)
+    }
+    foreach ($deliveryId in $deliveryIds) {
+        if (-not $deliveryId) { continue }
+        $record = if ($deliveries -is [System.Collections.IDictionary]) { $deliveries[$deliveryId] } else { $deliveries.$deliveryId }
+        $terminal = [string]$record.terminalState
+        if ($terminal -and $Script:SubmitReconcileTerminalStates -contains $terminal) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-SubmitReconcileStateRootIdentity {
     param(
         [string]$StatePath = '',
@@ -272,6 +296,9 @@ function Get-SubmitReconcileState {
                     fenceTrusted = $false
                     reason       = 'wrong_state_root_active_deliveries'
                     quarantined  = $Path
+                }
+                if (-not (Test-SubmitReconcileHasTerminalDeliveryEvidence -State $state)) {
+                    return $state
                 }
             }
             else {
