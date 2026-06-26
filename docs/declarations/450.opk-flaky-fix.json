@@ -1,0 +1,20 @@
+{
+  "issue_number": 450,
+  "iteration_id": "opk-flaky-fix",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-12",
+  "created_at": "2026-06-26T11:51:16Z",
+  "baseline": {
+    "commit_sha": "d8d56e18438165a145747cec0c945527a3efce93",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:supervisor-fault-boundary-flaky-wait"
+  },
+  "declared_paths": [
+    "docs/declarations/450.opk-flaky-fix.json",
+    "scripts/supervisor-fault-boundary.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}

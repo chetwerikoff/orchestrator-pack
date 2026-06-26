@@ -34,12 +34,14 @@ describe.sequential('supervisor-fault-boundary (Issue #450 C5)', () => {
       );
 
       await waitForMarker(stateDir, 'heartbeat', 25_000);
-      await new Promise((resolve) => setTimeout(resolve, 6000));
+      const supervisorLog = await waitForSupervisorLogMatch(
+        stateDir,
+        /fault boundary: heartbeat:/,
+        25_000,
+      );
 
       const supervisorPid = Number(fs.readFileSync(`${stateDir}/supervisor.pid`, 'utf8').trim());
       expect(isAlive(supervisorPid)).toBe(true);
-
-      const supervisorLog = readSupervisorLog(stateDir);
       expect(supervisorLog).toMatch(/fault boundary: heartbeat:/);
 
       const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
