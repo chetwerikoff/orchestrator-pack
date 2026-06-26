@@ -9,6 +9,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
+Write-AutonomousBoundaryEscapeAudit | Out-Null
+
 $spawnDeny = Test-AutonomousSpawnDenied -Argv $args
 if ($spawnDeny.denied) {
     if ($spawnDeny.auditLine) {
@@ -46,4 +48,5 @@ try {
 }
 finally {
     Clear-AutonomousClaimPrResumeActiveMutex
+    Clear-AutonomousSpawnWorktreeActiveGrant
 }

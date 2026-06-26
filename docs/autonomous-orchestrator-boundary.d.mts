@@ -109,6 +109,7 @@ export declare function evaluateAutonomousGitBoundary(input: {
   autonomousSurface?: boolean;
   sanctionedProvenance?: boolean;
   claimedBypass?: boolean;
+  spawnWorktreeGrantAllow?: boolean;
   parentChain?: string[];
 }): GitBoundaryVerdict;
 export declare function isGitArgvAoOwnedWorktreeAdd(argv: string[]): boolean;

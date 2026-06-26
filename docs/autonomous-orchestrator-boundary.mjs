@@ -635,6 +635,9 @@ export function evaluateAutonomousGitBoundary(input) {
     if (input.claimBoundWorktreeAllow) {
       return { allowed: true, reason: 'claimed_worktree_allow' };
     }
+    if (input.spawnWorktreeGrantAllow) {
+      return { allowed: true, reason: 'spawn_worktree_allow' };
+    }
     return { allowed: false, reason: 'autonomous_mutating_git_denied' };
   }
   if (
