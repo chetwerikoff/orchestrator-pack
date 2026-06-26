@@ -2702,6 +2702,58 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.reason).toBe('prior_epoch_work_terminal');
   });
 
+  it('remains eligible when escalated delivery keeps unresolved failed-delivery record', () => {
+    const deliveryId = 'opk-25:1717601000000:ao-send:orphan';
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {
+          [deliveryId]: {
+            deliveryId,
+            terminalState: 'escalated',
+            escalationReason: 'delivery_vanished',
+            failedDelivery: {
+              deliveryId,
+              unresolvedState: 'unresolved',
+              reason: 'delivery_vanished',
+            },
+          },
+        },
+        failedDeliveries: {
+          [deliveryId]: {
+            deliveryId,
+            unresolvedState: 'unresolved',
+            reason: 'delivery_vanished',
+          },
+        },
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('prior_epoch_work_terminal');
+  });
+
+  it('blocks re-seat when unresolved failed delivery has no terminal delivery record', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {
+          'orphan-failed': {
+            deliveryId: 'orphan-failed',
+            unresolvedState: 'unresolved',
+            reason: 'delivery_vanished',
+          },
+        },
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 0 },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('unresolved_failed_delivery');
+  });
+
   it('blocks re-seat when journal still has unresolved pending-draft records', () => {
     const result = evaluateStateRootReSeatEligibility({
       state: {

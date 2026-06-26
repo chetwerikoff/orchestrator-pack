@@ -1804,9 +1804,15 @@ function findUnresolvedFailedDeliveries(failedDeliveries) {
 }
 
 /**
- * @param {Record<string, unknown>} journal
+ * @param {Record<string, unknown>} failedDeliveries
  * @param {Record<string, unknown>} stateDeliveries
  */
+function findUnresolvedFailedDeliveriesBlockingReSeat(failedDeliveries, stateDeliveries) {
+  return findUnresolvedFailedDeliveries(failedDeliveries).filter(
+    (deliveryId) => !isSubmitTrackingDeliveryTerminal(stateDeliveries?.[deliveryId]),
+  );
+}
+
 function countCompletedMatchingJournalEvidence(journal, stateDeliveries) {
   const terminalDeliveryIds = new Set(
     Object.entries(stateDeliveries ?? {})
@@ -1882,7 +1888,10 @@ export function evaluateStateRootReSeatEligibility({
     };
   }
 
-  const unresolvedFailed = findUnresolvedFailedDeliveries(state?.failedDeliveries ?? {});
+  const unresolvedFailed = findUnresolvedFailedDeliveriesBlockingReSeat(
+    state?.failedDeliveries ?? {},
+    state?.deliveries ?? {},
+  );
   if (unresolvedFailed.length > 0) {
     return {
       eligible: false,
