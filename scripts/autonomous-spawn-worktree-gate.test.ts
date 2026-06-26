@@ -9,6 +9,7 @@ import {
   evaluateSpawnWorktreeGrantConsume,
   parseGitSpawnWorktreeAddArgv,
   parseSpawnTargetFromArgv,
+  deriveSpawnAuthorizedWorktreeNames,
   pathIsUnderCanonicalPrefix,
 } from '../docs/spawn-worktree-grant.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
@@ -57,7 +58,7 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','opk-470')
+        argv = @('spawn','470')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -337,7 +338,6 @@ describe('spawn worktree grant (#470)', () => {
       grantId: 'grant-prompt-flag',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
-      extraAuthorizedWorktreeNames: ['opk-470'],
       sourceRepositoryRoot: '/tmp/source-repo',
     });
     expect(built.ok).toBe(true);
@@ -349,6 +349,32 @@ describe('spawn worktree grant (#470)', () => {
       argv: ['worktree', 'add', '/tmp/projects/orchestrator-pack/worktrees/opk-470', 'HEAD'],
       canonicalPath: '/tmp/projects/orchestrator-pack/worktrees/opk-470',
       worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
+      targetPreexists: false,
+      effectiveRepositoryRoot: '/tmp/source-repo',
+    });
+    expect(consume.ok).toBe(true);
+    expect(consume.reason).toBe('spawn_worktree_allow');
+  });
+
+  it('authorizes opk-prefixed worker worktree basenames for numeric issue spawns', () => {
+    const prefix = '/tmp/projects/orchestrator-pack/worktrees';
+    const target = `${prefix}/opk-470`;
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '470'],
+      grantId: 'grant-opk-basename',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: '/tmp/source-repo',
+    });
+    expect(built.ok).toBe(true);
+    expect(built.grant?.authorizedWorktreeNames).toEqual(expect.arrayContaining(['470', 'opk-470']));
+    expect(deriveSpawnAuthorizedWorktreeNames(parseSpawnTargetFromArgv(['spawn', '470']))).toEqual(['470', 'opk-470']);
+
+    const consume = evaluateSpawnWorktreeGrantConsume({
+      grant: built.grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: '/tmp/source-repo',
     });
@@ -377,7 +403,6 @@ describe('spawn worktree grant (#470)', () => {
       grantId: 'grant-branch',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
-      extraAuthorizedWorktreeNames: ['opk-470'],
       sourceRepositoryRoot: '/tmp/source-repo',
     });
     const consume = evaluateSpawnWorktreeGrantConsume({
@@ -400,7 +425,6 @@ describe('spawn worktree grant (#470)', () => {
       grantId: 'grant-repo-global',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
-      extraAuthorizedWorktreeNames: ['opk-470'],
       sourceRepositoryRoot: '/tmp/source-repo',
     });
     const consume = evaluateSpawnWorktreeGrantConsume({
@@ -423,7 +447,6 @@ describe('spawn worktree grant (#470)', () => {
       grantId: 'grant-repo-mismatch',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
-      extraAuthorizedWorktreeNames: ['opk-470'],
       sourceRepositoryRoot: '/tmp/source-repo',
     });
     const consume = evaluateSpawnWorktreeGrantConsume({

@@ -320,6 +320,31 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   return { ok: true, reason: 'spawn_worktree_allow', basename, commit: shape.commit };
 }
 
+
+/**
+ * @param {import('./spawn-worktree-grant.d.mts').SpawnTargetParse} parsed
+ * @param {string[]} [extraAuthorizedWorktreeNames]
+ */
+export function deriveSpawnAuthorizedWorktreeNames(parsed, extraAuthorizedWorktreeNames = []) {
+  const authorized = new Set();
+  if (parsed.issueTarget) {
+    const issueTarget = String(parsed.issueTarget);
+    authorized.add(issueTarget);
+    if (!/^opk-/i.test(issueTarget)) {
+      authorized.add(`opk-${issueTarget}`);
+    }
+  }
+  if (parsed.prNumber !== null) {
+    authorized.add(`pr-${parsed.prNumber}`);
+  }
+  for (const name of extraAuthorizedWorktreeNames) {
+    if (name) {
+      authorized.add(String(name));
+    }
+  }
+  return [...authorized];
+}
+
 /**
  * @param {object} input
  */
@@ -334,18 +359,10 @@ export function buildSpawnWorktreeGrantRecord(input) {
   }
   const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
   const expiresAtUtc = new Date(nowMs + SPAWN_WORKTREE_GRANT_TTL_SECONDS * 1000).toISOString();
-  const authorized = new Set();
-  if (parsed.issueTarget) {
-    authorized.add(String(parsed.issueTarget));
-  }
-  if (parsed.prNumber !== null) {
-    authorized.add(`pr-${parsed.prNumber}`);
-  }
-  for (const name of input.extraAuthorizedWorktreeNames ?? []) {
-    if (name) {
-      authorized.add(String(name));
-    }
-  }
+  const authorized = deriveSpawnAuthorizedWorktreeNames(
+    parsed,
+    Array.isArray(input.extraAuthorizedWorktreeNames) ? input.extraAuthorizedWorktreeNames : [],
+  );
   return {
     ok: true,
     reason: 'grant_built',

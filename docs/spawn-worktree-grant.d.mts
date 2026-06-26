@@ -33,6 +33,7 @@ export interface BoundaryEscapeVerdict {
 }
 
 export declare function parseSpawnTargetFromArgv(argv: string[]): SpawnTargetParse;
+export declare function deriveSpawnAuthorizedWorktreeNames(parsed: SpawnTargetParse, extraAuthorizedWorktreeNames?: string[]): string[];
 export declare function gitArgvHasSourceSelectingGlobals(argv: string[]): boolean;
 export declare function canonicalRepositoryRootsEqual(left: string, right: string): boolean;
 export declare function parseGitSpawnWorktreeAddArgv(argv: string[]): GitSpawnWorktreeAddShape;
