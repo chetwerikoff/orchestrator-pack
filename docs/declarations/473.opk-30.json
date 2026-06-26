@@ -36,6 +36,7 @@
     "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
     "scripts/lib/review-ready-seed-liveness-matrix.d.mts",
     "scripts/lib/review-ready-seed-liveness-matrix.mjs",
+    "scripts/mechanical-json-state.Tests.ps1",
     "scripts/review-ready-report-state-seed.ps1",
     "scripts/review-ready-seed-liveness.test.ts",
     "scripts/run-review-ready-seed-liveness-fixture.ps1",
