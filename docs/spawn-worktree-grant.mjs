@@ -10,6 +10,9 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION = 1;
 export const SPAWN_WORKTREE_GRANT_TTL_SECONDS = 120;
 
+/** Git globals that select a repository other than the process cwd. */
+export const GIT_SOURCE_SELECTING_GLOBAL_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
+
 /** `ao spawn` flags that consume the next argv token (see `ao spawn --help`). */
 export const SPAWN_ARGV_OPTIONS_WITH_VALUE = ['--agent', '--claim-pr', '--prompt'];
 
@@ -85,6 +88,41 @@ export function parseSpawnTargetFromArgv(argv) {
     };
   }
   return { action, targetKey: '', prNumber: null, issueTarget: null };
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function gitArgvHasSourceSelectingGlobals(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (const token of list) {
+    if (GIT_SOURCE_SELECTING_GLOBAL_FLAGS.has(token)) {
+      return true;
+    }
+    if (/^--(?:git-dir|work-tree)=/i.test(token)) {
+      return true;
+    }
+    if (token.startsWith('-C') && token !== '-C') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {string} left
+ * @param {string} right
+ */
+export function canonicalRepositoryRootsEqual(left, right) {
+  const a = String(left ?? '').replace(/[/\\]+$/, '');
+  const b = String(right ?? '').replace(/[/\\]+$/, '');
+  if (!a || !b) {
+    return false;
+  }
+  if (process.platform === 'win32') {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return a === b;
 }
 
 /**
@@ -212,6 +250,10 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_expired' };
   }
 
+  if (gitArgvHasSourceSelectingGlobals(argv)) {
+    return { ok: false, reason: 'git_source_global_denied' };
+  }
+
   const shape = parseGitSpawnWorktreeAddArgv(argv);
   if (!shape.ok) {
     return { ok: false, reason: shape.reason };
@@ -256,8 +298,21 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_action_invalid' };
   }
 
-  if (grant.expectedBranch) {
-    if (!shape.branch || String(shape.branch) !== String(grant.expectedBranch)) {
+  const grantRepo = String(grant.sourceRepositoryRoot ?? '').trim();
+  if (!grantRepo) {
+    return { ok: false, reason: 'grant_repository_unbound' };
+  }
+  const effectiveRepo = String(input.effectiveRepositoryRoot ?? '').trim();
+  if (!effectiveRepo) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!canonicalRepositoryRootsEqual(grantRepo, effectiveRepo)) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+
+  if (shape.branch) {
+    const expectedBranch = grant.expectedBranch ? String(grant.expectedBranch) : null;
+    if (!expectedBranch || String(shape.branch) !== expectedBranch) {
       return { ok: false, reason: 'branch_mismatch' };
     }
   }
@@ -272,6 +327,10 @@ export function buildSpawnWorktreeGrantRecord(input) {
   const parsed = parseSpawnTargetFromArgv(input.argv ?? []);
   if (!parsed.targetKey) {
     return { ok: false, reason: 'spawn_target_missing' };
+  }
+  const sourceRepositoryRoot = String(input.sourceRepositoryRoot ?? '').trim();
+  if (!sourceRepositoryRoot) {
+    return { ok: false, reason: 'source_repository_missing' };
   }
   const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
   const expiresAtUtc = new Date(nowMs + SPAWN_WORKTREE_GRANT_TTL_SECONDS * 1000).toISOString();
@@ -301,6 +360,7 @@ export function buildSpawnWorktreeGrantRecord(input) {
       authorizedWorktreeNames: [...authorized],
       expectedHeadRef: String(input.expectedHeadRef ?? 'HEAD'),
       expectedBranch: input.expectedBranch ? String(input.expectedBranch) : null,
+      sourceRepositoryRoot,
       mintedAtUtc: new Date(nowMs).toISOString(),
       expiresAtUtc,
       consumed: false,

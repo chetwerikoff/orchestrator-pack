@@ -1,6 +1,7 @@
 export declare const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION: number;
 export declare const SPAWN_WORKTREE_GRANT_TTL_SECONDS: number;
 export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: string[];
+export declare const GIT_SOURCE_SELECTING_GLOBAL_FLAGS: ReadonlySet<string>;
 
 export interface SpawnTargetParse {
   action: string;
@@ -32,6 +33,8 @@ export interface BoundaryEscapeVerdict {
 }
 
 export declare function parseSpawnTargetFromArgv(argv: string[]): SpawnTargetParse;
+export declare function gitArgvHasSourceSelectingGlobals(argv: string[]): boolean;
+export declare function canonicalRepositoryRootsEqual(left: string, right: string): boolean;
 export declare function parseGitSpawnWorktreeAddArgv(argv: string[]): GitSpawnWorktreeAddShape;
 export declare function pathIsUnderCanonicalPrefix(candidatePath: string, prefixPath: string): boolean;
 export declare function evaluateSpawnWorktreeGrantConsume(input: {
@@ -40,6 +43,7 @@ export declare function evaluateSpawnWorktreeGrantConsume(input: {
   canonicalPath?: string;
   worktreesPrefix?: string;
   targetPreexists?: boolean;
+  effectiveRepositoryRoot?: string;
   nowMs?: number;
 }): SpawnWorktreeGrantConsumeVerdict;
 export declare function buildSpawnWorktreeGrantRecord(input: {
@@ -50,6 +54,7 @@ export declare function buildSpawnWorktreeGrantRecord(input: {
   extraAuthorizedWorktreeNames?: string[];
   expectedHeadRef?: string;
   expectedBranch?: string | null;
+  sourceRepositoryRoot?: string;
   nowMs?: number;
 }): { ok: boolean; reason: string; grant?: Record<string, unknown> };
 export declare function evaluateBoundaryEscapeSignal(input: {

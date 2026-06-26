@@ -186,6 +186,24 @@ function Release-AutonomousSpawnWorktreeTargetLock {
     Remove-Item -LiteralPath $Lock.lockDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+
+function Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot {
+    try {
+        $topLevel = [string](& git rev-parse --show-toplevel 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $topLevel) {
+            return @{ ok = $false; reason = 'repository_root_unresolvable' }
+        }
+        $resolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $topLevel
+        if (-not $resolved.ok) {
+            return @{ ok = $false; reason = 'repository_root_unresolvable' }
+        }
+        return @{ ok = $true; path = [string]$resolved.path }
+    }
+    catch {
+        return @{ ok = $false; reason = 'repository_root_unresolvable' }
+    }
+}
+
 function Mint-AutonomousSpawnWorktreeGrant {
     param(
         [string[]]$Argv,
@@ -217,6 +235,11 @@ function Mint-AutonomousSpawnWorktreeGrant {
     }
     $extraNames = Get-AutonomousSpawnWorktreeExtraAuthorizedNames -Action ([string]$parsed.action) `
         -PrNumber $prNumber -ProjectId $ProjectId
+    $sourceRepo = Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot
+    if (-not $sourceRepo.ok) {
+        Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
+        return @{ ok = $false; reason = [string]$sourceRepo.reason }
+    }
     $grantId = [guid]::NewGuid().ToString('n')
     $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
         argv                         = @($Argv)
@@ -225,6 +248,7 @@ function Mint-AutonomousSpawnWorktreeGrant {
         holder                       = $holder
         extraAuthorizedWorktreeNames = @($extraNames)
         expectedHeadRef              = 'HEAD'
+        sourceRepositoryRoot         = [string]$sourceRepo.path
     }
     if (-not $built.ok) {
         Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
@@ -437,12 +461,14 @@ function Consume-AutonomousSpawnWorktreeGrant {
             return @{ ok = $false; reason = 'grant_holder_not_live' }
         }
 
+        $effectiveRepo = Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot
         $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
-            grant           = $read.record
-            argv            = @($Argv)
-            canonicalPath   = $CanonicalPath
-            worktreesPrefix = $prefixResolved.path
-            targetPreexists = [bool]$TargetPreexists
+            grant                     = $read.record
+            argv                      = @($Argv)
+            canonicalPath             = $CanonicalPath
+            worktreesPrefix           = $prefixResolved.path
+            targetPreexists           = [bool]$TargetPreexists
+            effectiveRepositoryRoot   = if ($effectiveRepo.ok) { [string]$effectiveRepo.path } else { '' }
         }
         if (-not $evaluation.ok) {
             return @{ ok = $false; reason = [string]$evaluation.reason }
