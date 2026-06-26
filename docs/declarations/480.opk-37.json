@@ -1,0 +1,62 @@
+{
+  "issue_number": 480,
+  "iteration_id": "opk-37",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-34",
+  "created_at": "2026-06-26T13:55:00.000Z",
+  "baseline": {
+    "commit_sha": "1b954c0c1ab5c3a791dcf4b42dcb1c2d121b2516",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:e4e5228f7cc059cac3d98ec74a46c1d877afc09ec524b469287dadd651d0f1cf"
+  },
+  "declared_paths": [
+    "docs/autonomous-spawn-budget.mjs",
+    "docs/declarations/480.opk-34.json",
+    "docs/declarations/480.opk-37.json",
+    "docs/issues_drafts/152-orchestrator-review-pipeline-aggregate-spawn-budget.md",
+    "docs/review-pipeline-spawn-budget.d.mts",
+    "docs/review-pipeline-spawn-budget.json",
+    "docs/review-pipeline-spawn-budget.mjs",
+    "docs/review-start-repeat-classifier.d.mts",
+    "docs/review-start-repeat-classifier.mjs",
+    "docs/spawn-budget-manifest-loader.d.mts",
+    "docs/spawn-budget-manifest-loader.mjs",
+    "scripts/check-autonomous-spawn-budget.ps1",
+    "scripts/check-review-pipeline-spawn-budget.ps1",
+    "scripts/generate-review-pipeline-spawn-captures.ts",
+    "scripts/lib/Initialize-PackGateCheck.ps1",
+    "scripts/lib/Invoke-PackSpawnBudgetGates.ps1",
+    "scripts/record-review-pipeline-spawn-tick.ps1",
+    "scripts/review-pipeline-spawn-budget.test.ts",
+    "scripts/review-start-repeat-classifier.test.ts",
+    "scripts/verify.ps1",
+    "tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json",
+    "tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json",
+    "tests/external-output-references/review-start-repeat-classifier/claim-loser.json",
+    "tests/external-output-references/review-start-repeat-classifier/covered-in-flight.json",
+    "tests/external-output-references/review-start-repeat-classifier/distinct-new-cycle.json",
+    "tests/external-output-references/review-start-repeat-classifier/distinct-new-head.json",
+    "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json",
+    "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json",
+    "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5",
+      "new_active_scope_hash": "sha256:e4e5228f7cc059cac3d98ec74a46c1d877afc09ec524b469287dadd651d0f1cf",
+      "changed": {
+        "added": [
+          "docs/declarations/480.opk-37.json",
+          "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json",
+          "tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json"
+        ],
+        "removed": []
+      },
+      "reason": "Review fix: stable repo-relative claim capture fixtures",
+      "actor": "opk-37",
+      "timestamp": "2026-06-26T13:55:00.000Z",
+      "applied": true
+    }
+  ]
+}

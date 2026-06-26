@@ -1,0 +1,60 @@
+{
+  "issue_number": 480,
+  "iteration_id": "opk-34",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-26T09:57:36.011Z",
+  "baseline": {
+    "commit_sha": "000beeb32df88f921e330ed2febb78934f2bf08b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5"
+  },
+  "declared_paths": [
+    "docs/autonomous-spawn-budget.mjs",
+    "docs/issues_drafts/152-orchestrator-review-pipeline-aggregate-spawn-budget.md",
+    "docs/review-pipeline-spawn-budget.d.mts",
+    "docs/review-pipeline-spawn-budget.json",
+    "docs/review-pipeline-spawn-budget.mjs",
+    "docs/review-start-repeat-classifier.d.mts",
+    "docs/review-start-repeat-classifier.mjs",
+    "docs/spawn-budget-manifest-loader.d.mts",
+    "docs/spawn-budget-manifest-loader.mjs",
+    "docs/declarations/480.opk-34.json",
+    "scripts/check-autonomous-spawn-budget.ps1",
+    "scripts/check-review-pipeline-spawn-budget.ps1",
+    "scripts/generate-review-pipeline-spawn-captures.ts",
+    "scripts/lib/Initialize-PackGateCheck.ps1",
+    "scripts/lib/Invoke-PackSpawnBudgetGates.ps1",
+    "scripts/record-review-pipeline-spawn-tick.ps1",
+    "scripts/review-pipeline-spawn-budget.test.ts",
+    "scripts/review-start-repeat-classifier.test.ts",
+    "scripts/verify.ps1",
+    "tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json",
+    "tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json",
+    "tests/external-output-references/review-start-repeat-classifier/claim-loser.json",
+    "tests/external-output-references/review-start-repeat-classifier/covered-in-flight.json",
+    "tests/external-output-references/review-start-repeat-classifier/distinct-new-cycle.json",
+    "tests/external-output-references/review-start-repeat-classifier/distinct-new-head.json",
+    "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:590c1434beb7c2e5869333a02ccff1255ff5959d001dc2cca8ebee0f082830d3",
+      "new_active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5",
+      "changed": {
+        "added": [
+          "scripts/lib/Invoke-PackSpawnBudgetGates.ps1"
+        ],
+        "removed": [
+          "scripts/lib/Invoke-AutonomousSpawnBudgetGate.ps1",
+          "scripts/lib/Invoke-ReviewPipelineSpawnBudgetGate.ps1"
+        ]
+      },
+      "reason": "Merge spawn-budget gate scripts for self-architect lint dedupe",
+      "actor": "opk-34",
+      "timestamp": "2026-06-26T10:03:56.805Z",
+      "applied": true
+    }
+  ]
+}

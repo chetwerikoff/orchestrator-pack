@@ -1440,6 +1440,47 @@ else {
     Add-Failure 'Missing autonomous spawn budget vitest suite (Issue #462)'
 }
 
+$reviewPipelineSpawnBudgetCheck = Join-Path $Root 'scripts/check-review-pipeline-spawn-budget.ps1'
+if (Test-Path -LiteralPath $reviewPipelineSpawnBudgetCheck -PathType Leaf) {
+    & $reviewPipelineSpawnBudgetCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-pipeline-spawn-budget.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-pipeline-spawn-budget.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Review-pipeline spawn budget guard failed (Issue #480)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-pipeline-spawn-budget.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-pipeline spawn budget check (Issue #480)'
+}
+
+$reviewPipelineSpawnBudgetVitest = Join-Path $Root 'scripts/review-pipeline-spawn-budget.test.ts'
+if (Test-Path -LiteralPath $reviewPipelineSpawnBudgetVitest -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
+        & npm ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Add-Failure 'review-pipeline spawn budget vitest prerequisites failed (Issue #480)'
+        }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        & npx vitest run scripts/review-pipeline-spawn-budget.test.ts scripts/review-start-repeat-classifier.test.ts
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'review-pipeline spawn budget vitest suite failed (Issue #480)'
+        }
+        else {
+            Write-Check 'review-pipeline-spawn-budget/vitest' 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' 'missing'
+    Add-Failure 'Missing review-pipeline spawn budget vitest suite (Issue #480)'
+}
+
 $autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
 if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {

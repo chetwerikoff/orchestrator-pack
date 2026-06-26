@@ -1,0 +1,25 @@
+{
+  "description": "Covered clean head suppresses duplicate review start",
+  "attempts": [
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 318,
+      "head": "abc3180000000000000000000000000000000000",
+      "cycle": "cycle-1",
+      "claimId": "",
+      "reviewRunState": "clean",
+      "triggerSurface": "review-trigger-reconcile",
+      "started": false,
+      "reviewRuns": [
+        {
+          "id": "run-1",
+          "prNumber": 318,
+          "targetSha": "abc3180000000000000000000000000000000000",
+          "status": "clean"
+        }
+      ],
+      "cycleState": {}
+    }
+  ]
+}

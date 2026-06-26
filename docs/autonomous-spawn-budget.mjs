@@ -2,8 +2,8 @@
  * Autonomous surface spawn-budget contract (Issue #462).
  * Vitest: scripts/autonomous-spawn-budget.test.ts
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { loadPackSpawnBudgetManifest } from './spawn-budget-manifest-loader.mjs';
 
 export const AUTONOMOUS_SPAWN_BUDGET_VERSION = 'autonomous-spawn-budget/v1';
 export const AUTONOMOUS_SPAWN_BUDGET_RELATIVE_PATH = 'docs/autonomous-spawn-budget.json';
@@ -35,20 +35,12 @@ export function validateAutonomousSpawnBudget(budget) {
  * @param {string} packRoot
  */
 export function loadAutonomousSpawnBudget(packRoot) {
-  const budgetPath = join(packRoot, AUTONOMOUS_SPAWN_BUDGET_RELATIVE_PATH);
-  if (!existsSync(budgetPath)) {
-    return { ok: false, reason: 'spawn_budget_missing_or_unreadable', budget: null };
-  }
-  try {
-    const budget = JSON.parse(readFileSync(budgetPath, 'utf8'));
-    const validated = validateAutonomousSpawnBudget(budget);
-    if (!validated.ok) {
-      return { ok: false, reason: validated.reason, budget: null };
-    }
-    return { ok: true, reason: 'spawn_budget_ok', budget };
-  } catch {
-    return { ok: false, reason: 'spawn_budget_malformed', budget: null };
-  }
+  return loadPackSpawnBudgetManifest(
+    packRoot,
+    AUTONOMOUS_SPAWN_BUDGET_RELATIVE_PATH,
+    validateAutonomousSpawnBudget,
+    { okReason: 'spawn_budget_ok' },
+  );
 }
 
 /**

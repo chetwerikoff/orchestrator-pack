@@ -1,0 +1,19 @@
+{
+  "description": "Claim loser is not a new explainable start",
+  "attempts": [
+    {
+      "project": "orchestrator-pack",
+      "session": "opk-75",
+      "pr": 477,
+      "head": "abc4770000000000000000000000000000000000",
+      "cycle": "cycle-1",
+      "claimId": "claim-lost",
+      "reviewRunState": "",
+      "triggerSurface": "orchestrator-turn",
+      "claimOutcome": "claim_lost",
+      "started": false,
+      "reviewRuns": [],
+      "cycleState": {}
+    }
+  ]
+}
