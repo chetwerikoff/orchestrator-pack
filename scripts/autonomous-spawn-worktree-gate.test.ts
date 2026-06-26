@@ -356,6 +356,19 @@ describe('spawn worktree grant (#470)', () => {
     expect(consume.reason).toBe('spawn_worktree_allow');
   });
 
+  it('allows prompt-only spawn-new without minting a worktree grant', () => {
+    const output = runPwsh(`
+      . ${psString(spawnGateLibPath)}
+      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','--prompt','fixture holder prompt') -FixtureMode -FixturePolicy @{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }
+      [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason; grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID } | ConvertTo-Json -Compress
+    `);
+    const parsed = JSON.parse(output);
+    expect(parsed.denied).toBe(false);
+    expect(parsed.reason).toBe('spawn_policy_allowed');
+    expect(parsed.grantId).toBeFalsy();
+  });
+
   it('denies unexpected branch flags on spawn grant consume', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-470`;
