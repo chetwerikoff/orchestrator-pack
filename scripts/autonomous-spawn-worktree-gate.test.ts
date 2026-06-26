@@ -10,6 +10,8 @@ import {
   parseGitSpawnWorktreeAddArgv,
   parseSpawnTargetFromArgv,
   deriveSpawnAuthorizedWorktreeNames,
+  evaluateSpawnWorktreeBasenameBinding,
+  isAoSpawnWorktreeSessionBasename,
   pathIsUnderCanonicalPrefix,
 } from '../docs/spawn-worktree-grant.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
@@ -48,8 +50,8 @@ describe('spawn worktree grant (#470)', () => {
     const projectId = 'orchestrator-pack';
     const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
     mkdirSync(worktrees, { recursive: true });
-    const target = path.join(worktrees, 'opk-470');
-    const grantId = 'grant-spawn-470';
+    const target = path.join(worktrees, 'opk-27');
+    const grantId = 'grant-spawn-373';
 
     const mint = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
@@ -58,7 +60,7 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','470')
+        argv = @('spawn','373')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -89,7 +91,7 @@ describe('spawn worktree grant (#470)', () => {
     const projectId = 'orchestrator-pack';
     const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
     mkdirSync(worktrees, { recursive: true });
-    const target = path.join(worktrees, 'pr-999991');
+    const target = path.join(worktrees, 'opk-42');
 
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
@@ -356,19 +358,19 @@ describe('spawn worktree grant (#470)', () => {
     expect(consume.reason).toBe('spawn_worktree_allow');
   });
 
-  it('authorizes opk-prefixed worker worktree basenames for numeric issue spawns', () => {
+  it('authorizes AO session basename when spawn target differs from allocated session id (#472)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
-    const target = `${prefix}/opk-470`;
+    const target = `${prefix}/opk-27`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '470'],
-      grantId: 'grant-opk-basename',
+      argv: ['spawn', '373'],
+      grantId: 'grant-ao-session-basename',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
       sourceRepositoryRoot: '/tmp/source-repo',
     });
     expect(built.ok).toBe(true);
-    expect(built.grant?.authorizedWorktreeNames).toEqual(expect.arrayContaining(['470', 'opk-470']));
-    expect(deriveSpawnAuthorizedWorktreeNames(parseSpawnTargetFromArgv(['spawn', '470']))).toEqual(['470', 'opk-470']);
+    expect(built.grant?.authorizedWorktreeNames).toEqual(expect.arrayContaining(['373', 'opk-373']));
+    expect(built.grant?.authorizedWorktreeNames).not.toContain('opk-27');
 
     const consume = evaluateSpawnWorktreeGrantConsume({
       grant: built.grant,
@@ -380,6 +382,68 @@ describe('spawn worktree grant (#470)', () => {
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
+    const allowedNames = Array.isArray(built.grant?.authorizedWorktreeNames)
+      ? built.grant.authorizedWorktreeNames.map((name) => String(name))
+      : [];
+    expect(evaluateSpawnWorktreeBasenameBinding('opk-27', allowedNames)).toEqual({
+      ok: true,
+      reason: 'ao_session_basename',
+    });
+  });
+
+  it('claim-pr grant allows AO session basename without minting the session id (#472)', () => {
+    const prefix = '/tmp/projects/orchestrator-pack/worktrees';
+    const target = `${prefix}/opk-99`;
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '--claim-pr', '471'],
+      grantId: 'grant-claim-pr-session',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: '/tmp/source-repo',
+    });
+    expect(built.ok).toBe(true);
+    expect(built.grant?.authorizedWorktreeNames).toEqual(['pr-471']);
+    expect(built.grant?.authorizedWorktreeNames).not.toContain('opk-99');
+
+    const consume = evaluateSpawnWorktreeGrantConsume({
+      grant: built.grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: false,
+      effectiveRepositoryRoot: '/tmp/source-repo',
+    });
+    expect(consume.ok).toBe(true);
+    expect(consume.reason).toBe('spawn_worktree_allow');
+  });
+
+  it('denies non-AO worktree basenames with drift-visible diagnostics (#472)', () => {
+    const prefix = '/tmp/projects/orchestrator-pack/worktrees';
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '373'],
+      grantId: 'grant-invalid-basename',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: '/tmp/source-repo',
+    });
+    expect(built.ok).toBe(true);
+
+    for (const badBasename of ['random-worktree', 'opk-not-digits', 'opk-27-evil', '']) {
+      const target = `${prefix}/${badBasename}`;
+      const consume = evaluateSpawnWorktreeGrantConsume({
+        grant: built.grant,
+        argv: ['worktree', 'add', target, 'HEAD'],
+        canonicalPath: target,
+        worktreesPrefix: prefix,
+        targetPreexists: false,
+        effectiveRepositoryRoot: '/tmp/source-repo',
+      });
+      expect(consume.ok).toBe(false);
+      expect(consume.reason).toBe('worktree_session_basename_invalid');
+    }
+
+    expect(isAoSpawnWorktreeSessionBasename('opk-27')).toBe(true);
+    expect(isAoSpawnWorktreeSessionBasename('opk-once')).toBe(false);
   });
 
   it('allows prompt-only spawn-new without minting a worktree grant', () => {

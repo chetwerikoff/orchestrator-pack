@@ -30,6 +30,7 @@ if (-not $RepoRoot) {
 
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-ReadyReportStateSeedProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewReadyReportStateSeed.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewReadyReportStateSeed.ps1')
@@ -46,34 +47,11 @@ function Get-ReviewReadyReportStateSeedStateRoot {
     return ''
 }
 
+. (Join-Path $PSScriptRoot 'lib/Review-ReadySeedFixturePayload.ps1')
+
 function Get-FixtureReviewReadyReportStateSeedPayload {
     param([string]$Path)
-
-    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    $payload = @{
-        openPrs    = @($fixture.openPrs)
-        reviewRuns = @($fixture.reviewRuns)
-        sessions   = @($fixture.sessions)
-    }
-    foreach ($name in @(
-            'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
-            'bindingByKey', 'seededKeys', 'deferredScanKeys', 'handoffRecords',
-            'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand',
-            'supervisedRepoSlug'
-        )) {
-        if ($null -ne $fixture.$name) {
-            if ($name -in @(
-                    'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
-                    'bindingByKey', 'handoffRecords', 'watchEntries'
-                )) {
-                $payload[$name] = ConvertTo-MechanicalJsonMap -Value $fixture.$name
-            }
-            else {
-                $payload[$name] = $fixture.$name
-            }
-        }
-    }
-    return $payload
+    return (Get-ReviewReadySeedFixturePayload -Fixture (Resolve-ReviewReadySeedFixture -FixturePath $Path))
 }
 
 $stateRoot = Get-ReviewReadyReportStateSeedStateRoot
@@ -92,9 +70,12 @@ if ($FixturePath) {
     if ($payload.reviewCommand) {
         $reviewCommand = $payload.reviewCommand
     }
+    $progressBundle = New-ReviewReadyReportStateSeedProgressWriter
     $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
         -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -FixturePayload $payload -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
+        -ProgressWriter $progressBundle.Write -TickId $progressBundle.TickId `
         -LogWriter { param([string]$Message) Write-ReviewReadyReportStateSeedLog $Message }
+    & $progressBundle.Write 'tick_finish'
     Write-ReviewReadyReportStateSeedLog "fixture tick complete (started=$($result.started), seeded=$($result.seeded))"
     exit 0
 }
@@ -105,17 +86,42 @@ if (-not $reviewCommand) {
 
 try {
     do {
-        Write-OrchestratorSideProcessProgress -ChildId 'review-ready-report-state-seed' -Phase 'poll'
-        try {
-            $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
-                -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
-                -LogWriter { param([string]$Message) Write-ReviewReadyReportStateSeedLog $Message }
-            Write-ReviewReadyReportStateSeedLog "tick complete (started=$($result.started), seeded=$($result.seeded), candidates=$($result.candidates))"
-            Write-OrchestratorSideProcessTickSuccess -ChildId 'review-ready-report-state-seed'
+        $tickAdmission = Enter-ReviewReadyReportStateSeedTick -StateRoot $stateRoot
+        if (-not $tickAdmission.acquired) {
+            Write-ReviewReadyReportStateSeedLog 'tick skipped: prior tick still active'
+            Write-OrchestratorSideProcessProgress -ChildId 'review-ready-report-state-seed' -Phase 'tick_skipped' -TickOutcome 'skipped'
+            if ($Once) { break }
+            Start-Sleep -Milliseconds $pollMs
+            continue
         }
-        catch {
-            Write-ReviewReadyReportStateSeedLog "tick error: $_"
-            Write-OrchestratorSideProcessTickError -ChildId 'review-ready-report-state-seed' -ErrorMessage "$_"
+
+        $progressBundle = New-ReviewReadyReportStateSeedProgressWriter -TickId $tickAdmission.tickId
+        try {
+            Write-OrchestratorSideProcessWorkHeartbeat -ChildId 'review-ready-report-state-seed' -Phase 'poll' `
+                -WorkStep 'poll_start' -WorkCursor 1 -WorkTotal (Get-ReviewReadyReportStateSeedWorkTotal) `
+                -TickId $progressBundle.TickId
+            try {
+                $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
+                    -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
+                    -ProgressWriter $progressBundle.Write -TickId $progressBundle.TickId `
+                    -LogWriter { param([string]$Message) Write-ReviewReadyReportStateSeedLog $Message }
+                & $progressBundle.Write 'tick_finish'
+                Write-ReviewReadyReportStateSeedLog "tick complete (started=$($result.started), seeded=$($result.seeded), candidates=$($result.candidates))"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'review-ready-report-state-seed' -Extra @{
+                    progressSchemaVersion = 2
+                    tickId                = $progressBundle.TickId
+                }
+            }
+            catch {
+                Write-ReviewReadyReportStateSeedLog "tick error: $_"
+                Write-OrchestratorSideProcessTickError -ChildId 'review-ready-report-state-seed' -ErrorMessage "$_" -Extra @{
+                    progressSchemaVersion = 2
+                    tickId                = $progressBundle.TickId
+                }
+            }
+        }
+        finally {
+            Exit-ReviewReadyReportStateSeedTick -StateRoot $stateRoot
         }
 
         if ($Once) { break }

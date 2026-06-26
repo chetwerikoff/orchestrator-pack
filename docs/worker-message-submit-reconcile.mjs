@@ -39,6 +39,9 @@ import {
   compactWorkerMessageSubmitTracking,
   convergeOversizedReconcileState,
   evaluateSubmitTrackingCapacity,
+  FENCE_LIFECYCLE_COMPLETED,
+  FENCE_LIFECYCLE_PENDING,
+  interpretDispatchFenceLifecycle,
 } from './mechanical-reconcile-bounds.mjs';
 
 /** Default tick cadence: 30 seconds. */
@@ -68,6 +71,8 @@ export const OPERATOR_ESCALATION_PREFIX =
   '[worker-message-submit-reconcile] ESCALATION:';
 
 export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
+
+export const STATE_ROOT_RECOVERY_REASON = 'wrong_state_root_active_deliveries';
 export const FAILED_DELIVERY_RESOLVED = 'resolved';
 export const FAILED_DELIVERY_AUDITED_CLOSED = 'audited_closed';
 
@@ -1751,6 +1756,229 @@ export function planWorkerMessageSubmitActions(input) {
   };
 }
 
+const TERMINAL_SUBMIT_STATES = new Set([
+  SUBMIT_STATE_SUBMITTED,
+  SUBMIT_STATE_ESCALATED,
+  SUBMIT_STATE_NOOP,
+]);
+
+/**
+ * @param {Record<string, unknown> | null | undefined} record
+ */
+function isSubmitTrackingDeliveryTerminal(record) {
+  return TERMINAL_SUBMIT_STATES.has(trimString(record?.terminalState));
+}
+
+/**
+ * @param {Record<string, unknown>} journal
+ */
+function findUnresolvedDispatchJournalEntries(journal) {
+  /** @type {string[]} */
+  const unresolved = [];
+  for (const [deliveryId, record] of Object.entries(journal ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (interpretDispatchFenceLifecycle(record) === FENCE_LIFECYCLE_PENDING) {
+      unresolved.push(deliveryId);
+    }
+  }
+  return unresolved;
+}
+
+/**
+ * @param {Record<string, unknown>} failedDeliveries
+ */
+function findUnresolvedFailedDeliveries(failedDeliveries) {
+  /** @type {string[]} */
+  const unresolved = [];
+  for (const [deliveryId, record] of Object.entries(failedDeliveries ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (trimString(record?.unresolvedState) === FAILED_DELIVERY_UNRESOLVED) {
+      unresolved.push(deliveryId);
+    }
+  }
+  return unresolved;
+}
+
+/**
+ * @param {Record<string, unknown>} failedDeliveries
+ * @param {Record<string, unknown>} stateDeliveries
+ */
+function findUnresolvedFailedDeliveriesBlockingReSeat(failedDeliveries, stateDeliveries) {
+  return findUnresolvedFailedDeliveries(failedDeliveries).filter(
+    (deliveryId) => !isSubmitTrackingDeliveryTerminal(stateDeliveries?.[deliveryId]),
+  );
+}
+
+function countCompletedMatchingJournalEvidence(journal, stateDeliveries) {
+  const terminalDeliveryIds = new Set(
+    Object.entries(stateDeliveries ?? {})
+      .filter(
+        ([deliveryId, record]) =>
+          deliveryId &&
+          !deliveryId.startsWith('_') &&
+          isSubmitTrackingDeliveryTerminal(record),
+      )
+      .map(([deliveryId]) => deliveryId),
+  );
+  if (terminalDeliveryIds.size === 0) {
+    return 0;
+  }
+  let count = 0;
+  for (const [deliveryId, record] of Object.entries(journal ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (!terminalDeliveryIds.has(deliveryId)) {
+      continue;
+    }
+    if (interpretDispatchFenceLifecycle(record) !== FENCE_LIFECYCLE_COMPLETED) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * @param {object} input
+ */
+export function evaluateStateRootReSeatEligibility({
+  state,
+  journal,
+  anchor,
+}) {
+  const recovery = state?._recovery;
+  if (!recovery || recovery.fenceTrusted !== false) {
+    return { eligible: false, reason: 'no_untrusted_recovery' };
+  }
+  const priorRecoveryReason = trimString(recovery.reason);
+  if (priorRecoveryReason !== STATE_ROOT_RECOVERY_REASON) {
+    return {
+      eligible: false,
+      reason: 'recovery_reason_not_state_root',
+      priorRecoveryReason,
+    };
+  }
+
+  for (const [deliveryId, record] of Object.entries(state?.deliveries ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (!isSubmitTrackingDeliveryTerminal(record)) {
+      return {
+        eligible: false,
+        reason: 'unresolved_state_delivery',
+        deliveryId,
+        priorRecoveryReason,
+      };
+    }
+  }
+
+  const unresolvedJournal = findUnresolvedDispatchJournalEntries(journal ?? {});
+  if (unresolvedJournal.length > 0) {
+    return {
+      eligible: false,
+      reason: 'unresolved_journal_entry',
+      deliveryId: unresolvedJournal[0],
+      priorRecoveryReason,
+    };
+  }
+
+  const unresolvedFailed = findUnresolvedFailedDeliveriesBlockingReSeat(
+    state?.failedDeliveries ?? {},
+    state?.deliveries ?? {},
+  );
+  if (unresolvedFailed.length > 0) {
+    return {
+      eligible: false,
+      reason: 'unresolved_failed_delivery',
+      deliveryId: unresolvedFailed[0],
+      priorRecoveryReason,
+    };
+  }
+
+  const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
+  if (anchorActive > 0) {
+    const stateDeliveries = state?.deliveries ?? {};
+    const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
+      ([deliveryId, record]) =>
+        deliveryId &&
+        !deliveryId.startsWith('_') &&
+        isSubmitTrackingDeliveryTerminal(record),
+    ).length;
+    const completedMatchingJournalCount = countCompletedMatchingJournalEvidence(
+      journal ?? {},
+      stateDeliveries,
+    );
+    const totalEvidenceCount = terminalStateDeliveryCount;
+    if (totalEvidenceCount < anchorActive) {
+      return {
+        eligible: false,
+        reason: 'anchor_active_without_terminal_evidence',
+        priorRecoveryReason,
+        evidence: `anchorActiveDeliveryCount=${anchorActive};terminalEvidenceCount=${terminalStateDeliveryCount};completedMatchingJournalCount=${completedMatchingJournalCount}`,
+      };
+    }
+  }
+
+  return {
+    eligible: true,
+    reason: 'prior_epoch_work_terminal',
+    priorRecoveryReason,
+    evidence: 'state_deliveries_terminal_and_journal_resolved',
+  };
+}
+
+/**
+ * @param {object} input
+ */
+export function applyStateRootReSeat({
+  state,
+  identity,
+  eligibility,
+  nowMs,
+}) {
+  const next = {
+    ...(state ?? {}),
+    stateRootIdentity: trimString(identity),
+  };
+  delete next._recovery;
+  const auditEntry = {
+    atMs: nowMs,
+    action: 'state_root_reseat',
+    reason: trimString(eligibility?.reason),
+    priorRecoveryReason: trimString(eligibility?.priorRecoveryReason),
+    evidence: trimString(eligibility?.evidence ?? eligibility?.reason),
+  };
+  next.audit = [...toArray(state?.audit), auditEntry];
+  return next;
+}
+
+/**
+ * @param {object} input
+ */
+export function evaluateStateRootReSeat(input) {
+  const eligibility = evaluateStateRootReSeatEligibility({
+    state: input?.state ?? {},
+    journal: input?.journal ?? {},
+    anchor: input?.anchor ?? null,
+  });
+  if (!eligibility.eligible) {
+    return { ...eligibility, state: input?.state ?? {} };
+  }
+  const state = applyStateRootReSeat({
+    state: input?.state ?? {},
+    identity: input?.identity,
+    eligibility,
+    nowMs: Number(input?.nowMs ?? Date.now()),
+  });
+  return { ...eligibility, state };
+}
+
 /**
  * @param {object} input
  */
@@ -1787,5 +2015,9 @@ runStdinJsonCli('worker-message-submit-reconcile.mjs', {
   status() {
     const payload = readStdinJson();
     return getFailedDeliveryStatus(payload);
+  },
+  stateRootReseat() {
+    const payload = readStdinJson();
+    return evaluateStateRootReSeat(payload);
   },
 });

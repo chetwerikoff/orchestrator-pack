@@ -10,7 +10,7 @@ import {
   parsePrNumberFromPrUrl,
 } from './review-handoff-wake-admission.mjs';
 import { getReportState } from './review-finding-delivery-confirm.mjs';
-import { hasReadyForReviewForHead } from './review-head-ready.mjs';
+import { hasReadyForReviewForHead, preRunHeadReadyRecheck } from './review-head-ready.mjs';
 import {
   REPORT_STATE_SEED_START_REASON,
   createWatchEntry,
@@ -38,6 +38,15 @@ export const REPORT_STATE_SEED_TO_START_MAX_MS = 30_000;
 
 /** Default per-tick scan capacity — deferred heads revisit on later ticks. */
 export const DEFAULT_REPORT_STATE_POLL_TICK_CAPACITY = 20;
+
+/** Structured seed pre-side-effect revalidation outcomes (Issue #475). */
+export const SEED_REVALIDATION_OUTCOMES = Object.freeze({
+  FRESH: 'fresh-candidate-starts',
+  STALE_HEAD: 'stale-head',
+  READINESS: 'readiness-revalidated',
+  DUPLICATE: 'duplicate-prevented',
+  BOUNDARY_RACE: 'boundary-race-blocked',
+});
 
 const READY_FOR_REVIEW_STATE = 'ready_for_review';
 
@@ -659,6 +668,130 @@ export function planReportStatePollTick(input) {
   };
 }
 
+
+/**
+ * Normalize fresh authoritative inputs for seed pre-side-effect revalidation.
+ *
+ * @param {Record<string, unknown>} fresh
+ */
+function normalizeSeedRevalidationFresh(fresh) {
+  const prNumber = Number(fresh?.prNumber ?? fresh?.planned?.prNumber ?? 0);
+  const prKey = String(prNumber);
+  return {
+    ...fresh,
+    openPrs: toArray(fresh?.openPrs),
+    reviewRuns: toArray(fresh?.reviewRuns),
+    sessions: toArray(fresh?.sessions),
+    ciChecks: toArray(fresh?.ciChecks ?? fresh?.ciChecksByPr?.[prKey]),
+    requiredCheckNames: toArray(
+      fresh?.requiredCheckNames ?? fresh?.requiredCheckNamesByPr?.[prKey],
+    ),
+    requiredCheckLookupFailed: Boolean(
+      fresh?.requiredCheckLookupFailed ??
+        fresh?.requiredCheckLookupFailedByPr?.[prKey],
+    ),
+    nowMs: Number(fresh?.nowMs ?? Date.now()),
+  };
+}
+
+/**
+ * Classify a seed side-effect attempt after claim / pre-run recheck (Issue #475).
+ *
+ * @param {object} input
+ * @param {boolean} [input.triggered]
+ * @param {string} [input.sideEffectReason]
+ * @param {boolean} [input.boundaryRace]
+ */
+export function classifySeedSideEffectOutcome(input) {
+  const triggered = Boolean(input?.triggered);
+  const reason = String(input?.sideEffectReason ?? '').trim();
+  const boundaryRace = Boolean(input?.boundaryRace);
+
+  if (triggered) {
+    return {
+      outcome: SEED_REVALIDATION_OUTCOMES.FRESH,
+      emitReviewStart: true,
+      reason: reason || 'head_ready_after_recheck',
+    };
+  }
+
+  if (
+    boundaryRace ||
+    reason === 'claimed' ||
+    reason === 'lost_ownership' ||
+    reason === 'bound_to_other_run'
+  ) {
+    return {
+      outcome: SEED_REVALIDATION_OUTCOMES.BOUNDARY_RACE,
+      emitReviewStart: false,
+      reason: boundaryRace ? 'claim-lost' : reason,
+    };
+  }
+
+  if (
+    reason === 'covered_by_run' ||
+    reason === 'pre_run_recheck_head_covered' ||
+    reason === 'head_covered'
+  ) {
+    return {
+      outcome: SEED_REVALIDATION_OUTCOMES.DUPLICATE,
+      emitReviewStart: false,
+      reason: reason === 'covered_by_run' ? reason : 'head_covered',
+    };
+  }
+
+  if (
+    reason === 'pre_run_recheck_head_advanced' ||
+    reason.includes('head_advanced') ||
+    reason === 'stale-head'
+  ) {
+    return {
+      outcome: SEED_REVALIDATION_OUTCOMES.STALE_HEAD,
+      emitReviewStart: false,
+      reason: SEED_REVALIDATION_OUTCOMES.STALE_HEAD,
+    };
+  }
+
+  if (reason.startsWith('pre_run_recheck_') || reason === 'ci_red_defer') {
+    return {
+      outcome: SEED_REVALIDATION_OUTCOMES.READINESS,
+      emitReviewStart: false,
+      reason,
+    };
+  }
+
+  return {
+    outcome: SEED_REVALIDATION_OUTCOMES.READINESS,
+    emitReviewStart: false,
+    reason: reason || 'readiness_revalidated',
+  };
+}
+
+/**
+ * Revalidate a seed-planned candidate immediately before review-start side effects.
+ *
+ * @param {object} input
+ * @param {Record<string, unknown>} input.planned
+ * @param {Record<string, unknown>} input.fresh
+ */
+export function evaluateSeedPreSideEffectRevalidation(input) {
+  const planned = input?.planned ?? {};
+  const fresh = normalizeSeedRevalidationFresh({
+    ...(input?.fresh ?? {}),
+    prNumber: input?.fresh?.prNumber ?? planned?.prNumber,
+  });
+  const recheck = preRunHeadReadyRecheck(planned, fresh);
+  const classified = classifySeedSideEffectOutcome({
+    triggered: recheck.emitReviewRun,
+    sideEffectReason: recheck.reason,
+    boundaryRace: Boolean(input?.boundaryRace),
+  });
+  return {
+    ...classified,
+    recheck,
+  };
+}
+
 export { REPORT_STATE_SEED_START_REASON, resolveStartReasonForWatchEntry, seedWatchFromReportStatePoll };
 
 runStdinJsonCli('review-ready-report-state-seed.mjs', {
@@ -666,4 +799,6 @@ runStdinJsonCli('review-ready-report-state-seed.mjs', {
   seedFromCandidates: () => seedWatchFromReportStatePoll(readStdinJson()),
   updateBinding: () => updatePollBindingStateEntry(readStdinJson()),
   hasTerminalOutcome: () => hasTerminalHandoffOutcome(readStdinJson()),
+  revalidateBeforeSideEffect: () => evaluateSeedPreSideEffectRevalidation(readStdinJson()),
+  classifySideEffectOutcome: () => classifySeedSideEffectOutcome(readStdinJson()),
 });

@@ -1,0 +1,24 @@
+{
+  "expected": "hang-still-stalled",
+  "scenario": "health-verdict",
+  "stallThresholdMs": 20000,
+  "nowMs": 17000000030000,
+  "childPid": 4242,
+  "childAlive": true,
+  "childStartedMs": 1700000000000,
+  "progress": {
+    "childId": "review-ready-report-state-seed",
+    "phase": "poll",
+    "pid": 4242,
+    "lastProgressMs": 1700000000000,
+    "progressSchemaVersion": 2,
+    "tickId": "seed-tick-hang",
+    "workStep": "poll_start",
+    "workCursor": 1,
+    "workTotal": 8
+  },
+  "expectVerdict": {
+    "status": "stalled",
+    "reason": "no fresh tick progress"
+  }
+}

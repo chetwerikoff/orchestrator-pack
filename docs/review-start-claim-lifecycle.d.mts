@@ -43,6 +43,7 @@ export function hasInFlightCoveringRun(
 ): boolean;
 
 export function evaluateLaunchPending(args: Record<string, unknown>): Record<string, unknown>;
+export function resolveHoldBudgetStartMs(claim: Record<string, unknown> | null | undefined): number | null;
 export function evaluateHoldBudget(args: Record<string, unknown>): Record<string, unknown>;
 export function evaluateReadinessEnvelope(args: Record<string, unknown>): Record<string, unknown>;
 export function evaluateVisibilityFence(args: Record<string, unknown>): Record<string, unknown>;

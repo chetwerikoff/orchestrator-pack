@@ -1,0 +1,17 @@
+{
+  "extends": "tick-plan-base.json",
+  "expected": "duplicate-prevented",
+  "freshSnapshot": {
+    "reviewRuns": [
+      {
+        "id": "run-covered-475",
+        "prNumber": 475,
+        "targetSha": "2847a9ddeadbeef1234567890abcdef12345678",
+        "status": "running",
+        "findingCount": 0
+      }
+    ]
+  },
+  "expectStarted": 0,
+  "expectOutcome": "duplicate-prevented"
+}

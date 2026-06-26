@@ -44,6 +44,7 @@ export const TERMINAL_OUTCOME_RETRY_ELIGIBLE = {
   run_started: false,
   covered_by_run: false,
   hold_budget_exceeded: true,
+  readiness_envelope_exceeded: true,
   launch_pending_budget_exceeded: false,
   run_not_visible_fenced: false,
   orphan_covered_run_unbound: false,
@@ -207,6 +208,26 @@ function parseUtcMs(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+
+export function resolveHoldBudgetStartMs(claim) {
+  const holdMs = parseUtcMs(claim?.holdStartedAtUtc);
+  const acquiredMs = parseUtcMs(claim?.acquiredAtUtc);
+  const launchPendingMs = parseUtcMs(asRecord(claim?.launchPending)?.atUtc);
+  const launchInvokedMs = parseUtcMs(claim?.launchPendingInvokedAtUtc);
+
+  if (launchPendingMs != null || launchInvokedMs != null) {
+    return holdMs ?? launchPendingMs ?? launchInvokedMs;
+  }
+  if (holdMs == null) {
+    return null;
+  }
+  // Legacy acquire-time hold markers predate launch-gate rescoping; do not charge pre-launch work.
+  if (acquiredMs != null && holdMs <= acquiredMs + 1000) {
+    return null;
+  }
+  return holdMs;
+}
+
 export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
   const pending = asRecord(claim?.launchPending);
   if (!pending?.atUtc) {
@@ -229,7 +250,7 @@ export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifec
   }
   const ageMs = Math.max(0, nowMs - startedMs);
   const configuredBudget = Number(pending.budgetMs) > 0 ? Number(pending.budgetMs) : config.launchPendingBudgetMs;
-  const readinessStartMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc) ?? startedMs;
+  const readinessStartMs = parseUtcMs(claim?.acquiredAtUtc) ?? startedMs;
   const envelopeRemainingAtLaunch = Math.max(0, config.readinessEnvelopeMs - Math.max(0, startedMs - readinessStartMs));
   const budgetMs = Math.min(configuredBudget, envelopeRemainingAtLaunch);
   if (ageMs >= budgetMs) {
@@ -239,7 +260,7 @@ export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifec
 }
 
 export function evaluateReadinessEnvelope({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
-  const startedMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc);
+  const startedMs = parseUtcMs(claim?.acquiredAtUtc);
   if (startedMs == null) {
     return {
       exceeded: false,
@@ -262,11 +283,21 @@ export function evaluateReadinessEnvelope({ claim, nowMs, config = resolveClaimL
 }
 
 export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
-  const startedMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc);
-  if (startedMs == null) {
-    return { exceeded: false, reason: 'no_hold_start' };
-  }
+  const startedMs = resolveHoldBudgetStartMs(claim);
   const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  if (startedMs == null) {
+    const acquiredMs = parseUtcMs(claim?.acquiredAtUtc);
+    const preLaunchAgeMs = acquiredMs == null ? 0 : Math.max(0, nowMs - acquiredMs);
+    return {
+      exceeded: false,
+      reason: 'hold_not_started',
+      phase: 'pre_launch',
+      ageMs: 0,
+      preLaunchAgeMs,
+      budgetMs: config.holdBudgetMs,
+      envelope,
+    };
+  }
   const ageMs = Math.max(0, nowMs - startedMs);
   const budgetMs = Math.min(config.holdBudgetMs, envelope.budgetMs);
   const exceeded = envelope.exceeded || ageMs >= budgetMs;
@@ -275,6 +306,7 @@ export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycl
     ageMs,
     budgetMs,
     envelope,
+    phase: 'post_launch_gate',
     reason: envelope.exceeded ? 'envelope_exceeded' : (ageMs >= budgetMs ? 'budget_exceeded' : 'within_budget'),
   };
 }
@@ -290,7 +322,7 @@ export function evaluateVisibilityFence({ claim, reviewRuns, nowMs, config = res
   if (covered) {
     return { shouldFence: false, reason: 'run_visible', coveredRunId: covered.runId, envelope };
   }
-  const readinessStartMs = parseUtcMs(claim?.holdStartedAtUtc ?? claim?.acquiredAtUtc) ?? pendingMs;
+  const readinessStartMs = parseUtcMs(claim?.acquiredAtUtc) ?? pendingMs;
   const envelopeRemainingAtPending = Math.max(0, config.readinessEnvelopeMs - Math.max(0, pendingMs - readinessStartMs));
   const budgetMs = Math.min(config.visibilityBudgetMs, envelopeRemainingAtPending);
   if (envelope.exceeded || ageMs >= budgetMs) {
@@ -354,12 +386,23 @@ function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config }) {
       envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
     };
   }
+  const hold = evaluateHoldBudget({ claim, nowMs, config });
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  if (hold.phase === 'pre_launch' || hold.reason === 'hold_not_started') {
+    return {
+      action: 'terminalize',
+      outcome: 'readiness_envelope_exceeded',
+      reason: 'pre_launch_envelope_exceeded',
+      hold,
+      envelope,
+    };
+  }
   return {
     action: 'terminalize',
     outcome: 'hold_budget_exceeded',
-    reason: 'readiness_envelope_exceeded',
-    hold: evaluateHoldBudget({ claim, nowMs, config }),
-    envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+    reason: 'hold_budget_exceeded',
+    hold,
+    envelope,
   };
 }
 
@@ -596,9 +639,18 @@ async function main() {
       allowNonLinuxProc: payload?.allowNonLinuxProc,
     });
   }
-  if (subcommand === 'readiness-envelope') {
+  if (subcommand === 'hold-budget') {
     const config = resolveClaimLifecycleConfig(payload?.config ?? {});
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
+    return evaluateHoldBudget({
+      claim: payload?.claim,
+      nowMs,
+      config,
+    });
+  }
+  if (subcommand === 'readiness-envelope') {
+    const config = resolveClaimLifecycleConfig(payload?.config ?? {});
+    const nowMs = Number(payload?.nowMs) > 0 ? Number(payload?.nowMs) : Date.now();
     return evaluateReadinessEnvelope({
       claim: payload?.claim,
       nowMs,

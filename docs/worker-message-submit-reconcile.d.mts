@@ -78,6 +78,12 @@ export interface DeliveryTrackingRecord {
   vanishedSuppressedAtMs?: number;
 }
 
+export interface RecoveryLatch {
+  fenceTrusted?: boolean;
+  reason?: string;
+  quarantined?: string;
+}
+
 export interface SubmitTrackingState {
   deliveries?: Record<string, DeliveryTrackingRecord>;
   failedDeliveries?: Record<string, FailedDeliveryRecord>;
@@ -88,6 +94,7 @@ export interface SubmitTrackingState {
   adoptionConfigPathHash?: string;
   lastAdoptionEscalationKey?: string;
   stateRootIdentity?: string;
+  _recovery?: RecoveryLatch;
 }
 
 export interface SubmitDecision {
@@ -298,3 +305,39 @@ export declare function evaluateConcurrentSubmitClaim(input: {
   existingClaim?: string;
   newClaimKey: string;
 }): { ok: boolean; reason: string };
+
+export declare const STATE_ROOT_RECOVERY_REASON: string;
+
+export declare function evaluateStateRootReSeatEligibility(input: {
+  state?: Record<string, unknown>;
+  journal?: Record<string, Record<string, unknown>>;
+  anchor?: Record<string, unknown> | null;
+}): {
+  eligible: boolean;
+  reason: string;
+  priorRecoveryReason?: string;
+  deliveryId?: string;
+  evidence?: string;
+};
+
+export declare function applyStateRootReSeat(input: {
+  state?: Record<string, unknown>;
+  identity?: string;
+  eligibility?: Record<string, unknown>;
+  nowMs: number;
+}): Record<string, unknown>;
+
+export declare function evaluateStateRootReSeat(input: {
+  state?: Record<string, unknown>;
+  journal?: Record<string, Record<string, unknown>>;
+  anchor?: Record<string, unknown> | null;
+  identity?: string;
+  nowMs?: number;
+}): {
+  eligible: boolean;
+  reason: string;
+  priorRecoveryReason?: string;
+  deliveryId?: string;
+  evidence?: string;
+  state: Record<string, unknown>;
+};
