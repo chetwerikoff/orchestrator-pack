@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "000beeb32df88f921e330ed2febb78934f2bf08b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:590c1434beb7c2e5869333a02ccff1255ff5959d001dc2cca8ebee0f082830d3"
+    "active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5"
   },
   "declared_paths": [
     "docs/autonomous-spawn-budget.mjs",
@@ -24,8 +24,7 @@
     "scripts/check-review-pipeline-spawn-budget.ps1",
     "scripts/generate-review-pipeline-spawn-captures.ts",
     "scripts/lib/Initialize-PackGateCheck.ps1",
-    "scripts/lib/Invoke-AutonomousSpawnBudgetGate.ps1",
-    "scripts/lib/Invoke-ReviewPipelineSpawnBudgetGate.ps1",
+    "scripts/lib/Invoke-PackSpawnBudgetGates.ps1",
     "scripts/record-review-pipeline-spawn-tick.ps1",
     "scripts/review-pipeline-spawn-budget.test.ts",
     "scripts/review-start-repeat-classifier.test.ts",
@@ -39,5 +38,23 @@
     "tests/external-output-references/review-start-repeat-classifier/same-cycle-repeat.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:590c1434beb7c2e5869333a02ccff1255ff5959d001dc2cca8ebee0f082830d3",
+      "new_active_scope_hash": "sha256:2d13218ed8b7e6e33503d3d4e5a26d6cdaadddfd5063fe4010482a06be89ded5",
+      "changed": {
+        "added": [
+          "scripts/lib/Invoke-PackSpawnBudgetGates.ps1"
+        ],
+        "removed": [
+          "scripts/lib/Invoke-AutonomousSpawnBudgetGate.ps1",
+          "scripts/lib/Invoke-ReviewPipelineSpawnBudgetGate.ps1"
+        ]
+      },
+      "reason": "Merge spawn-budget gate scripts for self-architect lint dedupe",
+      "actor": "opk-34",
+      "timestamp": "2026-06-26T10:03:56.805Z",
+      "applied": true
+    }
+  ]
 }
