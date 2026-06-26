@@ -2,7 +2,7 @@
   "issue_number": 450,
   "iteration_id": "opk-flaky-fix",
   "iteration_id_source": "ao_session",
-  "supersedes": null,
+  "supersedes": "opk-12",
   "created_at": "2026-06-26T11:51:16Z",
   "baseline": {
     "commit_sha": "d8d56e18438165a145747cec0c945527a3efce93",
