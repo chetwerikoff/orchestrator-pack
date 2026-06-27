@@ -55,6 +55,11 @@ permissions:
   issues: read
   pull-requests: write
 
+# Caller PR runs cancel per pull_request.number; non-PR workflow_call invocations stay isolated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('call-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event.pull_request.number != '' }}
+
 jobs:
   codex-review:
     name: Codex ${{ inputs.model }} PR review
@@ -93,6 +98,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: orchestrator-pack/package-lock.json
 
       - name: Install pack dependencies
         working-directory: orchestrator-pack

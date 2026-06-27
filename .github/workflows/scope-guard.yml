@@ -7,6 +7,11 @@ on:
     branches:
       - main
 
+# Superseded pull-request runs cancel per PR number; push-to-main runs never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Default read-only; jobs that post PR comments override permissions locally.
 permissions:
   contents: read
@@ -90,6 +95,10 @@ jobs:
         shell: pwsh
         run: ./scripts/check-reusable.ps1
 
+      - name: Enforce CI cheap wins policy
+        shell: pwsh
+        run: ./scripts/check-ci-cheap-wins.ps1
+
   pr-scope-guard:
     name: PR scope guard
     if: github.event_name == 'pull_request'
@@ -107,6 +116,15 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted-scope-guard
+
+      - name: Setup Node.js (trusted scope guard deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            trusted-scope-guard/package-lock.json
 
       - name: Run scope guard
         shell: pwsh

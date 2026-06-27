@@ -6,28 +6,25 @@ on:
     branches:
       - main
 
+# Superseded pull-request runs cancel per PR number; push-to-main runs never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
-  audit-fixtures:
-    name: Read-delegation audit fixtures
+  audit-policy:
+    name: Read-delegation audit policy checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-
-      - name: Install npm dependencies
-        run: npm ci --include=dev
-
-      - name: Run read-delegation audit fixture suite
-        run: npm test -- scripts/read-delegation-audit.test.ts
+      # Fixture suite (scripts/read-delegation-audit.test.ts) is owned by scope-guard
+      # "Run pack contract tests" via scripts/test-all.ps1 on ordinary non-markdown PRs
+      # and on push-to-main. This workflow retains unique policy/meta checks only.
 
       - name: Enforce read-delegation policy pointer consistency
         shell: pwsh
