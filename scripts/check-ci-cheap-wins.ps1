@@ -36,12 +36,50 @@ function Get-WorkflowFiles {
 
 function Test-WorkflowTriggersPushMain {
     param([string]$Text)
-    return $Text -match '(?ms)^on:\s*.*?^\s*push:\s*$.*?^\s*branches:\s*$.*?^\s*-\s*main\s*$'
+    if ($Text -match '(?ms)^on:\s*.*?^\s*push:\s*$.*?^\s*branches:\s*$.*?^\s*-\s*main\s*$') {
+        return $true
+    }
+    if ($Text -match '(?ms)push:\s*[\r\n]+\s*branches:\s*\[[^\]]*\bmain\b') {
+        return $true
+    }
+    if ($Text -match '(?ms)push:\s*[\r\n]+\s*branches:\s*\r?\n\s*-\s*main\b') {
+        return $true
+    }
+    if ($Text -match '(?ms)push:\s*branches:\s*\[[^\]]*\bmain\b') {
+        return $true
+    }
+    return $false
 }
 
 function Test-WorkflowTriggersPullRequest {
     param([string]$Text)
-    return $Text -match '(?m)^\s*pull_request(_target)?:\s*$' -or $Text -match '(?m)^\s*-\s*pull_request(_target)?\s*$'
+    if ($Text -match '(?m)^on:\s*pull_request(_target)?\s*$') {
+        return $true
+    }
+    if ($Text -match '(?m)^on:\s*\[[^\]]*\bpull_request(_target)?\b[^\]]*\]') {
+        return $true
+    }
+    if ($Text -match '(?m)^\s*pull_request(_target)?:\s*') {
+        return $true
+    }
+    if ($Text -match '(?m)^\s*-\s*pull_request(_target)?\s*$') {
+        return $true
+    }
+    return $false
+}
+
+function Test-WorkflowIsReusable {
+    param([string]$Text)
+    if ($Text -match '(?m)^on:\s*workflow_call\s*$') {
+        return $true
+    }
+    if ($Text -match '(?m)^on:\s*\[[^\]]*\bworkflow_call\b[^\]]*\]') {
+        return $true
+    }
+    if ($Text -match '(?m)^on:\s*$' -and $Text -match '(?m)^\s*workflow_call:\s*') {
+        return $true
+    }
+    return $false
 }
 
 function Get-YamlJobs {
@@ -94,7 +132,7 @@ foreach ($file in $workflowFiles) {
 
     $hasPr = Test-WorkflowTriggersPullRequest -Text $text
     $hasPushMain = Test-WorkflowTriggersPushMain -Text $text
-  $isReusable = $text -match '(?m)^on:\s*$' -and $text -match '(?m)^\s*workflow_call:\s*$'
+    $isReusable = Test-WorkflowIsReusable -Text $text
 
     if ($hasPr -or $hasPushMain -or $isReusable) {
         if ($text -notmatch '(?m)^concurrency:\s*$') {
