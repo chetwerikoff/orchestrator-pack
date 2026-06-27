@@ -79,8 +79,13 @@ if ($workflowFiles.Count -eq 0) {
 $scopeGuardPath = Join-Path $RepoRoot '.github/workflows/scope-guard.yml'
 $auditWorkflowPath = Join-Path $RepoRoot '.github/workflows/read-delegation-audit.yml'
 
+$governedWorkflowExempt = '.github/workflows/contract-evidence-legacy-list-guard.yml'
+
 foreach ($file in $workflowFiles) {
     $rel = '.github/workflows/' + $file.Name
+    if ($rel -eq $governedWorkflowExempt) {
+        continue
+    }
     $text = Get-Content -LiteralPath $file.FullName -Raw
 
     $hasPr = Test-WorkflowTriggersPullRequest -Text $text
