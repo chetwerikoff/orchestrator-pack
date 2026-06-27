@@ -1,0 +1,36 @@
+{
+  "issue_number": 486,
+  "iteration_id": "opk-39",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-27T14:30:56.726Z",
+  "baseline": {
+    "commit_sha": "fc05ad209f7b5d1bf2637be10ac05a4267f82ef5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c07c83fdccf10b0c2fc7488537e027d7650ef129bb01d467abaa5670b1d2122f"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    ".github/workflows/read-delegation-audit.yml",
+    ".github/workflows/codex-pr-review.yml",
+    "scripts/check-ci-cheap-wins.ps1",
+    "docs/declarations/486.opk-39.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:2b1bcd7402b4af58de116cdb21cecfd8b2acf21ec5f059e0d4711923c7ce8258",
+      "new_active_scope_hash": "sha256:c07c83fdccf10b0c2fc7488537e027d7650ef129bb01d467abaa5670b1d2122f",
+      "changed": {
+        "added": [
+          "docs/declarations/486.opk-39.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in declared scope",
+      "actor": "opk-39",
+      "timestamp": "2026-06-27T14:31:17.627Z",
+      "applied": true
+    }
+  ]
+}
