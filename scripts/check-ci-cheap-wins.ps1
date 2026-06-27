@@ -28,7 +28,8 @@ function Get-WorkflowFiles {
         return @()
     }
     return @(
-        Get-ChildItem -LiteralPath $dir -Include '*.yml', '*.yaml' -File |
+        Get-ChildItem -LiteralPath $dir -File |
+            Where-Object { $_.Extension -in '.yml', '.yaml' } |
             Sort-Object Name
     )
 }
