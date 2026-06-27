@@ -27,7 +27,10 @@ function Get-WorkflowFiles {
     if (-not (Test-Path -LiteralPath $dir)) {
         return @()
     }
-    return @(Get-ChildItem -LiteralPath $dir -Filter '*.yml' -File | Sort-Object Name)
+    return @(
+        Get-ChildItem -LiteralPath $dir -Include '*.yml', '*.yaml' -File |
+            Sort-Object Name
+    )
 }
 
 function Test-WorkflowTriggersPushMain {
