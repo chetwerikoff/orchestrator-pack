@@ -82,6 +82,28 @@ function Test-WorkflowIsReusable {
     return $false
 }
 
+function Get-WorkflowConcurrencyBlock {
+    param([string]$Text)
+    $lines = $Text -split '\r?\n'
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^concurrency:\s*$') {
+            $block = [System.Collections.Generic.List[string]]::new()
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                if ($lines[$j] -match '^\S') {
+                    break
+                }
+                $block.Add($lines[$j]) | Out-Null
+            }
+            return ($block -join "`n")
+        }
+        if ($line -match '^concurrency:\s*(.+)$') {
+            return $Matches[1].Trim()
+        }
+    }
+    return ''
+}
+
 function Get-YamlJobs {
     param([string]$Text)
     $jobs = @{}
@@ -135,24 +157,25 @@ foreach ($file in $workflowFiles) {
     $isReusable = Test-WorkflowIsReusable -Text $text
 
     if ($hasPr -or $hasPushMain -or $isReusable) {
-        if ($text -notmatch '(?m)^concurrency:\s*$') {
+        if ($text -notmatch '(?m)^concurrency:\s*') {
             Add-Fail "$rel missing top-level concurrency block"
         }
         else {
+            $concurrency = Get-WorkflowConcurrencyBlock -Text $text
             if ($hasPushMain) {
-                if ($text -match '(?m)^\s*cancel-in-progress:\s*true\s*$') {
+                if ($concurrency -match '(?m)^\s*cancel-in-progress:\s*true\s*$') {
                     Add-Fail "$rel uses unconditional cancel-in-progress: true while also triggering push to main"
                 }
-                if ($text -notmatch 'cancel-in-progress:\s*\$\{\{') {
+                if ($concurrency -notmatch 'cancel-in-progress:\s*\$\{\{') {
                     Add-Fail "$rel must gate cancel-in-progress with a pull_request expression when push-to-main is enabled"
                 }
             }
 
             if ($hasPr) {
-                if ($text -match 'github\.head_ref' -and $text -notmatch 'pull_request\.number') {
+                if ($concurrency -match 'github\.head_ref' -and $concurrency -notmatch 'pull_request\.number') {
                     Add-Fail "$rel concurrency group uses head_ref without pull_request.number (fork PR isolation)"
                 }
-                if ($text -notmatch 'pull_request\.number') {
+                if ($concurrency -notmatch 'pull_request\.number') {
                     Add-Fail "$rel concurrency group must key on pull_request.number for PR-scoped cancellation"
                 }
             }
