@@ -140,6 +140,15 @@ if (Test-Path -LiteralPath $auditWorkflowPath) {
     if ($auditText -match '(?m)(run:\s*npm test -- scripts/read-delegation-audit\.test\.ts|vitest run.*read-delegation-audit\.test\.ts)') {
         Add-Fail 'read-delegation-audit.yml must not run the fixture suite (owned by scope-guard tests via test-all.ps1)'
     }
+    $auditJobs = Get-YamlJobs -Text $auditText
+    foreach ($jobName in $auditJobs.Keys) {
+        $jobText = $auditJobs[$jobName]
+        if ($jobText -match 'check-read-delegation-audit-ci-gate\.ps1') {
+            if ($jobText -notmatch 'actions/setup-node@v\d+' -or $jobText -notmatch 'cache:\s*npm') {
+                Add-Fail "read-delegation-audit.yml job '$jobName' invokes npm-ci meta-check without actions/setup-node cache: npm"
+            }
+        }
+    }
 }
 else {
     Add-Fail 'missing .github/workflows/read-delegation-audit.yml'

@@ -30,6 +30,12 @@ jobs:
         shell: pwsh
         run: ./scripts/check-read-delegation-policy-consistency.ps1
 
+      - name: Setup Node.js (audit meta-check deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
       - name: Verify read-delegation audit CI gate (meta-check)
         shell: pwsh
         run: ./scripts/check-read-delegation-audit-ci-gate.ps1
