@@ -203,6 +203,9 @@ if (Test-Path -LiteralPath $scopeGuardPath) {
     if ($scopeText -notmatch 'check-ci-cheap-wins\.ps1') {
         Add-Fail 'scope-guard.yml must invoke scripts/check-ci-cheap-wins.ps1'
     }
+    if ($scopeText -notmatch 'check-verify-runtime\.ps1') {
+        Add-Fail 'scope-guard.yml must invoke scripts/check-verify-runtime.ps1 (Issue #488)'
+    }
     if ($hasShardedPipeline -and $scopeText -notmatch 'check-ci-pipeline-split\.ps1') {
         Add-Fail 'scope-guard.yml must invoke scripts/check-ci-pipeline-split.ps1 when using sharded test pipeline'
     }

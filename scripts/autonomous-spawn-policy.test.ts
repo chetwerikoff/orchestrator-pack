@@ -17,9 +17,6 @@ import {
 import { autonomousBashEnv } from './_test-git-fixture.js';
 import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 
-const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
-const aoShimPath = path.join(repoRoot, 'scripts/ao');
-const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
 const migrationNotesPath = path.join(repoRoot, 'docs/migration_notes.md');
@@ -264,10 +261,12 @@ describe('claim-pr collision safety', () => {
   });
 
   it('internal git: mutating git still denied during allowed claim-pr path', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
+      const isolatedGitGuardPath = path.join(pack.scriptsDir, 'git-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', '--claim-pr', '999991'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', '--claim-pr', '999991'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -279,7 +278,7 @@ describe('claim-pr collision safety', () => {
 
       const gitDeny = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', gitGuardPath, 'branch', '-m', 'blocked'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGitGuardPath, 'branch', '-m', 'blocked'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -306,10 +305,11 @@ describe('spawn policy adoption', () => {
 
 describe('spawn policy guard integration', () => {
   it('allows bare spawn with committed default policy', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -340,10 +340,11 @@ describe('spawn policy guard integration', () => {
   });
 
   it('surface scoping: manual surface pass-through unchanged', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -359,8 +360,8 @@ describe('spawn policy guard integration', () => {
   });
 
   it('ao shim allows spawn on autonomous surface with default policy', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
-      const result = spawnSync(aoShimPath, ['spawn', 'opk-probe'], {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const result = spawnSync(pack.aoShimPath, ['spawn', 'opk-probe'], {
         cwd: repoRoot,
         encoding: 'utf8',
         env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
