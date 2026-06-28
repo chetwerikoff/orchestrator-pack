@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$StrictPrereqs
+    [switch]$StrictPrereqs,
+    [switch]$TestBackedSmoke
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -16,15 +17,14 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Failures = New-Object System.Collections.Generic.List[string]
 $Warnings = New-Object System.Collections.Generic.List[string]
 
+. (Join-Path $PSScriptRoot 'lib/Write-PackCheckLine.ps1')
 function Write-Check {
     param(
         [string]$Name,
         [string]$Status,
         [string]$Detail = ''
     )
-    $line = ('[{0}] {1}' -f $Status, $Name)
-    if ($Detail) { $line = "$line - $Detail" }
-    Write-Host $line
+    Write-PackCheckLine -Name $Name -Status $Status -Detail $Detail
 }
 
 function Add-Failure {
@@ -913,38 +913,8 @@ else {
     Add-Failure 'Missing gh inventory static guard (Issue #431)'
 }
 
-$ghWrapperVitest = Join-Path $Root 'scripts/gh-wrapper.test.ts'
-if (Test-Path -LiteralPath $ghWrapperVitest -PathType Leaf) {
-    Push-Location $Root
-    try {
-        $ghWrapperVitestReady = $true
-        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-            & npm ci --include=dev
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'gh-wrapper/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-                Add-Failure 'gh-wrapper vitest prerequisites failed (Issue #431)'
-                $ghWrapperVitestReady = $false
-            }
-        }
-        if ($ghWrapperVitestReady) {
-            & npx vitest run scripts/gh-wrapper.test.ts
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'gh-wrapper/vitest' 'FAIL' "exit=$LASTEXITCODE"
-                Add-Failure 'gh-wrapper vitest suite failed (Issue #431)'
-            }
-            else {
-                Write-Check 'gh-wrapper/vitest' 'PASS' 'completed'
-            }
-        }
-    }
-    finally {
-        Pop-Location
-    }
-}
-else {
-    Write-Check 'gh-wrapper/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing gh-wrapper vitest suite (Issue #431)'
-}
+Write-Check 'verify-runtime/gh-wrapper-vitest' 'SKIP' 'owned by scripts/check-gh-wrapper.ps1 + full Vitest lane (Issue #488)'
+
 
 Write-Host ''
 Write-Host '== wake-supervisor gh PATH guard (Issue #447) =='
@@ -984,35 +954,8 @@ else {
     Add-Failure 'Missing github fleet cache bypass guard (Issue #453)'
 }
 
-if (Test-Path -LiteralPath (Join-Path $Root 'package.json') -PathType Leaf) {
-    Push-Location $Root
-    try {
-        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-            npm ci --no-audit --no-fund 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'github-fleet-cache/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-                Add-Failure 'github-fleet-cache vitest prerequisites failed (Issue #453)'
-            }
-        }
-        if ($LASTEXITCODE -eq 0) {
-            & npx vitest run scripts/github-fleet-cache-coalesce.test.ts scripts/github-fleet-cache-memo.test.ts scripts/github-fleet-cache-bypass-guard.test.ts scripts/github-fleet-cache-stale-snapshot.test.ts
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'github-fleet-cache/vitest' 'FAIL' "exit=$LASTEXITCODE"
-                Add-Failure 'github-fleet-cache vitest suite failed (Issue #453)'
-            }
-            else {
-                Write-Check 'github-fleet-cache/vitest' 'PASS' 'completed'
-            }
-        }
-    }
-    finally {
-        Pop-Location
-    }
-}
-else {
-    Write-Check 'github-fleet-cache/vitest' 'FAIL' 'missing package.json'
-    Add-Failure 'Missing github-fleet-cache vitest prerequisites (Issue #453)'
-}
+Write-Check 'verify-runtime/github-fleet-cache-vitest' 'SKIP' 'owned by check-github-fleet-cache-bypass.ps1 + full Vitest lane (Issue #488)'
+
 
 Write-Host '== Draft discipline guards (Issue #221) =='
 $draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'
@@ -1090,31 +1033,7 @@ if ((Test-Path -LiteralPath $draftDisciplineCheck -PathType Leaf) -and
     }
 
 
-    Push-Location $Root
-    try {
-        $contractEvidenceVitestReady = $true
-        if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-            & npm ci --include=dev
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'contract-evidence/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-                Add-Failure 'contract-evidence vitest prerequisites failed (Issue #366)'
-                $contractEvidenceVitestReady = $false
-            }
-        }
-        if ($contractEvidenceVitestReady) {
-            & npx vitest run scripts/contract-evidence.test.ts
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'contract-evidence/vitest' 'FAIL' "exit=$LASTEXITCODE"
-                Add-Failure 'contract-evidence vitest suite failed (Issue #366)'
-            }
-            else {
-                Write-Check 'contract-evidence/vitest' 'PASS' 'completed'
-            }
-        }
-    }
-    finally {
-        Pop-Location
-    }
+    Write-Check 'verify-runtime/contract-evidence-vitest' 'SKIP' 'owned by draft discipline fixtures + full Vitest lane (Issue #488)'
 
     $productionManifest = Join-Path $Root 'tests/external-output-references/capture-manifest.json'
     node (Join-Path $Root 'scripts/generate-capture-manifest.mjs') --verify $productionManifest 2>$null
@@ -1349,55 +1268,11 @@ else {
     Add-Failure 'Missing autonomous orchestrator spawn policy check (Issue #458)'
 }
 
-$autonomousSpawnPolicyVitest = Join-Path $Root 'scripts/autonomous-spawn-policy.test.ts'
-if (Test-Path -LiteralPath $autonomousSpawnPolicyVitest -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn policy vitest prerequisites failed (Issue #458)'
-        }
-    }
-    if ($LASTEXITCODE -eq 0) {
-        & npx vitest run scripts/autonomous-spawn-policy.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn policy vitest suite failed (Issue #458)'
-        }
-        else {
-            Write-Check 'autonomous-spawn-policy/vitest' 'PASS' 'completed'
-        }
-    }
-}
-else {
-    Write-Check 'autonomous-spawn-policy/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing autonomous spawn policy vitest suite (Issue #458)'
-}
+Write-Check 'verify-runtime/autonomous-spawn-policy-vitest' 'SKIP' 'owned by check-autonomous-spawn-policy.ps1 + full Vitest lane (Issue #488)'
 
-$autonomousSpawnWorktreeVitest = Join-Path $Root 'scripts/autonomous-spawn-worktree-gate.test.ts'
-if (Test-Path -LiteralPath $autonomousSpawnWorktreeVitest -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn worktree vitest prerequisites failed (Issue #470)'
-        }
-    }
-    if ($LASTEXITCODE -eq 0) {
-        & npx vitest run scripts/autonomous-spawn-worktree-gate.test.ts scripts/spawn-worktree-head-ref-oid-binding.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn worktree vitest suite failed (Issue #470)'
-        }
-        else {
-            Write-Check 'autonomous-spawn-worktree/vitest' 'PASS' 'completed'
-        }
-    }
-}
-else {
-    Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing autonomous spawn worktree vitest suite (Issue #470)'
-}
+
+Write-Check 'verify-runtime/autonomous-spawn-worktree-vitest' 'SKIP' 'owned by full Vitest lane (Issue #488)'
+
 
 $autonomousSpawnBudgetCheck = Join-Path $Root 'scripts/check-autonomous-spawn-budget.ps1'
 if (Test-Path -LiteralPath $autonomousSpawnBudgetCheck -PathType Leaf) {
@@ -1415,30 +1290,8 @@ else {
     Add-Failure 'Missing autonomous spawn budget check (Issue #462)'
 }
 
-$autonomousSpawnBudgetVitest = Join-Path $Root 'scripts/autonomous-spawn-budget.test.ts'
-if (Test-Path -LiteralPath $autonomousSpawnBudgetVitest -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn budget vitest prerequisites failed (Issue #462)'
-        }
-    }
-    if ($LASTEXITCODE -eq 0) {
-        & npx vitest run scripts/autonomous-spawn-budget.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure 'autonomous spawn budget vitest suite failed (Issue #462)'
-        }
-        else {
-            Write-Check 'autonomous-spawn-budget/vitest' 'PASS' 'completed'
-        }
-    }
-}
-else {
-    Write-Check 'autonomous-spawn-budget/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing autonomous spawn budget vitest suite (Issue #462)'
-}
+Write-Check 'verify-runtime/autonomous-spawn-budget-vitest' 'SKIP' 'owned by check-autonomous-spawn-budget.ps1 + full Vitest lane (Issue #488)'
+
 
 $reviewPipelineSpawnBudgetCheck = Join-Path $Root 'scripts/check-review-pipeline-spawn-budget.ps1'
 if (Test-Path -LiteralPath $reviewPipelineSpawnBudgetCheck -PathType Leaf) {
@@ -1456,62 +1309,11 @@ else {
     Add-Failure 'Missing review-pipeline spawn budget check (Issue #480)'
 }
 
-$reviewPipelineSpawnBudgetVitest = Join-Path $Root 'scripts/review-pipeline-spawn-budget.test.ts'
-if (Test-Path -LiteralPath $reviewPipelineSpawnBudgetVitest -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-            Add-Failure 'review-pipeline spawn budget vitest prerequisites failed (Issue #480)'
-        }
-    }
-    if ($LASTEXITCODE -eq 0) {
-        & npx vitest run scripts/review-pipeline-spawn-budget.test.ts scripts/review-start-repeat-classifier.test.ts
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure 'review-pipeline spawn budget vitest suite failed (Issue #480)'
-        }
-        else {
-            Write-Check 'review-pipeline-spawn-budget/vitest' 'PASS' 'completed'
-        }
-    }
-}
-else {
-    Write-Check 'review-pipeline-spawn-budget/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing review-pipeline spawn budget vitest suite (Issue #480)'
-}
+Write-Check 'verify-runtime/review-pipeline-spawn-budget-vitest' 'SKIP' 'owned by check-review-pipeline-spawn-budget.ps1 + full Vitest lane (Issue #488)'
 
-$autonomousInterposerVitest = Join-Path $Root 'scripts/autonomous-orchestrator-interposer.test.ts'
-if (Test-Path -LiteralPath $autonomousInterposerVitest -PathType Leaf) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Check 'autonomous-interposer/vitest' 'FAIL' "npm ci exit=$LASTEXITCODE"
-            Add-Failure 'autonomous-interposer vitest prerequisites failed (Issue #406)'
-        }
-    }
-    if (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container) {
-        $previousCi = $env:CI
-        $env:CI = 'true'
-        try {
-            & npx vitest run scripts/autonomous-orchestrator-interposer.test.ts
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'autonomous-interposer/vitest' 'FAIL' "exit=$LASTEXITCODE"
-                Add-Failure 'autonomous orchestrator interposer vitest suite failed (Issue #406)'
-            }
-            else {
-                Write-Check 'autonomous-interposer/vitest' 'PASS' 'completed'
-            }
-        }
-        finally {
-            if ($null -ne $previousCi) { $env:CI = $previousCi } else { Remove-Item Env:CI -ErrorAction SilentlyContinue }
-        }
-    }
-}
-else {
-    Write-Check 'autonomous-interposer/vitest' 'FAIL' 'missing'
-    Add-Failure 'Missing autonomous orchestrator interposer vitest (Issue #406)'
-}
+
+Write-Check 'verify-runtime/autonomous-interposer-vitest' 'SKIP' 'owned by boundary checks + full Vitest lane (Issue #488)'
+
 
 $orchestratorGatePreflight = Join-Path $Root 'scripts/orchestrator-review-start-preflight.ps1'
 if (Test-Path -LiteralPath $orchestratorGatePreflight -PathType Leaf) {
@@ -1595,6 +1397,25 @@ if (Test-Path -LiteralPath $reusableCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-reusable.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing reusable repository policy check script'
+}
+
+if ($TestBackedSmoke) {
+    Write-Host ''
+    $smokeScript = Join-Path $Root 'scripts/invoke-verify-test-backed-smoke.ps1'
+    if (-not (Test-Path -LiteralPath $smokeScript -PathType Leaf)) {
+        Write-Check 'verify-runtime/test-backed-smoke' 'FAIL' 'missing helper'
+        Add-Failure 'Missing invoke-verify-test-backed-smoke.ps1 (Issue #488)'
+    }
+    else {
+        & $smokeScript -RepoRoot $Root
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'verify-runtime/test-backed-smoke' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'verify.ps1 -TestBackedSmoke failed (Issue #488)'
+        }
+        else {
+            Write-Check 'verify-runtime/test-backed-smoke' 'PASS' 'batched smoke completed'
+        }
+    }
 }
 
 Write-Host ''
