@@ -4,6 +4,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { expect } from 'vitest';
 import { repoRoot } from './_test-pwsh-helpers.js';
+import {
+  assertStubPackDocsImportClosure,
+  STUB_PACK_FIXTURE_SITES,
+} from './_test-stub-pack-import-closure.js';
 
 export const CANONICAL_INTERPOSER_SCRIPT_NAMES = [
   '_resolve-pwsh.sh',
@@ -53,10 +57,21 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     path.join(packRoot, 'docs/autonomous-spawn-policy.json'),
   );
   for (const doc of [
+    'autonomous-gate-preflight.mjs',
     'autonomous-orchestrator-boundary.mjs',
-    'orchestrator-claimed-review-run.mjs',
-    'review-mechanical-cli.mjs',
+    'codex-reviewer-timeout-retry.mjs',
     'mechanical-reconcile-bounds.mjs',
+    'orchestrator-claimed-review-run.mjs',
+    'review-finding-delivery-confirm.mjs',
+    'review-head-ready.mjs',
+    'review-mechanical-cli.mjs',
+    'review-ready-stuck-guard.mjs',
+    'review-reconcile-primitives.mjs',
+    'review-trigger-reconcile.mjs',
+    'session-runtime-liveness.mjs',
+    'terminal-flood-detect.mjs',
+    'worker-iteration-cycle.mjs',
+    'worker-message-dispatch-observe.mjs',
     'autonomous-review-start-capabilities.json',
     'autonomous-shared-capabilities.json',
   ]) {
@@ -66,6 +81,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     cpSync(path.join(repoRoot, 'scripts', name), path.join(scriptsDir, name));
     chmodSync(path.join(scriptsDir, name), 0o755);
   }
+  assertStubPackDocsImportClosure(STUB_PACK_FIXTURE_SITES.isolatedInterposer, packRoot);
   mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
   const fixture: InterposerPackFixture = {
     packRoot,
