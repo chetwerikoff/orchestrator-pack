@@ -9,6 +9,10 @@ import {
 } from './_test-interposer-pack-fixture.js';
 import { autonomousBashEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
+import {
+  assertStubPackDocsImportClosure,
+  STUB_PACK_FIXTURE_SITES,
+} from './_test-stub-pack-import-closure.js';
 
 export const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRoot, 'rev-parse', 'HEAD'], {
   encoding: 'utf8',
@@ -95,6 +99,7 @@ export function withAoSpawnProbeStub(run: (ctx: AoSpawnProbeStubContext) => void
   const isolated = createIsolatedInterposerPack();
   try {
     copyAoSpawnProbeStubPackDocs(isolated.packRoot);
+    assertStubPackDocsImportClosure(STUB_PACK_FIXTURE_SITES.aoSpawnProbeStub, isolated.packRoot);
     writeFileSync(aoStub, AUTONOMOUS_AO_PROBE_STUB_SCRIPT);
     chmodSync(aoStub, 0o755);
     writeIsolatedAutonomousRealBinariesConfig(isolated, aoStub);
