@@ -32,7 +32,6 @@ const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-Autonomous
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const spawnWorktreeGatePath = path.join(repoRoot, 'scripts/lib/Autonomous-SpawnWorktreeGate.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
-const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 
 function repoHeadOid(root: string) {
   return execFileSync(resolveTrustedSystemGit(), ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().toLowerCase();
@@ -309,10 +308,11 @@ describe('spawn worktree grant (#470)', () => {
   });
 
   it('guard integration: allowed spawn sets grant env for downstream git', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-470'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-470'],
         {
           cwd: repoRoot,
           encoding: 'utf8',

@@ -216,7 +216,64 @@ export function mapPullToGhJson(pull, fields) {
     headRefOid: pull.head?.sha ?? null,
     baseRefName: pull.base?.ref ?? null,
     state: mapPullState(pull),
+    mergedAt: pull.merged_at ?? null,
     body: pull.body ?? '',
+  };
+  return pickJsonFields(base, fields);
+}
+
+
+/**
+ * Map REST issue state to gh issue view state enum.
+ * @param {Record<string, unknown>} issue
+ */
+export function mapIssueState(issue) {
+  if (issue.state === 'closed') {
+    return 'CLOSED';
+  }
+  return 'OPEN';
+}
+
+/** @type {Record<string, string>} */
+const ISSUE_STATE_REASON_MAP = {
+  completed: 'COMPLETED',
+  not_planned: 'NOT_PLANNED',
+  reopened: 'REOPENED',
+  duplicate: 'DUPLICATE',
+};
+
+/**
+ * Map REST issue state_reason to gh issue view stateReason enum.
+ * @param {Record<string, unknown>} issue
+ */
+export function mapIssueStateReason(issue) {
+  const raw = issue.state_reason;
+  if (raw == null || raw === '') {
+    return null;
+  }
+  return ISSUE_STATE_REASON_MAP[String(raw).toLowerCase()] ?? null;
+}
+
+/**
+ * @param {Record<string, unknown>} issue
+ * @param {string[]} fields
+ */
+export function mapIssueToGhJson(issue, fields) {
+  const labels = Array.isArray(issue.labels)
+    ? issue.labels.map((label) => ({ name: label?.name ?? null }))
+    : [];
+  const assignees = Array.isArray(issue.assignees)
+    ? issue.assignees.map((assignee) => ({ login: assignee?.login ?? null }))
+    : [];
+  const base = {
+    number: issue.number,
+    title: issue.title ?? '',
+    body: issue.body ?? '',
+    url: issue.html_url ?? null,
+    state: mapIssueState(issue),
+    stateReason: mapIssueStateReason(issue),
+    labels,
+    assignees,
   };
   return pickJsonFields(base, fields);
 }

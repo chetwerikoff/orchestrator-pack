@@ -385,14 +385,20 @@ do not route them through RTK compaction.
 Architecture: §R.7 in
 [`docs/issues_drafts/00-architecture-decisions.md`](../docs/issues_drafts/00-architecture-decisions.md).
 
-## `gh` inventory REST routing (Issue #431)
+## `gh` wrapper transport (Issues #431, #501)
 
-On Linux-hosted surfaces with pack `scripts/` on PATH, `scripts/gh` routes **inventory-listed**
-read forms (`gh pr list/view/checks/diff`, `gh issue view --json body`, listed `--jq` patterns)
-to GitHub REST unconditionally. **Do not** hand-build REST replacements for those forms. Unknown
-`gh` argv passes through to native `gh`; if GraphQL quota is exhausted on an unlisted form, the
-native error is expected — report the argv shape for inventory extension instead of improvising
-REST.
+On Linux-hosted surfaces with pack `scripts/` on PATH, **every GitHub read** MUST go through
+the pack `scripts/gh` wrapper using **inventory-listed canonical forms** (auto-REST). The wrapper
+routes listed read forms (`gh pr list/view/checks/diff`, `gh issue view --json …`, listed `--jq`
+patterns) to GitHub REST unconditionally. **Do not** hand-build REST replacements for those
+forms.
+
+**Forbidden transports:** agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`,
+throwaway temporary `gh` shims, or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper. Unknown `gh`
+argv passes through to native `gh`; if GraphQL quota is exhausted on an unlisted form, the native
+error is expected — use `gh api <REST path>` (REST endpoint only) for the needed datum, **report**
+the uncovered argv shape for inventory extension, and never fall back to GraphQL/curl/shim
+improvisation.
 
 ## Required CI (CI green)
 
@@ -408,7 +414,8 @@ Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use
   `.github/workflows/scope-guard.yml`) — not every optional or third-party check on
   the PR unless the repo already treats them as merge-blocking.
 
-Inspect with `gh pr checks <pr>` (or equivalent) against the **current PR head**.
+Inspect with `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow,description`
+(or equivalent) against the **current PR head**.
 Do not treat the PR as CI-green while any required check is `fail`, `pending`, or
 missing for that head.
 
@@ -515,7 +522,8 @@ head), a background reconciler (`scripts/ci-green-wake-reconcile.ps1`, ~1-minute
 may `ao send` you to continue the hand-off. AO 0.9.x has no CI-green reaction; this path
 is independent of orchestrator LLM turns and is far faster than `report-stale` (~30 min).
 
-- On CI-green nudge: re-check `gh pr checks` for the current head, then
+- On CI-green nudge: re-check `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow,description`
+  for the current head, then
   `ao report ready_for_review` when criteria are met — do not stay idle.
 - The nudge does **not** apply once `ready_for_review` or `addressing_reviews` is
   accepted for that head (review loop owns the next transitions).

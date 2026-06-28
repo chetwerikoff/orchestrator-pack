@@ -8,7 +8,7 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { applyListedJq, mapPullState, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
+import { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
 import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
@@ -103,6 +103,23 @@ describe('gh inventory matcher', () => {
     ]);
     expect(route).toBeNull();
   });
+
+  it('routes issue view state,stateReason via REST inventory', () => {
+    const { route } = classifyArgv([
+      'issue', 'view', '458', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', 'state,stateReason',
+    ]);
+    expect(route?.id).toBe('issue-view-json');
+    expect(route?.prNumber).toBe(458);
+  });
+  it('routes pr view merge-verify state,mergedAt via REST inventory (Issue #501)', () => {
+    const { route } = classifyArgv([
+      'pr', 'view', '491', '--json', 'state,mergedAt',
+    ]);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prNumber).toBe(491);
+  });
+
 });
 
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
@@ -203,6 +220,34 @@ describe('gh pull state mapping', () => {
     expect(mapPullState({ state: 'closed', merged_at: '2026-01-01' })).toBe('MERGED');
     expect(mapPullState({ state: 'closed', merged_at: null })).toBe('CLOSED');
     expect(mapPullState({ state: 'open' })).toBe('OPEN');
+  });
+
+  it('maps REST merged_at to gh mergedAt key (Issue #501)', () => {
+    const mapped = mapPullToGhJson(
+      { state: 'closed', merged_at: '2026-06-28T05:01:44Z' },
+      ['state', 'mergedAt'],
+    );
+    expect(mapped).toEqual({ state: 'MERGED', mergedAt: '2026-06-28T05:01:44Z' });
+  });
+});
+
+describe('gh issue state reason mapping', () => {
+  it('maps REST state_reason to gh stateReason enum', () => {
+    expect(mapIssueStateReason({ state: 'closed', state_reason: 'completed' })).toBe('COMPLETED');
+    expect(mapIssueStateReason({ state: 'closed', state_reason: 'not_planned' })).toBe('NOT_PLANNED');
+    expect(mapIssueStateReason({ state: 'closed', state_reason: 'reopened' })).toBe('REOPENED');
+    expect(mapIssueStateReason({ state: 'closed', state_reason: 'duplicate' })).toBe('DUPLICATE');
+    expect(mapIssueStateReason({ state: 'open', state_reason: null })).toBeNull();
+    expect(mapIssueStateReason({ state: 'open' })).toBeNull();
+    expect(mapIssueStateReason({ state: 'closed', state_reason: 'unknown' })).toBeNull();
+  });
+
+  it('includes mapped stateReason in spawn field-set output', () => {
+    const mapped = mapIssueToGhJson(
+      { number: 458, state: 'closed', state_reason: 'completed', title: 't', body: 'b', html_url: 'https://example.com/458', labels: [], assignees: [] },
+      ['state', 'stateReason'],
+    );
+    expect(mapped).toEqual({ state: 'CLOSED', stateReason: 'COMPLETED' });
   });
 });
 

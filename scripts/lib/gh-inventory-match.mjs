@@ -1,6 +1,6 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'repo-view-name-with-owner'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
 
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
@@ -46,13 +46,38 @@ export function matchInventoryRoute(parsed) {
     if (!Number.isFinite(num) || num <= 0) {
       return null;
     }
-    if (!jsonFieldsEqual(parsed.jsonFields, ['body'])) {
+    const fields = parsed.jsonFields;
+    if (!fields) {
       return null;
     }
+
+    const allowedSets = [
+      ['body'],
+      ['number', 'title', 'body', 'url', 'state', 'stateReason', 'labels', 'assignees'],
+      ['state', 'stateReason'],
+      ['state', 'title', 'body'],
+      ['title', 'body', 'state'],
+    ];
+    const normalizedAllowed = allowedSets.map((set) => [...set].sort());
+    const sorted = [...fields].sort();
+    const matched = normalizedAllowed.find(
+      (set) => set.length === sorted.length && set.every((f, i) => f === sorted[i]),
+    );
+    if (!matched) {
+      return null;
+    }
+
     if (parsed.jq && parsed.jq !== '.body') {
       return null;
     }
-    return { id: 'issue-view-body', prNumber: num };
+    if (parsed.jq === '.body' && !jsonFieldsEqual(fields, ['body'])) {
+      return null;
+    }
+
+    return {
+      id: jsonFieldsEqual(fields, ['body']) ? 'issue-view-body' : 'issue-view-json',
+      prNumber: num,
+    };
   }
 
   if (root !== 'pr') {
@@ -173,6 +198,7 @@ export function matchInventoryRoute(parsed) {
       ['body', 'number'],
       ['baseRefName', 'headRefOid', 'number', 'state'],
       ['number', 'headRefOid', 'baseRefName', 'state'],
+      ['mergedAt', 'state'],
     ];
     const normalizedAllowed = allowedSets.map((s) => [...s].sort());
     const sorted = [...fields].sort();

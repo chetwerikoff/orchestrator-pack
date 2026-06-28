@@ -866,15 +866,15 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('autonomous ao guard allows spawn when default policy is on', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousSpawnProbeEnv({
-            AO_REAL_BINARY: aoStub,
+          env: autonomousBashEnv({
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },
@@ -886,15 +886,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('scripts/ao shim allows spawn --claim-pr on autonomous surface when policy and safety pass', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       const result = spawnSync(
-        aoShimPath,
+        pack.aoShimPath,
         ['spawn', '--claim-pr', '322'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
           env: autonomousClaimPrProbeEnv({
-            AO_REAL_BINARY: aoStub,
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },

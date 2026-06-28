@@ -9,11 +9,14 @@ param(
     [string]$RepoRoot = ''
 )
 
+# Issue #486 — PR cancellation scope and npm-cache contract
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot "lib/ci-workflow-yaml.ps1")
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$GuardIssueNumber = 486
 
 $failures = [System.Collections.Generic.List[string]]::new()
 
@@ -104,35 +107,6 @@ function Get-WorkflowConcurrencyBlock {
     return ''
 }
 
-function Get-YamlJobs {
-    param([string]$Text)
-    $jobs = @{}
-    if ($Text -notmatch '(?ms)^jobs:\s*\r?\n(?<body>.*)\z') {
-        return $jobs
-    }
-    $body = $Matches['body']
-    $lines = $body -split '\r?\n'
-    $current = $null
-    $buffer = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in $lines) {
-        if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
-            if ($current) {
-                $jobs[$current] = ($buffer -join "`n")
-            }
-            $current = $Matches[1]
-            $buffer = [System.Collections.Generic.List[string]]::new()
-            continue
-        }
-        if ($current) {
-            $buffer.Add($line) | Out-Null
-        }
-    }
-    if ($current) {
-        $jobs[$current] = ($buffer -join "`n")
-    }
-    return $jobs
-}
-
 Write-Host '== CI cheap wins static guard (Issue #486) =='
 
 $workflowFiles = Get-WorkflowFiles
@@ -218,11 +192,22 @@ else {
 
 if (Test-Path -LiteralPath $scopeGuardPath) {
     $scopeText = Get-Content -LiteralPath $scopeGuardPath -Raw
-  if ($scopeText -notmatch 'test-all\.ps1') {
-        Add-Fail 'scope-guard.yml tests job must run scripts/test-all.ps1 (vitest owner for read-delegation audit fixtures)'
+    $hasMonolithicTests = $scopeText -match '(?m)^\s*tests:\s*$' -and $scopeText -match 'test-all\.ps1'
+    $hasShardedPipeline = $scopeText -match 'test-vitest' -and $scopeText -match 'run-vitest-shard\.ps1' -and $scopeText -match 'ci-test-aggregate\.ps1'
+    if (-not $hasMonolithicTests -and -not $hasShardedPipeline) {
+        Add-Fail 'scope-guard.yml must run scripts/test-all.ps1 or the sharded vitest/pester pipeline (Issue #487)'
+    }
+    if ($hasShardedPipeline -and $scopeText -notmatch 'test-all\.ps1.*-SkipNpm|-SkipNpm.*test-all\.ps1') {
+        Add-Fail 'sharded pipeline must keep scripts/test-all.ps1 -SkipNpm for Pester/read-delegation ownership'
     }
     if ($scopeText -notmatch 'check-ci-cheap-wins\.ps1') {
         Add-Fail 'scope-guard.yml must invoke scripts/check-ci-cheap-wins.ps1'
+    }
+    if ($scopeText -notmatch 'check-verify-runtime\.ps1') {
+        Add-Fail 'scope-guard.yml must invoke scripts/check-verify-runtime.ps1 (Issue #488)'
+    }
+    if ($hasShardedPipeline -and $scopeText -notmatch 'check-ci-pipeline-split\.ps1') {
+        Add-Fail 'scope-guard.yml must invoke scripts/check-ci-pipeline-split.ps1 when using sharded test pipeline'
     }
 }
 else {

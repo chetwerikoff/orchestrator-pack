@@ -216,7 +216,7 @@ projects:
       %TEMP%\orchestrator-ci-green-wake-state.json.
       Each tick (level/state-derived, not edge-only):
         1. gh pr list --state open --json number,headRefOid
-        2. gh pr checks <n> per PR — required CI per REQUIRED CI above
+        2. gh pr checks <n> --json name,state,bucket,link,startedAt,completedAt,workflow,description per PR — required CI per REQUIRED CI above
         3. ao status --json --reports full — linked worker session + report states
         4. For each open PR whose required CI is currently green, whose linked worker is
            runtime alive, head-owning, and pre-hand-off (fixing_ci / working / pr_created
