@@ -133,6 +133,18 @@ Operator adoption after merge:
 4. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-review-start-preflight.ps1` — must pass.
 5. Run boundary inventory check:
    `pwsh -NoProfile -File scripts/check-autonomous-orchestrator-boundary.ps1` — must pass.
+
+### Broken explicit `ao` pointer (Issue #495)
+
+When `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1` and `.ao/autonomous-real-binaries.json` exists with a
+broken non-empty `ao` path (missing, non-executable, or pack shim) or invalid JSON, the pack `ao`
+resolver emits a one-per-process stderr line:
+
+`autonomous real-binary config: … (config: …; see docs/autonomous-real-binaries.example.json)`
+
+Boot may still continue via PATH / home fallbacks (Option C loud fallback). Non-surface
+`scripts/ao` invocations are unchanged. Fix the config when this line appears in orchestrator logs.
+
 6. From an orchestrator turn, confirm `ao spawn` and `git checkout` are refused while
    `git status` succeeds.
 7. Run side-effect-safe live probe:

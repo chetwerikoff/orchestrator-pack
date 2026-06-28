@@ -47,6 +47,79 @@ function Get-AutonomousRealBinariesConfig {
     }
 }
 
+$Script:AutonomousExplicitAoMisconfigurationWarningEmitted = $false
+$Script:AutonomousExplicitAoConfigExampleDoc = 'docs/autonomous-real-binaries.example.json'
+
+function Test-AutonomousLiteralPathIsExecutable {
+    param([string]$CandidatePath)
+
+    if (-not (Test-Path -LiteralPath $CandidatePath)) { return $false }
+    if ($IsWindows) { return $true }
+    try {
+        return [bool]((Get-Item -LiteralPath $CandidatePath).Mode -match 'x')
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-AutonomousConfiguredAoPointerUsable {
+    param(
+        [string]$ConfiguredPath,
+        [string]$PackRoot = ''
+    )
+
+    if (-not $ConfiguredPath -or $ConfiguredPath -eq 'ao') { return $false }
+    if (Test-Path -LiteralPath $ConfiguredPath) {
+        if (-not (Test-AutonomousLiteralPathIsExecutable -CandidatePath $ConfiguredPath)) {
+            return $false
+        }
+        $resolved = (Resolve-Path -LiteralPath $ConfiguredPath).Path
+        return -not (Test-IsPackAoShimPathForBoundary -CandidatePath $resolved)
+    }
+    $cmd = Get-Command $ConfiguredPath -ErrorAction SilentlyContinue
+    if ($cmd -and -not (Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source)) {
+        return $true
+    }
+    return $false
+}
+
+function Write-AutonomousExplicitAoConfigMisconfigurationWarning {
+    param(
+        [ValidateSet('broken-pointer', 'invalid-json')]
+        [string]$Reason,
+        [string]$ConfigPath,
+        [string]$ConfiguredPath = ''
+    )
+
+    if ($Script:AutonomousExplicitAoMisconfigurationWarningEmitted) { return }
+    $Script:AutonomousExplicitAoMisconfigurationWarningEmitted = $true
+    $exampleDoc = $Script:AutonomousExplicitAoConfigExampleDoc
+    if ($Reason -eq 'invalid-json') {
+        [Console]::Error.WriteLine("autonomous real-binary config: invalid JSON (config: $ConfigPath; see $exampleDoc)")
+        return
+    }
+    [Console]::Error.WriteLine("autonomous real-binary config: explicit ao pointer missing or not executable: $ConfiguredPath (config: $ConfigPath; see $exampleDoc)")
+}
+
+function Invoke-AutonomousExplicitAoConfigSurfacePolicy {
+    param([string]$PackRoot = '')
+
+    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) { return }
+    $configPath = Get-AutonomousRealBinariesConfigPath -PackRoot $PackRoot
+    if (-not (Test-Path -LiteralPath $configPath)) { return }
+    try {
+        $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        $configuredAo = [string]$config.ao
+        if ($configuredAo -and $configuredAo -ne 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $PackRoot)) {
+            Write-AutonomousExplicitAoConfigMisconfigurationWarning -Reason 'broken-pointer' -ConfigPath $configPath -ConfiguredPath $configuredAo
+        }
+    }
+    catch {
+        Write-AutonomousExplicitAoConfigMisconfigurationWarning -Reason 'invalid-json' -ConfigPath $configPath
+    }
+}
+
 function Test-TurnVisibleRealBinaryBypassPresent {
     foreach ($name in $Script:TurnVisibleRealBinaryEnvVars) {
         $value = [Environment]::GetEnvironmentVariable($name)
@@ -134,6 +207,9 @@ function Resolve-AutonomousRealBinaryPath {
 
     if (-not $PackRoot) {
         $PackRoot = Get-PackRootFromBoundaryLib
+    }
+    if ($BinaryName -eq 'ao') {
+        Invoke-AutonomousExplicitAoConfigSurfacePolicy -PackRoot $PackRoot
     }
     $packScripts = (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path
     $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot

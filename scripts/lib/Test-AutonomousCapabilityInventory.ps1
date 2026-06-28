@@ -50,9 +50,13 @@ function Get-AutonomousCapabilityInventoryViolations {
         if (Test-Path -LiteralPath $configPath) {
             try {
                 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+                . (Join-Path $RepoRoot 'scripts/lib/Orchestrator-AutonomousBoundary.ps1')
+                $configuredAo = [string]$config.ao
+                if ($configuredAo -and $configuredAo -ne 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $RepoRoot)) {
+                    $violations.Add("broken explicit ao pointer: $configuredAo")
+                }
                 $configuredGit = [string]$config.git
                 if ($configuredGit) {
-                    . (Join-Path $RepoRoot 'scripts/lib/Orchestrator-AutonomousBoundary.ps1')
                     if (Test-IsKnownSystemGitBinaryPath -CandidatePath $configuredGit) {
                         $violations.Add('configured git must be pack scripts/git-real-binary, not a host system binary')
                     }

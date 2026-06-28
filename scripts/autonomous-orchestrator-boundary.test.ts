@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, statSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -1025,6 +1025,161 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     } finally {
       rmSync(packRoot, { recursive: true, force: true });
     }
+  });
+
+
+  describe('broken explicit ao pointer policy (Issue #495)', () => {
+    const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
+    const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
+
+    function withBrokenAoPointerFixture(
+      run: (ctx: {
+        packRoot: string;
+        brokenAo: string;
+        fallbackAo: string;
+        pathBin: string;
+        configPath: string;
+      }) => void,
+    ) {
+      const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-broken-ao-'));
+      const brokenAo = path.join(packRoot, 'deleted-ao-stub.sh');
+      const pathBin = path.join(packRoot, 'bin');
+      const fallbackAo = path.join(pathBin, 'ao');
+      const configPath = path.join(packRoot, '.ao/autonomous-real-binaries.json');
+      try {
+        mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
+        mkdirSync(pathBin, { recursive: true });
+        writeFileSync(
+          fallbackAo,
+          `#!/usr/bin/env bash
+case "\${1:-}" in
+  status) printf '{"data":[]}\n'; exit 0 ;;
+  help) printf 'fallback-ao-help\n'; exit 0 ;;
+esac
+exit 0
+`,
+        );
+        chmodSync(fallbackAo, 0o755);
+        mkdirSync(path.join(packRoot, 'scripts'), { recursive: true });
+        for (const name of ['ao', '_resolve-pwsh.sh', 'ao-autonomous-guard.ps1']) {
+          cpSync(path.join(repoRoot, 'scripts', name), path.join(packRoot, 'scripts', name));
+          chmodSync(path.join(packRoot, 'scripts', name), 0o755);
+        }
+        cpSync(path.join(repoRoot, 'scripts/lib'), path.join(packRoot, 'scripts/lib'), { recursive: true });
+        writeFileSync(
+          configPath,
+          `${JSON.stringify({ ao: brokenAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
+        );
+        run({ packRoot, brokenAo, fallbackAo, pathBin, configPath });
+      } finally {
+        rmSync(packRoot, { recursive: true, force: true });
+      }
+    }
+
+    it('emits resolver-path warning and falls back on autonomous surface bash fast path', () => {
+      withBrokenAoPointerFixture(({ packRoot, pathBin }) => {
+        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'status', '--json'], {
+          cwd: packRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toMatch(BROKEN_POINTER_RE);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+      });
+    });
+
+    it('emits resolver-path warning and falls back on autonomous surface PS guard path', () => {
+      withBrokenAoPointerFixture(({ packRoot, pathBin }) => {
+        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'help'], {
+          cwd: packRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toMatch(BROKEN_POINTER_RE);
+        expect(`${result.stdout}${result.stderr}`).toMatch(/fallback-ao-help/);
+      });
+    });
+
+    it('treats invalid JSON as misconfiguration on autonomous surface', () => {
+      const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-invalid-json-'));
+      const pathBin = path.join(packRoot, 'bin');
+      const fallbackAo = path.join(pathBin, 'ao');
+      try {
+        mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
+        mkdirSync(pathBin, { recursive: true });
+        writeFileSync(
+          fallbackAo,
+          `#!/usr/bin/env bash
+case "\${1:-}" in
+  status) printf '{"data":[]}\n'; exit 0 ;;
+esac
+exit 0
+`,
+        );
+        chmodSync(fallbackAo, 0o755);
+        mkdirSync(path.join(packRoot, 'scripts'), { recursive: true });
+        for (const name of ['ao', '_resolve-pwsh.sh', 'ao-autonomous-guard.ps1']) {
+          cpSync(path.join(repoRoot, 'scripts', name), path.join(packRoot, 'scripts', name));
+          chmodSync(path.join(packRoot, 'scripts', name), 0o755);
+        }
+        cpSync(path.join(repoRoot, 'scripts/lib'), path.join(packRoot, 'scripts/lib'), { recursive: true });
+        writeFileSync(path.join(packRoot, '.ao/autonomous-real-binaries.json'), '{not-json\n');
+        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'status', '--json'], {
+          cwd: packRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toMatch(INVALID_JSON_RE);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+      } finally {
+        rmSync(packRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps non-surface fallback via AO_REAL_BINARY without resolver-path warning', () => {
+      const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-nonsurface-ao-'));
+      const envAo = path.join(packRoot, 'env-ao.sh');
+      const brokenAo = path.join(packRoot, 'broken-ao.sh');
+      try {
+        mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
+        writeFileSync(envAo, '#!/usr/bin/env bash\nprintf env-ao-ok\n');
+        chmodSync(envAo, 0o755);
+        writeFileSync(
+          path.join(packRoot, '.ao/autonomous-real-binaries.json'),
+          `${JSON.stringify({ ao: brokenAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
+        );
+        const result = spawnSync('bash', [path.join(repoRoot, 'scripts/ao'), 'help'], {
+          cwd: packRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            AO_REAL_BINARY: envAo,
+            PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(`${result.stdout}${result.stderr}`).toMatch(/env-ao-ok/);
+        expect(`${result.stdout}${result.stderr}`).not.toMatch(BROKEN_POINTER_RE);
+        expect(`${result.stdout}${result.stderr}`).not.toMatch(INVALID_JSON_RE);
+      } finally {
+        rmSync(packRoot, { recursive: true, force: true });
+      }
+    });
   });
 
   it('resolves pack root from boundary lib without explicit PackRoot', () => {
