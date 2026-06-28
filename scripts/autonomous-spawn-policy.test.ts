@@ -28,10 +28,6 @@ const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-Autonomou
 const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
 const migrationNotesPath = path.join(repoRoot, 'docs/migration_notes.md');
 
-const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRoot, 'rev-parse', 'HEAD'], {
-  encoding: 'utf8',
-}).trim().toLowerCase();
-
 function withTempSpawnPolicy(
   policy: Record<string, unknown>,
   run: (policyDir: string) => void,
