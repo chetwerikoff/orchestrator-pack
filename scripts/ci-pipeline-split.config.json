@@ -1,0 +1,7 @@
+{
+  "vitestShardCount": 4,
+  "aggregateJobName": "Run pack contract tests",
+  "typecheckJobName": "Type-check pack sources",
+  "vitestShardJobPrefix": "Vitest shard",
+  "pesterJobName": "Pester regression"
+}
