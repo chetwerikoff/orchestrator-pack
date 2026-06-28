@@ -99,6 +99,10 @@ jobs:
         shell: pwsh
         run: ./scripts/check-ci-cheap-wins.ps1
 
+      - name: Enforce verify runtime refactor policy
+        shell: pwsh
+        run: ./scripts/check-verify-runtime.ps1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -248,14 +252,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Pester module
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/powershell/Modules/Pester
+          key: pester-5-${{ runner.os }}-${{ hashFiles('scripts/install-pester-ci.ps1', 'scripts/test-all.ps1') }}
+          restore-keys: |
+            pester-5-${{ runner.os }}-
+
       - name: Install Pester
         shell: pwsh
-        run: |
-          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
-            Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -AllowClobber -SkipPublisherCheck
-          }
-          Import-Module Pester -MinimumVersion 5.0.0
-          Write-Host "Pester version: $((Get-Module Pester).Version)"
+        run: ./scripts/install-pester-ci.ps1
 
       - name: Run Pester track
         shell: pwsh
