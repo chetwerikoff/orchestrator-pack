@@ -1,0 +1,31 @@
+{
+  "issue_number": 493,
+  "iteration_id": "opk-41",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-28T04:14:59.309Z",
+  "baseline": {
+    "commit_sha": "d5e4c272e6445edebf7341f5669e4a0a98cbd595",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ecdd18861a15340af360e267edf95198d3f79ecbbdc8197fa2354caa7ac6dbad"
+  },
+  "declared_paths": [
+    "docs/spawn-worktree-git-ref.mjs",
+    "docs/spawn-worktree-git-ref.d.mts",
+    "docs/spawn-worktree-grant.mjs",
+    "docs/spawn-worktree-grant.d.mts",
+    "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+    "scripts/git-autonomous-guard.ps1",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/spawn-worktree-head-ref-oid-binding.test.ts",
+    "scripts/autonomous-spawn-policy.test.ts",
+    "scripts/verify.ps1",
+    "tests/external-output-references/captures/spawn-worktree-head-ref-oid-binding/capture-manifest.json",
+    "docs/declarations/493.opk-41.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
