@@ -16,7 +16,7 @@ describe('gh inventory static guard', () => {
     `;
     const forms = extractGhCommandsFromRuleSurface(text);
     expect(forms).toContain('gh pr view <n> --json state,mergedAt');
-    expect(forms.some((form) => form.includes('gh pr checks <n> --json'))).toBe(true);
+    expect(forms.some((form: string) => form.includes('gh pr checks <n> --json'))).toBe(true);
   });
 
   it('classifies covered orchestrator forms as inventory-covered', () => {
