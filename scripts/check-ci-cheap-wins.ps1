@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/ci-workflow-yaml.ps1')
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
@@ -102,35 +103,6 @@ function Get-WorkflowConcurrencyBlock {
         }
     }
     return ''
-}
-
-function Get-YamlJobs {
-    param([string]$Text)
-    $jobs = @{}
-    if ($Text -notmatch '(?ms)^jobs:\s*\r?\n(?<body>.*)\z') {
-        return $jobs
-    }
-    $body = $Matches['body']
-    $lines = $body -split '\r?\n'
-    $current = $null
-    $buffer = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in $lines) {
-        if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
-            if ($current) {
-                $jobs[$current] = ($buffer -join "`n")
-            }
-            $current = $Matches[1]
-            $buffer = [System.Collections.Generic.List[string]]::new()
-            continue
-        }
-        if ($current) {
-            $buffer.Add($line) | Out-Null
-        }
-    }
-    if ($current) {
-        $jobs[$current] = ($buffer -join "`n")
-    }
-    return $jobs
 }
 
 Write-Host '== CI cheap wins static guard (Issue #486) =='
