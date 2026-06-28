@@ -30,16 +30,7 @@ $SmokeFiles = @(
     'scripts/autonomous-orchestrator-interposer.test.ts'
 )
 
-function Write-SmokeCheck {
-    param(
-        [string]$Name,
-        [string]$Status,
-        [string]$Detail = ''
-    )
-    $line = ('[{0}] {1}' -f $Status, $Name)
-    if ($Detail) { $line = "$line - $Detail" }
-    Write-Host $line
-}
+. (Join-Path $PSScriptRoot 'lib/Write-PackCheckLine.ps1')
 
 Write-Host '== verify test-backed smoke (Issue #488) =='
 Write-Host 'Ownership: full regression remains scripts/test-all.ps1 / CI test-vitest lane.'
@@ -52,7 +43,7 @@ foreach ($rel in $SmokeFiles) {
         $selected += $rel
     }
     else {
-        Write-SmokeCheck "verify-smoke/$rel" 'FAIL' 'missing'
+        Write-PackCheckLine "verify-smoke/$rel" 'FAIL' 'missing'
         exit 1
     }
 }
@@ -63,12 +54,12 @@ try {
         Write-Host 'Installing npm dependencies once for test-backed smoke...'
         & npm ci --include=dev
         if ($LASTEXITCODE -ne 0) {
-            Write-SmokeCheck 'verify-smoke/npm-preflight' 'FAIL' "npm ci exit=$LASTEXITCODE"
+            Write-PackCheckLine 'verify-smoke/npm-preflight' 'FAIL' "npm ci exit=$LASTEXITCODE"
             exit 1
         }
     }
     else {
-        Write-SmokeCheck 'verify-smoke/npm-preflight' 'PASS' 'node_modules present'
+        Write-PackCheckLine 'verify-smoke/npm-preflight' 'PASS' 'node_modules present'
     }
 
     $previousCi = $env:CI
@@ -76,10 +67,10 @@ try {
     try {
         & npx vitest run @selected
         if ($LASTEXITCODE -ne 0) {
-            Write-SmokeCheck 'verify-smoke/vitest' 'FAIL' "exit=$LASTEXITCODE"
+            Write-PackCheckLine 'verify-smoke/vitest' 'FAIL' "exit=$LASTEXITCODE"
             exit 1
         }
-        Write-SmokeCheck 'verify-smoke/vitest' 'PASS' ("batched files={0}" -f $selected.Count)
+        Write-PackCheckLine 'verify-smoke/vitest' 'PASS' ("batched files={0}" -f $selected.Count)
     }
     finally {
         if ($null -ne $previousCi) { $env:CI = $previousCi } else { Remove-Item Env:CI -ErrorAction SilentlyContinue }

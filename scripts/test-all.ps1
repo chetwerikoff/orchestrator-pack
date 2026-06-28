@@ -11,15 +11,14 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Failures = New-Object System.Collections.Generic.List[string]
 $RuntimeReportPath = Join-Path $Root '.vitest-runtime-report.json'
 
+. (Join-Path $PSScriptRoot 'lib/Write-PackCheckLine.ps1')
 function Write-Track {
     param(
         [string]$Name,
         [string]$Status,
         [string]$Detail = ''
     )
-    $line = ('[{0}] {1}' -f $Status, $Name)
-    if ($Detail) { $line = "$line - $Detail" }
-    Write-Host $line
+    Write-PackCheckLine -Name $Name -Status $Status -Detail $Detail
 }
 
 Write-Host '== orchestrator-pack test-all =='

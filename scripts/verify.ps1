@@ -17,15 +17,14 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Failures = New-Object System.Collections.Generic.List[string]
 $Warnings = New-Object System.Collections.Generic.List[string]
 
+. (Join-Path $PSScriptRoot 'lib/Write-PackCheckLine.ps1')
 function Write-Check {
     param(
         [string]$Name,
         [string]$Status,
         [string]$Detail = ''
     )
-    $line = ('[{0}] {1}' -f $Status, $Name)
-    if ($Detail) { $line = "$line - $Detail" }
-    Write-Host $line
+    Write-PackCheckLine -Name $Name -Status $Status -Detail $Detail
 }
 
 function Add-Failure {
