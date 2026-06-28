@@ -264,6 +264,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Fail-closed full-regression aggregate
         shell: pwsh
         env:
