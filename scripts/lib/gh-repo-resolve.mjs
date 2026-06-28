@@ -216,6 +216,7 @@ export function mapPullToGhJson(pull, fields) {
     headRefOid: pull.head?.sha ?? null,
     baseRefName: pull.base?.ref ?? null,
     state: mapPullState(pull),
+    mergedAt: pull.merged_at ?? null,
     body: pull.body ?? '',
   };
   return pickJsonFields(base, fields);

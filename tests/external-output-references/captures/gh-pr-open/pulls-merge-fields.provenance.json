@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "gh api repos/chetwerikoff/orchestrator-pack/pulls/491",
+  "toolVersion": "gh 2.x",
+  "capturedAt": "2026-06-28T05:01:44.000Z",
+  "context": "REST pulls/{n} merge-state verification fields for gh pr view --json state,mergedAt wrapper route (Issue #501).",
+  "scrubLog": ["PR number references merged pack PR #491 metadata"]
+}

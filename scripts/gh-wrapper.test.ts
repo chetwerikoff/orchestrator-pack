@@ -8,7 +8,7 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
+import { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
 import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
@@ -112,6 +112,14 @@ describe('gh inventory matcher', () => {
     expect(route?.id).toBe('issue-view-json');
     expect(route?.prNumber).toBe(458);
   });
+  it('routes pr view merge-verify state,mergedAt via REST inventory (Issue #501)', () => {
+    const { route } = classifyArgv([
+      'pr', 'view', '491', '--json', 'state,mergedAt',
+    ]);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prNumber).toBe(491);
+  });
+
 });
 
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
@@ -212,6 +220,14 @@ describe('gh pull state mapping', () => {
     expect(mapPullState({ state: 'closed', merged_at: '2026-01-01' })).toBe('MERGED');
     expect(mapPullState({ state: 'closed', merged_at: null })).toBe('CLOSED');
     expect(mapPullState({ state: 'open' })).toBe('OPEN');
+  });
+
+  it('maps REST merged_at to gh mergedAt key (Issue #501)', () => {
+    const mapped = mapPullToGhJson(
+      { state: 'closed', merged_at: '2026-06-28T05:01:44Z' },
+      ['state', 'mergedAt'],
+    );
+    expect(mapped).toEqual({ state: 'MERGED', mergedAt: '2026-06-28T05:01:44Z' });
   });
 });
 

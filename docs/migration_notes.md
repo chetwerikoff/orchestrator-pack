@@ -150,6 +150,27 @@ remains the accepted unobservable residual.
 Supervisor child logs are rotated to `*.previous-*` before child start; the previous generation
 remains readable after restart for incident reconstruction.
 
+
+## Orchestrator-path gh REST coverage + no-drift guard (Issue #501)
+
+Extends #431 inventory with merge-verify `gh pr view <n> --json state,mergedAt` (REST
+`pulls/{n}` → `merged_at` mapped to `mergedAt`) and aligns orchestrator CI-read instructions
+with the inventory-covered `gh pr checks … --json` form. Adds a classifier-derived static guard
+(`scripts/check-gh-inventory-static.ps1`) over `prompts/agent_rules.md` and
+`agent-orchestrator.yaml.example` so agent-facing gh read-forms cannot drift from REST coverage.
+`prompts/agent_rules.md` carries the universal wrapper-transport rule (forbidden: raw curl,
+`gh api graphql`, throwaway shims, `unset GH_WRAPPER_ACTIVE`).
+
+Operator adoption after merge:
+
+1. Port any changed `orchestratorRules` gh read-forms from `agent-orchestrator.yaml.example` into
+   live `agent-orchestrator.yaml` (especially merge-verify `pr view` and CI-read `pr checks`
+   `--json` shapes).
+2. `ao stop` then `ao start` from the operator terminal so orchestrator and workers load updated
+   rules and forms.
+3. Verify wrapper route: `gh pr view <merged-pr> --json state,mergedAt` returns REST-sourced fields
+   without GraphQL bucket consumption when quota is exhausted.
+
 ## Always-REST `gh` transport on PATH (Issue #431)
 
 When pack `scripts/` is prepended on PATH, `scripts/gh` intercepts inventory read forms

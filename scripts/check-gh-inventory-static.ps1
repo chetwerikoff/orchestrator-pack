@@ -1,68 +1,67 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Static guard: pack-owned PowerShell reconcile scripts use inventory-covered gh read shapes (Issue #431).
+  Static guard: gh read forms in pack scripts and agent-facing rule surfaces are REST-covered (Issues #431, #501).
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+$GuardScript = Join-Path $Root 'scripts/lib/gh-inventory-static-guard.mjs'
 
-function Test-InventoryGhReadLine {
-    param([string]$Line)
-
-    if ($Line -match '^\s*#' ) { return $true }
-    if ($Line -notmatch '(^|[^a-zA-Z])gh\s+(pr|issue|repo)\s+') { return $true }
-    if ($Line -match 'gh pr (merge|comment|create|close|edit|review)') { return $true }
-    if ($Line -match 'throw\s+"gh |Write-Error\s+"gh |WarningTemplate\s*=\s*''warn: gh ') { return $true }
-    if ($Line -match 'SYNOPSIS|Shared gh pr list') { return $true }
-
-    $inventory = @(
-        'gh pr list --state open --json number,headRefOid',
-        'gh pr list --state open --json number,headRefOid,baseRefName',
-        'gh pr view .+--json (number,headRefOid,baseRefName,state|baseRefName|body|number,body)',
-        'gh pr view .+--json body',
-        'gh pr checks .+--json name,state,bucket,link,startedAt,completedAt,workflow,description',
-        'gh pr diff .+--name-only',
-        'gh issue view .+--json body',
-        'gh repo view --json nameWithOwner',
-        'gh pr list --head',
-        'gh pr list --head .+--json number,url --limit 1',
-        'gh pr view .+--json ''number,body''',
-        'gh pr view .+--jq'
+function Invoke-GhInventoryGuard {
+    param(
+        [string]$FilePath,
+        [ValidateSet('reconcile', 'rules')]
+        [string]$Mode
     )
 
-    foreach ($pattern in $inventory) {
-        if ($Line -match $pattern) {
-            return $true
-        }
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        return @()
     }
 
-    return $false
+    $output = & node $GuardScript $FilePath --mode $Mode 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        return @()
+    }
+
+    try {
+        return @($output | ConvertFrom-Json)
+    }
+    catch {
+        throw "gh inventory guard failed for ${FilePath}: $output"
+    }
 }
 
-$scanRoots = @(
+$reconcileRoots = @(
     (Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1'),
     (Join-Path $Root 'scripts/pr-scope-check.ps1'),
     (Join-Path $Root 'scripts/lib/Get-AutoReviewPrContext.ps1')
 )
 
+$ruleSurfaceRoots = @(
+    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'agent-orchestrator.yaml.example')
+)
+
 $violations = @()
-foreach ($file in $scanRoots) {
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-        continue
-    }
-    $lines = Get-Content -LiteralPath $file
-    foreach ($line in $lines) {
-        if (-not (Test-InventoryGhReadLine -Line $line)) {
-            $violations += "${file}: $line"
-        }
-    }
+foreach ($file in $reconcileRoots) {
+    $violations += Invoke-GhInventoryGuard -FilePath $file -Mode 'reconcile'
+}
+foreach ($file in $ruleSurfaceRoots) {
+    $violations += Invoke-GhInventoryGuard -FilePath $file -Mode 'rules'
 }
 
 if ($violations.Count -gt 0) {
-    Write-Host '[FAIL] non-inventory gh read shapes in pack reconcile scripts:'
-    $violations | ForEach-Object { Write-Host $_ }
+    Write-Host '[FAIL] gh read forms not REST-covered by inventory classifier:'
+    foreach ($item in $violations) {
+        if ($item.line) {
+            Write-Host "$($item.file): $($item.command) :: $($item.line)"
+        }
+        else {
+            Write-Host "$($item.file): $($item.command)"
+        }
+    }
     exit 1
 }
 
-Write-Host '[PASS] pack-owned gh inventory static guard (Issue #431)'
+Write-Host '[PASS] gh inventory static guard (classifier-derived; Issues #431, #501)'
 exit 0
