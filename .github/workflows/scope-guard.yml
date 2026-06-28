@@ -99,9 +99,18 @@ jobs:
         shell: pwsh
         run: ./scripts/check-ci-cheap-wins.ps1
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
       - name: Enforce CI pipeline split policy
         shell: pwsh
-        run: ./scripts/check-ci-pipeline-split.ps1 -SkipLiveCoverage
+        run: ./scripts/check-ci-pipeline-split.ps1
 
   pr-scope-guard:
     name: PR scope guard
