@@ -14,14 +14,19 @@ if ($deny.denied) {
     exit 93
 }
 
+$gitArgs = @($args)
+if ($deny.normalizedCommitOid) {
+    $gitArgs = Rewrite-AutonomousSpawnWorktreeAddCommitArgv -Argv $gitArgs -NormalizedCommitOid ([string]$deny.normalizedCommitOid)
+}
+
 $env:AO_AUTONOMOUS_GIT_INTERNAL_EXEC = '1'
 try {
     $realGit = Resolve-SystemGitExecutable
     if ($realGit -eq 'git') {
-        & git @args
+        & git @gitArgs
     }
     else {
-        & $realGit @args
+        & $realGit @gitArgs
     }
     exit $LASTEXITCODE
 }

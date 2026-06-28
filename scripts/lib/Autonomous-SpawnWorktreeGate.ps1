@@ -187,6 +187,128 @@ function Release-AutonomousSpawnWorktreeTargetLock {
 }
 
 
+
+function Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef {
+    param(
+        [string]$RepoRoot,
+        [string]$DefaultBranch = 'main'
+    )
+
+    return Invoke-SpawnWorktreeGrantCli -Subcommand 'resolveDefaultBranchBaseRef' -Payload @{
+        repoRoot       = [string]$RepoRoot
+        defaultBranch  = [string]$DefaultBranch
+        fixtureMode    = [bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE
+    }
+}
+
+function Resolve-AutonomousSpawnClaimPrHead {
+    param(
+        [int]$PrNumber,
+        [string]$SourceRepositoryRoot = '',
+        [switch]$FixtureMode
+    )
+
+    if ($env:AO_SPAWN_FIXTURE_PR_HEAD_OID) {
+        $fixtureOid = [string]$env:AO_SPAWN_FIXTURE_PR_HEAD_OID
+        if ($fixtureOid) {
+            return @{
+                ok          = $true
+                headRefOid  = $fixtureOid.Trim().ToLower()
+                prRefToken  = if ($env:AO_SPAWN_FIXTURE_PR_REF_TOKEN) { [string]$env:AO_SPAWN_FIXTURE_PR_REF_TOKEN } else { "pr-$PrNumber" }
+            }
+        }
+    }
+
+    if ($FixtureMode -and $SourceRepositoryRoot) {
+        $resolved = Invoke-SpawnWorktreeGrantCli -Subcommand 'resolveCommitRef' -Payload @{
+            repoRoot  = [string]$SourceRepositoryRoot
+            refToken  = 'HEAD'
+        }
+        if ($resolved.ok) {
+            return @{
+                ok          = $true
+                headRefOid  = [string]$resolved.commitOid
+                prRefToken  = "fixture-pr-$PrNumber"
+            }
+        }
+    }
+
+    try {
+        $json = (& gh pr view $PrNumber --json headRefOid,headRefName 2>$null | ConvertFrom-Json)
+        $headRefOid = [string]$json.headRefOid
+        if (-not $headRefOid) {
+            return @{ ok = $false; reason = 'expected_pr_head_missing' }
+        }
+        return @{
+            ok          = $true
+            headRefOid  = $headRefOid.Trim().ToLower()
+            prRefToken  = [string]$json.headRefName
+        }
+    }
+    catch {
+        return @{ ok = $false; reason = 'expected_pr_head_missing' }
+    }
+}
+
+function Write-AutonomousSpawnWorktreeHeadRefAudit {
+    param(
+        [string]$ProjectId,
+        [object]$AuditRecord
+    )
+
+    if (-not $AuditRecord) { return }
+    $auditDir = Join-Path (Get-AutonomousSpawnWorktreeStateRoot -ProjectId $ProjectId) 'head-ref-audit'
+    New-Item -ItemType Directory -Path $auditDir -Force -ErrorAction SilentlyContinue | Out-Null
+    $line = ($AuditRecord | ConvertTo-Json -Compress -Depth 8)
+    Add-Content -LiteralPath (Join-Path $auditDir 'events.jsonl') -Value $line -Encoding UTF8
+}
+
+function Verify-AutonomousSpawnClaimPrPostCheckout {
+    param(
+        [object]$GrantRecord,
+        [string]$WorkspaceRoot = ''
+    )
+
+    if (-not $GrantRecord) {
+        return @{ ok = $false; reason = 'grant_missing' }
+    }
+    if ([string]$GrantRecord.action -ne 'claim-pr-resume') {
+        return @{ ok = $true; reason = 'not_claim_pr' }
+    }
+
+    $workspace = $WorkspaceRoot
+    if (-not $workspace) {
+        $workspace = [string]$GrantRecord.consumedCanonicalPath
+    }
+    if (-not $workspace) {
+        return @{ ok = $false; reason = 'workspace_root_unresolvable' }
+    }
+
+    $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateClaimPrPostCheckout' -Payload @{
+        workspaceRoot    = [string]$workspace
+        expectedPrHeadOid = [string]$GrantRecord.expectedPrHeadOid
+        prNumber         = [int]$GrantRecord.prNumber
+        prRefToken       = [string]$GrantRecord.expectedPrRefToken
+    }
+    $projectId = [string]$GrantRecord.projectId
+    if (-not $projectId) {
+        $projectId = Get-AutonomousSpawnWorktreeProjectId
+    }
+    Write-AutonomousSpawnWorktreeHeadRefAudit -ProjectId $projectId -AuditRecord @{
+        atUtc                  = (Get-Date).ToUniversalTime().ToString('o')
+        kind                   = 'claim_pr_post_checkout'
+        outcome                = if ($evaluation.ok) { 'allow' } else { 'deny' }
+        reason                 = [string]$evaluation.reason
+        prNumber               = [int]$GrantRecord.prNumber
+        prRefToken             = [string]$evaluation.prRefToken
+        expectedPrHeadOid      = [string]$evaluation.expectedPrHeadOid
+        actualWorkspaceHeadOid = [string]$evaluation.actualWorkspaceHeadOid
+        grantId                = [string]$GrantRecord.grantId
+        workspaceRoot          = [string]$workspace
+    }
+    return $evaluation
+}
+
 function Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot {
     try {
         $topLevel = [string](& git rev-parse --show-toplevel 2>$null).Trim()
@@ -241,15 +363,30 @@ function Mint-AutonomousSpawnWorktreeGrant {
         return @{ ok = $false; reason = [string]$sourceRepo.reason }
     }
     $grantId = [guid]::NewGuid().ToString('n')
-    $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
+    $baseRef = Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef -RepoRoot ([string]$sourceRepo.path)
+    if (-not $baseRef.ok) {
+        Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
+        return @{ ok = $false; reason = [string]$baseRef.reason }
+    }
+    $buildPayload = @{
         argv                         = @($Argv)
         grantId                      = $grantId
         projectId                    = $ProjectId
         holder                       = $holder
         extraAuthorizedWorktreeNames = @($extraNames)
-        expectedHeadRef              = 'HEAD'
+        expectedHeadRef              = [string]$baseRef.refToken
         sourceRepositoryRoot         = [string]$sourceRepo.path
     }
+    if ([string]$parsed.action -eq 'claim-pr-resume') {
+        $prHead = Resolve-AutonomousSpawnClaimPrHead -PrNumber $prNumber -SourceRepositoryRoot ([string]$sourceRepo.path) -FixtureMode:([bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE)
+        if (-not $prHead.ok) {
+            Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
+            return @{ ok = $false; reason = [string]$prHead.reason }
+        }
+        $buildPayload.expectedPrHeadOid = [string]$prHead.headRefOid
+        $buildPayload.expectedPrRefToken = [string]$prHead.prRefToken
+    }
+    $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload $buildPayload
     if (-not $built.ok) {
         Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
         return @{ ok = $false; reason = [string]$built.reason }
@@ -479,19 +616,83 @@ function Consume-AutonomousSpawnWorktreeGrant {
         $updated.consumed = $true
         $updated.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         $updated.consumedCanonicalPath = $CanonicalPath
+        if ($evaluation.normalizedCommitOid) {
+            $updated.normalizedCommitOid = [string]$evaluation.normalizedCommitOid
+        }
+        if ($evaluation.headRefAudit) {
+            $updated.headRefAudit = $evaluation.headRefAudit
+            Write-AutonomousSpawnWorktreeHeadRefAudit -ProjectId $projectId -AuditRecord @{
+                atUtc    = (Get-Date).ToUniversalTime().ToString('o')
+                kind     = 'spawn_worktree_allow'
+                outcome  = 'allow'
+                reason   = [string]$evaluation.reason
+                audit    = $evaluation.headRefAudit
+            }
+        }
         Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $GrantLookup.namespace -GrantId $grantId -Record ($updated | ConvertTo-Json -Compress -Depth 20 | ConvertFrom-Json)
 
         return @{
-            ok        = $true
-            reason    = 'spawn_worktree_allow'
-            grantId   = $grantId
-            projectId = $projectId
-            path      = $CanonicalPath
+            ok                    = $true
+            reason                = 'spawn_worktree_allow'
+            grantId               = $grantId
+            projectId             = $projectId
+            path                  = $CanonicalPath
+            normalizedCommitOid   = [string]$evaluation.normalizedCommitOid
+            headRefAudit          = $evaluation.headRefAudit
         }
     }
     finally {
         Exit-AutonomousSpawnWorktreeGrantConsumeMutex -LockPath $lockPath
     }
+}
+
+
+function Rewrite-AutonomousSpawnWorktreeAddCommitArgv {
+    param(
+        [string[]]$Argv,
+        [string]$NormalizedCommitOid
+    )
+
+    $oid = [string]$NormalizedCommitOid
+    if (-not $oid -or $oid.Length -ne 40) {
+        return @($Argv)
+    }
+
+    $list = @($Argv)
+    $index = 0
+    while ($index -lt $list.Count) {
+        $token = [string]$list[$index]
+        if ($token -in @('-C', '-c', '--git-dir', '--work-tree', '--exec-path', '--namespace')) {
+            $index += 2
+            continue
+        }
+        if ($token.StartsWith('--') -and $token.Contains('=')) {
+            $index += 1
+            continue
+        }
+        if ($token.StartsWith('-')) {
+            $index += 1
+            continue
+        }
+        break
+    }
+    if ($index -ge $list.Count -or [string]$list[$index] -ne 'worktree') { return @($Argv) }
+    if ($index + 1 -ge $list.Count -or [string]$list[$index + 1] -ne 'add') { return @($Argv) }
+
+    $cursor = $index + 2
+    $sawPath = $false
+    while ($cursor -lt $list.Count) {
+        $token = [string]$list[$cursor]
+        if ($token -match '^(?i)--detach$') { $cursor += 1; continue }
+        if ($token -match '^(?i)(-b|--branch)$') { $cursor += 2; continue }
+        if ($token -match '^(?i)(-f|--force|--checkout|--lock|--orphan)$') { $cursor += 1; continue }
+        if ($token.StartsWith('-')) { return @($Argv) }
+        if (-not $sawPath) { $sawPath = $true; $cursor += 1; continue }
+        $rewritten = @($list)
+        $rewritten[$cursor] = $oid.ToLower()
+        return $rewritten
+    }
+    return @($Argv)
 }
 
 function Test-AutonomousSpawnWorktreeGrantBoundAllow {
@@ -528,11 +729,13 @@ function Test-AutonomousSpawnWorktreeGrantBoundAllow {
     }
 
     return @{
-        allowed   = $true
-        reason    = 'spawn_worktree_allow'
-        grantId   = $consume.grantId
-        projectId = $consume.projectId
-        path      = $consume.path
+        allowed               = $true
+        reason                = 'spawn_worktree_allow'
+        grantId               = $consume.grantId
+        projectId             = $consume.projectId
+        path                  = $consume.path
+        normalizedCommitOid   = [string]$consume.normalizedCommitOid
+        headRefAudit          = $consume.headRefAudit
     }
 }
 

@@ -37,6 +37,7 @@ if ($sendDeny.denied) {
 }
 
 $realAo = Resolve-RealAoExecutable
+$exitCode = 0
 try {
     if ($realAo -eq 'ao') {
         & ao @args
@@ -44,9 +45,23 @@ try {
     else {
         & $realAo @args
     }
-    exit $LASTEXITCODE
+    $exitCode = $LASTEXITCODE
 }
 finally {
+    if ($script:AutonomousSpawnWorktreeActiveGrant -and $script:AutonomousSpawnWorktreeActiveGrant.grantPath) {
+        $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $script:AutonomousSpawnWorktreeActiveGrant.grantPath
+        if ($read.ok -and $read.record.consumed -and [string]$read.record.consumedCanonicalPath) {
+            $workspaceRoot = [string]$read.record.consumedCanonicalPath
+            if (Test-Path -LiteralPath $workspaceRoot) {
+                $verify = Verify-AutonomousSpawnClaimPrPostCheckout -GrantRecord $read.record -WorkspaceRoot $workspaceRoot
+                if (-not $verify.ok -and [string]$verify.reason -ne 'not_claim_pr') {
+                    [Console]::Error.WriteLine("autonomous spawn claim-pr post-checkout verification failed: $($verify.reason)")
+                    if ($exitCode -eq 0) { $exitCode = 93 }
+                }
+            }
+        }
+    }
     Clear-AutonomousClaimPrResumeActiveMutex
     Clear-AutonomousSpawnWorktreeActiveGrant
 }
+exit $exitCode

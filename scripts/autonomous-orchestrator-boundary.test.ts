@@ -26,7 +26,11 @@ import {
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 import { autonomousBashEnv, gitFixtureEnv, withTempGitRepo } from './_test-git-fixture.js';
-import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
+import {
+  autonomousClaimPrProbeEnv,
+  autonomousSpawnProbeEnv,
+  withAoSpawnProbeStub,
+} from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -627,7 +631,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           {
             cwd: dir,
             encoding: 'utf8',
-            env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+            env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
           },
         );
         expect(allowCustomAo.status).toBe(0);
@@ -684,7 +688,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: dir,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(allowAoVar.status).toBe(0);
@@ -724,7 +728,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const allowAoScript = spawnSync('bash', [aoScript], {
         cwd: dir,
         encoding: 'utf8',
-        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
+        env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
       });
       expect(allowAoScript.status).toBe(0);
       expect(`${allowAoScript.stderr}${allowAoScript.stdout}`).toMatch(
@@ -870,7 +874,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
+          env: autonomousSpawnProbeEnv({
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },
@@ -889,7 +893,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
+          env: autonomousClaimPrProbeEnv({
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },
@@ -900,11 +904,10 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('without marker, spawn and mutating git pass through shims', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile, pack }) => {
-      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
+    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
       const spawnProbe = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',

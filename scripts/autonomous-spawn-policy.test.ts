@@ -15,7 +15,11 @@ import {
   validateAutonomousSpawnPolicy,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { autonomousBashEnv } from './_test-git-fixture.js';
-import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
+import {
+  autonomousClaimPrProbeEnv,
+  autonomousSpawnProbeEnv,
+  withAoSpawnProbeStub,
+} from './_test-autonomous-ao-stub-fixture.js';
 
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
@@ -270,7 +274,7 @@ describe('claim-pr collision safety', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousClaimPrProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);
@@ -313,7 +317,7 @@ describe('spawn policy guard integration', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);
@@ -364,7 +368,7 @@ describe('spawn policy guard integration', () => {
       const result = spawnSync(pack.aoShimPath, ['spawn', 'opk-probe'], {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+        env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
       });
       expect(result.status).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
