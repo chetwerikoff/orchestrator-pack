@@ -9,7 +9,29 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { autonomousBashEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
+
+export const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRoot, 'rev-parse', 'HEAD'], {
+  encoding: 'utf8',
+}).trim();
+
+/** Shallow-checkout-safe spawn probe env for guard integration tests. */
+export function autonomousSpawnProbeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return autonomousBashEnv({
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
+    ...overrides,
+  });
+}
+
+/** claim-pr spawn probes need a resolvable PR head OID without gh on CI. */
+export function autonomousClaimPrProbeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return autonomousSpawnProbeEnv({
+    AO_SPAWN_FIXTURE_PR_HEAD_OID: repoHeadOid,
+    ...overrides,
+  });
+}
 
 export const AUTONOMOUS_AO_PROBE_STUB_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail

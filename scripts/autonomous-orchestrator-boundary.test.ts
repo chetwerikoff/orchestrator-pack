@@ -26,7 +26,11 @@ import {
 } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 import { autonomousBashEnv, gitFixtureEnv, withTempGitRepo } from './_test-git-fixture.js';
-import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
+import {
+  autonomousClaimPrProbeEnv,
+  autonomousSpawnProbeEnv,
+  withAoSpawnProbeStub,
+} from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -869,7 +873,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
+          env: autonomousSpawnProbeEnv({
             AO_REAL_BINARY: aoStub,
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
@@ -889,7 +893,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
+          env: autonomousClaimPrProbeEnv({
             AO_REAL_BINARY: aoStub,
             AO_SPAWN_PROBE_FILE: probeFile,
           }),

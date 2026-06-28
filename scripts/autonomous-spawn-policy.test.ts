@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import {
@@ -14,8 +14,12 @@ import {
   parseClaimPrNumberFromSpawnArgv,
   validateAutonomousSpawnPolicy,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
-import { autonomousBashEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
-import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
+import { autonomousBashEnv } from './_test-git-fixture.js';
+import {
+  autonomousClaimPrProbeEnv,
+  autonomousSpawnProbeEnv,
+  withAoSpawnProbeStub,
+} from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const aoShimPath = path.join(repoRoot, 'scripts/ao');
@@ -275,11 +279,7 @@ describe('claim-pr collision safety', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
-            AO_SPAWN_PROBE_FILE: probeFile,
-            AO_SPAWN_FIXTURE_PR_HEAD_OID: repoHeadOid,
-            AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
-          }),
+          env: autonomousClaimPrProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);
@@ -321,10 +321,7 @@ describe('spawn policy guard integration', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
-            AO_SPAWN_PROBE_FILE: probeFile,
-            AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
-          }),
+          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);
@@ -374,10 +371,7 @@ describe('spawn policy guard integration', () => {
       const result = spawnSync(aoShimPath, ['spawn', 'opk-probe'], {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: autonomousBashEnv({
-          AO_SPAWN_PROBE_FILE: probeFile,
-          AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
-        }),
+        env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
       });
       expect(result.status).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
