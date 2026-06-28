@@ -7,9 +7,10 @@
   "baseline": {
     "commit_sha": "77525b07baec957747dcdb9b8541ebf01e8a200f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8fc49c376c3009b04b47b8ed9c8178a13fccb3845a7390fc63ad4737948c3a0e"
+    "active_scope_hash": "sha256:4c7c7fe3a6c51a2f7f6fdc1c82f5c896180d768e835fa2254b3e30699abc8e55"
   },
   "declared_paths": [
+    "docs/declarations/515.opk-65.json",
     "docs/review-start-envelope-external-io.mjs",
     "docs/review-start-envelope-external-io.d.mts",
     "docs/review-start-claim-lifecycle.mjs",
@@ -26,5 +27,20 @@
     "tests/external-output-references/review-start-envelope-external-io/pr510-infra-stall.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:8fc49c376c3009b04b47b8ed9c8178a13fccb3845a7390fc63ad4737948c3a0e",
+      "new_active_scope_hash": "sha256:4c7c7fe3a6c51a2f7f6fdc1c82f5c896180d768e835fa2254b3e30699abc8e55",
+      "changed": {
+        "added": [
+          "docs/declarations/515.opk-65.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in declared paths",
+      "actor": "opk-65",
+      "timestamp": "2026-06-28T15:12:46.939Z",
+      "applied": true
+    }
+  ]
 }
