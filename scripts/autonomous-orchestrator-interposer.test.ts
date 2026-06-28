@@ -45,29 +45,7 @@ const aoShimPath = path.join(scriptsDir, 'ao');
 function writeAoReadStubAtBinAo(dir: string): string {
   const binDir = path.join(dir, 'bin');
   mkdirSync(binDir, { recursive: true });
-  const realAo = path.join(binDir, 'ao');
-  writeFileSync(
-    realAo,
-    `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "spawn" ]]; then
-  printf '%s\\n' "$@" > "\${AO_SPAWN_PROBE_FILE:?}"
-  exit 0
-fi
-if [[ "\${1:-}" == "review" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
-  printf '[]\\n'
-  exit 0
-fi
-if [[ "\${1:-}" == "status" ]]; then
-  printf '{"data":[]}\\n'
-  exit 0
-fi
-printf 'unhandled:%s\\n' "$*" >&2
-exit 1
-`,
-  );
-  chmodSync(realAo, 0o755);
-  return realAo;
+  return writeSpawnGateAoStub(binDir, 'read-receipt', 'ao');
 }
 
 function writeTrustedLocalBinAoForwarder(
