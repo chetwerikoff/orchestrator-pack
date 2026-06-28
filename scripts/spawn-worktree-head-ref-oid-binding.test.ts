@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -52,6 +52,35 @@ function shortUniqueOid(dir: string) {
     }
   }
   return full.slice(0, 12);
+}
+
+function findAmbiguousShortOidPrefix(dir: string, blobCount = 1500) {
+  const oids = [headOid(dir)];
+  for (let i = 0; i < blobCount; i += 1) {
+    const hash = spawnSync(git, ['-C', dir, 'hash-object', '-w', '--stdin'], {
+      input: `spawn-worktree-ambiguous-fixture-blob-${i}`,
+      encoding: 'utf8',
+    });
+    if (hash.status === 0 && hash.stdout.trim()) {
+      oids.push(hash.stdout.trim().toLowerCase());
+    }
+  }
+  for (let len = 4; len <= 7; len += 1) {
+    const buckets = new Map<string, number>();
+    for (const oid of oids) {
+      const prefix = oid.slice(0, len);
+      buckets.set(prefix, (buckets.get(prefix) ?? 0) + 1);
+    }
+    for (const [prefix, count] of buckets) {
+      if (count >= 2) {
+        const resolved = resolveGitCommitRefInRepo(dir, prefix);
+        if (!resolved.ok && resolved.reason === 'head_ref_ambiguous') {
+          return prefix;
+        }
+      }
+    }
+  }
+  throw new Error('ambiguous short-OID fixture setup failed');
 }
 
 function setupSpawnRepo(run: (ctx: { repo: string; mainOid: string; baseRef: string }) => void) {
@@ -191,6 +220,19 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
       });
       expect(denyBlob.ok).toBe(false);
       expect(denyBlob.reason).toBe('head_ref_not_commit');
+
+      const ambiguousPrefix = findAmbiguousShortOidPrefix(repo);
+      const denyAmbiguous = evaluateSpawnWorktreeGrantConsume({
+        grant: built.grant,
+        argv: ['worktree', 'add', '/tmp/projects/orchestrator-pack/worktrees/opk-493', ambiguousPrefix],
+        canonicalPath: '/tmp/projects/orchestrator-pack/worktrees/opk-493',
+        worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
+        targetPreexists: false,
+        effectiveRepositoryRoot: repo,
+      });
+      expect(denyAmbiguous.ok).toBe(false);
+      expect(denyAmbiguous.reason).toBe('head_ref_ambiguous');
+      expect(resolveGitCommitRefInRepo(repo, ambiguousPrefix).reason).toBe('head_ref_ambiguous');
     });
   });
 
@@ -255,8 +297,18 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
       spawnNew: { gateEntrypoint: string; argv: string[]; headRefToken: string; baseRefToken: string };
       claimPr: {
         gateEntrypoint: string;
+        defaultBranchBaseRefToken: string;
+        defaultBranchStartOid: string;
+        expectedPrHeadOid: string;
+        expectedPrRefToken: string;
         worktreeAddArgv: string[];
         workerHandoffBeforeCheckoutVerified: boolean;
+        postClaimCheckout: {
+          ok: boolean;
+          reason: string;
+          expectedPrHeadOid: string;
+          actualWorkspaceHeadOid: string;
+        };
       };
     };
 
@@ -283,31 +335,56 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         effectiveRepositoryRoot: repo,
       });
       expect(consume.ok).toBe(true);
-      expect(manifest.claimPr.workerHandoffBeforeCheckoutVerified).toBe(false);
-
-      const claimArgv = manifest.claimPr.worktreeAddArgv.map((part) => (part === 'origin/main' ? baseRef : part));
-      const claimBuilt = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '--claim-pr', '493'],
-        grantId: 'capture-claim-pr',
-        holder: { pid: 1 },
-        sourceRepositoryRoot: repo,
-        expectedHeadRef: baseRef,
-        expectedBranch: 'opk-99',
-        expectedPrHeadOid: mainOid,
-      });
-      const claimConsume = evaluateSpawnWorktreeGrantConsume({
-        grant: claimBuilt.grant,
-        argv: claimArgv,
-        canonicalPath: '/tmp/projects/orchestrator-pack/worktrees/opk-99',
-        worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
-        targetPreexists: false,
-        effectiveRepositoryRoot: repo,
-      });
-      expect(claimConsume.ok).toBe(true);
       expect(manifest.aoPackageVersion).toMatch(/^0\.9\./);
       expect(manifest.spawnNew.gateEntrypoint).toContain('git-autonomous-guard.ps1');
       expect(manifest.claimPr.gateEntrypoint).toContain('git-autonomous-guard.ps1');
     });
+
+    expect(manifest.claimPr.defaultBranchBaseRefToken).toBe('origin/main');
+    expect(manifest.claimPr.defaultBranchStartOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(manifest.claimPr.expectedPrHeadOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(manifest.claimPr.postClaimCheckout.ok).toBe(true);
+    expect(manifest.claimPr.postClaimCheckout.reason).toBe('claim_pr_post_checkout_allow');
+    expect(manifest.claimPr.postClaimCheckout.expectedPrHeadOid).toBe(manifest.claimPr.expectedPrHeadOid);
+    expect(manifest.claimPr.postClaimCheckout.actualWorkspaceHeadOid).toBe(manifest.claimPr.expectedPrHeadOid);
+    expect(manifest.claimPr.workerHandoffBeforeCheckoutVerified).toBe(false);
+
+    const packBaseRef = resolveSpawnDefaultBranchBaseRef(repoRoot, 'main', true).refToken ?? 'HEAD';
+    const claimArgv = manifest.claimPr.worktreeAddArgv.map((part) => (
+      part === manifest.claimPr.defaultBranchBaseRefToken ? packBaseRef : part
+    ));
+    const claimBuilt = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '--claim-pr', '493'],
+      grantId: 'capture-claim-pr',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: repoRoot,
+      expectedHeadRef: packBaseRef,
+      expectedBranch: 'opk-99',
+      expectedPrHeadOid: manifest.claimPr.expectedPrHeadOid,
+      expectedPrRefToken: manifest.claimPr.expectedPrRefToken,
+    });
+    expect(claimBuilt.grant?.expectedCommitOid).toBe(manifest.claimPr.defaultBranchStartOid);
+    expect(claimBuilt.grant?.expectedPrHeadOid).toBe(manifest.claimPr.expectedPrHeadOid);
+
+    const claimConsume = evaluateSpawnWorktreeGrantConsume({
+      grant: claimBuilt.grant,
+      argv: claimArgv,
+      canonicalPath: '/tmp/projects/orchestrator-pack/worktrees/opk-99',
+      worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
+      targetPreexists: false,
+      effectiveRepositoryRoot: repoRoot,
+    });
+    expect(claimConsume.ok).toBe(true);
+
+    const verify = evaluateSpawnClaimPrPostCheckout({
+      workspaceRoot: repoRoot,
+      expectedPrHeadOid: manifest.claimPr.postClaimCheckout.expectedPrHeadOid,
+      prNumber: 493,
+      prRefToken: manifest.claimPr.expectedPrRefToken,
+    });
+    expect(verify.ok).toBe(manifest.claimPr.postClaimCheckout.ok);
+    expect(verify.reason).toBe(manifest.claimPr.postClaimCheckout.reason);
+    expect(verify.actualWorkspaceHeadOid).toBe(manifest.claimPr.postClaimCheckout.actualWorkspaceHeadOid);
   });
 
   it('PowerShell mint resolves default-branch base ref for spawn-new integration', () => {

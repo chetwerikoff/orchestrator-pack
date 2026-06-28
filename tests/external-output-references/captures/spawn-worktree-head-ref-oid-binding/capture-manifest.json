@@ -19,6 +19,10 @@
   "claimPr": {
     "gateEntrypoint": "scripts/git-autonomous-guard.ps1 -> Test-AutonomousGitDenied",
     "sequence": "spawn workspace on default-branch base ref, then claimPR checkout",
+    "defaultBranchBaseRefToken": "origin/main",
+    "defaultBranchStartOid": "0d840e5abbcefb6ebaf6c97c43490be135046479",
+    "expectedPrHeadOid": "8dbb48734f54dbe45718666356b64774c16036c0",
+    "expectedPrRefToken": "feat/493",
     "worktreeAddArgv": [
       "worktree",
       "add",
@@ -28,6 +32,12 @@
       "origin/main"
     ],
     "checkoutCompletedBeforeWorkerHandoff": true,
-    "workerHandoffBeforeCheckoutVerified": false
+    "workerHandoffBeforeCheckoutVerified": false,
+    "postClaimCheckout": {
+      "ok": true,
+      "reason": "claim_pr_post_checkout_allow",
+      "expectedPrHeadOid": "8dbb48734f54dbe45718666356b64774c16036c0",
+      "actualWorkspaceHeadOid": "8dbb48734f54dbe45718666356b64774c16036c0"
+    }
   }
 }
