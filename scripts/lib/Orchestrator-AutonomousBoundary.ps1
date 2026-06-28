@@ -56,7 +56,9 @@ function Test-AutonomousLiteralPathIsExecutable {
     if (-not (Test-Path -LiteralPath $CandidatePath)) { return $false }
     if ($IsWindows) { return $true }
     try {
-        return [bool]((Get-Item -LiteralPath $CandidatePath).Mode -match 'x')
+        $mode = [System.IO.File]::GetUnixFileMode($CandidatePath)
+        $executeMask = [System.IO.UnixFileMode]::UserExecute -bor [System.IO.UnixFileMode]::GroupExecute -bor [System.IO.UnixFileMode]::OtherExecute
+        return [bool]($mode -band $executeMask)
     }
     catch {
         return $false
