@@ -2,8 +2,6 @@
  * Repo-bound git commit ref resolution for spawn worktree grants (Issue #493).
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { gitArgvSubcommandIndex } from './autonomous-orchestrator-boundary.mjs';
 
 const FULL_OID = /^[0-9a-f]{40}$/i;
@@ -11,22 +9,9 @@ const SHORT_OID = /^[0-9a-f]{4,39}$/i;
 
 /**
  * @param {string} repoRoot
- */
-function looksLikeGitCommonDir(repoRoot) {
-  return existsSync(path.join(repoRoot, 'HEAD'));
-}
-
-/**
- * @param {string} repoRoot
  * @param {string[]} gitArgs
  */
 function runGitInRepo(repoRoot, gitArgs) {
-  if (looksLikeGitCommonDir(repoRoot)) {
-    return execFileSync('git', ['--git-dir', repoRoot, ...gitArgs], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  }
   return execFileSync('git', ['-C', repoRoot, ...gitArgs], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -168,23 +153,25 @@ export function commitOidsEqual(left, right) {
  * @param {object} input
  */
 export function evaluateSpawnWorktreeHeadRefAuthorization(input) {
-  const repoRoot = normalizeRepoRoot(input.repoRoot);
+  const fallbackRepoRoot = normalizeRepoRoot(input.repoRoot);
+  const expectedRepoRoot = normalizeRepoRoot(input.expectedRepoRoot ?? input.repoRoot);
+  const actualRepoRoot = normalizeRepoRoot(input.actualRepoRoot ?? input.repoRoot);
   const expectedRefToken = normalizeRefToken(input.expectedRefToken);
   const actualRefToken = normalizeRefToken(input.actualRefToken);
   const expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
 
-  if (!repoRoot) {
+  if (!fallbackRepoRoot || !expectedRepoRoot || !actualRepoRoot) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }
 
   const expectedResolved = expectedCommitOid && FULL_OID.test(expectedCommitOid)
     ? { ok: true, commitOid: expectedCommitOid, refToken: expectedRefToken || expectedCommitOid }
-    : resolveGitCommitRefInRepo(repoRoot, expectedRefToken);
+    : resolveGitCommitRefInRepo(expectedRepoRoot, expectedRefToken);
   if (!expectedResolved.ok) {
     return { ok: false, reason: expectedResolved.reason };
   }
 
-  const actualResolved = resolveGitCommitRefInRepo(repoRoot, actualRefToken);
+  const actualResolved = resolveGitCommitRefInRepo(actualRepoRoot, actualRefToken);
   if (!actualResolved.ok) {
     return { ok: false, reason: actualResolved.reason };
   }

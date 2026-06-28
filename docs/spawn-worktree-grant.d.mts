@@ -66,6 +66,11 @@ export declare function resolveGitRepositoryIdentity(cwd: string): {
   showToplevel?: string;
   gitCommonDirRaw?: string;
 };
+export declare function resolveGitWorktreeRoot(cwd: string): {
+  ok: boolean;
+  reason?: string;
+  worktreeRoot?: string;
+};
 export declare function canonicalRepositoryRootsEqual(left: string, right: string): boolean;
 export declare function parseGitSpawnWorktreeAddArgv(argv: string[]): GitSpawnWorktreeAddShape;
 export declare function pathIsUnderCanonicalPrefix(candidatePath: string, prefixPath: string): boolean;
@@ -76,6 +81,7 @@ export declare function evaluateSpawnWorktreeGrantConsume(input: {
   worktreesPrefix?: string;
   targetPreexists?: boolean;
   effectiveRepositoryRoot?: string;
+  effectiveGitWorktreeRoot?: string;
   nowMs?: number;
 }): SpawnWorktreeGrantConsumeVerdict;
 export declare function buildSpawnWorktreeGrantRecord(input: {
@@ -90,6 +96,7 @@ export declare function buildSpawnWorktreeGrantRecord(input: {
   expectedPrRefToken?: string;
   expectedBranch?: string | null;
   sourceRepositoryRoot?: string;
+  sourceGitWorktreeRoot?: string;
   nowMs?: number;
 }): { ok: boolean; reason: string; grant?: Record<string, unknown> };
 export declare function evaluateBoundaryEscapeSignal(input: {

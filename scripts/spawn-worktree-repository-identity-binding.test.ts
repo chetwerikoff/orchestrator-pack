@@ -8,6 +8,7 @@ import {
   canonicalRepositoryRootsEqual,
   evaluateSpawnWorktreeGrantConsume,
   resolveGitRepositoryIdentity,
+  resolveGitWorktreeRoot,
 } from '../docs/spawn-worktree-grant.mjs';
 import { resolveGitCommitRefInRepo } from '../docs/spawn-worktree-git-ref.mjs';
 import { gitFixtureEnv, resolveTrustedSystemGit, withTempGitRepo } from './_test-git-fixture.js';
@@ -94,6 +95,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
       sourceRepositoryRoot: fixture.identity,
+      sourceGitWorktreeRoot: fixture.linkedRoot,
       expectedHeadRef: 'HEAD',
       expectedCommitOid: headOid,
     });
@@ -106,6 +108,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
       worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: fixture.identity,
+      effectiveGitWorktreeRoot: fixture.mainRoot,
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
@@ -128,6 +131,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
           projectId: 'orchestrator-pack',
           holder: { pid: 1 },
           sourceRepositoryRoot: identityA.identity!,
+          sourceGitWorktreeRoot: repoA,
         });
         expect(built.ok).toBe(true);
 
@@ -202,6 +206,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
       sourceRepositoryRoot: fixture.identity,
+      sourceGitWorktreeRoot: fixture.mainRoot,
     });
     expect(built.ok).toBe(true);
 
@@ -242,6 +247,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID }
         sourceRepositoryRoot = [string]$sourceRepo.path
+        sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
         expectedHeadRef = 'HEAD'
       }
       if (-not $built.ok) { throw "buildGrant failed: $($built.reason)" }
@@ -271,4 +277,53 @@ describe('spawn worktree repository identity binding (#511)', () => {
     expect(parsed.denied, parsed.reason).toBe(false);
     expect(parsed.reason).toBe('spawn_worktree_allow');
   });
+  it('records HEAD from the minting linked worktree, not the main checkout HEAD', () => {
+    const mainRoot = mkdtempSync(path.join(tmpdir(), 'spawn-grant-head-main-'));
+    const linkedRoot = path.join(path.dirname(mainRoot), `${path.basename(mainRoot)}-linked`);
+    tempRoots.push(() => {
+      try {
+        gitIn(mainRoot, ['worktree', 'remove', '--force', linkedRoot]);
+      }
+      catch {
+        // ignore
+      }
+      rmSync(linkedRoot, { recursive: true, force: true });
+      rmSync(mainRoot, { recursive: true, force: true });
+    });
+
+    gitIn(mainRoot, ['init', '-b', 'main']);
+    gitIn(mainRoot, ['config', 'user.email', 'spawn-grant@test.local']);
+    gitIn(mainRoot, ['config', 'user.name', 'Spawn Grant Test']);
+    writeFileSync(path.join(mainRoot, 'README.md'), 'first\n');
+    gitIn(mainRoot, ['add', 'README.md']);
+    gitIn(mainRoot, ['commit', '-m', 'first']);
+    const firstOid = resolveGitCommitRefInRepo(mainRoot, 'HEAD').commitOid!;
+    gitIn(mainRoot, ['worktree', 'add', '-b', 'linked-wt', linkedRoot, 'HEAD']);
+    writeFileSync(path.join(mainRoot, 'second.md'), 'second\n');
+    gitIn(mainRoot, ['add', 'second.md']);
+    gitIn(mainRoot, ['commit', '-m', 'second']);
+    const mainHeadOid = resolveGitCommitRefInRepo(mainRoot, 'HEAD').commitOid!;
+    const linkedHeadOid = resolveGitCommitRefInRepo(linkedRoot, 'HEAD').commitOid!;
+    expect(linkedHeadOid).toBe(firstOid);
+    expect(mainHeadOid).not.toBe(linkedHeadOid);
+
+    const identity = resolveGitRepositoryIdentity(linkedRoot);
+    const worktree = resolveGitWorktreeRoot(linkedRoot);
+    expect(identity.ok).toBe(true);
+    expect(worktree.ok).toBe(true);
+
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '511'],
+      grantId: 'grant-linked-head',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: identity.identity!,
+      sourceGitWorktreeRoot: worktree.worktreeRoot!,
+      expectedHeadRef: 'HEAD',
+    });
+    expect(built.ok).toBe(true);
+    expect(built.grant?.expectedCommitOid).toBe(linkedHeadOid);
+    expect(built.grant?.expectedCommitOid).not.toBe(mainHeadOid);
+  });
+
 });
