@@ -196,7 +196,8 @@ describe('review-start-envelope-external-io', () => {
       nowMonotonicMs: 5000,
       stderr: 'HTTP 401: Bad credentials',
     });
-    expect(closed.classification.failureClass).toBeNull();
+    const classification = closed.classification as { failureClass: string | null };
+    expect(classification.failureClass).toBeNull();
     expect(closed.infraPauseSegments).toEqual([]);
   });
 
