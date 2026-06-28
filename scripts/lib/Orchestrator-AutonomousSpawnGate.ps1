@@ -141,9 +141,6 @@ function Test-AutonomousSpawnDenied {
     if ($FixtureMode) {
         $env:AO_SPAWN_WORKTREE_FIXTURE_MODE = '1'
     }
-    else {
-        Remove-Item Env:AO_SPAWN_WORKTREE_FIXTURE_MODE -ErrorAction SilentlyContinue
-    }
 
     $sub = Get-AoArgvSubcommand -Argv $Argv
     if ($sub -notmatch '^(?i)spawn$') {
