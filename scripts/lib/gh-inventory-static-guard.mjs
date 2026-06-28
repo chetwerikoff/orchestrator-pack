@@ -9,14 +9,17 @@ import { classifyArgv } from './gh-inventory-match.mjs';
 const WRITE_VERBS = new Set(['merge', 'comment', 'create', 'close', 'edit', 'review']);
 
 /** @type {RegExp[]} */
-const RULE_SURFACE_PATTERNS = [
-  /\bgh\s+pr\s+list\s+--state\s+open\s+--json\s+[A-Za-z,]+(?:\s+--limit\s+\d+)?/gi,
-  /\bgh\s+pr\s+list\s+--head\s+[^\n`]+?--json\s+[A-Za-z,]+(?:\s+--limit\s+\d+)?/gi,
-  /\bgh\s+pr\s+view(?:\s+(?:<\w+>|\$\{?\w+\}?|\d+))?\s+--json\s+[A-Za-z,]+(?:\s+(?:--jq|-q)\s+[^`\n;,]+)?/gi,
-  /\bgh\s+pr\s+checks\s+(?:<\w+>|\$\{?\w+\}?|\d+)(?:\s+--json\s+[A-Za-z,]+)?/gi,
-  /\bgh\s+pr\s+diff\s+(?:<\w+>|\$\{?\w+\}?|\d+)\s+--name-only/gi,
-  /\bgh\s+issue\s+view\s+(?:<\w+>|\$\{?\w+\}?|\d+)\s+--json\s+[A-Za-z,]+/gi,
-  /\bgh\s+repo\s+view\s+--json\s+[A-Za-z,]+/gi,
+const RULE_SURFACE_READ_PATTERNS = [
+  /\bgh\s+pr\s+(?!merge|comment|create|close|edit|review)[^\n`]+/gi,
+  /\bgh\s+issue\s+(?!merge|comment|create|close|edit|review)[^\n`]+/gi,
+  /\bgh\s+repo\s+view[^\n`]+/gi,
+];
+
+/** @type {RegExp[]} */
+const FORBIDDEN_RULE_SURFACE_PATTERNS = [
+  /\bgh\s+api\s+graphql[^\n`]*/gi,
+  /\bcurl\s+[^\n`]*api\.github\.com[^\n`]*/gi,
+  /\bunset\s+GH_WRAPPER_ACTIVE\b/gi,
 ];
 
 /** @type {RegExp[]} */
@@ -38,6 +41,65 @@ function trimReconcileCommand(fragment) {
     .replace(/\s+\|\s+.*$/u, '')
     .replace(/\)\s*$/u, '')
     .trim();
+}
+
+/**
+ * @param {string} fragment
+ */
+function trimRuleSurfaceCommand(fragment) {
+  return fragment
+    .replace(/[`]/g, '')
+    .replace(/\s+(?:per PR|per\s+REQUIRED).*$/i, '')
+    .replace(/\s+[—–-]\s+.*$/u, '')
+    .replace(/\s+[;,+].*$/u, '')
+    .replace(/\s+on that session.*$/i, '')
+    .replace(/\s+or the worker.*$/i, '')
+    .replace(/\s+or equivalent.*$/i, '')
+    .replace(/\s+not session.*$/i, '')
+    .replace(/[).]+$/u, '')
+    .trim();
+}
+
+/**
+ * @param {string} line
+ */
+function isProhibitionDocLine(line) {
+  return /MUST NOT|Forbidden transports|forbidden transport|Do not run|Do not use|bypass the wrapper|temporary `gh` shims/i.test(line);
+}
+
+/**
+ * @param {string} command
+ */
+function isIncompleteRuleSurfaceCommand(command) {
+  const trimmed = command.trim();
+  if (!trimmed.startsWith('gh ')) {
+    return true;
+  }
+  if (/\b(?:pr|issue|repo)\/[\w-]+/i.test(trimmed) || /gh\s+pr\s+list\/view\/checks\/diff/i.test(trimmed)) {
+    return true;
+  }
+  if (/…|\.\.\.|<REST path>| or the worker| or equivalent|\(current head\)| on that session/i.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+api\b/i.test(trimmed) && !/^gh\s+api\s+graphql/i.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+pr\s+(?:view|checks|list)$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+pr\s+list(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+pr\s+view(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+issue\s+view\s+--json\s+…/i.test(trimmed)) {
+    return true;
+  }
+  if (/gh api.*\/merge/i.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -158,18 +220,47 @@ export function extractGhCommandsFromReconcileLine(line) {
 }
 
 /**
+ * @param {string} line
+ * @returns {string[]}
+ */
+export function extractGhCommandsFromRuleSurfaceLine(line) {
+  /** @type {string[]} */
+  const found = [];
+  const prohibitionDoc = isProhibitionDocLine(line);
+
+  for (const pattern of RULE_SURFACE_READ_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(line)) !== null) {
+      const trimmed = trimRuleSurfaceCommand(match[0]);
+      if (!isIncompleteRuleSurfaceCommand(trimmed)) {
+        found.push(trimmed);
+      }
+    }
+  }
+
+  if (!prohibitionDoc) {
+    for (const pattern of FORBIDDEN_RULE_SURFACE_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(line)) !== null) {
+        found.push(trimRuleSurfaceCommand(match[0]));
+      }
+    }
+  }
+
+  return [...new Set(found)];
+}
+
+/**
  * @param {string} text
  * @returns {string[]}
  */
 export function extractGhCommandsFromRuleSurface(text) {
   /** @type {string[]} */
   const found = [];
-  for (const pattern of RULE_SURFACE_PATTERNS) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      found.push(match[0].trim());
-    }
+  for (const line of text.split(/\r?\n/)) {
+    found.push(...extractGhCommandsFromRuleSurfaceLine(line));
   }
   return [...new Set(found)];
 }
@@ -185,10 +276,22 @@ export function scanFileForViolations(filePath, mode) {
   const violations = [];
 
   if (mode === 'rules') {
-    for (const command of extractGhCommandsFromRuleSurface(text)) {
-      const prefixed = command.startsWith('gh ') ? command : `gh ${command}`;
-      if (!isInventoryCoveredCommand(prefixed)) {
-        violations.push({ file: filePath, command: prefixed });
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      for (const command of extractGhCommandsFromRuleSurfaceLine(line)) {
+        const prefixed = command.startsWith('gh ') ? command : `gh ${command}`;
+        if (
+          FORBIDDEN_RULE_SURFACE_PATTERNS.some((pattern) => {
+            pattern.lastIndex = 0;
+            return pattern.test(command);
+          })
+        ) {
+          violations.push({ file: filePath, command, line: line.trim() });
+          continue;
+        }
+        if (!isInventoryCoveredCommand(prefixed)) {
+          violations.push({ file: filePath, command: prefixed, line: line.trim() });
+        }
       }
     }
     return violations;

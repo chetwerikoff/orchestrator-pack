@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractGhCommandsFromRuleSurface,
+  extractGhCommandsFromRuleSurfaceLine,
   isInventoryCoveredCommand,
   scanFileForViolations,
 } from './lib/gh-inventory-static-guard.mjs';
@@ -39,5 +40,41 @@ describe('gh inventory static guard', () => {
     const violations = scanFileForViolations(file, 'rules');
     expect(violations.length).toBeGreaterThan(0);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('detects unknown gh read forms such as gh issue list', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-'));
+    const file = join(dir, 'rules.md');
+    writeFileSync(
+      file,
+      'Inspect with `gh issue list --json number` before spawning.\n',
+      'utf8',
+    );
+    const violations = scanFileForViolations(file, 'rules');
+    expect(violations.some((v) => v.command.includes('gh issue list'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('detects forbidden gh api graphql transport in instruct lines', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-'));
+    const file = join(dir, 'rules.md');
+    writeFileSync(
+      file,
+      'When blocked, run `gh api graphql -f query=...` as a fallback.\n',
+      'utf8',
+    );
+    const violations = scanFileForViolations(file, 'rules');
+    expect(violations.some((v) => v.command.includes('gh api graphql'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('ignores family mentions and prohibition documentation lines', () => {
+    expect(extractGhCommandsFromRuleSurfaceLine('routes `gh pr list/view/checks/diff` to REST')).toEqual([]);
+    expect(
+      extractGhCommandsFromRuleSurfaceLine(
+        '**Forbidden transports:** agents MUST NOT use `gh api graphql` or raw curl.',
+      ),
+    ).toEqual([]);
+    expect(extractGhCommandsFromRuleSurfaceLine('`gh pr checks` stay verbatim per passthrough')).toEqual([]);
   });
 });
