@@ -99,6 +99,19 @@ jobs:
         shell: pwsh
         run: ./scripts/check-ci-cheap-wins.ps1
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Enforce CI pipeline split policy
+        shell: pwsh
+        run: ./scripts/check-ci-pipeline-split.ps1
+
   pr-scope-guard:
     name: PR scope guard
     if: github.event_name == 'pull_request'
@@ -160,8 +173,8 @@ jobs:
             Pop-Location
           }
 
-  tests:
-    name: Run pack contract tests
+  test-typecheck:
+    name: Type-check pack sources
     needs: classify-pr-changes
     if: |
       always() &&
@@ -190,6 +203,51 @@ jobs:
         shell: pwsh
         run: ./scripts/check-review-start-claim-guard.ps1
 
+  test-vitest:
+    name: Vitest shard ${{ matrix.shard }}/4
+    needs: classify-pr-changes
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Run Vitest shard
+        shell: pwsh
+        run: ./scripts/run-vitest-shard.ps1 -Shard ${{ matrix.shard }} -ShardTotal 4
+
+  test-pester:
+    name: Pester regression
+    needs: classify-pr-changes
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install Pester
         shell: pwsh
         run: |
@@ -199,9 +257,33 @@ jobs:
           Import-Module Pester -MinimumVersion 5.0.0
           Write-Host "Pester version: $((Get-Module Pester).Version)"
 
-      - name: Run all tests
+      - name: Run Pester track
         shell: pwsh
-        run: ./scripts/test-all.ps1
+        run: ./scripts/test-all.ps1 -SkipNpm
+
+  test-aggregate:
+    name: Run pack contract tests
+    needs: [classify-pr-changes, test-typecheck, test-vitest, test-pester]
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail-closed full-regression aggregate
+        shell: pwsh
+        env:
+          TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
+          VITEST_RESULT: ${{ needs.test-vitest.result }}
+          PESTER_RESULT: ${{ needs.test-pester.result }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: ./scripts/ci-test-aggregate.ps1
 
   self-architect-lint:
     name: Self-architect lint
