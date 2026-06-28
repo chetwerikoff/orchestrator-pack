@@ -218,11 +218,19 @@ else {
 
 if (Test-Path -LiteralPath $scopeGuardPath) {
     $scopeText = Get-Content -LiteralPath $scopeGuardPath -Raw
-  if ($scopeText -notmatch 'test-all\.ps1') {
-        Add-Fail 'scope-guard.yml tests job must run scripts/test-all.ps1 (vitest owner for read-delegation audit fixtures)'
+    $hasMonolithicTests = $scopeText -match '(?m)^\s*tests:\s*$' -and $scopeText -match 'test-all\.ps1'
+    $hasShardedPipeline = $scopeText -match 'test-vitest' -and $scopeText -match 'run-vitest-shard\.ps1' -and $scopeText -match 'ci-test-aggregate\.ps1'
+    if (-not $hasMonolithicTests -and -not $hasShardedPipeline) {
+        Add-Fail 'scope-guard.yml must run scripts/test-all.ps1 or the sharded vitest/pester pipeline (Issue #487)'
+    }
+    if ($hasShardedPipeline -and $scopeText -notmatch 'test-all\.ps1.*-SkipNpm|-SkipNpm.*test-all\.ps1') {
+        Add-Fail 'sharded pipeline must keep scripts/test-all.ps1 -SkipNpm for Pester/read-delegation ownership'
     }
     if ($scopeText -notmatch 'check-ci-cheap-wins\.ps1') {
         Add-Fail 'scope-guard.yml must invoke scripts/check-ci-cheap-wins.ps1'
+    }
+    if ($hasShardedPipeline -and $scopeText -notmatch 'check-ci-pipeline-split\.ps1') {
+        Add-Fail 'scope-guard.yml must invoke scripts/check-ci-pipeline-split.ps1 when using sharded test pipeline'
     }
 }
 else {

@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$SkipNpm,
-    [switch]$SkipPester
+    [switch]$SkipPester,
+    [int]$VitestShard = 0,
+    [int]$VitestShardCount = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +45,12 @@ if (-not $SkipNpm) {
             }
 
             if ($Failures.Count -eq 0) {
-                & npm test
+                if ($VitestShard -gt 0 -and $VitestShardCount -gt 0) {
+                    & npm test -- --shard="$VitestShard/$VitestShardCount"
+                }
+                else {
+                    & npm test
+                }
                 if ($LASTEXITCODE -ne 0) {
                     Write-Track 'vitest' 'FAIL' "exit=$LASTEXITCODE"
                     $Failures.Add('Vitest track failed') | Out-Null
