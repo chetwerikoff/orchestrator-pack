@@ -45,7 +45,7 @@ describe('test runtime budget guard (Issue #488)', () => {
             name: 'scripts/slow-example.test.ts',
             assertionResults: [
               { ancestorTitles: ['suite'], title: 'slow case', duration: 250_000, status: 'passed' },
-              { ancestorTitles: ['suite'], title: 'another slow case', duration: 120_000, status: 'passed' },
+              { ancestorTitles: ['suite'], title: 'another slow case', duration: 250_000, status: 'passed' },
             ],
           },
         ],
