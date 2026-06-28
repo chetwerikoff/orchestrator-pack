@@ -590,7 +590,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('interposes custom absolute git and ao real-binary paths', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
     const fakeBinRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-bin-'));
     try {
       const customGitDir = path.join(fakeBinRoot, 'opt', 'homebrew', 'bin');
@@ -608,7 +608,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
         const denyCustomGit = spawnSync(
           'bash',
-          ['-c', `source ${bashEnvPath}; ${customGit} branch -m custom-git-bypass`],
+          ['-c', `source ${pack.bashEnvPath}; ${customGit} branch -m custom-git-bypass`],
           {
             cwd: dir,
             encoding: 'utf8',
@@ -623,7 +623,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
         const allowCustomAo = spawnSync(
           'bash',
-          ['-c', `source ${bashEnvPath}; ${customAo} spawn opk-1`],
+          ['-c', `source ${pack.bashEnvPath}; ${customAo} spawn opk-1`],
           {
             cwd: dir,
             encoding: 'utf8',
@@ -641,12 +641,12 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('denies git and ao paths hidden behind shell variable expansion', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const denyGitVar = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; G=/usr/bin/git; "$G" branch -m var-expand-bypass`],
+        ['-c', `source ${pack.bashEnvPath}; G=/usr/bin/git; "$G" branch -m var-expand-bypass`],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -661,7 +661,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
       const denyGitCommandSubstitution = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; echo $(/usr/bin/git branch -m blocked-cmdsub)`],
+        ['-c', `source ${pack.bashEnvPath}; echo $(/usr/bin/git branch -m blocked-cmdsub)`],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -680,7 +680,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       chmodSync(fakeAo, 0o755);
       const allowAoVar = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
+        ['-c', `source ${pack.bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -697,7 +697,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('denies absolute git and ao invocations from bash script files under BASH_ENV', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const gitScript = path.join(dir, 'mutate-git.sh');
@@ -709,7 +709,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         env: {
           ...process.env,
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-          BASH_ENV: bashEnvPath,
+          BASH_ENV: pack.bashEnvPath,
         },
       });
       expect(denyGitScript.status).toBe(93);
@@ -724,7 +724,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const allowAoScript = spawnSync('bash', [aoScript], {
         cwd: dir,
         encoding: 'utf8',
-        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: bashEnvPath }),
+        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
       });
       expect(allowAoScript.status).toBe(0);
       expect(`${allowAoScript.stderr}${allowAoScript.stdout}`).toMatch(
@@ -862,15 +862,15 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('autonomous ao guard allows spawn when default policy is on', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
           env: autonomousBashEnv({
-            AO_REAL_BINARY: aoStub,
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },
@@ -882,15 +882,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('scripts/ao shim allows spawn --claim-pr on autonomous surface when policy and safety pass', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       const result = spawnSync(
-        aoShimPath,
+        pack.aoShimPath,
         ['spawn', '--claim-pr', '322'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
           env: autonomousBashEnv({
-            AO_REAL_BINARY: aoStub,
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },
@@ -901,10 +900,11 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('without marker, spawn and mutating git pass through shims', () => {
-    withAoSpawnProbeStub(({ aoStub, probeFile }) => {
+    withAoSpawnProbeStub(({ aoStub, probeFile, pack }) => {
+      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const spawnProbe = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
