@@ -108,7 +108,7 @@ else {
             Add-Fail 'test-vitest job must not use continue-on-error: true'
         }
         if ($vitestJob -notmatch 'run-vitest-shard\.ps1') {
-            Add-Fail 'test-vitest job must invoke scripts/run-vitest-shard.ps1'
+            Add-Fail 'test-vitest job must invoke scripts/run-vitest-shard.ps1 (includes Issue #488 runtime budget)'
         }
         $matrixMatches = [regex]::Matches($vitestJob, '(?m)^\s*shard:\s*\[([^\]]+)\]')
         if ($matrixMatches.Count -eq 0) {
