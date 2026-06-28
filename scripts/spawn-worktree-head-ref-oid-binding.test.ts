@@ -428,7 +428,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
           holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
           extraAuthorizedWorktreeNames = @()
           expectedHeadRef = ${psString(baseRef)}
-          sourceRepositoryRoot = ${psString(repoRoot)}
+          sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
         }
         $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
         Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId 'ps-grant-493' -Record $built.grant | Out-Null

@@ -90,7 +90,7 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @()
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
@@ -160,7 +160,7 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @()
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
@@ -209,7 +209,7 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = ${holderPid}; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @('opk-race-a','opk-race-b')
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null

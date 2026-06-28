@@ -311,11 +311,18 @@ function Verify-AutonomousSpawnClaimPrPostCheckout {
 
 function Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot {
     try {
-        $topLevel = [string](& git rev-parse --show-toplevel 2>$null).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $topLevel) {
+        $commonDirRel = [string](& git rev-parse --git-common-dir 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $commonDirRel) {
             return @{ ok = $false; reason = 'repository_root_unresolvable' }
         }
-        $resolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $topLevel
+        $cwd = (Get-Location).Path
+        $commonDirAbs = if ([System.IO.Path]::IsPathRooted($commonDirRel)) {
+            $commonDirRel
+        }
+        else {
+            Join-Path $cwd $commonDirRel
+        }
+        $resolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $commonDirAbs
         if (-not $resolved.ok) {
             return @{ ok = $false; reason = 'repository_root_unresolvable' }
         }

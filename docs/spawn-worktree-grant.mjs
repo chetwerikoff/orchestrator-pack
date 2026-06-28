@@ -1,6 +1,9 @@
 /**
  * Spawn-owned worktree grant validation (Issue #470).
  */
+import { execFileSync } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import {
   classifySpawnAction,
   gitArgvSubcommandIndex,
@@ -117,6 +120,56 @@ export function gitArgvHasSourceSelectingGlobals(argv) {
     }
   }
   return false;
+}
+
+
+/**
+ * Resolve shared git repository identity for spawn-grant repository binding (#511).
+ *
+ * @param {string} cwd
+ */
+export function resolveGitRepositoryIdentity(cwd) {
+  const workDir = String(cwd ?? '').trim();
+  if (!workDir) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  try {
+    const commonDirRel = execFileSync('git', ['-C', workDir, 'rev-parse', '--git-common-dir'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (!commonDirRel) {
+      return { ok: false, reason: 'repository_root_unresolvable' };
+    }
+    const showToplevel = execFileSync('git', ['-C', workDir, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const commonDirAbs = path.isAbsolute(commonDirRel)
+      ? commonDirRel
+      : path.resolve(workDir, commonDirRel);
+    if (!existsSync(commonDirAbs)) {
+      return { ok: false, reason: 'repository_root_unresolvable' };
+    }
+    let identity = commonDirAbs;
+    try {
+      identity = typeof realpathSync.native === 'function'
+        ? realpathSync.native(commonDirAbs)
+        : realpathSync(commonDirAbs);
+    }
+    catch {
+      identity = realpathSync(commonDirAbs);
+    }
+    return {
+      ok: true,
+      identity: String(identity).replace(/[/\\]+$/, ''),
+      showToplevel: String(showToplevel).trim(),
+      gitCommonDirRaw: commonDirRel,
+    };
+  }
+  catch {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
 }
 
 /**
@@ -507,4 +560,8 @@ runStdinJsonCli('spawn-worktree-grant.mjs', {
   },
   evaluateHeadRefAuthorization: () => evaluateSpawnWorktreeHeadRefAuthorization(readStdinJson()),
   evaluateClaimPrPostCheckout: () => evaluateSpawnClaimPrPostCheckout(readStdinJson()),
+  resolveRepositoryIdentity: () => {
+    const input = readStdinJson();
+    return resolveGitRepositoryIdentity(String(input.cwd ?? ''));
+  },
 });

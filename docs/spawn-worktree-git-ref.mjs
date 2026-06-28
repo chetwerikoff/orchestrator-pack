@@ -2,6 +2,8 @@
  * Repo-bound git commit ref resolution for spawn worktree grants (Issue #493).
  */
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { gitArgvSubcommandIndex } from './autonomous-orchestrator-boundary.mjs';
 
 const FULL_OID = /^[0-9a-f]{40}$/i;
@@ -9,9 +11,22 @@ const SHORT_OID = /^[0-9a-f]{4,39}$/i;
 
 /**
  * @param {string} repoRoot
+ */
+function looksLikeGitCommonDir(repoRoot) {
+  return existsSync(path.join(repoRoot, 'HEAD'));
+}
+
+/**
+ * @param {string} repoRoot
  * @param {string[]} gitArgs
  */
 function runGitInRepo(repoRoot, gitArgs) {
+  if (looksLikeGitCommonDir(repoRoot)) {
+    return execFileSync('git', ['--git-dir', repoRoot, ...gitArgs], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
   return execFileSync('git', ['-C', repoRoot, ...gitArgs], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
