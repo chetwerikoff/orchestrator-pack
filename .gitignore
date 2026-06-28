@@ -35,7 +35,6 @@ node_modules/
 dist/
 build/
 coverage/
-.vitest-runtime-report*.json
 .out/
 .cache/
 .turbo/
