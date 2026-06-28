@@ -3,6 +3,7 @@
  */
 import {
   classifySpawnAction,
+  gitArgvSubcommandIndex,
   parseClaimPrNumberFromSpawnArgv,
 } from './autonomous-orchestrator-boundary.mjs';
 import {
@@ -139,23 +140,7 @@ export function canonicalRepositoryRootsEqual(left, right) {
  */
 export function parseGitSpawnWorktreeAddArgv(argv) {
   const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
-  let index = 0;
-  while (index < list.length) {
-    const token = list[index];
-    if (token === '-C' || token === '-c' || token === '--git-dir' || token === '--work-tree' || token === '--exec-path' || token === '--namespace') {
-      index += 2;
-      continue;
-    }
-    if (token.startsWith('--') && token.includes('=')) {
-      index += 1;
-      continue;
-    }
-    if (token.startsWith('-')) {
-      index += 1;
-      continue;
-    }
-    break;
-  }
+  const index = gitArgvSubcommandIndex(list);
   if (index >= list.length || list[index].toLowerCase() !== 'worktree') {
     return { ok: false, reason: 'not_worktree' };
   }
@@ -510,7 +495,11 @@ runStdinJsonCli('spawn-worktree-grant.mjs', {
   evaluateBoundaryEscape: () => evaluateBoundaryEscapeSignal(readStdinJson()),
   resolveDefaultBranchBaseRef: () => {
     const input = readStdinJson();
-    return resolveSpawnDefaultBranchBaseRef(String(input.repoRoot ?? ''), String(input.defaultBranch ?? 'main'));
+    return resolveSpawnDefaultBranchBaseRef(
+      String(input.repoRoot ?? ''),
+      String(input.defaultBranch ?? 'main'),
+      Boolean(input.fixtureMode),
+    );
   },
   resolveCommitRef: () => {
     const input = readStdinJson();

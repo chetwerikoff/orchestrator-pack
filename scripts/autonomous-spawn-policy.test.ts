@@ -321,7 +321,10 @@ describe('spawn policy guard integration', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousBashEnv({
+            AO_SPAWN_PROBE_FILE: probeFile,
+            AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
+          }),
         },
       );
       expect(result.status).toBe(0);
@@ -371,7 +374,10 @@ describe('spawn policy guard integration', () => {
       const result = spawnSync(aoShimPath, ['spawn', 'opk-probe'], {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+        env: autonomousBashEnv({
+          AO_SPAWN_PROBE_FILE: probeFile,
+          AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
+        }),
       });
       expect(result.status).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);

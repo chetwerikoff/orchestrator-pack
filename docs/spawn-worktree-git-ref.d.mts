@@ -1,6 +1,7 @@
 export declare function resolveSpawnDefaultBranchBaseRef(
   repoRoot: string,
   defaultBranch?: string,
+  fixtureMode?: boolean,
 ): { ok: boolean; reason?: string; refToken?: string };
 
 export declare function resolveGitCommitRefInRepo(

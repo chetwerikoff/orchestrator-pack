@@ -71,6 +71,19 @@ function setupSpawnRepo(run: (ctx: { repo: string; mainOid: string; baseRef: str
 }
 
 describe('spawn worktree head-ref OID binding (#493)', () => {
+  it('fixtureMode resolves HEAD when default branch refs are absent', () => {
+    withTempGitRepo((repo) => {
+      const commit = headOid(repo);
+      gitIn(repo, ['checkout', '--detach', 'HEAD']);
+      gitIn(repo, ['update-ref', '-d', 'refs/heads/main']);
+      expect(resolveSpawnDefaultBranchBaseRef(repo, 'main', false).ok).toBe(false);
+      const fixture = resolveSpawnDefaultBranchBaseRef(repo, 'main', true);
+      expect(fixture.ok).toBe(true);
+      expect(fixture.refToken).toBe('HEAD');
+      expect(resolveGitCommitRefInRepo(repo, fixture.refToken ?? '').commitOid).toBe(commit);
+    });
+  });
+
   it('literal HEAD vs origin/main spellings allow when OID matches', () => {
     setupSpawnRepo(({ repo, mainOid, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({

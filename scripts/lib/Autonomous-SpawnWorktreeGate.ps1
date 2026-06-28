@@ -197,6 +197,7 @@ function Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef {
     return Invoke-SpawnWorktreeGrantCli -Subcommand 'resolveDefaultBranchBaseRef' -Payload @{
         repoRoot       = [string]$RepoRoot
         defaultBranch  = [string]$DefaultBranch
+        fixtureMode    = [bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE
     }
 }
 

@@ -2,6 +2,7 @@
  * Repo-bound git commit ref resolution for spawn worktree grants (Issue #493).
  */
 import { execFileSync } from 'node:child_process';
+import { gitArgvSubcommandIndex } from './autonomous-orchestrator-boundary.mjs';
 
 const FULL_OID = /^[0-9a-f]{40}$/i;
 const SHORT_OID = /^[0-9a-f]{4,39}$/i;
@@ -31,13 +32,15 @@ function normalizeRefToken(value) {
   return String(value ?? '').trim();
 }
 
+
 /**
  * Resolve AO 0.9.x default-branch worktree-add base ref preference.
  *
  * @param {string} repoRoot
  * @param {string} [defaultBranch]
+ * @param {boolean} [fixtureMode]
  */
-export function resolveSpawnDefaultBranchBaseRef(repoRoot, defaultBranch = 'main') {
+export function resolveSpawnDefaultBranchBaseRef(repoRoot, defaultBranch = 'main', fixtureMode = false) {
   const repo = normalizeRepoRoot(repoRoot);
   const branch = String(defaultBranch ?? 'main').trim() || 'main';
   if (!repo) {
@@ -55,6 +58,15 @@ export function resolveSpawnDefaultBranchBaseRef(repoRoot, defaultBranch = 'main
       return { ok: true, refToken: localRef };
     }
     catch {
+      if (fixtureMode) {
+        try {
+          runGitInRepo(repo, ['rev-parse', '--verify', 'HEAD^{commit}']);
+          return { ok: true, refToken: 'HEAD' };
+        }
+        catch {
+          return { ok: false, reason: 'default_branch_base_ref_unresolvable' };
+        }
+      }
       return { ok: false, reason: 'default_branch_base_ref_unresolvable' };
     }
   }
@@ -241,23 +253,7 @@ export function rewriteGitWorktreeAddCommitArgv(argv, normalizedCommitOid) {
     return list;
   }
 
-  let index = 0;
-  while (index < list.length) {
-    const token = list[index];
-    if (token === '-C' || token === '-c' || token === '--git-dir' || token === '--work-tree' || token === '--exec-path' || token === '--namespace') {
-      index += 2;
-      continue;
-    }
-    if (token.startsWith('--') && token.includes('=')) {
-      index += 1;
-      continue;
-    }
-    if (token.startsWith('-')) {
-      index += 1;
-      continue;
-    }
-    break;
-  }
+  const index = gitArgvSubcommandIndex(list);
   if (index >= list.length || list[index].toLowerCase() !== 'worktree') {
     return list;
   }
