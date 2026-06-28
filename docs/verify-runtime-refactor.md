@@ -38,7 +38,7 @@ invocation after **one** dependency preflight via
 Thresholds are canonical in `scripts/test-runtime-budget.config.json`:
 
 - **perTestMs** (default 120000): fail when a single Vitest case exceeds this.
-- **perFileMs** (default 300000): fail when a test file total exceeds this.
+- **perFileMs** (default 450000): fail when a test file total exceeds this (~7.5 min). CI integration-heavy script suites may legitimately approach this on cold GHA runners.
 
 `scripts/test-all.ps1` writes Vitest JSON to `.vitest-runtime-report.json` and
 runs `scripts/enforce-vitest-runtime-budget.mjs`. Failures name the slow test

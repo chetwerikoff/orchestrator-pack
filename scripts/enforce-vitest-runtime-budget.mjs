@@ -28,7 +28,12 @@ function loadConfig() {
 }
 
 function normalizeFilePath(file) {
-  return String(file ?? 'unknown').replace(/\\/g, '/');
+  const normalized = String(file ?? 'unknown').replace(/\\/g, '/');
+  const root = repoRoot.replace(/\\/g, '/');
+  if (normalized.startsWith(`${root}/`)) {
+    return normalized.slice(root.length + 1);
+  }
+  return normalized;
 }
 
 function collectFromVitestJson(payload, out) {
