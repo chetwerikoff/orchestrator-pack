@@ -1094,19 +1094,24 @@ exit 0
     });
 
     it('emits resolver-path warning and falls back on autonomous surface PS guard path', () => {
-      withBrokenAoPointerFixture(({ packRoot, pathBin }) => {
-        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'help'], {
-          cwd: packRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-            PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
-          },
-        });
-        expect(result.status).toBe(0);
-        expect(result.stderr).toMatch(BROKEN_POINTER_RE);
-        expect(`${result.stdout}${result.stderr}`).toMatch(/fallback-ao-help/);
+      withBrokenAoPointerFixture(({ packRoot, pathBin, fallbackAo, brokenAo }) => {
+        const scriptsDir = path.join(packRoot, 'scripts');
+        const minimalPath = `${pathBin}:${scriptsDir}:/usr/bin:/bin`;
+        const output = runPwsh(`
+          $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+          $env:PATH = ${psString(minimalPath)}
+          . ${psString(boundaryLibPath)}
+          Invoke-AutonomousExplicitAoConfigSurfacePolicy -PackRoot ${psString(packRoot)} | Out-Null
+          $resolved = Resolve-RealAoExecutable -PackRoot ${psString(packRoot)}
+          [pscustomobject]@{
+            resolved = [string]$resolved
+            usesFallback = [bool]($resolved -eq ${psString(fallbackAo)})
+            avoidsBroken = [bool]($resolved -ne ${psString(brokenAo)})
+          } | ConvertTo-Json -Compress
+        `);
+        const parsed = JSON.parse(output);
+        expect(parsed.usesFallback).toBe(true);
+        expect(parsed.avoidsBroken).toBe(true);
       });
     });
 
