@@ -1,14 +1,11 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import {
+  createIsolatedInterposerPack,
+  writeIsolatedAutonomousRealBinariesConfig,
+  type InterposerPackFixture,
+} from './_test-interposer-pack-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
 export const AUTONOMOUS_AO_PROBE_STUB_SCRIPT = `#!/usr/bin/env bash
@@ -24,33 +21,67 @@ fi
 exit 0
 `;
 
-/** Isolated ao stub via .ao/autonomous-real-binaries.json — records argv to probeFile. */
-export function withAoSpawnProbeStub(run: (ctx: { aoStub: string; probeFile: string }) => void) {
+export type AoSpawnProbeStubContext = {
+  aoStub: string;
+  probeFile: string;
+  pack: InterposerPackFixture;
+};
+
+const liveOperatorConfigPath = path.join(repoRoot, '.ao', 'autonomous-real-binaries.json');
+
+const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
+  'autonomous-gate-preflight.mjs',
+  'codex-reviewer-timeout-retry.mjs',
+  'review-finding-delivery-confirm.mjs',
+  'review-head-ready.mjs',
+  'review-ready-stuck-guard.mjs',
+  'review-reconcile-primitives.mjs',
+  'review-trigger-reconcile.mjs',
+  'session-runtime-liveness.mjs',
+  'spawn-worktree-grant.mjs',
+  'terminal-flood-detect.mjs',
+  'worker-iteration-cycle.mjs',
+  'worker-message-dispatch-observe.mjs',
+] as const;
+
+function copyAoSpawnProbeStubPackDocs(packRoot: string) {
+  for (const doc of AO_SPAWN_PROBE_STUB_PACK_DOCS) {
+    cpSync(path.join(repoRoot, 'docs', doc), path.join(packRoot, 'docs', doc));
+  }
+}
+
+function snapshotLiveOperatorConfig(): string | null {
+  return existsSync(liveOperatorConfigPath) ? readFileSync(liveOperatorConfigPath, 'utf8') : null;
+}
+
+function assertLiveOperatorConfigUnchanged(before: string | null, label: string) {
+  const after = existsSync(liveOperatorConfigPath) ? readFileSync(liveOperatorConfigPath, 'utf8') : null;
+  if (after !== before) {
+    throw new Error(
+      `withAoSpawnProbeStub ${label}: live operator config mutated at ${liveOperatorConfigPath}`,
+    );
+  }
+}
+
+/** Isolated ao stub via pack-local .ao/autonomous-real-binaries.json — records argv to probeFile. */
+export function withAoSpawnProbeStub(run: (ctx: AoSpawnProbeStubContext) => void) {
+  const liveConfigBefore = snapshotLiveOperatorConfig();
   const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-ao-stub-'));
   const aoStub = path.join(stubDir, 'ao-stub.sh');
   const probeFile = path.join(stubDir, 'spawn-probe.txt');
-  const aoDir = path.join(repoRoot, '.ao');
-  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
-  const priorConfig = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
+  const isolated = createIsolatedInterposerPack();
   try {
+    copyAoSpawnProbeStubPackDocs(isolated.packRoot);
     writeFileSync(aoStub, AUTONOMOUS_AO_PROBE_STUB_SCRIPT);
     chmodSync(aoStub, 0o755);
-    mkdirSync(aoDir, { recursive: true });
-    writeFileSync(
-      configPath,
-      JSON.stringify(
-        { ao: aoStub, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' },
-        null,
-        2,
-      ),
-    );
-    run({ aoStub, probeFile });
+    writeIsolatedAutonomousRealBinariesConfig(isolated, aoStub);
+    assertLiveOperatorConfigUnchanged(liveConfigBefore, 'before callback');
+    // Isolation under pack.packRoot/.ao is the durable fix — not finally restoring repoRoot/.ao.
+    run({ aoStub, probeFile, pack: isolated });
+    assertLiveOperatorConfigUnchanged(liveConfigBefore, 'after callback');
   } finally {
-    if (priorConfig === null) {
-      if (existsSync(configPath)) rmSync(configPath);
-    } else {
-      writeFileSync(configPath, priorConfig);
-    }
+    isolated.cleanup();
     rmSync(stubDir, { recursive: true, force: true });
+    assertLiveOperatorConfigUnchanged(liveConfigBefore, 'after cleanup');
   }
 }
