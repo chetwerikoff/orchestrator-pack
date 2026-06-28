@@ -226,6 +226,14 @@
       "path": "captures/gh-pr-open/open.raw.json",
       "contentHash": "sha256:f8523a313d522ca149bb777731e13da43e3790950f3306b90bdb6683e32e7d0a"
     },
+    "gh-pr-open/pulls-merge-fields": {
+      "id": "gh-pr-open/pulls-merge-fields",
+      "producer": "gh",
+      "sourceCommand": "gh api repos/chetwerikoff/orchestrator-pack/pulls/491",
+      "kind": "structured",
+      "path": "captures/gh-pr-open/pulls-merge-fields.raw.json",
+      "contentHash": "sha256:99332a727941f1a1493f075f24241626e5c9bb4a4f3d7909775c243976a421fb"
+    },
     "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27": {
       "id": "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27",
       "producer": "spawn-worktree-grant-ao-session-basename",
