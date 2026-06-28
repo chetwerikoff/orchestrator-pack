@@ -7,13 +7,30 @@
   "baseline": {
     "commit_sha": "c6d0a26b41483423a9ad2f4eff0e048d9ed637e0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:a6b792b2131935a68581463cc35e62584969fc4696990c9a67a8ea4a82f5227a"
+    "active_scope_hash": "sha256:328a89dcc1fc304eec482efd3ce9d02504894415563151c932f6d32df1b86558"
   },
-  "declared_paths": [],
+  "declared_paths": [
+    "docs/declarations/488.opk-45.json"
+  ],
   "declared_globs": [
     "scripts/**",
     ".github/workflows/**",
     "docs/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a6b792b2131935a68581463cc35e62584969fc4696990c9a67a8ea4a82f5227a",
+      "new_active_scope_hash": "sha256:328a89dcc1fc304eec482efd3ce9d02504894415563151c932f6d32df1b86558",
+      "changed": {
+        "added": [
+          "docs/declarations/488.opk-45.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in declared scope",
+      "actor": "opk-45",
+      "timestamp": "2026-06-28T05:48:04.466Z",
+      "applied": true
+    }
+  ]
 }
