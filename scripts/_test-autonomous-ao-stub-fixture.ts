@@ -9,6 +9,7 @@ import {
   stripInterposerBashEnvBlockers,
   writeIsolatedAutonomousRealBinariesConfig,
   type InterposerPackFixture,
+  type IsolatedInterposerPack,
 } from './_test-interposer-pack-fixture.js';
 import { autonomousBashEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
@@ -161,7 +162,8 @@ export type AoSpawnProbeStubContext = {
   pack: InterposerPackFixture;
 };
 
-export type HermeticSpawnGateContext = AoSpawnProbeStubContext & {
+export type HermeticSpawnGateContext = Omit<AoSpawnProbeStubContext, 'pack'> & {
+  pack: IsolatedInterposerPack;
   stubKind: SpawnGateStubKind;
 };
 
