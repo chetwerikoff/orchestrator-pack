@@ -1,0 +1,33 @@
+{
+  "aoPackageVersion": "0.9.5",
+  "captureId": "spawn-worktree-head-ref-oid-binding",
+  "scrubbed": true,
+  "proofCommand": "npx vitest run scripts/spawn-worktree-head-ref-oid-binding.test.ts -t \"replays capture manifest\"",
+  "spawnNew": {
+    "gateEntrypoint": "scripts/git-autonomous-guard.ps1 -> Test-AutonomousGitDenied",
+    "argv": [
+      "worktree",
+      "add",
+      "-b",
+      "opk-493",
+      "/tmp/projects/orchestrator-pack/worktrees/opk-493",
+      "origin/main"
+    ],
+    "headRefToken": "HEAD",
+    "baseRefToken": "origin/main"
+  },
+  "claimPr": {
+    "gateEntrypoint": "scripts/git-autonomous-guard.ps1 -> Test-AutonomousGitDenied",
+    "sequence": "spawn workspace on default-branch base ref, then claimPR checkout",
+    "worktreeAddArgv": [
+      "worktree",
+      "add",
+      "-b",
+      "opk-99",
+      "/tmp/projects/orchestrator-pack/worktrees/opk-99",
+      "origin/main"
+    ],
+    "checkoutCompletedBeforeWorkerHandoff": true,
+    "workerHandoffBeforeCheckoutVerified": false
+  }
+}

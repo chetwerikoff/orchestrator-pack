@@ -20,11 +20,29 @@ export interface GitSpawnWorktreeAddShape {
   detach?: boolean;
 }
 
+export interface SpawnWorktreeHeadRefAudit {
+  expectedRefToken?: string;
+  expectedCommitOid?: string;
+  actualRefToken?: string;
+  actualCommitOid?: string;
+  normalizationMode?: string;
+  sourceRepositoryRoot?: string;
+  action?: string;
+  grantId?: string;
+}
+
 export interface SpawnWorktreeGrantConsumeVerdict {
   ok: boolean;
   reason: string;
   basename?: string;
   commit?: string;
+  normalizedCommitOid?: string;
+  normalizationMode?: string;
+  headRefAudit?: SpawnWorktreeHeadRefAudit;
+  expectedRefToken?: string;
+  expectedCommitOid?: string;
+  actualRefToken?: string;
+  actualCommitOid?: string;
 }
 
 export interface BoundaryEscapeVerdict {
@@ -60,6 +78,9 @@ export declare function buildSpawnWorktreeGrantRecord(input: {
   holder?: Record<string, unknown> | null;
   extraAuthorizedWorktreeNames?: string[];
   expectedHeadRef?: string;
+  expectedCommitOid?: string;
+  expectedPrHeadOid?: string;
+  expectedPrRefToken?: string;
   expectedBranch?: string | null;
   sourceRepositoryRoot?: string;
   nowMs?: number;

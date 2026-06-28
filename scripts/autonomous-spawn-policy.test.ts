@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import {
@@ -14,7 +14,7 @@ import {
   parseClaimPrNumberFromSpawnArgv,
   validateAutonomousSpawnPolicy,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
-import { autonomousBashEnv } from './_test-git-fixture.js';
+import { autonomousBashEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
@@ -23,6 +23,10 @@ const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
 const migrationNotesPath = path.join(repoRoot, 'docs/migration_notes.md');
+
+const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRoot, 'rev-parse', 'HEAD'], {
+  encoding: 'utf8',
+}).trim().toLowerCase();
 
 function withTempSpawnPolicy(
   policy: Record<string, unknown>,
@@ -271,7 +275,11 @@ describe('claim-pr collision safety', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousBashEnv({
+            AO_SPAWN_PROBE_FILE: probeFile,
+            AO_SPAWN_FIXTURE_PR_HEAD_OID: repoHeadOid,
+            AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
+          }),
         },
       );
       expect(result.status).toBe(0);

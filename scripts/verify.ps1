@@ -1384,7 +1384,7 @@ if (Test-Path -LiteralPath $autonomousSpawnWorktreeVitest -PathType Leaf) {
         }
     }
     if ($LASTEXITCODE -eq 0) {
-        & npx vitest run scripts/autonomous-spawn-worktree-gate.test.ts
+        & npx vitest run scripts/autonomous-spawn-worktree-gate.test.ts scripts/spawn-worktree-head-ref-oid-binding.test.ts
         if ($LASTEXITCODE -ne 0) {
             Write-Check 'autonomous-spawn-worktree/vitest' 'FAIL' "exit=$LASTEXITCODE"
             Add-Failure 'autonomous spawn worktree vitest suite failed (Issue #470)'

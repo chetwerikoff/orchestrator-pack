@@ -5,6 +5,12 @@ import {
   classifySpawnAction,
   parseClaimPrNumberFromSpawnArgv,
 } from './autonomous-orchestrator-boundary.mjs';
+import {
+  evaluateSpawnClaimPrPostCheckout,
+  evaluateSpawnWorktreeHeadRefAuthorization,
+  resolveGitCommitRefInRepo,
+  resolveSpawnDefaultBranchBaseRef,
+} from './spawn-worktree-git-ref.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION = 1;
@@ -309,9 +315,33 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: basenameBinding.reason };
   }
 
-  const expectedHead = String(grant.expectedHeadRef ?? 'HEAD');
-  if (String(shape.commit) !== expectedHead) {
-    return { ok: false, reason: 'head_ref_mismatch' };
+  const grantRepo = String(grant.sourceRepositoryRoot ?? '').trim();
+  if (!grantRepo) {
+    return { ok: false, reason: 'grant_repository_unbound' };
+  }
+  const effectiveRepo = String(input.effectiveRepositoryRoot ?? '').trim();
+  if (!effectiveRepo) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!canonicalRepositoryRootsEqual(grantRepo, effectiveRepo)) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+
+  const headAuth = evaluateSpawnWorktreeHeadRefAuthorization({
+    repoRoot: grantRepo,
+    expectedRefToken: String(grant.expectedHeadRef ?? 'HEAD'),
+    expectedCommitOid: grant.expectedCommitOid ? String(grant.expectedCommitOid) : '',
+    actualRefToken: String(shape.commit),
+  });
+  if (!headAuth.ok) {
+    return {
+      ok: false,
+      reason: headAuth.reason,
+      expectedRefToken: headAuth.expectedRefToken,
+      expectedCommitOid: headAuth.expectedCommitOid,
+      actualRefToken: headAuth.actualRefToken,
+      actualCommitOid: headAuth.actualCommitOid,
+    };
   }
 
   if (grant.action === 'claim-pr-resume') {
@@ -330,18 +360,6 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_action_invalid' };
   }
 
-  const grantRepo = String(grant.sourceRepositoryRoot ?? '').trim();
-  if (!grantRepo) {
-    return { ok: false, reason: 'grant_repository_unbound' };
-  }
-  const effectiveRepo = String(input.effectiveRepositoryRoot ?? '').trim();
-  if (!effectiveRepo) {
-    return { ok: false, reason: 'repository_root_unresolvable' };
-  }
-  if (!canonicalRepositoryRootsEqual(grantRepo, effectiveRepo)) {
-    return { ok: false, reason: 'repository_root_mismatch' };
-  }
-
   if (shape.branch) {
     const expectedBranch = grant.expectedBranch ? String(grant.expectedBranch) : null;
     if (!expectedBranch || String(shape.branch) !== expectedBranch) {
@@ -349,7 +367,24 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     }
   }
 
-  return { ok: true, reason: 'spawn_worktree_allow', basename, commit: shape.commit };
+  return {
+    ok: true,
+    reason: 'spawn_worktree_allow',
+    basename,
+    commit: shape.commit,
+    normalizedCommitOid: headAuth.normalizedCommitOid,
+    normalizationMode: headAuth.normalizationMode,
+    headRefAudit: {
+      expectedRefToken: headAuth.expectedRefToken,
+      expectedCommitOid: headAuth.expectedCommitOid,
+      actualRefToken: headAuth.actualRefToken,
+      actualCommitOid: headAuth.actualCommitOid,
+      normalizationMode: headAuth.normalizationMode,
+      sourceRepositoryRoot: grantRepo,
+      action: String(grant.action ?? ''),
+      grantId: String(grant.grantId ?? ''),
+    },
+  };
 }
 
 
@@ -395,26 +430,48 @@ export function buildSpawnWorktreeGrantRecord(input) {
     parsed,
     Array.isArray(input.extraAuthorizedWorktreeNames) ? input.extraAuthorizedWorktreeNames : [],
   );
+  const expectedHeadRef = String(input.expectedHeadRef ?? 'HEAD');
+  let expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
+  if (!expectedCommitOid) {
+    const resolved = resolveGitCommitRefInRepo(sourceRepositoryRoot, expectedHeadRef);
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason };
+    }
+    expectedCommitOid = resolved.commitOid;
+  }
+  /** @type {Record<string, unknown>} */
+  const grant = {
+    schemaVersion: SPAWN_WORKTREE_GRANT_SCHEMA_VERSION,
+    grantId: String(input.grantId ?? ''),
+    action: parsed.action,
+    projectId: String(input.projectId ?? 'orchestrator-pack'),
+    targetKey: parsed.targetKey,
+    issueTarget: parsed.issueTarget,
+    prNumber: parsed.prNumber,
+    authorizedWorktreeNames: [...authorized],
+    expectedHeadRef,
+    expectedCommitOid,
+    expectedBranch: input.expectedBranch ? String(input.expectedBranch) : null,
+    sourceRepositoryRoot,
+    mintedAtUtc: new Date(nowMs).toISOString(),
+    expiresAtUtc,
+    consumed: false,
+    holder: input.holder ?? null,
+  };
+  if (parsed.action === 'claim-pr-resume') {
+    const expectedPrHeadOid = String(input.expectedPrHeadOid ?? '').trim().toLowerCase();
+    if (!expectedPrHeadOid) {
+      return { ok: false, reason: 'expected_pr_head_missing' };
+    }
+    grant.expectedPrHeadOid = expectedPrHeadOid;
+    if (input.expectedPrRefToken) {
+      grant.expectedPrRefToken = String(input.expectedPrRefToken);
+    }
+  }
   return {
     ok: true,
     reason: 'grant_built',
-    grant: {
-      schemaVersion: SPAWN_WORKTREE_GRANT_SCHEMA_VERSION,
-      grantId: String(input.grantId ?? ''),
-      action: parsed.action,
-      projectId: String(input.projectId ?? 'orchestrator-pack'),
-      targetKey: parsed.targetKey,
-      issueTarget: parsed.issueTarget,
-      prNumber: parsed.prNumber,
-      authorizedWorktreeNames: [...authorized],
-      expectedHeadRef: String(input.expectedHeadRef ?? 'HEAD'),
-      expectedBranch: input.expectedBranch ? String(input.expectedBranch) : null,
-      sourceRepositoryRoot,
-      mintedAtUtc: new Date(nowMs).toISOString(),
-      expiresAtUtc,
-      consumed: false,
-      holder: input.holder ?? null,
-    },
+    grant,
   };
 }
 
@@ -451,4 +508,14 @@ runStdinJsonCli('spawn-worktree-grant.mjs', {
   buildGrant: () => buildSpawnWorktreeGrantRecord(readStdinJson()),
   evaluateConsume: () => evaluateSpawnWorktreeGrantConsume(readStdinJson()),
   evaluateBoundaryEscape: () => evaluateBoundaryEscapeSignal(readStdinJson()),
+  resolveDefaultBranchBaseRef: () => {
+    const input = readStdinJson();
+    return resolveSpawnDefaultBranchBaseRef(String(input.repoRoot ?? ''), String(input.defaultBranch ?? 'main'));
+  },
+  resolveCommitRef: () => {
+    const input = readStdinJson();
+    return resolveGitCommitRefInRepo(String(input.repoRoot ?? ''), String(input.refToken ?? ''));
+  },
+  evaluateHeadRefAuthorization: () => evaluateSpawnWorktreeHeadRefAuthorization(readStdinJson()),
+  evaluateClaimPrPostCheckout: () => evaluateSpawnClaimPrPostCheckout(readStdinJson()),
 });
