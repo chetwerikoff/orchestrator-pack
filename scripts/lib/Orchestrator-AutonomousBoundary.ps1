@@ -113,7 +113,7 @@ function Invoke-AutonomousExplicitAoConfigSurfacePolicy {
     try {
         $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
         $configuredAo = [string]$config.ao
-        if ($configuredAo -and $configuredAo -ne 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $PackRoot)) {
+        if ($configuredAo -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $PackRoot)) {
             Write-AutonomousExplicitAoConfigMisconfigurationWarning -Reason 'broken-pointer' -ConfigPath $configPath -ConfiguredPath $configuredAo
         }
     }
@@ -217,11 +217,11 @@ function Resolve-AutonomousRealBinaryPath {
     $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot
     if ($config) {
         $configured = [string]$config.$BinaryName
-        if ($configured -and $configured -ne $BinaryName) {
+        if ($configured) {
             if ($BinaryName -eq 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configured -PackRoot $PackRoot)) {
-                # Broken explicit ao; surface policy warned — fall through to PATH/home fallbacks.
+                # Broken explicit ao (including literal "ao"); surface policy warned — fall through.
             }
-            else {
+            elseif ($configured -ne $BinaryName) {
                 if (Test-Path -LiteralPath $configured) {
                     $resolved = (Resolve-Path -LiteralPath $configured).Path
                     $isShim = if ($BinaryName -eq 'ao') {
