@@ -594,7 +594,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('interposes custom absolute git and ao real-binary paths', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
     const fakeBinRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-bin-'));
     try {
       const customGitDir = path.join(fakeBinRoot, 'opt', 'homebrew', 'bin');
@@ -612,7 +612,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
         const denyCustomGit = spawnSync(
           'bash',
-          ['-c', `source ${bashEnvPath}; ${customGit} branch -m custom-git-bypass`],
+          ['-c', `source ${pack.bashEnvPath}; ${customGit} branch -m custom-git-bypass`],
           {
             cwd: dir,
             encoding: 'utf8',
@@ -627,11 +627,11 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
         const allowCustomAo = spawnSync(
           'bash',
-          ['-c', `source ${bashEnvPath}; ${customAo} spawn opk-1`],
+          ['-c', `source ${pack.bashEnvPath}; ${customAo} spawn opk-1`],
           {
             cwd: dir,
             encoding: 'utf8',
-            env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+            env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
           },
         );
         expect(allowCustomAo.status).toBe(0);
@@ -645,12 +645,12 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('denies git and ao paths hidden behind shell variable expansion', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const denyGitVar = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; G=/usr/bin/git; "$G" branch -m var-expand-bypass`],
+        ['-c', `source ${pack.bashEnvPath}; G=/usr/bin/git; "$G" branch -m var-expand-bypass`],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -665,7 +665,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
 
       const denyGitCommandSubstitution = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; echo $(/usr/bin/git branch -m blocked-cmdsub)`],
+        ['-c', `source ${pack.bashEnvPath}; echo $(/usr/bin/git branch -m blocked-cmdsub)`],
         {
           cwd: dir,
           encoding: 'utf8',
@@ -684,11 +684,11 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       chmodSync(fakeAo, 0o755);
       const allowAoVar = spawnSync(
         'bash',
-        ['-c', `source ${bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
+        ['-c', `source ${pack.bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
         {
           cwd: dir,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(allowAoVar.status).toBe(0);
@@ -701,7 +701,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
   it('denies absolute git and ao invocations from bash script files under BASH_ENV', () => {
-    withAoSpawnProbeStub(({ probeFile }) => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
       withTempGitRepo((dir) => {
       const before = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' });
       const gitScript = path.join(dir, 'mutate-git.sh');
@@ -713,7 +713,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         env: {
           ...process.env,
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-          BASH_ENV: bashEnvPath,
+          BASH_ENV: pack.bashEnvPath,
         },
       });
       expect(denyGitScript.status).toBe(93);
@@ -728,7 +728,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
       const allowAoScript = spawnSync('bash', [aoScript], {
         cwd: dir,
         encoding: 'utf8',
-        env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: bashEnvPath }),
+        env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
       });
       expect(allowAoScript.status).toBe(0);
       expect(`${allowAoScript.stderr}${allowAoScript.stdout}`).toMatch(
@@ -874,7 +874,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({
+          env: autonomousSpawnProbeEnv({
             AO_SPAWN_PROBE_FILE: probeFile,
           }),
         },

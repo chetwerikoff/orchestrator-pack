@@ -60,6 +60,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-reconcile-primitives.mjs',
   'review-trigger-reconcile.mjs',
   'session-runtime-liveness.mjs',
+  'spawn-worktree-git-ref.mjs',
   'spawn-worktree-grant.mjs',
   'terminal-flood-detect.mjs',
   'worker-iteration-cycle.mjs',
