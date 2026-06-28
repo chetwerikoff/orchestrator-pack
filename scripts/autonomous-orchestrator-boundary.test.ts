@@ -31,6 +31,7 @@ import {
   autonomousSpawnProbeEnv,
   withAoSpawnProbeStub,
 } from './_test-autonomous-ao-stub-fixture.js';
+import { stripInterposerBashEnvBlockers } from './_test-interposer-pack-fixture.js';
 
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
 const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
@@ -1032,6 +1033,21 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
     const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
     const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
 
+    function spawnAoFixtureBash(
+      argv: string[],
+      cwd: string,
+      extraEnv: Record<string, string | undefined>,
+    ) {
+      return spawnSync('bash', argv, {
+        cwd,
+        encoding: 'utf8',
+        env: {
+          ...stripInterposerBashEnvBlockers(process.env),
+          ...extraEnv,
+        },
+      });
+    }
+
     function withBrokenAoPointerFixture(
       run: (ctx: {
         packRoot: string;
@@ -1078,15 +1094,14 @@ exit 0
 
     it('emits resolver-path warning and falls back on autonomous surface bash fast path', () => {
       withBrokenAoPointerFixture(({ packRoot, pathBin }) => {
-        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'status', '--json'], {
-          cwd: packRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
+        const result = spawnAoFixtureBash(
+          [path.join(packRoot, 'scripts/ao'), 'status', '--json'],
+          packRoot,
+          {
             AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
             PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
           },
-        });
+        );
         expect(result.status).toBe(0);
         expect(result.stderr).toMatch(BROKEN_POINTER_RE);
         expect(() => JSON.parse(result.stdout)).not.toThrow();
@@ -1186,15 +1201,14 @@ exit 0
         }
         cpSync(path.join(repoRoot, 'scripts/lib'), path.join(packRoot, 'scripts/lib'), { recursive: true });
         writeFileSync(path.join(packRoot, '.ao/autonomous-real-binaries.json'), '{not-json\n');
-        const result = spawnSync('bash', [path.join(packRoot, 'scripts/ao'), 'status', '--json'], {
-          cwd: packRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
+        const result = spawnAoFixtureBash(
+          [path.join(packRoot, 'scripts/ao'), 'status', '--json'],
+          packRoot,
+          {
             AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
             PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
           },
-        });
+        );
         expect(result.status).toBe(0);
         expect(result.stderr).toMatch(INVALID_JSON_RE);
         expect(() => JSON.parse(result.stdout)).not.toThrow();
@@ -1215,15 +1229,14 @@ exit 0
           path.join(packRoot, '.ao/autonomous-real-binaries.json'),
           `${JSON.stringify({ ao: brokenAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
         );
-        const result = spawnSync('bash', [path.join(repoRoot, 'scripts/ao'), 'help'], {
-          cwd: packRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
+        const result = spawnAoFixtureBash(
+          [path.join(repoRoot, 'scripts/ao'), 'help'],
+          packRoot,
+          {
             AO_REAL_BINARY: envAo,
             PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
           },
-        });
+        );
         expect(result.status).toBe(0);
         expect(`${result.stdout}${result.stderr}`).toMatch(/env-ao-ok/);
         expect(`${result.stdout}${result.stderr}`).not.toMatch(BROKEN_POINTER_RE);
