@@ -36,14 +36,52 @@ function normalizeFilePath(file) {
   return normalized;
 }
 
-function collectFromVitestJson(payload, out) {
+function sumAssertionDurationMs(assertions) {
+  let total = 0;
+  for (const assertion of assertions) {
+    const durationMs = Number(assertion.duration ?? 0);
+    if (Number.isFinite(durationMs)) {
+      total += durationMs;
+    }
+  }
+  return total;
+}
+
+function resolveFileDurationMs(fileResult) {
+  const start = Number(fileResult.startTime);
+  const end = Number(fileResult.endTime);
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+    return end - start;
+  }
+  return sumAssertionDurationMs(fileResult.assertionResults ?? []);
+}
+
+function collectFromVitestJson(payload) {
   const results = payload?.testResults;
   if (!Array.isArray(results)) {
-    return false;
+    return null;
   }
+
+  const tests = [];
+  const files = [];
+
   for (const fileResult of results) {
     const file = normalizeFilePath(fileResult.name);
     const assertions = fileResult.assertionResults ?? [];
+    const fileDurationMs = resolveFileDurationMs(fileResult);
+
+    files.push({
+      file,
+      durationMs: fileDurationMs,
+      testCount: assertions.length,
+      timingSource:
+        Number.isFinite(Number(fileResult.startTime)) &&
+        Number.isFinite(Number(fileResult.endTime)) &&
+        Number(fileResult.endTime) >= Number(fileResult.startTime)
+          ? 'file-wall'
+          : 'assertion-sum',
+    });
+
     for (const assertion of assertions) {
       const titleParts = [];
       if (Array.isArray(assertion.ancestorTitles) && assertion.ancestorTitles.length > 0) {
@@ -54,7 +92,7 @@ function collectFromVitestJson(payload, out) {
       }
       const name = titleParts.join(' > ') || assertion.fullName || 'unnamed test';
       const durationMs = Number(assertion.duration ?? 0);
-      out.push({
+      tests.push({
         kind: 'test',
         name,
         file,
@@ -62,7 +100,8 @@ function collectFromVitestJson(payload, out) {
       });
     }
   }
-  return out.length > 0 || Array.isArray(results);
+
+  return { tests, files };
 }
 
 function collectResults(node, out) {
@@ -94,12 +133,12 @@ function collectResults(node, out) {
 function summarizeByFile(tests) {
   const byFile = new Map();
   for (const test of tests) {
-    const entry = byFile.get(test.file) ?? { file: test.file, totalMs: 0, tests: [] };
-    entry.totalMs += test.durationMs;
-    entry.tests.push(test);
+    const entry = byFile.get(test.file) ?? { file: test.file, durationMs: 0, testCount: 0 };
+    entry.durationMs += test.durationMs;
+    entry.testCount += 1;
     byFile.set(test.file, entry);
   }
-  return byFile;
+  return [...byFile.values()];
 }
 
 function main() {
@@ -110,13 +149,25 @@ function main() {
   }
 
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
-  const tests = [];
-  if (!collectFromVitestJson(payload, tests)) {
-    collectResults(payload, tests);
+  const collected = collectFromVitestJson(payload);
+  const tests = collected?.tests ?? [];
+  const files =
+    collected?.files ??
+    summarizeByFile(
+      (() => {
+        const fallbackTests = [];
+        collectResults(payload, fallbackTests);
+        return fallbackTests;
+      })(),
+    );
+
+  if (!collected) {
+    const fallbackTests = [];
+    collectResults(payload, fallbackTests);
+    tests.push(...fallbackTests);
   }
 
   const violations = [];
-  const byFile = summarizeByFile(tests);
 
   for (const test of tests) {
     if (test.durationMs > perTestMs) {
@@ -126,10 +177,14 @@ function main() {
     }
   }
 
-  for (const entry of byFile.values()) {
-    if (entry.totalMs > perFileMs) {
+  for (const fileEntry of files) {
+    if (fileEntry.durationMs > perFileMs) {
+      const timingNote =
+        fileEntry.timingSource === 'file-wall'
+          ? 'file wall time'
+          : 'assertion-duration sum';
       violations.push(
-        `slow file: ${entry.file} total ${entry.totalMs}ms across ${entry.tests.length} test(s) (budget ${perFileMs}ms per file)`,
+        `slow file: ${fileEntry.file} took ${Math.round(fileEntry.durationMs)}ms ${timingNote} across ${fileEntry.testCount} test(s) (budget ${perFileMs}ms per file)`,
       );
     }
   }
