@@ -266,7 +266,6 @@ jobs:
     needs: [classify-pr-changes, test-typecheck, test-vitest, test-pester]
     if: |
       always() &&
-      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest

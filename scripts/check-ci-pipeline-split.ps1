@@ -177,6 +177,9 @@ else {
         if ($aggregateJob -match 'continue-on-error:\s*true') {
             Add-Fail 'test-aggregate job must not use continue-on-error: true'
         }
+        if ($aggregateJob -match '!cancelled\(\)') {
+            Add-Fail 'test-aggregate job must not gate on !cancelled(); run under always() so cancelled upstream lanes fail closed'
+        }
         $displayName = Get-JobDisplayName -JobText $aggregateJob
         if ($displayName -and $displayName -ne $aggregateJobName) {
             Add-Fail "test-aggregate display name must remain '$aggregateJobName' (required check migration)"

@@ -76,5 +76,6 @@ describe('ci-pipeline-split config and workflow binding', () => {
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
     expect(yaml).toMatch(/name: Run pack contract tests/);
     expect(yaml).toMatch(/shard: \[1, 2, 3, 4\]/);
+    expect(yaml).not.toMatch(/test-aggregate:[\s\S]*!cancelled\(\)/);
   });
 });
