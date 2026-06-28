@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "6b22bf707a3d9d03ea34b972815fd5d327aac110",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:268138096ff65a6eb2ef57a8ebdda29dd492be0e7ddfc6f3a0af9b64cd84621b"
+    "active_scope_hash": "sha256:1c44a93cb1fac4833ee96b3dcfb05a1d03b453f442f6616bfbe29422a4eb35cc"
   },
   "declared_paths": [
     "docs/declarations/511.opk-63.json",
+    "docs/spawn-worktree-git-ref.d.mts",
     "docs/spawn-worktree-git-ref.mjs",
     "docs/spawn-worktree-grant.d.mts",
     "docs/spawn-worktree-grant.mjs",
@@ -21,5 +22,20 @@
     "tests/external-output-references/captures/spawn-worktree-repository-identity-binding/capture-manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:268138096ff65a6eb2ef57a8ebdda29dd492be0e7ddfc6f3a0af9b64cd84621b",
+      "new_active_scope_hash": "sha256:1c44a93cb1fac4833ee96b3dcfb05a1d03b453f442f6616bfbe29422a4eb35cc",
+      "changed": {
+        "added": [
+          "docs/spawn-worktree-git-ref.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "Include spawn-worktree-git-ref.d.mts in declared scope",
+      "actor": "opk-63",
+      "timestamp": "2026-06-28T15:44:15.162Z",
+      "applied": true
+    }
+  ]
 }
