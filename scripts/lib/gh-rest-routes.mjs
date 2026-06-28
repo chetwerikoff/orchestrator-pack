@@ -1,6 +1,7 @@
 import {
   applyListedJq,
   ghApiJson,
+  mapIssueToGhJson,
   mapPullState,
   mapPullToGhJson,
   pickJsonFields,
@@ -271,12 +272,21 @@ export function routePrDiffNameOnly(realGh, repo, prNumber, cwd) {
  * @param {number} issueNumber
  * @param {string} cwd
  */
-export function routeIssueViewBody(realGh, repo, issueNumber, cwd) {
-  const issue = ghApiJson(realGh, `repos/${repo.slug}/issues/${issueNumber}`, {
+function fetchIssue(realGh, repo, issueNumber, cwd) {
+  return ghApiJson(realGh, `repos/${repo.slug}/issues/${issueNumber}`, {
     hostname: repo.host,
     cwd,
   });
-  return { body: issue.body ?? '' };
+}
+
+export function routeIssueView(realGh, repo, issueNumber, fields, jq, cwd) {
+  const issue = fetchIssue(realGh, repo, issueNumber, cwd);
+  const mapped = mapIssueToGhJson(issue, fields);
+  return applyListedJq(mapped, jq);
+}
+
+export function routeIssueViewBody(realGh, repo, issueNumber, cwd) {
+  return routeIssueView(realGh, repo, issueNumber, ['body'], null, cwd);
 }
 
 /**
@@ -320,9 +330,16 @@ export function executeRestRoute(routeId, ctx) {
         const files = routePrDiffNameOnly(realGh, repo, route.prNumber, cwd);
         return files;
       }
-      case 'issue-view-body': {
-        const body = routeIssueViewBody(realGh, repo, route.prNumber, cwd);
-        return applyListedJq(body, parsed.jq);
+      case 'issue-view-body':
+      case 'issue-view-json': {
+        return routeIssueView(
+          realGh,
+          repo,
+          route.prNumber,
+          parsed.jsonFields ?? ['body'],
+          parsed.jq,
+          cwd,
+        );
       }
       case 'repo-view-name-with-owner': {
         const repoView = {
