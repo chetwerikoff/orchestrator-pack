@@ -1,0 +1,19 @@
+{
+  "issue_number": 488,
+  "iteration_id": "opk-45",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-28T05:47:54.183Z",
+  "baseline": {
+    "commit_sha": "c6d0a26b41483423a9ad2f4eff0e048d9ed637e0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:a6b792b2131935a68581463cc35e62584969fc4696990c9a67a8ea4a82f5227a"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    ".github/workflows/**",
+    "docs/**"
+  ],
+  "amendments": []
+}
