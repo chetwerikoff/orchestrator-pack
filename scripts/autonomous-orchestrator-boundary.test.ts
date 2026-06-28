@@ -1183,6 +1183,56 @@ exit 0
       }
     });
 
+    it('rejects pack shim ao pointer relative to supplied PackRoot when lib is sourced elsewhere', () => {
+      const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-pack-shim-ao-'));
+      const scriptsDir = path.join(packRoot, 'scripts');
+      const pathBin = path.join(packRoot, 'bin');
+      const fallbackAo = path.join(pathBin, 'ao');
+      const packShimAo = path.join(scriptsDir, 'ao');
+      const configPath = path.join(packRoot, '.ao/autonomous-real-binaries.json');
+      try {
+        mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
+        mkdirSync(pathBin, { recursive: true });
+        mkdirSync(scriptsDir, { recursive: true });
+        writeFileSync(
+          fallbackAo,
+          `#!/usr/bin/env bash
+case "\${1:-}" in
+  status) printf '{"data":[]}\n'; exit 0 ;;
+esac
+exit 0
+`,
+        );
+        chmodSync(fallbackAo, 0o755);
+        cpSync(path.join(repoRoot, 'scripts/ao'), packShimAo);
+        chmodSync(packShimAo, 0o755);
+        writeFileSync(
+          configPath,
+          `${JSON.stringify({ ao: packShimAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
+        );
+        const minimalPath = `${pathBin}:${scriptsDir}:/usr/bin:/bin`;
+        const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `
+          $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+          $env:PATH = ${psString(minimalPath)}
+          . ${psString(boundaryLibPath)}
+          Invoke-AutonomousExplicitAoConfigSurfacePolicy -PackRoot ${psString(packRoot)} | Out-Null
+          $resolved = Resolve-RealAoExecutable -PackRoot ${psString(packRoot)}
+          [pscustomobject]@{
+            resolved = [string]$resolved
+            usesFallback = [bool]($resolved -eq ${psString(fallbackAo)})
+            avoidsPackShim = [bool]($resolved -ne ${psString(packShimAo)})
+          } | ConvertTo-Json -Compress
+        `], { cwd: repoRoot, encoding: 'utf8' });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toMatch(BROKEN_POINTER_RE);
+        const parsed = JSON.parse(result.stdout.trim());
+        expect(parsed.usesFallback).toBe(true);
+        expect(parsed.avoidsPackShim).toBe(true);
+      } finally {
+        rmSync(packRoot, { recursive: true, force: true });
+      }
+    });
+
     it('skips non-executable configured ao and resolves PATH fallback in PS', () => {
       const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-nonexec-ao-'));
       const scriptsDir = path.join(packRoot, 'scripts');
