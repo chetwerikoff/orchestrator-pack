@@ -16,6 +16,16 @@ import { describe, expect, it } from 'vitest';
 import { repoRoot } from './_test-pwsh-helpers.js';
 import { gitFixtureEnv, resolveTrustedSystemGit, withTempGitRepo } from './_test-git-fixture.js';
 import {
+  assertSpawnGateIsolationPreflight,
+  assertSpawnGateOutcome,
+  SPAWN_GATE_FIXTURE_SESSION_ID,
+  spawnHermeticEvalHidden,
+  spawnHermeticIsolatedOrchestratorBash,
+  spawnHermeticLiveArmedBash,
+  withHermeticSpawnGatePack,
+  writeSpawnGateAoStub,
+} from './_test-autonomous-ao-stub-fixture.js';
+import {
   assertAssignmentRhsUsesPackTarget,
   createIsolatedInterposerPack,
   runInterposerBinaryRewrite,
@@ -30,45 +40,6 @@ const bootstrapPath = path.join(repoRoot, 'scripts/autonomous-orchestrator-surfa
 const bashEnvPath = path.join(repoRoot, 'scripts/autonomous-bash-env.sh');
 const scriptsDir = path.join(repoRoot, 'scripts');
 const aoShimPath = path.join(scriptsDir, 'ao');
-
-const bashEnvRunnerDir = mkdtempSync(path.join(tmpdir(), 'ao-interposer-bash-env-runners-'));
-const liveCommandRunner = path.join(bashEnvRunnerDir, 'run-live-command.sh');
-const evalHiddenRunner = path.join(bashEnvRunnerDir, 'run-eval-hidden.sh');
-writeFileSync(
-  liveCommandRunner,
-  `#!/usr/bin/env bash
-set -euo pipefail
-eval "$1"
-`,
-);
-writeFileSync(
-  evalHiddenRunner,
-  `#!/usr/bin/env bash
-set -O extglob
-set -euo pipefail
-builtin eval "$1"
-`,
-);
-chmodSync(liveCommandRunner, 0o755);
-chmodSync(evalHiddenRunner, 0o755);
-
-function spawnLiveArmedBash(
-  pack: InterposerPackFixture,
-  command: string,
-  extraEnv: Record<string, string | undefined> = {},
-  cwd = pack.packRoot,
-) {
-  return spawnIsolatedOrchestratorBash(pack, [liveCommandRunner, command], extraEnv, cwd);
-}
-
-function spawnEvalHidden(
-  pack: InterposerPackFixture,
-  command: string,
-  extraEnv: Record<string, string | undefined> = {},
-  cwd = pack.packRoot,
-) {
-  return spawnIsolatedOrchestratorBash(pack, [evalHiddenRunner, command], extraEnv, cwd);
-}
 
 
 function writeAoReadStubAtBinAo(dir: string): string {
@@ -123,37 +94,7 @@ function assertNoInterposerQuotingErrors(result: { stderr: string }) {
 }
 
 function writeAoReadStub(dir: string) {
-  const aoStub = path.join(dir, 'ao-stub.sh');
-  writeFileSync(
-    aoStub,
-    `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "spawn" ]]; then
-  printf '%s\\n' "$@" > "\${AO_SPAWN_PROBE_FILE:?}"
-  exit 0
-fi
-if [[ "\${1:-}" == "review" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
-  printf '[]\\n'
-  exit 0
-fi
-if [[ "\${1:-}" == "status" ]]; then
-  printf '{"data":[]}\\n'
-  exit 0
-fi
-if [[ "\${1:-}" == "events" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
-  printf '[]\\n'
-  exit 0
-fi
-if [[ "\${1:-}" == "send" ]]; then
-  printf 'raw-send-stub\\n' >&2
-  exit 0
-fi
-printf 'unhandled:%s\\n' "$*" >&2
-exit 1
-`,
-  );
-  chmodSync(aoStub, 0o755);
-  return aoStub;
+  return writeSpawnGateAoStub(dir, 'read-receipt');
 }
 
 describe('autonomous orchestrator interposer (#406)', () => {
@@ -187,44 +128,42 @@ describe('autonomous orchestrator interposer (#406)', () => {
   });
 
   it('bootstrap maps AO_TMUX_NAME orchestrator sessions to surface and allows spawn under default policy', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-tmux-map-'));
-    const aoStub = writeAoReadStub(stubDir);
-    const probeFile = path.join(stubDir, 'spawn-probe.txt');
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const onlyTmux = spawnIsolatedOrchestratorBash(pack, [liveCommandRunner, 'ao spawn opk-probe'], {
-          AO_TMUX_NAME: 'opk-orchestrator',
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
-          AO_SPAWN_PROBE_FILE: probeFile,
-        });
-        expect(onlyTmux.status).not.toBe(93);
-        expect(existsSync(probeFile)).toBe(false);
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      withTempGitRepo((dir) => {
+        const onlyTmux = spawnHermeticLiveArmedBash(
+          ctx,
+          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          {
+            AO_TMUX_NAME: 'opk-orchestrator',
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+          },
+          dir,
+        );
+        assertSpawnGateOutcome('orchestrator-surface-allow', onlyTmux, ctx);
       });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('live arming path: BASH_ENV bootstrap arms orchestrator surface and allows spawn under default policy', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-live-arm-'));
-    const aoStub = writeAoReadStub(stubDir);
-    const probeFile = path.join(stubDir, 'spawn-probe.txt');
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const deny = spawnLiveArmedBash(pack, 'ao spawn opk-probe', {
-          AO_SPAWN_PROBE_FILE: probeFile,
-        });
-        expect(deny.status).not.toBe(93);
-        expect(existsSync(probeFile)).toBe(false);
-
-        const read = spawnLiveArmedBash(pack, 'ao review list --json');
-        expect(read.status).toBe(0);
-        expect(() => JSON.parse(read.stdout)).not.toThrow();
-        expect(read.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { probeFile } = ctx;
+      withTempGitRepo((dir) => {
+        const deny = spawnHermeticLiveArmedBash(
+          ctx,
+          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          {
+            AO_SPAWN_PROBE_FILE: probeFile,
+          },
+          dir,
+        );
+        assertSpawnGateOutcome('orchestrator-surface-allow', deny, ctx);
       });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+
+      const read = spawnHermeticLiveArmedBash(ctx, 'ao review list --json');
+      expect(read.status).toBe(0);
+      expect(() => JSON.parse(read.stdout)).not.toThrow();
+      expect(read.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+    });
   });
 
   it('fail-closed when tracked bootstrap is armed but interposer file is missing', () => {
@@ -273,7 +212,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       if (existsSync('/usr/bin/git')) {
         withTempGitRepo((dir) => {
           const readme = path.join(dir, 'README.md');
-          const absoluteGit = spawnSync('/bin/bash', [liveCommandRunner, `/usr/bin/git checkout -- ${readme}`], {
+          const absoluteGit = spawnSync('/bin/bash', ['-c', `/usr/bin/git checkout -- ${readme}`], {
             cwd: dir,
             encoding: 'utf8',
             env: {
@@ -312,7 +251,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
         expect(() => JSON.parse(viaShim.stdout)).not.toThrow();
         assertNoInterposerQuotingErrors(viaShim);
 
-        const viaPathReview = spawnEvalHidden(pack, 'ao review list --json', {
+        const viaPathReview = spawnIsolatedOrchestratorBash(pack, ['-c', `source ${pack.bashEnvPath}; ao review list --json`], {
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
           HOME: homeDir,
         });
@@ -320,7 +259,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
         expect(() => JSON.parse(viaPathReview.stdout)).not.toThrow();
         assertNoInterposerQuotingErrors(viaPathReview);
 
-        const viaPathStatus = spawnEvalHidden(pack, 'ao status --json', {
+        const viaPathStatus = spawnIsolatedOrchestratorBash(pack, ['-c', `source ${pack.bashEnvPath}; ao status --json`], {
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
           HOME: homeDir,
         });
@@ -422,57 +361,49 @@ exec "$REAL_GIT" checkout -- ${readme}
     });
   });
   it('read-verbs stay clean on orchestrator surface through forwarder shims', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-read-verbs-'));
-    const aoStub = writeAoReadStub(stubDir);
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const cases = [
-          ['review', 'list', '--json'],
-          ['status', '--json'],
-          ['events', 'list', '--json'],
-        ] as const;
-        for (const argv of cases) {
-          const direct = spawnIsolatedOrchestratorBash(pack, [pack.aoShimPath, ...argv], {
-            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-          });
-          expect(direct.status).toBe(0);
-          expect(() => JSON.parse(direct.stdout)).not.toThrow();
-          expect(direct.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { pack } = ctx;
+      const cases = [
+        ['review', 'list', '--json'],
+        ['status', '--json'],
+        ['events', 'list', '--json'],
+      ] as const;
+      for (const argv of cases) {
+        const direct = spawnIsolatedOrchestratorBash(pack, [pack.aoShimPath, ...argv], {
+          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+        });
+        expect(direct.status).toBe(0);
+        expect(() => JSON.parse(direct.stdout)).not.toThrow();
+        expect(direct.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
 
-          const hidden = spawnEvalHidden(pack, `ao ${argv.join(' ')}`);
-          expect(hidden.status).toBe(0);
-          expect(() => JSON.parse(hidden.stdout)).not.toThrow();
-          expect(hidden.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
-        }
-      });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+        const hidden = spawnHermeticEvalHidden(ctx, `ao ${argv.join(' ')}`);
+        expect(hidden.status).toBe(0);
+        expect(() => JSON.parse(hidden.stdout)).not.toThrow();
+        expect(hidden.stderr).not.toMatch(/ao-autonomous-script|unexpected EOF/i);
+      }
+    });
   });
 
   it('re-prepends pack scripts after synthetic PATH reset and keeps eval-hidden behavior', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-path-reset-'));
-    const aoStub = writeAoReadStub(stubDir);
-    const probeFile = path.join(stubDir, 'spawn-probe.txt');
     const wrapDir = mkdtempSync(path.join(tmpdir(), 'wrapdir-'));
     const hostPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
     try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
+      withHermeticSpawnGatePack('read-receipt', (ctx) => {
+        const { probeFile } = ctx;
         withTempGitRepo((dir) => {
-          const denySpawn = spawnEvalHidden(
-            pack,
-            'ao spawn opk-probe',
+          const denySpawn = spawnHermeticEvalHidden(
+            ctx,
+            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
             {
               AO_SPAWN_PROBE_FILE: probeFile,
               PATH: `${wrapDir}:${hostPath}`,
             },
             dir,
           );
-          expect(denySpawn.status).not.toBe(93);
-          expect(existsSync(probeFile)).toBe(false);
+          assertSpawnGateOutcome('orchestrator-surface-allow', denySpawn, ctx);
 
-          const readGit = spawnEvalHidden(
-            pack,
+          const readGit = spawnHermeticEvalHidden(
+            ctx,
             'git status --short',
             {
               PATH: `${wrapDir}:${hostPath}`,
@@ -483,7 +414,6 @@ exec "$REAL_GIT" checkout -- ${readme}
         });
       });
     } finally {
-      rmSync(stubDir, { recursive: true, force: true });
       rmSync(wrapDir, { recursive: true, force: true });
     }
   });
@@ -492,29 +422,24 @@ exec "$REAL_GIT" checkout -- ${readme}
     if (!existsSync('/usr/bin/git')) {
       return;
     }
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-buried-path-'));
-    const aoStub = writeAoReadStub(stubDir);
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        withTempGitRepo((dir) => {
-          const readme = path.join(dir, 'README.md');
-          const hostPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
-          const buriedPath = `/usr/bin:${pack.scriptsDir}:${hostPath}`;
-          const hiddenGit = spawnEvalHidden(
-            pack,
-            `git checkout -- ${readme}`,
-            {
-              PATH: buriedPath,
-            },
-            dir,
-          );
-          expect(hiddenGit.status).toBe(93);
-          expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
-        });
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { pack } = ctx;
+      withTempGitRepo((dir) => {
+        const readme = path.join(dir, 'README.md');
+        const hostPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
+        const buriedPath = `/usr/bin:${pack.scriptsDir}:${hostPath}`;
+        const hiddenGit = spawnHermeticEvalHidden(
+          ctx,
+          `git checkout -- ${readme}`,
+          {
+            PATH: buriedPath,
+          },
+          dir,
+        );
+        expect(hiddenGit.status).toBe(93);
+        expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
       });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('does not treat attacker-named forwarder grep bait as a trusted shim', () => {
@@ -560,20 +485,24 @@ exit 0
 `,
     );
     chmodSync(fakePwsh, 0o755);
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-fake-pwsh-stub-'));
-    const aoStub = writeAoReadStub(stubDir);
     try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const spawnProbe = path.join(fakePwshDir, 'spawn-probe.txt');
-        const result = spawnEvalHidden(pack, 'ao spawn opk-probe', {
-          AO_SPAWN_PROBE_FILE: spawnProbe,
-          PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
+      withHermeticSpawnGatePack('read-receipt', (ctx) => {
+        withTempGitRepo((dir) => {
+          const spawnProbe = path.join(fakePwshDir, 'spawn-probe.txt');
+          const result = spawnHermeticEvalHidden(
+            ctx,
+            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+            {
+              AO_SPAWN_PROBE_FILE: spawnProbe,
+              PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
+            },
+            dir,
+          );
+          assertSpawnGateOutcome('orchestrator-surface-allow', result, ctx);
         });
-        expect(result.status).not.toBe(93);
       });
     } finally {
       rmSync(fakePwshDir, { recursive: true, force: true });
-      rmSync(stubDir, { recursive: true, force: true });
     }
   });
 
@@ -592,13 +521,20 @@ exit 0
     );
     chmodSync(fakePwsh, 0o755);
     try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const spawnProbe = path.join(stubDir, 'spawn-probe.txt');
-        const result = spawnEvalHidden(pack, 'ao spawn opk-probe', {
-          AO_SPAWN_PROBE_FILE: spawnProbe,
-          AO_PWSH_BINARY: fakePwsh,
+      withHermeticSpawnGatePack('read-receipt', (ctx) => {
+        withTempGitRepo((dir) => {
+          const spawnProbe = path.join(stubDir, 'spawn-probe.txt');
+          const result = spawnHermeticEvalHidden(
+            ctx,
+            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+            {
+              AO_SPAWN_PROBE_FILE: spawnProbe,
+              AO_PWSH_BINARY: fakePwsh,
+            },
+            dir,
+          );
+          assertSpawnGateOutcome('orchestrator-surface-allow', result, ctx);
         });
-        expect(result.status).not.toBe(93);
       });
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
@@ -620,7 +556,7 @@ exit 0
     chmodSync(maliciousStub, 0o755);
     try {
       withIsolatedInterposerPack(aoStub, (pack) => {
-        const result = spawnEvalHidden(pack, 'ao status --json', {
+        const result = spawnIsolatedOrchestratorBash(pack, ['-c', 'ao status --json'], {
           AO_REAL_BINARY: maliciousStub,
         });
         expect(result.status).toBe(0);
@@ -633,110 +569,103 @@ exit 0
   });
 
   it('orchestrator deny matrix covers flat and eval-hidden shapes', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-deny-matrix-'));
-    const aoStub = writeAoReadStub(stubDir);
-    const probeFile = path.join(stubDir, 'spawn-probe.txt');
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        withTempGitRepo((dir) => {
-          const readme = path.join(dir, 'README.md');
-          if (!existsSync('/usr/bin/git')) {
-            return;
-          }
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { probeFile } = ctx;
+      withTempGitRepo((dir) => {
+        const readme = path.join(dir, 'README.md');
+        if (!existsSync('/usr/bin/git')) {
+          return;
+        }
 
-          const flatGit = spawnLiveArmedBash(pack, `/usr/bin/git checkout -- ${readme}`, {}, dir);
-          expect(flatGit.status).toBe(93);
-          expect(`${flatGit.stderr}${flatGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+        const flatGit = spawnHermeticLiveArmedBash(ctx, `/usr/bin/git checkout -- ${readme}`, {}, dir);
+        assertSpawnGateOutcome('orchestrator-surface-deny', flatGit, ctx);
+        expect(`${flatGit.stderr}${flatGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
 
-          const hiddenGit = spawnEvalHidden(pack, `/usr/bin/git checkout -- ${readme}`, {}, dir);
-          expect(hiddenGit.status).toBe(93);
-          expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+        const hiddenGit = spawnHermeticEvalHidden(ctx, `/usr/bin/git checkout -- ${readme}`, {}, dir);
+        assertSpawnGateOutcome('orchestrator-surface-deny', hiddenGit, ctx);
+        expect(`${hiddenGit.stderr}${hiddenGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
 
-          const flatSpawn = spawnLiveArmedBash(pack, 'ao spawn opk-probe', {
+        const flatSpawn = spawnHermeticLiveArmedBash(
+          ctx,
+          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          {
             AO_SPAWN_PROBE_FILE: probeFile,
-          });
-          expect(flatSpawn.status).not.toBe(93);
+          },
+          dir,
+        );
+        assertSpawnGateOutcome('orchestrator-surface-allow', flatSpawn, ctx);
 
-          const hiddenSpawn = spawnEvalHidden(pack, 'ao spawn opk-probe', {
+        const hiddenSpawn = spawnHermeticEvalHidden(
+          ctx,
+          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          {
             AO_SPAWN_PROBE_FILE: probeFile,
-          });
-          expect(hiddenSpawn.status).not.toBe(93);
+          },
+          dir,
+        );
+        assertSpawnGateOutcome('orchestrator-surface-allow', hiddenSpawn, ctx);
 
-          const flatSend = spawnLiveArmedBash(pack, 'ao send opk-worker hi');
-          expect(flatSend.status).toBe(93);
-          expect(`${flatSend.stderr}${flatSend.stdout}`).toMatch(
-            /autonomous_raw_worker_send_denied|autonomous worker nudges paused/i,
-          );
+        const flatSend = spawnHermeticLiveArmedBash(ctx, 'ao send opk-worker hi');
+        assertSpawnGateOutcome('orchestrator-surface-deny', flatSend, ctx);
+        expect(`${flatSend.stderr}${flatSend.stdout}`).toMatch(
+          /autonomous_raw_worker_send_denied|autonomous worker nudges paused/i,
+        );
 
-          const hiddenSend = spawnEvalHidden(pack, 'ao send opk-worker hi');
-          expect(hiddenSend.status).toBe(93);
-          expect(`${hiddenSend.stderr}${hiddenSend.stdout}`).toMatch(
-            /autonomous_raw_worker_send_denied|autonomous worker nudges paused/i,
-          );
-        });
+        const hiddenSend = spawnHermeticEvalHidden(ctx, 'ao send opk-worker hi');
+        assertSpawnGateOutcome('orchestrator-surface-deny', hiddenSend, ctx);
+        expect(`${hiddenSend.stderr}${hiddenSend.stdout}`).toMatch(
+          /autonomous_raw_worker_send_denied|autonomous worker nudges paused/i,
+        );
       });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('allow matrix: worker surface allows spawn; gated send is not raw-denied', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-allow-matrix-'));
-    const aoStub = writeAoReadStub(stubDir);
-    const probeFile = path.join(stubDir, 'spawn-probe.txt');
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const workerSpawn = spawnEvalHidden(pack, 'ao spawn opk-probe', {
-          AO_TMUX_NAME: 'opk-worker',
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
-          AO_REAL_BINARY: aoStub,
-          AO_SPAWN_PROBE_FILE: probeFile,
-        });
-        expect(workerSpawn.status).toBe(0);
-        expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-probe']);
-        expect(`${workerSpawn.stderr}${workerSpawn.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
-
-        const gated = spawnSync(
-          'pwsh',
-          ['-NoProfile', '-File', path.join(scriptsDir, 'invoke-gated-worker-nudge.ps1'), '-Probe'],
-          {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            env: {
-              ...stripInterposerBashEnvBlockers(process.env),
-              AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-              BASH_ENV: pack.bootstrapPath,
-            },
-          },
-        );
-        expect(gated.status).not.toBe(93);
-        expect(`${gated.stderr}${gated.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { pack, probeFile, aoStub } = ctx;
+      const workerSpawn = spawnHermeticEvalHidden(ctx, `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`, {
+        AO_TMUX_NAME: 'opk-worker',
+        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+        AO_REAL_BINARY: aoStub,
+        AO_SPAWN_PROBE_FILE: probeFile,
       });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+      assertSpawnGateOutcome('worker-surface-allow-stub-receipt', workerSpawn, ctx);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', SPAWN_GATE_FIXTURE_SESSION_ID]);
+      expect(`${workerSpawn.stderr}${workerSpawn.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
+
+      const gated = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', path.join(scriptsDir, 'invoke-gated-worker-nudge.ps1'), '-Probe'],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...stripInterposerBashEnvBlockers(process.env),
+            AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+            BASH_ENV: pack.bootstrapPath,
+          },
+        },
+      );
+      expect(gated.status).not.toBe(93);
+      expect(`${gated.stderr}${gated.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
+    });
   });
 
   it('double-arm bootstrap + interposer is idempotent on PATH and behavior', () => {
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'autonomous-double-arm-'));
-    const aoStub = writeAoReadStub(stubDir);
-    try {
-      withIsolatedInterposerPack(aoStub, (pack) => {
-        const command = `source ${pack.bootstrapPath}; source ${pack.bashEnvPath}; ao review list --json`;
-        const once = spawnLiveArmedBash(pack, command);
-        const twice = spawnLiveArmedBash(pack, command);
-        expect(once.status).toBe(0);
-        expect(twice.status).toBe(0);
-        expect(once.stdout).toBe(twice.stdout);
-        const pathProbe = spawnLiveArmedBash(pack, 'printf \'%s\\n\' "$PATH"');
-        expect(pathProbe.status).toBe(0);
-        const pathSegments = pathProbe.stdout.trim().split(':').filter(Boolean);
-        const scriptCount = pathSegments.filter((segment) => segment === pack.scriptsDir).length;
-        expect(scriptCount).toBeLessThanOrEqual(1);
-      });
-    } finally {
-      rmSync(stubDir, { recursive: true, force: true });
-    }
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const { pack } = ctx;
+      const command = `source ${pack.bootstrapPath}; source ${pack.bashEnvPath}; ao review list --json`;
+      const once = spawnHermeticLiveArmedBash(ctx, command);
+      const twice = spawnHermeticLiveArmedBash(ctx, command);
+      expect(once.status).toBe(0);
+      expect(twice.status).toBe(0);
+      expect(once.stdout).toBe(twice.stdout);
+      const pathProbe = spawnHermeticLiveArmedBash(ctx, 'printf \'%s\\n\' "$PATH"');
+      expect(pathProbe.status).toBe(0);
+      const pathSegments = pathProbe.stdout.trim().split(':').filter(Boolean);
+      const scriptCount = pathSegments.filter((segment) => segment === pack.scriptsDir).length;
+      expect(scriptCount).toBeLessThanOrEqual(1);
+    });
   });
   it('quote reconstruction: preprocess rewrites untrusted REAL_AO/REAL_GIT assignments with valid shell', () => {
     const absAo = '/tmp/interposer-quote-abs/bin/ao';
@@ -885,6 +814,14 @@ exec "$REAL_AO" "$@"
   });
 
 
+
+  it('spawn-gate preflight fails closed when pack-local config is removed', () => {
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      const configPath = path.join(ctx.pack.packRoot, '.ao', 'autonomous-real-binaries.json');
+      rmSync(configPath);
+      expect(() => assertSpawnGateIsolationPreflight(ctx.pack)).toThrow(/spawn-gate preflight/);
+    });
+  });
 
 });
 
