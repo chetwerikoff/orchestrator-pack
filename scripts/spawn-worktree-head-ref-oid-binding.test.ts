@@ -314,7 +314,8 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
     const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-head-ref-oid-'));
     const projectId = 'orchestrator-pack';
     const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
-    const baseRef = resolveSpawnDefaultBranchBaseRef(repoRoot).refToken ?? 'refs/heads/main';
+    const baseRefResult = resolveSpawnDefaultBranchBaseRef(repoRoot, 'main', true);
+    const baseRef = baseRefResult.ok ? (baseRefResult.refToken ?? 'HEAD') : 'HEAD';
     const expectedOid = resolveGitCommitRefInRepo(repoRoot, baseRef).commitOid ?? headOid(repoRoot);
     const target = path.join(worktrees, 'opk-493');
     try {
@@ -322,6 +323,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         . ${psString(spawnWorktreeGatePath)}
         . ${psString(boundaryLibPath)}
         $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SPAWN_WORKTREE_FIXTURE_MODE = '1'
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}
         $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{

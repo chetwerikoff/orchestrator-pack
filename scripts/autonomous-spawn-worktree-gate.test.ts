@@ -316,7 +316,10 @@ describe('spawn worktree grant (#470)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousBashEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousBashEnv({
+            AO_SPAWN_PROBE_FILE: probeFile,
+            AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
+          }),
         },
       );
       expect(result.status).toBe(0);
