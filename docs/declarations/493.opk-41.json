@@ -7,25 +7,43 @@
   "baseline": {
     "commit_sha": "d5e4c272e6445edebf7341f5669e4a0a98cbd595",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ecdd18861a15340af360e267edf95198d3f79ecbbdc8197fa2354caa7ac6dbad"
+    "active_scope_hash": "sha256:d85f5e3c3af20c813ff846ba502b077466d526c0428a5b3f54ac22c419c4dae6"
   },
   "declared_paths": [
-    "docs/spawn-worktree-git-ref.mjs",
+    "docs/declarations/493.opk-41.json",
     "docs/spawn-worktree-git-ref.d.mts",
-    "docs/spawn-worktree-grant.mjs",
+    "docs/spawn-worktree-git-ref.mjs",
     "docs/spawn-worktree-grant.d.mts",
+    "docs/spawn-worktree-grant.mjs",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/ao-autonomous-guard.ps1",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/autonomous-spawn-policy.test.ts",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/git-autonomous-guard.ps1",
     "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
     "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
     "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
-    "scripts/git-autonomous-guard.ps1",
-    "scripts/ao-autonomous-guard.ps1",
-    "scripts/autonomous-spawn-worktree-gate.test.ts",
     "scripts/spawn-worktree-head-ref-oid-binding.test.ts",
-    "scripts/autonomous-spawn-policy.test.ts",
     "scripts/verify.ps1",
-    "tests/external-output-references/captures/spawn-worktree-head-ref-oid-binding/capture-manifest.json",
-    "docs/declarations/493.opk-41.json"
+    "tests/external-output-references/captures/spawn-worktree-head-ref-oid-binding/capture-manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ecdd18861a15340af360e267edf95198d3f79ecbbdc8197fa2354caa7ac6dbad",
+      "new_active_scope_hash": "sha256:d85f5e3c3af20c813ff846ba502b077466d526c0428a5b3f54ac22c419c4dae6",
+      "changed": {
+        "added": [
+          "scripts/_test-autonomous-ao-stub-fixture.ts",
+          "scripts/autonomous-orchestrator-boundary.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add test helper and boundary test paths from CI scope guard",
+      "actor": "opk-41",
+      "timestamp": "2026-06-28T05:35:28.545Z",
+      "applied": true
+    }
+  ]
 }
