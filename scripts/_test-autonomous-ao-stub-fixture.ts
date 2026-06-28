@@ -50,6 +50,8 @@ builtin eval "$1"
 chmodSync(liveCommandRunner, 0o755);
 chmodSync(evalHiddenRunner, 0o755);
 
+export const SPAWN_GATE_LIVE_COMMAND_RUNNER = liveCommandRunner;
+
 function recordNonLiveReceipt() {
   return `if [[ -n "\${${AO_SPAWN_NONLIVE_RECEIPT_ENV}:-}" ]]; then
   printf 'invoked:%s\\n' "$*" >> "\${${AO_SPAWN_NONLIVE_RECEIPT_ENV}}"

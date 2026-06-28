@@ -22,6 +22,7 @@ import {
   spawnHermeticEvalHidden,
   spawnHermeticIsolatedOrchestratorBash,
   spawnHermeticLiveArmedBash,
+  SPAWN_GATE_LIVE_COMMAND_RUNNER,
   withHermeticSpawnGatePack,
   writeSpawnGateAoStub,
 } from './_test-autonomous-ao-stub-fixture.js';
@@ -190,7 +191,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       if (existsSync('/usr/bin/git')) {
         withTempGitRepo((dir) => {
           const readme = path.join(dir, 'README.md');
-          const absoluteGit = spawnSync('/bin/bash', ['-c', `/usr/bin/git checkout -- ${readme}`], {
+          const absoluteGit = spawnSync('/bin/bash', [SPAWN_GATE_LIVE_COMMAND_RUNNER, `/usr/bin/git checkout -- ${readme}`], {
             cwd: dir,
             encoding: 'utf8',
             env: {
