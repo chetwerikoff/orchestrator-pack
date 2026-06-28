@@ -1,0 +1,17 @@
+{
+  "issue_number": 505,
+  "iteration_id": "opk-49",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-28T09:11:44.769Z",
+  "baseline": {
+    "commit_sha": "b7a7f5a053b6deeee68224a6bdd8e382e8276349",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:69df6c7dc152bd4c29e4badc72f2c27fe627f5dbe6723df4d202397d8bdc7a5a"
+  },
+  "declared_paths": [
+    "docs/issues_drafts/opk-1-pipeline-smoke.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
