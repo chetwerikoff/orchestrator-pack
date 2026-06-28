@@ -17,6 +17,7 @@ export function resolveClaimLifecycleConfig(
   launchPendingBudgetMs: number;
   visibilityBudgetMs: number;
   reaperPeriodSeconds: number;
+  attemptCeilingMs: number;
 };
 
 export function classifyClaimHolderLiveness(

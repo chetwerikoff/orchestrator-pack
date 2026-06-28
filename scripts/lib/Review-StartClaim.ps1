@@ -559,16 +559,28 @@ function Move-ReviewStartClaimToTerminal {
 function New-ReviewStartClaimActiveRecord {
     param([int]$PrNumber, [string]$HeadSha, [string]$Surface, [string]$Reason = '', [object]$RecoveredFrom = $null)
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
+    $mono = $null
+    if ([string]$env:AO_REVIEW_START_MONOTONIC_NOW_MS) {
+        $parsed = 0L
+        if ([int64]::TryParse([string]$env:AO_REVIEW_START_MONOTONIC_NOW_MS, [ref]$parsed)) { $mono = $parsed }
+    }
+    if ($null -eq $mono) {
+        . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+        $cli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-envelope-external-io.mjs'
+        $mono = [int64](Invoke-MechanicalNodeFilterCli -FilterCliPath $cli -Subcommand 'monotonic-now' -Payload @{} -Label 'review-start-claim-acquire' -JsonDepth 5).nowMonotonicMs
+    }
     return @{
-        schemaVersion = 1
-        key           = "pr-$PrNumber-$normalized"
-        prNumber      = $PrNumber
-        headSha       = $normalized
-        state         = 'active'
-        holder        = New-ReviewStartClaimHolder -Surface $Surface
-        acquiredAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-        startReason   = $Reason
-        recoveredFrom = $RecoveredFrom
+        schemaVersion               = 1
+        key                         = "pr-$PrNumber-$normalized"
+        prNumber                    = $PrNumber
+        headSha                     = $normalized
+        state                       = 'active'
+        holder                      = New-ReviewStartClaimHolder -Surface $Surface
+        acquiredAtUtc               = (Get-Date).ToUniversalTime().ToString('o')
+        startReason                 = $Reason
+        recoveredFrom               = $RecoveredFrom
+        firstAttemptAtMonotonicMs   = $mono
+        readinessStartMonotonicMs   = $mono
     }
 }
 

@@ -5,6 +5,7 @@
 
 . (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartEnvelopeExternalIo.ps1')
 
 $Script:ReviewStartClaimLifecycleCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-claim-lifecycle.mjs'
 
@@ -81,6 +82,7 @@ function Update-ReviewStartClaimRecordFields {
         $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
         if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
         if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
+            Invoke-ReviewStartClaimOwnershipLossCleanup -ClaimResult $ClaimResult
             return @{ ok = $false; reason = 'lost_ownership'; holder = $read.record.holder }
         }
         $record = @{}
@@ -406,12 +408,11 @@ function Invoke-ReviewStartClaimReaperSweep {
     $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
     Initialize-ReviewStartClaimNamespace -Namespace $resolved
     $active = @(Get-ReviewStartClaimActiveRecords -Namespace $resolved)
-    $sweep = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'sweep' -Payload @{
+    $sweep = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'sweep' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
         activeClaims = @($active)
         reviewRuns   = @($ReviewRuns)
         localHost    = Get-ReviewStartClaimLocalHostName
-        nowMs        = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    }
+    })
     $results = @()
     foreach ($entry in @($sweep.actions)) {
         $key = [string]$entry.key
@@ -448,10 +449,9 @@ function Test-ReviewStartClaimHoldBudgetExceeded {
     $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
     if (-not $read.ok) { return @{ exceeded = $false; reason = 'unreadable' } }
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    return Invoke-ReviewStartClaimLifecycleCli -Subcommand 'hold-budget' -Payload @{
+    return Invoke-ReviewStartClaimLifecycleCli -Subcommand 'hold-budget' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
         claim = $read.record
-        nowMs = $nowMs
-    }
+    })
 }
 
 
@@ -515,10 +515,9 @@ function Wait-ReviewStartClaimPostInvokeVisibility {
             return @{ ok = [bool]$terminal.ok; reason = 'run_not_visible_fenced'; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true; fence = $fence }
         }
 
-        $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload @{
+        $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
             claim = $read.record
-            nowMs = $nowMs
-        }
+        })
         if ($envelope.exceeded) {
             $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
                 -Record $read.record -Decision @{
@@ -593,4 +592,77 @@ function Sync-ReviewStartClaimReclaimBeforeSkip {
     $reclaim = Invoke-ReviewStartClaimReclaimOrphan -Namespace $Namespace -Path $Path -Record $Record `
         -ReviewRuns $ReviewRuns -DecisionSource 'acquire_sync' -LogWriter $LogWriter
     return $reclaim
+}
+
+
+function Stop-ReviewStartSupervisedGhChild {
+    param([int]$Pid)
+    if ($Pid -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
+    try {
+        $proc = Get-Process -Id $Pid -ErrorAction Stop
+        if ($proc -and -not $proc.HasExited) {
+            Stop-Process -Id $Pid -Force -ErrorAction Stop
+            return @{ stopped = $true }
+        }
+        return @{ stopped = $false; reason = 'already_exited' }
+    }
+    catch {
+        return @{ stopped = $false; reason = 'not_running' }
+    }
+}
+
+function Invoke-ReviewStartClaimOwnershipLossCleanup {
+    param([hashtable]$ClaimResult)
+    if (-not $ClaimResult -or -not $ClaimResult.path) { return }
+    $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
+    if (-not $read.ok) { return }
+    $active = $read.record.activeInfraPause
+    if ($active -and $active.supervisedGhPid) {
+        Stop-ReviewStartSupervisedGhChild -Pid ([int]$active.supervisedGhPid) | Out-Null
+    }
+}
+
+function Start-ReviewStartClaimInfraPause {
+    param(
+        [hashtable]$ClaimResult,
+        [int]$SupervisedGhPid = 0
+    )
+    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $mono = Get-ReviewStartMonotonicNowMs
+    $begin = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'begin-pause' -Payload @{
+        nowMonotonicMs  = $mono
+        supervisedGhPid = if ($SupervisedGhPid -gt 0) { $SupervisedGhPid } else { $null }
+    }
+    return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
+        activeInfraPause = $begin.activeInfraPause
+    }
+}
+
+function Complete-ReviewStartClaimInfraPause {
+    param(
+        [hashtable]$ClaimResult,
+        [string]$Stderr = '',
+        [switch]$TimedOut
+    )
+    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
+    if (-not $read.ok) { return @{ ok = $false; reason = 'unreadable' } }
+    $mono = Get-ReviewStartMonotonicNowMs
+    $closed = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'close-pause' -Payload @{
+        claim          = $read.record
+        nowMonotonicMs = $mono
+        stderr         = $Stderr
+        timedOut       = [bool]$TimedOut
+    }
+    if (-not $closed.closed) { return @{ ok = $false; reason = [string]$closed.reason } }
+    $clear = @()
+    if ($closed.clearActiveInfraPause) { $clear += 'activeInfraPause' }
+    $update = Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
+        infraPauseSegments = @($closed.infraPauseSegments)
+    } -ClearFields $clear
+    return @{
+        ok             = [bool]$update.ok
+        classification = $closed.classification
+        failureClass   = [string]$closed.classification.failureClass
+    }
 }

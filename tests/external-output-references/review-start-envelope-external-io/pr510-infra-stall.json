@@ -1,0 +1,14 @@
+{
+  "variant": "review-start-envelope-external-io/pr510-infra-stall",
+  "description": "PR #510-shaped gh transport stall during preflight with recovery",
+  "infraPauseSegments": [
+    {
+      "startedMonotonicMs": 2000000,
+      "endedMonotonicMs": 2035000,
+      "failureClass": "infra_transport",
+      "shape": "gh_wrapper_transport"
+    }
+  ],
+  "expectedEnvelopeExceededWithoutPause": true,
+  "expectedEnvelopeExceededWithPause": false
+}

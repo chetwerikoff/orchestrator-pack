@@ -6,6 +6,13 @@
  */
 import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import {
+  DEFAULT_ATTEMPT_CEILING_MS,
+  evaluateAttemptCeiling,
+  evaluateReadinessEnvelopeWithPause,
+  getMonotonicNowMs,
+  resolveFirstAttemptMonotonicMs,
+} from './review-start-envelope-external-io.mjs';
+import {
   asRecord,
   classifyReviewerLiveness,
   readCurrentBootHash,
@@ -45,6 +52,7 @@ export const TERMINAL_OUTCOME_RETRY_ELIGIBLE = {
   covered_by_run: false,
   hold_budget_exceeded: true,
   readiness_envelope_exceeded: true,
+  readiness_attempt_ceiling_exceeded: false,
   launch_pending_budget_exceeded: false,
   run_not_visible_fenced: false,
   orphan_covered_run_unbound: false,
@@ -98,12 +106,19 @@ export function resolveClaimLifecycleConfig(config = {}, env = process.env) {
     5,
     DEFAULT_REAPER_PERIOD_SECONDS,
   );
+  const attemptCeilingMs = clampInt(
+    config.attemptCeilingMs ?? env.AO_REVIEW_CLAIM_ATTEMPT_CEILING_MS,
+    DEFAULT_ATTEMPT_CEILING_MS,
+    60_000,
+    DEFAULT_ATTEMPT_CEILING_MS,
+  );
   return {
     readinessEnvelopeMs,
     holdBudgetMs,
     launchPendingBudgetMs,
     visibilityBudgetMs,
     reaperPeriodSeconds,
+    attemptCeilingMs,
   };
 }
 export function holderToLivenessSidecar(holder) {
@@ -228,7 +243,15 @@ export function resolveHoldBudgetStartMs(claim) {
   return holdMs;
 }
 
-export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
+export function evaluateLaunchPending({
+  claim,
+  nowMs,
+  nowMonotonicMs,
+  config = resolveClaimLifecycleConfig(),
+}) {
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
   const pending = asRecord(claim?.launchPending);
   if (!pending?.atUtc) {
     return { active: false, expired: false, reason: 'absent' };
@@ -237,7 +260,7 @@ export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifec
   if (startedMs == null) {
     return { active: false, expired: false, reason: 'invalid_timestamp' };
   }
-  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config });
   if (envelope.exceeded) {
     return {
       active: false,
@@ -259,32 +282,34 @@ export function evaluateLaunchPending({ claim, nowMs, config = resolveClaimLifec
   return { active: true, expired: false, ageMs, budgetMs, envelope, reason: 'active' };
 }
 
-export function evaluateReadinessEnvelope({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
-  const startedMs = parseUtcMs(claim?.acquiredAtUtc);
-  if (startedMs == null) {
-    return {
-      exceeded: false,
-      reason: 'no_readiness_start',
-      ageMs: 0,
-      budgetMs: config.readinessEnvelopeMs,
-      remainingMs: config.readinessEnvelopeMs,
-    };
-  }
-  const ageMs = Math.max(0, nowMs - startedMs);
-  const budgetMs = config.readinessEnvelopeMs;
-  const remainingMs = Math.max(0, budgetMs - ageMs);
-  return {
-    exceeded: ageMs >= budgetMs,
-    ageMs,
-    budgetMs,
-    remainingMs,
-    reason: ageMs >= budgetMs ? 'envelope_exceeded' : 'within_envelope',
-  };
+export function evaluateReadinessEnvelope({
+  claim,
+  nowMs,
+  nowMonotonicMs,
+  config = resolveClaimLifecycleConfig(),
+}) {
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
+  return evaluateReadinessEnvelopeWithPause({
+    claim,
+    nowMs,
+    nowMonotonicMs: mono,
+    config,
+  });
 }
 
-export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycleConfig() }) {
+export function evaluateHoldBudget({
+  claim,
+  nowMs,
+  nowMonotonicMs,
+  config = resolveClaimLifecycleConfig(),
+}) {
   const startedMs = resolveHoldBudgetStartMs(claim);
-  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config });
   if (startedMs == null) {
     const acquiredMs = parseUtcMs(claim?.acquiredAtUtc);
     const preLaunchAgeMs = acquiredMs == null ? 0 : Math.max(0, nowMs - acquiredMs);
@@ -311,12 +336,21 @@ export function evaluateHoldBudget({ claim, nowMs, config = resolveClaimLifecycl
   };
 }
 
-export function evaluateVisibilityFence({ claim, reviewRuns, nowMs, config = resolveClaimLifecycleConfig() }) {
+export function evaluateVisibilityFence({
+  claim,
+  reviewRuns,
+  nowMs,
+  nowMonotonicMs,
+  config = resolveClaimLifecycleConfig(),
+}) {
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
   const pendingMs = parseUtcMs(claim?.visibilityPendingAtUtc);
   if (pendingMs == null) {
     return { shouldFence: false, reason: 'not_pending' };
   }
-  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config });
   const ageMs = Math.max(0, nowMs - pendingMs);
   const covered = findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''));
   if (covered) {
@@ -363,31 +397,34 @@ export function evaluateLegacyPreInvokeOrphan({
 }
 
 
-function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config }) {
+function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs, config }) {
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
   if (claim?.visibilityPendingAtUtc) {
-    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, config });
+    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
     if (visibility.shouldFence || !findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''))) {
       return {
         action: 'terminalize',
         outcome: 'run_not_visible_fenced',
         reason: visibility.reason ?? 'readiness_envelope_exceeded',
         visibility,
-        envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+        envelope: evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config }),
       };
     }
   }
-  const launch = evaluateLaunchPending({ claim, nowMs, config });
+  const launch = evaluateLaunchPending({ claim, nowMs, nowMonotonicMs: mono, config });
   if (launch.expired || asRecord(claim?.launchPending)?.atUtc || claim?.launchPendingInvokedAtUtc) {
     return {
       action: 'terminalize',
       outcome: 'launch_pending_budget_exceeded',
       reason: 'readiness_envelope_exceeded',
       launch,
-      envelope: evaluateReadinessEnvelope({ claim, nowMs, config }),
+      envelope: evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config }),
     };
   }
-  const hold = evaluateHoldBudget({ claim, nowMs, config });
-  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
+  const hold = evaluateHoldBudget({ claim, nowMs, nowMonotonicMs: mono, config });
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config });
   if (hold.phase === 'pre_launch' || hold.reason === 'hold_not_started') {
     return {
       action: 'terminalize',
@@ -411,6 +448,7 @@ export function evaluateReclaimDecision({
   holderLiveness,
   reviewRuns,
   nowMs,
+  nowMonotonicMs,
   config = resolveClaimLifecycleConfig(),
   corruptEvidence = false,
   postAcquireSideEffectAudit = false,
@@ -420,6 +458,25 @@ export function evaluateReclaimDecision({
   }
   const prNumber = Number(claim?.prNumber);
   const headSha = String(claim?.headSha ?? '');
+  const mono = Number.isFinite(nowMonotonicMs)
+    ? Number(nowMonotonicMs)
+    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
+  if (mono != null) {
+    const ceiling = evaluateAttemptCeiling({
+      claim,
+      nowMonotonicMs: mono,
+      reviewRuns,
+      config,
+    });
+    if (ceiling.exceeded) {
+      return {
+        action: 'terminalize',
+        outcome: 'readiness_attempt_ceiling_exceeded',
+        reason: 'readiness_attempt_ceiling_exceeded',
+        ceiling,
+      };
+    }
+  }
   const matchingEvidence = evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha);
   if (corruptEvidence || matchingEvidence.corruptEvidence) {
     return {
@@ -434,8 +491,8 @@ export function evaluateReclaimDecision({
     return { action: 'skip', reason: 'in_flight_covering_run', runId: covered.runId };
   }
 
-  const envelope = evaluateReadinessEnvelope({ claim, nowMs, config });
-  const hold = evaluateHoldBudget({ claim, nowMs, config });
+  const envelope = evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config });
+  const hold = evaluateHoldBudget({ claim, nowMs, nowMonotonicMs: mono, config });
   const liveness = holderLiveness ?? { outcome: 'ambiguous', reason: 'not_evaluated' };
 
   if (liveness.outcome === 'foreign_host') {
@@ -449,13 +506,13 @@ export function evaluateReclaimDecision({
     };
   }
 
-  const launch = evaluateLaunchPending({ claim, nowMs, config });
+  const launch = evaluateLaunchPending({ claim, nowMs, nowMonotonicMs: mono, config });
   if (launch.active) {
     return { action: 'skip', reason: 'launch_pending_active', launch };
   }
 
   if (claim?.invokeCompletedAtUtc || claim?.visibilityPendingAtUtc) {
-    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, config });
+    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
     if (visibility.shouldFence) {
       return {
         action: 'terminalize',
@@ -517,7 +574,7 @@ export function evaluateReclaimDecision({
     if (liveness.outcome === 'legacy') {
       return { action: 'skip', reason: 'legacy_holder_unverified', liveness, envelope };
     }
-    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, config });
+    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
   }
 
   if (hold.exceeded && liveness.outcome === 'alive') {
@@ -530,7 +587,7 @@ export function evaluateReclaimDecision({
   }
 
   if (liveness.outcome === 'alive') {
-    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, config });
+    const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
     if (visibility.shouldFence) {
       return {
         action: 'terminalize',
@@ -562,11 +619,13 @@ export function evaluateSweep({
   activeClaims,
   reviewRuns,
   nowMs,
+  nowMonotonicMs,
   localHost,
   config = resolveClaimLifecycleConfig(),
   corruptKeys = [],
 }) {
   const corruptSet = new Set(toArray(corruptKeys).map((key) => String(key)));
+  const mono = Number.isFinite(nowMonotonicMs) ? Number(nowMonotonicMs) : getMonotonicNowMs();
   const actions = [];
   for (const claim of toArray(activeClaims)) {
     const key = String(claim?.key ?? '');
@@ -581,6 +640,7 @@ export function evaluateSweep({
       holderLiveness,
       reviewRuns,
       nowMs,
+      nowMonotonicMs: mono,
       config,
       corruptEvidence: corruptSet.has(key) || matchingEvidence.corruptEvidence,
     });
@@ -609,11 +669,15 @@ async function main() {
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
     const holderLiveness = payload?.holderLiveness
       ?? classifyClaimHolderLiveness(payload?.claim?.holder, { localHost: payload?.localHost });
+    const nowMonotonicMs = Number(payload?.nowMonotonicMs) > 0
+      ? Number(payload.nowMonotonicMs)
+      : undefined;
     return evaluateReclaimDecision({
       claim: payload?.claim,
       holderLiveness,
       reviewRuns: toArray(payload?.reviewRuns),
       nowMs,
+      nowMonotonicMs,
       config,
       corruptEvidence: Boolean(payload?.corruptEvidence),
       postAcquireSideEffectAudit: Boolean(payload?.postAcquireSideEffectAudit),
@@ -622,10 +686,14 @@ async function main() {
   if (subcommand === 'sweep') {
     const config = resolveClaimLifecycleConfig(payload?.config ?? {});
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
+    const nowMonotonicMs = Number(payload?.nowMonotonicMs) > 0
+      ? Number(payload.nowMonotonicMs)
+      : undefined;
     return evaluateSweep({
       activeClaims: toArray(payload?.activeClaims),
       reviewRuns: toArray(payload?.reviewRuns),
       nowMs,
+      nowMonotonicMs,
       localHost: payload?.localHost,
       config,
       corruptKeys: toArray(payload?.corruptKeys),
@@ -642,28 +710,40 @@ async function main() {
   if (subcommand === 'hold-budget') {
     const config = resolveClaimLifecycleConfig(payload?.config ?? {});
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
+    const nowMonotonicMs = Number(payload?.nowMonotonicMs) > 0
+      ? Number(payload.nowMonotonicMs)
+      : undefined;
     return evaluateHoldBudget({
       claim: payload?.claim,
       nowMs,
+      nowMonotonicMs,
       config,
     });
   }
   if (subcommand === 'readiness-envelope') {
     const config = resolveClaimLifecycleConfig(payload?.config ?? {});
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload?.nowMs) : Date.now();
+    const nowMonotonicMs = Number(payload?.nowMonotonicMs) > 0
+      ? Number(payload.nowMonotonicMs)
+      : undefined;
     return evaluateReadinessEnvelope({
       claim: payload?.claim,
       nowMs,
+      nowMonotonicMs,
       config,
     });
   }
   if (subcommand === 'visibility-fence') {
     const config = resolveClaimLifecycleConfig(payload?.config ?? {});
     const nowMs = Number(payload?.nowMs) > 0 ? Number(payload.nowMs) : Date.now();
+    const nowMonotonicMs = Number(payload?.nowMonotonicMs) > 0
+      ? Number(payload.nowMonotonicMs)
+      : undefined;
     return evaluateVisibilityFence({
       claim: payload?.claim,
       reviewRuns: toArray(payload?.reviewRuns),
       nowMs,
+      nowMonotonicMs,
       config,
     });
   }
