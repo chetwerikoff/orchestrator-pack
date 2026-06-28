@@ -49,6 +49,7 @@ type StopAuditResult = {
     residualNonCompliance: number;
     denominatorCause?: string;
     reviewHookCaptureBranch?: string;
+    degraded?: boolean;
   };
   flags: AuditVerdict[];
   error?: string;
@@ -79,6 +80,7 @@ type FixtureExpect = {
   advisoryOutcome?: string;
   advisorySatisfied?: boolean;
   shellReadAround?: boolean;
+  reviewSignalState?: string;
 };
 
 type FixturePayload = {
@@ -187,6 +189,9 @@ const equivalenceFixtures = [
   'code-class-excluded.json',
   'reviewer-path-excluded.json',
   'diff-log-below-t1.json',
+  'ambient-reviewer-env-ordinary.json',
+  'ambient-review-marker-ordinary.json',
+  'undecidable-review-marker.json',
 ];
 
 describe('threshold constants', () => {
@@ -251,6 +256,31 @@ describe('equivalence-class fixtures', () => {
       if (expectRow.shellReadAround !== undefined) {
         expect(verdict.shellReadAround).toBe(expectRow.shellReadAround);
       }
+      if (expectRow.reviewSignalState !== undefined) {
+        expect(verdict.reviewSignalState).toBe(expectRow.reviewSignalState);
+      }
+
+      if (fixture.expectSummary) {
+        const summary = result.summary;
+        if (fixture.expectSummary.delegableTriggerUnits !== undefined) {
+          expect(summary.delegableTriggerUnits).toBe(fixture.expectSummary.delegableTriggerUnits);
+        }
+        if (fixture.expectSummary.flaggedUnits !== undefined) {
+          expect(summary.flaggedUnits).toBe(fixture.expectSummary.flaggedUnits);
+        }
+        if (fixture.expectSummary.residualNonCompliance !== undefined) {
+          expect(summary.residualNonCompliance).toBe(fixture.expectSummary.residualNonCompliance);
+        }
+        if (fixture.expectSummary.denominatorCause !== undefined) {
+          expect(summary.denominatorCause).toBe(fixture.expectSummary.denominatorCause);
+        }
+        if (fixture.expectSummary.reviewHookCaptureBranch !== undefined) {
+          expect(summary.reviewHookCaptureBranch).toBe(fixture.expectSummary.reviewHookCaptureBranch);
+        }
+      }
+      if (fixture.expectDegraded !== undefined) {
+        expect(result.summary.degraded).toBe(fixture.expectDegraded);
+      }
     });
   }
 });
@@ -268,6 +298,9 @@ describe('detection parity (Claude vs Cursor)', () => {
       );
       expect(cursor.verdicts.map((row) => row.excludedFromDenominator)).toEqual(
         claude.verdicts.map((row) => row.excludedFromDenominator),
+      );
+      expect(cursor.verdicts.map((row) => row.reviewerPath)).toEqual(
+        claude.verdicts.map((row) => row.reviewerPath),
       );
       expect(cursor.summary.denominatorCause).toBe(claude.summary.denominatorCause);
       expect(cursor.summary.reviewHookCaptureBranch).toBe(claude.summary.reviewHookCaptureBranch);
@@ -1655,6 +1688,49 @@ describe('invoke-read-delegation-audit-stop.ps1', () => {
     expect(lines.length).toBeGreaterThan(0);
     const record = JSON.parse(lines[0]) as { surface?: string };
     expect(record.surface).toBe('cursor');
+  });
+
+  it('does not treat ambient PACK_REVIEWER as reviewer-path (#264)', () => {
+    if (!powershellBin) {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-delegation-hook-ambient-'));
+    const artifactPath = path.join(dir, 'hook.jsonl');
+    const savedReviewer = process.env.PACK_REVIEWER;
+    const savedCommand = process.env.REVIEW_COMMAND;
+    process.env.PACK_REVIEWER = 'codex';
+    process.env.REVIEW_COMMAND = 'pwsh scripts/invoke-pack-review.ps1';
+    try {
+      execFileSync(
+        powershellBin,
+        ['-NoProfile', '-File', invokeScript, '-ArtifactPath', artifactPath],
+        {
+          cwd: repoRoot,
+          input: JSON.stringify({
+            hook_event_name: 'Stop',
+            surface: 'claude',
+            workUnits: loadFixture('ambient-reviewer-env-ordinary.json').workUnits,
+          }),
+          encoding: 'utf8',
+        },
+      );
+      const lines = fs.readFileSync(artifactPath, 'utf8').trim().split('\n').filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      const record = JSON.parse(lines[0]) as { verdict?: { reviewerPath?: boolean; inDenominator?: boolean } };
+      expect(record.verdict?.reviewerPath).toBe(false);
+      expect(record.verdict?.inDenominator).toBe(true);
+    } finally {
+      if (savedReviewer === undefined) {
+        delete process.env.PACK_REVIEWER;
+      } else {
+        process.env.PACK_REVIEWER = savedReviewer;
+      }
+      if (savedCommand === undefined) {
+        delete process.env.REVIEW_COMMAND;
+      } else {
+        process.env.REVIEW_COMMAND = savedCommand;
+      }
+    }
   });
 
   it('creates the metric directory before writing wrapper errors', () => {

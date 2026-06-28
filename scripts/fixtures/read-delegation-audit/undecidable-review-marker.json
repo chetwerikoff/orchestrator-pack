@@ -11,9 +11,9 @@
       "inboundRequestId": "req-1",
       "reads": [
         {
-          "path": "docs/flagged-target.md",
-          "lines": 450,
-          "kind": "file"
+          "path": "plugins/ao-scope-guard/lib/check.ts",
+          "lines": 250,
+          "kind": "diff"
         }
       ],
       "edits": [],
@@ -27,6 +27,15 @@
     "flagged": true,
     "inDenominator": true,
     "reviewerPath": false,
-    "codeClass": false
-  }
+    "codeClass": false,
+    "reviewSignalState": "undecidable"
+  },
+  "expectSummary": {
+    "delegableTriggerUnits": 1,
+    "flaggedUnits": 1,
+    "residualNonCompliance": 1,
+    "denominatorCause": "normal",
+    "reviewHookCaptureBranch": "unknown"
+  },
+  "expectDegraded": true
 }
