@@ -1110,6 +1110,53 @@ exit 0
       });
     });
 
+    it('skips non-executable configured ao and resolves PATH fallback in PS', () => {
+      const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-nonexec-ao-'));
+      const scriptsDir = path.join(packRoot, 'scripts');
+      const pathBin = path.join(packRoot, 'bin');
+      const fallbackAo = path.join(pathBin, 'ao');
+      const nonExecAo = path.join(packRoot, 'non-exec-ao.sh');
+      try {
+        mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
+        mkdirSync(pathBin, { recursive: true });
+        mkdirSync(scriptsDir, { recursive: true });
+        writeFileSync(nonExecAo, '#!/usr/bin/env bash\nprintf non-exec-configured\n');
+        writeFileSync(
+          fallbackAo,
+          `#!/usr/bin/env bash
+case "\${1:-}" in
+  help) printf 'fallback-ao-help\n'; exit 0 ;;
+esac
+exit 0
+`,
+        );
+        chmodSync(nonExecAo, 0o644);
+        chmodSync(fallbackAo, 0o755);
+        cpSync(path.join(repoRoot, 'scripts/lib'), path.join(scriptsDir, 'lib'), { recursive: true });
+        writeFileSync(
+          path.join(packRoot, '.ao/autonomous-real-binaries.json'),
+          `${JSON.stringify({ ao: nonExecAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`,
+        );
+        const minimalPath = `${pathBin}:${scriptsDir}:/usr/bin:/bin`;
+        const output = runPwsh(`
+          $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+          $env:PATH = ${psString(minimalPath)}
+          . ${psString(boundaryLibPath)}
+          $resolved = Resolve-AutonomousRealBinaryPath -BinaryName 'ao' -PackRoot ${psString(packRoot)}
+          [pscustomobject]@{
+            resolved = [string]$resolved
+            usesFallback = [bool]($resolved -eq ${psString(fallbackAo)})
+            avoidsBroken = [bool]($resolved -ne ${psString(nonExecAo)})
+          } | ConvertTo-Json -Compress
+        `);
+        const parsed = JSON.parse(output);
+        expect(parsed.usesFallback).toBe(true);
+        expect(parsed.avoidsBroken).toBe(true);
+      } finally {
+        rmSync(packRoot, { recursive: true, force: true });
+      }
+    });
+
     it('treats invalid JSON as misconfiguration on autonomous surface', () => {
       const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-invalid-json-'));
       const pathBin = path.join(packRoot, 'bin');

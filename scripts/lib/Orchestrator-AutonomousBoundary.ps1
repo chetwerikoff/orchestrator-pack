@@ -216,28 +216,33 @@ function Resolve-AutonomousRealBinaryPath {
     if ($config) {
         $configured = [string]$config.$BinaryName
         if ($configured -and $configured -ne $BinaryName) {
-            if (Test-Path -LiteralPath $configured) {
-                $resolved = (Resolve-Path -LiteralPath $configured).Path
-                $isShim = if ($BinaryName -eq 'ao') {
-                    Test-IsPackAoShimPathForBoundary -CandidatePath $resolved
-                }
-                else {
-                    Test-IsPackGitShimPath -CandidatePath $resolved
-                }
-                if (-not $isShim) {
-                    return $resolved
-                }
+            if ($BinaryName -eq 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configured -PackRoot $PackRoot)) {
+                # Broken explicit ao; surface policy warned — fall through to PATH/home fallbacks.
             }
-            $cmd = Get-Command $configured -ErrorAction SilentlyContinue
-            if ($cmd) {
-                $isShim = if ($BinaryName -eq 'ao') {
-                    Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source
+            else {
+                if (Test-Path -LiteralPath $configured) {
+                    $resolved = (Resolve-Path -LiteralPath $configured).Path
+                    $isShim = if ($BinaryName -eq 'ao') {
+                        Test-IsPackAoShimPathForBoundary -CandidatePath $resolved
+                    }
+                    else {
+                        Test-IsPackGitShimPath -CandidatePath $resolved
+                    }
+                    if (-not $isShim) {
+                        return $resolved
+                    }
                 }
-                else {
-                    Test-IsPackGitShimPath -CandidatePath $cmd.Source
-                }
-                if (-not $isShim) {
-                    return $cmd.Source
+                $cmd = Get-Command $configured -ErrorAction SilentlyContinue
+                if ($cmd) {
+                    $isShim = if ($BinaryName -eq 'ao') {
+                        Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source
+                    }
+                    else {
+                        Test-IsPackGitShimPath -CandidatePath $cmd.Source
+                    }
+                    if (-not $isShim) {
+                        return $cmd.Source
+                    }
                 }
             }
         }
