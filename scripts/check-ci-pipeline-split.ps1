@@ -10,12 +10,14 @@ param(
     [switch]$SkipLiveCoverage
 )
 
+# Issue #487 — sharded vitest aggregate and coverage contract
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/ci-workflow-yaml.ps1')
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$GuardIssueNumber = 487
 
 $failures = [System.Collections.Generic.List[string]]::new()
 

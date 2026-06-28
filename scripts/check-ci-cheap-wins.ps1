@@ -9,12 +9,14 @@ param(
     [string]$RepoRoot = ''
 )
 
+# Issue #486 — PR cancellation scope and npm-cache contract
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'lib/ci-workflow-yaml.ps1')
+. (Join-Path $PSScriptRoot "lib/ci-workflow-yaml.ps1")
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$GuardIssueNumber = 486
 
 $failures = [System.Collections.Generic.List[string]]::new()
 
