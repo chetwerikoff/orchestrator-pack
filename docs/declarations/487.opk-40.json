@@ -1,0 +1,26 @@
+{
+  "issue_number": 487,
+  "iteration_id": "opk-40",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-28T02:34:23.660Z",
+  "baseline": {
+    "commit_sha": "3ed0209563b550cf428f6046f69386e00fb60bfd",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1444da04eedd6b7e3f54ba38ffe2df30019cddf0a66a40555449d1ab53d4f2b9"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "scripts/check-ci-cheap-wins.ps1",
+    "scripts/check-ci-pipeline-split.ps1",
+    "scripts/check-ci-pipeline-split.test.ts",
+    "scripts/ci-pipeline-split.config.json",
+    "scripts/ci-test-aggregate.ps1",
+    "scripts/run-vitest-shard.ps1",
+    "scripts/lib/ci-workflow-yaml.ps1",
+    "scripts/test-all.ps1",
+    "docs/ci-pipeline-split.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
