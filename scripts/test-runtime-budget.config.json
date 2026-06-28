@@ -1,0 +1,10 @@
+{
+  "issue": 488,
+  "description": "Commit-stage slow-test budget for the full Vitest regression lane. Adjust thresholds intentionally when test class legitimately grows.",
+  "perTestMs": 120000,
+  "perFileMs": 300000,
+  "notes": {
+    "perTestMs": "Fail when any single Vitest case exceeds this duration (default 120s).",
+    "perFileMs": "Fail when any test file total exceeds this duration (default 300s / 5 min)."
+  }
+}
