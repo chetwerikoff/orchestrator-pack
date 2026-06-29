@@ -365,11 +365,7 @@ export function buildHermeticSpawnGateEnv(
 function hermeticOrchestratorProbeEnv(
   extraEnv: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
-  const {
-    PATH: _inheritedPath,
-    AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode,
-    ...probeRest
-  } = autonomousSpawnProbeEnv(extraEnv);
+  const { AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode, ...probeRest } = autonomousSpawnProbeEnv(extraEnv);
   return probeRest;
 }
 

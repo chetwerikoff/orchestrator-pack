@@ -5,7 +5,7 @@
   "supersedes": "opk-64",
   "created_at": "2026-06-29T06:30:00.000Z",
   "baseline": {
-    "commit_sha": "12ac047ca810bf164e24566b5ea852e55de55010",
+    "commit_sha": "aeb49af3513fbbf6f9eea6f7809f3c60a867fc01",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:79aa03c70c99b6b2b57a8797213adc0bed39e60699a2202cfcf8d86720bad1bc"
   },
