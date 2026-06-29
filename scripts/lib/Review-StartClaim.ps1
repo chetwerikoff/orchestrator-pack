@@ -552,6 +552,14 @@ function Move-ReviewStartClaimToTerminal {
     $target = Join-Path (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) $name
     ($terminal | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $target -Encoding UTF8
     Prune-ReviewStartClaimTerminalRecords -Namespace $Namespace
+    try {
+        . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+        Sync-ReviewStartEnvelopeLedgerFromTerminal -Namespace $Namespace -ActivePath $ActivePath -Record $Record `
+            -Outcome $Outcome -Extra $Extra | Out-Null
+    }
+    catch {
+        Write-Warning "review-start-envelope-ledger sync failed for outcome=${Outcome}: $_"
+    }
     Remove-Item -LiteralPath $ActivePath -Force -ErrorAction SilentlyContinue
     return $target
 }
@@ -731,6 +739,14 @@ function Resolve-ReviewStartClaimAgainstExisting {
                 coveredBy = 'claim_skip'
             }
             return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $terminalPath; namespace = $Namespace; key = $Existing.record.key }
+        }
+        try {
+            . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+            Reset-ReviewStartEnvelopeLedgerForCoveredHead -Namespace $Namespace -PrNumber $PrNumber -HeadSha $Normalized `
+                -ReviewRuns $ReviewRuns | Out-Null
+        }
+        catch {
+            Write-Warning "review-start-envelope-ledger covered-head reset failed: $_"
         }
         return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
     }
