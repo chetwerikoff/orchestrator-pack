@@ -299,7 +299,7 @@ describe('review-start-claim-run-binding', () => {
       projectId: 'orchestrator-pack',
     });
     expect(guardOff.manualOnly).toBe(true);
-    expect(guardOff.diagnostic?.diagnostic).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
+    expect(guardOff).toMatchObject({ diagnostic: { diagnostic: MISSING_CLAIM_FOR_REVIEW_RUN } });
 
     const gate = evaluateAutomatedLaunchClaimGate({
       claim: null,
