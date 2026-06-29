@@ -29,6 +29,13 @@ switch ($scenario) {
         Write-Output '[]'
         exit 0
     }
+    'large_stdout' {
+        $chunk = 'x' * 8192
+        for ($i = 0; $i -lt 32; $i++) {
+            Write-Output $chunk
+        }
+        exit 0
+    }
     'pr510' {
         if ($call -lt 2) {
             Write-Err 'gh-wrapper: REST route failed for pr-list-open: Get "https://api.github.com/repos/o/r/pulls": dial tcp: i/o timeout'

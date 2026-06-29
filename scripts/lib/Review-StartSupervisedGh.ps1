@@ -29,6 +29,34 @@ function Get-ReviewStartSupervisedGhDeadlineMs {
     return $DefaultCeilingMs
 }
 
+function Read-ReviewStartSupervisedGhProcessStreams {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [int]$WaitTimeoutMs,
+        [int]$ChildPid = 0
+    )
+
+    $stdoutDrain = $Process.StandardOutput.ReadToEndAsync()
+    $stderrDrain = $Process.StandardError.ReadToEndAsync()
+    $timedOut = -not $Process.WaitForExit([Math]::Max(1, $WaitTimeoutMs))
+    if ($timedOut) {
+        if ($ChildPid -gt 0) {
+            Stop-ReviewStartSupervisedGhChild -Pid $ChildPid | Out-Null
+        }
+        if (-not $Process.HasExited) {
+            try { $Process.Kill($true) } catch { }
+            try { $Process.WaitForExit(2000) | Out-Null } catch { }
+        }
+    }
+    try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
+    try { $stderrDrain.Wait(5000) | Out-Null } catch { }
+    return @{
+        Stdout   = [string]$stdoutDrain.Result
+        Stderr   = [string]$stderrDrain.Result
+        TimedOut = $timedOut
+    }
+}
+
 function Invoke-ReviewStartSupervisedGh {
     param(
         [hashtable]$ClaimResult,
@@ -82,19 +110,10 @@ function Invoke-ReviewStartSupervisedGh {
         }
     } | Out-Null
 
-    $timedOut = -not $proc.WaitForExit([Math]::Max(1, $resolvedDeadline))
-    if ($timedOut) {
-        Stop-ReviewStartSupervisedGhChild -Pid $childPid | Out-Null
-        $stderr = ''
-        $stdout = ''
-    }
-    else {
-        $stderr = $proc.StandardError.ReadToEnd()
-        $stdout = $proc.StandardOutput.ReadToEnd()
-        if (-not $proc.HasExited) {
-            $proc.WaitForExit() | Out-Null
-        }
-    }
+    $streams = Read-ReviewStartSupervisedGhProcessStreams -Process $proc -WaitTimeoutMs $resolvedDeadline -ChildPid $childPid
+    $timedOut = [bool]$streams.TimedOut
+    $stderr = [string]$streams.Stderr
+    $stdout = [string]$streams.Stdout
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { -1 }
 
     $closed = Complete-ReviewStartClaimInfraPause -ClaimResult $ClaimResult -Stderr $stderr -TimedOut:$timedOut

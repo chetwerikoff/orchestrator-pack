@@ -359,6 +359,87 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+  it('drains-redirected-gh-output-before-waiting-for-exit', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-large-stdout-'));
+    const monoStart = 7_000_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${monoStart}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'large_stdout'
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claim -RepoRoot ${psString(repoRoot)} -GhArguments @('pr','list') -DeadlineMs 5000
+        [pscustomobject]@{
+          ok = [bool]$transport.ok
+          timedOut = [bool]$transport.timedOut
+          stdoutLength = [int]([string]$transport.stdout).Length
+          failureClass = [string]$transport.failureClass
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.timedOut).toBe(false);
+      expect(result.ok).toBe(true);
+      expect(result.stdoutLength).toBeGreaterThan(200_000);
+      expect(result.failureClass).not.toBe(INFRA_TRANSPORT_FAILURE_CLASS);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves-first-attempt-monotonic-ms-across-recovered-claims', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-first-attempt-'));
+    const firstMono = 50_000_000;
+    const laterMono = firstMono + 310_000;
+    const config = resolveClaimLifecycleConfig({ attemptCeilingMs: 300_000 });
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${firstMono}'
+        . ${psString(claimHelperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $record = New-ReviewStartClaimActiveRecord -PrNumber 510 -HeadSha $sha -Surface 'dead-starter' -Reason 'fixture'
+        $record.holder.pid = 99999999
+        $record.holder.startTimeTicks = '100'
+        $record.holder.bootIdHash = 'dead-boot-hash'
+        Write-ReviewStartClaimAtomic -Path (Get-ReviewStartClaimPath -Namespace $ns -PrNumber 510 -HeadSha $sha) -Record $record
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${laterMono}'
+        $retry = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'recoverer' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          acquired = [bool]$retry.acquired
+          recovered = [bool]$retry.recovered
+          firstAttempt = [int64]$retry.claim.firstAttemptAtMonotonicMs
+          readinessStart = [int64]$retry.claim.readinessStartMonotonicMs
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(true);
+      expect(result.firstAttempt).toBe(firstMono);
+      expect(result.readinessStart).toBe(laterMono);
+
+      const ceiling = evaluateAttemptCeiling({
+        claim: {
+          prNumber: 510,
+          headSha: fullSha,
+          firstAttemptAtMonotonicMs: result.firstAttempt,
+        },
+        nowMonotonicMs: laterMono,
+        reviewRuns: [],
+        config,
+      });
+      expect(ceiling.exceeded).toBe(true);
+      expect(ceiling.reason).toBe('attempt_ceiling_exceeded');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('hold-semantics-481-preserved', () => {
     const result = spawnSync('npm', ['test', '--', 'review-start-claim-budget-semantics'], {
       cwd: repoRoot,

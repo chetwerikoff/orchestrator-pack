@@ -556,8 +556,28 @@ function Move-ReviewStartClaimToTerminal {
     return $target
 }
 
+function Get-ReviewStartClaimPriorFirstAttemptMonotonicMs {
+    param([object]$Record)
+    if (-not $Record) { return 0 }
+    $raw = $Record.firstAttemptAtMonotonicMs
+    if ($null -eq $raw -or $raw -eq '') {
+        $raw = $Record.readinessStartMonotonicMs
+    }
+    if ($null -eq $raw -or $raw -eq '') { return 0 }
+    $parsed = 0L
+    if ([int64]::TryParse([string]$raw, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return 0
+}
+
 function New-ReviewStartClaimActiveRecord {
-    param([int]$PrNumber, [string]$HeadSha, [string]$Surface, [string]$Reason = '', [object]$RecoveredFrom = $null)
+    param(
+        [int]$PrNumber,
+        [string]$HeadSha,
+        [string]$Surface,
+        [string]$Reason = '',
+        [object]$RecoveredFrom = $null,
+        [int64]$PriorFirstAttemptMonotonicMs = 0
+    )
     $normalized = ConvertTo-ReviewStartClaimHeadSha -HeadSha $HeadSha
     $mono = $null
     if ([string]$env:AO_REVIEW_START_MONOTONIC_NOW_MS) {
@@ -569,6 +589,7 @@ function New-ReviewStartClaimActiveRecord {
         $cli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-envelope-external-io.mjs'
         $mono = [int64](Invoke-MechanicalNodeFilterCli -FilterCliPath $cli -Subcommand 'monotonic-now' -Payload @{} -Label 'review-start-claim-acquire' -JsonDepth 5).nowMonotonicMs
     }
+    $firstAttemptMono = if ($PriorFirstAttemptMonotonicMs -gt 0) { $PriorFirstAttemptMonotonicMs } else { $mono }
     return @{
         schemaVersion               = 1
         key                         = "pr-$PrNumber-$normalized"
@@ -579,7 +600,7 @@ function New-ReviewStartClaimActiveRecord {
         acquiredAtUtc               = (Get-Date).ToUniversalTime().ToString('o')
         startReason                 = $Reason
         recoveredFrom               = $RecoveredFrom
-        firstAttemptAtMonotonicMs   = $mono
+        firstAttemptAtMonotonicMs   = $firstAttemptMono
         readinessStartMonotonicMs   = $mono
     }
 }
@@ -701,7 +722,7 @@ function Resolve-ReviewStartClaimAgainstExisting {
             holder        = $Existing.record.holder
             acquiredAtUtc = $Existing.record.acquiredAtUtc
             outcome       = [string]$syncReclaim.decision.outcome
-        }
+        } -PriorFirstAttemptMonotonicMs (Get-ReviewStartClaimPriorFirstAttemptMonotonicMs -Record $Existing.record)
         Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
         if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
             return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
@@ -721,7 +742,7 @@ function Resolve-ReviewStartClaimAgainstExisting {
         path          = $terminalPath
         holder        = $Existing.record.holder
         acquiredAtUtc = $Existing.record.acquiredAtUtc
-    }
+    } -PriorFirstAttemptMonotonicMs (Get-ReviewStartClaimPriorFirstAttemptMonotonicMs -Record $Existing.record)
     Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
     if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
         return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
