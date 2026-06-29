@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "dd5f839e798e2b2f28dd1ef6bc298b7dcdbb46a1",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ad428e1fe924981e5d062515cbf6784c153d14c2f9a0e66360eb71881427fc03"
+    "active_scope_hash": "sha256:c462d95c485c5ebb61d4246cb496b2f518ace554086b0c276b7cdc57a219830c"
   },
   "declared_paths": [
     "docs/worker-recovery.mjs",
@@ -29,7 +29,7 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:e5deaecb962a960d0706750b7e19d8ae5e96dc127b9ed6dfbadd446ab0f9db5b",
-      "new_active_scope_hash": "sha256:ad428e1fe924981e5d062515cbf6784c153d14c2f9a0e66360eb71881427fc03",
+      "new_active_scope_hash": "sha256:c462d95c485c5ebb61d4246cb496b2f518ace554086b0c276b7cdc57a219830c",
       "changed": {
         "added": [
           "docs/autonomous-orchestrator-boundary.d.mts",
