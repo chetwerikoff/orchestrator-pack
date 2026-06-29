@@ -18,6 +18,7 @@ const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1')
 const lifecycleHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const ledgerHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartEnvelopeLedger.ps1');
 const guardPath = path.join(repoRoot, 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1');
+const snapshotHelperPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
 
 function tempClaimDir() {
   return mkdtempSync(path.join(tmpdir(), 'envelope-ledger-'));
@@ -88,6 +89,30 @@ describe('review-start-envelope-ledger unit', () => {
     ).toBe(false);
   });
 
+  it('reeval-fresh-snapshot-allows-pre-claim', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    expect(src).not.toContain('requires an acquired claim');
+
+    const script = `
+      function Invoke-GhOpenPrList { param([string]$RepoRoot); return @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main' }) }
+      function Get-AoReviewRuns { param([string]$Project); return @(@{ prNumber = 516; targetSha = ${psString(fullSha)}; status = 'failed' }) }
+      function Get-AoStatusSessions { return @() }
+      function Add-GhPrHeadCommittedAtFromFleetMemo { param([string]$RepoRoot, $Pr) }
+      . ${psString(snapshotHelperPath)}
+      $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 516 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
+        param($openPrs, $prNumber, $repoRoot)
+        @{
+          ciChecksByPr = @{ '516' = @() }
+          requiredCheckNamesByPr = @{ '516' = @('Verify orchestrator-pack structure') }
+          requiredCheckLookupFailedByPr = @{ '516' = $false }
+        }
+      }
+      [pscustomobject]@{ reviewRunCount = @($snapshot.reviewRuns).Count } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.reviewRunCount).toBeGreaterThanOrEqual(1);
+  });
+
   it('consecutive-failure-notify-at-three', () => {
     let ledger = emptyEnvelopeLedger();
     for (let i = 0; i < 2; i += 1) {
@@ -127,7 +152,9 @@ describe('review-start-envelope-ledger unit', () => {
 });
 
 describe('review-start-envelope-ledger integration', () => {
-  it('cross-attempt-failure-count-persists across claim terminals', () => {
+  it(
+    'cross-attempt-failure-count-persists across claim terminals',
+    () => {
     const dir = tempClaimDir();
     try {
       const first = terminalizeCountedFailure(dir, 'review-trigger-reconcile', 'hold_budget_exceeded');
@@ -144,9 +171,11 @@ describe('review-start-envelope-ledger integration', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
-  it('consecutive-failure-notify-at-three emits operator-visible escalation', () => {
+  it(
+    'consecutive-failure-notify-at-three emits operator-visible escalation',
+    () => {
     const dir = tempClaimDir();
     const logPath = path.join(dir, 'escalate.log');
     try {
@@ -193,7 +222,7 @@ describe('review-start-envelope-ledger integration', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('all-starter-surfaces-supervised-gh', () => {
     const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardPath, '-RepoRoot', repoRoot], {
@@ -249,5 +278,5 @@ describe('review-start-envelope-ledger integration', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });

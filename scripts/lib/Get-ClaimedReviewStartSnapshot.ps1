@@ -62,9 +62,8 @@ function Get-ClaimedReviewStartReevalFreshSnapshot {
         [string]$RepoRoot
     )
 
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) {
-        throw 'Get-ClaimedReviewStartReevalFreshSnapshot requires an acquired claim'
-    }
+    # Pre-claim callers (e.g. Invoke-ReviewTriggerReevalPlannedRun claimRuns) pass no acquired claim;
+    # Get-ClaimedReviewStartSnapshot falls back to unsupervised open-PR list until claim is held.
     . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
     $base = Get-ClaimedReviewStartSnapshot -PrNumber ([int]$Planned.prNumber) -Project $Project -RepoRoot $RepoRoot `
         -ClaimResult $ClaimResult -ResolveChecksBundle {
