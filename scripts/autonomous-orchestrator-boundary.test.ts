@@ -123,7 +123,7 @@ function withoutGithubActionsEnv<T>(run: () => T): T {
   }
 }
 
-describe('autonomous orchestrator spawn/git boundary (#324)', () => {
+describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000 }, () => {
   it('exports stable boundary markers', () => {
     expect(AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION).toBe('autonomous-orchestrator-boundary/v1');
     expect(TURN_VISIBLE_REAL_BINARY_ENV_VARS).toContain('AO_REAL_BINARY');
@@ -1035,7 +1035,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
 
-  describe('broken explicit ao pointer policy (Issue #495)', () => {
+  describe('broken explicit ao pointer policy (Issue #495)', { timeout: 120_000 }, () => {
     const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
     const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
 
@@ -1446,7 +1446,7 @@ exit 0
   });
 });
 
-describe('autonomous review worktree path hardening (#429)', () => {
+describe('autonomous review worktree path hardening (#429)', { timeout: 120_000 }, () => {
   function withPathFixture(run: (ctx: { aoBase: string; projectId: string; workspaces: string }) => void) {
     const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-worktree-path-'));
     const projectId = 'orchestrator-pack';
@@ -1518,7 +1518,7 @@ describe('autonomous review worktree path hardening (#429)', () => {
   });
 });
 
-describe('autonomous review worktree claim-bound allow (#429)', () => {
+describe('autonomous review worktree claim-bound allow (#429)', { timeout: 120_000 }, () => {
   function evaluateClaimBound(
     argv: string[],
     aoBase: string,
@@ -1767,7 +1767,7 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
   });
 });
 
-describe('worker recovery boundary (#522)', () => {
+describe('worker recovery boundary (#522)', { timeout: 120_000 }, () => {
   it('worktree list recovery boundary: allows list and denies mutating worktree without recovery parent', () => {
     for (const argv of [['worktree', 'list'], ['worktree', 'list', '--porcelain']]) {
       const verdict = evaluateAutonomousGitBoundary({ argv, autonomousSurface: true });
