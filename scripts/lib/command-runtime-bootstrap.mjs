@@ -379,7 +379,7 @@ export function runLiveCommandRuntimePreflight(packRoot = DEFAULT_PACK_ROOT) {
     process.stderr.write(`${result.diagnostic}\n`);
     process.exit(1);
   }
-  process.stdout.write('[PASS] command-runtime bootstrap preflight\n');
+  process.stderr.write('[PASS] command-runtime bootstrap preflight\n');
   process.exit(0);
 }
 

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -92,6 +93,19 @@ describe('command-runtime bootstrap (#532)', () => {
     expect(noNative.ok).toBe(false);
     expect(noNative.reason).toBe('native_gh_unresolved');
     expect(noNative.diagnostic).toMatch(/gh-resolve-real-binary/);
+  });
+
+  it('keeps live preflight success diagnostics off stdout', () => {
+    const cli = join(packScripts, 'lib', 'command-runtime-bootstrap.mjs');
+    const inherited = process.env.PATH ?? '/usr/bin:/bin';
+    const effectivePath = buildCommandRuntimePath(packScripts, inherited);
+    const result = spawnSync(process.execPath, [cli, 'livePreflight', '--pack-root', packRoot], {
+      env: { ...process.env, PATH: effectivePath },
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/\[PASS\] command-runtime bootstrap preflight/);
   });
 
   it('keeps stderr separate from stdout JSON parsing', () => {
