@@ -465,9 +465,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   }
 
   const grantRefRepo = String(grant.sourceGitWorktreeRoot ?? grant.sourceRepositoryRoot ?? '').trim();
-  const effectiveRefRepo = String(
-    input.effectiveGitWorktreeRoot ?? grantRefRepo ?? input.effectiveRepositoryRoot ?? '',
-  ).trim();
+  const effectiveRefRepo = String(input.effectiveGitWorktreeRoot ?? '').trim();
   if (!grantRefRepo || !effectiveRefRepo) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }

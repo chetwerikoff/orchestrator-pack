@@ -177,6 +177,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
           worktreesPrefix: prefix,
           targetPreexists: false,
           effectiveRepositoryRoot: identityB.identity!,
+          effectiveGitWorktreeRoot: repoB,
         });
         expect(consume.ok).toBe(false);
         expect(consume.reason).toBe('repository_root_mismatch');
@@ -312,6 +313,62 @@ describe('spawn worktree repository identity binding (#511)', () => {
     expect(parsed.denied, parsed.reason).toBe(false);
     expect(parsed.reason).toBe('spawn_worktree_allow');
   });
+  it('fails closed when effectiveGitWorktreeRoot is omitted despite repository identity match', () => {
+    const mainRoot = mkdtempSync(path.join(tmpdir(), 'spawn-grant-consume-main-'));
+    const linkedRoot = path.join(path.dirname(mainRoot), `${path.basename(mainRoot)}-linked`);
+    tempRoots.push(() => {
+      try {
+        gitIn(mainRoot, ['worktree', 'remove', '--force', linkedRoot]);
+      }
+      catch {
+        // ignore
+      }
+      rmSync(linkedRoot, { recursive: true, force: true });
+      rmSync(mainRoot, { recursive: true, force: true });
+    });
+
+    gitIn(mainRoot, ['init', '-b', 'main']);
+    gitIn(mainRoot, ['config', 'user.email', 'spawn-grant@test.local']);
+    gitIn(mainRoot, ['config', 'user.name', 'Spawn Grant Test']);
+    writeFileSync(path.join(mainRoot, 'README.md'), 'first\n');
+    gitIn(mainRoot, ['add', 'README.md']);
+    gitIn(mainRoot, ['commit', '-m', 'first']);
+    gitIn(mainRoot, ['worktree', 'add', '-b', 'linked-wt', linkedRoot, 'HEAD']);
+    writeFileSync(path.join(mainRoot, 'second.md'), 'second\n');
+    gitIn(mainRoot, ['add', 'second.md']);
+    gitIn(mainRoot, ['commit', '-m', 'second']);
+
+    const identity = resolveGitRepositoryIdentity(mainRoot);
+    const linkedHeadOid = resolveGitCommitRefInRepo(linkedRoot, 'HEAD').commitOid!;
+    const mainHeadOid = resolveGitCommitRefInRepo(mainRoot, 'HEAD').commitOid!;
+    expect(mainHeadOid).not.toBe(linkedHeadOid);
+
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '511'],
+      grantId: 'grant-missing-consumer-worktree',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: identity.identity!,
+      sourceGitWorktreeRoot: linkedRoot,
+      expectedHeadRef: 'HEAD',
+      expectedCommitOid: linkedHeadOid,
+    });
+    expect(built.ok).toBe(true);
+
+    const prefix = '/tmp/projects/orchestrator-pack/worktrees';
+    const target = `${prefix}/opk-511`;
+    const consume = evaluateSpawnWorktreeGrantConsume({
+      grant: built.grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: false,
+      effectiveRepositoryRoot: identity.identity!,
+    });
+    expect(consume.ok).toBe(false);
+    expect(consume.reason).toBe('repository_root_unresolvable');
+  });
+
   it('records HEAD from the minting linked worktree, not the main checkout HEAD', () => {
     const mainRoot = mkdtempSync(path.join(tmpdir(), 'spawn-grant-head-main-'));
     const linkedRoot = path.join(path.dirname(mainRoot), `${path.basename(mainRoot)}-linked`);
