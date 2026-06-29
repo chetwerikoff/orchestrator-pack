@@ -2,10 +2,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  evaluateLaunchPending,
-  evaluateReclaimDecision,
-} from '../docs/review-start-claim-lifecycle.mjs';
-import {
   MISSING_CLAIM_FOR_REVIEW_RUN,
   diagnoseMissingClaimForReviewRun,
   evaluateAutomatedLaunchClaimGate,
@@ -16,6 +12,10 @@ import {
   isPackOwnedAutomatedProvenance,
   runMatchesBindingKey,
 } from '../docs/review-start-claim-run-binding.mjs';
+import {
+  evaluateLaunchPending,
+  evaluateReclaimDecision,
+} from '../docs/review-start-claim-lifecycle.mjs';
 import { evaluateAutonomousReviewRunBoundary } from '../docs/orchestrator-claimed-review-run.mjs';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
@@ -26,6 +26,19 @@ const fixtureDir = path.join(
 
 function loadFixture(name: string) {
   return JSON.parse(readFileSync(path.join(fixtureDir, name), 'utf8'));
+}
+
+type BindingDiagnostic = {
+  kind?: string;
+  prNumber?: number;
+  headSha?: string;
+  reviewerSessionId?: string;
+  detectionPoint?: string;
+  surface?: string;
+};
+
+function diagnosticOf(result: { diagnostic?: unknown }) {
+  return result.diagnostic as BindingDiagnostic | undefined;
 }
 
 describe('review-start-claim-run-binding', () => {
@@ -66,12 +79,13 @@ describe('review-start-claim-run-binding', () => {
       surface: fixture.surface,
     });
     expect(result.emit).toBe(true);
-    expect(result.diagnostic?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
-    expect(result.diagnostic?.prNumber).toBe(519);
-    expect(result.diagnostic?.headSha).toBe('a7f0e4d190556d2a61082878e82c6e5164f6a31e');
-    expect(result.diagnostic?.reviewerSessionId).toBe('opk-rev-1092');
-    expect(result.diagnostic?.detectionPoint).toBe('worktree_gate');
-    expect(result.diagnostic?.surface).toBe('review-wake-trigger');
+    const diagnostic = diagnosticOf(result);
+    expect(diagnostic?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
+    expect(diagnostic?.prNumber).toBe(519);
+    expect(diagnostic?.headSha).toBe('a7f0e4d190556d2a61082878e82c6e5164f6a31e');
+    expect(diagnostic?.reviewerSessionId).toBe('opk-rev-1092');
+    expect(diagnostic?.detectionPoint).toBe('worktree_gate');
+    expect(diagnostic?.surface).toBe('review-wake-trigger');
   });
 
   it('launch-pending-visible-run-not-budget-terminalized', () => {
@@ -112,7 +126,7 @@ describe('review-start-claim-run-binding', () => {
     });
     expect(binding.reconcile).toBe(true);
     expect(binding.outcome).toBe('covered_by_run');
-    expect(binding.reviewer?.completed).toBe(true);
+    expect(binding.reviewer && (binding.reviewer as { completed?: boolean }).completed).toBe(true);
 
     const budget = evaluateLaunchPendingBudgetDecision({
       claim: fixture.claim,
@@ -157,8 +171,8 @@ describe('review-start-claim-run-binding', () => {
       detectionPoint: 'worktree_gate',
     });
     expect(noClaim.emit).toBe(true);
-    expect(noClaim.diagnostic?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
-    expect(noClaim.diagnostic?.detectionPoint).toBe('worktree_gate');
+    expect(diagnosticOf(noClaim)?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
+    expect(diagnosticOf(noClaim)?.detectionPoint).toBe('worktree_gate');
   });
 
   it('cursor-guard-off-surface-covered', () => {
@@ -187,8 +201,8 @@ describe('review-start-claim-run-binding', () => {
       surface: 'cursor-worker',
     });
     expect(diagnostic.emit).toBe(true);
-    expect(diagnostic.diagnostic?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
-    expect(diagnostic.diagnostic?.surface).toBe('cursor-worker');
+    expect(diagnosticOf(diagnostic)?.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
+    expect(diagnosticOf(diagnostic)?.surface).toBe('cursor-worker');
 
     const rawDenied = evaluateAutonomousReviewRunBoundary({
       commandLine: 'ao review run opk-orch --execute --command echo',
