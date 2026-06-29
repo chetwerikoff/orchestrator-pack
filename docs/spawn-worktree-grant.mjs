@@ -226,6 +226,67 @@ export function canonicalRepositoryRootsEqual(left, right) {
 }
 
 /**
+ * @param {string} root
+ */
+function normalizeRepositoryIdentityForCompare(root) {
+  const resolved = resolveGitRepositoryIdentity(root);
+  if (resolved.ok) {
+    return { ok: true, identity: resolved.identity };
+  }
+  const candidate = String(root ?? '').trim().replace(/[/\\]+$/, '');
+  if (!candidate || !existsSync(candidate)) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  const normalized = candidate.replace(/\\/g, '/');
+  const base = path.basename(candidate);
+  if (base !== '.git' && !normalized.includes('/.git/')) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  try {
+    const identity = typeof realpathSync.native === 'function'
+      ? realpathSync.native(candidate)
+      : realpathSync(candidate);
+    return { ok: true, identity: String(identity).replace(/[/\\]+$/, '') };
+  }
+  catch {
+    return { ok: true, identity: candidate };
+  }
+}
+
+/**
+ * Compare grant-bound and effective repository roots, accepting legacy
+ * worktree-root grants minted before shared-identity binding (#511).
+ *
+ * @param {string} grantRoot
+ * @param {string} effectiveRoot
+ */
+export function spawnGrantRepositoryRootsEqual(grantRoot, effectiveRoot) {
+  const grant = String(grantRoot ?? '').trim();
+  const effective = String(effectiveRoot ?? '').trim();
+  if (!grant || !effective) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (canonicalRepositoryRootsEqual(grant, effective)) {
+    return { ok: true };
+  }
+  const grantIdentity = normalizeRepositoryIdentityForCompare(grant);
+  const effectiveIdentity = normalizeRepositoryIdentityForCompare(effective);
+  if (!grantIdentity.ok && !effectiveIdentity.ok) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!grantIdentity.ok) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!effectiveIdentity.ok) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+  if (!canonicalRepositoryRootsEqual(grantIdentity.identity, effectiveIdentity.identity)) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+  return { ok: true };
+}
+
+/**
  * @param {string[]} argv
  */
 export function parseGitSpawnWorktreeAddArgv(argv) {
@@ -398,8 +459,9 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   if (!effectiveRepo) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }
-  if (!canonicalRepositoryRootsEqual(grantRepo, effectiveRepo)) {
-    return { ok: false, reason: 'repository_root_mismatch' };
+  const repoBinding = spawnGrantRepositoryRootsEqual(grantRepo, effectiveRepo);
+  if (!repoBinding.ok) {
+    return { ok: false, reason: repoBinding.reason };
   }
 
   const grantRefRepo = String(grant.sourceGitWorktreeRoot ?? grant.sourceRepositoryRoot ?? '').trim();

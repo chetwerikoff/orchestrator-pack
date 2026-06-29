@@ -72,6 +72,10 @@ export declare function resolveGitWorktreeRoot(cwd: string): {
   worktreeRoot?: string;
 };
 export declare function canonicalRepositoryRootsEqual(left: string, right: string): boolean;
+export declare function spawnGrantRepositoryRootsEqual(
+  grantRoot: string,
+  effectiveRoot: string,
+): { ok: boolean; reason?: string };
 export declare function parseGitSpawnWorktreeAddArgv(argv: string[]): GitSpawnWorktreeAddShape;
 export declare function pathIsUnderCanonicalPrefix(candidatePath: string, prefixPath: string): boolean;
 export declare function evaluateSpawnWorktreeGrantConsume(input: {

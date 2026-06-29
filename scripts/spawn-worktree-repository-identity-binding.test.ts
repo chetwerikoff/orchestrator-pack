@@ -114,6 +114,41 @@ describe('spawn worktree repository identity binding (#511)', () => {
     expect(consume.reason).toBe('spawn_worktree_allow');
   });
 
+  it('accepts legacy grant with worktree-root sourceRepositoryRoot only', () => {
+    const fixture = setupLinkedWorktreePair();
+    tempRoots.push(fixture.cleanup);
+
+    const prefix = '/tmp/projects/orchestrator-pack/worktrees';
+    const target = `${prefix}/opk-511`;
+    const headOid = resolveGitCommitRefInRepo(fixture.linkedRoot, 'HEAD').commitOid!;
+
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '511'],
+      grantId: 'grant-legacy-worktree-root-2',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1 },
+      sourceRepositoryRoot: fixture.linkedRoot,
+      sourceGitWorktreeRoot: fixture.linkedRoot,
+      expectedHeadRef: 'HEAD',
+      expectedCommitOid: headOid,
+    });
+    expect(built.ok).toBe(true);
+    const legacyGrant = { ...built.grant! };
+    delete (legacyGrant as { sourceGitWorktreeRoot?: string }).sourceGitWorktreeRoot;
+
+    const consume = evaluateSpawnWorktreeGrantConsume({
+      grant: legacyGrant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: false,
+      effectiveRepositoryRoot: fixture.identity,
+      effectiveGitWorktreeRoot: fixture.mainRoot,
+    });
+    expect(consume.ok).toBe(true);
+    expect(consume.reason).toBe('spawn_worktree_allow');
+  });
+
   it('denies cross-repository consume before tree mutation', () => {
     withTempGitRepo((repoA) => {
       withTempGitRepo((repoB) => {
