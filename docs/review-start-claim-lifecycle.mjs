@@ -20,6 +20,7 @@ import {
   readProcStartTimeTicks,
   toArray,
 } from './review-run-recovery.mjs';
+import { evaluateLaunchPendingBudgetDecision } from './review-start-claim-run-binding.mjs';
 
 export const CLAIM_LIFECYCLE_SCHEMA_VERSION = 1;
 export const DEFAULT_READINESS_ENVELOPE_MS = 30_000;
@@ -416,6 +417,21 @@ function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonic
   }
   const launch = evaluateLaunchPending({ claim, nowMs, nowMonotonicMs: mono, config });
   if (launch.expired || asRecord(claim?.launchPending)?.atUtc || claim?.launchPendingInvokedAtUtc) {
+    const binding = evaluateLaunchPendingBudgetDecision({
+      claim,
+      reviewRuns,
+      nowMs,
+    });
+    if (binding.action === 'reconcile') {
+      return {
+        action: 'reconcile',
+        outcome: binding.outcome,
+        reason: binding.reason,
+        launch,
+        binding: binding.binding,
+        envelope: evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config }),
+      };
+    }
     return {
       action: 'terminalize',
       outcome: 'launch_pending_budget_exceeded',
@@ -453,6 +469,7 @@ export function evaluateReclaimDecision({
   config = resolveClaimLifecycleConfig(),
   corruptEvidence = false,
   postAcquireSideEffectAudit = false,
+  reviewerEvidence = [],
 }) {
   if (String(claim?.state ?? '') !== 'active') {
     return { action: 'skip', reason: 'not_active' };
@@ -528,6 +545,22 @@ export function evaluateReclaimDecision({
   }
 
   if (launch.expired) {
+    const binding = evaluateLaunchPendingBudgetDecision({
+      claim,
+      reviewRuns,
+      reviewerEvidence: toArray(reviewerEvidence),
+      nowMs,
+    });
+    if (binding.action === 'reconcile') {
+      return {
+        action: 'reconcile',
+        outcome: binding.outcome,
+        reason: binding.reason,
+        launch,
+        binding: binding.binding,
+        runId: binding.runId,
+      };
+    }
     return {
       action: 'terminalize',
       outcome: 'launch_pending_budget_exceeded',
@@ -682,6 +715,7 @@ async function main() {
       config,
       corruptEvidence: Boolean(payload?.corruptEvidence),
       postAcquireSideEffectAudit: Boolean(payload?.postAcquireSideEffectAudit),
+      reviewerEvidence: toArray(payload?.reviewerEvidence),
     });
   }
   if (subcommand === 'sweep') {

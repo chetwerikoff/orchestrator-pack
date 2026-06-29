@@ -348,6 +348,43 @@ function Consume-ReviewStartClaimForAutonomousWorktreeAllow {
     return @{ ok = $true; reason = 'worktree_allow_consumed'; auditPath = $annotate.auditPath }
 }
 
+
+function Get-ReviewStartClaimRecordsForNamespace {
+    param([string]$Namespace)
+    $records = @()
+    if (-not (Test-Path -LiteralPath $Namespace -PathType Container)) { return $records }
+    foreach ($file in Get-ChildItem -LiteralPath $Namespace -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+        $read = Read-ReviewStartClaimRecord -Path $file.FullName
+        if ($read.ok) { $records += $read.record }
+    }
+    return $records
+}
+
+function Find-PackOwnedReviewRunForHeadSha {
+    param([string]$HeadSha)
+    $headShape = Test-ReviewStartClaimHeadShaFormat -HeadSha $HeadSha
+    if (-not $headShape.ok) { return $null }
+    $normalizedHead = $headShape.headSha
+    $projectId = Get-AutonomousReviewWorktreeProjectId
+    $runs = @(Get-AoReviewRuns -Project $projectId)
+    foreach ($run in $runs) {
+        if ([string]$run.targetSha -ne $normalizedHead) { continue }
+        $provenance = Invoke-ReviewStartClaimRunBindingCli -Subcommand 'provenance' -Payload @{
+            run = $run
+            surface = [string]$run.surface
+            provenance = [string]$run.startReason
+        }
+        if (-not $provenance.packOwnedAutomated) { continue }
+        return @{
+            run = $run
+            projectId = $projectId
+            surface = [string]$run.surface
+            provenance = [string]$run.startReason
+        }
+    }
+    return $null
+}
+
 function Test-AutonomousReviewWorktreeClaimBoundAllow {
     param([string[]]$Argv)
 
@@ -362,7 +399,17 @@ function Test-AutonomousReviewWorktreeClaimBoundAllow {
 
     $claimLookup = Find-LiveReviewStartClaimForHeadSha -HeadSha $shape.commit
     if (-not $claimLookup.ok) {
-        return @{ allowed = $false; reason = $claimLookup.reason }
+        $diagnostic = $null
+        if ($claimLookup.reason -eq 'no_live_claim') {
+            $runMatch = Find-PackOwnedReviewRunForHeadSha -HeadSha $shape.commit
+            if ($runMatch) {
+                $claims = @(Get-ReviewStartClaimRecordsForNamespace -Namespace (Resolve-ReviewStartClaimNamespace -ProjectId $runMatch.projectId))
+                $diag = Get-MissingClaimForReviewRunDiagnostic -Run $runMatch.run -Claims $claims `
+                    -ProjectId $runMatch.projectId -DetectionPoint 'worktree_gate' -Surface $runMatch.surface -Provenance $runMatch.provenance
+                if ($diag.emit) { $diagnostic = $diag.diagnostic }
+            }
+        }
+        return @{ allowed = $false; reason = $claimLookup.reason; diagnostic = $diagnostic }
     }
 
     $claimProjectId = $claimLookup.claim.projectId

@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartEnvelopeExternalIo.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimRunBinding.ps1')
 
 $Script:ReviewStartClaimLifecycleCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-claim-lifecycle.mjs'
 
@@ -116,6 +117,12 @@ function Confirm-ReviewStartClaimLaunchGate {
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $bindingGate = Test-AutomatedReviewLaunchClaimGate -ClaimResult $ClaimResult -PrNumber ([int]$ClaimResult.claim.prNumber) `
+        -HeadSha ([string]$ClaimResult.claim.headSha) -ProjectId ([string]$ClaimResult.projectId)
+    if (-not $bindingGate.ok) {
+        if ($LogWriter) { & $LogWriter "review-start-claim: launch binding denied key=$($ClaimResult.key) reason=$($bindingGate.reason)" }
+        return @{ ok = $false; reason = [string]$bindingGate.reason; bindingGate = $bindingGate.gate }
+    }
     $holdStart = Set-ReviewStartClaimHoldStarted -ClaimResult $ClaimResult
     if (-not $holdStart.ok) {
         $reason = if ([string]$holdStart.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$holdStart.reason }
@@ -384,6 +391,24 @@ function Invoke-ReviewStartClaimReclaimOrphan {
         $result = Mark-ReviewStartClaimForeignHolderBlocking -Namespace $Namespace -Path $Path -Record $Record `
             -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns -LogWriter $LogWriter
         return @{ reclaimed = $false; manual = $true; blocking = $true; result = $result; decision = $decision }
+    }
+    if ($decision.action -eq 'reconcile') {
+        $outcome = [string]$decision.outcome
+        $extra = @{ reason = [string]$decision.reason }
+        if ($decision.runId) { $extra.boundRunId = [string]$decision.runId }
+        if ($decision.binding) { $extra.binding = $decision.binding }
+        $claimResult = @{
+            acquired  = $true
+            namespace = $Namespace
+            path      = $Path
+            claim     = $Record
+            key       = [string]$Record.key
+        }
+        $result = Complete-ReviewStartClaim -ClaimResult $claimResult -Outcome $outcome -ReviewRuns @($ReviewRuns) -Extra $extra
+        if ($LogWriter) {
+            & $LogWriter "review-start-claim-run-binding: reconciled key=$($Record.key) outcome=$outcome reason=$($decision.reason)"
+        }
+        return @{ action = 'reconcile'; outcome = $outcome; reason = [string]$decision.reason; result = $result }
     }
     if ($decision.action -eq 'terminalize') {
         $result = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $Namespace -Path $Path -Record $Record `
