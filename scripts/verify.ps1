@@ -1220,6 +1220,25 @@ else {
     Add-Failure 'Missing orchestrator claimed review-start gate check (Issue #318)'
 }
 
+
+Write-Host ''
+Write-Host '== review-start claim run binding (Issue #521) =='
+$claimRunBindingCheck = Join-Path $Root 'scripts/check-review-start-claim-run-binding.ps1'
+if (Test-Path -LiteralPath $claimRunBindingCheck -PathType Leaf) {
+    & $claimRunBindingCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-start-claim-run-binding.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-start-claim-run-binding.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Review-start claim run binding wiring failed (Issue #521)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-start-claim-run-binding.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-start claim run binding check (Issue #521)'
+}
+
 $autonomousCapabilityCheck = Join-Path $Root 'scripts/check-autonomous-review-start-capabilities.ps1'
 if (Test-Path -LiteralPath $autonomousCapabilityCheck -PathType Leaf) {
     & $autonomousCapabilityCheck

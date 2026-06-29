@@ -48,5 +48,5 @@ export function resolveHoldBudgetStartMs(claim: Record<string, unknown> | null |
 export function evaluateHoldBudget(args: Record<string, unknown>): Record<string, unknown>;
 export function evaluateReadinessEnvelope(args: Record<string, unknown>): Record<string, unknown>;
 export function evaluateVisibilityFence(args: Record<string, unknown>): Record<string, unknown>;
-export function evaluateReclaimDecision(args: Record<string, unknown>): Record<string, unknown>;
+export function evaluateReclaimDecision(args: Record<string, unknown> & { reviewerEvidence?: Record<string, unknown> | null; projectId?: string }): Record<string, unknown>;
 export function evaluateSweep(args: Record<string, unknown>): Record<string, unknown>;

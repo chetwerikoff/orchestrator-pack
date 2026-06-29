@@ -1,0 +1,33 @@
+{
+  "captureVersion": 1,
+  "incidentPr": 519,
+  "pr519NoClaimHead": "a7f0e4d190556d2a61082878e82c6e5164f6a31e",
+  "pr519ReconcileHead": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+  "reviewRunId": "review-run-fa05d810-85e6-4f1c-8f06-57d50790c6b5",
+  "reviewerSessionId": "opk-rev-1072",
+  "launchPendingInvokedAtUtc": "2026-06-28T15:44:30Z",
+  "reviewRunCreatedAtUtc": "2026-06-28T15:44:30.964Z",
+  "reviewerCompletedAtUtc": "2026-06-28T15:47:46Z",
+  "reaperDecisionAtUtc": "2026-06-28T15:48:14Z",
+  "noClaimRuns": [
+    {
+      "id": "opk-rev-1092",
+      "prNumber": 519,
+      "targetSha": "a7f0e4d190556d2a61082878e82c6e5164f6a31e",
+      "status": "running",
+      "provenance": "review-trigger-reeval"
+    },
+    {
+      "id": "opk-rev-1095",
+      "prNumber": 519,
+      "targetSha": "a7f0e4d190556d2a61082878e82c6e5164f6a31e",
+      "status": "running",
+      "provenance": "review-trigger-reeval"
+    }
+  ],
+  "reconcileClaim": {
+    "key": "pr-519-5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+    "surface": "review-trigger-reeval",
+    "launchPendingInvokedAtUtc": "2026-06-28T15:44:30Z"
+  }
+}

@@ -20,6 +20,10 @@ import {
   readProcStartTimeTicks,
   toArray,
 } from './review-run-recovery.mjs';
+import {
+  applyRunBindingToReclaimDecision,
+  evaluateLaunchPendingRunReconciliation,
+} from './review-start-claim-run-binding.mjs';
 
 export const CLAIM_LIFECYCLE_SCHEMA_VERSION = 1;
 export const DEFAULT_READINESS_ENVELOPE_MS = 30_000;
@@ -398,7 +402,19 @@ export function evaluateLegacyPreInvokeOrphan({
 }
 
 
-function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs, config }) {
+
+function bindLaunchPendingReclaimDecision(decision, claim, reviewRuns, nowMs, reviewerEvidence, projectId) {
+  return applyRunBindingToReclaimDecision({
+    decision,
+    claim,
+    reviewRuns,
+    reviewerEvidence,
+    nowMs,
+    projectId,
+  });
+}
+
+function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs, config, reviewerEvidence, projectId }) {
   const mono = Number.isFinite(nowMonotonicMs)
     ? Number(nowMonotonicMs)
     : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
@@ -416,6 +432,24 @@ function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonic
   }
   const launch = evaluateLaunchPending({ claim, nowMs, nowMonotonicMs: mono, config });
   if (launch.expired || asRecord(claim?.launchPending)?.atUtc || claim?.launchPendingInvokedAtUtc) {
+    const binding = evaluateLaunchPendingRunReconciliation({
+      claim,
+      reviewRuns,
+      reviewerEvidence,
+      nowMs,
+      projectId,
+    });
+    if (binding.reconcile) {
+      return {
+        action: 'terminalize',
+        outcome: binding.outcome,
+        reason: binding.reason,
+        runId: binding.runId,
+        reviewerSessionId: binding.reviewerSessionId,
+        launch,
+        envelope: evaluateReadinessEnvelope({ claim, nowMs, nowMonotonicMs: mono, config }),
+      };
+    }
     return {
       action: 'terminalize',
       outcome: 'launch_pending_budget_exceeded',
@@ -453,6 +487,8 @@ export function evaluateReclaimDecision({
   config = resolveClaimLifecycleConfig(),
   corruptEvidence = false,
   postAcquireSideEffectAudit = false,
+  reviewerEvidence = null,
+  projectId = '',
 }) {
   if (String(claim?.state ?? '') !== 'active') {
     return { action: 'skip', reason: 'not_active' };
@@ -509,6 +545,23 @@ export function evaluateReclaimDecision({
 
   const launch = evaluateLaunchPending({ claim, nowMs, nowMonotonicMs: mono, config });
   if (launch.active) {
+    const activeBinding = evaluateLaunchPendingRunReconciliation({
+      claim,
+      reviewRuns,
+      reviewerEvidence,
+      nowMs,
+      projectId,
+    });
+    if (activeBinding.reconcile) {
+      return {
+        action: 'terminalize',
+        outcome: activeBinding.outcome,
+        reason: activeBinding.reason,
+        runId: activeBinding.runId,
+        reviewerSessionId: activeBinding.reviewerSessionId,
+        launch,
+      };
+    }
     return { action: 'skip', reason: 'launch_pending_active', launch };
   }
 
@@ -528,12 +581,12 @@ export function evaluateReclaimDecision({
   }
 
   if (launch.expired) {
-    return {
+    return bindLaunchPendingReclaimDecision({
       action: 'terminalize',
       outcome: 'launch_pending_budget_exceeded',
       reason: 'launch_pending_budget_exceeded',
       launch,
-    };
+    }, claim, reviewRuns, nowMs, reviewerEvidence, projectId);
   }
 
   if (liveness.outcome === 'provably_not_alive') {
@@ -575,7 +628,7 @@ export function evaluateReclaimDecision({
     if (liveness.outcome === 'legacy') {
       return { action: 'skip', reason: 'legacy_holder_unverified', liveness, envelope };
     }
-    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
+    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config, reviewerEvidence, projectId });
   }
 
   if (hold.exceeded && liveness.outcome === 'alive') {
@@ -682,6 +735,8 @@ async function main() {
       config,
       corruptEvidence: Boolean(payload?.corruptEvidence),
       postAcquireSideEffectAudit: Boolean(payload?.postAcquireSideEffectAudit),
+      reviewerEvidence: payload?.reviewerEvidence ?? null,
+      projectId: String(payload?.projectId ?? ''),
     });
   }
   if (subcommand === 'sweep') {

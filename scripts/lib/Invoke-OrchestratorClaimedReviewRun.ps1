@@ -7,6 +7,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimRunBinding.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousReviewStartGate.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-ReviewStartAudit.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
@@ -172,6 +173,10 @@ function Invoke-OrchestratorClaimedReviewRun {
         throw
     }
 
+    $bindingGate = Confirm-ReviewStartClaimRunBindingLaunch -ClaimResult $claim -PrNumber $PrNumber -HeadSha $headSha -ProjectId $Project -Surface 'orchestrator-claimed-review-run' -LogWriter $writeLog
+    if (-not $bindingGate.ok) {
+        return @{ started = $false; reason = [string]$bindingGate.reason; headSha = $headSha; bindingDenied = $true }
+    }
     $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -LogWriter $writeLog
     if (-not $launchGate.ok) {
         & $writeLog "orchestrator-claimed-review-run: launch gate denied PR #$PrNumber head=$headSha reason=$($launchGate.reason)"

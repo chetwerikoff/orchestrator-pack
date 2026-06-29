@@ -157,6 +157,14 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 throw
             }
         }
+        $bindingGate = Confirm-ReviewStartClaimRunBindingLaunch -ClaimResult $claim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) -ProjectId $ProjectId -Surface 'review-trigger-reeval' -LogWriter $LogWriter
+        if (-not $bindingGate.ok) {
+            & $LogWriter "review-trigger-reeval: run-binding launch denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($bindingGate.reason)"
+            return @{
+                started = $false
+                reason      = [string]$bindingGate.reason
+            }
+        }
         $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
         if (-not $launchGate.ok) {
             & $LogWriter "review-trigger-reeval: launch gate denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($launchGate.reason)"

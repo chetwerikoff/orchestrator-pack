@@ -468,7 +468,15 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
                 throw
             }
-            $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
+            $bindingGate = Confirm-ReviewStartClaimRunBindingLaunch -ClaimResult $claim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) -ProjectId $ProjectId -Surface 'review-wake-trigger' -LogWriter $LogWriter
+        if (-not $bindingGate.ok) {
+            & $LogWriter "review-wake-trigger: run-binding launch denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($bindingGate.reason)"
+            return @{
+                started = $false
+                reason      = [string]$bindingGate.reason
+            }
+        }
+        $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($holdRuns) -LogWriter $LogWriter
             if (-not $launchGate.ok) {
                 & $LogWriter "review-wake-trigger: launch gate denied PR #$($planned.prNumber) head=$($planned.headSha) reason=$($launchGate.reason)"
                 return @{

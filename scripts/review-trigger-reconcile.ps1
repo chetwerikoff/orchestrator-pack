@@ -498,6 +498,11 @@ function Invoke-PlannedReviewRun {
         Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns @() -Failure "reviewer workspace preflight failed: $_" | Out-Null
         throw
     }
+    $bindingGate = Confirm-ReviewStartClaimRunBindingLaunch -ClaimResult $claim -PrNumber $PrNumber -HeadSha $HeadSha -ProjectId $Project -Surface 'review-trigger-reconcile' -LogWriter { param($m) Write-ReconcileLog $m }
+    if (-not $bindingGate.ok) {
+        Write-ReconcileLog "run-binding launch denied PR #$PrNumber head=$HeadSha reason=$($bindingGate.reason)"
+        return @{ started = $false; reason = [string]$bindingGate.reason }
+    }
     $launchGate = Confirm-ReviewStartClaimLaunchGate -ClaimResult $claim -ReviewRuns @($claimRuns) -DecisionSource 'hold_budget' -LogWriter { param($m) Write-ReconcileLog $m }
     if (-not $launchGate.ok) {
         Write-ReconcileLog "launch gate denied PR #$PrNumber head=$HeadSha reason=$($launchGate.reason)"
