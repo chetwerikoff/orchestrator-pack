@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "bb47cd5021419cc81ca4b64e4ffdca64cc2a1923",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8721ddaecb90ddbd573d24b5e975a301e8cbf69f5974ef4c78257c9283a27260"
+    "active_scope_hash": "sha256:8aa190d75e0055f1e1e0f65ce992ca6dfb6e14e5fcb3786d34fabbf2e3db6a22"
   },
   "declared_paths": [
     "docs/declarations/515.opk-69.json",
@@ -25,8 +25,24 @@
     "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
     "scripts/review-start-envelope-external-io.test.ts",
     "scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1",
-    "tests/external-output-references/review-start-envelope-external-io/pr510-infra-stall.json"
+    "tests/external-output-references/review-start-envelope-external-io/pr510-infra-stall.json",
+    "scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:8721ddaecb90ddbd573d24b5e975a301e8cbf69f5974ef4c78257c9283a27260",
+      "new_active_scope_hash": "sha256:8aa190d75e0055f1e1e0f65ce992ca6dfb6e14e5fcb3786d34fabbf2e3db6a22",
+      "changed": {
+        "added": [
+          "scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "declare steal-claim-then-hang fixture for post-start ownership-loss test",
+      "actor": "opk-69",
+      "timestamp": "2026-06-29T08:53:02.084Z",
+      "applied": true
+    }
+  ]
 }
