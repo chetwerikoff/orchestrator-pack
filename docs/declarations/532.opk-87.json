@@ -10,8 +10,8 @@
     "active_scope_hash": "sha256:2a32b2c6f27f0d44789e713e887eff8ff4161d64ecffe03252de448dd7dcd466"
   },
   "declared_paths": [
-    "docs/declarations/532.opk-87.json",
     "agent-orchestrator.yaml.example",
+    "docs/declarations/532.opk-87.json",
     "docs/migration_notes.md",
     "prompts/agent_rules.md",
     "scripts/_test-interposer-pack-fixture.ts",
@@ -31,31 +31,18 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:f6d9501740c2e4a79cc559c8f60af49309e5c0c78a2e0e0920db8228838b6ef6",
-      "new_active_scope_hash": "sha256:aafd611b3c618e60acbd1a996e6ec0a263983a0d3fee10108b9c574a666b803b",
+      "new_active_scope_hash": "sha256:2a32b2c6f27f0d44789e713e887eff8ff4161d64ecffe03252de448dd7dcd466",
       "changed": {
         "added": [
           "docs/declarations/532.opk-87.json",
+          "scripts/_test-interposer-pack-fixture.ts",
           "scripts/lib/command-runtime-bootstrap.d.mts"
         ],
         "removed": []
       },
-      "reason": "add TypeScript declarations and declaration self-path",
+      "reason": "add TypeScript declarations, declaration self-path, and interposer fixture skip for hermetic tests",
       "actor": "opk-87",
-      "timestamp": "2026-06-29T15:48:41.006Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:aafd611b3c618e60acbd1a996e6ec0a263983a0d3fee10108b9c574a666b803b",
-      "new_active_scope_hash": "sha256:2a32b2c6f27f0d44789e713e887eff8ff4161d64ecffe03252de448dd7dcd466",
-      "changed": {
-        "added": [
-          "scripts/_test-interposer-pack-fixture.ts"
-        ],
-        "removed": []
-      },
-      "reason": "bootstrap hook ordering and interposer fixture skip for hermetic tests",
-      "actor": "opk-87",
-      "timestamp": "2026-06-29T16:05:00.000Z",
+      "timestamp": "2026-06-29T16:08:00.000Z",
       "applied": true
     }
   ]
