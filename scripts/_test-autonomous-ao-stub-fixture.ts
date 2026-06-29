@@ -365,8 +365,22 @@ export function buildHermeticSpawnGateEnv(
 function hermeticOrchestratorProbeEnv(
   extraEnv: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
-  const { AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode, ...probeRest } = autonomousSpawnProbeEnv(extraEnv);
-  return probeRest;
+  const {
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode,
+    GIT_SYSTEM_BINARY: _gitSystem,
+    GIT_REAL_BINARY: _gitReal,
+    AO_REAL_BINARY: _aoReal,
+    AO_PWSH_BINARY: _pwsh,
+    AO_SPAWN_WORKTREE_GRANT_ID: _grantId,
+    ...probeRest
+  } = autonomousSpawnProbeEnv(extraEnv);
+  return {
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: '',
+    GIT_SYSTEM_BINARY: '',
+    GIT_REAL_BINARY: '',
+    AO_SPAWN_WORKTREE_GRANT_ID: '',
+    ...probeRest,
+  };
 }
 
 export function writeSpawnGateAoStub(stubDir: string, kind: SpawnGateStubKind, basename = 'ao-stub.sh'): string {

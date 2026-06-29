@@ -41,6 +41,7 @@ export function stripInterposerBashEnvBlockers(env: NodeJS.ProcessEnv) {
     __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: _sb,
     __AO_AUTONOMOUS_BASH_INTERPOSED: _bi,
     AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: _as,
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode,
     ...rest
   } = env;
   return rest;

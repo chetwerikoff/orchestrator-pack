@@ -795,5 +795,36 @@ exec "$REAL_AO" "$@"
     });
   });
 
+  it('orchestrator deny matrix denies absolute git when bypass env leaks from process', () => {
+    const saved = {
+      fixtureMode: process.env.AO_SPAWN_WORKTREE_FIXTURE_MODE,
+      gitSystem: process.env.GIT_SYSTEM_BINARY,
+      gitReal: process.env.GIT_REAL_BINARY,
+    };
+    process.env.AO_SPAWN_WORKTREE_FIXTURE_MODE = '1';
+    process.env.GIT_SYSTEM_BINARY = '/usr/bin/git';
+    process.env.GIT_REAL_BINARY = '/usr/bin/git';
+    try {
+      withHermeticSpawnGatePack('read-receipt', (ctx) => {
+        withTempGitRepo((dir) => {
+          const readme = path.join(dir, 'README.md');
+          if (!existsSync('/usr/bin/git')) {
+            return;
+          }
+          const flatGit = spawnHermeticLiveArmedBash(ctx, `/usr/bin/git checkout -- ${readme}`, {}, dir);
+          assertSpawnGateOutcome('orchestrator-surface-deny', flatGit, ctx);
+          expect(`${flatGit.stderr}${flatGit.stdout}`).toMatch(/autonomous tree-mutating git denied/i);
+        });
+      });
+    } finally {
+      if (saved.fixtureMode === undefined) delete process.env.AO_SPAWN_WORKTREE_FIXTURE_MODE;
+      else process.env.AO_SPAWN_WORKTREE_FIXTURE_MODE = saved.fixtureMode;
+      if (saved.gitSystem === undefined) delete process.env.GIT_SYSTEM_BINARY;
+      else process.env.GIT_SYSTEM_BINARY = saved.gitSystem;
+      if (saved.gitReal === undefined) delete process.env.GIT_REAL_BINARY;
+      else process.env.GIT_REAL_BINARY = saved.gitReal;
+    }
+  });
+
 });
 
