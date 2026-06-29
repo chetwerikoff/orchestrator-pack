@@ -120,6 +120,25 @@ describe('gh inventory matcher', () => {
     expect(route?.prNumber).toBe(491);
   });
 
+  it('routes RCA issue view state,title,body,closedAt via REST inventory (Issue #520)', () => {
+    const { route } = classifyArgv([
+      'issue', 'view', '520', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', 'state,title,body,closedAt',
+    ]);
+    expect(route?.id).toBe('issue-view-json');
+    expect(route?.prNumber).toBe(520);
+  });
+
+  it('routes RCA merged-PR closure lookup via REST inventory (Issue #520)', () => {
+    const { route } = classifyArgv([
+      'pr', 'list', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--state', 'merged', '--search', 'closes #431',
+      '--json', 'number,title,state,mergedAt', '--limit', '10',
+    ]);
+    expect(route?.id).toBe('pr-list-merged-closes');
+    expect(route?.prNumber).toBe(431);
+  });
+
 });
 
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
@@ -248,6 +267,27 @@ describe('gh issue state reason mapping', () => {
       ['state', 'stateReason'],
     );
     expect(mapped).toEqual({ state: 'CLOSED', stateReason: 'COMPLETED' });
+  });
+
+  it('maps REST closed_at to gh closedAt key (Issue #520)', () => {
+    const mapped = mapIssueToGhJson(
+      {
+        number: 431,
+        state: 'closed',
+        title: 'Closed issue',
+        body: 'body',
+        closed_at: '2026-06-28T05:01:44Z',
+        labels: [],
+        assignees: [],
+      },
+      ['state', 'title', 'body', 'closedAt'],
+    );
+    expect(mapped).toEqual({
+      state: 'CLOSED',
+      title: 'Closed issue',
+      body: 'body',
+      closedAt: '2026-06-28T05:01:44Z',
+    });
   });
 });
 

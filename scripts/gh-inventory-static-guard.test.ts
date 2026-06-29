@@ -77,4 +77,44 @@ describe('gh inventory static guard', () => {
     ).toEqual([]);
     expect(extractGhCommandsFromRuleSurfaceLine('`gh pr checks` stay verbatim per passthrough')).toEqual([]);
   });
+
+  it('classifies RCA issue metadata and merged-PR closure lookup forms (Issue #520)', () => {
+    expect(
+      isInventoryCoveredCommand(
+        'gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt',
+      ),
+    ).toBe(true);
+    expect(
+      isInventoryCoveredCommand(
+        'gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "closes #N" --json number,title,state,mergedAt --limit 10',
+      ),
+    ).toBe(true);
+  });
+
+  it('ignores prose-only gh issue view mentions on RCA surfaces (Issue #520)', () => {
+    expect(extractGhCommandsFromRuleSurfaceLine('| A | `gh issue view` → `state` is **closed** |')).toEqual([]);
+    expect(
+      extractGhCommandsFromRuleSurfaceLine(
+        '- Open and closed GitHub Issues (via registry-resolved numbers and `gh issue view`);',
+      ),
+    ).toEqual([]);
+  });
+
+  it('fails on bare gh pr view and gh pr checks executable instructions (Issue #520)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-bare-'));
+    const file = join(dir, 'rules.md');
+    writeFileSync(file, 'Run `gh pr view 42` before merge.\n', 'utf8');
+    const viewViolations = scanFileForViolations(file, 'rules');
+    expect(viewViolations.some((v) => v.command.includes('gh pr view 42'))).toBe(true);
+
+    writeFileSync(file, 'Run `gh pr checks 42` for CI.\n', 'utf8');
+    const checksViolations = scanFileForViolations(file, 'rules');
+    expect(checksViolations.some((v) => v.command.includes('gh pr checks 42'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('passes investigate_root_cause.md RCA prompt scan (Issue #520)', () => {
+    const violations = scanFileForViolations('prompts/investigate_root_cause.md', 'rules');
+    expect(violations).toEqual([]);
+  });
 });

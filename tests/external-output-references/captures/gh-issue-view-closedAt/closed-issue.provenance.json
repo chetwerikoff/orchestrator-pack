@@ -1,0 +1,10 @@
+{
+  "sourceCommand": "gh issue view 431 --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt",
+  "toolVersion": "pack scripts/gh REST route (Issue #520)",
+  "capturedAt": "2026-06-29T10:00:00.000Z",
+  "context": "REST issues/{number} mapped to gh issue view JSON with closedAt from closed_at.",
+  "derivation": {
+    "closedAt": "issue.closed_at"
+  },
+  "scrubLog": ["Synthetic fixture; live capture uses real issue metadata"]
+}
