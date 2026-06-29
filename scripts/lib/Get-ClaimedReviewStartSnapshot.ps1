@@ -53,3 +53,25 @@ function Get-ClaimedReviewStartSnapshot {
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
     }
 }
+
+function Get-ClaimedReviewStartReevalFreshSnapshot {
+    param(
+        [object]$Planned,
+        [hashtable]$ClaimResult,
+        [string]$Project,
+        [string]$RepoRoot
+    )
+
+    # Pre-claim callers (e.g. Invoke-ReviewTriggerReevalPlannedRun claimRuns) pass no acquired claim;
+    # Get-ClaimedReviewStartSnapshot falls back to unsupervised open-PR list until claim is held.
+    . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
+    $base = Get-ClaimedReviewStartSnapshot -PrNumber ([int]$Planned.prNumber) -Project $Project -RepoRoot $RepoRoot `
+        -ClaimResult $ClaimResult -ResolveChecksBundle {
+        param($openPrs, $prNumber, $repoRoot)
+        Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @(
+            @($openPrs | Where-Object { [int]$_.number -eq $prNumber })
+        )
+    }
+    return $base
+}
+

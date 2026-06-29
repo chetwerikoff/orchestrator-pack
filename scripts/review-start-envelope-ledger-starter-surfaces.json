@@ -1,0 +1,30 @@
+{
+  "version": "review-start-envelope-ledger-starter-surfaces/v1",
+  "mandatoryPreflightMarkers": [
+    "Get-ClaimedReviewStartSnapshot",
+    "Get-ClaimedReviewStartReevalFreshSnapshot",
+    "Invoke-ReviewStartSupervisedGh"
+  ],
+  "surfaces": [
+    {
+      "id": "orchestrator_turn",
+      "path": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
+    },
+    {
+      "id": "review-trigger-reconcile",
+      "path": "scripts/review-trigger-reconcile.ps1"
+    },
+    {
+      "id": "review-wake-trigger",
+      "path": "scripts/lib/Invoke-ReviewWakeTrigger.ps1"
+    },
+    {
+      "id": "review-trigger-reeval",
+      "path": "scripts/lib/Invoke-ReviewTriggerReeval.ps1"
+    },
+    {
+      "id": "review-ready-report-state-seed",
+      "path": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1"
+    }
+  ]
+}

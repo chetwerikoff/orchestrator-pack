@@ -136,6 +136,14 @@ function Confirm-ReviewStartClaimLaunchGate {
         $reason = if ([string]$pending.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$pending.reason }
         return @{ ok = $false; reason = $reason }
     }
+    try {
+        . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+        Reset-ReviewStartEnvelopeLedgerForPreflightSuccess -Namespace $ClaimResult.namespace `
+            -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha) | Out-Null
+    }
+    catch {
+        Write-Warning "review-start-envelope-ledger preflight reset failed: $_"
+    }
     return @{ ok = $true }
 }
 

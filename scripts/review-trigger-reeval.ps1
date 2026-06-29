@@ -205,10 +205,10 @@ function Invoke-ReviewTriggerReevalTick {
                     StateRoot            = $StateRoot
                     ProjectId            = $ProjectId
                     ResolveFreshSnapshot = {
-                        param($planned)
-                        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
-                        $targetPr = @($openPrs | Where-Object { [int]$_.number -eq $planned.prNumber })
-                        Get-ReviewTriggerReevalSnapshot -OpenPrs $targetPr -ScopedOnly
+                        param($planned, $claimResult)
+                        . (Join-Path $PSScriptRoot 'lib/Get-ClaimedReviewStartSnapshot.ps1')
+                        Get-ClaimedReviewStartReevalFreshSnapshot -Planned $planned -ClaimResult $claimResult `
+                            -Project $ProjectId -RepoRoot $RepoRoot
                     }
                     DryRun               = $DryRunMode
                     LogWriter            = { param([string]$Message) Write-ReviewTriggerReevalLog $Message }
