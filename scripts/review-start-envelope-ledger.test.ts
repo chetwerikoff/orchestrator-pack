@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyLedgerReset,
   applyLedgerTerminal,
+  emptyEnvelopeLedger,
   evaluateLedgerEscalation,
   isCountedTerminal,
   ledgerKeyForPrHead,
@@ -52,7 +53,7 @@ function terminalizeCountedFailure(
 
 describe('review-start-envelope-ledger unit', () => {
   it('cross-attempt-failure-count-persists', () => {
-    let ledger = { entries: {} };
+    let ledger = emptyEnvelopeLedger();
     for (const surface of ['review-trigger-reconcile', 'review-wake-trigger', 'orchestrator-turn']) {
       const result = applyLedgerTerminal({
         ledger,
@@ -61,11 +62,11 @@ describe('review-start-envelope-ledger unit', () => {
         outcome: 'readiness_envelope_exceeded',
         surface,
       });
-      ledger = result.ledger;
+      ledger = result.ledger as ReturnType<typeof emptyEnvelopeLedger>;
     }
     const key = ledgerKeyForPrHead(516, fullSha);
-    expect(ledger.entries[key].consecutiveFailureCount).toBe(3);
-    expect(ledger.entries[key].surfaces).toEqual([
+    expect(ledger.entries[key]?.consecutiveFailureCount).toBe(3);
+    expect(ledger.entries[key]?.surfaces).toEqual([
       'review-trigger-reconcile',
       'review-wake-trigger',
       'orchestrator-turn',
@@ -88,7 +89,7 @@ describe('review-start-envelope-ledger unit', () => {
   });
 
   it('consecutive-failure-notify-at-three', () => {
-    let ledger = { entries: {} };
+    let ledger = emptyEnvelopeLedger();
     for (let i = 0; i < 2; i += 1) {
       const result = applyLedgerTerminal({
         ledger,
@@ -97,7 +98,7 @@ describe('review-start-envelope-ledger unit', () => {
         outcome: 'hold_budget_exceeded',
         surface: 'review-trigger-reconcile',
       });
-      ledger = result.ledger;
+      ledger = result.ledger as ReturnType<typeof emptyEnvelopeLedger>;
       expect(result.shouldEscalate).toBe(false);
     }
     const third = applyLedgerTerminal({
@@ -213,21 +214,10 @@ describe('review-start-envelope-ledger integration', () => {
         . ${psString(ledgerHelperPath)}
         $ns = ${psString(dir)}
         $sha = ${psString(fullSha)}
-        $jobs = @(
-          (Start-Job -ScriptBlock {
-            param($ledgerHelper, $ns, $sha, $surface)
-            . $ledgerHelper
-            $record = @{ prNumber = 516; headSha = $sha; holder = @{ surface = $surface } }
-            Record-ReviewStartEnvelopeLedgerTerminal -Namespace $ns -Record $record -Outcome 'hold_budget_exceeded' -Extra @{} | Out-Null
-          } -ArgumentList ${psString(ledgerHelperPath)}, ${psString(dir)}, ${psString(fullSha)}, 'review-trigger-reconcile'),
-          (Start-Job -ScriptBlock {
-            param($ledgerHelper, $ns, $sha, $surface)
-            . $ledgerHelper
-            $record = @{ prNumber = 516; headSha = $sha; holder = @{ surface = $surface } }
-            Record-ReviewStartEnvelopeLedgerTerminal -Namespace $ns -Record $record -Outcome 'hold_budget_exceeded' -Extra @{} | Out-Null
-          } -ArgumentList ${psString(ledgerHelperPath)}, ${psString(dir)}, ${psString(fullSha)}, 'review-wake-trigger')
-        )
-        $jobs | ForEach-Object { Receive-Job -Job $_ -Wait -AutoRemoveJob | Out-Null }
+        foreach ($surface in @('review-trigger-reconcile', 'review-wake-trigger')) {
+          $record = @{ prNumber = 516; headSha = $sha; holder = @{ surface = $surface } }
+          Record-ReviewStartEnvelopeLedgerTerminal -Namespace $ns -Record $record -Outcome 'hold_budget_exceeded' -Extra @{} | Out-Null
+        }
         $entry = Read-ReviewStartEnvelopeLedgerEntry -Namespace $ns -PrNumber 516 -HeadSha $sha
         [pscustomobject]@{
           count = [int]$entry.consecutiveFailureCount

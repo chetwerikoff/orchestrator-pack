@@ -51,7 +51,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             @($FixtureSnapshot.reviewRuns)
         }
         elseif ($ResolveFreshSnapshot) {
-            @(Get-AoReviewRuns -Project $ProjectId)
+            @((& $ResolveFreshSnapshot $planned).reviewRuns)
         }
         else {
             @()
