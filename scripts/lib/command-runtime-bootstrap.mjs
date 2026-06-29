@@ -59,14 +59,6 @@ export const RECOVERY_DUPLICATION_PATTERNS = Object.freeze([
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_PACK_ROOT = resolve(PACK_SCRIPTS_DIR, '..');
 
-const PWSH_TRUSTED_CANDIDATES = [
-  '/usr/local/bin/pwsh',
-  '/usr/bin/pwsh',
-  '/opt/microsoft/powershell/7/pwsh',
-];
-
-const NODE_TRUSTED_CANDIDATES = ['/usr/local/bin/node', '/usr/bin/node'];
-
 /**
  * @param {string} packScriptsDir
  * @param {string} [inheritedPath]
@@ -123,11 +115,6 @@ function resolveExecutableOnPath(pathValue, name) {
  * @param {string} [pathValue]
  */
 function resolvePwsh(pathValue = '') {
-  for (const candidate of PWSH_TRUSTED_CANDIDATES) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
   return resolveExecutableOnPath(pathValue, 'pwsh');
 }
 
@@ -135,11 +122,6 @@ function resolvePwsh(pathValue = '') {
  * @param {string} [pathValue]
  */
 function resolveNode(pathValue = '') {
-  for (const candidate of NODE_TRUSTED_CANDIDATES) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
   return resolveExecutableOnPath(pathValue, 'node');
 }
 
@@ -374,7 +356,10 @@ export function scanRecoveryDuplication(text, filePath) {
  * @param {string} packRoot
  */
 export function runLiveCommandRuntimePreflight(packRoot = DEFAULT_PACK_ROOT) {
-  const result = evaluateCommandRuntimePreflight({ packRoot });
+  const result = evaluateCommandRuntimePreflight({
+    packRoot,
+    effectivePath: process.env.PATH ?? '',
+  });
   if (!result.ok) {
     process.stderr.write(`${result.diagnostic}\n`);
     process.exit(1);

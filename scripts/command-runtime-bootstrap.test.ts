@@ -35,20 +35,12 @@ describe('command-runtime bootstrap (#532)', () => {
     const result = evaluateCommandRuntimePreflight({
       packRoot,
       packScriptsDir: packScripts,
-      effectivePath: buildCommandRuntimePath(packScripts, '/usr/bin:/bin'),
-      tools: {
-        pwsh: null,
-        node: '/usr/bin/node',
-        packGh: join(packScripts, 'gh'),
-        firstGh: join(packScripts, 'gh'),
-        nativeGh: '/usr/bin/gh',
-      },
+      effectivePath: packScripts,
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('missing_pwsh');
     expect(result.diagnostic).toMatch(/missing tool pwsh/);
-    expect(result.pathClass).toContain('pack-scripts');
-    expect(result.pathClass).toContain('usr-bin');
+    expect(result.pathClass).toBe('pack-scripts');
   });
 
   it('validates pack gh is first on PATH and native gh resolves', () => {
@@ -106,6 +98,16 @@ describe('command-runtime bootstrap (#532)', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toMatch(/\[PASS\] command-runtime bootstrap preflight/);
+  });
+
+  it('live preflight fails closed on the actual command PATH without pack scripts first', () => {
+    const cli = join(packScripts, 'lib', 'command-runtime-bootstrap.mjs');
+    const result = spawnSync(process.execPath, [cli, 'livePreflight', '--pack-root', packRoot], {
+      env: { ...process.env, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/pack scripts\/gh must be first|missing tool/);
   });
 
   it('keeps stderr separate from stdout JSON parsing', () => {
