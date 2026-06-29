@@ -15,7 +15,7 @@ import {
   pathIsUnderCanonicalPrefix,
 } from '../docs/spawn-worktree-grant.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
-import { autonomousSpawnProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
+import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 import { repoRoot, runPwsh, psString } from './_test-pwsh-helpers.js';
 import { withTempGitRepo, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { execFileSync } from 'node:child_process';
@@ -320,7 +320,7 @@ describe('spawn worktree grant (#470)', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);

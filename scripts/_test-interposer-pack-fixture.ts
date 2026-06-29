@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -41,6 +41,10 @@ export function stripInterposerBashEnvBlockers(env: NodeJS.ProcessEnv) {
     __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: _sb,
     __AO_AUTONOMOUS_BASH_INTERPOSED: _bi,
     AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: _as,
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode,
+    AO_SPAWN_WORKTREE_GRANT_ID: _grantId,
+    GIT_SYSTEM_BINARY: _gitSystem,
+    GIT_REAL_BINARY: _gitReal,
     ...rest
   } = env;
   return rest;
@@ -127,7 +131,43 @@ export function spawnIsolatedOrchestratorBash(
   args: string[],
   extraEnv: Record<string, string | undefined> = {},
   cwd = pack.packRoot,
+  pathOptions: { pathPrepend?: string[]; pathSuffix?: string } = {},
 ) {
+  const { PATH: pathOverride, ...restEnv } = extraEnv;
+  const pathPrepend = pathOptions.pathPrepend ?? [];
+  const pathSuffix =
+    pathOptions.pathSuffix ?? (typeof pathOverride === 'string' ? pathOverride : undefined);
+  const segments = [
+    ...pathPrepend.filter(Boolean),
+    pack.scriptsDir,
+    ...(pathSuffix
+      ? pathSuffix
+          .split(':')
+          .map((segment) => segment.trim())
+          .filter(Boolean)
+      : []),
+    ...(() => {
+      const utilitySegments = new Set<string>(['/usr/bin', '/bin']);
+      for (const segment of (process.env.PATH ?? '').split(':')) {
+        const trimmed = segment.trim();
+        if (!trimmed) continue;
+        const aoCandidate = path.join(trimmed, 'ao');
+        if (existsSync(aoCandidate)) {
+          try {
+            if ((statSync(aoCandidate).mode & 0o111) !== 0 && path.resolve(aoCandidate) !== path.resolve(pack.aoShimPath)) {
+              continue;
+            }
+          } catch {
+            continue;
+          }
+        }
+        for (const utility of ['pwsh', 'git', 'python3']) {
+          if (existsSync(path.join(trimmed, utility))) utilitySegments.add(trimmed);
+        }
+      }
+      return [...utilitySegments];
+    })(),
+  ];
   return spawnSync('/bin/bash', args, {
     cwd,
     encoding: 'utf8',
@@ -135,7 +175,8 @@ export function spawnIsolatedOrchestratorBash(
       ...stripInterposerBashEnvBlockers(process.env),
       AO_TMUX_NAME: 'opk-orchestrator',
       BASH_ENV: pack.bootstrapPath,
-      ...extraEnv,
+      PATH: segments.join(':'),
+      ...restEnv,
     },
   });
 }
