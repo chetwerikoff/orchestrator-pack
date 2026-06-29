@@ -153,23 +153,24 @@ export function commitOidsEqual(left, right) {
  * @param {object} input
  */
 export function evaluateSpawnWorktreeHeadRefAuthorization(input) {
-  const repoRoot = normalizeRepoRoot(input.repoRoot);
+  const expectedRepoRoot = normalizeRepoRoot(input.expectedRepoRoot ?? input.repoRoot);
+  const actualRepoRoot = normalizeRepoRoot(input.actualRepoRoot ?? input.repoRoot);
   const expectedRefToken = normalizeRefToken(input.expectedRefToken);
   const actualRefToken = normalizeRefToken(input.actualRefToken);
   const expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
 
-  if (!repoRoot) {
+  if (!expectedRepoRoot || !actualRepoRoot) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }
 
   const expectedResolved = expectedCommitOid && FULL_OID.test(expectedCommitOid)
     ? { ok: true, commitOid: expectedCommitOid, refToken: expectedRefToken || expectedCommitOid }
-    : resolveGitCommitRefInRepo(repoRoot, expectedRefToken);
+    : resolveGitCommitRefInRepo(expectedRepoRoot, expectedRefToken);
   if (!expectedResolved.ok) {
     return { ok: false, reason: expectedResolved.reason };
   }
 
-  const actualResolved = resolveGitCommitRefInRepo(repoRoot, actualRefToken);
+  const actualResolved = resolveGitCommitRefInRepo(actualRepoRoot, actualRefToken);
   if (!actualResolved.ok) {
     return { ok: false, reason: actualResolved.reason };
   }

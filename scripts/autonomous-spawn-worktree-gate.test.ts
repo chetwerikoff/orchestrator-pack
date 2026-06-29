@@ -90,7 +90,8 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @()
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
+        sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
@@ -160,7 +161,8 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @()
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
+        sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
@@ -209,7 +211,8 @@ describe('spawn worktree grant (#470)', () => {
         holder = @{ pid = ${holderPid}; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
         extraAuthorizedWorktreeNames = @('opk-race-a','opk-race-b')
         expectedHeadRef = 'HEAD'
-        sourceRepositoryRoot = ${psString(repoRoot)}
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
+        sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
       }
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
@@ -285,6 +288,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: '/tmp/ao/projects/orchestrator-pack/worktrees',
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
       nowMs: Date.parse('2026-01-01T00:00:01Z'),
     });
     expect(verdict.ok).toBe(false);
@@ -380,6 +384,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
@@ -406,6 +411,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
@@ -439,6 +445,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
     });
     expect(consume.ok).toBe(true);
     expect(consume.reason).toBe('spawn_worktree_allow');
@@ -464,6 +471,7 @@ describe('spawn worktree grant (#470)', () => {
         worktreesPrefix: prefix,
         targetPreexists: false,
         effectiveRepositoryRoot: repoRoot,
+        effectiveGitWorktreeRoot: repoRoot,
       });
       expect(consume.ok).toBe(false);
       expect(consume.reason).toBe('worktree_session_basename_invalid');
@@ -503,6 +511,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
     });
     expect(consume.ok).toBe(false);
     expect(consume.reason).toBe('branch_mismatch');
@@ -525,6 +534,7 @@ describe('spawn worktree grant (#470)', () => {
       worktreesPrefix: prefix,
       targetPreexists: false,
       effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
     });
     expect(consume.ok).toBe(false);
     expect(consume.reason).toBe('git_source_global_denied');

@@ -1,6 +1,9 @@
 /**
  * Spawn-owned worktree grant validation (Issue #470).
  */
+import { execFileSync } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import {
   classifySpawnAction,
   gitArgvSubcommandIndex,
@@ -119,10 +122,97 @@ export function gitArgvHasSourceSelectingGlobals(argv) {
   return false;
 }
 
+
+/**
+ * Resolve shared git repository identity for spawn-grant repository binding (#511).
+ *
+ * @param {string} cwd
+ */
+export function resolveGitRepositoryIdentity(cwd) {
+  const workDir = String(cwd ?? '').trim();
+  if (!workDir) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  try {
+    const commonDirRel = execFileSync('git', ['-C', workDir, 'rev-parse', '--git-common-dir'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (!commonDirRel) {
+      return { ok: false, reason: 'repository_root_unresolvable' };
+    }
+    const showToplevel = execFileSync('git', ['-C', workDir, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const commonDirAbs = path.isAbsolute(commonDirRel)
+      ? commonDirRel
+      : path.resolve(workDir, commonDirRel);
+    if (!existsSync(commonDirAbs)) {
+      return { ok: false, reason: 'repository_root_unresolvable' };
+    }
+    let identity = commonDirAbs;
+    try {
+      identity = typeof realpathSync.native === 'function'
+        ? realpathSync.native(commonDirAbs)
+        : realpathSync(commonDirAbs);
+    }
+    catch {
+      identity = realpathSync(commonDirAbs);
+    }
+    return {
+      ok: true,
+      identity: String(identity).replace(/[/\\]+$/, ''),
+      showToplevel: String(showToplevel).trim(),
+      gitCommonDirRaw: commonDirRel,
+    };
+  }
+  catch {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+}
+
 /**
  * @param {string} left
  * @param {string} right
  */
+/**
+ * Resolve the mint/consume cwd git worktree root used for ref/OID resolution (#511).
+ *
+ * @param {string} cwd
+ */
+export function resolveGitWorktreeRoot(cwd) {
+  const workDir = String(cwd ?? '').trim();
+  if (!workDir) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  try {
+    const showToplevel = execFileSync('git', ['-C', workDir, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (!showToplevel) {
+      return { ok: false, reason: 'repository_root_unresolvable' };
+    }
+    let worktreeRoot = showToplevel;
+    try {
+      worktreeRoot = typeof realpathSync.native === 'function'
+        ? realpathSync.native(showToplevel)
+        : realpathSync(showToplevel);
+    }
+    catch {
+      worktreeRoot = realpathSync(showToplevel);
+    }
+    return {
+      ok: true,
+      worktreeRoot: String(worktreeRoot).replace(/[/\\]+$/, ''),
+    };
+  }
+  catch {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+}
+
 export function canonicalRepositoryRootsEqual(left, right) {
   const a = String(left ?? '').replace(/[/\\]+$/, '');
   const b = String(right ?? '').replace(/[/\\]+$/, '');
@@ -133,6 +223,67 @@ export function canonicalRepositoryRootsEqual(left, right) {
     return a.toLowerCase() === b.toLowerCase();
   }
   return a === b;
+}
+
+/**
+ * @param {string} root
+ */
+function normalizeRepositoryIdentityForCompare(root) {
+  const resolved = resolveGitRepositoryIdentity(root);
+  if (resolved.ok) {
+    return { ok: true, identity: resolved.identity };
+  }
+  const candidate = String(root ?? '').trim().replace(/[/\\]+$/, '');
+  if (!candidate || !existsSync(candidate)) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  const normalized = candidate.replace(/\\/g, '/');
+  const base = path.basename(candidate);
+  if (base !== '.git' && !normalized.includes('/.git/')) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  try {
+    const identity = typeof realpathSync.native === 'function'
+      ? realpathSync.native(candidate)
+      : realpathSync(candidate);
+    return { ok: true, identity: String(identity).replace(/[/\\]+$/, '') };
+  }
+  catch {
+    return { ok: true, identity: candidate };
+  }
+}
+
+/**
+ * Compare grant-bound and effective repository roots, accepting legacy
+ * worktree-root grants minted before shared-identity binding (#511).
+ *
+ * @param {string} grantRoot
+ * @param {string} effectiveRoot
+ */
+export function spawnGrantRepositoryRootsEqual(grantRoot, effectiveRoot) {
+  const grant = String(grantRoot ?? '').trim();
+  const effective = String(effectiveRoot ?? '').trim();
+  if (!grant || !effective) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (canonicalRepositoryRootsEqual(grant, effective)) {
+    return { ok: true };
+  }
+  const grantIdentity = normalizeRepositoryIdentityForCompare(grant);
+  const effectiveIdentity = normalizeRepositoryIdentityForCompare(effective);
+  if (!grantIdentity.ok && !effectiveIdentity.ok) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!grantIdentity.ok) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
+  }
+  if (!effectiveIdentity.ok) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+  if (!canonicalRepositoryRootsEqual(grantIdentity.identity, effectiveIdentity.identity)) {
+    return { ok: false, reason: 'repository_root_mismatch' };
+  }
+  return { ok: true };
 }
 
 /**
@@ -308,12 +459,21 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   if (!effectiveRepo) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }
-  if (!canonicalRepositoryRootsEqual(grantRepo, effectiveRepo)) {
-    return { ok: false, reason: 'repository_root_mismatch' };
+  const repoBinding = spawnGrantRepositoryRootsEqual(grantRepo, effectiveRepo);
+  if (!repoBinding.ok) {
+    return { ok: false, reason: repoBinding.reason };
+  }
+
+  const grantRefRepo = String(grant.sourceGitWorktreeRoot ?? grant.sourceRepositoryRoot ?? '').trim();
+  const effectiveRefRepo = String(input.effectiveGitWorktreeRoot ?? '').trim();
+  if (!grantRefRepo || !effectiveRefRepo) {
+    return { ok: false, reason: 'repository_root_unresolvable' };
   }
 
   const headAuth = evaluateSpawnWorktreeHeadRefAuthorization({
-    repoRoot: grantRepo,
+    repoRoot: grantRefRepo,
+    expectedRepoRoot: grantRefRepo,
+    actualRepoRoot: effectiveRefRepo,
     expectedRefToken: String(grant.expectedHeadRef ?? 'HEAD'),
     expectedCommitOid: grant.expectedCommitOid ? String(grant.expectedCommitOid) : '',
     actualRefToken: String(shape.commit),
@@ -409,6 +569,12 @@ export function buildSpawnWorktreeGrantRecord(input) {
   if (!sourceRepositoryRoot) {
     return { ok: false, reason: 'source_repository_missing' };
   }
+  const sourceGitWorktreeRoot = String(
+    input.sourceGitWorktreeRoot ?? input.sourceRepositoryRoot ?? '',
+  ).trim();
+  if (!sourceGitWorktreeRoot) {
+    return { ok: false, reason: 'source_git_worktree_missing' };
+  }
   const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
   const expiresAtUtc = new Date(nowMs + SPAWN_WORKTREE_GRANT_TTL_SECONDS * 1000).toISOString();
   const authorized = deriveSpawnAuthorizedWorktreeNames(
@@ -418,7 +584,7 @@ export function buildSpawnWorktreeGrantRecord(input) {
   const expectedHeadRef = String(input.expectedHeadRef ?? 'HEAD');
   let expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
   if (!expectedCommitOid) {
-    const resolved = resolveGitCommitRefInRepo(sourceRepositoryRoot, expectedHeadRef);
+    const resolved = resolveGitCommitRefInRepo(sourceGitWorktreeRoot, expectedHeadRef);
     if (!resolved.ok) {
       return { ok: false, reason: resolved.reason };
     }
@@ -438,6 +604,7 @@ export function buildSpawnWorktreeGrantRecord(input) {
     expectedCommitOid,
     expectedBranch: input.expectedBranch ? String(input.expectedBranch) : null,
     sourceRepositoryRoot,
+    sourceGitWorktreeRoot,
     mintedAtUtc: new Date(nowMs).toISOString(),
     expiresAtUtc,
     consumed: false,
@@ -507,4 +674,12 @@ runStdinJsonCli('spawn-worktree-grant.mjs', {
   },
   evaluateHeadRefAuthorization: () => evaluateSpawnWorktreeHeadRefAuthorization(readStdinJson()),
   evaluateClaimPrPostCheckout: () => evaluateSpawnClaimPrPostCheckout(readStdinJson()),
+  resolveRepositoryIdentity: () => {
+    const input = readStdinJson();
+    return resolveGitRepositoryIdentity(String(input.cwd ?? ''));
+  },
+  resolveGitWorktreeRoot: () => {
+    const input = readStdinJson();
+    return resolveGitWorktreeRoot(String(input.cwd ?? ''));
+  },
 });

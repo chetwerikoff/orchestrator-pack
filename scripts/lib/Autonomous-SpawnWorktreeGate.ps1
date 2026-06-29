@@ -311,6 +311,31 @@ function Verify-AutonomousSpawnClaimPrPostCheckout {
 
 function Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot {
     try {
+        $commonDirRel = [string](& git rev-parse --git-common-dir 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $commonDirRel) {
+            return @{ ok = $false; reason = 'repository_root_unresolvable' }
+        }
+        $cwd = (Get-Location).Path
+        $commonDirAbs = if ([System.IO.Path]::IsPathRooted($commonDirRel)) {
+            $commonDirRel
+        }
+        else {
+            Join-Path $cwd $commonDirRel
+        }
+        $resolved = Resolve-AutonomousReviewWorktreeExistingAncestorPath -TargetPath $commonDirAbs
+        if (-not $resolved.ok) {
+            return @{ ok = $false; reason = 'repository_root_unresolvable' }
+        }
+        return @{ ok = $true; path = [string]$resolved.path }
+    }
+    catch {
+        return @{ ok = $false; reason = 'repository_root_unresolvable' }
+    }
+}
+
+
+function Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot {
+    try {
         $topLevel = [string](& git rev-parse --show-toplevel 2>$null).Trim()
         if ($LASTEXITCODE -ne 0 -or -not $topLevel) {
             return @{ ok = $false; reason = 'repository_root_unresolvable' }
@@ -362,8 +387,13 @@ function Mint-AutonomousSpawnWorktreeGrant {
         Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
         return @{ ok = $false; reason = [string]$sourceRepo.reason }
     }
+    $sourceWorktree = Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot
+    if (-not $sourceWorktree.ok) {
+        Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
+        return @{ ok = $false; reason = [string]$sourceWorktree.reason }
+    }
     $grantId = [guid]::NewGuid().ToString('n')
-    $baseRef = Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef -RepoRoot ([string]$sourceRepo.path)
+    $baseRef = Resolve-AutonomousSpawnWorktreeDefaultBranchBaseRef -RepoRoot ([string]$sourceWorktree.path)
     if (-not $baseRef.ok) {
         Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
         return @{ ok = $false; reason = [string]$baseRef.reason }
@@ -376,9 +406,10 @@ function Mint-AutonomousSpawnWorktreeGrant {
         extraAuthorizedWorktreeNames = @($extraNames)
         expectedHeadRef              = [string]$baseRef.refToken
         sourceRepositoryRoot         = [string]$sourceRepo.path
+        sourceGitWorktreeRoot        = [string]$sourceWorktree.path
     }
     if ([string]$parsed.action -eq 'claim-pr-resume') {
-        $prHead = Resolve-AutonomousSpawnClaimPrHead -PrNumber $prNumber -SourceRepositoryRoot ([string]$sourceRepo.path) -FixtureMode:([bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE)
+        $prHead = Resolve-AutonomousSpawnClaimPrHead -PrNumber $prNumber -SourceRepositoryRoot ([string]$sourceWorktree.path) -FixtureMode:([bool]$env:AO_SPAWN_WORKTREE_FIXTURE_MODE)
         if (-not $prHead.ok) {
             Release-AutonomousSpawnWorktreeTargetLock -Lock $lock
             return @{ ok = $false; reason = [string]$prHead.reason }
@@ -599,6 +630,7 @@ function Consume-AutonomousSpawnWorktreeGrant {
         }
 
         $effectiveRepo = Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot
+        $effectiveWorktree = Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot
         $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
             grant                     = $read.record
             argv                      = @($Argv)
@@ -606,6 +638,7 @@ function Consume-AutonomousSpawnWorktreeGrant {
             worktreesPrefix           = $prefixResolved.path
             targetPreexists           = [bool]$TargetPreexists
             effectiveRepositoryRoot   = if ($effectiveRepo.ok) { [string]$effectiveRepo.path } else { '' }
+            effectiveGitWorktreeRoot  = if ($effectiveWorktree.ok) { [string]$effectiveWorktree.path } else { '' }
         }
         if (-not $evaluation.ok) {
             return @{ ok = $false; reason = [string]$evaluation.reason }
