@@ -95,7 +95,12 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
 
         $prKey = [string]$planned.prNumber
-        $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
+        $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
+        if ($transportDenial) {
+            $recheck = $transportDenial
+        }
+        else {
+            $recheck = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'preRunRecheck' -Payload @{
             planned = $planned
             fresh   = @{
                 openPrs                     = @($fresh.openPrs)
@@ -106,6 +111,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
             }
         }
+        }
     }
     catch {
         Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
@@ -115,7 +121,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-trigger-reeval: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
         if (-not $DryRun) {
-            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+            Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         }
         return @{
             triggered   = $false

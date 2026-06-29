@@ -39,6 +39,11 @@ function Invoke-OrchestratorClaimedReviewRunPreRecheck {
         [hashtable]$Snapshot
     )
 
+    $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $Snapshot
+    if ($transportDenial) {
+        return $transportDenial
+    }
+
     $prKey = [string]$PlannedAction.prNumber
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:OrchestratorPreRecheckFilterCli `
         -Subcommand 'preRunRecheck' -Payload @{
@@ -157,7 +162,7 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     if (-not $recheck.emitReviewRun) {
-        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         Write-OrchestratorReviewStartDenialAudit -AuditRoot $AuditRoot -PrNumber $PrNumber -HeadSha $headSha `
             -Reason ([string]$recheck.reason) -ClaimOutcome 'covered_abort' | Out-Null
         & $writeLog "orchestrator-claimed-review-run: recheck aborted PR #$PrNumber head=$headSha reason=$($recheck.reason)"

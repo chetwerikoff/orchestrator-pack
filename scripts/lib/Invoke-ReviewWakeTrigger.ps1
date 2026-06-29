@@ -415,7 +415,12 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         else {
             ''
         }
-        $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
+        $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
+        if ($transportDenial) {
+            $recheck = $transportDenial
+        }
+        else {
+            $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
             wakeKind = [string]$FilterResult.wakeKind
             planned  = @{
                 prNumber        = $planned.prNumber
@@ -433,6 +438,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 requiredCheckLookupFailed = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
             }
         }
+        }
     }
     catch {
         Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
@@ -442,7 +448,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-wake-trigger: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
         if (-not $DryRun) {
-            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+            Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         }
         return @{
             triggered = $false

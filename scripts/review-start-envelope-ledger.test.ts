@@ -105,6 +105,52 @@ describe('review-start-envelope-ledger unit', () => {
     ).toBe(false);
   });
 
+  it('pre-run-recheck-snapshot-forwards-transport-failure', () => {
+    const reconcileSrc = readFileSync(path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1'), 'utf8');
+    expect(reconcileSrc).toMatch(/transportFailure\s*=\s*\$claimed\.transportFailure/);
+    expect(reconcileSrc).toMatch(/Get-ReviewStartSupervisedGhInfraTransportRecheckDenial/);
+    expect(reconcileSrc).toMatch(/Complete-ReviewStartClaimPreRunRecheckDenied/);
+  });
+
+  it('pre-run-recheck-supervised-gh-transport-failure-counts-ledger', () => {
+    const dir = tempClaimDir();
+    const fakeGhPath = path.join(
+      repoRoot,
+      'scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1',
+    );
+    const supervisedGhPath = path.join(repoRoot, 'scripts/lib/Review-StartSupervisedGh.ps1');
+    const orchestratorClaimedPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
+    try {
+      const script = `
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'dns_timeout'
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(ledgerHelperPath)}
+        . ${psString(supervisedGhPath)}
+        . ${psString(orchestratorClaimedPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 516 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $snap = Get-OrchestratorClaimedReviewSnapshot -PrNumber 516 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $claim
+        $denial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $snap
+        $null = Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $denial -ReviewRuns @()
+        $entry = Read-ReviewStartEnvelopeLedgerEntry -Namespace $ns -PrNumber 516 -HeadSha $sha
+        [pscustomobject]@{
+          denialReason = [string]$denial.reason
+          counted = [int]$entry.consecutiveFailureCount
+          supervised = [bool]$denial.supervisedGhInfraTransport
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.denialReason).toBe('supervised_gh_transport_failure');
+      expect(result.supervised).toBe(true);
+      expect(result.counted).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reeval-fresh-snapshot-allows-pre-claim', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).not.toContain('requires an acquired claim');

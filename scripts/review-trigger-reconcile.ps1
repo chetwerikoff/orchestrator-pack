@@ -342,6 +342,7 @@ function Get-PreRunRecheckSnapshot {
         [hashtable]$ClaimResult = $null
     )
 
+    $transportFailure = $null
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'lib/Get-ClaimedReviewStartSnapshot.ps1')
         $claimed = Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
@@ -349,6 +350,7 @@ function Get-PreRunRecheckSnapshot {
             param($openPrs, $prNumber, $repoRoot)
             Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @($openPrs)
         }
+        $transportFailure = $claimed.transportFailure
         $openPrs = @($claimed.openPrs)
         $reviewRuns = @($claimed.reviewRuns)
         $sessions = @($claimed.sessions)
@@ -380,6 +382,7 @@ function Get-PreRunRecheckSnapshot {
         workerDeliveries                = Get-ReconcileWorkerDeliveries $deliveryPayload.workerDeliveries
         reactionMessages                = $deliveryPayload.reactionMessages
         reactionConfigUnavailable       = [bool]$deliveryPayload.reactionConfigUnavailable
+        transportFailure                = $transportFailure
     }
 }
 
@@ -416,6 +419,11 @@ function Test-PreRunHeadReadyRecheck {
             emitReviewRun = $false
             reason        = 'reaction_config_unavailable'
         }
+    }
+
+    $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
+    if ($transportDenial) {
+        return $transportDenial
     }
 
     $prKey = [string]$PlannedAction.prNumber
@@ -507,7 +515,7 @@ function Invoke-PlannedReviewRun {
 
     if (-not $recheck.emitReviewRun) {
         Write-ReconcileLog "pre-run re-check aborted review for PR #$PrNumber head=$HeadSha ($($recheck.reason))"
-        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true }
     }
 
