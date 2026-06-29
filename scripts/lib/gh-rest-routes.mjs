@@ -98,17 +98,31 @@ function fetchPull(realGh, repo, prNumber, cwd) {
  * @param {string} ref
  * @returns {number | null}
  */
-function parsePullNumberFromReference(ref) {
+/**
+ * @param {string} ref
+ * @returns {{ prNumber: number, slug?: string, host?: string | null } | null}
+ */
+export function parsePullReference(ref) {
   const trimmed = String(ref).trim();
   const asNum = Number(trimmed);
   if (Number.isFinite(asNum) && asNum > 0 && String(asNum) === trimmed) {
-    return asNum;
+    return { prNumber: asNum };
   }
-  const urlMatch = trimmed.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i);
+
+  const urlMatch = trimmed.match(
+    /^(?:https?:\/\/)?([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?(?:[?#].*)?$/i,
+  );
   if (urlMatch) {
-    const fromUrl = Number(urlMatch[1]);
-    if (Number.isFinite(fromUrl) && fromUrl > 0) {
-      return fromUrl;
+    const [, host, owner, repoName, numStr] = urlMatch;
+    const prNumber = Number(numStr);
+    if (Number.isFinite(prNumber) && prNumber > 0) {
+      const slug = `${owner}/${repoName}`;
+      const normalizedHost = host.toLowerCase();
+      return {
+        prNumber,
+        slug,
+        host: normalizedHost === 'github.com' ? null : host,
+      };
     }
   }
   return null;
@@ -121,9 +135,12 @@ function parsePullNumberFromReference(ref) {
  * @param {string} cwd
  */
 function fetchPullByReference(realGh, repo, ref, cwd) {
-  const prNumber = parsePullNumberFromReference(ref);
-  if (prNumber) {
-    return fetchPull(realGh, repo, prNumber, cwd);
+  const parsed = parsePullReference(ref);
+  if (parsed?.prNumber) {
+    const targetRepo = parsed.slug
+      ? { slug: parsed.slug, host: parsed.host ?? null }
+      : repo;
+    return fetchPull(realGh, targetRepo, parsed.prNumber, cwd);
   }
 
   const perPage = 100;

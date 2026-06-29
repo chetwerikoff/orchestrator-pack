@@ -10,7 +10,7 @@ import {
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
 import * as repoResolve from './lib/gh-repo-resolve.mjs';
 const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } = repoResolve;
-import { executeRestRoute } from './lib/gh-rest-routes.mjs';
+import { executeRestRoute, parsePullReference, routePrView } from './lib/gh-rest-routes.mjs';
 import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
@@ -674,6 +674,47 @@ describe('prInfoFromView wrapper integration (Issue #530)', () => {
     }
   });
 
+
+  it('parsePullReference preserves owner/repo from full PR URLs (review #531)', () => {
+    expect(parsePullReference('https://github.com/other-owner/other-repo/pull/123')).toEqual({
+      prNumber: 123,
+      slug: 'other-owner/other-repo',
+      host: null,
+    });
+    expect(parsePullReference('123')).toEqual({ prNumber: 123 });
+    expect(parsePullReference('feat/branch')).toBeNull();
+  });
+
+  it('routePrView uses URL owner/repo instead of ambient --repo (review #531)', () => {
+    const apiSpy = vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh, endpoint) => {
+      expect(endpoint).toBe('repos/other-owner/other-repo/pulls/123');
+      return SAMPLE_REST_PULL;
+    });
+    try {
+      const result = routePrView(
+        'gh',
+        { slug: 'chetwerikoff/orchestrator-pack', host: 'github.com' },
+        'https://github.com/other-owner/other-repo/pull/123',
+        [...PR_INFO_FROM_VIEW_FIELDS],
+        null,
+        process.cwd(),
+      );
+      expect(result).toMatchObject({ number: 530 });
+      expect(apiSpy).toHaveBeenCalledOnce();
+    } finally {
+      apiSpy.mockRestore();
+    }
+  });
+
+  it('classifies resolvePR argv with full PR URL as pr-view REST route', () => {
+    const { route } = classifyArgv([
+      'pr', 'view', 'https://github.com/other-owner/other-repo/pull/123',
+      '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', PR_INFO_FROM_VIEW_JSON,
+    ]);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prRef).toBe('https://github.com/other-owner/other-repo/pull/123');
+  });
   it('keeps both argv classes off GraphQL passthrough when quota is exhausted', () => {
     expect(classifyArgv(RESOLVE_PR_ARGV).route).not.toBeNull();
     expect(classifyArgv(DETECT_PR_SIX_FIELD_ARGV).route).not.toBeNull();
