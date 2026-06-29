@@ -104,6 +104,16 @@ No operator adoption required beyond the usual supervised-child restart after de
 active claims with legacy acquire-time `holdStartedAtUtc` markers are interpreted as pre-launch
 until launch-pending evidence appears.
 
+## Review-start envelope external I/O pause (Issue #515)
+
+Mandatory pre-launch supervised `gh` transport failures classified as `infra_transport` no longer
+advance the 30s readiness envelope; the liveness reaper uses the same monotonic pause accounting.
+New active claims record `firstAttemptAtMonotonicMs`; uncovered heads terminalize as
+`readiness_attempt_ceiling_exceeded` after five minutes of monotonic attempt age. Tests may inject
+`AO_REVIEW_START_MONOTONIC_NOW_MS` and `AO_REVIEW_START_SUPERVISED_GH_COMMAND`.
+
+No operator adoption required beyond the usual supervised-child restart after deploy.
+
 
 ## LLM-orchestrator claimed review-start gate (Issue #318)
 

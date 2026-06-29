@@ -22,11 +22,12 @@ function Get-OrchestratorClaimedReviewSnapshot {
         [int]$PrNumber,
         [string]$Project,
         [string]$RepoRoot,
-        [hashtable]$FixtureSnapshot
+        [hashtable]$FixtureSnapshot,
+        [hashtable]$ClaimResult
     )
 
     return Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
-        -FixtureSnapshot $FixtureSnapshot -ResolveChecksBundle {
+        -FixtureSnapshot $FixtureSnapshot -ClaimResult $ClaimResult -ResolveChecksBundle {
             param($OpenPrs, $TargetPr, $Root)
             Get-ReconcileChecksByPr -RepoRoot $Root -OpenPrs @(@($OpenPrs | Where-Object { [int]$_.number -eq $TargetPr }))
         }
@@ -140,7 +141,9 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     try {
-        $fresh = if ($FixtureSnapshot) { $FixtureSnapshot } else { Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot }
+        $fresh = if ($FixtureSnapshot) { $FixtureSnapshot } else {
+            Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot -ClaimResult $claim
+        }
         $recheck = Invoke-OrchestratorClaimedReviewRunPreRecheck -PlannedAction @{
             prNumber    = $PrNumber
             headSha     = $headSha
