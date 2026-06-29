@@ -6,8 +6,7 @@ export default defineConfig({
   test: {
     include: ['plugins/**/tests/**/*.test.ts', 'scripts/**/*.test.ts'],
     environment: 'node',
-    // Align with scripts/test-runtime-budget.config.json perTestMs (Issue #488).
-    testTimeout: ci ? 120_000 : 15_000,
+    testTimeout: 15_000,
     // GHA runners occasionally hit vitest-worker onTaskUpdate RPC timeouts when
     // many heavy script integration files run in parallel (all tests pass).
     ...(ci
