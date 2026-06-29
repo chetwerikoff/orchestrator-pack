@@ -372,11 +372,36 @@ function Invoke-ReviewReadyReportStateSeedTick {
         else {
             $plannedRunParams['ResolveFreshSnapshot'] = {
                 param($planned, $claimResult)
-                . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
-                $base = Get-ClaimedReviewStartReevalFreshSnapshot -Planned $planned -ClaimResult $claimResult `
-                    -Project $ProjectId -RepoRoot $RepoRoot
-                $base.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                $base
+                $prNumber = [int]$planned.prNumber
+                if ($claimResult -and $claimResult.acquired) {
+                    . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
+                    $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claimResult -RepoRoot $RepoRoot -GhArguments @(
+                        'pr', 'view', [string]$prNumber, '--json', 'number,headRefOid,baseRefName'
+                    )
+                    if (-not $transport.ok) {
+                        $scoped = @()
+                    }
+                    else {
+                        $scoped = @($transport.stdout | ConvertFrom-Json)
+                    }
+                }
+                else {
+                    $scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($prNumber))
+                }
+                $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
+                    param($payload)
+                    Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
+                        -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
+                }
+                @{
+                    openPrs                       = $scoped
+                    reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
+                    sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
+                    ciChecksByPr                  = $freshChecks.ciChecksByPr
+                    requiredCheckNamesByPr        = $freshChecks.requiredCheckNamesByPr
+                    requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
+                    nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                }
             }
         }
         $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams

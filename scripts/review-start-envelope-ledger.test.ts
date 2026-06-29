@@ -136,6 +136,15 @@ describe('review-start-envelope-ledger unit', () => {
     );
   });
 
+  it('report-state-seed-fresh-snapshot-preserves-terminated-sessions', () => {
+    const seedPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
+    const src = readFileSync(seedPath, 'utf8');
+    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
+    expect(src).toMatch(/Get-AoStatusSessionsIncludingTerminated/);
+    expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
+    expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);
+  });
+
   it('consecutive-failure-notify-at-three', () => {
     let ledger = emptyEnvelopeLedger();
     for (let i = 0; i < 2; i += 1) {
