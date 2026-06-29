@@ -1,0 +1,17 @@
+{
+  "issue_number": 512,
+  "iteration_id": "opk-67",
+  "iteration_id_source": "ao_session",
+  "supersedes": "opk-64",
+  "created_at": "2026-06-29T04:10:00.000Z",
+  "baseline": {
+    "commit_sha": "726393408bd15674ca36b77b6440855f9ff14861",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:79aa03c70c99b6b2b57a8797213adc0bed39e60699a2202cfcf8d86720bad1bc"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}
