@@ -24,10 +24,13 @@ function Get-ClaimedReviewStartSnapshot {
         )
         if (-not $transport.ok) {
             return @{
-                transportFailure = $transport
-                openPrs          = @()
-                reviewRuns       = @(Get-AoReviewRuns -Project $Project)
-                sessions         = @(Get-AoStatusSessions)
+                transportFailure            = $transport
+                openPrs                     = @()
+                reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
+                sessions                    = @(Get-AoStatusSessions)
+                ciChecksByPr                = @{}
+                requiredCheckNamesByPr      = @{}
+                requiredCheckLookupFailedByPr = @{}
             }
         }
         $openPrs = @($transport.stdout | ConvertFrom-Json)

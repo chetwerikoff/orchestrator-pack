@@ -305,6 +305,41 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+  it('claimed-snapshot-transport-failure-returns-pre-recheck-safe-maps', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-snap-transport-'));
+    const monoStart = 6_500_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${monoStart}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'dns_timeout'
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        . ${psString(ghChecksPath)}
+        . ${psString(reconcileChecksPath)}
+        . ${psString(snapshotHelperPath)}
+        . ${psString(orchestratorClaimedPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'orchestrator-turn' -Namespace $ns -ReviewRuns @()
+        $snap = Get-OrchestratorClaimedReviewSnapshot -PrNumber 510 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $claim
+        $recheck = Invoke-OrchestratorClaimedReviewRunPreRecheck -PlannedAction @{
+          prNumber = 510; headSha = $sha; sessionId = 'opk-test'; startReason = 'test'
+        } -Snapshot $snap
+        [pscustomobject]@{
+          hasCiMaps = ($null -ne $snap.ciChecksByPr) -and ($null -ne $snap.requiredCheckNamesByPr) -and ($null -ne $snap.requiredCheckLookupFailedByPr)
+          recheckReason = [string]$recheck.reason
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.hasCiMaps).toBe(true);
+      expect(result.recheckReason).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('hung-gh-and-claim-loss-cleanup', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'envelope-hung-gh-'));
     try {
