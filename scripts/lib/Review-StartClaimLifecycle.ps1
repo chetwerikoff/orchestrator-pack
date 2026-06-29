@@ -613,12 +613,32 @@ function Stop-ReviewStartSupervisedGhChild {
 
 function Invoke-ReviewStartClaimOwnershipLossCleanup {
     param([hashtable]$ClaimResult)
-    if (-not $ClaimResult -or -not $ClaimResult.path) { return }
-    $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-    if (-not $read.ok) { return }
-    $active = $read.record.activeInfraPause
-    if ($active -and $active.supervisedGhPid) {
-        Stop-ReviewStartSupervisedGhChild -Pid ([int]$active.supervisedGhPid) | Out-Null
+    if (-not $ClaimResult -or -not $ClaimResult.claim) { return }
+
+    $stalePid = 0
+    $staleActive = $ClaimResult.claim.activeInfraPause
+    if ($staleActive -and $staleActive.supervisedGhPid) {
+        $parsed = 0
+        if ([int]::TryParse([string]$staleActive.supervisedGhPid, [ref]$parsed) -and $parsed -gt 0) {
+            $stalePid = $parsed
+        }
+    }
+
+    if ($stalePid -le 0 -and $ClaimResult.path) {
+        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
+        if ($read.ok -and [string]$read.record.holder.processGuid -eq [string]$ClaimResult.claim.holder.processGuid) {
+            $diskActive = $read.record.activeInfraPause
+            if ($diskActive -and $diskActive.supervisedGhPid) {
+                $parsed = 0
+                if ([int]::TryParse([string]$diskActive.supervisedGhPid, [ref]$parsed) -and $parsed -gt 0) {
+                    $stalePid = $parsed
+                }
+            }
+        }
+    }
+
+    if ($stalePid -gt 0) {
+        Stop-ReviewStartSupervisedGhChild -Pid $stalePid | Out-Null
     }
 }
 

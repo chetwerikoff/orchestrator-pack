@@ -359,6 +359,52 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+  it('ownership-loss-cleanup-does-not-kill-new-owner-supervised-gh', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-ownership-loss-'));
+    const winnerScript = path.join(dir, 'winner-gh.ps1');
+    writeFileSync(winnerScript, "Start-Sleep -Seconds 30\n");
+    const monoStart = 21_000_000;
+    try {
+      const script = `
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $first = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $stalePid = 42424242
+        $first.claim.activeInfraPause = @{
+          startedMonotonicMs = ${monoStart}
+          supervisedGhPid    = $stalePid
+        }
+        $winner = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', ${psString(winnerScript)}) -PassThru -WindowStyle Hidden
+        Start-Sleep -Milliseconds 300
+        $winnerPid = [int]$winner.Id
+        $record = Get-Content -LiteralPath $first.path -Raw | ConvertFrom-Json
+        $record.activeInfraPause = @{
+          startedMonotonicMs = ${monoStart + 1}
+          supervisedGhPid    = $winnerPid
+        }
+        $record.holder = New-ReviewStartClaimHolder -Surface 'winner-surface'
+        ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $first.path -Encoding UTF8
+        Invoke-ReviewStartClaimOwnershipLossCleanup -ClaimResult $first
+        $winnerAlive = $false
+        try {
+          $null = Get-Process -Id $winnerPid -ErrorAction Stop
+          $winnerAlive = $true
+        }
+        catch { }
+        if ($winnerAlive) {
+          Stop-Process -Id $winnerPid -Force -ErrorAction SilentlyContinue
+        }
+        [pscustomobject]@{ winnerAlive = $winnerAlive } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.winnerAlive).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drains-redirected-gh-output-before-waiting-for-exit', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'envelope-large-stdout-'));
     const monoStart = 7_000_000;
