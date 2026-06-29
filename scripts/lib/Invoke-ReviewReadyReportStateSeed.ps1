@@ -371,23 +371,12 @@ function Invoke-ReviewReadyReportStateSeedTick {
         }
         else {
             $plannedRunParams['ResolveFreshSnapshot'] = {
-                param($planned)
-                $freshOpenPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @([int]$planned.prNumber))
-                $scoped = @($freshOpenPrs)
-                $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
-                    param($payload)
-                    Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
-                        -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
-                }
-                @{
-                    openPrs                       = $scoped
-                    reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
-                    sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
-                    ciChecksByPr                  = $freshChecks.ciChecksByPr
-                    requiredCheckNamesByPr        = $freshChecks.requiredCheckNamesByPr
-                    requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
-                    nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                }
+                param($planned, $claimResult)
+                . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+                $base = Get-ClaimedReviewStartReevalFreshSnapshot -Planned $planned -ClaimResult $claimResult `
+                    -Project $ProjectId -RepoRoot $RepoRoot
+                $base.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                $base
             }
         }
         $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams

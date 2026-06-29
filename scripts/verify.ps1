@@ -1236,6 +1236,22 @@ else {
     Add-Failure 'Missing autonomous review-start capability check (Issue #318)'
 }
 
+$envelopeLedgerStarterCheck = Join-Path $Root 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1'
+if (Test-Path -LiteralPath $envelopeLedgerStarterCheck -PathType Leaf) {
+    & $envelopeLedgerStarterCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Review-start envelope ledger starter-surface supervised gh guard failed (Issue #516)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-start envelope ledger starter-surface guard (Issue #516)'
+}
+
 $autonomousBoundaryCheck = Join-Path $Root 'scripts/check-autonomous-orchestrator-boundary.ps1'
 if (Test-Path -LiteralPath $autonomousBoundaryCheck -PathType Leaf) {
     & $autonomousBoundaryCheck

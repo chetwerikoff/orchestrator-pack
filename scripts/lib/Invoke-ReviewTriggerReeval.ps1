@@ -9,6 +9,7 @@
 . (Join-Path $PSScriptRoot 'Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
 
 function Test-ReviewTriggerReevalForbiddenCommand {
     param([string]$CommandLine)
@@ -50,7 +51,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             @($FixtureSnapshot.reviewRuns)
         }
         elseif ($ResolveFreshSnapshot) {
-            @((& $ResolveFreshSnapshot $planned).reviewRuns)
+            @(Get-AoReviewRuns -Project $ProjectId)
         }
         else {
             @()
@@ -87,7 +88,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             $FixtureSnapshot
         }
         elseif ($ResolveFreshSnapshot) {
-            & $ResolveFreshSnapshot $planned
+            & $ResolveFreshSnapshot $planned $claim
         }
         else {
             throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
@@ -170,7 +171,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {
             $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
-            $postFailureRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @() }
+            $postFailureRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned $claim).reviewRuns) } else { @() }
             Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
             throw $failure
         }
@@ -179,8 +180,8 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         Exit-OrchestratorSideEffectFence -LockPath $lockPath
     }
 
-    $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned).reviewRuns) } else { @($fresh.reviewRuns) }
-    $resolveRuns = if ($ResolveFreshSnapshot) { { @((& $ResolveFreshSnapshot $planned).reviewRuns) } } else { $null }
+    $postRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned $claim).reviewRuns) } else { @($fresh.reviewRuns) }
+    $resolveRuns = if ($ResolveFreshSnapshot) { { @((& $ResolveFreshSnapshot $planned $claim).reviewRuns) } } else { $null }
     $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $postRuns `
         -ResolveReviewRuns $resolveRuns -LogWriter $LogWriter
     if (-not $complete.ok) {
