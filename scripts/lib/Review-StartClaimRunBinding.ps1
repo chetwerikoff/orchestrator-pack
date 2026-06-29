@@ -17,6 +17,18 @@ function Invoke-ReviewStartClaimRunBindingCli {
         -Subcommand $Subcommand -Payload $Payload -Label 'review-start-claim-run-binding' -JsonDepth 30
 }
 
+function Resolve-ReviewStartClaimBindingProjectId {
+    param(
+        [hashtable]$ClaimResult,
+        [string]$ProjectId = ''
+    )
+
+    if ([string]$ProjectId) { return [string]$ProjectId }
+    if ($ClaimResult -and [string]$ClaimResult.projectId) { return [string]$ClaimResult.projectId }
+    if ($ClaimResult -and [string]$ClaimResult.claim.projectId) { return [string]$ClaimResult.claim.projectId }
+    return 'orchestrator-pack'
+}
+
 function Test-AutomatedReviewLaunchClaimGate {
     param(
         [hashtable]$ClaimResult,
@@ -25,6 +37,8 @@ function Test-AutomatedReviewLaunchClaimGate {
         [string]$HeadSha,
         [string]$ProjectId = 'orchestrator-pack'
     )
+
+    $ProjectId = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult -ProjectId $ProjectId
 
     if ($ClaimResult -and $ClaimResult.acquired -and [string]$ClaimResult.claim.state -eq 'active') {
         $claimPr = [int]$ClaimResult.claim.prNumber

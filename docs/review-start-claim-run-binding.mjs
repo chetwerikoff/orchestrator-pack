@@ -58,7 +58,8 @@ function normalizeHeadSha(headSha) {
 }
 
 function normalizeProjectNamespace(projectId) {
-  return String(projectId ?? 'orchestrator-pack').trim().toLowerCase();
+  const normalized = String(projectId ?? 'orchestrator-pack').trim().toLowerCase();
+  return normalized || 'orchestrator-pack';
 }
 
 function normalizeStatus(status) {

@@ -117,8 +117,9 @@ function Confirm-ReviewStartClaimLaunchGate {
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $bindingProjectId = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult
     $bindingGate = Test-AutomatedReviewLaunchClaimGate -ClaimResult $ClaimResult -PrNumber ([int]$ClaimResult.claim.prNumber) `
-        -HeadSha ([string]$ClaimResult.claim.headSha) -ProjectId ([string]$ClaimResult.projectId)
+        -HeadSha ([string]$ClaimResult.claim.headSha) -ProjectId $bindingProjectId
     if (-not $bindingGate.ok) {
         if ($LogWriter) { & $LogWriter "review-start-claim: launch binding denied key=$($ClaimResult.key) reason=$($bindingGate.reason)" }
         return @{ ok = $false; reason = [string]$bindingGate.reason; bindingGate = $bindingGate.gate }
