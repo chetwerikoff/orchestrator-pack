@@ -14,6 +14,7 @@ import {
   parseClaimPrNumberFromSpawnArgv,
   validateAutonomousSpawnPolicy,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
+import { evaluateRecoverySpawnRoute } from '../docs/worker-recovery.mjs';
 import { autonomousBashEnv } from './_test-git-fixture.js';
 import {
   autonomousClaimPrProbeEnv,
@@ -373,5 +374,38 @@ describe('spawn policy guard integration', () => {
       expect(result.status).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
     });
+  });
+});
+
+
+describe('worker recovery spawn policy routing (#522)', () => {
+  it('worker recovery: allowSpawnNew=false denies recovery spawn-new route', () => {
+    const route = evaluateRecoverySpawnRoute({
+      policyLoadOk: true,
+      policy: { allowSpawnNew: false, allowClaimPrResume: true },
+      spawnAction: 'spawn-new',
+    });
+    expect(route.allowed).toBe(false);
+    expect(route.reason).toBe('spawn_new_denied');
+  });
+
+  it('worker recovery: allowClaimPrResume=false denies claim-pr resume', () => {
+    const route = evaluateRecoverySpawnRoute({
+      policyLoadOk: true,
+      policy: { allowSpawnNew: true, allowClaimPrResume: false },
+      spawnAction: 'claim-pr-resume',
+    });
+    expect(route.allowed).toBe(false);
+    expect(route.reason).toBe('claim_pr_resume_denied');
+  });
+
+  it('worker recovery: missing policy fails closed', () => {
+    const route = evaluateRecoverySpawnRoute({
+      policyLoadOk: false,
+      policy: null,
+      spawnAction: 'spawn-new',
+    });
+    expect(route.allowed).toBe(false);
+    expect(route.reason).toBe('spawn_policy_missing_or_unreadable');
   });
 });

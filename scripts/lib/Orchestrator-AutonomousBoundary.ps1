@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 . (Join-Path $PSScriptRoot 'Autonomous-ReviewWorktreeGate.ps1')
 . (Join-Path $PSScriptRoot 'Autonomous-SpawnWorktreeGate.ps1')
+. (Join-Path $PSScriptRoot 'Autonomous-WorkerRecoveryGate.ps1')
 
 $Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
@@ -14,6 +15,7 @@ $Script:SanctionedGitPreflightPatterns = @(
     'reviewer-workspace-preflight.ps1',
     'orchestrator-worktree-preflight.ps1'
 )
+$Script:WorkerRecoveryParentPattern = 'invoke-worker-recovery.ps1'
 $Script:ClaimedReviewRunInvokerPattern = 'Invoke-OrchestratorClaimedReviewRun.ps1'
 $Script:SanctionedGitParentPatterns = @(
     $Script:SanctionedGitPreflightPatterns
@@ -757,6 +759,31 @@ function Test-GitArgvConfigTailIsGetReadOnly {
     return $sawGet
 }
 
+
+function Test-GitArgvIsWorktreeList {
+    param([string[]]$Argv)
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
+    if ($index -ge $Argv.Count) { return $false }
+    if ([string]$Argv[$index] -notmatch '^(?i)worktree$') { return $false }
+    if (($index + 1) -ge $Argv.Count) { return $false }
+    return [string]$Argv[$index + 1] -match '^(?i)list$'
+}
+
+function Test-GitArgvIsWorktreeRemoveForce {
+    param([string[]]$Argv)
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
+    if ($index -ge $Argv.Count) { return $false }
+    if ([string]$Argv[$index] -notmatch '^(?i)worktree$') { return $false }
+    if (($index + 1) -ge $Argv.Count) { return $false }
+    if ([string]$Argv[$index + 1] -notmatch '^(?i)remove$') { return $false }
+    for ($i = $index + 2; $i -lt $Argv.Count; $i++) {
+        if ([string]$Argv[$i] -match '^(?i)(--force|-f)$') { return $true }
+    }
+    return $false
+}
+
 function Test-GitArgvIsMutating {
     param([string[]]$Argv)
 
@@ -774,6 +801,7 @@ function Test-GitArgvIsMutating {
     }
 
     $sub = [string]$Argv[$index]
+    if (Test-GitArgvIsWorktreeList -Argv $Argv) { return $false }
     switch -Regex ($sub) {
         '^(?i)fetch$' {
             if (Test-GitArgvTailHasExactOption -Argv $Argv -StartIndex ($index + 1) -Option '--dry-run') {
@@ -842,6 +870,14 @@ function Test-AutonomousGitDenied {
             return @{ denied = $true; reason = [string]$spawnAllow.reason }
         }
         return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
+    }
+
+    if (Test-GitArgvIsWorktreeRemoveForce -Argv $Argv) {
+        $recoveryAllow = Test-AutonomousWorkerRecoveryGitAllow -Argv $Argv -FixtureParentChain $FixtureParentChain
+        if ($recoveryAllow.allowed) {
+            return @{ denied = $false; reason = 'recovery_worktree_remove_allow' }
+        }
+        return @{ denied = $true; reason = [string]$recoveryAllow.reason }
     }
 
     if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain -Argv $Argv) {

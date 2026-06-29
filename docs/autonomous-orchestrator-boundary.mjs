@@ -104,6 +104,34 @@ export function gitArgvSubcommandIndex(list, startIndex = 0) {
 /**
  * @param {string[]} argv
  */
+
+/**
+ * @param {string[]} argv
+ */
+export function isGitArgvWorktreeList(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index + 1 >= list.length) {
+    return false;
+  }
+  return list[index].toLowerCase() === 'worktree' && list[index + 1].toLowerCase() === 'list';
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function isGitArgvWorktreeRemoveForce(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const index = gitArgvSubcommandIndex(list);
+  if (index + 1 >= list.length || list[index].toLowerCase() !== 'worktree') {
+    return false;
+  }
+  if (list[index + 1].toLowerCase() !== 'remove') {
+    return false;
+  }
+  return list.slice(index + 2).some((token) => token === '--force' || token === '-f');
+}
+
 export function gitSubcommandFromArgv(argv) {
   const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
   const index = gitArgvSubcommandIndex(list);
@@ -218,6 +246,9 @@ export function isMutatingGitArgv(argv) {
   }
   const index = gitArgvSubcommandIndex(list);
   if (index >= list.length) {
+    return false;
+  }
+  if (isGitArgvWorktreeList(list)) {
     return false;
   }
   const sub = list[index].toLowerCase();
@@ -639,6 +670,12 @@ export function evaluateAutonomousGitBoundary(input) {
       return { allowed: true, reason: 'spawn_worktree_allow' };
     }
     return { allowed: false, reason: 'autonomous_mutating_git_denied' };
+  }
+  if (isGitArgvWorktreeRemoveForce(argv)) {
+    if (input.recoveryWorktreeRemoveAllow) {
+      return { allowed: true, reason: 'recovery_worktree_remove_allow' };
+    }
+    return { allowed: false, reason: input.recoveryDenyReason ?? 'autonomous_mutating_git_denied' };
   }
   if (
     input.sanctionedProvenance

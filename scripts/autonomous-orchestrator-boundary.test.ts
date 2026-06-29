@@ -1766,3 +1766,71 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
     }
   });
 });
+
+describe('worker recovery boundary (#522)', () => {
+  it('worktree list recovery boundary: allows list and denies mutating worktree without recovery parent', () => {
+    for (const argv of [['worktree', 'list'], ['worktree', 'list', '--porcelain']]) {
+      const verdict = evaluateAutonomousGitBoundary({ argv, autonomousSurface: true });
+      expect(verdict.allowed).toBe(true);
+      expect(verdict.reason).toBe('read_only_git');
+    }
+    for (const argv of [
+      ['worktree', 'add', '/tmp/wt', 'main'],
+      ['worktree', 'prune'],
+      ['worktree', 'move', '/tmp/a', '/tmp/b'],
+      ['branch', '-m', 'old', 'new'],
+    ]) {
+      const verdict = evaluateAutonomousGitBoundary({ argv, autonomousSurface: true });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toBe('autonomous_mutating_git_denied');
+    }
+    const removeDenied = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', '/tmp/orchestrator-pack/worktrees/opk-522'],
+      autonomousSurface: true,
+    });
+    expect(removeDenied.allowed).toBe(false);
+    expect(removeDenied.reason).toBe('autonomous_mutating_git_denied');
+  });
+
+  it('sanctioned worker recovery parent: allows claim-bound remove and denies spoofed parent', () => {
+    const target = '/tmp/orchestrator-pack/worktrees/opk-522';
+    const allowed = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', target],
+      autonomousSurface: true,
+      recoveryWorktreeRemoveAllow: true,
+    });
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.reason).toBe('recovery_worktree_remove_allow');
+
+    const spoofed = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', target],
+      autonomousSurface: true,
+      parentChain: ['pwsh -File scripts/reviewer-workspace-preflight.ps1'],
+    });
+    expect(spoofed.allowed).toBe(false);
+
+    const prune = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'prune'],
+      autonomousSurface: true,
+      recoveryWorktreeRemoveAllow: true,
+    });
+    expect(prune.allowed).toBe(false);
+  });
+
+  it('worktree list recovery boundary: process-level read-only allow has no filesystem side effects', () => {
+    const { dir } = initCoordinatedIssue324Fixture();
+    try {
+      const before = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      expect(before.status).toBe(0);
+      const result = spawnAutonomousBashTurn(
+        dir,
+        'git worktree list >/dev/null; git worktree list --porcelain >/dev/null; git worktree prune 2>/dev/null || true',
+      );
+      expect(result.status).toBe(0);
+      const after = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      expect(after.stdout).toBe(before.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
