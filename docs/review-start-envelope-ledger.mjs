@@ -49,11 +49,31 @@ function readFailureClass(value) {
 /**
  * @param {object} input
  */
-export function isCountedTerminal(input = {}) {
+function resolveCountedFailureClass(input = {}) {
   const outcome = String(input.outcome ?? '').trim();
   if (COUNTED_TERMINAL_OUTCOMES.includes(outcome)) {
-    return { counted: true, failureClass: outcome };
+    return outcome;
   }
+  if (outcome === 'run_not_visible_fenced') {
+    const extra = /** @type {Record<string, unknown>} */ (input.extra ?? {});
+    const underlying = String(extra.decisionReason ?? extra.reason ?? '').trim();
+    if (COUNTED_TERMINAL_OUTCOMES.includes(underlying)) {
+      return underlying;
+    }
+  }
+  return '';
+}
+
+/**
+ * @param {object} input
+ */
+export function isCountedTerminal(input = {}) {
+  const failureClass = resolveCountedFailureClass(input);
+  if (failureClass) {
+    return { counted: true, failureClass };
+  }
+
+  const outcome = String(input.outcome ?? '').trim();
   if (outcome !== 'released_for_retry') {
     return { counted: false, failureClass: '' };
   }

@@ -68,7 +68,9 @@ function Get-ClaimedReviewStartReevalFreshSnapshot {
     $base = Get-ClaimedReviewStartSnapshot -PrNumber ([int]$Planned.prNumber) -Project $Project -RepoRoot $RepoRoot `
         -ClaimResult $ClaimResult -ResolveChecksBundle {
         param($openPrs, $prNumber, $repoRoot)
-        Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @($openPrs)
+        Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @(
+            @($openPrs | Where-Object { [int]$_.number -eq $prNumber })
+        )
     }
     return $base
 }

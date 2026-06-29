@@ -89,6 +89,22 @@ describe('review-start-envelope-ledger unit', () => {
     ).toBe(false);
   });
 
+  it('counts run_not_visible_fenced when decisionReason is readiness_envelope_exceeded', () => {
+    const counted = isCountedTerminal({
+      outcome: 'run_not_visible_fenced',
+      extra: { decisionReason: 'readiness_envelope_exceeded' },
+    });
+    expect(counted.counted).toBe(true);
+    expect(counted.failureClass).toBe('readiness_envelope_exceeded');
+
+    expect(
+      isCountedTerminal({
+        outcome: 'run_not_visible_fenced',
+        extra: { decisionReason: 'visibility_budget_exceeded' },
+      }).counted,
+    ).toBe(false);
+  });
+
   it('reeval-fresh-snapshot-allows-pre-claim', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).not.toContain('requires an acquired claim');
@@ -111,6 +127,13 @@ describe('review-start-envelope-ledger unit', () => {
     `;
     const result = JSON.parse(runPwsh(script));
     expect(result.reviewRunCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reeval-fresh-snapshot-scopes-checks-to-planned-pr', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    expect(src).toMatch(
+      /Get-ReconcileChecksByPr[\s\S]*Where-Object\s*\{\s*\[int\]\$_.number\s*-eq\s*\$prNumber\s*\}/,
+    );
   });
 
   it('consecutive-failure-notify-at-three', () => {
@@ -159,11 +182,13 @@ describe('review-start-envelope-ledger integration', () => {
     try {
       const first = terminalizeCountedFailure(dir, 'review-trigger-reconcile', 'hold_budget_exceeded');
       const second = terminalizeCountedFailure(dir, 'review-wake-trigger', 'readiness_envelope_exceeded');
-      const third = terminalizeCountedFailure(dir, 'orchestrator-turn', 'readiness_attempt_ceiling_exceeded');
+      const fenced = terminalizeCountedFailure(dir, 'orchestrator-turn', 'run_not_visible_fenced', {
+        decisionReason: 'readiness_envelope_exceeded',
+      });
       expect(first.consecutiveFailureCount).toBe(1);
       expect(second.consecutiveFailureCount).toBe(2);
-      expect(third.consecutiveFailureCount).toBe(3);
-      expect(third.surfaces).toEqual([
+      expect(fenced.consecutiveFailureCount).toBe(3);
+      expect(fenced.surfaces).toEqual([
         'review-trigger-reconcile',
         'review-wake-trigger',
         'orchestrator-turn',
