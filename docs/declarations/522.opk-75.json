@@ -5,13 +5,15 @@
   "supersedes": null,
   "created_at": "2026-06-29T11:34:11.842Z",
   "baseline": {
-    "commit_sha": "7c3d16cffb8e53d8e008a783abcccd9663a44e5a",
+    "commit_sha": "dd5f839e798e2b2f28dd1ef6bc298b7dcdbb46a1",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:e5deaecb962a960d0706750b7e19d8ae5e96dc127b9ed6dfbadd446ab0f9db5b"
+    "active_scope_hash": "sha256:ad428e1fe924981e5d062515cbf6784c153d14c2f9a0e66360eb71881427fc03"
   },
   "declared_paths": [
     "docs/worker-recovery.mjs",
+    "docs/worker-recovery.d.mts",
     "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/autonomous-orchestrator-boundary.d.mts",
     "docs/autonomous-review-start-capabilities.json",
     "scripts/invoke-worker-recovery.ps1",
     "scripts/lib/Autonomous-WorkerRecoveryGate.ps1",
@@ -24,5 +26,21 @@
     "scripts/autonomous-spawn-worktree-gate.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:e5deaecb962a960d0706750b7e19d8ae5e96dc127b9ed6dfbadd446ab0f9db5b",
+      "new_active_scope_hash": "sha256:ad428e1fe924981e5d062515cbf6784c153d14c2f9a0e66360eb71881427fc03",
+      "changed": {
+        "added": [
+          "docs/autonomous-orchestrator-boundary.d.mts",
+          "docs/worker-recovery.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "add worker-recovery and boundary declaration types",
+      "actor": "opk-75",
+      "timestamp": "2026-06-29T12:24:44.064Z",
+      "applied": true
+    }
+  ]
 }
