@@ -9,6 +9,7 @@ import {
   classifyInfraTransportFailure,
   createMonotonicClock,
   closeInfraPauseSegment,
+  clearFirstAttemptOnCoveredHead,
   INFRA_TRANSPORT_FAILURE_CLASS,
 } from '../docs/review-start-envelope-external-io.mjs';
 import {
@@ -23,6 +24,10 @@ const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1')
 const lifecycleHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const supervisedGhPath = path.join(repoRoot, 'scripts/lib/Review-StartSupervisedGh.ps1');
 const fakeGhPath = path.join(repoRoot, 'scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1');
+const snapshotHelperPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
+const orchestratorClaimedPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
+const ghChecksPath = path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1');
+const reconcileChecksPath = path.join(repoRoot, 'scripts/lib/Get-ReconcileChecksByPr.ps1');
 
 function fakeHolder(overrides: Record<string, unknown> = {}) {
   return {
@@ -239,6 +244,65 @@ describe('review-start-envelope-external-io', () => {
     });
     expect(covered.exceeded).toBe(false);
     expect(covered.reason).toBe('covered');
+
+    const staleHeadSha = 'a'.repeat(40);
+    const staleCover = evaluateAttemptCeiling({
+      claim,
+      nowMonotonicMs: startMono + 400_000,
+      reviewRuns: [{ prNumber: 510, targetSha: staleHeadSha, status: 'clean' }],
+      config,
+    });
+    expect(staleCover.reason).not.toBe('covered');
+    expect(staleCover.exceeded).toBe(true);
+
+    const clearStale = clearFirstAttemptOnCoveredHead({
+      claim,
+      reviewRuns: [{ prNumber: 510, targetSha: staleHeadSha, status: 'clean' }],
+    });
+    expect(clearStale.clear).toBe(false);
+    expect(clearStale.reason).toBe('uncovered');
+
+    const clearMatch = clearFirstAttemptOnCoveredHead({
+      claim,
+      reviewRuns: [{ prNumber: 510, targetSha: fullSha, status: 'clean' }],
+    });
+    expect(clearMatch.clear).toBe(true);
+  });
+
+  it('claimed-snapshot-wires-acquired-claim-into-supervised-gh', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-claimed-snap-'));
+    const monoStart = 6_000_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${monoStart}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'dns_timeout'
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        . ${psString(ghChecksPath)}
+        . ${psString(reconcileChecksPath)}
+        . ${psString(snapshotHelperPath)}
+        . ${psString(orchestratorClaimedPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'orchestrator-turn' -Namespace $ns -ReviewRuns @()
+        $snap = Get-OrchestratorClaimedReviewSnapshot -PrNumber 510 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $claim
+        $record = Get-Content -LiteralPath $claim.path -Raw | ConvertFrom-Json
+        $segments = @($record.infraPauseSegments)
+        [pscustomobject]@{
+          transportOk = [bool]$snap.transportFailure.ok
+          pauseSegmentCount = $segments.Count
+          firstShape = [string]$segments[0].shape
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.transportOk).toBe(false);
+      expect(result.pauseSegmentCount).toBeGreaterThan(0);
+      expect(result.firstShape).toBe('dns_timeout');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('hung-gh-and-claim-loss-cleanup', () => {

@@ -20,9 +20,11 @@ function normalizeHeadSha(headSha) {
 
 function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
   const normalized = normalizeHeadSha(headSha);
+  if (!normalized) return null;
   for (const run of Array.isArray(reviewRuns) ? reviewRuns : []) {
     const runPr = Number(run?.prNumber);
     if (!Number.isInteger(runPr) || runPr !== prNumber) continue;
+    if (normalizeHeadSha(run?.targetSha) !== normalized) continue;
     const status = String(run?.status ?? '').trim().toLowerCase();
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     return { run, status, runId: String(run?.id ?? run?.runId ?? '') };
