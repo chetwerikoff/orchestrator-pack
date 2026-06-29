@@ -575,7 +575,12 @@ function expectPrInfoFromViewFields(value: Record<string, unknown>) {
 }
 
 function mockGhApiJsonForPrInfoFromView() {
-  return vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh: string, endpoint: string) => {
+  const ghApiJsonSpy = repoResolve.ghApiJson as (
+    realGh: string,
+    endpoint: string,
+    options?: { hostname?: string | null; cwd?: string },
+  ) => unknown;
+  return vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh, endpoint) => {
     if (endpoint.includes('/pulls/530')) {
       return SAMPLE_REST_PULL;
     }

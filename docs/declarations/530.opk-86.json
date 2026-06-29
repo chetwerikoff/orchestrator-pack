@@ -1,0 +1,27 @@
+{
+  "issue_number": 530,
+  "iteration_id": "opk-86",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-29T15:30:00.000Z",
+  "baseline": {
+    "commit_sha": "6c87ad8ac16c786be62f06bf52358e91e79c7572",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:108c5922a53f70d9f74b008a8300eb0a1907b0ee6b1b0bedc0c499fabdf7425c"
+  },
+  "declared_paths": [
+    "docs/declarations/530.opk-86.json",
+    "scripts/fixtures/gh-pr-info-from-view/fake-gh-api.sh",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.d.mts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-rest-routes.d.mts",
+    "scripts/lib/gh-rest-routes.mjs"
+  ],
+  "declared_globs": [
+    "scripts/**"
+  ],
+  "amendments": []
+}
