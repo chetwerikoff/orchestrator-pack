@@ -357,6 +357,13 @@ function Get-ReviewStartClaimRecordsForNamespace {
         $read = Read-ReviewStartClaimRecord -Path $file.FullName
         if ($read.ok) { $records += $read.record }
     }
+    $terminalDir = Get-ReviewStartClaimTerminalDir -Namespace $Namespace
+    if (Test-Path -LiteralPath $terminalDir -PathType Container) {
+        foreach ($file in Get-ChildItem -LiteralPath $terminalDir -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+            $read = Read-ReviewStartClaimRecord -Path $file.FullName
+            if ($read.ok) { $records += $read.record }
+        }
+    }
     return $records
 }
 

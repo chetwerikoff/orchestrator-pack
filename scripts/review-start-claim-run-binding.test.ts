@@ -302,6 +302,78 @@ describe('review-start-claim-run-binding', () => {
     expect(foreignProjectBinding.outcome).toBe('launch_pending_budget_exceeded');
   });
 
+  it('terminal-reconciled-claim-suppresses-missing-diagnostic', () => {
+    const run = {
+      prNumber: 519,
+      targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      startReason: 'completion_wake',
+      surface: 'review-wake-trigger',
+      packOwnedAutomated: true,
+      reviewerSessionId: 'opk-rev-1072',
+      id: 'review-run-fa05d810-85e6-4f1c-8f06-57d50790c6b5',
+    };
+    const terminalClaim = {
+      state: 'terminal',
+      prNumber: 519,
+      headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      projectId: 'orchestrator-pack',
+      terminalOutcome: 'run_started',
+      boundRunId: 'review-run-fa05d810-85e6-4f1c-8f06-57d50790c6b5',
+    };
+    const result = diagnoseMissingClaimForReviewRun({
+      run,
+      claims: [terminalClaim],
+      detectionPoint: 'worktree_gate',
+    });
+    expect(result.emit).toBe(false);
+    expect(result.reason).toBe('matching_claim_present');
+    expect(result.lineage).toBe('reconciled');
+  });
+
+  it('prefers-covered-run-before-non-covering-match', () => {
+    const claim = {
+      state: 'active',
+      prNumber: 519,
+      headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      projectId: 'orchestrator-pack',
+      launchPending: { atUtc: '2026-06-28T15:44:30.000Z' },
+      launchPendingInvokedAtUtc: '2026-06-28T15:44:30Z',
+    };
+    const reviewRuns = [
+      {
+        id: 'review-run-old-failed',
+        prNumber: 519,
+        targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        project: 'orchestrator-pack',
+        status: 'failed',
+      },
+      {
+        id: 'review-run-current-running',
+        prNumber: 519,
+        targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        project: 'orchestrator-pack',
+        status: 'running',
+      },
+    ];
+    const binding = evaluateLaunchPendingRunBinding({
+      claim,
+      reviewRuns,
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(binding.reconcile).toBe(true);
+    expect(binding.runId).toBe('review-run-current-running');
+    expect(binding.outcome).not.toBe('released_after_run_terminalized');
+
+    const budget = evaluateLaunchPendingBudgetDecision({
+      claim,
+      reviewRuns,
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(budget.action).toBe('reconcile');
+    expect(budget.runId).toBe('review-run-current-running');
+    expect(budget.outcome).not.toBe('released_after_run_terminalized');
+  });
+
   it('positive-outcome: visible AO run reconciles launch-pending claim instead of budget terminalization', () => {
     const fixture = loadFixture('pr519-launch-pending-visible-run.json');
     const binding = evaluateLaunchPendingRunBinding({

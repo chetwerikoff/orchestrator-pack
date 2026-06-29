@@ -289,6 +289,7 @@ function findMatchingRunForClaim(reviewRuns, prNumber, headSha, projectNamespace
   const namespace = normalizeProjectNamespace(projectNamespace);
   let bestInFlight = null;
   let bestTerminal = null;
+  let bestNonCovering = null;
   for (const run of toArray(reviewRuns)) {
     if (!runMatchesBindingKey(run, prNumber, normalized, namespace)) continue;
     const status = normalizeStatus(run?.status);
@@ -302,14 +303,14 @@ function findMatchingRunForClaim(reviewRuns, prNumber, headSha, projectNamespace
       continue;
     }
     if (KNOWN_NON_COVERING_RUN_STATUSES.includes(status)) {
-      return {
+      bestNonCovering = {
         run,
         status,
         runId: String(run?.id ?? run?.runId ?? ''),
       };
     }
   }
-  return bestInFlight ?? bestTerminal ?? null;
+  return bestInFlight ?? bestTerminal ?? bestNonCovering ?? null;
 }
 
 function resolveReviewerCompletion(reviewerEvidence, runId, reviewerSessionId) {
