@@ -288,14 +288,28 @@ export function hermeticSpawnGatePath(
   return [...prepend, pack.scriptsDir, ...suffix, ...hermeticUtilityPathSegments(pack)].join(':');
 }
 
+function assertSpawnGateExecutable(candidate: string, label: string): void {
+  if (!existsSync(candidate)) {
+    throw new Error(`spawn-gate preflight: ${label} missing: ${candidate}`);
+  }
+  try {
+    if ((statSync(candidate).mode & 0o111) === 0) {
+      throw new Error(`spawn-gate preflight: ${label} not executable: ${candidate}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('spawn-gate preflight:')) {
+      throw err;
+    }
+    throw new Error(`spawn-gate preflight: ${label} not accessible: ${candidate}`);
+  }
+}
+
 export function assertSpawnGateIsolationPreflight(pack: InterposerPackFixture): void {
   const configPath = path.join(pack.packRoot, '.ao', 'autonomous-real-binaries.json');
   if (!existsSync(configPath)) {
     throw new Error(`spawn-gate preflight: missing pack-local config at ${configPath}`);
   }
-  if (!existsSync(pack.aoShimPath)) {
-    throw new Error(`spawn-gate preflight: missing pack ao shim at ${pack.aoShimPath}`);
-  }
+  assertSpawnGateExecutable(pack.aoShimPath, 'pack ao shim');
   let configuredAo = '';
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as { ao?: string };
@@ -303,9 +317,10 @@ export function assertSpawnGateIsolationPreflight(pack: InterposerPackFixture): 
   } catch {
     throw new Error(`spawn-gate preflight: invalid JSON at ${configPath}`);
   }
-  if (!configuredAo || !existsSync(configuredAo)) {
-    throw new Error(`spawn-gate preflight: configured ao stub missing or not executable: ${configuredAo}`);
+  if (!configuredAo) {
+    throw new Error('spawn-gate preflight: configured ao stub path empty');
   }
+  assertSpawnGateExecutable(configuredAo, 'configured ao stub');
   const hermeticPath = hermeticSpawnGatePath(pack);
   const resolved = spawnSync('/bin/bash', ['-c', 'command -v ao'], {
     encoding: 'utf8',
@@ -434,7 +449,7 @@ export function assertSpawnGateOutcome(
       expect(receipt).toMatch(/invoked:.*\bspawn\b/);
       return;
     case 'surface-off-allow':
-      expect(result.status).not.toBe(93);
+      expect(result.status).toBe(0);
       expect(probePresent).toBe(false);
       return;
     case 'worker-surface-allow-stub-receipt':

@@ -788,5 +788,12 @@ exec "$REAL_AO" "$@"
     });
   });
 
+  it('spawn-gate preflight fails closed when configured ao stub is not executable', () => {
+    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+      chmodSync(ctx.aoStub, 0o644);
+      expect(() => assertSpawnGateIsolationPreflight(ctx.pack)).toThrow(/not executable/);
+    });
+  });
+
 });
 
