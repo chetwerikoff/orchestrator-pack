@@ -438,6 +438,63 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+
+  it('supervised-gh-kills-child-immediately-on-post-start-ownership-loss', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-post-start-loss-'));
+    const stealScript = path.join(
+      repoRoot,
+      'scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1',
+    );
+    const childPidFile = path.join(dir, 'stolen-gh.pid');
+    const monoStart = 23_000_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${monoStart}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(stealScript)}
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $env:AO_REVIEW_START_TEST_CLAIM_PATH = $claim.path
+        $env:AO_REVIEW_START_TEST_CHILD_PID_FILE = ${psString(childPidFile)}
+        $env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS = '500'
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claim -RepoRoot ${psString(repoRoot)} -GhArguments @() -DeadlineMs 30000
+        $sw.Stop()
+        $childPid = 0
+        if (Test-Path -LiteralPath ${psString(childPidFile)}) {
+          $parsed = 0
+          if ([int]::TryParse((Get-Content -LiteralPath ${psString(childPidFile)} -Raw).Trim(), [ref]$parsed)) {
+            $childPid = $parsed
+          }
+        }
+        $childAlive = $false
+        if ($childPid -gt 0) {
+          try {
+            $null = Get-Process -Id $childPid -ErrorAction Stop
+            $childAlive = $true
+          }
+          catch { }
+        }
+        [pscustomobject]@{
+          reason = [string]$transport.reason
+          elapsedMs = [int64]$sw.ElapsedMilliseconds
+          childAlive = $childAlive
+          childPid = $childPid
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.reason).toBe('claim_ownership_lost');
+      expect(result.childPid).toBeGreaterThan(0);
+      expect(result.childAlive).toBe(false);
+      expect(result.elapsedMs).toBeLessThan(5000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('kills-wrapper-spawned-child-on-supervised-gh-timeout', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'envelope-wrapper-tree-'));
     const childPidFile = path.join(dir, 'wrapper-child.pid');

@@ -100,13 +100,40 @@ function Invoke-ReviewStartSupervisedGh {
     $proc.StartInfo = $psi
     [void]$proc.Start()
     $childPid = $proc.Id
-    Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
+    $delayMs = 0
+    if ([string]$env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS) {
+        [void][int]::TryParse([string]$env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS, [ref]$delayMs)
+    }
+    if ($delayMs -gt 0) { Start-Sleep -Milliseconds $delayMs }
+    $pidUpdate = Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
         activeInfraPause = @{
             startedMonotonicMs = Get-ReviewStartMonotonicNowMs
             supervisedGhPid    = $childPid
             shape              = 'pending'
         }
-    } | Out-Null
+    }
+    if (-not $pidUpdate.ok) {
+        try {
+            if (-not $proc.HasExited) {
+                $proc.Kill($true)
+                $proc.WaitForExit(2000) | Out-Null
+            }
+        }
+        catch { }
+        Stop-ReviewStartSupervisedGhChild -Pid $childPid | Out-Null
+        if ([string]$pidUpdate.reason -eq 'lost_ownership') {
+            return @{
+                ok           = $false
+                reason       = 'claim_ownership_lost'
+                exitCode     = -1
+                stderr       = ''
+                stdout       = ''
+                timedOut     = $false
+                failureClass = ''
+            }
+        }
+        return @{ ok = $false; reason = [string]$pidUpdate.reason; failureClass = '' }
+    }
 
     $streams = Read-ReviewStartSupervisedGhProcessStreams -Process $proc -WaitTimeoutMs $resolvedDeadline -ChildPid $childPid
     $timedOut = [bool]$streams.TimedOut
