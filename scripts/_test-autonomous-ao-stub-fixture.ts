@@ -375,11 +375,11 @@ function hermeticOrchestratorProbeEnv(
     ...probeRest
   } = autonomousSpawnProbeEnv(extraEnv);
   return {
+    ...probeRest,
     AO_SPAWN_WORKTREE_FIXTURE_MODE: '',
     GIT_SYSTEM_BINARY: '',
     GIT_REAL_BINARY: '',
     AO_SPAWN_WORKTREE_GRANT_ID: '',
-    ...probeRest,
   };
 }
 
