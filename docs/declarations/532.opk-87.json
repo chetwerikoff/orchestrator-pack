@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "77c3cecd8f1b3510cfc1d05e3ad204a78e40d0a9",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f6d9501740c2e4a79cc559c8f60af49309e5c0c78a2e0e0920db8228838b6ef6"
+    "active_scope_hash": "sha256:aafd611b3c618e60acbd1a996e6ec0a263983a0d3fee10108b9c574a666b803b"
   },
   "declared_paths": [
     "scripts/lib/command-runtime-bootstrap.mjs",
+    "scripts/lib/command-runtime-bootstrap.d.mts",
     "scripts/orchestrator-command-runtime-preflight.ps1",
     "scripts/check-command-runtime-bootstrap.ps1",
     "scripts/check-command-runtime-forbidden-workaround.ps1",
@@ -22,8 +23,25 @@
     "scripts/invoke-verify-test-backed-smoke.ps1",
     "prompts/agent_rules.md",
     "docs/migration_notes.md",
-    "agent-orchestrator.yaml.example"
+    "agent-orchestrator.yaml.example",
+    "docs/declarations/532.opk-87.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f6d9501740c2e4a79cc559c8f60af49309e5c0c78a2e0e0920db8228838b6ef6",
+      "new_active_scope_hash": "sha256:aafd611b3c618e60acbd1a996e6ec0a263983a0d3fee10108b9c574a666b803b",
+      "changed": {
+        "added": [
+          "docs/declarations/532.opk-87.json",
+          "scripts/lib/command-runtime-bootstrap.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "add TypeScript declarations and declaration self-path",
+      "actor": "opk-87",
+      "timestamp": "2026-06-29T15:48:41.006Z",
+      "applied": true
+    }
+  ]
 }
