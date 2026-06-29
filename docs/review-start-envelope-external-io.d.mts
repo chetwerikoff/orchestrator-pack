@@ -23,6 +23,10 @@ export declare function resolveFirstAttemptMonotonicMs(
   claim: Record<string, unknown> | null | undefined,
 ): number | null;
 
+export declare function resolveReadinessStartMonotonicMs(
+  claim: Record<string, unknown> | null | undefined,
+): number | null;
+
 export declare function sumInfraPauseMs(
   claim: Record<string, unknown> | null | undefined,
   nowMonotonicMs: number,

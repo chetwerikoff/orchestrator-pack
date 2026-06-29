@@ -153,6 +153,15 @@ export function resolveFirstAttemptMonotonicMs(claim) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function resolveReadinessStartMonotonicMs(claim) {
+  const readiness = claim?.readinessStartMonotonicMs;
+  if (readiness != null && readiness !== '') {
+    const parsed = Number(readiness);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return resolveFirstAttemptMonotonicMs(claim);
+}
+
 /**
  * @param {Record<string, unknown> | null | undefined} claim
  * @param {number} nowMonotonicMs
@@ -193,9 +202,9 @@ export function evaluateReadinessEnvelopeWithPause({
   const budgetMs = Number(config?.readinessEnvelopeMs) > 0
     ? Number(config.readinessEnvelopeMs)
     : 30_000;
-  const firstMono = resolveFirstAttemptMonotonicMs(claim);
+  const readinessMono = resolveReadinessStartMonotonicMs(claim);
 
-  if (firstMono == null || !Number.isFinite(nowMonotonicMs)) {
+  if (readinessMono == null || !Number.isFinite(nowMonotonicMs)) {
     const startedMs = Date.parse(String(claim?.acquiredAtUtc ?? ''));
     if (!Number.isFinite(startedMs)) {
       return {
@@ -220,7 +229,7 @@ export function evaluateReadinessEnvelopeWithPause({
     };
   }
 
-  const rawAgeMs = Math.max(0, Number(nowMonotonicMs) - firstMono);
+  const rawAgeMs = Math.max(0, Number(nowMonotonicMs) - readinessMono);
   const pauseMs = sumInfraPauseMs(claim, Number(nowMonotonicMs));
   const ageMs = Math.max(0, rawAgeMs - pauseMs);
   return {

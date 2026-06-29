@@ -16,17 +16,24 @@ function Resolve-ReviewStartSupervisedGhCommand {
 
 function Get-ReviewStartSupervisedGhDeadlineMs {
     param(
-        [hashtable]$ClaimResult,
-        [int]$DefaultCeilingMs = 300000
+        [hashtable]$ClaimResult
     )
+    $config = Get-ReviewStartClaimLifecycleConfig
+    $ceilingMs = 300000
+    if ($config -and $config.config -and $config.config.attemptCeilingMs) {
+        $parsed = 0
+        if ([int]::TryParse([string]$config.config.attemptCeilingMs, [ref]$parsed) -and $parsed -gt 0) {
+            $ceilingMs = $parsed
+        }
+    }
     $read = if ($ClaimResult.path) { Read-ReviewStartClaimRecord -Path $ClaimResult.path } else { @{ ok = $false } }
     $mono = Get-ReviewStartMonotonicNowMs
     if ($read.ok -and $read.record.firstAttemptAtMonotonicMs) {
         $first = [int64]$read.record.firstAttemptAtMonotonicMs
-        $remaining = [Math]::Max(1, $DefaultCeilingMs - ($mono - $first))
+        $remaining = [Math]::Max(1, $ceilingMs - ($mono - $first))
         return $remaining
     }
-    return $DefaultCeilingMs
+    return $ceilingMs
 }
 
 function Read-ReviewStartSupervisedGhProcessStreams {

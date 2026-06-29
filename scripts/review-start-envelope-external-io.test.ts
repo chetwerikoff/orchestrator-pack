@@ -622,6 +622,61 @@ describe('review-start-envelope-external-io', () => {
   });
 
 
+
+  it('readiness-envelope-uses-per-retry-start-after-terminal-reacquire', () => {
+    const config = resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000 });
+    const firstMono = 50_000_000;
+    const laterMono = firstMono + 40_000;
+    const envelope = evaluateReadinessEnvelopeWithPause({
+      claim: {
+        firstAttemptAtMonotonicMs: firstMono,
+        readinessStartMonotonicMs: laterMono,
+        infraPauseSegments: [],
+        acquiredAtUtc: '2026-06-28T12:00:00.000Z',
+      },
+      nowMs: Date.parse('2026-06-28T12:00:41.000Z'),
+      nowMonotonicMs: laterMono + 1_000,
+      config,
+    });
+    expect(envelope.exceeded).toBe(false);
+    expect(envelope.ageMs).toBe(1_000);
+  });
+
+  it('supervised-gh-deadline-honors-configured-attempt-ceiling', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-gh-ceiling-'));
+    const hangScript = path.join(dir, 'hang-gh.ps1');
+    writeFileSync(hangScript, "Start-Sleep -Seconds 120\n");
+    const firstMono = 10_000_000;
+    const nowMono = firstMono + 50_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_CLAIM_ATTEMPT_CEILING_MS = '60000'
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${firstMono}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(hangScript)}
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${nowMono}'
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claim -RepoRoot ${psString(repoRoot)} -GhArguments @()
+        $sw.Stop()
+        [pscustomobject]@{
+          timedOut = [bool]$transport.timedOut
+          elapsedMs = [int64]$sw.ElapsedMilliseconds
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.timedOut).toBe(true);
+      expect(result.elapsedMs).toBeLessThan(20_000);
+      expect(result.elapsedMs).toBeGreaterThan(1_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('corrupt-run-evidence-blocks-before-attempt-ceiling', () => {
     const config = resolveClaimLifecycleConfig({ attemptCeilingMs: 300_000 });
     const startMono = 10_000_000;

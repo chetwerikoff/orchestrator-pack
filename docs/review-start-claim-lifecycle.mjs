@@ -11,6 +11,7 @@ import {
   evaluateReadinessEnvelopeWithPause,
   getMonotonicNowMs,
   resolveFirstAttemptMonotonicMs,
+  resolveReadinessStartMonotonicMs,
 } from './review-start-envelope-external-io.mjs';
 import {
   asRecord,
@@ -290,7 +291,7 @@ export function evaluateReadinessEnvelope({
 }) {
   const mono = Number.isFinite(nowMonotonicMs)
     ? Number(nowMonotonicMs)
-    : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
+    : (resolveReadinessStartMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
   return evaluateReadinessEnvelopeWithPause({
     claim,
     nowMs,
