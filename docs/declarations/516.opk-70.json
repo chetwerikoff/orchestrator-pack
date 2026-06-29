@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "7fb1d470589b765ff509fd24a4bd09cac71e2b4f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8b1f9479fcc19e30289429f5fdd703ce3cbafa6627810d7e75852090ebb20e10"
+    "active_scope_hash": "sha256:0eb14bcfbeaa6318e31f0b32c8cf655f1c0f9aa3df0b76986c58af932b2ecb09"
   },
   "declared_paths": [
     "docs/review-start-envelope-external-io.mjs",
@@ -26,8 +26,24 @@
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
     "scripts/verify.ps1",
-    "docs/declarations/516.opk-70.json"
+    "docs/declarations/516.opk-70.json",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:8b1f9479fcc19e30289429f5fdd703ce3cbafa6627810d7e75852090ebb20e10",
+      "new_active_scope_hash": "sha256:0eb14bcfbeaa6318e31f0b32c8cf655f1c0f9aa3df0b76986c58af932b2ecb09",
+      "changed": {
+        "added": [
+          "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Add orchestrator-turn pre-run recheck transport-failure handling (review opk-rev-1119)",
+      "actor": "opk-77",
+      "timestamp": "2026-06-29T13:55:54.842Z",
+      "applied": true
+    }
+  ]
 }

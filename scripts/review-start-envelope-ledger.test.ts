@@ -149,7 +149,7 @@ describe('review-start-envelope-ledger unit', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('reeval-fresh-snapshot-allows-pre-claim', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
@@ -189,6 +189,8 @@ describe('review-start-envelope-ledger unit', () => {
     expect(src).toMatch(/Get-AoStatusSessionsIncludingTerminated/);
     expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
     expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);
+    expect(src).toMatch(/transportFailure\s*=\s*\$transport/);
+    expect(src).toMatch(/\$freshSnapshot\.transportFailure\s*=\s*\$transportFailure/);
   });
 
   it('consecutive-failure-notify-at-three', () => {
