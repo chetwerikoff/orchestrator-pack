@@ -569,6 +569,51 @@ function Get-ReviewStartClaimPriorFirstAttemptMonotonicMs {
     return 0
 }
 
+
+function Test-ReviewStartClaimTerminalOutcomeRetryEligible {
+    param([string]$Outcome)
+    $eligible = @{
+        recovered_stale                 = $true
+        recovered_orphan_liveness       = $true
+        released_for_retry              = $true
+        released_after_run_terminalized = $true
+        aborted_by_recheck              = $true
+        hold_budget_exceeded            = $true
+        readiness_envelope_exceeded     = $true
+        operator_resolved_rearmed         = $true
+    }
+    return $eligible.ContainsKey($Outcome) -and $eligible[$Outcome]
+}
+
+function Get-ReviewStartClaimPriorFirstAttemptFromRetryEligibleTerminals {
+    param(
+        [string]$Namespace,
+        [string]$Key
+    )
+    $terminalDir = Get-ReviewStartClaimTerminalDir -Namespace $Namespace
+    if (-not (Test-Path -LiteralPath $terminalDir)) { return 0 }
+    $bestMono = 0L
+    $bestAt = [DateTime]::MinValue
+    Get-ChildItem -LiteralPath $terminalDir -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $read = Read-ReviewStartClaimRecord -Path $_.FullName
+        if (-not $read.ok) { return }
+        if ([string]$read.record.key -ne $Key) { return }
+        $outcome = [string]$read.record.outcome
+        if (-not (Test-ReviewStartClaimTerminalOutcomeRetryEligible -Outcome $outcome)) { return }
+        $mono = Get-ReviewStartClaimPriorFirstAttemptMonotonicMs -Record $read.record
+        if ($mono -le 0) { return }
+        $terminalAt = [DateTime]::MinValue
+        if ($read.record.terminalAtUtc) {
+            [void][DateTime]::TryParse([string]$read.record.terminalAtUtc, [ref]$terminalAt)
+        }
+        if ($terminalAt -gt $bestAt -or ($terminalAt -eq $bestAt -and $mono -gt $bestMono)) {
+            $bestAt = $terminalAt
+            $bestMono = $mono
+        }
+    }
+    return $bestMono
+}
+
 function New-ReviewStartClaimActiveRecord {
     param(
         [int]$PrNumber,
@@ -786,7 +831,9 @@ function Acquire-ReviewStartClaim {
                 return @{ acquired = $false; reason = 'ambiguous_claim'; escalation = $true; detail = $existing.reason; path = $path; namespace = $resolved; key = $key }
             }
 
-            $record = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason
+            $priorFirstAttempt = Get-ReviewStartClaimPriorFirstAttemptFromRetryEligibleTerminals -Namespace $resolved -Key $key
+            $record = New-ReviewStartClaimActiveRecord -PrNumber $PrNumber -HeadSha $normalized -Surface $Surface -Reason $StartReason `
+                -PriorFirstAttemptMonotonicMs $priorFirstAttempt
             Write-ReviewStartClaimAtomic -Path $path -Record $record
             if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
                 return Get-ReviewStartClaimLostRaceResult -Path $path -Namespace $resolved -Key $key

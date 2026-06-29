@@ -564,6 +564,76 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+
+  it('corrupt-run-evidence-blocks-before-attempt-ceiling', () => {
+    const config = resolveClaimLifecycleConfig({ attemptCeilingMs: 300_000 });
+    const startMono = 10_000_000;
+    const claim = {
+      state: 'active',
+      key: `pr-510-${fullSha}`,
+      prNumber: 510,
+      headSha: fullSha,
+      firstAttemptAtMonotonicMs: startMono,
+      holder: fakeHolder(),
+      acquiredAtUtc: '2026-06-28T12:00:00.000Z',
+    };
+    const decision = evaluateReclaimDecision({
+      claim,
+      holderLiveness: { outcome: 'alive', reason: 'alive' },
+      reviewRuns: [{ id: 'run-ambiguous', prNumber: 510, targetSha: fullSha, status: 'mystery' }],
+      nowMs: Date.parse('2026-06-28T12:10:00.000Z'),
+      nowMonotonicMs: startMono + 300_001,
+      config,
+    });
+    expect(decision.action).toBe('block');
+    expect(decision.reason).toBe('corrupt_run_store_evidence');
+  });
+
+  it('preserves-first-attempt-monotonic-ms-across-aborted-by-recheck-retry', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-aborted-recheck-'));
+    const firstMono = 60_000_000;
+    const laterMono = firstMono + 120_000;
+    const config = resolveClaimLifecycleConfig({ attemptCeilingMs: 300_000 });
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${firstMono}'
+        . ${psString(claimHelperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $first = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        Complete-ReviewStartClaim -ClaimResult $first -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason='transport_failure' } | Out-Null
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${laterMono}'
+        $retry = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        [pscustomobject]@{
+          acquired = [bool]$retry.acquired
+          recovered = [bool]$retry.recovered
+          firstAttempt = [int64]$retry.claim.firstAttemptAtMonotonicMs
+          readinessStart = [int64]$retry.claim.readinessStartMonotonicMs
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(false);
+      expect(result.firstAttempt).toBe(firstMono);
+      expect(result.readinessStart).toBe(laterMono);
+
+      const ceiling = evaluateAttemptCeiling({
+        claim: {
+          prNumber: 510,
+          headSha: fullSha,
+          firstAttemptAtMonotonicMs: result.firstAttempt,
+        },
+        nowMonotonicMs: laterMono,
+        reviewRuns: [],
+        config,
+      });
+      expect(ceiling.exceeded).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('hold-semantics-481-preserved', () => {
     const result = spawnSync('npm', ['test', '--', 'review-start-claim-budget-semantics'], {
       cwd: repoRoot,

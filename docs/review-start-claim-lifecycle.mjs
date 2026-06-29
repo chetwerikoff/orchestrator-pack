@@ -458,6 +458,14 @@ export function evaluateReclaimDecision({
   }
   const prNumber = Number(claim?.prNumber);
   const headSha = String(claim?.headSha ?? '');
+  const matchingEvidence = evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha);
+  if (corruptEvidence || matchingEvidence.corruptEvidence) {
+    return {
+      action: 'block',
+      reason: 'corrupt_run_store_evidence',
+      ambiguousRuns: matchingEvidence.ambiguousRuns,
+    };
+  }
   const mono = Number.isFinite(nowMonotonicMs)
     ? Number(nowMonotonicMs)
     : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
@@ -476,14 +484,6 @@ export function evaluateReclaimDecision({
         ceiling,
       };
     }
-  }
-  const matchingEvidence = evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha);
-  if (corruptEvidence || matchingEvidence.corruptEvidence) {
-    return {
-      action: 'block',
-      reason: 'corrupt_run_store_evidence',
-      ambiguousRuns: matchingEvidence.ambiguousRuns,
-    };
   }
 
   const covered = findCoveringRunForKey(reviewRuns, prNumber, headSha);
