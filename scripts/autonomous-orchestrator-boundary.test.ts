@@ -29,7 +29,7 @@ import { autonomousBashEnv, gitFixtureEnv, withTempGitRepo } from './_test-git-f
 import {
   assertSpawnGateIsolationPreflight,
   autonomousClaimPrProbeEnv,
-  autonomousSpawnProbeEnv,
+  autonomousSpawnFixtureProbeEnv,
   buildHermeticSpawnGateEnv,
   spawnHermeticBoundaryBash,
   withAoSpawnProbeStub,
@@ -633,7 +633,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           pack,
           ['-c', `source ${pack.bashEnvPath}; ${customAo} spawn opk-1`],
           nonLiveReceiptFile,
-          autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
           dir,
         );
         expect(allowCustomAo.status).toBe(0);
@@ -688,7 +688,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         pack,
         ['-c', `source ${pack.bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
         nonLiveReceiptFile,
-        autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+        autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         dir,
       );
       expect(allowAoVar.status).toBe(0);
@@ -728,7 +728,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
         pack,
         [aoScript],
         nonLiveReceiptFile,
-        autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
+        autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile, BASH_ENV: pack.bashEnvPath }),
         dir,
       );
       expect(allowAoScript.status).toBe(0);
@@ -877,7 +877,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
           encoding: 'utf8',
           env: buildHermeticSpawnGateEnv(
             pack,
-            autonomousSpawnProbeEnv({
+            autonomousSpawnFixtureProbeEnv({
               AO_SPAWN_PROBE_FILE: probeFile,
             }),
           ),

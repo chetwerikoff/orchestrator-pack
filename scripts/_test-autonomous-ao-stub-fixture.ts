@@ -59,9 +59,16 @@ fi
 `;
 }
 
-/** Shallow-checkout-safe spawn probe env for guard integration tests. */
+/** Hermetic spawn-gate env without worktree fixture mode (safe for git-deny probes). */
 export function autonomousSpawnProbeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return autonomousBashEnv({
+    ...overrides,
+  });
+}
+
+/** Spawn probe env with worktree fixture mode enabled (spawn/claim-pr probes only). */
+export function autonomousSpawnFixtureProbeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return autonomousSpawnProbeEnv({
     AO_SPAWN_WORKTREE_FIXTURE_MODE: '1',
     ...overrides,
   });
@@ -69,7 +76,7 @@ export function autonomousSpawnProbeEnv(overrides: NodeJS.ProcessEnv = {}): Node
 
 /** claim-pr spawn probes need a resolvable PR head OID without gh on CI. */
 export function autonomousClaimPrProbeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return autonomousSpawnProbeEnv({
+  return autonomousSpawnFixtureProbeEnv({
     AO_SPAWN_FIXTURE_PR_HEAD_OID: repoHeadOid,
     ...overrides,
   });

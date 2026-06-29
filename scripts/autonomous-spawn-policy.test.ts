@@ -17,7 +17,7 @@ import {
 import { autonomousBashEnv } from './_test-git-fixture.js';
 import {
   autonomousClaimPrProbeEnv,
-  autonomousSpawnProbeEnv,
+  autonomousSpawnFixtureProbeEnv,
   withAoSpawnProbeStub,
 } from './_test-autonomous-ao-stub-fixture.js';
 
@@ -317,7 +317,7 @@ describe('spawn policy guard integration', () => {
         {
           cwd: repoRoot,
           encoding: 'utf8',
-          env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+          env: autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         },
       );
       expect(result.status).toBe(0);
@@ -368,7 +368,7 @@ describe('spawn policy guard integration', () => {
       const result = spawnSync(pack.aoShimPath, ['spawn', 'opk-probe'], {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: autonomousSpawnProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
+        env: autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
       });
       expect(result.status).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
