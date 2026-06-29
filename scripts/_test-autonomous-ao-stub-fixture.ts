@@ -255,15 +255,26 @@ function hermeticUtilityPathSegments(pack: InterposerPackFixture): string[] {
   const segments = new Set<string>(['/usr/bin', '/bin']);
   for (const segment of (process.env.PATH ?? '').split(':')) {
     const trimmed = segment.trim();
-    if (!trimmed || pathSegmentContainsForeignAo(trimmed, pack)) {
+    if (!trimmed) {
       continue;
     }
+    // Pack scriptsDir is always first on hermetic PATH, so trailing segments may
+    // host foreign ao while still supplying pwsh/git/python3 for guarded shims.
     for (const utility of ['pwsh', 'git', 'python3'] as const) {
       if (existsSync(path.join(trimmed, utility))) {
         segments.add(trimmed);
       }
     }
   }
+  const resolvedPwsh = spawnSync('/bin/bash', ['-c', 'command -v pwsh'], {
+    encoding: 'utf8',
+    env: { PATH: [...segments].join(':') },
+  }).stdout
+    .trim();
+  if (resolvedPwsh) {
+    segments.add(path.dirname(resolvedPwsh));
+  }
+  void pack;
   return [...segments];
 }
 
