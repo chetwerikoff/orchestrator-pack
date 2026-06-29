@@ -1,0 +1,29 @@
+{
+  "issue_number": 532,
+  "iteration_id": "opk-87",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-29T15:47:39.349Z",
+  "baseline": {
+    "commit_sha": "77c3cecd8f1b3510cfc1d05e3ad204a78e40d0a9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f6d9501740c2e4a79cc559c8f60af49309e5c0c78a2e0e0920db8228838b6ef6"
+  },
+  "declared_paths": [
+    "scripts/lib/command-runtime-bootstrap.mjs",
+    "scripts/orchestrator-command-runtime-preflight.ps1",
+    "scripts/check-command-runtime-bootstrap.ps1",
+    "scripts/check-command-runtime-forbidden-workaround.ps1",
+    "scripts/command-runtime-bootstrap.test.ts",
+    "scripts/autonomous-orchestrator-surface-bootstrap.sh",
+    "scripts/gh",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/verify.ps1",
+    "scripts/invoke-verify-test-backed-smoke.ps1",
+    "prompts/agent_rules.md",
+    "docs/migration_notes.md",
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
