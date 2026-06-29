@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Review-start claim ↔ AO review run lifecycle binding (Issue #521).
+  Review-start claim and claimed review-start lifecycle binding (Issue #521).
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
