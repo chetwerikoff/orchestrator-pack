@@ -173,7 +173,7 @@ describe('worker recovery claim lifecycle', () => {
       'utf8',
     );
     expect(claimText).not.toMatch(/File\]::Move\(\$tmp, \$Path, \$/);
-    expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
+    expect(claimText).toMatch(/AllowOverwrite[\s\S]*Move-Item -LiteralPath \$tmp -Destination \$Path -Force/);
   });
 });
 

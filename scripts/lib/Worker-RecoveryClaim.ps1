@@ -86,20 +86,22 @@ function Write-WorkerRecoveryAtomic {
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
+    if (-not $AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw [System.IO.IOException]::new("claim already exists: $Path")
+    }
     $tmp = Join-Path $parent ".$([guid]::NewGuid().ToString('n')).tmp"
-    ($Record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $tmp -Encoding UTF8
     try {
-        if ($AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            Remove-Item -LiteralPath $Path -Force
+        ($Record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $tmp -Encoding UTF8
+        if ($AllowOverwrite) {
+            Move-Item -LiteralPath $tmp -Destination $Path -Force
         }
-        [System.IO.File]::Move($tmp, $Path)
+        else {
+            [System.IO.File]::Move($tmp, $Path)
+        }
     }
     catch {
         if (Test-Path -LiteralPath $tmp) {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        }
-        if (-not $AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            throw [System.IO.IOException]::new("claim already exists: $Path")
         }
         throw
     }
