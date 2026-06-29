@@ -154,6 +154,19 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
     });
   });
 
+  it('allows split expectedRepoRoot/actualRepoRoot without legacy repoRoot', () => {
+    setupSpawnRepo(({ repo, baseRef }) => {
+      const auth = evaluateSpawnWorktreeHeadRefAuthorization({
+        expectedRepoRoot: repo,
+        actualRepoRoot: repo,
+        expectedRefToken: 'HEAD',
+        actualRefToken: baseRef,
+      });
+      expect(auth.ok).toBe(true);
+      expect(auth.reason).toBe('head_ref_oid_allow');
+    });
+  });
+
   it('denies different commit, unresolvable, ambiguous, and wrong-repo refs', () => {
     setupSpawnRepo(({ repo, mainOid, baseRef }) => {
       writeFileSync(path.join(repo, 'other.txt'), 'other\n');

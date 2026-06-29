@@ -153,14 +153,13 @@ export function commitOidsEqual(left, right) {
  * @param {object} input
  */
 export function evaluateSpawnWorktreeHeadRefAuthorization(input) {
-  const fallbackRepoRoot = normalizeRepoRoot(input.repoRoot);
   const expectedRepoRoot = normalizeRepoRoot(input.expectedRepoRoot ?? input.repoRoot);
   const actualRepoRoot = normalizeRepoRoot(input.actualRepoRoot ?? input.repoRoot);
   const expectedRefToken = normalizeRefToken(input.expectedRefToken);
   const actualRefToken = normalizeRefToken(input.actualRefToken);
   const expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
 
-  if (!fallbackRepoRoot || !expectedRepoRoot || !actualRepoRoot) {
+  if (!expectedRepoRoot || !actualRepoRoot) {
     return { ok: false, reason: 'repository_root_unresolvable' };
   }
 
