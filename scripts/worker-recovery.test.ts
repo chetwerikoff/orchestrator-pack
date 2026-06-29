@@ -147,6 +147,34 @@ describe('worker recovery claim lifecycle', () => {
     const result = JSON.parse(runPwsh(script));
     expect(result.auditCount).toBe(1);
   });
+
+  it('worker recovery claim lifecycle: claim phase update overwrites active claim under Stop', () => {
+    const ns = tempNs();
+    const claimKey = 'worker-opk-phase';
+    const canonical = '/tmp/orchestrator-pack/worktrees/opk-phase';
+    const script = `
+      $ErrorActionPreference = 'Stop'
+      . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $claim = Acquire-WorkerRecoveryClaim -ClaimKey ${psString(claimKey)} -Surface 'test' -CanonicalPath ${psString(canonical)} -BoundCandidates @(${psString(canonical)})
+      if (-not $claim.acquired) { throw 'expected claim acquisition' }
+      $updated = Update-WorkerRecoveryClaimPhase -Path $claim.path -Record $claim.record -Phase 'cleanup_pending'
+      $read = Read-WorkerRecoveryClaimRecord -Path $claim.path
+      [pscustomobject]@{ phase = [string]$updated.phase; persistedPhase = [string]$read.record.phase } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.phase).toBe('cleanup_pending');
+    expect(result.persistedPhase).toBe('cleanup_pending');
+  });
+
+  it('worker recovery claim lifecycle: uses PS 5.1-compatible claim overwrite without File.Move(source, dest, overwrite)', () => {
+    const claimText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1'),
+      'utf8',
+    );
+    expect(claimText).not.toMatch(/File\]::Move\(\$tmp, \$Path, \$/);
+    expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
+  });
 });
 
 describe('worker recovery post-claim revalidation', () => {

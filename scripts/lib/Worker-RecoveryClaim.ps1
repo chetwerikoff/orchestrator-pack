@@ -79,7 +79,8 @@ function New-WorkerRecoveryHolder {
 function Write-WorkerRecoveryAtomic {
     param(
         [string]$Path,
-        [hashtable]$Record
+        [hashtable]$Record,
+        [switch]$AllowOverwrite
     )
     $parent = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $parent)) {
@@ -88,10 +89,19 @@ function Write-WorkerRecoveryAtomic {
     $tmp = Join-Path $parent ".$([guid]::NewGuid().ToString('n')).tmp"
     ($Record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $tmp -Encoding UTF8
     try {
-        [System.IO.File]::Move($tmp, $Path, $false)
-    }
-    catch [System.Management.Automation.MethodException] {
+        if ($AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            Remove-Item -LiteralPath $Path -Force
+        }
         [System.IO.File]::Move($tmp, $Path)
+    }
+    catch {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $AllowOverwrite -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw [System.IO.IOException]::new("claim already exists: $Path")
+        }
+        throw
     }
 }
 
@@ -232,7 +242,7 @@ function Update-WorkerRecoveryClaimPhase {
     $next.phase = $Phase
     foreach ($key in $Patch.Keys) { $next[$key] = $Patch[$key] }
     $next.updatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-    Write-WorkerRecoveryAtomic -Path $Path -Record $next
+    Write-WorkerRecoveryAtomic -Path $Path -Record $next -AllowOverwrite
     return $next
 }
 
