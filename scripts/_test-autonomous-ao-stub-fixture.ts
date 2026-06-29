@@ -5,7 +5,6 @@ import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_proce
 import { expect } from 'vitest';
 import {
   createIsolatedInterposerPack,
-  spawnIsolatedOrchestratorBash,
   stripInterposerBashEnvBlockers,
   writeIsolatedAutonomousRealBinariesConfig,
   type InterposerPackFixture,
@@ -350,6 +349,28 @@ export function buildHermeticSpawnGateEnv(
   };
 }
 
+
+function buildHermeticOrchestratorBashEnv(
+  pack: InterposerPackFixture,
+  extraEnv: Record<string, string | undefined> = {},
+  pathOptions: { pathPrepend?: string[]; pathSuffix?: string } = {},
+): NodeJS.ProcessEnv {
+  const {
+    PATH: _inheritedPath,
+    AO_SPAWN_WORKTREE_FIXTURE_MODE: _fixtureMode,
+    ...probeRest
+  } = autonomousSpawnProbeEnv(extraEnv);
+  return buildHermeticSpawnGateEnv(
+    pack,
+    {
+      AO_TMUX_NAME: 'opk-orchestrator',
+      BASH_ENV: pack.bootstrapPath,
+      ...probeRest,
+    },
+    pathOptions,
+  );
+}
+
 export function writeSpawnGateAoStub(stubDir: string, kind: SpawnGateStubKind, basename = 'ao-stub.sh'): string {
   const aoStub = path.join(stubDir, basename);
   writeFileSync(aoStub, stubScriptForKind(kind));
@@ -378,16 +399,18 @@ export function spawnHermeticLiveArmedBash(
   pathOptions: { pathPrepend?: string[]; pathSuffix?: string } = {},
 ) {
   assertSpawnGateIsolationPreflight(ctx.pack);
-  return spawnIsolatedOrchestratorBash(
-    ctx.pack,
-    [liveCommandRunner, command],
-    autonomousSpawnProbeEnv({
-      [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
-      ...extraEnv,
-    }),
+  return spawnSync('/bin/bash', [liveCommandRunner, command], {
     cwd,
-    pathOptions,
-  );
+    encoding: 'utf8',
+    env: buildHermeticOrchestratorBashEnv(
+      ctx.pack,
+      {
+        [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
+        ...extraEnv,
+      },
+      pathOptions,
+    ),
+  });
 }
 
 export function spawnHermeticEvalHidden(
@@ -398,16 +421,18 @@ export function spawnHermeticEvalHidden(
   pathOptions: { pathPrepend?: string[]; pathSuffix?: string } = {},
 ) {
   assertSpawnGateIsolationPreflight(ctx.pack);
-  return spawnIsolatedOrchestratorBash(
-    ctx.pack,
-    [evalHiddenRunner, command],
-    autonomousSpawnProbeEnv({
-      [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
-      ...extraEnv,
-    }),
+  return spawnSync('/bin/bash', [evalHiddenRunner, command], {
     cwd,
-    pathOptions,
-  );
+    encoding: 'utf8',
+    env: buildHermeticOrchestratorBashEnv(
+      ctx.pack,
+      {
+        [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
+        ...extraEnv,
+      },
+      pathOptions,
+    ),
+  });
 }
 
 export function spawnHermeticIsolatedOrchestratorBash(
@@ -418,16 +443,18 @@ export function spawnHermeticIsolatedOrchestratorBash(
   pathOptions: { pathPrepend?: string[]; pathSuffix?: string } = {},
 ) {
   assertSpawnGateIsolationPreflight(ctx.pack);
-  return spawnIsolatedOrchestratorBash(
-    ctx.pack,
-    args,
-    autonomousSpawnProbeEnv({
-      [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
-      ...extraEnv,
-    }),
+  return spawnSync('/bin/bash', args, {
     cwd,
-    pathOptions,
-  );
+    encoding: 'utf8',
+    env: buildHermeticOrchestratorBashEnv(
+      ctx.pack,
+      {
+        [AO_SPAWN_NONLIVE_RECEIPT_ENV]: ctx.nonLiveReceiptFile,
+        ...extraEnv,
+      },
+      pathOptions,
+    ),
+  });
 }
 
 export function assertSpawnGateOutcome(
