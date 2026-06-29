@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { classifyArgv, hasOnlyAllowedFlags } from './lib/gh-inventory-match.mjs';
+import { describe, expect, it, vi } from 'vitest';
+import { classifyArgv, hasOnlyAllowedFlags, PR_INFO_FROM_VIEW_FIELDS } from './lib/gh-inventory-match.mjs';
 import {
   aggregateChecks,
   bucketForState,
@@ -8,7 +8,9 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
+import * as repoResolve from './lib/gh-repo-resolve.mjs';
+const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } = repoResolve;
+import { executeRestRoute } from './lib/gh-rest-routes.mjs';
 import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
@@ -537,5 +539,142 @@ describe('argv flag permutations', () => {
     expect(parsed.repo).toBe('o/r');
     const { route } = classifyArgv(['--repo', 'o/r', 'pr', 'view', '3', '--json', 'body']);
     expect(route?.id).toBe('pr-view');
+  });
+});
+
+const SAMPLE_REST_PULL = {
+  number: 530,
+  title: 'REST-route scm-github resolvePR',
+  html_url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/530',
+  head: { ref: 'feat/530', sha: 'deadbeef' },
+  base: { ref: 'main' },
+  draft: true,
+  state: 'open',
+};
+
+const PR_INFO_FROM_VIEW_JSON = PR_INFO_FROM_VIEW_FIELDS.join(',');
+
+/** resolvePR argv — AO claim-pr (Issue #530). */
+const RESOLVE_PR_ARGV = [
+  'pr', 'view', '530', '--repo', 'chetwerikoff/orchestrator-pack',
+  '--json', PR_INFO_FROM_VIEW_JSON,
+];
+
+/** detectPR argv — full six-field prInfoFromView set (Issue #530). */
+const DETECT_PR_SIX_FIELD_ARGV = [
+  'pr', 'list', '--repo', 'chetwerikoff/orchestrator-pack',
+  '--head', 'feat/530', '--json', PR_INFO_FROM_VIEW_JSON, '--limit', '1',
+];
+
+function expectPrInfoFromViewFields(value: Record<string, unknown>) {
+  for (const field of PR_INFO_FROM_VIEW_FIELDS) {
+    expect(value).toHaveProperty(field);
+  }
+  expect(value).not.toHaveProperty('html_url');
+  expect(value).not.toHaveProperty('draft');
+}
+
+function mockGhApiJsonForPrInfoFromView() {
+  return vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh: string, endpoint: string) => {
+    if (endpoint.includes('/pulls/530')) {
+      return SAMPLE_REST_PULL;
+    }
+    if (endpoint.includes('pulls?state=open')) {
+      return [SAMPLE_REST_PULL];
+    }
+    throw new Error(`unexpected gh api endpoint: ${endpoint}`);
+  });
+}
+
+function wrapperStdoutForArgv(argv: string[]) {
+  const { parsed, route } = classifyArgv(argv);
+  if (!route) {
+    throw new Error('expected inventory route');
+  }
+  const result = executeRestRoute(route.id, {
+    realGh: 'gh',
+    parsed,
+    route,
+    cwd: process.cwd(),
+  });
+  return `${JSON.stringify(result)}\n`;
+}
+
+describe('prInfoFromView REST inventory (Issue #530)', () => {
+  it('classifies resolvePR argv as pr-view REST route', () => {
+    const { route } = classifyArgv(RESOLVE_PR_ARGV);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prRef).toBe('530');
+    expect(route?.prNumber).toBeUndefined();
+  });
+
+  it('classifies resolvePR argv with --repo before subcommand', () => {
+    const argv = [
+      '--repo', 'chetwerikoff/orchestrator-pack',
+      'pr', 'view', '530', '--json', PR_INFO_FROM_VIEW_JSON,
+    ];
+    const { route } = classifyArgv(argv);
+    expect(route?.id).toBe('pr-view');
+    expect(route?.prRef).toBe('530');
+  });
+
+  it('classifies detectPR six-field argv as pr-list-head REST route', () => {
+    const { route } = classifyArgv(DETECT_PR_SIX_FIELD_ARGV);
+    expect(route?.id).toBe('pr-list-head');
+    expect(route?.branch).toBe('feat/530');
+  });
+
+  it('maps REST pull fields to gh-CLI prInfoFromView names', () => {
+    const mapped = mapPullToGhJson(SAMPLE_REST_PULL, [...PR_INFO_FROM_VIEW_FIELDS]);
+    expectPrInfoFromViewFields(mapped);
+    expect(mapped).toEqual({
+      number: 530,
+      url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/530',
+      title: 'REST-route scm-github resolvePR',
+      headRefName: 'feat/530',
+      baseRefName: 'main',
+      isDraft: true,
+    });
+  });
+});
+
+describe('prInfoFromView wrapper integration (Issue #530)', () => {
+  it('resolvePR argv stdout exposes gh-CLI field names via REST (GraphQL stub fails)', () => {
+    const apiSpy = mockGhApiJsonForPrInfoFromView();
+    try {
+      const stdout = wrapperStdoutForArgv(RESOLVE_PR_ARGV);
+      const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+      expectPrInfoFromViewFields(parsed);
+      expect(parsed.number).toBe(530);
+      expect(parsed.headRefName).toBe('feat/530');
+      expect(parsed.isDraft).toBe(true);
+      expect(apiSpy).toHaveBeenCalled();
+    } finally {
+      apiSpy.mockRestore();
+    }
+  });
+
+  it('detectPR six-field argv stdout is REST array with gh-CLI field names', () => {
+    const apiSpy = mockGhApiJsonForPrInfoFromView();
+    try {
+      const stdout = wrapperStdoutForArgv(DETECT_PR_SIX_FIELD_ARGV);
+      const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>[];
+      expect(parsed.length).toBeLessThanOrEqual(1);
+      expect(parsed).toHaveLength(1);
+      expectPrInfoFromViewFields(parsed[0]);
+      expect(parsed[0].url).toBe('https://github.com/chetwerikoff/orchestrator-pack/pull/530');
+      expect(apiSpy).toHaveBeenCalled();
+    } finally {
+      apiSpy.mockRestore();
+    }
+  });
+
+  it('keeps both argv classes off GraphQL passthrough when quota is exhausted', () => {
+    expect(classifyArgv(RESOLVE_PR_ARGV).route).not.toBeNull();
+    expect(classifyArgv(DETECT_PR_SIX_FIELD_ARGV).route).not.toBeNull();
+    expect(classifyArgv([
+      'pr', 'view', '530', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', 'number,url,title,headRefName,baseRefName,isDraft,commits',
+    ]).route).toBeNull();
   });
 });
