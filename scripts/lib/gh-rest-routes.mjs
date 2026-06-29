@@ -19,6 +19,38 @@ import { aggregateChecks, extractActionsRunId, mergeCheckContexts } from './gh-p
  * @param {string[]} fields
  * @param {string} cwd
  */
+/**
+ * @param {string} realGh
+ * @param {{ slug: string, host: string }} repo
+ * @param {number} issueNumber
+ * @param {number} limit
+ * @param {string[]} fields
+ * @param {string} cwd
+ */
+export function routePrListMergedCloses(realGh, repo, issueNumber, limit, fields, cwd) {
+  const q = `repo:${repo.slug} is:pr is:merged closes:${issueNumber}`;
+  const perPage = Math.min(limit, 100);
+  const search = ghApiJson(
+    realGh,
+    `search/issues?q=${encodeURIComponent(q)}&per_page=${perPage}`,
+    { hostname: repo.host, cwd },
+  );
+  const items = Array.isArray(search.items) ? search.items : [];
+  const results = [];
+  for (const item of items) {
+    const prNumber = Number(item.number);
+    if (!Number.isFinite(prNumber) || prNumber <= 0) {
+      continue;
+    }
+    const pull = fetchPull(realGh, repo, prNumber, cwd);
+    results.push(mapPullToGhJson(pull, fields));
+    if (results.length >= limit) {
+      break;
+    }
+  }
+  return results;
+}
+
 export function fetchOpenPrList(realGh, repo, state, limit, fields, cwd) {
   const perPage = 100;
   const max = Math.min(limit, 200);
@@ -321,6 +353,11 @@ export function executeRestRoute(routeId, ctx) {
         const limitFlag = parsed.flags['--limit'];
         const limit = limitFlag ? Number(limitFlag) : null;
         return routePrListHead(realGh, repo, route.branch, fields, parsed.jq, limit, cwd);
+      }
+      case 'pr-list-merged-closes': {
+        const limit = Number(parsed.flags['--limit']);
+        const fields = parsed.jsonFields ?? ['number', 'title', 'state', 'mergedAt'];
+        return routePrListMergedCloses(realGh, repo, route.prNumber, limit, fields, cwd);
       }
       case 'pr-view':
         return routePrView(realGh, repo, route.prNumber, parsed.jsonFields ?? [], parsed.jq, cwd);

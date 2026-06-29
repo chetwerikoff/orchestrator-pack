@@ -212,6 +212,7 @@ export function mapPullState(pull) {
 export function mapPullToGhJson(pull, fields) {
   const base = {
     number: pull.number,
+    title: pull.title ?? '',
     url: pull.html_url ?? null,
     headRefOid: pull.head?.sha ?? null,
     baseRefName: pull.base?.ref ?? null,
@@ -272,6 +273,7 @@ export function mapIssueToGhJson(issue, fields) {
     url: issue.html_url ?? null,
     state: mapIssueState(issue),
     stateReason: mapIssueStateReason(issue),
+    closedAt: issue.closed_at ?? null,
     labels,
     assignees,
   };

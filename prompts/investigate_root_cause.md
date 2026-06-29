@@ -150,7 +150,9 @@ Before listing anything under **§3 Already done** or **§4 Planned**:
    cited `docs/issues_drafts/NN-<slug>.md` path to its GitHub Issue number (never
    treat the draft filename prefix as the GitHub `#`).
 2. For each candidate issue, read live metadata (at minimum):
-   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt`.
+   `gh issue view <N> --repo chetwerikoff/orchestrator-pack --json state,title,body,closedAt`
+   (or the same `--json` field set without `--repo` when the checkout is already
+   `chetwerikoff/orchestrator-pack`).
 3. Do **not** infer open, closed, planned, or shipped from a draft file existing
    or from draft presence in the repo alone.
 
@@ -168,7 +170,7 @@ For **each** issue/draft you might put in §4:
 | Step | Check | If true → |
 |------|--------|-----------|
 | A | `gh issue view` → `state` is **closed** | **Exclude from §4.** If the outcome matters to the investigation, one line in **§3** (worked / partial / failed) with close reason or merged PR ref. |
-| B | Merged PR linked to the issue (`gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "closes #N"` or issue timeline / comments) | **Exclude from §4** unless the PR clearly did *not* implement the scoped acceptance criteria. |
+| B | Merged PR linked to the issue (`gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "closes #N" --json number,title,state,mergedAt --limit 10` or issue timeline / comments) | **Exclude from §4** unless the PR clearly did *not* implement the scoped acceptance criteria. |
 | C | Acceptance criteria from the issue body (or linked draft) already satisfied on **`main`** — files/paths exist, behavior present, `git log -n 5 -- <paths>` shows merge after issue open | **Exclude from §4**; record in **§3** as shipped (note **open issue, work on main** if `state` is still open). |
 | D | `docs/declarations/*.json` or merged worker PR scope matches the issue’s declared outcome for this topic | **Exclude from §4**; **§3** instead. |
 | E | Issue is **open** but only tracks spec/ops follow-up while implementation is already on `main` | **§3** for what shipped; **§4** only if you state the *remaining* gap in one line (not the whole original issue scope). |

@@ -71,7 +71,7 @@ function isProhibitionDocLine(line) {
  * @param {string} command
  */
 function isIncompleteRuleSurfaceCommand(command) {
-  const trimmed = command.trim();
+  const trimmed = command.trim().replace(/[,.)]+$/u, '').trim();
   if (!trimmed.startsWith('gh ')) {
     return true;
   }
@@ -90,7 +90,13 @@ function isIncompleteRuleSurfaceCommand(command) {
   if (/^gh\s+pr\s+list(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
     return true;
   }
-  if (/^gh\s+pr\s+view(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
+  if (/^gh\s+pr\s+view/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+view\s+#?\d+/i.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+pr\s+checks/i.test(trimmed) && !/--json/.test(trimmed) && !/^gh\s+pr\s+checks\s+#?\d+/i.test(trimmed)) {
+    return true;
+  }
+  if (/^gh\s+issue\s+view(?:[, ]|$)/i.test(trimmed) && !/--json/.test(trimmed)) {
     return true;
   }
   if (/^gh\s+issue\s+view\s+--json\s+…/i.test(trimmed)) {
@@ -112,6 +118,7 @@ export function normalizeGhCommandTemplate(command) {
     .replace(/\(\[[^\]]+\][^)]*\)/g, '42')
     .replace(/<\w+>/gi, '42')
     .replace(/\$\{?\w+\}?/g, '42')
+    .replace(/closes\s+#N\b/gi, 'closes #42')
     .replace(/\s+(?:per PR|per\s+REQUIRED).*$/i, '')
     .replace(/\s+[—–-]\s+.*$/u, '')
     .replace(/\s+[;,].*$/u, '')

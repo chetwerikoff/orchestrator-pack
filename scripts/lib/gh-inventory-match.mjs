@@ -1,6 +1,22 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
+
+/**
+ * @param {string | boolean | undefined} searchFlag
+ * @returns {number | null}
+ */
+function parseClosesIssueSearch(searchFlag) {
+  if (typeof searchFlag !== 'string') {
+    return null;
+  }
+  const match = searchFlag.trim().match(/^closes\s+#(\d+)$/i);
+  if (!match) {
+    return null;
+  }
+  const issueNumber = Number(match[1]);
+  return Number.isFinite(issueNumber) && issueNumber > 0 ? issueNumber : null;
+}
 
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
@@ -56,6 +72,7 @@ export function matchInventoryRoute(parsed) {
       ['number', 'title', 'body', 'url', 'state', 'stateReason', 'labels', 'assignees'],
       ['state', 'stateReason'],
       ['state', 'title', 'body'],
+      ['state', 'title', 'body', 'closedAt'],
       ['title', 'body', 'state'],
     ];
     const normalizedAllowed = allowedSets.map((set) => [...set].sort());
@@ -127,6 +144,25 @@ export function matchInventoryRoute(parsed) {
 
   if (sub === 'list') {
     const headFlag = parsed.flags['--head'];
+    const closesIssueNumber = parseClosesIssueSearch(parsed.flags['--search']);
+    if (
+      parsed.flags['--state'] === 'merged'
+      && closesIssueNumber
+      && jsonFieldsEqual(parsed.jsonFields, ['mergedAt', 'number', 'state', 'title'])
+    ) {
+      if (!hasOnlyAllowedFlags(parsed, ['--state', '--search', '--limit'])) {
+        return null;
+      }
+      const limit = Number(parsed.flags['--limit'] ?? 0);
+      if (!Number.isFinite(limit) || limit <= 0 || limit > 30) {
+        return null;
+      }
+      if (parsed.jq) {
+        return null;
+      }
+      return { id: 'pr-list-merged-closes', prNumber: closesIssueNumber };
+    }
+
     if (headFlag && typeof headFlag === 'string') {
       if (jsonFieldsEqual(parsed.jsonFields, ['number', 'url'])) {
         if (!hasOnlyAllowedFlags(parsed, ['--head', '--limit'])) {
