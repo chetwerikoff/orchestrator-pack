@@ -675,6 +675,12 @@ export function evaluateAutonomousGitBoundary(input) {
     if (input.recoveryWorktreeRemoveAllow) {
       return { allowed: true, reason: 'recovery_worktree_remove_allow' };
     }
+    if (
+      input.sanctionedProvenance
+      || hasSanctionedGitParentChain(input.parentChain, argv)
+    ) {
+      return { allowed: true, reason: 'sanctioned_git_child' };
+    }
     return { allowed: false, reason: input.recoveryDenyReason ?? 'autonomous_mutating_git_denied' };
   }
   if (

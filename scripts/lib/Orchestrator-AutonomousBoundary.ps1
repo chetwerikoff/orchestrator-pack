@@ -877,6 +877,9 @@ function Test-AutonomousGitDenied {
         if ($recoveryAllow.allowed) {
             return @{ denied = $false; reason = 'recovery_worktree_remove_allow' }
         }
+        if (Test-AutonomousGitSanctionedProvenance -FixtureParentChain $FixtureParentChain -Argv $Argv) {
+            return @{ denied = $false; reason = 'sanctioned_git_child' }
+        }
         return @{ denied = $true; reason = [string]$recoveryAllow.reason }
     }
 

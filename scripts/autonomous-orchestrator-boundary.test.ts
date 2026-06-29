@@ -1805,9 +1805,17 @@ describe('worker recovery boundary (#522)', () => {
     const spoofed = evaluateAutonomousGitBoundary({
       argv: ['worktree', 'remove', '--force', target],
       autonomousSurface: true,
-      parentChain: ['pwsh -File scripts/reviewer-workspace-preflight.ps1'],
+      parentChain: ['pwsh -File scripts/run-pack-review.ps1'],
     });
     expect(spoofed.allowed).toBe(false);
+
+    const reviewPreflight = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', '/tmp/code-reviews/workspaces/op-rev-1'],
+      autonomousSurface: true,
+      parentChain: ['pwsh -File scripts/reviewer-workspace-preflight.ps1'],
+    });
+    expect(reviewPreflight.allowed).toBe(true);
+    expect(reviewPreflight.reason).toBe('sanctioned_git_child');
 
     const prune = evaluateAutonomousGitBoundary({
       argv: ['worktree', 'prune'],
@@ -1822,15 +1830,16 @@ describe('worker recovery boundary (#522)', () => {
     try {
       const before = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
       expect(before.status).toBe(0);
-      const result = spawnAutonomousBashTurn(
-        dir,
-        'git worktree list >/dev/null; git worktree list --porcelain >/dev/null; git worktree prune 2>/dev/null || true',
-      );
-      expect(result.status).toBe(0);
+      const listResult = spawnAutonomousBashTurn(dir, 'git worktree list >/dev/null');
+      expect(listResult.status).toBe(0);
+      const porcelainResult = spawnAutonomousBashTurn(dir, 'git worktree list --porcelain >/dev/null');
+      expect(porcelainResult.status).toBe(0);
+      const pruneResult = spawnAutonomousBashTurn(dir, 'git worktree prune');
+      expect(pruneResult.status).toBe(93);
       const after = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
       expect(after.stdout).toBe(before.stdout);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
