@@ -66,6 +66,23 @@ describe('review-start-claim-run-binding', () => {
     });
     expect(allowed.launch).toBe(true);
     expect(allowed.reason).toBe('live_claim_present');
+
+    const mismatchedClaim = {
+      state: 'active',
+      prNumber: 518,
+      headSha: 'a7f0e4d190556d2a61082878e82c6e5164f6a31e',
+      projectId: 'orchestrator-pack',
+    };
+    const mismatchedGate = evaluateAutomatedLaunchClaimGate({
+      claim: mismatchedClaim,
+      claims: [],
+      prNumber: 519,
+      headSha: 'a7f0e4d190556d2a61082878e82c6e5164f6a31e',
+      projectNamespace: 'orchestrator-pack',
+    });
+    expect(mismatchedGate.launch).toBe(false);
+    expect(mismatchedGate.reason).toBe('missing_live_claim_for_launch');
+    expect(mismatchedGate.lineage).toBe('direct_claim_key_mismatch');
   });
 
   it('observed-no-claim-run-diagnostic-before-worktree-denial', () => {
@@ -260,6 +277,29 @@ describe('review-start-claim-run-binding', () => {
       projectNamespace: 'orchestrator-pack',
     });
     expect(binding.direction).toBe('none');
+
+    const foreignProjectBinding = evaluateLaunchPendingBudgetDecision({
+      claim: {
+        state: 'active',
+        prNumber: 519,
+        headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        projectId: 'orchestrator-pack',
+        launchPending: { atUtc: '2026-06-28T15:44:30.000Z' },
+        launchPendingInvokedAtUtc: '2026-06-28T15:44:30Z',
+      },
+      reviewRuns: [
+        {
+          id: 'review-run-foreign-project',
+          prNumber: 519,
+          targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+          project: 'other-pack',
+          status: 'running',
+        },
+      ],
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(foreignProjectBinding.action).toBe('terminalize');
+    expect(foreignProjectBinding.outcome).toBe('launch_pending_budget_exceeded');
   });
 
   it('positive-outcome: visible AO run reconciles launch-pending claim instead of budget terminalization', () => {

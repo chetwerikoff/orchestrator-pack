@@ -4,7 +4,6 @@
 import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import {
   COVERED_RUN_STATUSES,
-  findCoveringRunForKey,
   IN_FLIGHT_RUN_STATUSES,
   KNOWN_NON_COVERING_RUN_STATUSES,
 } from './review-start-claim-lifecycle.mjs';
@@ -189,9 +188,23 @@ export function evaluateAutomatedLaunchClaimGate({
   headSha,
   projectNamespace = 'orchestrator-pack',
 }) {
-  const resolved = claim
-    ? { claim, lineage: isClaimLive(claim) ? 'live' : (isClaimReconciled(claim) ? 'reconciled' : 'none') }
-    : findMatchingClaimForRun({ claims, prNumber, headSha, projectNamespace });
+  const namespace = normalizeProjectNamespace(projectNamespace);
+  const resolved = (() => {
+    if (claim && claimMatchesRunKey(claim, prNumber, headSha, namespace)) {
+      return {
+        claim,
+        lineage: isClaimLive(claim) ? 'live' : (isClaimReconciled(claim) ? 'reconciled' : 'none'),
+      };
+    }
+    if (claim) {
+      const fallback = findMatchingClaimForRun({ claims, prNumber, headSha, projectNamespace: namespace });
+      return {
+        ...fallback,
+        lineage: fallback.claim ? fallback.lineage : 'direct_claim_key_mismatch',
+      };
+    }
+    return findMatchingClaimForRun({ claims, prNumber, headSha, projectNamespace: namespace });
+  })();
 
   if (!resolved.claim) {
     return {
@@ -270,13 +283,23 @@ export function diagnoseMissingClaimForReviewRun({
   };
 }
 
-function findMatchingRunForClaim(reviewRuns, prNumber, headSha) {
-  const covered = findCoveringRunForKey(reviewRuns, prNumber, headSha);
-  if (covered) return covered;
+function findMatchingRunForClaim(reviewRuns, prNumber, headSha, projectNamespace = 'orchestrator-pack') {
   const normalized = normalizeHeadSha(headSha);
+  const namespace = normalizeProjectNamespace(projectNamespace);
+  let bestInFlight = null;
+  let bestTerminal = null;
   for (const run of toArray(reviewRuns)) {
-    if (!runMatchesBindingKey(run, prNumber, normalized)) continue;
+    if (!runMatchesBindingKey(run, prNumber, normalized, namespace)) continue;
     const status = normalizeStatus(run?.status);
+    if (COVERED_RUN_STATUSES.includes(status)) {
+      const entry = { run, status, runId: String(run?.id ?? run?.runId ?? '') };
+      if (IN_FLIGHT_RUN_STATUSES.includes(status)) {
+        bestInFlight = entry;
+        continue;
+      }
+      bestTerminal = entry;
+      continue;
+    }
     if (KNOWN_NON_COVERING_RUN_STATUSES.includes(status)) {
       return {
         run,
@@ -285,7 +308,7 @@ function findMatchingRunForClaim(reviewRuns, prNumber, headSha) {
       };
     }
   }
-  return null;
+  return bestInFlight ?? bestTerminal ?? null;
 }
 
 function resolveReviewerCompletion(reviewerEvidence, runId, reviewerSessionId) {
@@ -338,7 +361,8 @@ export function evaluateLaunchPendingRunBinding({
 }) {
   const prNumber = Number(claim?.prNumber);
   const headSha = String(claim?.headSha ?? '');
-  const covered = findMatchingRunForClaim(reviewRuns, prNumber, headSha);
+  const projectNamespace = normalizeProjectNamespace(claim?.projectId ?? claim?.project ?? 'orchestrator-pack');
+  const covered = findMatchingRunForClaim(reviewRuns, prNumber, headSha, projectNamespace);
   if (!covered) {
     return {
       reconcile: false,

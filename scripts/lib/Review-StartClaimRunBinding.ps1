@@ -29,7 +29,8 @@ function Test-AutomatedReviewLaunchClaimGate {
     if ($ClaimResult -and $ClaimResult.acquired -and [string]$ClaimResult.claim.state -eq 'active') {
         $claimPr = [int]$ClaimResult.claim.prNumber
         $claimHead = [string]$ClaimResult.claim.headSha
-        if ($claimPr -eq $PrNumber -and $claimHead -eq $HeadSha) {
+        $claimProject = if ([string]$ClaimResult.projectId) { [string]$ClaimResult.projectId } else { 'orchestrator-pack' }
+        if ($claimPr -eq $PrNumber -and $claimHead -eq $HeadSha -and $claimProject -eq $ProjectId) {
             return @{ ok = $true; reason = 'live_claim_present'; fastPath = $true }
         }
     }
@@ -41,7 +42,12 @@ function Test-AutomatedReviewLaunchClaimGate {
         claims           = @($Claims)
     }
     if ($ClaimResult -and $ClaimResult.acquired) {
-        $payload.claim = $ClaimResult.claim
+        $claimProject = if ([string]$ClaimResult.projectId) { [string]$ClaimResult.projectId } else { 'orchestrator-pack' }
+        $claimPr = [int]$ClaimResult.claim.prNumber
+        $claimHead = [string]$ClaimResult.claim.headSha
+        if ($claimPr -eq $PrNumber -and $claimHead -eq $HeadSha -and $claimProject -eq $ProjectId) {
+            $payload.claim = $ClaimResult.claim
+        }
     }
     $gate = Invoke-ReviewStartClaimRunBindingCli -Subcommand 'launch-gate' -Payload $payload
     if ($gate.launch) {
