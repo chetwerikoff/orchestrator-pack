@@ -422,10 +422,9 @@ export function assertSpawnGateOutcome(
       return;
     case 'orchestrator-surface-allow':
       expect(result.status).not.toBe(93);
-      // Guard-mediated allows may not reach the stub receipt; hermetic preflight blocks live ao.
-      if (probePresent) {
-        expect(receipt).toMatch(/invoked:/);
-      }
+      // Orchestrator allow must not write probe receipts; non-live receipt proves stub routing.
+      expect(probePresent).toBe(false);
+      expect(receipt).toMatch(/invoked:.*\bspawn\b/);
       return;
     case 'surface-off-allow':
       expect(result.status).not.toBe(93);

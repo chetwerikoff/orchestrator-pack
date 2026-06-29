@@ -107,7 +107,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
   });
 
   it('bootstrap maps AO_TMUX_NAME orchestrator sessions to surface and allows spawn under default policy', () => {
-    withHermeticSpawnGatePack('read-receipt', (ctx) => {
+    withHermeticSpawnGatePack('surface-off-harmless', (ctx) => {
       withTempGitRepo((dir) => {
         const onlyTmux = spawnHermeticLiveArmedBash(
           ctx,
@@ -118,21 +118,18 @@ describe('autonomous orchestrator interposer (#406)', () => {
           },
           dir,
         );
-        assertSpawnGateOutcome('orchestrator-surface-allow', onlyTmux, ctx);
+        assertSpawnGateOutcome('surface-off-allow', onlyTmux, ctx);
       });
     });
   });
 
   it('live arming path: BASH_ENV bootstrap arms orchestrator surface and allows spawn under default policy', () => {
     withHermeticSpawnGatePack('read-receipt', (ctx) => {
-      const { probeFile } = ctx;
       withTempGitRepo((dir) => {
         const deny = spawnHermeticLiveArmedBash(
           ctx,
           `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
-          {
-            AO_SPAWN_PROBE_FILE: probeFile,
-          },
+          {},
           dir,
         );
         assertSpawnGateOutcome('orchestrator-surface-allow', deny, ctx);
@@ -368,13 +365,11 @@ exec "$REAL_GIT" checkout -- ${readme}
     const hostPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
     try {
       withHermeticSpawnGatePack('read-receipt', (ctx) => {
-        const { probeFile } = ctx;
         withTempGitRepo((dir) => {
           const denySpawn = spawnHermeticEvalHidden(
             ctx,
             `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
             {
-              AO_SPAWN_PROBE_FILE: probeFile,
               PATH: `${wrapDir}:${hostPath}`,
             },
             dir,
@@ -467,12 +462,10 @@ exit 0
     try {
       withHermeticSpawnGatePack('read-receipt', (ctx) => {
         withTempGitRepo((dir) => {
-          const spawnProbe = path.join(fakePwshDir, 'spawn-probe.txt');
           const result = spawnHermeticEvalHidden(
             ctx,
             `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
             {
-              AO_SPAWN_PROBE_FILE: spawnProbe,
               PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
             },
             dir,
@@ -502,12 +495,10 @@ exit 0
     try {
       withHermeticSpawnGatePack('read-receipt', (ctx) => {
         withTempGitRepo((dir) => {
-          const spawnProbe = path.join(stubDir, 'spawn-probe.txt');
           const result = spawnHermeticEvalHidden(
             ctx,
             `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
             {
-              AO_SPAWN_PROBE_FILE: spawnProbe,
               AO_PWSH_BINARY: fakePwsh,
             },
             dir,
@@ -549,7 +540,6 @@ exit 0
 
   it('orchestrator deny matrix covers flat and eval-hidden shapes', () => {
     withHermeticSpawnGatePack('read-receipt', (ctx) => {
-      const { probeFile } = ctx;
       withTempGitRepo((dir) => {
         const readme = path.join(dir, 'README.md');
         if (!existsSync('/usr/bin/git')) {
@@ -567,9 +557,7 @@ exit 0
         const flatSpawn = spawnHermeticLiveArmedBash(
           ctx,
           `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
-          {
-            AO_SPAWN_PROBE_FILE: probeFile,
-          },
+          {},
           dir,
         );
         assertSpawnGateOutcome('orchestrator-surface-allow', flatSpawn, ctx);
@@ -577,9 +565,7 @@ exit 0
         const hiddenSpawn = spawnHermeticEvalHidden(
           ctx,
           `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
-          {
-            AO_SPAWN_PROBE_FILE: probeFile,
-          },
+          {},
           dir,
         );
         assertSpawnGateOutcome('orchestrator-surface-allow', hiddenSpawn, ctx);
