@@ -133,6 +133,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
           worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
           targetPreexists: false,
           effectiveRepositoryRoot: repo,
+          effectiveGitWorktreeRoot: repo,
         });
         expect(consume.ok, commitToken).toBe(true);
         expect(consume.normalizedCommitOid).toBe(mainOid);
@@ -151,6 +152,19 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
       expect(auth.expectedRefToken).toBe('HEAD');
       expect(auth.actualRefToken).toBe(baseRef);
       expect(auth.expectedRefToken).not.toBe(auth.actualRefToken);
+    });
+  });
+
+  it('allows split expectedRepoRoot/actualRepoRoot without legacy repoRoot', () => {
+    setupSpawnRepo(({ repo, baseRef }) => {
+      const auth = evaluateSpawnWorktreeHeadRefAuthorization({
+        expectedRepoRoot: repo,
+        actualRepoRoot: repo,
+        expectedRefToken: 'HEAD',
+        actualRefToken: baseRef,
+      });
+      expect(auth.ok).toBe(true);
+      expect(auth.reason).toBe('head_ref_oid_allow');
     });
   });
 
@@ -179,6 +193,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(denyOther.ok).toBe(false);
       expect(denyOther.reason).toBe('head_oid_mismatch');
@@ -190,6 +205,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(denyMissing.ok).toBe(false);
       expect(denyMissing.reason).toBe('head_ref_unresolvable');
@@ -202,6 +218,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
           worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
           targetPreexists: false,
           effectiveRepositoryRoot: otherRepo,
+          effectiveGitWorktreeRoot: otherRepo,
         });
         expect(denyWrongBinding.ok).toBe(false);
         expect(denyWrongBinding.reason).toBe('repository_root_mismatch');
@@ -217,6 +234,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(denyBlob.ok).toBe(false);
       expect(denyBlob.reason).toBe('head_ref_not_commit');
@@ -229,6 +247,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(denyAmbiguous.ok).toBe(false);
       expect(denyAmbiguous.reason).toBe('head_ref_ambiguous');
@@ -269,6 +288,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(consume.ok).toBe(true);
 
@@ -333,6 +353,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(consume.ok).toBe(true);
       expect(manifest.aoPackageVersion).toMatch(/^0\.9\./);
@@ -371,6 +392,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         worktreesPrefix: '/tmp/projects/orchestrator-pack/worktrees',
         targetPreexists: false,
         effectiveRepositoryRoot: repo,
+        effectiveGitWorktreeRoot: repo,
       });
       expect(claimConsume.ok).toBe(true);
 
@@ -428,7 +450,8 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
           holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
           extraAuthorizedWorktreeNames = @()
           expectedHeadRef = ${psString(baseRef)}
-          sourceRepositoryRoot = ${psString(repoRoot)}
+          sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
+          sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
         }
         $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
         Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId 'ps-grant-493' -Record $built.grant | Out-Null

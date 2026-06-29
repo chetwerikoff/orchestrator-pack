@@ -13,6 +13,8 @@ export declare function commitOidsEqual(left: string, right: string): boolean;
 
 export declare function evaluateSpawnWorktreeHeadRefAuthorization(input: {
   repoRoot?: string;
+  expectedRepoRoot?: string;
+  actualRepoRoot?: string;
   expectedRefToken?: string;
   expectedCommitOid?: string;
   actualRefToken?: string;

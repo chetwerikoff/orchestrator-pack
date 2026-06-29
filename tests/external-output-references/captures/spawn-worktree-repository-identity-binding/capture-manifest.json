@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "captureId": "spawn-worktree-repository-identity-binding",
+  "issue": 511,
+  "proofCommand": "npx vitest run scripts/spawn-worktree-repository-identity-binding.test.ts -t \"grounds fixtures in real git resolver output\"",
+  "resolverEvidenceShape": {
+    "mainShowToplevel": "__REAL_SHOW_TOPLEVEL_MAIN__",
+    "linkedShowToplevel": "__REAL_SHOW_TOPLEVEL_LINKED__",
+    "mainGitCommonDirRaw": "__REAL_GIT_COMMON_DIR_MAIN__",
+    "linkedGitCommonDirRaw": "__REAL_GIT_COMMON_DIR_LINKED__"
+  },
+  "notes": "Placeholder tokens document that the focused test records live git rev-parse --show-toplevel and --git-common-dir outputs from a real linked-worktree fixture instead of hand-shaped repository roots."
+}
