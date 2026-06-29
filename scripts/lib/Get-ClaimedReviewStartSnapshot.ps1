@@ -9,6 +9,7 @@ function Get-ClaimedReviewStartSnapshot {
         [string]$Project,
         [string]$RepoRoot,
         [hashtable]$FixtureSnapshot,
+        [hashtable]$ClaimResult,
         [scriptblock]$ResolveChecksBundle
     )
 
@@ -16,7 +17,30 @@ function Get-ClaimedReviewStartSnapshot {
         return $FixtureSnapshot
     }
 
-    $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+    if ($ClaimResult -and $ClaimResult.acquired) {
+        . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $ClaimResult -RepoRoot $RepoRoot -GhArguments @(
+            'pr', 'list', '--state', 'open', '--json', 'number,headRefOid,baseRefName', '--limit', '200'
+        )
+        if (-not $transport.ok) {
+            return @{
+                transportFailure            = $transport
+                openPrs                     = @()
+                reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
+                sessions                    = @(Get-AoStatusSessions)
+                ciChecksByPr                = @{}
+                requiredCheckNamesByPr      = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
+        $openPrs = @($transport.stdout | ConvertFrom-Json)
+        foreach ($pr in $openPrs) {
+            Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+        }
+    }
+    else {
+        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+    }
     $reviewRuns = @(Get-AoReviewRuns -Project $Project)
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = & $ResolveChecksBundle $openPrs $PrNumber $RepoRoot
