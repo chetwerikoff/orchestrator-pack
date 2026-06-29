@@ -29,6 +29,16 @@ switch ($scenario) {
         Write-Output '[]'
         exit 0
     }
+    'wrapper_spawn_hang' {
+        $pidFile = [string]$env:AO_REVIEW_START_WRAPPER_CHILD_PID_FILE
+        $child = Start-Process -FilePath 'sleep' -ArgumentList @('60') -PassThru -NoNewWindow
+        if ($pidFile) {
+            Set-Content -LiteralPath $pidFile -Value ([string]$child.Id) -Encoding ASCII -NoNewline
+        }
+        Start-Sleep -Seconds 120
+        Write-Output '[]'
+        exit 0
+    }
     'large_stdout' {
         $chunk = 'x' * 8192
         for ($i = 0; $i -lt 32; $i++) {

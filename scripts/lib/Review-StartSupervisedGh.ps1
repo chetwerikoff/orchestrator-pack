@@ -40,12 +40,10 @@ function Read-ReviewStartSupervisedGhProcessStreams {
     $stderrDrain = $Process.StandardError.ReadToEndAsync()
     $timedOut = -not $Process.WaitForExit([Math]::Max(1, $WaitTimeoutMs))
     if ($timedOut) {
+        try { $Process.Kill($true) } catch { }
+        try { $Process.WaitForExit(2000) | Out-Null } catch { }
         if ($ChildPid -gt 0) {
             Stop-ReviewStartSupervisedGhChild -Pid $ChildPid | Out-Null
-        }
-        if (-not $Process.HasExited) {
-            try { $Process.Kill($true) } catch { }
-            try { $Process.WaitForExit(2000) | Out-Null } catch { }
         }
     }
     try { $stdoutDrain.Wait(5000) | Out-Null } catch { }

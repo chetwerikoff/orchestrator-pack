@@ -403,6 +403,51 @@ describe('review-start-envelope-external-io', () => {
     }
   });
 
+  it('kills-wrapper-spawned-child-on-supervised-gh-timeout', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'envelope-wrapper-tree-'));
+    const childPidFile = path.join(dir, 'wrapper-child.pid');
+    const monoStart = 22_000_000;
+    try {
+      const script = `
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = '${monoStart}'
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'wrapper_spawn_hang'
+        $env:AO_REVIEW_START_WRAPPER_CHILD_PID_FILE = ${psString(childPidFile)}
+        . ${psString(claimHelperPath)}
+        . ${psString(lifecycleHelperPath)}
+        . ${psString(supervisedGhPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claim -RepoRoot ${psString(repoRoot)} -GhArguments @() -DeadlineMs 500
+        $childPid = 0
+        if (Test-Path -LiteralPath ${psString(childPidFile)}) {
+          $parsed = 0
+          if ([int]::TryParse((Get-Content -LiteralPath ${psString(childPidFile)} -Raw), [ref]$parsed)) {
+            $childPid = $parsed
+          }
+        }
+        $childAlive = $false
+        if ($childPid -gt 0) {
+          try {
+            $null = Get-Process -Id $childPid -ErrorAction Stop
+            $childAlive = $true
+          }
+          catch { }
+        }
+        [pscustomobject]@{
+          timedOut = [bool]$transport.timedOut
+          childAlive = $childAlive
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.timedOut).toBe(true);
+      expect(result.childAlive).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drains-redirected-gh-output-before-waiting-for-exit', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'envelope-large-stdout-'));
     const monoStart = 7_000_000;
