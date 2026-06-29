@@ -268,7 +268,7 @@ function hermeticUtilityPathSegments(pack: InterposerPackFixture): string[] {
   }
   const resolvedPwsh = spawnSync('/bin/bash', ['-c', 'command -v pwsh'], {
     encoding: 'utf8',
-    env: { PATH: [...segments].join(':') },
+    env: stripInterposerBashEnvBlockers(process.env),
   }).stdout
     .trim();
   if (resolvedPwsh) {
