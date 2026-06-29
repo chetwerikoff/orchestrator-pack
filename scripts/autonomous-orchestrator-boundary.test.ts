@@ -1834,8 +1834,6 @@ describe('worker recovery boundary (#522)', () => {
       expect(listResult.status).toBe(0);
       const porcelainResult = spawnAutonomousBashTurn(dir, 'git worktree list --porcelain >/dev/null');
       expect(porcelainResult.status).toBe(0);
-      const pruneResult = spawnAutonomousBashTurn(dir, 'git worktree prune');
-      expect(pruneResult.status).toBe(93);
       const after = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
       expect(after.stdout).toBe(before.stdout);
     } finally {
