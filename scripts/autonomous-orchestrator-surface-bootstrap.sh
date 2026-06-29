@@ -39,6 +39,18 @@ if __ao_surface_bootstrap_is_orchestrator_tmux; then
 fi
 
 PACK_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]:-${BASH_ENV:-}}")" && pwd)"
+if __ao_surface_bootstrap_is_orchestrator_tmux && [[ "${__AO_COMMAND_RUNTIME_PREFLIGHT_OK:-}" != "1" ]]; then
+  runtime_cli="${PACK_SCRIPTS}/lib/command-runtime-bootstrap.mjs"
+  if ! command -v node >/dev/null 2>&1; then
+    printf '%s\n' 'command-runtime-bootstrap: missing tool node before preflight' >&2
+    exit 93
+  fi
+  if ! node "${runtime_cli}" livePreflight --pack-root "$(cd "${PACK_SCRIPTS}/.." && pwd)"; then
+    exit 93
+  fi
+  export __AO_COMMAND_RUNTIME_PREFLIGHT_OK=1
+fi
+
 INTERPOSER="${PACK_SCRIPTS}/autonomous-bash-env.sh"
 if [[ ! -r "${INTERPOSER}" ]]; then
   printf '%s\n' \

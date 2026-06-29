@@ -1348,6 +1348,55 @@ else {
 }
 
 
+Write-Host '== command-runtime bootstrap (Issue #532) =='
+$commandRuntimeWiring = Join-Path $Root 'scripts/check-command-runtime-bootstrap.ps1'
+if (Test-Path -LiteralPath $commandRuntimeWiring -PathType Leaf) {
+    & $commandRuntimeWiring
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime bootstrap wiring failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime bootstrap wiring check (Issue #532)'
+}
+
+$commandRuntimeForbidden = Join-Path $Root 'scripts/check-command-runtime-forbidden-workaround.ps1'
+if (Test-Path -LiteralPath $commandRuntimeForbidden -PathType Leaf) {
+    & $commandRuntimeForbidden
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime forbidden-workaround guard failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime forbidden-workaround guard (Issue #532)'
+}
+
+$commandRuntimePreflight = Join-Path $Root 'scripts/orchestrator-command-runtime-preflight.ps1'
+if (Test-Path -LiteralPath $commandRuntimePreflight -PathType Leaf) {
+    & $commandRuntimePreflight -FixtureMode
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime bootstrap preflight failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime bootstrap preflight (Issue #532)'
+}
+
 Write-Host '== worker nudge gate (Issue #384) =='
 $workerNudgeGateCheck = Join-Path $Root 'scripts/check-worker-nudge-gate.ps1'
 if (Test-Path -LiteralPath $workerNudgeGateCheck -PathType Leaf) {
