@@ -64,7 +64,8 @@ function Invoke-GhOpenPrListForNumbers {
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
-        [int[]]$PrNumbers
+        [int[]]$PrNumbers,
+        [scriptblock]$ProgressWriter = $null
     )
 
     $unique = @($PrNumbers | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
@@ -75,7 +76,12 @@ function Invoke-GhOpenPrListForNumbers {
     Push-Location -LiteralPath $RepoRoot
     try {
         $prs = @()
+        $ordinal = 0
         foreach ($n in $unique) {
+            $ordinal += 1
+            if ($ProgressWriter) {
+                & $ProgressWriter 'open_pr_view' $ordinal
+            }
             $raw = gh pr view $n --json number,headRefOid,baseRefName,state 2>&1
             if ($LASTEXITCODE -ne 0) {
                 continue
@@ -197,7 +203,8 @@ function Get-GhChecksBundleByPr {
         [scriptblock]$MergeRequiredNames,
         [string]$EmptyChecksWarningTemplate = 'warn: gh pr checks PR #{0} exit {1} with no parseable JSON',
         [string]$ChecksFetchFailedWarningTemplate = 'warn: checks fetch failed PR #{0} : {1}',
-        [string]$ProtectionLookupWarningTemplate = 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as unresolved'
+        [string]$ProtectionLookupWarningTemplate = 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as unresolved',
+        [scriptblock]$ProgressWriter = $null
     )
 
     $ciChecksByPr = @{}
@@ -211,13 +218,18 @@ function Get-GhChecksBundleByPr {
             requiredCheckLookupFailedByPr = $requiredCheckLookupFailedByPr
         }
     }
+    $ordinal = 0
     foreach ($pr in @($OpenPrs)) {
+        $ordinal += 1
         $n = [int]$pr.number
         if (-not $n) {
             continue
         }
 
         try {
+            if ($ProgressWriter) {
+                & $ProgressWriter 'checks' $ordinal
+            }
             $ciChecksByPr[[string]$n] = @(Invoke-GhPrChecks -RepoRoot $RepoRoot -PrNumber $n)
         }
         catch {
@@ -225,6 +237,9 @@ function Get-GhChecksBundleByPr {
             $ciChecksByPr[[string]$n] = @()
         }
 
+        if ($ProgressWriter) {
+            & $ProgressWriter 'required_checks' $ordinal
+        }
         $requiredLookup = Get-GhRequiredCheckNamesForPr -RepoRoot $RepoRoot -PrNumber $n `
             -MergeRequiredNames $MergeRequiredNames `
             -ProtectionLookupWarning $ProtectionLookupWarningTemplate
