@@ -50,7 +50,7 @@ function Read-ReviewStartSupervisedGhProcessStreams {
         try { $Process.Kill($true) } catch { }
         try { $Process.WaitForExit(2000) | Out-Null } catch { }
         if ($ChildPid -gt 0) {
-            Stop-ReviewStartSupervisedGhChild -Pid $ChildPid | Out-Null
+            Stop-ReviewStartSupervisedGhChild -ProcessId $ChildPid | Out-Null
         }
     }
     try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
@@ -127,7 +127,7 @@ function Invoke-ReviewStartSupervisedGh {
             }
         }
         catch { }
-        Stop-ReviewStartSupervisedGhChild -Pid $childPid | Out-Null
+        Stop-ReviewStartSupervisedGhChild -ProcessId $childPid | Out-Null
         if ([string]$pidUpdate.reason -eq 'lost_ownership') {
             return @{
                 ok           = $false

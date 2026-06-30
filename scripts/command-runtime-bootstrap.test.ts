@@ -133,7 +133,7 @@ describe('command-runtime bootstrap (#532)', () => {
     const covered = evaluateUncoveredGhArgv(['pr', 'view', '42', '--json', 'state,mergedAt']);
     expect(covered.ok).toBe(true);
 
-    const uncovered = evaluateUncoveredGhArgv([
+    const resolvePrCovered = evaluateUncoveredGhArgv([
       'pr',
       'view',
       '42',
@@ -141,6 +141,18 @@ describe('command-runtime bootstrap (#532)', () => {
       'owner/repo',
       '--json',
       'number,url,title,headRefName,baseRefName,isDraft',
+    ]);
+    expect(resolvePrCovered.ok).toBe(true);
+    expect(resolvePrCovered.route).toBe('pr-view');
+
+    const uncovered = evaluateUncoveredGhArgv([
+      'pr',
+      'view',
+      '42',
+      '--repo',
+      'owner/repo',
+      '--json',
+      'number,url,title,headRefName,baseRefName,isDraft,commits',
     ]);
     expect(uncovered.ok).toBe(false);
     expect(uncovered.reason).toBe('gh_inventory_gap');

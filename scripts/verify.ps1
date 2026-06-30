@@ -913,6 +913,24 @@ else {
     Add-Failure 'Missing gh inventory static guard (Issue #431)'
 }
 
+Write-Host ''
+Write-Host '== PowerShell $Pid parameter static guard (Issue #534) =='
+$powershellPidParamCheck = Join-Path $Root 'scripts/check-powershell-pid-param-static.ps1'
+if (Test-Path -LiteralPath $powershellPidParamCheck -PathType Leaf) {
+    & $powershellPidParamCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'PowerShell $Pid parameter static guard failed (Issue #534)'
+    }
+}
+else {
+    Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing PowerShell $Pid parameter static guard (Issue #534)'
+}
+
 Write-Check 'verify-runtime/gh-wrapper-vitest' 'SKIP' 'owned by scripts/check-gh-wrapper.ps1 + full Vitest lane (Issue #488)'
 
 
