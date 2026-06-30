@@ -1,20 +1,31 @@
 import { defineConfig } from 'vitest/config';
 
 const ci = process.env.CI === 'true';
+const lightLane = process.env.VITEST_CI_LIGHT_LANE === '1';
+const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
 
 export default defineConfig({
   test: {
     include: ['plugins/**/tests/**/*.test.ts', 'scripts/**/*.test.ts'],
     environment: 'node',
-    testTimeout: 15_000,
-    // GHA runners occasionally hit vitest-worker onTaskUpdate RPC timeouts when
-    // many heavy script integration files run in parallel (all tests pass).
+    // Issue #488 slow-test budget: per-test ceiling must not be below 120s in CI.
+    testTimeout: ci ? 120_000 : 15_000,
+    // Heavy lanes stay serial in-runner (#487/#536). Only classified light files
+    // may use bounded in-process parallelism (#556).
     ...(ci
-      ? {
-          pool: 'forks',
-          fileParallelism: false,
-          maxWorkers: 1,
-        }
+      ? lightLane
+        ? {
+            pool: 'forks',
+            fileParallelism: true,
+            maxWorkers: Number.isFinite(lightMaxWorkers) && lightMaxWorkers >= 1
+              ? Math.min(lightMaxWorkers, 4)
+              : 2,
+          }
+        : {
+            pool: 'forks',
+            fileParallelism: false,
+            maxWorkers: 1,
+          }
       : {}),
   },
 });
