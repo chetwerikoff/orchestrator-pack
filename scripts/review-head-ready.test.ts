@@ -869,7 +869,6 @@ describe('preRunHeadReadyRecheck', () => {
         findingCount: 0,
         terminationReason:
           'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
-        createdAt: '2026-06-16T00:00:00.000Z',
       }],
         sessions: [
           {
@@ -906,7 +905,6 @@ describe('preRunHeadReadyRecheck', () => {
         findingCount: 0,
         terminationReason:
           'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
-        createdAt: '2026-06-16T00:00:00.000Z',
       }],
         sessions: [
           {
