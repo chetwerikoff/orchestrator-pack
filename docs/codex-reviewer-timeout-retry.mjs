@@ -12,6 +12,17 @@ import {
 } from './reviewer-failure-evidence-markers.mjs';
 import { findFailedOrCancelledRunForHead } from './review-trigger-reconcile.mjs';
 
+export {
+  TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+  REPEATED_TIMEOUT_ESCALATION_REASON,
+  REVIEWER_EVIDENCE_PREFIX,
+  DEFAULT_TIMEOUT_RETRY_MAX,
+  resolveTimeoutRetryMax,
+  extractReviewerEvidenceFromText,
+  extractReviewerFailureClass,
+  countSameHeadFailuresByClass,
+} from './reviewer-failure-evidence-markers.mjs';
+
 /**
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
  * @param {number} prNumber
