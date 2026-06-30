@@ -28,9 +28,9 @@ follow-up if imbalance persists after this change.
 Ten successful `scope-guard` runs on `main` before the eight-way experiment are
 documented in `docs/investigations/ci-test-speed-current-baseline.md`:
 
-- **Vitest shard 3/4** was the slowest shard in **10/10** runs (p50 ~9m48s;
-  other shards p50 ~1m54s–2m37s).
-- Workflow critical path p50 **~9m53s** — dominated by shard 3/4, not
+- **Vitest shard 3/4** was the slowest shard in **10/10** runs (p50 **597s** /
+  ~9m57s; other shards p50 **125s** / ~2m05s, range 91s–162s).
+- Workflow critical path p50 **597s** (~9m57s) — dominated by shard 3/4, not
   typecheck, Pester, or `verify-pack`.
 - Root cause: Vitest default round-robin assigns sorted files by index, not by
   duration; heavy integration tests cluster in one bucket.
