@@ -436,6 +436,44 @@ describe('review-start-claim-run-binding', () => {
     expect(resolveBindingProjectNamespace({ claim, projectNamespace: 'other-pack' })).toBe('other-pack');
   });
 
+  it('evaluateReclaimDecision ignores foreign-project in-flight runs when namespace supplied', () => {
+    const claim = {
+      state: 'active',
+      prNumber: 519,
+      headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      launchPending: { atUtc: '2026-06-28T15:44:30.000Z' },
+      launchPendingInvokedAtUtc: '2026-06-28T15:44:30Z',
+    };
+    const reviewRuns = [
+      {
+        id: 'review-run-other-pack',
+        prNumber: 519,
+        targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        project: 'other-pack',
+        status: 'running',
+      },
+    ];
+    const withoutNamespace = evaluateReclaimDecision({
+      claim,
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'dead' },
+      reviewRuns,
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(withoutNamespace.action).toBe('skip');
+    expect(withoutNamespace.reason).toBe('in_flight_covering_run');
+
+    const withNamespace = evaluateReclaimDecision({
+      claim,
+      holderLiveness: { outcome: 'provably_not_alive', reason: 'dead' },
+      reviewRuns,
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+      projectNamespace: 'orchestrator-pack',
+    });
+    expect(withNamespace.action).toBe('terminalize');
+    expect(withNamespace.outcome).toBe('launch_pending_budget_exceeded');
+    expect(withNamespace.reason).not.toBe('in_flight_covering_run');
+  });
+
   it('evaluateClaimRunBinding passes projectNamespace for claim-to-run reconciliation', () => {
     const claim = {
       state: 'active',

@@ -20,7 +20,11 @@ import {
   readProcStartTimeTicks,
   toArray,
 } from './review-run-recovery.mjs';
-import { evaluateLaunchPendingBudgetDecision } from './review-start-claim-run-binding.mjs';
+import {
+  evaluateLaunchPendingBudgetDecision,
+  resolveBindingProjectNamespace,
+  runMatchesBindingKey,
+} from './review-start-claim-run-binding.mjs';
 
 export const CLAIM_LIFECYCLE_SCHEMA_VERSION = 1;
 export const DEFAULT_READINESS_ENVELOPE_MS = 30_000;
@@ -196,12 +200,16 @@ export function evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha)
   };
 }
 
-export function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
+export function findCoveringRunForKey(reviewRuns, prNumber, headSha, projectNamespace) {
   const normalized = normalizeHeadSha(headSha);
+  const namespaceScoped = String(projectNamespace ?? '').trim() !== '';
   let bestInFlight = null;
   let bestTerminal = null;
   for (const run of toArray(reviewRuns)) {
-    if (!runMatchesKey(run, prNumber, normalized)) continue;
+    const keyMatch = namespaceScoped
+      ? runMatchesBindingKey(run, prNumber, normalized, projectNamespace)
+      : runMatchesKey(run, prNumber, normalized);
+    if (!keyMatch) continue;
     const status = normalizeStatus(run?.status);
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     const entry = { run, status, runId: String(run?.id ?? run?.runId ?? '') };
@@ -405,7 +413,18 @@ function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonic
     : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
   if (claim?.visibilityPendingAtUtc) {
     const visibility = evaluateVisibilityFence({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
-    if (visibility.shouldFence || !findCoveringRunForKey(reviewRuns, Number(claim?.prNumber), String(claim?.headSha ?? ''))) {
+    const coveringNamespace = String(projectNamespace ?? '').trim() !== ''
+      ? resolveBindingProjectNamespace({ claim, projectNamespace })
+      : undefined;
+    if (
+      visibility.shouldFence
+      || !findCoveringRunForKey(
+        reviewRuns,
+        Number(claim?.prNumber),
+        String(claim?.headSha ?? ''),
+        coveringNamespace,
+      )
+    ) {
       return {
         action: 'terminalize',
         outcome: 'run_not_visible_fenced',
@@ -506,7 +525,10 @@ export function evaluateReclaimDecision({
     }
   }
 
-  const covered = findCoveringRunForKey(reviewRuns, prNumber, headSha);
+  const coveringNamespace = String(projectNamespace ?? '').trim() !== ''
+    ? resolveBindingProjectNamespace({ claim, projectNamespace })
+    : undefined;
+  const covered = findCoveringRunForKey(reviewRuns, prNumber, headSha, coveringNamespace);
   if (covered && IN_FLIGHT_RUN_STATUSES.includes(covered.status)) {
     return { action: 'skip', reason: 'in_flight_covering_run', runId: covered.runId };
   }
