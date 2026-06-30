@@ -20,6 +20,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-PostRunRetry.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-ReviewStartAudit.ps1')
@@ -39,7 +40,7 @@ if (-not $HeadSha) {
     }
 }
 
-$runs = @(Get-AoReviewRuns -Project $ProjectId)
+$runs = @(Get-EnrichedAoReviewRuns -Project $ProjectId -RepoRoot $PackRoot)
 $payload = @{
     reviewRuns = $runs
     prNumber   = $PrNumber
@@ -55,6 +56,10 @@ if ($coverage.verdict -eq 'covered' -or $activeClaim) {
         -Reason 'manual_override_covered_or_pending' -ClaimOutcome 'manual_warning' -Provenance 'manual-operator' | Out-Null
     Write-Warning "manual review start on covered or pending head PR #$PrNumber head=$HeadSha (claimActive=$activeClaim coverage=$($coverage.verdict))"
 }
+
+$failed = @($runs | Where-Object { $_.prNumber -eq $PrNumber -and $_.targetSha -eq $HeadSha -and $_.status -in @('failed','cancelled') } | Select-Object -First 1)
+Write-ManualOperatorReviewRetryAudit -Namespace $namespace -PrNumber $PrNumber -HeadSha $HeadSha `
+    -FailureClass ([string]$failed.failureClass) -RunId ([string]$failed.id) | Out-Null
 
 & ao review run $SessionId --execute --command $ReviewCommand
 exit $LASTEXITCODE

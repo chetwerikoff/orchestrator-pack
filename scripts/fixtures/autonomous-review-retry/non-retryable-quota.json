@@ -1,0 +1,5 @@
+{
+  "failureClass": "quota_exceeded",
+  "terminationReason": "rate limit exceeded (429)",
+  "expect": { "retryEligible": false }
+}

@@ -25,6 +25,7 @@ import {
 } from '../docs/orchestrator-claimed-review-run.mjs';
 
 const fixturesDir = path.join(repoRoot, 'tests/fixtures/orchestrator-claimed-review-run');
+const scriptsFixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-claimed-review-run');
 const invokePath = path.join(repoRoot, 'scripts/invoke-orchestrator-claimed-review-run.ps1');
 const helperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
@@ -47,8 +48,9 @@ type TurnGateFixture = {
   expect: { launch?: boolean; reason?: string; verdict?: string };
 };
 
-function loadFixture(name: string): TurnGateFixture {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as TurnGateFixture;
+function loadFixture(name: string, fromScripts = false): TurnGateFixture {
+  const dir = fromScripts ? scriptsFixturesDir : fixturesDir;
+  return JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as TurnGateFixture;
 }
 
 function evaluateFixtureTurnGate(fixture: TurnGateFixture) {
@@ -89,7 +91,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
   });
 
   it('failed findingCount 0 is failed_or_cancelled not clean', () => {
-    const fixture = loadFixture('failed-empty-not-clean.json');
+    const fixture = loadFixture('failed-empty-not-clean.json', true);
     const cell = evaluateScenarioMatrixCell({
       claimWindow: 'free',
       reviewRuns: fixture.reviewRuns as never,
@@ -101,7 +103,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
   });
 
   it('retry-eligible failed run launches through full turn gate recheck', () => {
-    const fixture = loadFixture('failed-retry-turn-gate.json');
+    const fixture = loadFixture('failed-retry-turn-gate.json', true);
     const result = evaluateFixtureTurnGate(fixture);
     expect(result.launch).toBe(fixture.expect.launch);
     expect(result.reason).toBe(fixture.expect.reason);
@@ -114,14 +116,24 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(result.reason).toBe(fixture.expect.reason);
   });
 
+  it('records post-run retry ledger only inside orchestrator side-effect fence', () => {
+    const src = readFileSync(helperPath, 'utf8');
+    const fenceIdx = src.indexOf('Invoke-OrchestratorSideEffectFenced');
+    const ledgerIdx = src.indexOf('Register-PostRunAutonomousRetryAttemptFromClaim');
+    expect(fenceIdx).toBeGreaterThan(-1);
+    expect(ledgerIdx).toBeGreaterThan(fenceIdx);
+    const beforeFence = src.slice(0, fenceIdx);
+    expect(beforeFence).not.toContain('Register-PostRunAutonomousRetryAttemptFromClaim');
+  });
+
   const matrixStatuses = [
     { status: 'none', runs: [], free: true, held: false, terminal: true },
     { status: 'running', runs: [{ status: 'running' }], free: false, held: false, terminal: false },
     { status: 'clean', runs: [{ status: 'clean' }], free: false, held: false, terminal: false },
     { status: 'needs_triage', runs: [{ status: 'needs_triage' }], free: false, held: false, terminal: false },
     { status: 'waiting_update', runs: [{ status: 'waiting_update' }], free: false, held: false, terminal: false },
-    { status: 'failed', runs: [{ status: 'failed', retryEligible: true }], free: true, held: false, terminal: true },
-    { status: 'cancelled', runs: [{ status: 'cancelled', retryEligible: true }], free: true, held: false, terminal: true },
+    { status: 'failed', runs: [{ status: 'failed', retryEligible: true, findingCount: 0, terminationReason: 'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}' }], free: true, held: false, terminal: true },
+    { status: 'cancelled', runs: [{ status: 'cancelled', retryEligible: true, findingCount: 0, terminationReason: 'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}' }], free: true, held: false, terminal: true },
   ];
 
   it.each(matrixStatuses)(

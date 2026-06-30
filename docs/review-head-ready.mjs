@@ -40,10 +40,8 @@ import {
   resolveReconcileEvaluationSession,
   toArray,
 } from './review-trigger-reconcile.mjs';
-import {
-  buildTimeoutRetryObserved,
-  resolveFailedRunRetryEligibility,
-} from './codex-reviewer-timeout-retry.mjs';
+import { buildTimeoutRetryObserved } from './codex-reviewer-timeout-retry.mjs';
+import { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';
 
 /** Sustained-quiescence debounce — tied to review-ready stuck grace (Issue #174 / #261). */
 export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
@@ -1357,7 +1355,7 @@ export function buildFailedCancelledObserved(run, prNumber, headSha, reviewRuns 
     status: String(run?.status ?? ''),
     terminationReason: String(run?.terminationReason ?? ''),
     retryEligible: retryState.retryEligible,
-    failureClass: timeoutObserved.failureClass ?? undefined,
+    failureClass: retryState.failureClass ?? timeoutObserved.failureClass ?? undefined,
     escalationReason: retryState.escalationReason ?? timeoutObserved.escalationReason ?? undefined,
     effectiveBudgetMs: timeoutObserved.effectiveBudgetMs ?? undefined,
     testBudgetDecision: timeoutObserved.testBudgetDecision ?? undefined,

@@ -6,34 +6,15 @@ export declare const REVIEWER_EVIDENCE_PREFIX: 'reviewer-evidence:';
 export declare const DEFAULT_TIMEOUT_RETRY_MAX: 1;
 
 export declare function resolveTimeoutRetryMax(env?: NodeJS.ProcessEnv): number;
-
 export declare function extractReviewerEvidenceFromText(
   text: string,
 ): { reviewer: Record<string, unknown> } | null;
-
 export declare function extractReviewerFailureClass(
   run: ReviewRun | null | undefined,
 ): string | null;
-
 export declare function countSameHeadFailuresByClass(
   runs: ReviewRun[],
   prNumber: number,
   headSha: string,
   failureClass: string,
 ): number;
-
-export declare function evaluateTimeoutRetryEligibility(
-  reviewRuns: ReviewRun[],
-  prNumber: number,
-  headSha: string,
-  options?: { maxRetries?: number },
-): {
-  failureClass: string | null;
-  retryEligible: boolean;
-  escalationReason: string | null;
-  timeoutFailureCount: number;
-};
-
-export declare function buildTimeoutRetryObserved(
-  run: ReviewRun | null | undefined,
-): Record<string, unknown>;

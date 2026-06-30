@@ -14,6 +14,7 @@ export function isFailureEvidenceArtifact(record: unknown): boolean;
 export const OUTPUT_WITHHELD_MARKER: string;
 export function createFailureEvidenceArtifact(input: Record<string, unknown>): Record<string, unknown>;
 export function readFailureEvidenceArtifact(storeDir: string, input?: Record<string, unknown>): Record<string, unknown>;
+export function readFailureEvidenceRunPointer(storeDir: string, runId: string): Record<string, unknown> | null;
 export function recordFailureEvidencePhase(input: Record<string, unknown>): Record<string, unknown>;
 export function associateFailureEvidenceRun(input: Record<string, unknown>): Record<string, unknown>;
 export function recordFailureEvidenceOutput(input: Record<string, unknown>): Record<string, unknown>;

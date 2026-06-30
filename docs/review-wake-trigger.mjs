@@ -14,7 +14,7 @@ import {
   resolveCurrentPrHeadSha,
   buildFailedCancelledObserved,
 } from './review-head-ready.mjs';
-import { resolveFailedRunRetryEligibility } from './codex-reviewer-timeout-retry.mjs';
+import { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';
 import {
   evaluateHandoffPreClaimRecheck,
   formatHandoffWakeAuditLine,

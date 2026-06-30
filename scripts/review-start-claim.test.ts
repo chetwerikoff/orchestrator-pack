@@ -839,3 +839,11 @@ describe('incident capture fixtures', () => {
     expect(watch['266:fd2fdb66']?.source).toBe('wake_defer');
   });
 });
+
+describe('review-trigger-reeval launch wiring', () => {
+  it('replaces holdRuns with fresh enriched review runs before ledger registration', () => {
+    const src = readFileSync(reevalInvokePath, 'utf8');
+    expect(src).toMatch(/if \(-not \$FixtureSnapshot\) \{\s*\$holdRuns = @\(\$fresh\.reviewRuns\)/);
+  });
+});
+
