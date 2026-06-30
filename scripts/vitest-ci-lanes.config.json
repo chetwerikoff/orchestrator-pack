@@ -31,6 +31,7 @@
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/autonomous-orchestrator-interposer.test.ts": "heavy",
+    "scripts/autonomous-review-retry.test.ts": "heavy",
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": "heavy",
     "scripts/autonomous-spawn-budget.test.ts": "heavy",
     "scripts/autonomous-spawn-policy.test.ts": "heavy",
@@ -54,6 +55,7 @@
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts": "heavy",
     "scripts/gh-wrapper.test.ts": "heavy",
     "scripts/github-fleet-cache-bypass-guard.test.ts": "heavy",
+    "scripts/github-fleet-cache-bypass.test.ts": "heavy",
     "scripts/github-fleet-cache-coalesce.test.ts": "heavy",
     "scripts/github-fleet-cache-memo.test.ts": "heavy",
     "scripts/github-fleet-cache-stale-snapshot.test.ts": "heavy",
@@ -65,6 +67,7 @@
     "scripts/orchestrator-wake-listener.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor.test.ts": "heavy",
     "scripts/pr-scope-check.test.ts": "heavy",
+    "scripts/publish-issue-body-sync.test.ts": "heavy",
     "scripts/reaction-config-messages.test.ts": "light",
     "scripts/read-delegation-audit.test.ts": "heavy",
     "scripts/reverify-allowlist-config.test.ts": "heavy",
@@ -85,6 +88,7 @@
     "scripts/review-send-reconcile.test.ts": "light",
     "scripts/review-start-claim-budget-semantics.test.ts": "heavy",
     "scripts/review-start-claim-lifecycle.test.ts": "light",
+    "scripts/review-start-claim-run-binding.test.ts": "heavy",
     "scripts/review-start-claim.test.ts": "heavy",
     "scripts/review-start-envelope-external-io.test.ts": "heavy",
     "scripts/review-start-envelope-ledger.test.ts": "heavy",
@@ -111,6 +115,7 @@
     "scripts/worker-nudge-issue-owner-bootstrap.test.ts": "heavy",
     "scripts/worker-nudge-task-continuation-pr-facet.test.ts": "light",
     "scripts/worker-nudge-task-continuation-tuple.test.ts": "light",
+    "scripts/worker-recovery.test.ts": "heavy",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light"
   }
 }
