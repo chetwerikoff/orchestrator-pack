@@ -24,16 +24,6 @@ function Get-ReviewStartClaimProjectNamespace {
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'review-start-claims')
 }
 
-function Resolve-ReviewStartClaimProjectIdFromNamespace {
-    param([string]$Namespace)
-
-    $normalized = ([string]$Namespace).Replace('\', '/').TrimEnd('/')
-    if ($normalized -match '/projects/([^/]+)/review-start-claims$') {
-        return $Matches[1]
-    }
-    return 'orchestrator-pack'
-}
-
 function Resolve-ReviewStartClaimNamespace {
     param(
         [string]$ProjectId = 'orchestrator-pack',

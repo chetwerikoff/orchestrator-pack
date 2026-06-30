@@ -29,6 +29,16 @@ function Resolve-ReviewStartClaimBindingProjectId {
     return 'orchestrator-pack'
 }
 
+function Resolve-ReviewStartClaimProjectIdFromNamespace {
+    param([string]$Namespace)
+
+    $normalized = ([string]$Namespace).Replace('\', '/').TrimEnd('/')
+    if ($normalized -match '/projects/([^/]+)/review-start-claims$') {
+        return $Matches[1]
+    }
+    return 'orchestrator-pack'
+}
+
 function Test-AutomatedReviewLaunchClaimGate {
     param(
         [hashtable]$ClaimResult,

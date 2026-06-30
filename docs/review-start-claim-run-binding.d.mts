@@ -26,6 +26,7 @@ export function isClaimReconciled(claim: Record<string, unknown> | null | undefi
 
 export function findMatchingClaimForRun(input: Record<string, unknown>): Record<string, unknown>;
 export function evaluateAutomatedLaunchClaimGate(input: Record<string, unknown>): Record<string, unknown>;
+export function resolveBindingProjectNamespace(input?: Record<string, unknown>): string;
 export function diagnoseMissingClaimForReviewRun(input: Record<string, unknown>): Record<string, unknown>;
 export function evaluateLaunchPendingRunBinding(input: Record<string, unknown>): Record<string, unknown>;
 export function evaluateLaunchPendingBudgetDecision(input: Record<string, unknown>): Record<string, unknown>;
