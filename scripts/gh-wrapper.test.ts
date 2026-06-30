@@ -675,19 +675,25 @@ describe('prInfoFromView wrapper integration (Issue #530)', () => {
   });
 
 
-  it('parsePullReference preserves owner/repo from full PR URLs (review #531)', () => {
+  it('parsePullReference preserves owner/repo and host from full PR URLs (review #531)', () => {
     expect(parsePullReference('https://github.com/other-owner/other-repo/pull/123')).toEqual({
       prNumber: 123,
       slug: 'other-owner/other-repo',
-      host: null,
+      host: 'github.com',
+    });
+    expect(parsePullReference('https://ghe.example.com/acme/widget/pull/99')).toEqual({
+      prNumber: 99,
+      slug: 'acme/widget',
+      host: 'ghe.example.com',
     });
     expect(parsePullReference('123')).toEqual({ prNumber: 123 });
     expect(parsePullReference('feat/branch')).toBeNull();
   });
 
   it('routePrView uses URL owner/repo instead of ambient --repo (review #531)', () => {
-    const apiSpy = vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh, endpoint) => {
+    const apiSpy = vi.spyOn(repoResolve, 'ghApiJson').mockImplementation((_realGh, endpoint, options) => {
       expect(endpoint).toBe('repos/other-owner/other-repo/pulls/123');
+      expect(options?.hostname).toBe('github.com');
       return SAMPLE_REST_PULL;
     });
     try {

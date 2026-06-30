@@ -117,11 +117,12 @@ export function parsePullReference(ref) {
     const prNumber = Number(numStr);
     if (Number.isFinite(prNumber) && prNumber > 0) {
       const slug = `${owner}/${repoName}`;
-      const normalizedHost = host.toLowerCase();
       return {
         prNumber,
         slug,
-        host: normalizedHost === 'github.com' ? null : host,
+        // Preserve explicit URL host so ghApiJson passes --hostname and does not
+        // inherit GH_HOST (GHE) when the ref is a public github.com PR URL.
+        host,
       };
     }
   }
