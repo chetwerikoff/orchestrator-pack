@@ -491,11 +491,9 @@ describe('orchestrator-wake-supervisor', () => {
       expect(script).toContain(`'-ProjectId' ${quotedProjectId}`);
       expect(script).not.toMatch(/-ProjectId proj&/);
       expect(script).not.toMatch(/nohup pwsh -NoProfile /);
-      if (process.platform === 'linux') {
-        expect(script).toMatch(/\bsetsid\b/);
-      } else if (process.platform === 'darwin') {
-        expect(script).not.toMatch(/\bsetsid\b/);
-      }
+      expect(script).toContain('command -v setsid');
+      expect(script).toMatch(/setsid nohup pwsh/);
+      expect(script).toMatch(/POSIX::setsid/);
 
       const apostropheDir = makeStateDir();
       const apostropheProject = "team's-pack";
