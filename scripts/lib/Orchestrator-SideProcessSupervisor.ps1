@@ -1470,12 +1470,14 @@ function Start-OrchestratorWakeSupervisorDaemon {
                 Format-UnixShellSingleQuotedArgument -Value $_
             }) -join ' '
         $packScriptsQuoted = Format-UnixShellSingleQuotedArgument -Value (Get-OrchestratorSideProcessPackScriptsDir)
+        $detachPrefix = if ($IsLinux) { 'setsid ' } else { '' }
+        $launchLine = "${detachPrefix}nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 < /dev/null &"
         $launcherContent = @(
             '#!/usr/bin/env bash'
             'set -euo pipefail'
             "cd $(Format-UnixShellSingleQuotedArgument -Value $WorkingDirectory)"
             ('export PATH={0}:${{PATH:-}}' -f $packScriptsQuoted)
-            "setsid nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 < /dev/null &"
+            $launchLine
             'echo $!'
         ) -join "`n"
         Set-Content -LiteralPath $launcher -Value $launcherContent -Encoding utf8 -NoNewline
