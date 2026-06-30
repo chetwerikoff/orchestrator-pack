@@ -388,6 +388,77 @@ describe('autonomous-review-retry', () => {
     }
   });
 
+  it('rejects sidecar evidence without by-run pointer', () => {
+    const headSha = 'abc53900000000000000000000000000000000000';
+    const run = {
+      id: 'run-no-pointer',
+      prNumber: 539,
+      targetSha: headSha,
+      reviewerSessionId: 'opk-rev-no-pointer',
+      status: 'failed',
+      findingCount: 0,
+      terminationReason: 'Command failed',
+      createdAt: '2026-06-30T00:00:00.000Z',
+    };
+    const artifact = {
+      schemaVersion: 1,
+      reviewerSessionId: 'opk-rev-no-pointer',
+      runId: 'run-no-pointer',
+      phases: [],
+      stderrTail:
+        'reviewer-evidence:{"reviewer":{"failureClass":"timeout_no_verdict"}}',
+    };
+    const enriched = enrichReviewRun(run, {
+      evidenceByRunId: { 'run-no-pointer': { artifact } },
+      allRuns: [run],
+    });
+    expect(enriched.failureClass).toBe('unknown');
+    expect(enriched.retryEligible).toBe(false);
+  });
+
+  it('rejects reused reviewer session across unrelated runs on enrich path', () => {
+    const headSha = 'abc53900000000000000000000000000000000000';
+    const runA = {
+      id: 'run-a',
+      prNumber: 539,
+      targetSha: headSha,
+      reviewerSessionId: 'opk-rev-shared',
+      status: 'failed',
+      findingCount: 0,
+      terminationReason: 'Command failed',
+      createdAt: '2026-06-30T00:00:00.000Z',
+    };
+    const runB = {
+      id: 'run-b',
+      prNumber: 539,
+      targetSha: headSha,
+      reviewerSessionId: 'opk-rev-shared',
+      status: 'failed',
+      findingCount: 0,
+      terminationReason: 'Command failed',
+      createdAt: '2026-06-30T01:00:00.000Z',
+    };
+    const artifact = {
+      schemaVersion: 1,
+      reviewerSessionId: 'opk-rev-shared',
+      runId: 'run-a',
+      phases: [],
+      stderrTail:
+        'reviewer-evidence:{"reviewer":{"failureClass":"timeout_no_verdict"}}',
+    };
+    const pointer = {
+      schemaVersion: 1,
+      runId: 'run-a',
+      reviewerSessionId: 'opk-rev-shared',
+    };
+    const enriched = enrichReviewRun(runA, {
+      evidenceByRunId: { 'run-a': { artifact, pointer } },
+      allRuns: [runA, runB],
+    });
+    expect(enriched.failureClass).toBe('unknown');
+    expect(enriched.retryEligible).toBe(false);
+  });
+
   it('rejects stale sidecar linkage', () => {
     for (const name of ['sidecar-stale-pointer.json', 'sidecar-fingerprint-mismatch.json']) {
       const fixture = loadFixture<{

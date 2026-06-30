@@ -40,6 +40,7 @@ export declare function validateSidecarJoin(
 export declare function classifyPostRunFailure(
   run: ReviewRun,
   evidence?: Record<string, unknown>,
+  allRuns?: ReviewRun[],
 ): { failureClass: string; source: string };
 export declare function enrichReviewRun(
   run: ReviewRun,

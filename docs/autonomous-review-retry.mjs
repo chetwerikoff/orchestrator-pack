@@ -18,7 +18,10 @@ import {
   POST_RUN_RETRY_LEDGER_VERSION,
   readPostRunLedgerEntry,
 } from './post-run-retry-ledger.mjs';
-import { resolveFailureEvidenceForRun } from './reviewer-failure-evidence.mjs';
+import {
+  resolveFailureEvidenceForRun,
+  readFailureEvidenceRunPointer,
+} from './reviewer-failure-evidence.mjs';
 import { fingerprintRun } from './review-run-recovery.mjs';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
@@ -184,16 +187,17 @@ export function validateSidecarJoin(run, artifact, pointer = null, allRuns = [])
   if (!artifact || typeof artifact !== 'object') {
     return { ok: false, reason: 'missing_sidecar' };
   }
-  if (pointer && typeof pointer === 'object') {
-    const pointerRunId = String(pointer.runId ?? '').trim();
-    if (!pointerRunId || pointerRunId !== runId) {
-      return { ok: false, reason: 'stale_or_missing_by_run_pointer' };
-    }
-    const pointerSession = String(pointer.reviewerSessionId ?? '').trim();
-    const artifactSession = String(artifact.reviewerSessionId ?? '').trim();
-    if (pointerSession && artifactSession && pointerSession !== artifactSession) {
-      return { ok: false, reason: 'pointer_session_mismatch' };
-    }
+  if (!pointer || typeof pointer !== 'object') {
+    return { ok: false, reason: 'stale_or_missing_by_run_pointer' };
+  }
+  const pointerRunId = String(pointer.runId ?? '').trim();
+  if (!pointerRunId || pointerRunId !== runId) {
+    return { ok: false, reason: 'stale_or_missing_by_run_pointer' };
+  }
+  const pointerSession = String(pointer.reviewerSessionId ?? '').trim();
+  const artifactSession = String(artifact.reviewerSessionId ?? '').trim();
+  if (pointerSession && artifactSession && pointerSession !== artifactSession) {
+    return { ok: false, reason: 'pointer_session_mismatch' };
   }
   const artifactRunId = String(artifact.runId ?? '').trim();
   if (artifactRunId && artifactRunId !== runId) {
@@ -233,12 +237,12 @@ export function validateSidecarJoin(run, artifact, pointer = null, allRuns = [])
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun} run
  * @param {{ artifact?: Record<string, unknown>, pointer?: Record<string, unknown>, joinRejected?: boolean }} [evidence]
  */
-export function classifyPostRunFailure(run, evidence = {}) {
+export function classifyPostRunFailure(run, evidence = {}, allRuns = []) {
   if (evidence.joinRejected) {
     return { failureClass: FAILURE_CLASS_UNKNOWN, source: 'join_rejected' };
   }
   if (evidence.artifact) {
-    const join = validateSidecarJoin(run, evidence.artifact, evidence.pointer);
+    const join = validateSidecarJoin(run, evidence.artifact, evidence.pointer, allRuns);
     if (!join.ok) {
       return { failureClass: FAILURE_CLASS_UNKNOWN, source: join.reason };
     }
@@ -283,11 +287,11 @@ export function enrichReviewRun(run, options = {}) {
     return { ...run };
   }
 
-  const classified = classifyPostRunFailure(run, evidenceContext);
+  const reviewRuns = options.allRuns ?? options.reviewRuns ?? [run];
+  const classified = classifyPostRunFailure(run, evidenceContext, reviewRuns);
   const failureClass = classified.failureClass;
   const prNumber = Number(run?.prNumber);
   const headSha = normalizeSha(String(run?.targetSha ?? ''));
-  const reviewRuns = options.allRuns ?? options.reviewRuns ?? [run];
   const decision = evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha, {
     failureClass,
     maxRetries: options.maxRetries,
@@ -329,7 +333,10 @@ export function buildEvidenceByRunIdFromStore(storeDir, runs) {
     }
     const resolved = resolveFailureEvidenceForRun(storeDir, run);
     if (resolved.ok && resolved.artifact) {
-      evidenceByRunId[runId] = { artifact: resolved.artifact };
+      const pointer = readFailureEvidenceRunPointer(storeDir, runId);
+      evidenceByRunId[runId] = pointer
+        ? { artifact: resolved.artifact, pointer }
+        : { artifact: resolved.artifact };
     }
   }
   return evidenceByRunId;
@@ -600,7 +607,11 @@ runStdinJsonCli('autonomous-review-retry.mjs', {
   },
   classifyPostRunFailure: () => {
     const payload = readStdinJson();
-    return classifyPostRunFailure(payload?.run ?? {}, payload?.evidence ?? {});
+    return classifyPostRunFailure(
+      payload?.run ?? {},
+      payload?.evidence ?? {},
+      payload?.allRuns ?? payload?.reviewRuns ?? [],
+    );
   },
   validateSidecarJoin: () => {
     const payload = readStdinJson();
