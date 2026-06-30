@@ -16,18 +16,122 @@ if (-not $ScriptsRoot) {
     $ScriptsRoot = Join-Path $Root 'scripts'
 }
 
+function Get-BalancedParenInner {
+    param(
+        [string]$Content,
+        [int]$OpenParenIndex
+    )
+
+    if ($OpenParenIndex -lt 0 -or $OpenParenIndex -ge $Content.Length -or $Content[$OpenParenIndex] -ne '(') {
+        return $null
+    }
+
+    $depth = 0
+    for ($i = $OpenParenIndex; $i -lt $Content.Length; $i++) {
+        switch ($Content[$i]) {
+            '(' { $depth++ }
+            ')' {
+                $depth--
+                if ($depth -eq 0) {
+                    return $Content.Substring($OpenParenIndex + 1, $i - $OpenParenIndex - 1)
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-ParamBlockInners {
+    param([string]$Content)
+
+    $inners = @()
+    $pattern = [regex]'(?is)\bparam\s*\('
+    foreach ($match in $pattern.Matches($Content)) {
+        $openIndex = $match.Index + $match.Length - 1
+        $inner = Get-BalancedParenInner -Content $Content -OpenParenIndex $openIndex
+        if ($null -ne $inner) {
+            $inners += $inner
+        }
+    }
+    return $inners
+}
+
+function Get-FunctionParamInners {
+    param([string]$Content)
+
+    $inners = @()
+    $pattern = [regex]'(?is)\bfunction\s+\S+\s*\('
+    foreach ($match in $pattern.Matches($Content)) {
+        $openIndex = $match.Index + $match.Length - 1
+        $inner = Get-BalancedParenInner -Content $Content -OpenParenIndex $openIndex
+        if ($null -ne $inner) {
+            $inners += $inner
+        }
+    }
+    return $inners
+}
+
+function Split-ParamSegments {
+    param([string]$ParamInner)
+
+    $segments = @()
+    $current = [System.Text.StringBuilder]::new()
+    $depth = 0
+    for ($i = 0; $i -lt $ParamInner.Length; $i++) {
+        $ch = $ParamInner[$i]
+        switch ($ch) {
+            '(' { $depth++ }
+            '[' { $depth++ }
+            ')' { $depth-- }
+            ']' { $depth-- }
+        }
+        if ($ch -eq ',' -and $depth -eq 0) {
+            $segments += $current.ToString()
+            [void]$current.Clear()
+            continue
+        }
+        [void]$current.Append($ch)
+    }
+    if ($current.Length -gt 0) {
+        $segments += $current.ToString()
+    }
+    return $segments
+}
+
 function Test-ParamSegmentDeclaresPid {
     param([string]$Segment)
 
-    $trimmed = $Segment.Trim()
-    if (-not $trimmed) { return $false }
-    return $trimmed -match '(?i)^(?:\[[^\]]+\]\s*)*\$pid\b'
+    $rest = $Segment.Trim()
+    if (-not $rest) { return $false }
+
+    while ($rest.StartsWith('[')) {
+        $depth = 0
+        $consumed = $false
+        for ($i = 0; $i -lt $rest.Length; $i++) {
+            switch ($rest[$i]) {
+                '[' { $depth++ }
+                ']' {
+                    $depth--
+                    if ($depth -eq 0) {
+                        $rest = $rest.Substring($i + 1).TrimStart()
+                        $consumed = $true
+                        break
+                    }
+                }
+            }
+            if ($consumed) { break }
+        }
+        if (-not $consumed) { return $false }
+    }
+
+    return $rest -match '(?i)^\$pid\b'
 }
 
 function Test-ParamInnerDeclaresPid {
     param([string]$ParamInner)
 
-    foreach ($segment in ($ParamInner -split ',')) {
+    foreach ($segment in (Split-ParamSegments -ParamInner $ParamInner)) {
         if (Test-ParamSegmentDeclaresPid -Segment $segment) {
             return $true
         }
@@ -38,16 +142,14 @@ function Test-ParamInnerDeclaresPid {
 function Test-PidParamDeclaration {
     param([string]$Content)
 
-    $paramPattern = [regex]'(?is)\bparam\s*\((?<params>.*?)\)'
-    foreach ($match in $paramPattern.Matches($Content)) {
-        if (Test-ParamInnerDeclaresPid -ParamInner $match.Groups['params'].Value) {
+    foreach ($inner in (Get-ParamBlockInners -Content $Content)) {
+        if (Test-ParamInnerDeclaresPid -ParamInner $inner) {
             return $true
         }
     }
 
-    $functionPattern = [regex]'(?is)\bfunction\s+\S+\s*\((?<params>[^)]*)\)'
-    foreach ($match in $functionPattern.Matches($Content)) {
-        if (Test-ParamInnerDeclaresPid -ParamInner $match.Groups['params'].Value) {
+    foreach ($inner in (Get-FunctionParamInners -Content $Content)) {
+        if (Test-ParamInnerDeclaresPid -ParamInner $inner) {
             return $true
         }
     }
