@@ -122,6 +122,18 @@ describe('gh inventory matcher', () => {
     expect(route?.prNumber).toBe(491);
   });
 
+
+  it('routes spawn-gate headRefOid,headRefName pr view via REST inventory (Issue #546)', () => {
+    for (const argv of [
+      ['pr', 'view', '527', '--json', 'headRefOid,headRefName'],
+      ['pr', 'view', '527', '--repo', 'chetwerikoff/orchestrator-pack', '--json', 'headRefOid,headRefName'],
+    ] as const) {
+      const { route } = classifyArgv([...argv]);
+      expect(route?.id).toBe('pr-view');
+      expect(route?.prNumber).toBe(527);
+    }
+  });
+
   it('routes getPRState state-only pr view via REST inventory (Issue #538)', () => {
     for (const argv of [
       ['pr', 'view', '527', '--json', 'state'],
@@ -373,6 +385,51 @@ esac
 `);
   return { fakeGh, audit };
 }
+
+
+describe('gh pr view head-ref REST execution (Issue #546)', () => {
+  it('executes headRefOid,headRefName pr view via REST without graphql under exhausted harness', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-head-ref-'));
+    try {
+      const audit = join(root, 'audit.log');
+      const fakeGh = join(root, 'fake-gh');
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+printf '%s\n' "$*" >>"$audit"
+joined="$*"
+if [[ "$joined" == *graphql* ]] || [[ "$joined" == *"pr view"* ]]; then
+  echo 'GraphQL quota exhausted (https://api.github.com/graphql)' >&2
+  exit 1
+fi
+case "$joined" in
+  *"api repos/o/r/pulls/527"*)
+    echo '{"number":527,"head":{"sha":"abc123def456","ref":"feat/546"}}'
+    ;;
+  *)
+    echo "fake-gh: unhandled argv: $joined" >&2
+    exit 1
+    ;;
+esac
+`);
+      const argv = ['pr', 'view', '527', '--repo', 'o/r', '--json', 'headRefOid,headRefName'];
+      const parsed = parseGhArgv(argv);
+      const result = executeRestRoute('pr-view', {
+        realGh: fakeGh,
+        parsed,
+        route: { id: 'pr-view', prNumber: 527 },
+        cwd: root,
+      });
+      expect(result).toEqual({ headRefOid: 'abc123def456', headRefName: 'feat/546' });
+
+      const auditLog = readFileSync(audit, 'utf8');
+      expect(auditLog).not.toMatch(/graphql/i);
+      expect(auditLog).toMatch(/api repos\/o\/r\/pulls\/527/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('gh pr view state-only REST execution (Issue #538)', () => {
   it('executes state-only pr view via REST without graphql under exhausted harness', () => {

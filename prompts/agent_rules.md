@@ -400,6 +400,14 @@ error is expected — use `gh api <REST path>` (REST endpoint only) for the need
 the uncovered argv shape for inventory extension, and never fall back to GraphQL/curl/shim
 improvisation.
 
+**New GitHub read shapes (Issue #546):** before recommending or committing any new pack-owned
+`gh` read argv shape, verify it is already classified by pack `scripts/gh` inventory
+(`classifyArgv` / `scripts/check-gh-inventory-static.ps1`). An uncovered executable read form is
+an **inventory-extension report**, not permission to bypass the wrapper (see **Forbidden
+transports** above). Prefer extending the existing inventory route for the verified field set;
+explicit REST-only `gh api repos/...` reads and documented intentional passthrough exceptions
+remain the only other allowed shapes.
+
 ## Command-runtime bootstrap (Issue #532)
 
 Before autonomous orchestrator command turns run side-effecting pack workflows, the command runtime

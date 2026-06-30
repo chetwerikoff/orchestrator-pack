@@ -113,6 +113,32 @@ describe('gh inventory static guard', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+
+  it('fails on unclassified pr view unknownField shape (Issue #546)', () => {
+    expect(isInventoryCoveredCommand('gh pr view 123 --json unknownField')).toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-unknown-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(file, 'gh pr view 123 --json unknownField
+', 'utf8');
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations.some((v) => v.command.includes('unknownField'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('passes classified spawn-gate headRef shape and explicit REST api reads (Issue #546)', () => {
+    expect(isInventoryCoveredCommand('gh pr view 527 --json headRefOid,headRefName')).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-covered-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(
+      file,
+      "gh pr view 527 --json headRefOid,headRefName\ngh api repos/o/r/pulls/527 --jq .head.sha\n",
+      'utf8',
+    );
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('passes investigate_root_cause.md RCA prompt scan (Issue #520)', () => {
     const violations = scanFileForViolations('prompts/investigate_root_cause.md', 'rules');
     expect(violations).toEqual([]);
