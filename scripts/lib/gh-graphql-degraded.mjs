@@ -74,6 +74,20 @@ function hostnameFlagArgs(hostname, explicitHostname) {
   return [];
 }
 
+/**
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} hostname
+ */
+export function resolveEnvTokenForHost(env, hostname) {
+  if (hostname !== DEFAULT_HOST) {
+    const enterprise = env.GH_ENTERPRISE_TOKEN || env.GITHUB_ENTERPRISE_TOKEN || env.GHE_TOKEN;
+    if (enterprise) {
+      return enterprise;
+    }
+  }
+  return env.GH_TOKEN || env.GITHUB_TOKEN || null;
+}
+
 const GH_API_VALUE_FLAGS = new Set([
   '--hostname',
   '--method',
@@ -148,7 +162,7 @@ export function resolveCredentialFingerprint(
   hostname = DEFAULT_HOST,
   explicitHostname = false,
 ) {
-  const envToken = env.GH_TOKEN || env.GITHUB_TOKEN;
+  const envToken = resolveEnvTokenForHost(env, hostname);
   if (envToken) {
     return hashFingerprint(`env-token:${envToken}`);
   }

@@ -14,6 +14,7 @@ export function resolveCredentialFingerprint(
   hostname?: string,
   explicitHostname?: boolean,
 ): string;
+export function resolveEnvTokenForHost(env: NodeJS.ProcessEnv, hostname: string): string | null;
 export function resolvePartitionKey(realGh: string, argv: string[], env?: NodeJS.ProcessEnv): string;
 export function resolveCacheDir(env?: NodeJS.ProcessEnv): string;
 export function cacheFilePath(cacheDir: string, partitionKey: string): string;

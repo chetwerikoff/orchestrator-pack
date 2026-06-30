@@ -18,6 +18,7 @@ import {
   fetchRateLimitGraphql,
   isGraphqlPassthroughArgv,
   isPrimaryGraphqlQuotaExhaustion,
+  resolveEnvTokenForHost,
   resolvePartitionKey,
   writeDegradedCache,
 } from './lib/gh-graphql-degraded.mjs';
@@ -1307,6 +1308,21 @@ tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={
     } finally {
       harness.cleanup();
     }
+  });
+
+  it('fingerprints enterprise hosts from GH_ENTERPRISE_TOKEN instead of GH_TOKEN', () => {
+    const gheArgv = ['api', '--hostname', 'ghe.example', 'graphql', '-f', 'query={viewer{login}}'];
+    const keyA = resolvePartitionKey('fake-gh', gheArgv, {
+      GH_TOKEN: 'shared-dotcom',
+      GHE_TOKEN: 'enterprise-a',
+    } as NodeJS.ProcessEnv);
+    const keyB = resolvePartitionKey('fake-gh', gheArgv, {
+      GH_TOKEN: 'shared-dotcom',
+      GHE_TOKEN: 'enterprise-b',
+    } as NodeJS.ProcessEnv);
+    expect(keyA).not.toBe(keyB);
+    expect(resolveEnvTokenForHost({ GH_TOKEN: 'dotcom', GHE_TOKEN: 'ent' } as NodeJS.ProcessEnv, 'ghe.example')).toBe('ent');
+    expect(resolveEnvTokenForHost({ GH_TOKEN: 'dotcom', GHE_TOKEN: 'ent' } as NodeJS.ProcessEnv, 'github.com')).toBe('dotcom');
   });
 
   it('classifies primary GraphQL quota exhaustion separately from non-triggers', () => {
