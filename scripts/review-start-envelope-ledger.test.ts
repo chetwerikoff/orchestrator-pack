@@ -224,6 +224,55 @@ describe('review-start-envelope-ledger unit', () => {
     expect(result.reviewRunCount).toBeGreaterThanOrEqual(1);
   });
 
+  it('pre-claim snapshot loads post-run retry ledger from claim namespace', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    expect(src).toMatch(/Resolve-ReviewStartClaimNamespace/);
+
+    const dir = tempClaimDir();
+    const headSha = 'abc53900000000000000000000000000000000000';
+    const postRunRetryPath = path.join(repoRoot, 'scripts/lib/Review-PostRunRetry.ps1');
+    try {
+      const script = `
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(dir)}
+        $sha = ${psString(headSha)}
+        function Invoke-GhOpenPrList { param([string]$RepoRoot); return @(@{ number = 539; headRefOid = $sha; baseRefName = 'main' }) }
+        function Get-AoReviewRuns { param([string]$Project); return @(@{
+          id = 'timeout-1'
+          prNumber = 539
+          targetSha = $sha
+          status = 'failed'
+          findingCount = 0
+          terminationReason = 'reviewer-evidence:{"reviewer":{"failureClass":"timeout_no_verdict"}}'
+        }) }
+        function Get-AoStatusSessions { return @() }
+        function Add-GhPrHeadCommittedAtFromFleetMemo { param([string]$RepoRoot, $Pr) }
+        . ${psString(postRunRetryPath)}
+        Register-PostRunAutonomousRetryAttempt -Namespace $env:AO_REVIEW_CLAIM_DIR -PrNumber 539 -HeadSha $sha -FailureClass 'timeout_no_verdict' -RunId 'timeout-1' | Out-Null
+        . ${psString(snapshotHelperPath)}
+        $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 539 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
+          param($openPrs, $prNumber, $repoRoot)
+          @{
+            ciChecksByPr = @{ '539' = @() }
+            requiredCheckNamesByPr = @{ '539' = @('Verify orchestrator-pack structure') }
+            requiredCheckLookupFailedByPr = @{ '539' = $false }
+          }
+        }
+        $run = @($snapshot.reviewRuns)[0]
+        [pscustomobject]@{
+          retryEligible = [bool]$run.retryEligible
+          autonomousAttemptCount = [int]$run.autonomousAttemptCount
+          effectiveFailureCount = [int]$run.effectiveFailureCount
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.autonomousAttemptCount).toBe(1);
+      expect(result.effectiveFailureCount).toBe(2);
+      expect(result.retryEligible).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reeval-fresh-snapshot-scopes-checks-to-planned-pr', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).toMatch(
