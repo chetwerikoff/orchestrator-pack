@@ -1151,6 +1151,26 @@ Measured missed-savings follow-up to #145. No passthrough manifest change on the
 
 Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
 
+
+## Wake-supervisor open-PR snapshot no-child bypass (Issue #553)
+
+Wake-supervisor children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,
+`review-send-reconcile`, `review-finding-delivery-confirm`, `ci-failure-notification-reconcile`,
+`ci-failure-notification-reaction`) must consume the shared REST-backed open-PR snapshot from
+`AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/` and must not fail through to per-child upstream
+`gh pr list` when the snapshot is warm. Producer REST `403` surfaces as
+`snapshot_populate_failed`; child bypass attempts surface as `child_list_bypass`.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop`
+2. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Wait ≥120s, then `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status`
+4. During a warm snapshot window, affected child logs must not repeat
+   `gh pr list failed ... gh-wrapper: REST route failed ... (HTTP 403)` per tick.
+5. If a single producer `403` remains after duplicate child list calls are gone, track via the
+   existing Phase 2 hard-gate path (`#142`) — not this issue.
+
 ## Operator adoption contract
 
 Merged worker PRs often change `agent-orchestrator.yaml.example` and docs while
