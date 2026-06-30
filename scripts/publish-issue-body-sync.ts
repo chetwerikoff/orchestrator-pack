@@ -6,9 +6,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   isDirectCliExecution,
+  handleCliHelpOrJson,
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
   runReviewerTsCli,
+  throwUnknownCliArg,
 } from './lib/reviewer-ts-cli.js';
 import {
   readDraftFile,
@@ -65,16 +67,13 @@ function parseArgs(argv: string[]): CliOptions {
       case '--title':
         opts.title = String(argv[++i] ?? '');
         break;
-      case '--json':
-        opts.json = true;
-        break;
-      case '--help':
-      case '-h':
-        console.log(usage());
-        process.exit(0);
-        break;
       default:
-        throw new Error(`Unknown argument: ${arg}\n${usage()}`);
+        if (!handleCliHelpOrJson(arg, usage(), () => {
+          opts.json = true;
+        })) {
+          throwUnknownCliArg(arg, usage());
+        }
+        break;
     }
   }
 

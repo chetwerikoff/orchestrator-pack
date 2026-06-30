@@ -316,7 +316,16 @@ export function syncPublishIssueBody(
     }
   }
 
-  const resolvedIssueNumber = issueNumber ?? input.issueNumber;
+  const resolvedIssueNumber =
+    issueNumber ?? (input.mode === 'create' ? null : input.issueNumber);
+  if (!resolvedIssueNumber) {
+    return {
+      ok: false,
+      issueNumber: null,
+      message: 'issue number is required for live REST parity read',
+      audit,
+    };
+  }
   const liveRead = readLiveIssueBodyViaRest(deps, input.repo, resolvedIssueNumber);
   if (liveRead.exitCode !== 0) {
     return {
@@ -347,7 +356,7 @@ export function syncPublishIssueBody(
     ok: true,
     issueNumber: resolvedIssueNumber,
     audit: audit ?? buildMutationAuditRecord({
-      mode: input.mode === 'verify' ? 'issue edit' : input.mode,
+      mode: input.mode === 'create' ? 'create' : 'edit',
       repo: input.repo,
       issueNumber: resolvedIssueNumber,
       bodyFilePath: '<verify-only>',

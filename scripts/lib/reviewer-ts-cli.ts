@@ -37,3 +37,23 @@ export function parseRequiredNonEmptyString(
   }
   return trimmed;
 }
+
+export function handleCliHelpOrJson(
+  arg: string,
+  usage: string,
+  onJson: () => void,
+): boolean {
+  if (arg === '--json') {
+    onJson();
+    return true;
+  }
+  if (arg === '--help' || arg === '-h') {
+    console.log(usage);
+    process.exit(0);
+  }
+  return false;
+}
+
+export function throwUnknownCliArg(arg: string, usage: string): never {
+  throw new Error(`Unknown argument: ${arg}\n${usage}`);
+}
