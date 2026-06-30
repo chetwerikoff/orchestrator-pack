@@ -459,7 +459,7 @@ describe('review-start-claim-run-binding', () => {
       projectNamespace: 'other-pack',
     });
     expect(withNamespace.direction).toBe('claim_to_run');
-    expect(withNamespace.reconcile?.reconcile).toBe(true);
+    expect((withNamespace.reconcile as { reconcile?: boolean } | undefined)?.reconcile).toBe(true);
 
     const wrongNamespace = evaluateClaimRunBinding({
       claim,
