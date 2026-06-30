@@ -38,7 +38,8 @@ unless the fallback conditions in this skill apply.
 
 - Draft at `docs/issues_drafts/NN-<slug>.md` with `GitHub Issue: #N` (not TBD).
 - Codex draft review done (`NO_FINDINGS` or 5-iteration cap with open questions recorded).
-- `gh issue create` / `gh issue edit` synced the body.
+- Issue body synced through `scripts/publish-issue-body-sync` (sanctioned
+  `gh issue create` / `gh issue edit` with `--body-file` plus live REST parity).
 - Registry row for this draft defined (draft path → issue **N**); Cursor lands it in
   `docs/issue_queue_index.md` at publish — the architect does not hand-edit the tracked
   file (see Common steps).
@@ -57,8 +58,15 @@ working artifact; the issue carries everything the worker needs.
    pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
    ```
 
-2. Confirm the issue body matches the local draft (re-`gh issue edit` if the
-   draft changed after the last sync).
+2. Confirm live REST body parity with the local draft. Re-sync only through the
+   mechanical helper (never raw `gh issue edit`):
+
+   ```powershell
+   pwsh -NoProfile -File scripts/publish-issue-body-sync.ps1 -Mode verify -DraftPath docs/issues_drafts/NN-<slug>.md -IssueNumber <N>
+   ```
+
+   On mismatch or first sync, run `-Mode edit` (existing issue) or `-Mode create`
+   (new issue). The helper exits non-zero on transport/parity failure.
 3. Confirm the draft header records `GitHub Issue: #N`.
 4. Confirm the registry row for this draft is defined (draft path → **N**); it will be
    written to `docs/issue_queue_index.md` by Cursor at publish, not by the architect.
@@ -172,11 +180,23 @@ Steps:
 5. Wait for CI green (gh pr checks <pr> --watch). Then gh pr merge <pr> --merge --delete-branch.
    If you refresh after merge, do it only in this isolated checkout (git checkout main &&
    git pull origin main); never touch the architect's live checkout.
-6. For each "#N <- draft": re-sync the existing issue body (body = draft minus the H1 line,
-   i.e. tail -n +3) with gh issue edit <N> --body-file <tmp>. For each "new <- draft":
-   gh issue create with title = the draft H1 and body = draft minus H1, then write the
-   returned number into the draft's "GitHub Issue: #N" line and add that draft's registry
-   row to docs/issue_queue_index.md (selective staging only — see Index ownership above).
+6. For each "#N <- draft": re-sync through the mechanical helper:
+
+   ```bash
+   node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path <draft> --issue-number <N> --repo chetwerikoff/orchestrator-pack
+   ```
+
+   For each "new <- draft": create through the helper (title defaults to draft H1):
+
+   ```bash
+   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path <draft> --repo chetwerikoff/orchestrator-pack
+   ```
+
+   Write the returned issue number into the draft's `GitHub Issue: #N` line and add
+   that draft's registry row to docs/issue_queue_index.md (selective staging only —
+   see Index ownership above). **Forbidden:** raw `gh issue create` / `gh issue edit`
+   or low-level `gh api` issue-body mutation — the helper enforces `--body-file`
+   transport and live REST parity before reporting success.
 7. Report the PR URL, the merge commit, and each issue number/URL synced or created.
 EOF
 # Fast isolated runtime: the helper creates a scratch checkout for all delegate
@@ -246,8 +266,10 @@ pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
 **Contract-evidence gate (Issue #366).** Run on **every** draft in the publish
-commit (Mode A re-sync, Modes B and C) before `gh issue create` / `gh issue edit`
-or spec PR commit:
+commit (Mode A re-sync, Modes B and C) before issue-body sync or spec PR commit.
+Issue-body create/edit/verify must go through `scripts/publish-issue-body-sync`
+— never raw `gh issue create` / `gh issue edit` or low-level `gh api` body
+mutation.
 
 ```powershell
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
