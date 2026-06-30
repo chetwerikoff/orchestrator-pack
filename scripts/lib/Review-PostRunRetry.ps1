@@ -33,6 +33,19 @@ function Get-PostRunRetryLedgerPath {
     return Join-Path $Namespace 'post-run-retry-ledger.json'
 }
 
+function Get-PackAoReviewRuns {
+    param([string]$Project = '')
+
+    if (Get-Command Get-AoReviewRuns -ErrorAction SilentlyContinue) {
+        return @(Get-AoReviewRuns -Project $Project)
+    }
+
+    return @(& {
+        . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
+        Get-AoReviewRuns -Project $Project
+    })
+}
+
 function Get-EnrichedAoReviewRuns {
     param(
         [string]$Project = '',
@@ -40,8 +53,7 @@ function Get-EnrichedAoReviewRuns {
         [hashtable]$EvidenceByRunId = @{}
     )
 
-    . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
-    $runs = @(Get-AoReviewRuns -Project $Project)
+    $runs = @(Get-PackAoReviewRuns -Project $Project)
     if ($runs.Count -eq 0) {
         return @()
     }
