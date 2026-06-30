@@ -15,6 +15,7 @@ import {
   evaluateOwnershipEvidence,
   evaluatePostClaimRevalidation,
   evaluateRecoverySpawnRoute,
+  evaluateLiveDifferentOwner,
   evaluateSpawnFreshness,
   evaluateTriggerAdmission,
   evaluateWorkerRecoveryGitAllow,
@@ -330,6 +331,20 @@ describe('worker recovery post-claim revalidation', () => {
     expect(recoveryText).toMatch(/selectionWorktreeRecord/);
     expect(recoveryText).toMatch(/liveWorktreeRecord/);
   });
+
+  it('worker recovery destructive audit: persists decision before worktree remove', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/preCleanupAudit/);
+    const writePreIdx = recoveryText.indexOf(
+      'Write-WorkerRecoveryAudit -Namespace $claim.namespace -Record $preCleanupAudit',
+    );
+    const removeIdx = recoveryText.indexOf('worktree remove --force');
+    expect(writePreIdx).toBeGreaterThan(-1);
+    expect(removeIdx).toBeGreaterThan(writePreIdx);
+  });
 });
 
 describe('worker recovery cleanup failure', () => {
@@ -515,6 +530,39 @@ describe('worker recovery spawn freshness', () => {
     });
     expect(result.allowed).toBe(false);
     expect(result.escalate).toBe(true);
+  });
+
+  it('worker recovery spawn freshness: blocks when another live owner occupies worktree', () => {
+    const worktree = '/home/test/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-dead';
+    const owner = evaluateLiveDifferentOwner({
+      recoveryClaimSessionId: 'opk-dead',
+      canonicalPath: worktree,
+      sessions: [
+        {
+          name: 'opk-live',
+          session: { runtime: 'alive', status: 'working', worktree },
+        },
+      ],
+    });
+    expect(owner.liveDifferentOwner).toBe(true);
+    const freshness = evaluateSpawnFreshness({
+      localSession: { runtime: 'exited', status: 'terminated' },
+      recoveryClaimSessionId: 'opk-dead',
+      liveDifferentOwner: owner.liveDifferentOwner,
+      restUnavailable: true,
+    });
+    expect(freshness.allowed).toBe(false);
+    expect(freshness.reason).toBe('live_different_owner');
+  });
+
+  it('worker recovery spawn freshness: re-reads local AO snapshot before spawn gate', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/spawnSnapshot\s*=\s*Get-WorkerRecoveryPostClaimSnapshot/);
+    expect(recoveryText).toMatch(/Get-WorkerRecoveryLiveDifferentOwner/);
+    expect(recoveryText).toMatch(/liveDifferentOwner\s*=\s*\[bool\]\$liveOwnerCheck\.liveDifferentOwner/);
   });
 });
 

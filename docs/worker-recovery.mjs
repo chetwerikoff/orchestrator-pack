@@ -355,6 +355,34 @@ export function evaluateSpawnFreshness(input) {
 /**
  * @param {object} input
  */
+export function evaluateLiveDifferentOwner(input) {
+  const recoverySessionId = String(input.recoveryClaimSessionId ?? '').trim();
+  const canonicalPath = String(input.canonicalPath ?? '').trim();
+  if (!recoverySessionId || !canonicalPath) {
+    return { liveDifferentOwner: false, reason: 'missing_inputs' };
+  }
+  const sessions = Array.isArray(input.sessions) ? input.sessions : [];
+  for (const entry of sessions) {
+    const row = asRecord(entry);
+    if (!row) continue;
+    const sessionId = String(row.name ?? row.sessionId ?? '').trim();
+    if (!sessionId || sessionId === recoverySessionId) continue;
+    const session = asRecord(row.session) ?? row;
+    const liveness = classifyWorkerSessionLiveness(session);
+    if (liveness.verdict !== 'live') continue;
+    const worktree = String(session.worktree ?? session.workspace ?? '').trim();
+    if (!worktree) continue;
+    const canon = canonicalizeRecoveryPath(worktree);
+    if (canon.ok && canon.canonical === canonicalPath) {
+      return { liveDifferentOwner: true, reason: 'live_different_owner', ownerSessionId: sessionId };
+    }
+  }
+  return { liveDifferentOwner: false, reason: 'no_live_different_owner' };
+}
+
+/**
+ * @param {object} input
+ */
 export function evaluateBoundedRetry(input) {
   const attempt = Number(input.attempt ?? 0);
   const budget = Number(input.budget ?? WORKER_RECOVERY_DEFAULT_RETRY_BUDGET);
@@ -526,6 +554,8 @@ function handleCliSubcommand(subcommand, payload) {
       return evaluateTriggerAdmission(payload);
     case 'evaluateSpawnFreshness':
       return evaluateSpawnFreshness(payload);
+    case 'evaluateLiveDifferentOwner':
+      return evaluateLiveDifferentOwner(payload);
     case 'evaluateRetry':
       return evaluateBoundedRetry(payload);
     case 'evaluateGitAllow':

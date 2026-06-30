@@ -132,6 +132,42 @@ function Get-WorkerRecoveryPostClaimSnapshot {
     }
 }
 
+function Get-WorkerRecoveryLiveDifferentOwner {
+    param(
+        [string]$RecoverySessionId,
+        [string]$CanonicalPath,
+        [switch]$FixtureMode,
+        [array]$FixtureSessions = @()
+    )
+
+    $rows = @()
+    if ($FixtureMode) {
+        $rows = @($FixtureSessions)
+    }
+    else {
+        try {
+            $rows = @(Get-AoStatusSessions)
+        }
+        catch {
+            $rows = @()
+        }
+    }
+
+    $payloadRows = @()
+    foreach ($row in $rows) {
+        if (-not $row) { continue }
+        $name = if ($row.name) { [string]$row.name } else { [string]$row.sessionId }
+        $snap = if ($row.session) { $row.session } else { ConvertTo-WorkerRecoverySessionSnapshot -AoRow $row }
+        $payloadRows += @{ name = $name; session = $snap }
+    }
+
+    return Invoke-WorkerRecoveryCli -Subcommand 'evaluateLiveDifferentOwner' -Payload @{
+        recoveryClaimSessionId = $RecoverySessionId
+        canonicalPath          = $CanonicalPath
+        sessions               = $payloadRows
+    }
+}
+
 function Test-WorkerRecoveryWorktreePresent {
     param(
         [string]$RepoRoot,
@@ -425,6 +461,24 @@ function Invoke-WorkerRecovery {
         -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode -FixtureWorktreePresent:$WorktreePresent
     $danglingGitdirCleanup = ($eligibility.outcome -eq 'removed_dangling_gitdir')
     $shouldCleanup = $worktreeStillPresent -or $danglingGitdirCleanup
+    if ($shouldCleanup) {
+        $preCleanupAudit = @{
+            schemaVersion   = 'worker-recovery/v1'
+            attemptId       = $claim.record.attemptId
+            candidate       = @{ sessionId = $SessionId; canonicalPath = $pathCanon.canonical }
+            sourceEvidence  = @{ trigger = $Trigger }
+            canonicalPath   = $pathCanon.canonical
+            livenessVerdict = $eligibility.liveness.verdict
+            ownershipProof  = $eligibility.ownership
+            claimHolder     = $claim.record.holder
+            claimOutcome    = 'claim_acquired'
+            cleanupDecision = $eligibility.outcome
+            spawnDecision   = 'not_attempted'
+            finalState      = 'cleanup_pending'
+            recordedAtUtc   = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-WorkerRecoveryAudit -Namespace $claim.namespace -Record $preCleanupAudit
+    }
     if (-not $DryRun -and $shouldCleanup) {
         $cleanupAttempted = $true
         & git -C $RepoRoot worktree remove --force $pathCanon.canonical
@@ -447,9 +501,15 @@ function Invoke-WorkerRecovery {
         else {
             Get-AutonomousSpawnPolicy -PackRoot $PackRoot
         }
+        $spawnSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
+            -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
+            -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
+        $liveOwnerCheck = Get-WorkerRecoveryLiveDifferentOwner -RecoverySessionId $SessionId `
+            -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode
         $freshness = Invoke-WorkerRecoveryCli -Subcommand 'evaluateSpawnFreshness' -Payload @{
-            localSession           = $Session
+            localSession           = $spawnSnapshot.session
             recoveryClaimSessionId = $SessionId
+            liveDifferentOwner     = [bool]$liveOwnerCheck.liveDifferentOwner
             restUnavailable        = $true
         }
         $spawnArgv = @('spawn')
