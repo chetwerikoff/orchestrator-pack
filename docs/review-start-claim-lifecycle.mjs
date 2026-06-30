@@ -399,7 +399,7 @@ export function evaluateLegacyPreInvokeOrphan({
 }
 
 
-function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs, config }) {
+function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs, config, projectNamespace }) {
   const mono = Number.isFinite(nowMonotonicMs)
     ? Number(nowMonotonicMs)
     : (resolveFirstAttemptMonotonicMs(claim) != null ? getMonotonicNowMs() : null);
@@ -421,6 +421,7 @@ function resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonic
       claim,
       reviewRuns,
       nowMs,
+      projectNamespace,
     });
     if (binding.action === 'reconcile') {
       return {
@@ -470,6 +471,7 @@ export function evaluateReclaimDecision({
   corruptEvidence = false,
   postAcquireSideEffectAudit = false,
   reviewerEvidence = [],
+  projectNamespace,
 }) {
   if (String(claim?.state ?? '') !== 'active') {
     return { action: 'skip', reason: 'not_active' };
@@ -550,6 +552,7 @@ export function evaluateReclaimDecision({
       reviewRuns,
       reviewerEvidence: toArray(reviewerEvidence),
       nowMs,
+      projectNamespace,
     });
     if (binding.action === 'reconcile') {
       return {
@@ -608,7 +611,7 @@ export function evaluateReclaimDecision({
     if (liveness.outcome === 'legacy') {
       return { action: 'skip', reason: 'legacy_holder_unverified', liveness, envelope };
     }
-    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config });
+    return resolveEnvelopeExceededOutcome({ claim, reviewRuns, nowMs, nowMonotonicMs: mono, config, projectNamespace });
   }
 
   if (hold.exceeded && liveness.outcome === 'alive') {
@@ -657,6 +660,7 @@ export function evaluateSweep({
   localHost,
   config = resolveClaimLifecycleConfig(),
   corruptKeys = [],
+  projectNamespace,
 }) {
   const corruptSet = new Set(toArray(corruptKeys).map((key) => String(key)));
   const mono = Number.isFinite(nowMonotonicMs) ? Number(nowMonotonicMs) : getMonotonicNowMs();
@@ -677,6 +681,7 @@ export function evaluateSweep({
       nowMonotonicMs: mono,
       config,
       corruptEvidence: corruptSet.has(key) || matchingEvidence.corruptEvidence,
+      projectNamespace,
     });
     actions.push({
       key,
@@ -716,6 +721,7 @@ async function main() {
       corruptEvidence: Boolean(payload?.corruptEvidence),
       postAcquireSideEffectAudit: Boolean(payload?.postAcquireSideEffectAudit),
       reviewerEvidence: toArray(payload?.reviewerEvidence),
+      projectNamespace: payload?.projectNamespace,
     });
   }
   if (subcommand === 'sweep') {
@@ -732,6 +738,7 @@ async function main() {
       localHost: payload?.localHost,
       config,
       corruptKeys: toArray(payload?.corruptKeys),
+      projectNamespace: payload?.projectNamespace,
     });
   }
   if (subcommand === 'classify-holder') {

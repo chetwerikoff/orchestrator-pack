@@ -62,15 +62,38 @@ function normalizeProjectNamespace(projectId) {
   return normalized || 'orchestrator-pack';
 }
 
+function explicitProjectId(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
+export function resolveBindingProjectNamespace({ claim, projectNamespace } = {}) {
+  const explicitNs = explicitProjectId(projectNamespace);
+  if (explicitNs) {
+    return normalizeProjectNamespace(explicitNs);
+  }
+  const fromClaim = explicitProjectId(
+    claim?.projectId ?? claim?.project ?? claim?.namespaceProjectId,
+  );
+  if (fromClaim) {
+    return normalizeProjectNamespace(fromClaim);
+  }
+  return 'orchestrator-pack';
+}
+
 function normalizeStatus(status) {
   return String(status ?? '').trim().toLowerCase();
 }
 
 function claimProjectMatches(claim, projectNamespace) {
-  const claimProject = normalizeProjectNamespace(
+  const namespace = normalizeProjectNamespace(projectNamespace);
+  const explicitClaimProject = explicitProjectId(
     claim?.projectId ?? claim?.project ?? claim?.namespaceProjectId,
   );
-  return claimProject === normalizeProjectNamespace(projectNamespace);
+  if (!explicitClaimProject) {
+    return true;
+  }
+  return normalizeProjectNamespace(explicitClaimProject) === namespace;
 }
 
 function runProjectMatches(run, projectNamespace) {
@@ -360,11 +383,12 @@ export function evaluateLaunchPendingRunBinding({
   reviewRuns,
   reviewerEvidence = [],
   nowMs = Date.now(),
+  projectNamespace,
 }) {
   const prNumber = Number(claim?.prNumber);
   const headSha = String(claim?.headSha ?? '');
-  const projectNamespace = normalizeProjectNamespace(claim?.projectId ?? claim?.project ?? 'orchestrator-pack');
-  const covered = findMatchingRunForClaim(reviewRuns, prNumber, headSha, projectNamespace);
+  const namespace = resolveBindingProjectNamespace({ claim, projectNamespace });
+  const covered = findMatchingRunForClaim(reviewRuns, prNumber, headSha, namespace);
   if (!covered) {
     return {
       reconcile: false,

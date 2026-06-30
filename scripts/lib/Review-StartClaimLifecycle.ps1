@@ -375,15 +375,18 @@ function Invoke-ReviewStartClaimReclaimOrphan {
         [object]$Record,
         [array]$ReviewRuns = @(),
         [string]$DecisionSource = 'reclaim',
+        [string]$ProjectId = '',
         [scriptblock]$LogWriter = $null
     )
 
+    $bindingProjectId = if ([string]$ProjectId) { [string]$ProjectId } else { Resolve-ReviewStartClaimProjectIdFromNamespace -Namespace $Namespace }
     $decision = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'evaluate' -Payload @{
         claim                       = $Record
         reviewRuns                  = @($ReviewRuns)
         localHost                   = Get-ReviewStartClaimLocalHostName
         nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         postAcquireSideEffectAudit  = (Test-ReviewStartClaimPostAcquireSideEffectAudit -Namespace $Namespace -ClaimKey ([string]$Record.key))
+        projectNamespace            = $bindingProjectId
     }
     if ($decision.action -eq 'skip' -or $decision.action -eq 'block') {
         return @{ reclaimed = $false; decision = $decision }
@@ -435,9 +438,10 @@ function Invoke-ReviewStartClaimReaperSweep {
     Initialize-ReviewStartClaimNamespace -Namespace $resolved
     $active = @(Get-ReviewStartClaimActiveRecords -Namespace $resolved)
     $sweep = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'sweep' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
-        activeClaims = @($active)
-        reviewRuns   = @($ReviewRuns)
-        localHost    = Get-ReviewStartClaimLocalHostName
+        activeClaims     = @($active)
+        reviewRuns       = @($ReviewRuns)
+        localHost        = Get-ReviewStartClaimLocalHostName
+        projectNamespace = $ProjectId
     })
     $results = @()
     foreach ($entry in @($sweep.actions)) {
@@ -451,7 +455,7 @@ function Invoke-ReviewStartClaimReaperSweep {
             continue
         }
         $reclaim = Invoke-ReviewStartClaimReclaimOrphan -Namespace $resolved -Path $path -Record $claim `
-            -ReviewRuns $ReviewRuns -DecisionSource 'reaper' -LogWriter $LogWriter
+            -ReviewRuns $ReviewRuns -DecisionSource 'reaper' -ProjectId $ProjectId -LogWriter $LogWriter
         $results += @{
             key       = $key
             action    = $decision.action

@@ -97,18 +97,23 @@ function Resolve-ReviewStartClaimRunBindingDecision {
         [hashtable]$Claim,
         [array]$ReviewRuns = @(),
         [array]$ReviewerEvidence = @(),
-        [int64]$NowMs = 0
+        [int64]$NowMs = 0,
+        [string]$ProjectId = ''
     )
 
     if ($NowMs -le 0) {
         $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
-    return Invoke-ReviewStartClaimRunBindingCli -Subcommand 'launch-pending-budget' -Payload @{
+    $payload = @{
         claim             = $Claim
         reviewRuns        = @($ReviewRuns)
         reviewerEvidence  = @($ReviewerEvidence)
         nowMs             = $NowMs
     }
+    if ([string]$ProjectId) {
+        $payload.projectNamespace = [string]$ProjectId
+    }
+    return Invoke-ReviewStartClaimRunBindingCli -Subcommand 'launch-pending-budget' -Payload $payload
 }
 
 function Complete-ReviewStartClaimFromRunBinding {

@@ -4,6 +4,7 @@
 #>
 
 $Script:AutonomousReviewWorktreeGateRoot = $PSScriptRoot
+. (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaim.ps1')
 . (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaimLifecycle.ps1')
 

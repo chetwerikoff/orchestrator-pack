@@ -8,6 +8,7 @@ import {
   evaluateClaimRunBinding,
   evaluateLaunchPendingBudgetDecision,
   evaluateLaunchPendingRunBinding,
+  resolveBindingProjectNamespace,
   isManualOperatorProvenance,
   isPackOwnedAutomatedProvenance,
   runMatchesBindingKey,
@@ -396,6 +397,53 @@ describe('review-start-claim-run-binding', () => {
     expect(budget.action).toBe('reconcile');
     expect(budget.runId).toBe('review-run-current-running');
     expect(budget.outcome).not.toBe('released_after_run_terminalized');
+  });
+
+  it('namespace-scoped-claim-without-projectId-reconciles-visible-run', () => {
+    const claim = {
+      state: 'active',
+      prNumber: 519,
+      headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      launchPending: { atUtc: '2026-06-28T15:44:30.000Z' },
+      launchPendingInvokedAtUtc: '2026-06-28T15:44:30Z',
+    };
+    const reviewRuns = [
+      {
+        id: 'review-run-other-pack',
+        prNumber: 519,
+        targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        project: 'other-pack',
+        status: 'running',
+      },
+    ];
+    const withoutNamespace = evaluateLaunchPendingBudgetDecision({
+      claim,
+      reviewRuns,
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(withoutNamespace.action).toBe('terminalize');
+    expect(withoutNamespace.outcome).toBe('launch_pending_budget_exceeded');
+
+    const withNamespace = evaluateLaunchPendingBudgetDecision({
+      claim,
+      reviewRuns,
+      projectNamespace: 'other-pack',
+      nowMs: Date.parse('2026-06-28T15:48:14.000Z'),
+    });
+    expect(withNamespace.action).toBe('reconcile');
+    expect(withNamespace.outcome).not.toBe('launch_pending_budget_exceeded');
+    expect(resolveBindingProjectNamespace({ claim, projectNamespace: 'other-pack' })).toBe('other-pack');
+  });
+
+  it('worktree-gate-imports-ao-review-list-helper', () => {
+    const gateLib = path.join(repoRoot, 'scripts/lib/Autonomous-ReviewWorktreeGate.ps1');
+    const result = JSON.parse(
+      runPwsh(`
+        . ${psString(gateLib)}
+        [pscustomobject]@{ hasHelper = [bool](Get-Command Get-AoReviewRuns -ErrorAction SilentlyContinue) } | ConvertTo-Json -Compress
+      `),
+    );
+    expect(result.hasHelper).toBe(true);
   });
 
   it('positive-outcome: visible AO run reconciles launch-pending claim instead of budget terminalization', () => {
