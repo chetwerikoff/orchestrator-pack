@@ -1,0 +1,42 @@
+{
+  "issue_number": 521,
+  "iteration_id": "opk-76",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-29T11:53:43.707Z",
+  "baseline": {
+    "commit_sha": "70c882fe81938c5485d6ea9378be57833fbf306c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d16e472e6abcc9a357ed53b82c1f4186d7eba6ebe74df54c7e57f6c0d35fc8e7"
+  },
+  "declared_paths": [
+    "docs/review-start-claim-run-binding.mjs",
+    "docs/review-start-claim-run-binding.d.mts",
+    "docs/review-start-claim-lifecycle.mjs",
+    "scripts/review-start-claim-run-binding.test.ts",
+    "scripts/lib/Review-StartClaimRunBinding.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/orchestrator-wake-supervisor.test.ts"
+  ],
+  "declared_globs": [
+    "tests/external-output-references/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f7d9b8758f766199b0f67e912b96ebf007e69ede693fe71d4c7b9c17f62b02a0",
+      "new_active_scope_hash": "sha256:d16e472e6abcc9a357ed53b82c1f4186d7eba6ebe74df54c7e57f6c0d35fc8e7",
+      "changed": {
+        "added": [
+          "scripts/orchestrator-wake-supervisor.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "CI flake: extend supervisor orphan status test timeout",
+      "actor": "opk-90",
+      "timestamp": "2026-06-30T04:53:22.264Z",
+      "applied": true
+    }
+  ]
+}
