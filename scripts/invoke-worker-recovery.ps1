@@ -64,11 +64,30 @@ if (-not $WorktreePath) {
     throw 'WorktreePath is required unless -Probe is set.'
 }
 
-$result = Invoke-WorkerRecovery -Trigger $Trigger -SessionId $SessionId -CanonicalPath $WorktreePath `
-    -ProjectId $ProjectId -PackRoot $PackRoot -RepoRoot $RepoRoot -Surface 'invoke-worker-recovery' `
-    -Session $session -DanglingGitdir:$DanglingGitdir -WorktreePresent:$WorktreePresent -DryRun:$DryRun `
-    -SpawnAction $SpawnAction -IssueNumber $IssueNumber -PrNumber $PrNumber -SpawnPolicy $spawnPolicy -FixtureMode:([bool]$spawnPolicy) `
-    -SkipSpawn:(-not $SpawnAction)
+$recoveryParams = @{
+    Trigger      = $Trigger
+    SessionId    = $SessionId
+    CanonicalPath = $WorktreePath
+    ProjectId    = $ProjectId
+    PackRoot     = $PackRoot
+    RepoRoot     = $RepoRoot
+    Surface      = 'invoke-worker-recovery'
+    Session      = $session
+    DanglingGitdir = $DanglingGitdir
+    DryRun       = $DryRun
+    SpawnAction  = $SpawnAction
+    IssueNumber  = $IssueNumber
+    PrNumber     = $PrNumber
+    SpawnPolicy  = $spawnPolicy
+    FixtureMode  = [bool]$spawnPolicy
+    SkipSpawn    = (-not $SpawnAction)
+}
+if ($PSBoundParameters.ContainsKey('WorktreePresent') -or $Probe) {
+    $result = Invoke-WorkerRecovery @recoveryParams -WorktreePresent:$WorktreePresent
+}
+else {
+    $result = Invoke-WorkerRecovery @recoveryParams
+}
 
 $result | ConvertTo-Json -Compress -Depth 8
 if ((-not $result.ok -or $result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure', 'escalated')) -and -not $DryRun) {

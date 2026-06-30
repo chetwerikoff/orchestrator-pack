@@ -632,5 +632,19 @@ describe('invoke-worker-recovery entrypoint', () => {
     expect(entryText).toMatch(/Get-WorkerRecoveryAoSessionById -SessionId \$SessionId/);
     expect(entryText).toMatch(/ConvertTo-WorkerRecoverySessionSnapshot -AoRow \$aoRow/);
   });
+
+  it('invoke-worker-recovery forwards WorktreePresent only when caller bound the switch', () => {
+    const entryText = readFileSync(
+      path.join(repoRoot, 'scripts/invoke-worker-recovery.ps1'),
+      'utf8',
+    );
+    expect(entryText).toMatch(/PSBoundParameters\.ContainsKey\('WorktreePresent'\)/);
+    expect(entryText).not.toMatch(
+      /-WorktreePresent:\$WorktreePresent -DryRun:\$DryRun/,
+    );
+    expect(entryText).toMatch(
+      /if \(\$PSBoundParameters\.ContainsKey\('WorktreePresent'\) -or \$Probe\)/,
+    );
+  });
 });
 
