@@ -10,7 +10,7 @@ import {
   resolveDefaultAoProjectId,
 } from './lib/reverify-bound-issue-snapshot.js';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
-import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
+import { dispatchDefaultCliArg, isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
 
 function usage(): string {
   return [
@@ -112,17 +112,12 @@ function parseArgs(argv: string[]) {
         opts.summary = true;
         opts.json = false;
         break;
-      case '--json':
-        opts.json = true;
-        opts.summary = false;
-        break;
-      case '--help':
-      case '-h':
-        console.log(usage());
-        process.exit(0);
-        break;
       default:
-        throw new Error(`Unknown argument: ${arg}\n${usage()}`);
+        dispatchDefaultCliArg(arg, usage(), () => {
+          opts.json = true;
+          opts.summary = false;
+        });
+        break;
     }
   }
 

@@ -397,7 +397,7 @@ capture still fails sync.
 
 ### Pre-sync mechanical checks
 
-Before `gh issue create` / `gh issue edit`:
+Before `scripts/publish-issue-body-sync` create/edit/verify:
 
 ```powershell
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
@@ -439,8 +439,8 @@ enumerate it.
 
 ## Codex review the draft (before sync, max 5 iterations)
 
-Run a **critical architect** Codex pass on the draft markdown **before** `gh issue create`
-or `gh issue edit`. Architect role: `CLAUDE.md`.
+Run a **critical architect** Codex pass on the draft markdown **before** issue-body sync (`scripts/publish-issue-body-sync`)
+. Architect role: `CLAUDE.md`.
 
 **Command discipline (non-negotiable):**
 
@@ -532,7 +532,7 @@ the review prompt is passed as the `PROMPT` argument as above.
    or document remaining open questions in the draft **Prerequisite** or
    **Verification** section before sync.
 
-**Sync gate:** do not run `gh issue create` / `gh issue edit` until Codex returns
+**Sync gate:** do not run `scripts/publish-issue-body-sync` until Codex returns
 `NO_FINDINGS` or you have hit the 5-iteration cap and recorded open questions.
 
 Contract reference: `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
@@ -577,14 +577,14 @@ below — must run the same mechanical guard as pre-sync:
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
 ```
 
-Refuse `gh issue create` / `gh issue edit` / publish commit while this exits non-zero.
+Refuse `scripts/publish-issue-body-sync` / publish commit while this exits non-zero.
 When delegating to [`publish-issue-draft`](../publish-issue-draft/SKILL.md), include this
 command in the delegate prompt and verify it ran before issue sync or spec PR commit.
 
 Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
 questions recorded), **delegate publish to deepseek via `opencode run`** using
 the temp-file mechanism below. This is the default: deepseek handles the fixed
-`gh issue create` / `gh pr create` / `gh pr merge` sequence autonomously, freeing
+the fixed `scripts/publish-issue-body-sync` + `gh pr create` / `gh pr merge` sequence autonomously, freeing
 the architect from token-expensive mechanical steps. The direct
 `AO_PUBLISH_FALLBACK=1` path (manual `gh`/git commands in the fallback section)
 is the **fallback** — use it only when `opencode run` is unavailable or leaves
@@ -617,10 +617,16 @@ passed Codex review — do NOT edit its task content. Steps:
 0. Run contract-evidence (and positive-outcome / parked-root when applicable):
    pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
    Exit non-zero => stop; do not sync or publish.
-1. Create the GitHub Issue (gh CLI, issue-create subcommand):
-   - Title = the draft's H1 (first heading line).
-   - Body  = the draft body MINUS the H1 line (tail -n +3 of the file).
-   - gh issue create --repo chetwerikoff/orchestrator-pack --title "<H1>" --body-file <tmp>
+1. Create or re-sync the GitHub Issue through the mechanical helper (never raw
+   `gh issue create` / `gh issue edit`):
+
+   ```bash
+   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path docs/issues_drafts/NN-<slug>.md --repo chetwerikoff/orchestrator-pack
+   ```
+
+   For an existing issue number, use `edit --issue-number <N>` instead. The helper
+   uses `--body-file` transport, reads live REST body via `scripts/gh api`, and
+   fails closed on mismatch before reporting success.
 2. Write the returned number into the draft's `GitHub Issue: #N` line (it is
    `TBD` now). Add this draft's registry row to docs/issue_queue_index.md (draft
    path -> #N; no open/closed/shipped columns) — stage only this row's hunk at
@@ -671,21 +677,20 @@ manual commands below and tell the user the OpenCode path was unavailable.
 The draft body **minus the H1 heading** is the issue body. Use:
 
 ```powershell
-$body = Join-Path ([System.IO.Path]::GetTempPath()) 'issue-NN-body.md'
-Get-Content docs/issues_drafts/NN-<slug>.md | Select-Object -Skip 2 | Set-Content -Encoding utf8 $body
-gh issue edit <N> --repo chetwerikoff/orchestrator-pack --body-file $body
+pwsh -NoProfile -File scripts/publish-issue-body-sync.ps1 -Mode edit -DraftPath docs/issues_drafts/NN-<slug>.md -IssueNumber <N>
 ```
 
 Bash equivalent:
 
 ```bash
-body="$(mktemp)"
-tail -n +3 docs/issues_drafts/NN-<slug>.md > "$body"
-gh issue edit <N> --repo chetwerikoff/orchestrator-pack --body-file "$body"
-rm -f "$body"
+node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
 ```
 
-For new issues: `gh issue create ... --body-file $body --title "<title>"`.
+For new issues:
+
+```bash
+node --import tsx scripts/publish-issue-body-sync.ts create --draft-path docs/issues_drafts/NN-<slug>.md --repo chetwerikoff/orchestrator-pack
+```
 
 ### Publish to main (fallback / manual)
 
@@ -740,7 +745,7 @@ in the test-harness code.
 
 - Use `codex exec` or `codex exec review` for draft review — those are worker/PR paths.
 - Pipe `codex review` through `tail`, `head`, or `grep` (hides in-progress output).
-- Kill a running draft review to rush `gh issue create` — wait for `NO_FINDINGS` or cap.
+- Kill a running draft review to rush issue-body sync — wait for `NO_FINDINGS` or cap.
 - Sync to GitHub before Codex review completes (unless 5-iteration cap with open questions recorded).
 - Use `ao spawn` to publish a brand-new draft — it needs an existing issue and a
   fresh checkout, so it cannot create the issue or see the local draft. Use
