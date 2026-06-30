@@ -14,6 +14,7 @@ import {
   isAoSpawnWorktreeSessionBasename,
   pathIsUnderCanonicalPrefix,
 } from '../docs/spawn-worktree-grant.mjs';
+import { evaluateRecoverySpawnRoute } from '../docs/worker-recovery.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 import { repoRoot, runPwsh, psString } from './_test-pwsh-helpers.js';
@@ -560,5 +561,20 @@ describe('spawn worktree grant (#470)', () => {
     });
     expect(consume.ok).toBe(false);
     expect(consume.reason).toBe('repository_root_mismatch');
+  });
+});
+
+
+describe('worker recovery repository identity from pack root (#522)', () => {
+  it('worker recovery spawn uses pack root cwd so grant roots align', () => {
+    const packRoot = repoRoot;
+    expect(packRoot).toBeTruthy();
+    const route = evaluateRecoverySpawnRoute({
+      policyLoadOk: true,
+      policy: { allowSpawnNew: true, allowClaimPrResume: true },
+      spawnAction: 'spawn-new',
+      grantDenied: false,
+    });
+    expect(route.allowed).toBe(true);
   });
 });

@@ -110,8 +110,12 @@ export declare function evaluateAutonomousGitBoundary(input: {
   sanctionedProvenance?: boolean;
   claimedBypass?: boolean;
   spawnWorktreeGrantAllow?: boolean;
+  recoveryWorktreeRemoveAllow?: boolean;
+  recoveryDenyReason?: string;
   parentChain?: string[];
 }): GitBoundaryVerdict;
+export declare function isGitArgvWorktreeList(argv: string[]): boolean;
+export declare function isGitArgvWorktreeRemoveForce(argv: string[]): boolean;
 export declare function isGitArgvAoOwnedWorktreeAdd(argv: string[]): boolean;
 export declare function classifySanctionedGitProvenance(
   parentChain?: string[],

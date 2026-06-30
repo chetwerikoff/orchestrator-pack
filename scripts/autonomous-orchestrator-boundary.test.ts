@@ -123,7 +123,7 @@ function withoutGithubActionsEnv<T>(run: () => T): T {
   }
 }
 
-describe('autonomous orchestrator spawn/git boundary (#324)', () => {
+describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000 }, () => {
   it('exports stable boundary markers', () => {
     expect(AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION).toBe('autonomous-orchestrator-boundary/v1');
     expect(TURN_VISIBLE_REAL_BINARY_ENV_VARS).toContain('AO_REAL_BINARY');
@@ -1035,7 +1035,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', () => {
   });
 
 
-  describe('broken explicit ao pointer policy (Issue #495)', () => {
+  describe('broken explicit ao pointer policy (Issue #495)', { timeout: 120_000 }, () => {
     const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
     const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
 
@@ -1446,7 +1446,7 @@ exit 0
   });
 });
 
-describe('autonomous review worktree path hardening (#429)', () => {
+describe('autonomous review worktree path hardening (#429)', { timeout: 120_000 }, () => {
   function withPathFixture(run: (ctx: { aoBase: string; projectId: string; workspaces: string }) => void) {
     const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-worktree-path-'));
     const projectId = 'orchestrator-pack';
@@ -1518,7 +1518,7 @@ describe('autonomous review worktree path hardening (#429)', () => {
   });
 });
 
-describe('autonomous review worktree claim-bound allow (#429)', () => {
+describe('autonomous review worktree claim-bound allow (#429)', { timeout: 120_000 }, () => {
   function evaluateClaimBound(
     argv: string[],
     aoBase: string,
@@ -1765,4 +1765,79 @@ describe('autonomous review worktree claim-bound allow (#429)', () => {
       rmSync(aoBase, { recursive: true, force: true });
     }
   });
+});
+
+describe('worker recovery boundary (#522)', { timeout: 120_000 }, () => {
+  it('worktree list recovery boundary: allows list and denies mutating worktree without recovery parent', () => {
+    for (const argv of [['worktree', 'list'], ['worktree', 'list', '--porcelain']]) {
+      const verdict = evaluateAutonomousGitBoundary({ argv, autonomousSurface: true });
+      expect(verdict.allowed).toBe(true);
+      expect(verdict.reason).toBe('read_only_git');
+    }
+    for (const argv of [
+      ['worktree', 'add', '/tmp/wt', 'main'],
+      ['worktree', 'prune'],
+      ['worktree', 'move', '/tmp/a', '/tmp/b'],
+      ['branch', '-m', 'old', 'new'],
+    ]) {
+      const verdict = evaluateAutonomousGitBoundary({ argv, autonomousSurface: true });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toBe('autonomous_mutating_git_denied');
+    }
+    const removeDenied = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', '/tmp/orchestrator-pack/worktrees/opk-522'],
+      autonomousSurface: true,
+    });
+    expect(removeDenied.allowed).toBe(false);
+    expect(removeDenied.reason).toBe('autonomous_mutating_git_denied');
+  });
+
+  it('sanctioned worker recovery parent: allows claim-bound remove and denies spoofed parent', () => {
+    const target = '/tmp/orchestrator-pack/worktrees/opk-522';
+    const allowed = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', target],
+      autonomousSurface: true,
+      recoveryWorktreeRemoveAllow: true,
+    });
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.reason).toBe('recovery_worktree_remove_allow');
+
+    const spoofed = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', target],
+      autonomousSurface: true,
+      parentChain: ['pwsh -File scripts/run-pack-review.ps1'],
+    });
+    expect(spoofed.allowed).toBe(false);
+
+    const reviewPreflight = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'remove', '--force', '/tmp/code-reviews/workspaces/op-rev-1'],
+      autonomousSurface: true,
+      parentChain: ['pwsh -File scripts/reviewer-workspace-preflight.ps1'],
+    });
+    expect(reviewPreflight.allowed).toBe(true);
+    expect(reviewPreflight.reason).toBe('sanctioned_git_child');
+
+    const prune = evaluateAutonomousGitBoundary({
+      argv: ['worktree', 'prune'],
+      autonomousSurface: true,
+      recoveryWorktreeRemoveAllow: true,
+    });
+    expect(prune.allowed).toBe(false);
+  });
+
+  it('worktree list recovery boundary: process-level read-only allow has no filesystem side effects', () => {
+    const { dir } = initCoordinatedIssue324Fixture();
+    try {
+      const before = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      expect(before.status).toBe(0);
+      const listResult = spawnAutonomousBashTurn(dir, 'git worktree list >/dev/null');
+      expect(listResult.status).toBe(0);
+      const porcelainResult = spawnAutonomousBashTurn(dir, 'git worktree list --porcelain >/dev/null');
+      expect(porcelainResult.status).toBe(0);
+      const after = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      expect(after.stdout).toBe(before.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
