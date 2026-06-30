@@ -116,6 +116,16 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     expect(result.reason).toBe(fixture.expect.reason);
   });
 
+  it('records post-run retry ledger only inside orchestrator side-effect fence', () => {
+    const src = readFileSync(helperPath, 'utf8');
+    const fenceIdx = src.indexOf('Invoke-OrchestratorSideEffectFenced');
+    const ledgerIdx = src.indexOf('Register-PostRunAutonomousRetryAttemptFromClaim');
+    expect(fenceIdx).toBeGreaterThan(-1);
+    expect(ledgerIdx).toBeGreaterThan(fenceIdx);
+    const beforeFence = src.slice(0, fenceIdx);
+    expect(beforeFence).not.toContain('Register-PostRunAutonomousRetryAttemptFromClaim');
+  });
+
   const matrixStatuses = [
     { status: 'none', runs: [], free: true, held: false, terminal: true },
     { status: 'running', runs: [{ status: 'running' }], free: false, held: false, terminal: false },

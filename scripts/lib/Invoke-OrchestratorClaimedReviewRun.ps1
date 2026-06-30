@@ -183,10 +183,10 @@ function Invoke-OrchestratorClaimedReviewRun {
         & $writeLog "orchestrator-claimed-review-run: launch gate denied PR #$PrNumber head=$headSha reason=$($launchGate.reason)"
         return @{ started = $false; reason = [string]$launchGate.reason; headSha = $headSha }
     }
-    Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($claimRuns) | Out-Null
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($claimRuns) | Out-Null
         $prevBypass = $env:AO_CLAIMED_REVIEW_RUN_BYPASS
         $env:AO_CLAIMED_REVIEW_RUN_BYPASS = '1'
         try {
