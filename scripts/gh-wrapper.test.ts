@@ -12,12 +12,23 @@ import * as repoResolve from './lib/gh-repo-resolve.mjs';
 const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } = repoResolve;
 import { executeRestRoute, parsePullReference, routePrView } from './lib/gh-rest-routes.mjs';
 import {
+  RATE_LIMIT_REFRESH_MS,
+  cacheFilePath,
+  extractApiHostnameInfo,
+  fetchRateLimitGraphql,
+  isGraphqlPassthroughArgv,
+  isPrimaryGraphqlQuotaExhaustion,
+  resolveEnvTokenForHost,
+  resolvePartitionKey,
+  writeDegradedCache,
+} from './lib/gh-graphql-degraded.mjs';
+import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
   resolveRealGhBinary,
 } from './lib/gh-resolve-real-binary.mjs';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -871,3 +882,529 @@ describe('prInfoFromView wrapper integration (Issue #530)', () => {
     ]).route).toBeNull();
   });
 });
+
+describe('gh api graphql degraded fail-fast (Issue #540)', () => {
+  const GRAPHQL_QUERY_ARGV = ['api', 'graphql', '-f', 'query={viewer{login}}'];
+  const wrapperDir = import.meta.dirname;
+
+  function buildGraphqlDegradedHarness(options: {
+    token?: string;
+    nowMs?: number;
+    initialRemaining?: number;
+    resetOffsetSec?: number;
+    forceGraphqlQuotaError?: boolean;
+  } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'gh-graphql-degraded-'));
+    const audit = join(root, 'audit.log');
+    const cacheDir = join(root, 'cache');
+    const statePath = join(root, 'state.json');
+    const nowSec = Math.floor((options.nowMs ?? Date.now()) / 1000);
+    const resetAt = nowSec + (options.resetOffsetSec ?? 3600);
+    writeFileSync(statePath, JSON.stringify({
+      remaining: options.initialRemaining ?? 1,
+      reset: resetAt,
+      graphqlCalls: 0,
+      forceGraphqlQuotaError: options.forceGraphqlQuotaError ?? false,
+    }));
+    const fakeGh = join(root, 'fake-gh');
+    writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+state="${statePath}"
+printf '%s\n' "$*" >>"$audit"
+joined="$*"
+if [[ "$1" == "auth" && "$2" == "token" ]]; then
+  printf '%s' "\${GH_TOKEN:-token-a}"
+  exit 0
+fi
+if [[ "$joined" == *"api rate_limit"* ]]; then
+  node -e "const s=require(process.argv[1]); process.stdout.write(JSON.stringify({resources:{graphql:{limit:5000,remaining:s.remaining,reset:s.reset,used:5000-s.remaining}}}));" "$state"
+  exit 0
+fi
+if [[ "$joined" == *graphql* ]]; then
+  if [[ "\${SCENARIO:-}" == "secondary" ]]; then
+    echo 'secondary_rate_limit exceeded' >&2; exit 1
+  fi
+  if [[ "\${SCENARIO:-}" == "auth" ]]; then
+    echo 'HTTP 401 Bad credentials' >&2; exit 1
+  fi
+  if [[ "\${SCENARIO:-}" == "validation" ]]; then
+    echo "Field 'bogus' doesn't exist on type 'Query'" >&2; exit 1
+  fi
+  node -e "const fs=require('fs'); const p=process.argv[1]; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.graphqlCalls+=1; fs.writeFileSync(p, JSON.stringify(s)); if (s.forceGraphqlQuotaError || s.remaining<=0) { console.error('gh: HTTP 403: API rate limit exceeded for user (graphql_rate_limit)'); process.exit(1); } console.log('{"data":{"viewer":{"login":"fixture"}}}');" "$state"
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+    const env = {
+      ...process.env,
+      GH_TOKEN: options.token ?? 'token-a',
+      GH_GRAPHQL_DEGRADED_CACHE_DIR: cacheDir,
+      GH_GRAPHQL_DEGRADED_NOW_MS: String(options.nowMs ?? Date.now()),
+    };
+    return {
+      root,
+      audit,
+      cacheDir,
+      statePath,
+      fakeGh,
+      env,
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  function spawnGraphqlPassthrough(fakeGh: string, argv: string[], env: NodeJS.ProcessEnv) {
+    const script = `import { tryGraphqlDegradedPassthrough } from './lib/gh-graphql-degraded.mjs';
+const argv = ${JSON.stringify(argv)};
+const fakeGh = ${JSON.stringify(fakeGh)};
+tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
+    return spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: wrapperDir,
+      env,
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+  }
+
+  function auditLines(auditPath: string) {
+    if (!existsSync(auditPath)) {
+      return [];
+    }
+    return readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean);
+  }
+
+  it('arms from live primary-quota failure and suppresses a second subprocess without network GraphQL', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 5000, forceGraphqlQuotaError: true });
+    try {
+      const first = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(first.status).not.toBe(0);
+      expect(first.stderr).toMatch(/graphql_rate_limit|primary quota exhausted/i);
+
+      const second = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(second.status).not.toBe(0);
+      expect(second.stderr).toMatch(/graphql_degraded_fail_fast/);
+      expect(second.stderr).toMatch(/primary quota exhausted/i);
+
+      const audit = auditLines(harness.audit).join('\n');
+      expect(audit.match(/graphql/gi)?.length ?? 0).toBe(1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('allows passthrough after resources.graphql.reset elapses', () => {
+    const nowMs = 1_700_000_000_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 0,
+      resetOffsetSec: -10,
+    });
+    try {
+      writeFileSync(harness.statePath, JSON.stringify({
+        remaining: 1,
+        reset: Math.floor(nowMs / 1000) + 3600,
+        graphqlCalls: 0,
+      }));
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/fixture/);
+      expect(auditLines(harness.audit).some((line) => line.includes('graphql'))).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('does not arm degraded mode for non-trigger failures', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 1 });
+    try {
+      for (const scenario of ['secondary', 'auth', 'validation']) {
+        rmSync(harness.cacheDir, { recursive: true, force: true });
+        writeFileSync(harness.audit, '');
+        const env = { ...harness.env, SCENARIO: scenario };
+        const first = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+        expect(first.status).not.toBe(0);
+        expect(first.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+        const second = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+        expect(second.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+        expect(auditLines(harness.audit).filter((line) => line.includes('graphql')).length).toBeGreaterThanOrEqual(2);
+      }
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('shares one rate_limit refresh across suppressed subprocesses within 60s', () => {
+    const nowMs = 1_700_000_100_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 0,
+      resetOffsetSec: 3600,
+    });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/graphql_degraded_fail_fast/);
+      }
+      const rateLimitCalls = auditLines(harness.audit).filter((line) => line.includes('rate_limit')).length;
+      expect(rateLimitCalls).toBeLessThanOrEqual(1);
+      expect(auditLines(harness.audit).filter((line) => line.includes('graphql')).length).toBe(0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('discards malformed cache and re-arms only from a fresh qualifying trigger', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 5000, forceGraphqlQuotaError: true });
+    try {
+      mkdirSync(harness.cacheDir, { recursive: true });
+      const partition = resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      writeFileSync(cacheFilePath(harness.cacheDir, partition), '{not-json');
+      const first = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(first.status).not.toBe(0);
+      expect(auditLines(harness.audit).filter((line) => line.includes('graphql')).length).toBe(1);
+      const second = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(second.stderr).toMatch(/graphql_degraded_fail_fast/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('isolates exhausted partitions by credential fingerprint', () => {
+    const nowMs = 1_700_000_200_000;
+    const harnessA = buildGraphqlDegradedHarness({
+      nowMs,
+      token: 'token-a',
+      initialRemaining: 0,
+      resetOffsetSec: 3600,
+    });
+    const harnessB = buildGraphqlDegradedHarness({
+      nowMs,
+      token: 'token-b',
+      initialRemaining: 1,
+      resetOffsetSec: 3600,
+    });
+    try {
+      const suppressedA = spawnGraphqlPassthrough(harnessA.fakeGh, GRAPHQL_QUERY_ARGV, harnessA.env);
+      expect(suppressedA.stderr).toMatch(/graphql_degraded_fail_fast/);
+
+      const allowedB = spawnGraphqlPassthrough(harnessB.fakeGh, GRAPHQL_QUERY_ARGV, harnessB.env);
+      expect(allowedB.status).toBe(0);
+      expect(allowedB.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+    } finally {
+      harnessA.cleanup();
+      harnessB.cleanup();
+    }
+  });
+
+  it('never returns synthetic GraphQL success for suppressed invocations', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 0, resetOffsetSec: 3600 });
+    try {
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toMatch(/"data"/);
+      expect(result.stderr).toMatch(/primary quota exhausted/i);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('detects graphql passthrough argv shapes', () => {
+    expect(isGraphqlPassthroughArgv(['api', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--hostname', 'ghe.example', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--method', 'POST', 'graphql', '-f', 'query={viewer{login}}'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-H', 'Accept: application/json', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-i', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--include', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-X', 'POST', 'graphql', '-f', 'query={viewer{login}}'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-q', '.data', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-p', 'corsair', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--method', 'GET', 'rate_limit'])).toBe(false);
+    expect(isGraphqlPassthroughArgv(['api', 'rate_limit'])).toBe(false);
+  });
+
+  it('applies degraded fail-fast to graphql argv with leading api flags', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 0, resetOffsetSec: 3600 });
+    try {
+      const argv = ['api', '--method', 'POST', 'graphql', '-f', 'query={viewer{login}}'];
+      const result = spawnGraphqlPassthrough(harness.fakeGh, argv, harness.env);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  function parseFakeGhHostname(argv: string[]) {
+    for (let i = 0; i < argv.length; i += 1) {
+      if (argv[i] === '--hostname' && argv[i + 1]) {
+        return argv[i + 1];
+      }
+      if (argv[i].startsWith('--hostname=')) {
+        return argv[i].slice('--hostname='.length);
+      }
+    }
+    return 'github.com';
+  }
+
+  function buildMultiHostGraphqlHarness(hostQuotas: Record<string, { remaining: number; resetOffsetSec?: number }>) {
+    const root = mkdtempSync(join(tmpdir(), 'gh-graphql-multi-host-'));
+    const audit = join(root, 'audit.log');
+    const cacheDir = join(root, 'cache');
+    const statePath = join(root, 'state.json');
+    const nowSec = Math.floor(Date.now() / 1000);
+    const hosts: Record<string, { remaining: number; reset: number }> = {};
+    for (const [host, quota] of Object.entries(hostQuotas)) {
+      hosts[host] = {
+        remaining: quota.remaining,
+        reset: nowSec + (quota.resetOffsetSec ?? 3600),
+      };
+    }
+    writeFileSync(statePath, JSON.stringify({ hosts, graphqlCalls: 0 }));
+    const fakeGh = join(root, 'fake-gh');
+    writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+state="${statePath}"
+printf '%s\n' "$*" >>"$audit"
+joined="$*"
+args=("$@")
+host="github.com"
+explicit_host=false
+for ((i=0; i<\${#args[@]}; i++)); do
+  if [[ "\${args[i]}" == "--hostname" && $((i+1)) -lt \${#args[@]} ]]; then
+    host="\${args[$((i+1))]}"
+    explicit_host=true
+  fi
+done
+if [[ "$explicit_host" == false && -n "\${GH_HOST:-}" ]]; then
+  host="\$GH_HOST"
+fi
+if [[ "$1" == "auth" && "$2" == "token" ]]; then
+  case "$host" in
+    ghe.example) printf 'token-ghe' ;;
+    *) printf 'token-dotcom' ;;
+  esac
+  exit 0
+fi
+if [[ "$joined" == *"api rate_limit"* ]] || [[ "$joined" == *"api --hostname"* && "$joined" == *"rate_limit"* ]]; then
+  node -e "const fs=require('fs'); const [statePath, host]=process.argv.slice(1); const s=JSON.parse(fs.readFileSync(statePath,'utf8')); const h=s.hosts[host]||s.hosts['github.com']; process.stdout.write(JSON.stringify({resources:{graphql:{limit:5000,remaining:h.remaining,reset:h.reset,used:5000-h.remaining}}}));" "$state" "$host"
+  exit 0
+fi
+if [[ "$joined" == *graphql* ]]; then
+  node -e "const fs=require('fs'); const [statePath, host]=process.argv.slice(1); const p=statePath; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.graphqlCalls+=1; fs.writeFileSync(p, JSON.stringify(s)); const h=s.hosts[host]||s.hosts['github.com']; if (h.remaining<=0) { console.error('gh: HTTP 403: API rate limit exceeded for user (graphql_rate_limit)'); process.exit(1); } console.log('{\"data\":{\"viewer\":{\"login\":\"fixture\"}}}');" "$state" "$host"
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+    const env = {
+      ...process.env,
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      GH_GRAPHQL_DEGRADED_CACHE_DIR: cacheDir,
+    };
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    return {
+      root,
+      audit,
+      cacheDir,
+      statePath,
+      fakeGh,
+      env,
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('fingerprints credentials per explicit hostname instead of default auth context', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const gheArgv = ['api', '--hostname', 'ghe.example', 'graphql', '-f', 'query={viewer{login}}'];
+      const dotcomArgv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+
+      const suppressedGhe = spawnGraphqlPassthrough(harness.fakeGh, gheArgv, harness.env);
+      expect(suppressedGhe.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+
+      const allowedDotcom = spawnGraphqlPassthrough(harness.fakeGh, dotcomArgv, harness.env);
+      expect(allowedDotcom.status).toBe(0);
+      expect(allowedDotcom.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+
+      const audit = auditLines(harness.audit).join('\n');
+      expect(audit).toMatch(/auth token --hostname ghe\.example/);
+      expect(audit).toMatch(/auth token --hostname github\.com/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('queries rate_limit on explicitly supplied github.com even when GH_HOST points elsewhere', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const argv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+      const env = { ...harness.env, GH_HOST: 'ghe.example' };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, argv, env);
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).some((line) => line.includes('--hostname github.com') && line.includes('rate_limit'))).toBe(true);
+      expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
+      expect(extractApiHostnameInfo(argv)).toEqual({ host: 'github.com', explicit: true });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('builds explicit-host rate_limit argv as gh api --hostname <host> rate_limit', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const argv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+      const env = { ...harness.env, GH_HOST: 'ghe.example' };
+      expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
+      const rateLimitLine = auditLines(harness.audit).find((line) => line.includes('rate_limit'));
+      expect(rateLimitLine).toBeDefined();
+      expect(rateLimitLine).toMatch(/^api --hostname github\.com rate_limit/);
+      expect(rateLimitLine).not.toMatch(/^--hostname/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('bounds parallel rate_limit refresh with a per-partition lease', async () => {
+    const nowMs = 1_700_000_500_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 0,
+      resetOffsetSec: 3600,
+    });
+    try {
+      const script = `import { tryGraphqlDegradedPassthrough } from './lib/gh-graphql-degraded.mjs';
+tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={viewer{login}}'])}, ${JSON.stringify(harness.fakeGh)}, { env: process.env });`;
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_NOW_MS: String(nowMs),
+      };
+      await Promise.all(Array.from({ length: 5 }, () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+          cwd: wrapperDir,
+          env,
+        });
+        child.on('error', reject);
+        child.on('close', resolve);
+      })));
+      const rateLimitCalls = auditLines(harness.audit).filter((line) => line.includes('rate_limit')).length;
+      expect(rateLimitCalls).toBeLessThanOrEqual(1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('refreshes rate_limit while degraded and clears suppression when remaining returns', () => {
+    const nowMs = 1_700_000_300_000;
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 0, resetOffsetSec: 3600 });
+    try {
+      const partition = resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      mkdirSync(harness.cacheDir, { recursive: true });
+      writeDegradedCache(harness.cacheDir, partition, {
+        degraded: true,
+        graphqlResetAt: Math.floor(nowMs / 1000) + 3600,
+        graphqlRemaining: 0,
+        lastRateLimitFetchMs: nowMs - RATE_LIMIT_REFRESH_MS - 1,
+      });
+      writeFileSync(harness.statePath, JSON.stringify({
+        remaining: 5,
+        reset: Math.floor(nowMs / 1000) + 3600,
+        graphqlCalls: 0,
+      }));
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_NOW_MS: String(nowMs),
+      };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).some((line) => line.includes('rate_limit'))).toBe(true);
+      expect(auditLines(harness.audit).some((line) => line.includes('graphql'))).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('partitions degraded cache by GH_HOST when no explicit --hostname', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const gheEnv = { ...harness.env, GH_HOST: 'ghe.example' };
+      const dotcomEnv = { ...harness.env };
+      delete dotcomEnv.GH_HOST;
+
+      expect(extractApiHostnameInfo(GRAPHQL_QUERY_ARGV, gheEnv)).toEqual({
+        host: 'ghe.example',
+        explicit: false,
+      });
+      expect(resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, gheEnv)).not.toBe(
+        resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, dotcomEnv),
+      );
+
+      const suppressedGhe = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, gheEnv);
+      expect(suppressedGhe.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+
+      const allowedDotcom = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, dotcomEnv);
+      expect(allowedDotcom.status).toBe(0);
+      expect(allowedDotcom.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('passthroughs graphql when degraded cache dir is unwritable', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 5 });
+    try {
+      const blocked = join(harness.root, 'blocked-cache-path');
+      writeFileSync(blocked, 'not-a-directory');
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_CACHE_DIR: blocked,
+      };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/fixture/);
+      expect(result.stderr).toMatch(/graphql_degraded_cache_io_failed/);
+      expect(auditLines(harness.audit).some((line) => line.includes('graphql'))).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('fingerprints enterprise hosts from GH_ENTERPRISE_TOKEN instead of GH_TOKEN', () => {
+    const gheArgv = ['api', '--hostname', 'ghe.example', 'graphql', '-f', 'query={viewer{login}}'];
+    const keyA = resolvePartitionKey('fake-gh', gheArgv, {
+      GH_TOKEN: 'shared-dotcom',
+      GHE_TOKEN: 'enterprise-a',
+    } as NodeJS.ProcessEnv);
+    const keyB = resolvePartitionKey('fake-gh', gheArgv, {
+      GH_TOKEN: 'shared-dotcom',
+      GHE_TOKEN: 'enterprise-b',
+    } as NodeJS.ProcessEnv);
+    expect(keyA).not.toBe(keyB);
+    expect(resolveEnvTokenForHost({ GH_TOKEN: 'dotcom', GHE_TOKEN: 'ent' } as NodeJS.ProcessEnv, 'ghe.example')).toBe('ent');
+    expect(resolveEnvTokenForHost({ GH_TOKEN: 'dotcom', GHE_TOKEN: 'ent' } as NodeJS.ProcessEnv, 'github.com')).toBe('dotcom');
+  });
+
+  it('classifies primary GraphQL quota exhaustion separately from non-triggers', () => {
+    expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'graphql_rate_limit', stdout: '', exitCode: 1 })).toBe(true);
+    expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'secondary_rate_limit', stdout: '', exitCode: 1 })).toBe(false);
+    expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'HTTP 401 Bad credentials', stdout: '', exitCode: 1 })).toBe(false);
+  });
+});
+

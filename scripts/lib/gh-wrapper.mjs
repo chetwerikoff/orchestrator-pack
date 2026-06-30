@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { classifyArgv } from './gh-inventory-match.mjs';
 import { exitCodeForPrChecks } from './gh-pr-checks.mjs';
 import { resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
+import { tryGraphqlDegradedPassthrough } from './gh-graphql-degraded.mjs';
 import { executeRestRoute } from './gh-rest-routes.mjs';
 import { REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
 
@@ -40,6 +41,9 @@ function formatStdout(result, parsed, route) {
 
 function passthrough(argv) {
   const realGh = resolveRealGhBinary();
+  if (tryGraphqlDegradedPassthrough(argv, realGh)) {
+    return;
+  }
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
