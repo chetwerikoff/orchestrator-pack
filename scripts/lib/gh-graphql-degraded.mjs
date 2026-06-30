@@ -21,6 +21,7 @@ export const CACHE_VERSION = 1;
 export const RATE_LIMIT_REFRESH_MS = 60_000;
 export const RATE_LIMIT_REFRESH_LOCK_STALE_MS = 120_000;
 export const AUDIT_LABEL = 'graphql_degraded_fail_fast';
+export const CACHE_IO_AUDIT_LABEL = 'graphql_degraded_cache_io_failed';
 export const SUPPRESSION_EXIT_CODE = 1;
 export const PRIMARY_QUOTA_MARKER = 'GraphQL primary quota exhausted';
 
@@ -269,12 +270,20 @@ export function readDegradedCache(cacheDir, partitionKey) {
   try {
     const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     if (!isValidCacheRecord(parsed, partitionKey)) {
-      rmSync(filePath, { force: true });
+      try {
+        rmSync(filePath, { force: true });
+      } catch {
+        // best-effort cache repair
+      }
       return null;
     }
     return parsed;
   } catch {
-    rmSync(filePath, { force: true });
+    try {
+      rmSync(filePath, { force: true });
+    } catch {
+      // best-effort cache repair
+    }
     return null;
   }
 }
@@ -573,23 +582,60 @@ function emitPassthroughResult(result) {
 }
 
 /**
- * Handle gh api graphql passthrough with degraded-mode gate. Exits on graphql argv.
+ * @param {string} partitionKey
+ * @param {unknown} err
+ */
+function emitCacheIoFailureDiagnostic(partitionKey, err) {
+  const message = err instanceof Error ? err.message : String(err);
+  const shortPartition = partitionKey ? hashFingerprint(partitionKey) : 'unknown';
+  process.stderr.write(
+    `gh-wrapper-audit: ${CACHE_IO_AUDIT_LABEL} partition=${shortPartition} error=${JSON.stringify(message)}\n`,
+  );
+}
+
+/**
  * @param {string[]} argv
  * @param {string} realGh
- * @param {{ env?: NodeJS.ProcessEnv }} [options]
- * @returns {boolean} false when argv is not graphql passthrough
+ * @param {NodeJS.ProcessEnv} env
  */
-export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
-  if (!isGraphqlPassthroughArgv(argv)) {
-    return false;
+function passthroughGraphqlDirect(argv, realGh, env) {
+  const graphqlResult = spawnSync(realGh, argv, {
+    cwd: process.cwd(),
+    env: { ...env, GH_WRAPPER_ACTIVE: '1' },
+    encoding: 'utf8',
+    maxBuffer: 50 * 1024 * 1024,
+  });
+  emitPassthroughResult(graphqlResult);
+}
+
+/**
+ * @param {string} cacheDir
+ * @param {string} partitionKey
+ * @param {{
+ *   degraded: boolean;
+ *   graphqlResetAt: number | null;
+ *   graphqlRemaining: number | null;
+ *   lastRateLimitFetchMs: number;
+ * }} state
+ */
+function tryWriteDegradedCache(cacheDir, partitionKey, state) {
+  try {
+    return writeDegradedCache(cacheDir, partitionKey, state);
+  } catch {
+    return null;
   }
+}
 
-  const env = options.env ?? process.env;
-  const cacheDir = resolveCacheDir(env);
-  const partitionKey = resolvePartitionKey(realGh, argv, env);
-  const currentMs = nowMs();
+/**
+ * @param {string} cacheDir
+ * @param {string} partitionKey
+ * @param {string} realGh
+ * @param {string[]} argv
+ * @param {NodeJS.ProcessEnv} env
+ * @param {number} currentMs
+ */
+function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs) {
   let cache = readDegradedCache(cacheDir, partitionKey);
-
   const resetEpochSec = cache?.graphqlResetAt ?? null;
   const resetMs = resetEpochSec ? resetEpochSec * 1000 : null;
 
@@ -615,6 +661,38 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     exitSuppressed(partitionKey, resetEpochSec);
   }
 
+  return { cache, refreshed };
+}
+
+/**
+ * Handle gh api graphql passthrough with degraded-mode gate. Exits on graphql argv.
+ * @param {string[]} argv
+ * @param {string} realGh
+ * @param {{ env?: NodeJS.ProcessEnv }} [options]
+ * @returns {boolean} false when argv is not graphql passthrough
+ */
+export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
+  if (!isGraphqlPassthroughArgv(argv)) {
+    return false;
+  }
+
+  const env = options.env ?? process.env;
+  const currentMs = nowMs();
+  let cacheDir = '';
+  let partitionKey = '';
+  let cache = null;
+  let refreshed = false;
+
+  try {
+    cacheDir = resolveCacheDir(env);
+    partitionKey = resolvePartitionKey(realGh, argv, env);
+    ({ cache, refreshed } = applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs));
+  } catch (err) {
+    emitCacheIoFailureDiagnostic(partitionKey, err);
+    passthroughGraphqlDirect(argv, realGh, env);
+    return true;
+  }
+
   const graphqlResult = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...env, GH_WRAPPER_ACTIVE: '1' },
@@ -624,7 +702,7 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
 
   if (graphqlResult.status === 0) {
     if (cache?.degraded) {
-      writeDegradedCache(cacheDir, partitionKey, {
+      tryWriteDegradedCache(cacheDir, partitionKey, {
         degraded: false,
         graphqlResetAt: null,
         graphqlRemaining: cache.graphqlRemaining,
@@ -649,29 +727,33 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     if (refreshed && cache?.graphqlResetAt) {
       resetAt = cache.graphqlResetAt;
     } else if (!resetAt) {
-      cache = readDegradedCache(cacheDir, partitionKey) ?? cache;
-      resetAt = cache?.graphqlResetAt ?? null;
-      if (!resetAt) {
-        const armRefresh = maybeRefreshDegradedCache(
-          cacheDir,
-          partitionKey,
-          realGh,
-          argv,
-          env,
-          currentMs,
-          { ignoreCadence: true },
-        );
-        cache = armRefresh.cache ?? cache;
+      try {
+        cache = readDegradedCache(cacheDir, partitionKey) ?? cache;
         resetAt = cache?.graphqlResetAt ?? null;
+        if (!resetAt) {
+          const armRefresh = maybeRefreshDegradedCache(
+            cacheDir,
+            partitionKey,
+            realGh,
+            argv,
+            env,
+            currentMs,
+            { ignoreCadence: true },
+          );
+          cache = armRefresh.cache ?? cache;
+          resetAt = cache?.graphqlResetAt ?? null;
+        }
+      } catch (err) {
+        emitCacheIoFailureDiagnostic(partitionKey, err);
       }
     }
     if (!cache || !cache.degraded) {
-      cache = writeDegradedCache(cacheDir, partitionKey, {
+      cache = tryWriteDegradedCache(cacheDir, partitionKey, {
         degraded: true,
         graphqlResetAt: resetAt,
         graphqlRemaining: 0,
         lastRateLimitFetchMs: cache?.lastRateLimitFetchMs ?? currentMs,
-      });
+      }) ?? cache;
     }
     if (graphqlResult.stderr) {
       process.stderr.write(graphqlResult.stderr);

@@ -2,6 +2,7 @@ export const CACHE_VERSION: number;
 export const RATE_LIMIT_REFRESH_MS: number;
 export const RATE_LIMIT_REFRESH_LOCK_STALE_MS: number;
 export const AUDIT_LABEL: string;
+export const CACHE_IO_AUDIT_LABEL: string;
 export const SUPPRESSION_EXIT_CODE: number;
 export const PRIMARY_QUOTA_MARKER: string;
 

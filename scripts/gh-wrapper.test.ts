@@ -1310,6 +1310,25 @@ tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={
     }
   });
 
+  it('passthroughs graphql when degraded cache dir is unwritable', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 5 });
+    try {
+      const blocked = join(harness.root, 'blocked-cache-path');
+      writeFileSync(blocked, 'not-a-directory');
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_CACHE_DIR: blocked,
+      };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/fixture/);
+      expect(result.stderr).toMatch(/graphql_degraded_cache_io_failed/);
+      expect(auditLines(harness.audit).some((line) => line.includes('graphql'))).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it('fingerprints enterprise hosts from GH_ENTERPRISE_TOKEN instead of GH_TOKEN', () => {
     const gheArgv = ['api', '--hostname', 'ghe.example', 'graphql', '-f', 'query={viewer{login}}'];
     const keyA = resolvePartitionKey('fake-gh', gheArgv, {
