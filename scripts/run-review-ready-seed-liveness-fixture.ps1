@@ -120,6 +120,45 @@ try {
                 Remove-Item -LiteralPath $stateDir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+        'progress-writer-detail-sequence' {
+            $tickId = 'seed-refresh-detail'
+            $baseNow = $nowMs
+            $progressDir = Join-Path ([System.IO.Path]::GetTempPath()) ("seed-detail-$([guid]::NewGuid())")
+            New-Item -ItemType Directory -Path $progressDir -Force | Out-Null
+            $env:AO_SIDE_PROCESS_PROGRESS_DIR = $progressDir
+            try {
+                $progressBundle = New-ReviewReadyReportStateSeedProgressWriter -TickId $tickId
+                foreach ($step in @($fixture.writerSteps)) {
+                    $env:AO_SIDE_PROCESS_NOW_MS = [string]($baseNow + [long]$step.atElapsedMs)
+                    if ($step.detail) {
+                        & $progressBundle.Write @{
+                            WorkStep   = [string]$step.workStep
+                            WorkCursor = [int]$step.workCursor
+                            WorkTotal  = [int]$step.workTotal
+                        }
+                    }
+                    else {
+                        & $progressBundle.Write ([string]$step.workStep)
+                    }
+                }
+                $checkNow = $baseNow + [long]$fixture.checkAtElapsedMs
+                $env:AO_SIDE_PROCESS_NOW_MS = [string]$checkNow
+                $progress = Read-OrchestratorSideProcessProgress -ChildId 'review-ready-report-state-seed'
+                $freshness = Get-OrchestratorSideProcessProgressFreshnessVerdict `
+                    -Progress $progress -ChildPid $PID -StallThresholdMs $stallThresholdMs -NowMs $checkNow -TickId $tickId `
+                    -ChildId 'review-ready-report-state-seed'
+                $result.ok = [bool]$freshness.Fresh
+                if ($fixture.expectProgress) {
+                    $result.ok = $result.ok -and ([string]$progress.workStep -eq [string]$fixture.expectProgress.workStep)
+                    $result.ok = $result.ok -and ([int]$progress.workCursor -eq [int]$fixture.expectProgress.workCursor)
+                    $result.ok = $result.ok -and ([int]$progress.workTotal -eq [int]$fixture.expectProgress.workTotal)
+                }
+                $result.detail = "freshness=$($freshness.Status) step=$($progress.workStep) cursor=$($progress.workCursor)/$($progress.workTotal)"
+            }
+            finally {
+                Remove-Item -LiteralPath $progressDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
         'side-effect-drain' {
             $stateRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("seed-sidefx-$([guid]::NewGuid())")
             New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null

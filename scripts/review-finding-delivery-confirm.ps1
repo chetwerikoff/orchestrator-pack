@@ -218,7 +218,7 @@ function Get-OpenPrList {
     }
     catch {
         $message = $_.Exception.Message
-        if ($message -match 'gh pr list failed') {
+        if ($message -match 'gh pr list failed|snapshot_populate_failed|child_list_bypass') {
             throw $message
         }
         throw
