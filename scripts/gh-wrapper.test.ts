@@ -1057,6 +1057,8 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     expect(isGraphqlPassthroughArgv(['api', '--hostname', 'ghe.example', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '--method', 'POST', 'graphql', '-f', 'query={viewer{login}}'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '-H', 'Accept: application/json', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-i', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--include', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '--method', 'GET', 'rate_limit'])).toBe(false);
     expect(isGraphqlPassthroughArgv(['api', 'rate_limit'])).toBe(false);
   });

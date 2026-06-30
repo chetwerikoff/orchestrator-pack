@@ -82,7 +82,6 @@ const GH_API_VALUE_FLAGS = new Set([
   '-F',
   '--form',
   '--input',
-  '-i',
   '--jq',
   '-t',
   '--template',
@@ -90,7 +89,6 @@ const GH_API_VALUE_FLAGS = new Set([
   '-R',
   '--repo',
   '--preview',
-  '--include',
 ]);
 
 /**
