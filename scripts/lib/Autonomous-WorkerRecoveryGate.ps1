@@ -5,51 +5,16 @@
 
 . (Join-Path $PSScriptRoot 'Worker-RecoveryClaim.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 
 $Script:WorkerRecoveryCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs'
 $Script:WorkerRecoveryParentPattern = 'invoke-worker-recovery.ps1'
-
-function Split-WorkerRecoveryGateCommandLineTokens {
-    param([string]$CommandLine)
-
-    $tokens = New-Object System.Collections.Generic.List[string]
-    if (-not $CommandLine) {
-        return @()
-    }
-
-    $current = New-Object System.Text.StringBuilder
-    $inSingle = $false
-    $inDouble = $false
-    for ($index = 0; $index -lt $CommandLine.Length; $index++) {
-        $char = $CommandLine[$index]
-        if ($char -eq "'" -and -not $inDouble) {
-            $inSingle = -not $inSingle
-            continue
-        }
-        if ($char -eq '"' -and -not $inSingle) {
-            $inDouble = -not $inDouble
-            continue
-        }
-        if ([char]::IsWhiteSpace($char) -and -not $inSingle -and -not $inDouble) {
-            if ($current.Length -gt 0) {
-                $tokens.Add($current.ToString())
-                $current.Clear() | Out-Null
-            }
-            continue
-        }
-        [void]$current.Append($char)
-    }
-    if ($current.Length -gt 0) {
-        $tokens.Add($current.ToString())
-    }
-    return ,@($tokens.ToArray())
-}
 
 function Test-ProcessCommandLineIsWorkerRecoveryParent {
     param([string]$CommandLine)
 
     if (-not $CommandLine) { return $false }
-    $tokens = Split-WorkerRecoveryGateCommandLineTokens -CommandLine $CommandLine
+    $tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
     if ($tokens.Count -eq 0) { return $false }
 
     for ($index = 0; $index -lt $tokens.Count; $index++) {
@@ -108,7 +73,6 @@ function Test-AutonomousWorkerRecoveryGitAllow {
         }
     }
     else {
-        . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
         $chain = Get-ProcessParentChainCommandLines
         foreach ($line in $chain) {
             if (Test-ProcessCommandLineIsWorkerRecoveryParent -CommandLine $line) {

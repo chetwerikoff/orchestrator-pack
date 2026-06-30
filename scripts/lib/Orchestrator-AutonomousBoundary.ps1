@@ -441,42 +441,6 @@ function Get-ProcessParentChainCommandLines {
     return @($lines)
 }
 
-function Split-ProcessCommandLineTokens {
-    param([string]$CommandLine)
-
-    $tokens = New-Object System.Collections.Generic.List[string]
-    if (-not $CommandLine) {
-        return @()
-    }
-
-    $current = New-Object System.Text.StringBuilder
-    $inSingle = $false
-    $inDouble = $false
-    for ($index = 0; $index -lt $CommandLine.Length; $index++) {
-        $char = $CommandLine[$index]
-        if ($char -eq "'" -and -not $inDouble) {
-            $inSingle = -not $inSingle
-            continue
-        }
-        if ($char -eq '"' -and -not $inSingle) {
-            $inDouble = -not $inDouble
-            continue
-        }
-        if ([char]::IsWhiteSpace($char) -and -not $inSingle -and -not $inDouble) {
-            if ($current.Length -gt 0) {
-                $tokens.Add($current.ToString())
-                $current.Clear() | Out-Null
-            }
-            continue
-        }
-        [void]$current.Append($char)
-    }
-    if ($current.Length -gt 0) {
-        $tokens.Add($current.ToString())
-    }
-    return ,@($tokens.ToArray())
-}
-
 function Test-ProcessCommandLineIsSanctionedGitParent {
     param(
         [string]$CommandLine,

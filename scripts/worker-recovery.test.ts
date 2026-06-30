@@ -528,7 +528,7 @@ describe('worker recovery git allow binding', () => {
       path.join(repoRoot, 'scripts/lib/Autonomous-WorkerRecoveryGate.ps1'),
       'utf8',
     );
-    expect(gateText).toMatch(/Split-WorkerRecoveryGateCommandLineTokens/);
+    expect(gateText).toMatch(/Split-ProcessCommandLineTokens -CommandLine \$CommandLine/);
     expect(gateText).toMatch(/Split-Path -Leaf/);
     expect(gateText).not.toMatch(/-match \[regex\]::Escape\(\$Script:WorkerRecoveryParentPattern\)/);
   });
