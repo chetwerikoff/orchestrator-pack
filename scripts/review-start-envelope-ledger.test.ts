@@ -273,6 +273,34 @@ describe('review-start-envelope-ledger unit', () => {
     }
   });
 
+  it('claim ledger registration tolerates failed runs with startedAt only', () => {
+    const dir = tempClaimDir();
+    const headSha = 'abc53900000000000000000000000000000000000';
+    const postRunRetryPath = path.join(repoRoot, 'scripts/lib/Review-PostRunRetry.ps1');
+    try {
+      const script = `
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(dir)}
+        $sha = ${psString(headSha)}
+        . ${psString(postRunRetryPath)}
+        $claim = @{ acquired = $true; namespace = $env:AO_REVIEW_CLAIM_DIR; claim = @{ prNumber = 539; headSha = $sha } }
+        $runs = @(@{
+          id = 'timeout-started-at-only'
+          prNumber = 539
+          targetSha = $sha
+          status = 'failed'
+          failureClass = 'timeout_no_verdict'
+          startedAt = '2026-06-30T01:00:00.000Z'
+        })
+        $result = Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns $runs
+        [pscustomobject]@{ changed = [bool]$result.changed; reason = [string]$result.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.changed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reeval-fresh-snapshot-scopes-checks-to-planned-pr', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).toMatch(

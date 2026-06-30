@@ -125,6 +125,20 @@ function Register-PostRunAutonomousRetryAttempt {
     return $result
 }
 
+function Get-ReviewRunTerminalSortTime {
+    param([object]$Run)
+
+    $ts = if ($Run.createdAt) { [string]$Run.createdAt } elseif ($Run.startedAt) { [string]$Run.startedAt } else { '' }
+    if (-not $ts) {
+        return [datetime]::MinValue
+    }
+    $parsed = [datetime]::MinValue
+    if ([datetime]::TryParse($ts, [ref]$parsed)) {
+        return $parsed
+    }
+    return [datetime]::MinValue
+}
+
 function Register-PostRunAutonomousRetryAttemptFromClaim {
     param(
         [hashtable]$ClaimResult,
@@ -147,9 +161,7 @@ function Register-PostRunAutonomousRetryAttemptFromClaim {
             $status -in @('failed', 'cancelled') -and
             [int]$_.prNumber -eq $prNumber -and
             [string]$_.targetSha -eq $headSha
-        }) | Sort-Object {
-            [DateTime]::Parse([string]$_.createdAt)
-        } -Descending | Select-Object -First 1
+        }) | Sort-Object { Get-ReviewRunTerminalSortTime -Run $_ } -Descending | Select-Object -First 1
 
     if (-not $failed) {
         return @{ changed = $false; reason = 'no_failed_run_on_head' }
