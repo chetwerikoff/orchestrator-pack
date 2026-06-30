@@ -435,6 +435,40 @@ describe('review-start-claim-run-binding', () => {
     expect(resolveBindingProjectNamespace({ claim, projectNamespace: 'other-pack' })).toBe('other-pack');
   });
 
+  it('evaluateClaimRunBinding passes projectNamespace for claim-to-run reconciliation', () => {
+    const claim = {
+      state: 'active',
+      prNumber: 519,
+      headSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+      launchPending: { atUtc: '2026-06-28T15:44:30.000Z' },
+      launchPendingInvokedAtUtc: '2026-06-28T15:44:30Z',
+    };
+    const reviewRuns = [
+      {
+        id: 'review-run-other-pack',
+        prNumber: 519,
+        targetSha: '5a20a5d5c3d590ce6ec041e57a390ea63e39158a',
+        project: 'other-pack',
+        status: 'running',
+      },
+    ];
+
+    const withNamespace = evaluateClaimRunBinding({
+      claim,
+      reviewRuns,
+      projectNamespace: 'other-pack',
+    });
+    expect(withNamespace.direction).toBe('claim_to_run');
+    expect(withNamespace.reconcile?.reconcile).toBe(true);
+
+    const wrongNamespace = evaluateClaimRunBinding({
+      claim,
+      reviewRuns,
+      projectNamespace: 'orchestrator-pack',
+    });
+    expect(wrongNamespace.direction).toBe('none');
+  });
+
   it('worktree-gate-imports-ao-review-list-helper', () => {
     const gateLib = path.join(repoRoot, 'scripts/lib/Autonomous-ReviewWorktreeGate.ps1');
     const result = JSON.parse(

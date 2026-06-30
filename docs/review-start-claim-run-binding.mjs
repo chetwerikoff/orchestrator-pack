@@ -480,6 +480,7 @@ export function evaluateClaimRunBinding({
       claim,
       reviewRuns,
       reviewerEvidence,
+      projectNamespace: namespace,
     });
     if (binding.reconcile) {
       return {
