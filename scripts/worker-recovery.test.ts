@@ -342,6 +342,44 @@ describe('worker recovery artifact preservation', () => {
     expect(recoveryText).toMatch(/git status --ignored --porcelain/);
     expect(recoveryText).toMatch(/\^!!/);
   });
+  it('worker recovery artifact preservation: branch without upstream marks unpushed without throwing', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'worker-recovery-upstream-'));
+    tempRoots.push(dir);
+    const git = (args: string[]) => {
+      const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+      expect(result.status).toBe(0);
+      return result;
+    };
+    git(['init', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    writeFileSync(path.join(dir, 'README.md'), 'seed\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'seed']);
+    git(['checkout', '-b', 'feat/worker']);
+    writeFileSync(path.join(dir, 'worker.txt'), 'work\n');
+    git(['add', 'worker.txt']);
+    git(['commit', '-m', 'worker commit']);
+
+    const script = `
+      $ErrorActionPreference = 'Stop'
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $state = Get-WorkerRecoveryDirtyState -WorktreePath ${psString(dir)}
+      [pscustomobject]@{ unpushedCommits = [bool]$state.unpushedCommits; trackedModifications = [bool]$state.trackedModifications } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.unpushedCommits).toBe(true);
+    expect(result.trackedModifications).toBe(false);
+  });
+
+  it('worker recovery artifact preservation: dirty state handles missing upstream safely', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/\$upstreamRaw = & git rev-parse --abbrev-ref "\$branch@\{upstream\}" 2>\$null/);
+    expect(recoveryText).toMatch(/if \(\$null -ne \$upstreamRaw\) \{ \[string\]\$upstreamRaw\.Trim\(\) \} else \{ '' \}/);
+  });
 });
 
 describe('worker recovery spawn freshness', () => {

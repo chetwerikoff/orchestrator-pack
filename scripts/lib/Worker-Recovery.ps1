@@ -130,11 +130,14 @@ function Get-WorkerRecoveryDirtyState {
             if ($line -match '^!!') { $relevantIgnored = $true; break }
         }
         $unpushed = $false
-        $branch = (& git rev-parse --abbrev-ref HEAD 2>$null).Trim()
+        $branchRaw = & git rev-parse --abbrev-ref HEAD 2>$null
+        $branch = if ($null -ne $branchRaw) { [string]$branchRaw.Trim() } else { '' }
         if ($branch -and $branch -ne 'HEAD') {
-            $upstream = (& git rev-parse --abbrev-ref "$branch@{upstream}" 2>$null).Trim()
+            $upstreamRaw = & git rev-parse --abbrev-ref "$branch@{upstream}" 2>$null
+            $upstream = if ($null -ne $upstreamRaw) { [string]$upstreamRaw.Trim() } else { '' }
             if ($upstream) {
-                $ahead = (& git rev-list --count "$upstream..HEAD" 2>$null).Trim()
+                $aheadRaw = & git rev-list --count "$upstream..HEAD" 2>$null
+                $ahead = if ($null -ne $aheadRaw) { [string]$aheadRaw.Trim() } else { '' }
                 if ($ahead -and [int]$ahead -gt 0) { $unpushed = $true }
             }
             else {
