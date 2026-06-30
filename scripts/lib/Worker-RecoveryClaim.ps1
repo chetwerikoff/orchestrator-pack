@@ -321,21 +321,18 @@ function Recover-WorkerRecoveryMutex {
 
 function Enter-WorkerRecoveryMutex {
     param([string]$LockDir)
-    try {
-        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
-        return $true
-    }
-    catch {
-        if (Recover-WorkerRecoveryMutex -LockDir $LockDir) {
-            try {
-                New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
-                return $true
-            }
-            catch {
-                return $false
-            }
+
+    $mayRecoverStale = $true
+    while ($true) {
+        try {
+            New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+            return $true
         }
-        return $false
+        catch {
+            if (-not $mayRecoverStale) { return $false }
+            $mayRecoverStale = $false
+            if (-not (Recover-WorkerRecoveryMutex -LockDir $LockDir)) { return $false }
+        }
     }
 }
 
