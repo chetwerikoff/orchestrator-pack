@@ -265,6 +265,19 @@ Operator adoption after merge:
    `graphql_degraded_fail_fast` and do not spam `api.github.com/graphql`.
 3. After `resources.graphql.reset`, confirm passthrough `gh api graphql` attempts network again.
 
+
+## GraphQL quota GitHub read inventory closure (Issue #549)
+
+`scripts/lib/graphql-quota-github-read-inventory.json` classifies every in-scope executable
+GitHub read shape on pack-owned scripts/prompts as `rest_inventory`, `rest_direct`,
+`graphql_fail_fast` (wrapper passthrough only), or `accepted_upstream_residual`. CI runs
+`node scripts/lib/graphql-quota-github-read-inventory.mjs validate` via
+`scripts/check-gh-inventory-static.ps1`; new uncovered `gh` argv or script-level `gh api graphql`
+fail before merge.
+
+No operator adoption required beyond keeping pack `scripts/` on PATH (#431) and #540 fail-fast
+behavior.
+
 ## Wake supervisor degraded backoff and fault boundary (Issue #450)
 
 Wake supervisor children under sustained dependency outage or inventory failure now use
