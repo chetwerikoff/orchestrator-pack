@@ -71,6 +71,30 @@ describe('worker recovery liveness discrimination', () => {
     expect(result.outcome).toBe('skipped_ambiguous');
   });
 
+
+  it('worker recovery liveness discrimination: path-only session id is insufficient ownership', () => {
+    const result = evaluateCleanupEligibility({
+      projectId: 'orchestrator-pack',
+      canonicalPath: worktree,
+      sessionId: 'opk-dead',
+      session: { runtime: 'exited', status: 'terminated' },
+      worktreeRecord: null,
+      aoBaseDir: aoBase,
+      worktreePresent: true,
+      dirtyState: {},
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.outcome).toBe('skipped_ambiguous');
+    expect(result.reason).toBe('insufficient_ownership_proof');
+    expect(evaluateOwnershipEvidence({
+      projectId: 'orchestrator-pack',
+      canonicalPath: worktree,
+      sessionId: 'opk-dead',
+      session: { runtime: 'exited', status: 'terminated' },
+      worktreeRecord: null,
+      aoBaseDir: aoBase,
+    }).ok).toBe(false);
+  });
   it('worker recovery liveness discrimination: terminated runtime with ownership is eligible', () => {
     const result = evaluateCleanupEligibility({
       projectId: 'orchestrator-pack',

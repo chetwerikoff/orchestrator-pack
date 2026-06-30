@@ -152,13 +152,6 @@ export function evaluateOwnershipEvidence(input) {
   const sessionIdMatch = sessionId && recordSessionId && sessionId === recordSessionId;
   const pathSessionMatch = sessionId && canonicalPath.includes(sessionId);
 
-  const positiveSignals = [
-    sessionPathMatch,
-    sessionIdMatch,
-    pathSessionMatch && pathUnderNamespace,
-    danglingGitdir && pathUnderNamespace && sessionId,
-  ].filter(Boolean).length;
-
   const foreignProject = worktreeRecord?.projectId
     && String(worktreeRecord.projectId).trim() !== projectId;
 
@@ -166,14 +159,18 @@ export function evaluateOwnershipEvidence(input) {
     return { ok: false, confidence: 'foreign', reason: 'foreign_project_owner' };
   }
 
-  if (positiveSignals >= 2 || (sessionPathMatch && sessionId)) {
+  const independentSignals = [sessionPathMatch, sessionIdMatch].filter(Boolean).length;
+  if (independentSignals >= 2 || (sessionPathMatch && sessionId)) {
     return { ok: true, confidence: 'high', reason: 'consistent_pack_ownership' };
   }
-  if (danglingGitdir && sessionId && pathUnderNamespace) {
+  if (danglingGitdir && sessionIdMatch && pathUnderNamespace) {
     return { ok: true, confidence: 'high', reason: 'dangling_orphan_namespace_match' };
   }
-  if (positiveSignals === 1) {
-    return { ok: true, confidence: 'medium', reason: 'single_ownership_signal' };
+  if (pathSessionMatch && pathUnderNamespace && sessionIdMatch) {
+    return { ok: true, confidence: 'high', reason: 'consistent_pack_ownership' };
+  }
+  if (independentSignals === 1 || (pathSessionMatch && pathUnderNamespace)) {
+    return { ok: false, confidence: 'low', reason: 'insufficient_ownership_proof' };
   }
   return { ok: false, confidence: 'none', reason: 'missing_ownership_proof' };
 }
