@@ -9,22 +9,14 @@ param()
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeReportPath = Join-Path $Root '.vitest-runtime-report-light.json'
-$PlanScript = Join-Path $Root 'scripts/lib/vitest-ci-lanes.mjs'
+$PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 
 $env:CI = 'true'
 $env:VITEST_CI_LIGHT_LANE = '1'
 
 Push-Location $Root
 try {
-    $planJson = node -e "
-import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
-const plan = buildLanePlan();
-if (!plan.ok) {
-  console.error(plan.errors.join('\n'));
-  process.exit(1);
-}
-console.log(JSON.stringify({ lightMaxWorkers: plan.config.lightMaxWorkers, light: plan.light }));
-" 2>&1
+    $planJson = & node $PlanScript light 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host $planJson
         exit 1

@@ -12,26 +12,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard.json"
+$PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 
 $env:CI = 'true'
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
 
 Push-Location $Root
 try {
-    $planJson = node -e "
-import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
-const plan = buildLanePlan();
-if (!plan.ok) {
-  console.error(plan.errors.join('\n'));
-  process.exit(1);
-}
-const shard = plan.heavyShards.find(s => s.shard === $Shard);
-if (!shard) {
-  console.error('heavy shard $Shard not found (count=' + plan.config.heavyShardCount + ')');
-  process.exit(1);
-}
-console.log(JSON.stringify(shard));
-" 2>&1
+    $planJson = & node $PlanScript heavy --shard $Shard 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host $planJson
         exit 1
@@ -39,7 +27,7 @@ console.log(JSON.stringify(shard));
 
     $shardPlan = $planJson | ConvertFrom-Json
     if ($shardPlan.files.Count -eq 0) {
-        Write-Host "[PASS] Vitest heavy shard $Shard: no files assigned"
+        Write-Host "[PASS] Vitest heavy shard ${Shard}: no files assigned"
         exit 0
     }
 
