@@ -37,17 +37,37 @@ function nowMs() {
 /**
  * @param {string[]} argv
  */
-export function extractApiHostname(argv) {
+/**
+ * @param {string[]} argv
+ * @returns {{ host: string; explicit: boolean }}
+ */
+export function extractApiHostnameInfo(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--hostname' && argv[i + 1]) {
-      return argv[i + 1];
+      return { host: argv[i + 1], explicit: true };
     }
     if (token.startsWith('--hostname=')) {
-      return token.slice('--hostname='.length);
+      return { host: token.slice('--hostname='.length), explicit: true };
     }
   }
-  return DEFAULT_HOST;
+  return { host: DEFAULT_HOST, explicit: false };
+}
+
+export function extractApiHostname(argv) {
+  return extractApiHostnameInfo(argv).host;
+}
+
+/**
+ * @param {string} hostname
+ * @param {boolean} explicitHostname
+ * @returns {string[]}
+ */
+function hostnameFlagArgs(hostname, explicitHostname) {
+  if (explicitHostname || hostname !== DEFAULT_HOST) {
+    return ['--hostname', hostname];
+  }
+  return [];
 }
 
 /**
@@ -85,13 +105,20 @@ function hashFingerprint(text) {
  * @param {string} realGh
  * @param {NodeJS.ProcessEnv} env
  */
-export function resolveCredentialFingerprint(realGh, env = process.env) {
+export function resolveCredentialFingerprint(
+  realGh,
+  env = process.env,
+  hostname = DEFAULT_HOST,
+  explicitHostname = false,
+) {
   const envToken = env.GH_TOKEN || env.GITHUB_TOKEN;
   if (envToken) {
     return hashFingerprint(`env-token:${envToken}`);
   }
 
-  const tokenResult = spawnSync(realGh, ['auth', 'token'], {
+  const hostArgs = hostnameFlagArgs(hostname, explicitHostname);
+
+  const tokenResult = spawnSync(realGh, ['auth', 'token', ...hostArgs], {
     encoding: 'utf8',
     env: { ...env, GH_WRAPPER_ACTIVE: '1' },
   });
@@ -102,7 +129,7 @@ export function resolveCredentialFingerprint(realGh, env = process.env) {
     }
   }
 
-  const loginResult = spawnSync(realGh, ['api', 'user', '-q', '.login'], {
+  const loginResult = spawnSync(realGh, ['api', ...hostArgs, 'user', '-q', '.login'], {
     encoding: 'utf8',
     env: { ...env, GH_WRAPPER_ACTIVE: '1' },
   });
@@ -122,8 +149,8 @@ export function resolveCredentialFingerprint(realGh, env = process.env) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function resolvePartitionKey(realGh, argv, env = process.env) {
-  const host = extractApiHostname(argv);
-  const credential = resolveCredentialFingerprint(realGh, env);
+  const { host, explicit } = extractApiHostnameInfo(argv);
+  const credential = resolveCredentialFingerprint(realGh, env, host, explicit);
   return `${host}|${credential}`;
 }
 
@@ -318,9 +345,9 @@ function exitSuppressed(partitionKey, resetAt) {
  * @param {NodeJS.ProcessEnv} env
  */
 export function fetchRateLimitGraphql(realGh, argv, env) {
+  const { host, explicit } = extractApiHostnameInfo(argv);
   const args = ['api', 'rate_limit'];
-  const host = extractApiHostname(argv);
-  if (host !== DEFAULT_HOST) {
+  if (explicit) {
     args.unshift('--hostname', host);
   }
   const result = spawnSync(realGh, args, {

@@ -13,6 +13,8 @@ const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapP
 import { executeRestRoute, parsePullReference, routePrView } from './lib/gh-rest-routes.mjs';
 import {
   cacheFilePath,
+  extractApiHostnameInfo,
+  fetchRateLimitGraphql,
   isGraphqlPassthroughArgv,
   isPrimaryGraphqlQuotaExhaustion,
   resolvePartitionKey,
@@ -1052,6 +1054,126 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     expect(isGraphqlPassthroughArgv(['api', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '--hostname', 'ghe.example', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', 'rate_limit'])).toBe(false);
+  });
+
+  function parseFakeGhHostname(argv: string[]) {
+    for (let i = 0; i < argv.length; i += 1) {
+      if (argv[i] === '--hostname' && argv[i + 1]) {
+        return argv[i + 1];
+      }
+      if (argv[i].startsWith('--hostname=')) {
+        return argv[i].slice('--hostname='.length);
+      }
+    }
+    return 'github.com';
+  }
+
+  function buildMultiHostGraphqlHarness(hostQuotas: Record<string, { remaining: number; resetOffsetSec?: number }>) {
+    const root = mkdtempSync(join(tmpdir(), 'gh-graphql-multi-host-'));
+    const audit = join(root, 'audit.log');
+    const cacheDir = join(root, 'cache');
+    const statePath = join(root, 'state.json');
+    const nowSec = Math.floor(Date.now() / 1000);
+    const hosts: Record<string, { remaining: number; reset: number }> = {};
+    for (const [host, quota] of Object.entries(hostQuotas)) {
+      hosts[host] = {
+        remaining: quota.remaining,
+        reset: nowSec + (quota.resetOffsetSec ?? 3600),
+      };
+    }
+    writeFileSync(statePath, JSON.stringify({ hosts, graphqlCalls: 0 }));
+    const fakeGh = join(root, 'fake-gh');
+    writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+state="${statePath}"
+printf '%s\n' "$*" >>"$audit"
+joined="$*"
+args=("$@")
+host="github.com"
+for ((i=0; i<\${#args[@]}; i++)); do
+  if [[ "\${args[i]}" == "--hostname" && $((i+1)) -lt \${#args[@]} ]]; then
+    host="\${args[$((i+1))]}"
+  fi
+done
+if [[ "$1" == "auth" && "$2" == "token" ]]; then
+  case "$host" in
+    ghe.example) printf 'token-ghe' ;;
+    *) printf 'token-dotcom' ;;
+  esac
+  exit 0
+fi
+if [[ "$joined" == *"api rate_limit"* ]] || [[ "$joined" == *"api --hostname"* && "$joined" == *"rate_limit"* ]]; then
+  node -e "const fs=require('fs'); const [statePath, host]=process.argv.slice(1); const s=JSON.parse(fs.readFileSync(statePath,'utf8')); const h=s.hosts[host]||s.hosts['github.com']; process.stdout.write(JSON.stringify({resources:{graphql:{limit:5000,remaining:h.remaining,reset:h.reset,used:5000-h.remaining}}}));" "$state" "$host"
+  exit 0
+fi
+if [[ "$joined" == *graphql* ]]; then
+  node -e "const fs=require('fs'); const [statePath, host]=process.argv.slice(1); const p=statePath; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.graphqlCalls+=1; fs.writeFileSync(p, JSON.stringify(s)); const h=s.hosts[host]||s.hosts['github.com']; if (h.remaining<=0) { console.error('gh: HTTP 403: API rate limit exceeded for user (graphql_rate_limit)'); process.exit(1); } console.log('{\"data\":{\"viewer\":{\"login\":\"fixture\"}}}');" "$state" "$host"
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+    const env = {
+      ...process.env,
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      GH_GRAPHQL_DEGRADED_CACHE_DIR: cacheDir,
+    };
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    return {
+      root,
+      audit,
+      cacheDir,
+      statePath,
+      fakeGh,
+      env,
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('fingerprints credentials per explicit hostname instead of default auth context', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const gheArgv = ['api', '--hostname', 'ghe.example', 'graphql', '-f', 'query={viewer{login}}'];
+      const dotcomArgv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+
+      const suppressedGhe = spawnGraphqlPassthrough(harness.fakeGh, gheArgv, harness.env);
+      expect(suppressedGhe.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+
+      const allowedDotcom = spawnGraphqlPassthrough(harness.fakeGh, dotcomArgv, harness.env);
+      expect(allowedDotcom.status).toBe(0);
+      expect(allowedDotcom.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+
+      const audit = auditLines(harness.audit).join('\n');
+      expect(audit).toMatch(/auth token --hostname ghe\.example/);
+      expect(audit).toMatch(/auth token --hostname github\.com/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('queries rate_limit on explicitly supplied github.com even when GH_HOST points elsewhere', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const argv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+      const env = { ...harness.env, GH_HOST: 'ghe.example' };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, argv, env);
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).some((line) => line.includes('--hostname github.com') && line.includes('rate_limit'))).toBe(true);
+      expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
+      expect(extractApiHostnameInfo(argv)).toEqual({ host: 'github.com', explicit: true });
+    } finally {
+      harness.cleanup();
+    }
   });
 
   it('classifies primary GraphQL quota exhaustion separately from non-triggers', () => {

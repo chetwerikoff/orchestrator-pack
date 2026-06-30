@@ -4,9 +4,15 @@ export const AUDIT_LABEL: string;
 export const SUPPRESSION_EXIT_CODE: number;
 export const PRIMARY_QUOTA_MARKER: string;
 
+export function extractApiHostnameInfo(argv: string[]): { host: string; explicit: boolean };
 export function extractApiHostname(argv: string[]): string;
 export function isGraphqlPassthroughArgv(argv: string[]): boolean;
-export function resolveCredentialFingerprint(realGh: string, env?: NodeJS.ProcessEnv): string;
+export function resolveCredentialFingerprint(
+  realGh: string,
+  env?: NodeJS.ProcessEnv,
+  hostname?: string,
+  explicitHostname?: boolean,
+): string;
 export function resolvePartitionKey(realGh: string, argv: string[], env?: NodeJS.ProcessEnv): string;
 export function resolveCacheDir(env?: NodeJS.ProcessEnv): string;
 export function cacheFilePath(cacheDir: string, partitionKey: string): string;
