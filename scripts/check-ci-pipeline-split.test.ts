@@ -57,12 +57,12 @@ describe('ci-test-aggregate fail-closed matrix (Issue #487)', () => {
 });
 
 describe('ci-pipeline-split config and workflow binding', () => {
-  it('config declares four vitest shards and stable aggregate name', () => {
+  it('config declares eight vitest shards and stable aggregate name', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
       vitestShardCount: number;
       aggregateJobName: string;
     };
-    expect(config.vitestShardCount).toBe(4);
+    expect(config.vitestShardCount).toBe(8);
     expect(config.aggregateJobName).toBe('Run pack contract tests');
   });
 
@@ -75,7 +75,7 @@ describe('ci-pipeline-split config and workflow binding', () => {
     expect(yaml).toMatch(/run-vitest-shard\.ps1/);
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
     expect(yaml).toMatch(/name: Run pack contract tests/);
-    expect(yaml).toMatch(/shard: \[1, 2, 3, 4\]/);
+    expect(yaml).toMatch(/shard: \[1, 2, 3, 4, 5, 6, 7, 8\]/);
     expect(yaml).not.toMatch(/test-aggregate:[\s\S]*!cancelled\(\)/);
   });
 });
