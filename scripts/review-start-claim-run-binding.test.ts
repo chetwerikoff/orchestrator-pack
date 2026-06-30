@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -467,6 +468,39 @@ describe('review-start-claim-run-binding', () => {
       projectNamespace: 'orchestrator-pack',
     });
     expect(wrongNamespace.direction).toBe('none');
+  });
+
+  it('no-live-claim-worktree-denial-survives-ao-list-failure', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-worktree-gate-'));
+    const projectId = 'orchestrator-pack';
+    const headSha = 'a7f0e4d190556d2a61082878e82c6e5164f6a31e';
+    const gateLib = path.join(repoRoot, 'scripts/lib/Autonomous-ReviewWorktreeGate.ps1');
+    const claimLib = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+    const target = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces', 'opk-rev-test');
+    try {
+      const result = JSON.parse(
+        runPwsh(`
+          function Get-AoReviewRuns { param([string]$Project) throw 'ao review list unavailable' }
+          $env:AO_BASE_DIR = ${psString(aoBase)}
+          $env:AO_PROJECT_ID = ${psString(projectId)}
+          . ${psString(claimLib)}
+          $ns = Get-ReviewStartClaimProjectNamespace -ProjectId ${psString(projectId)}
+          Initialize-ReviewStartClaimNamespace -Namespace $ns
+          . ${psString(gateLib)}
+          $gate = Test-AutonomousReviewWorktreeClaimBoundAllow -Argv @('worktree','add','--detach',${psString(target)},${psString(headSha)})
+          [pscustomobject]@{
+            allowed = [bool]$gate.allowed
+            reason = [string]$gate.reason
+            hasDiagnostic = $null -ne $gate.diagnostic
+          } | ConvertTo-Json -Compress
+        `),
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe('no_live_claim');
+      expect(result.hasDiagnostic).toBe(false);
+    } finally {
+      rmSync(aoBase, { recursive: true, force: true });
+    }
   });
 
   it('worktree-gate-imports-ao-review-list-helper', () => {

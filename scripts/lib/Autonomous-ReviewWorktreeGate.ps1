@@ -409,12 +409,17 @@ function Test-AutonomousReviewWorktreeClaimBoundAllow {
     if (-not $claimLookup.ok) {
         $diagnostic = $null
         if ($claimLookup.reason -eq 'no_live_claim') {
-            $runMatch = Find-PackOwnedReviewRunForHeadSha -HeadSha $shape.commit
-            if ($runMatch) {
-                $claims = @(Get-ReviewStartClaimRecordsForNamespace -Namespace (Resolve-ReviewStartClaimNamespace -ProjectId $runMatch.projectId))
-                $diag = Get-MissingClaimForReviewRunDiagnostic -Run $runMatch.run -Claims $claims `
-                    -ProjectId $runMatch.projectId -DetectionPoint 'worktree_gate' -Surface $runMatch.surface -Provenance $runMatch.provenance
-                if ($diag.emit) { $diagnostic = $diag.diagnostic }
+            try {
+                $runMatch = Find-PackOwnedReviewRunForHeadSha -HeadSha $shape.commit
+                if ($runMatch) {
+                    $claims = @(Get-ReviewStartClaimRecordsForNamespace -Namespace (Resolve-ReviewStartClaimNamespace -ProjectId $runMatch.projectId))
+                    $diag = Get-MissingClaimForReviewRunDiagnostic -Run $runMatch.run -Claims $claims `
+                        -ProjectId $runMatch.projectId -DetectionPoint 'worktree_gate' -Surface $runMatch.surface -Provenance $runMatch.provenance
+                    if ($diag.emit) { $diagnostic = $diag.diagnostic }
+                }
+            }
+            catch {
+                # Best-effort missing_claim diagnostic; #429 no_live_claim denial preserved on lookup failure.
             }
         }
         return @{ allowed = $false; reason = $claimLookup.reason; diagnostic = $diagnostic }
