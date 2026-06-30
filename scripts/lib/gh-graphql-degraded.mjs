@@ -71,6 +71,43 @@ function hostnameFlagArgs(hostname, explicitHostname) {
   return [];
 }
 
+const GH_API_VALUE_FLAGS = new Set([
+  '--hostname',
+  '--method',
+  '-H',
+  '--header',
+  '-f',
+  '--field',
+  '--raw-field',
+  '-F',
+  '--form',
+  '--input',
+  '-i',
+  '--jq',
+  '-t',
+  '--template',
+  '--cache',
+  '-R',
+  '--repo',
+  '--preview',
+  '--include',
+]);
+
+/**
+ * @param {string[]} argv
+ * @param {number} idx
+ */
+function advanceGhApiFlag(argv, idx) {
+  const token = argv[idx];
+  if (token.includes('=')) {
+    return 1;
+  }
+  if (GH_API_VALUE_FLAGS.has(token)) {
+    return idx + 1 < argv.length ? 2 : 1;
+  }
+  return 1;
+}
+
 /**
  * @param {string[]} argv
  */
@@ -82,15 +119,10 @@ export function isGraphqlPassthroughArgv(argv) {
   let cursor = apiIdx + 1;
   while (cursor < argv.length) {
     const token = argv[cursor];
-    if (token === '--hostname') {
-      cursor += 2;
-      continue;
+    if (!token.startsWith('-')) {
+      return token === 'graphql';
     }
-    if (token.startsWith('--hostname=')) {
-      cursor += 1;
-      continue;
-    }
-    return token === 'graphql';
+    cursor += advanceGhApiFlag(argv, cursor);
   }
   return false;
 }

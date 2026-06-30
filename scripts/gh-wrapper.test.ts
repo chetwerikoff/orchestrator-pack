@@ -1055,7 +1055,22 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
   it('detects graphql passthrough argv shapes', () => {
     expect(isGraphqlPassthroughArgv(['api', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '--hostname', 'ghe.example', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--method', 'POST', 'graphql', '-f', 'query={viewer{login}}'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '-H', 'Accept: application/json', 'graphql'])).toBe(true);
+    expect(isGraphqlPassthroughArgv(['api', '--method', 'GET', 'rate_limit'])).toBe(false);
     expect(isGraphqlPassthroughArgv(['api', 'rate_limit'])).toBe(false);
+  });
+
+  it('applies degraded fail-fast to graphql argv with leading api flags', () => {
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 0, resetOffsetSec: 3600 });
+    try {
+      const argv = ['api', '--method', 'POST', 'graphql', '-f', 'query={viewer{login}}'];
+      const result = spawnGraphqlPassthrough(harness.fakeGh, argv, harness.env);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+    } finally {
+      harness.cleanup();
+    }
   });
 
   function parseFakeGhHostname(argv: string[]) {
