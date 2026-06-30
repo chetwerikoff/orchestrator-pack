@@ -28,10 +28,6 @@ const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/review-trigger-reconcile',
 );
-const scriptsFixturesDir = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'fixtures/review-trigger-reconcile',
-);
 
 const greenChecks = [
   { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
@@ -40,9 +36,8 @@ const greenChecks = [
   { name: 'Self-architect lint', state: 'SUCCESS' },
 ];
 
-function loadFixture<T>(name: string, fromScripts = false): T {
-  const dir = fromScripts ? scriptsFixturesDir : fixturesDir;
-  return JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as T;
+function loadFixture<T>(name: string): T {
+  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as T;
 }
 
 function headCommittedAtMsFromPr(pr: Record<string, unknown>) {
@@ -861,36 +856,71 @@ describe('preRunHeadReadyRecheck', () => {
   });
 
   it('allows retry-eligible failed run through pre-run recheck', () => {
-    const fixture = loadFixture<{
-      planned: { prNumber: number; headSha: string; sessionId: string };
-      fresh: {
-        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
-        reviewRuns: { prNumber: number; targetSha: string; status: string; retryEligible?: boolean }[];
-        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
-        ciChecks: typeof greenChecks;
-        requiredCheckNames: string[];
-      };
-      expect: { emitReviewRun: boolean; reason: string };
-    }>('pre-run-failed-retry.json', true);
-    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
-    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
-    expect(result.reason).toBe(fixture.expect.reason);
+    const headSha = 'abc3180000000000000000000000000000000000';
+    const result = preRunHeadReadyRecheck(
+      { prNumber: 318, headSha, sessionId: 'opk-75' },
+      {
+        openPrs: [{ number: 318, headRefOid: headSha, headCommittedAt: '2026-06-16T00:00:00.000Z' }],
+        reviewRuns: [{
+        id: 'failed-empty',
+        prNumber: 318,
+        targetSha: 'abc3180000000000000000000000000000000000',
+        status: 'failed',
+        findingCount: 0,
+        terminationReason:
+          'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
+        createdAt: '2026-06-16T00:00:00.000Z',
+      }],
+        sessions: [
+          {
+            sessionId: 'opk-75',
+            name: 'opk-75',
+            prNumber: 318,
+            reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-16T00:00:00.000Z' }],
+          },
+        ],
+        ciChecks: greenChecks,
+        requiredCheckNames: [
+          'Verify orchestrator-pack structure',
+          'PR scope guard',
+          'Run pack contract tests',
+          'Self-architect lint',
+        ],
+      },
+    );
+    expect(result.emitReviewRun).toBe(true);
+    expect(result.reason).toBe('failed_retry_after_recheck');
   });
 
   it('blocks retry-eligible failed run when required CI is red at pre-run recheck', () => {
-    const fixture = loadFixture<{
-      planned: { prNumber: number; headSha: string; sessionId: string };
-      fresh: {
-        openPrs: { number: number; headRefOid: string; headCommittedAt: string }[];
-        reviewRuns: { prNumber: number; targetSha: string; status: string; retryEligible?: boolean }[];
-        sessions: NonNullable<Parameters<typeof evaluateHeadReadyForReview>[0]['session']>[];
-        ciChecks: typeof greenChecks;
-        requiredCheckNames: string[];
-      };
-      expect: { emitReviewRun: boolean; reason: string };
-    }>('pre-run-failed-retry-ci-red.json', true);
-    const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
-    expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
-    expect(result.reason).toBe(fixture.expect.reason);
+    const headSha = 'abc3180000000000000000000000000000000000';
+    const result = preRunHeadReadyRecheck(
+      { prNumber: 318, headSha, sessionId: 'opk-75' },
+      {
+        openPrs: [{ number: 318, headRefOid: headSha, headCommittedAt: '2026-06-16T00:00:00.000Z' }],
+        reviewRuns: [{
+        id: 'failed-empty',
+        prNumber: 318,
+        targetSha: 'abc3180000000000000000000000000000000000',
+        status: 'failed',
+        findingCount: 0,
+        terminationReason:
+          'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
+        createdAt: '2026-06-16T00:00:00.000Z',
+      }],
+        sessions: [
+          {
+            sessionId: 'opk-75',
+            name: 'opk-75',
+            prNumber: 318,
+            reports: [{ reportState: 'ready_for_review', reportedAt: '2026-06-16T00:00:00.000Z' }],
+          },
+        ],
+        ciChecks: [{ name: 'Verify orchestrator-pack structure', state: 'FAILURE' }],
+        requiredCheckNames: ['Verify orchestrator-pack structure'],
+      },
+    );
+    expect(result.emitReviewRun).toBe(false);
+    expect(result.reason).toBe('pre_run_recheck_ci_red_defer');
   });
 });
