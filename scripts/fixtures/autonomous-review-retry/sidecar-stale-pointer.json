@@ -1,0 +1,29 @@
+{
+  "description": "stale by-run pointer rejects sidecar join",
+  "run": {
+    "id": "run-stale-pointer",
+    "prNumber": 539,
+    "targetSha": "abc53900000000000000000000000000000000000",
+    "reviewerSessionId": "opk-rev-stale",
+    "status": "failed",
+    "findingCount": 0,
+    "terminationReason": "Command failed",
+    "createdAt": "2026-06-30T00:00:00.000Z"
+  },
+  "artifact": {
+    "schemaVersion": 1,
+    "reviewerSessionId": "opk-rev-stale",
+    "runId": "run-other",
+    "phases": [],
+    "stderrTail": "reviewer-evidence:{\"reviewer\":{\"failureClass\":\"timeout_no_verdict\"}}"
+  },
+  "pointer": {
+    "schemaVersion": 1,
+    "runId": "run-stale-pointer",
+    "reviewerSessionId": "opk-rev-stale"
+  },
+  "expect": {
+    "failureClass": "unknown",
+    "retryEligible": false
+  }
+}

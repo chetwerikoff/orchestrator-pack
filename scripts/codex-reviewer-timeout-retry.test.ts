@@ -2,14 +2,16 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { evaluateTimeoutRetryEligibility } from '../docs/codex-reviewer-timeout-retry.mjs';
+import * as timeoutRetryCompat from '../docs/codex-reviewer-timeout-retry.mjs';
+import * as reviewerFailureEvidenceMarkers from '../docs/reviewer-failure-evidence-markers.mjs';
 import {
   countSameHeadFailuresByClass,
-  evaluateTimeoutRetryEligibility,
   extractReviewerFailureClass,
   REPEATED_TIMEOUT_ESCALATION_REASON,
   resolveTimeoutRetryMax,
   TIMEOUT_NO_VERDICT_FAILURE_CLASS,
-} from '../docs/codex-reviewer-timeout-retry.mjs';
+} from '../docs/reviewer-failure-evidence-markers.mjs';
 import {
   evaluateOrchestratorTurnGate,
   evaluateScenarioMatrixCell,
@@ -111,6 +113,33 @@ function buildTimeoutRun(overrides: Record<string, unknown> = {}) {
 }
 
 describe('same-head timeout retry escalation (AC#4)', () => {
+  it('re-exports reviewer-failure-evidence marker symbols for backward compatibility', () => {
+    expect(timeoutRetryCompat.TIMEOUT_NO_VERDICT_FAILURE_CLASS).toBe(
+      reviewerFailureEvidenceMarkers.TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+    );
+    expect(timeoutRetryCompat.REPEATED_TIMEOUT_ESCALATION_REASON).toBe(
+      reviewerFailureEvidenceMarkers.REPEATED_TIMEOUT_ESCALATION_REASON,
+    );
+    expect(timeoutRetryCompat.REVIEWER_EVIDENCE_PREFIX).toBe(
+      reviewerFailureEvidenceMarkers.REVIEWER_EVIDENCE_PREFIX,
+    );
+    expect(timeoutRetryCompat.DEFAULT_TIMEOUT_RETRY_MAX).toBe(
+      reviewerFailureEvidenceMarkers.DEFAULT_TIMEOUT_RETRY_MAX,
+    );
+    expect(timeoutRetryCompat.resolveTimeoutRetryMax).toBe(
+      reviewerFailureEvidenceMarkers.resolveTimeoutRetryMax,
+    );
+    expect(timeoutRetryCompat.extractReviewerEvidenceFromText).toBe(
+      reviewerFailureEvidenceMarkers.extractReviewerEvidenceFromText,
+    );
+    expect(timeoutRetryCompat.extractReviewerFailureClass).toBe(
+      reviewerFailureEvidenceMarkers.extractReviewerFailureClass,
+    );
+    expect(timeoutRetryCompat.countSameHeadFailuresByClass).toBe(
+      reviewerFailureEvidenceMarkers.countSameHeadFailuresByClass,
+    );
+  });
+
   it('extracts timeout_no_verdict from reviewer-evidence marker', () => {
     const terminationReason = [
       'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}',

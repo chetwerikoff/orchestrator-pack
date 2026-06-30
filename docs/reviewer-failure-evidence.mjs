@@ -229,6 +229,16 @@ function readArtifactFile(path) {
   return asRecord(JSON.parse(readFileSync(path, 'utf8')));
 }
 
+export function readFailureEvidenceRunPointer(storeDir, runId) {
+  const boundRunId = safeRunId(runId);
+  if (!boundRunId) {
+    return null;
+  }
+  const pointerPath = getFailureEvidenceRunPointerPath(storeDir, boundRunId);
+  const pointer = readArtifactFile(pointerPath);
+  return isFailureEvidenceRunPointer(pointer) ? pointer : null;
+}
+
 export function readFailureEvidenceArtifact(storeDir, { runId, reviewerSessionId } = {}) {
   const boundRunId = safeRunId(runId);
   if (boundRunId) {

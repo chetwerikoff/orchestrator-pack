@@ -965,6 +965,19 @@ describe('wake trigger integration', () => {
     expect(joined).not.toMatch(/outcome=claim_(win|loss)/);
   });
 
+  it('records post-run retry ledger only after handoff receipt bound check', () => {
+    const triggerLib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Invoke-ReviewWakeTrigger.ps1');
+    const src = readFileSync(triggerLib, 'utf8');
+    const fenceBlockStart = src.indexOf('$handoffReceiptAbort = $false');
+    expect(fenceBlockStart).toBeGreaterThan(-1);
+    const handoffIdx = src.indexOf('if ($isHandoffWake) {', fenceBlockStart);
+    const ledgerIdx = src.indexOf('Register-PostRunAutonomousRetryAttemptFromClaim', fenceBlockStart);
+    const aoIdx = src.indexOf('& ao @runArgs', fenceBlockStart);
+    expect(handoffIdx).toBeGreaterThan(-1);
+    expect(ledgerIdx).toBeGreaterThan(handoffIdx);
+    expect(aoIdx).toBeGreaterThan(ledgerIdx);
+  });
+
   it('completion wake keeps 5s processing bound', () => {
     const fixture = JSON.parse(
       readFileSync(path.join(fixturesDir, '../review-wake-trigger/green-wake-triggers.json'), 'utf8'),
