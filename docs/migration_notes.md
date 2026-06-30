@@ -225,6 +225,27 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## GraphQL exhaustion degraded poll at `scripts/gh` (Issue #540)
+
+When **primary GraphQL quota** is exhausted, pack `scripts/gh` arms a partitioned cross-subprocess
+cache and suppresses further passthrough `gh api graphql` network calls until
+`resources.graphql.reset` elapses. Suppressed attempts emit
+`gh-wrapper-audit: graphql_degraded_fail_fast` on stderr (distinct from real GraphQL HTTP). Suppressed
+calls exit non-zero with a primary-quota exhaustion diagnostic — **no synthetic GraphQL success
+bodies**. Batch/review-thread enrichment stays functionally degraded until quota returns; inventory
+REST routes (#431/#538) are unchanged.
+
+Cache location: `$XDG_STATE_HOME/orchestrator-pack/gh-graphql-degraded/` (partition key = API host +
+credential fingerprint). `rate_limit` refresh is bounded to ≤1 REST call per 60s per partition.
+
+Operator adoption after merge:
+
+1. `ao stop` then `ao start` from the operator terminal so daemon PATH picks up `scripts/gh`
+   changes.
+2. Under GraphQL exhaustion, confirm repeated `gh api graphql` attempts log
+   `graphql_degraded_fail_fast` and do not spam `api.github.com/graphql`.
+3. After `resources.graphql.reset`, confirm passthrough `gh api graphql` attempts network again.
+
 ## Wake supervisor degraded backoff and fault boundary (Issue #450)
 
 Wake supervisor children under sustained dependency outage or inventory failure now use
