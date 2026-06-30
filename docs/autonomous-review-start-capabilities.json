@@ -83,11 +83,19 @@
       "surface": "claim-store",
       "path": "scripts/lib/Autonomous-ReviewWorktreeGate.ps1",
       "provenance": "live-review-start-claim"
+    },
+    {
+      "id": "invoke-worker-recovery",
+      "classification": "gated",
+      "surface": "shell",
+      "path": "scripts/invoke-worker-recovery.ps1",
+      "provenance": "worker-recovery-claim"
     }
   ],
   "sanctionedGitParents": [
     "reviewer-workspace-preflight.ps1",
-    "orchestrator-worktree-preflight.ps1"
+    "orchestrator-worktree-preflight.ps1",
+    "invoke-worker-recovery.ps1"
   ],
   "sanctionedGitParentMaxDepth": 2
 }
