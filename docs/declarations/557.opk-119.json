@@ -1,0 +1,40 @@
+{
+  "issue_number": 557,
+  "iteration_id": "opk-119",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T13:12:12.071Z",
+  "baseline": {
+    "commit_sha": "af1e3b885ec91ed6ab842f3f7a3d9fa94f75194c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4f608d7ba18f85053b8784ce41a103bdf4dc216d1b42d9ec16cc55ec7f07791d"
+  },
+  "declared_paths": [
+    "docs/declarations/557.opk-119.json",
+    "docs/migration_notes.md",
+    "docs/worker-recovery.d.mts",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/review-start-envelope-ledger.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:5fa910d0a110a67311324d4f755c011df2577970e4f2b083d05be441d1af9ef8",
+      "new_active_scope_hash": "sha256:4f608d7ba18f85053b8784ce41a103bdf4dc216d1b42d9ec16cc55ec7f07791d",
+      "changed": {
+        "added": [
+          "docs/worker-recovery.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "CI fix: worker-recovery.d.mts type export after main merge",
+      "actor": "opk-119",
+      "timestamp": "2026-06-30T16:47:56.490Z",
+      "applied": true
+    }
+  ]
+}

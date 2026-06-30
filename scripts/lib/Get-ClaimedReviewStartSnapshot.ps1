@@ -3,6 +3,8 @@
   Shared live snapshot reader for claimed review-start gates.
 #>
 
+. (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
+
 function Get-ClaimedReviewStartSnapshot {
     param(
         [int]$PrNumber,
@@ -17,10 +19,12 @@ function Get-ClaimedReviewStartSnapshot {
         return $FixtureSnapshot
     }
 
+    $transportFailure = $null
+    $openPrs = @()
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
         $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $ClaimResult -RepoRoot $RepoRoot -GhArguments @(
-            'pr', 'list', '--state', 'open', '--json', 'number,headRefOid,baseRefName', '--limit', '200'
+            'pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state'
         )
         if (-not $transport.ok) {
             # Transport denial must short-circuit before live AO reads — Get-AoReviewRuns /
@@ -36,13 +40,14 @@ function Get-ClaimedReviewStartSnapshot {
                 requiredCheckLookupFailedByPr = @{}
             }
         }
-        $openPrs = @($transport.stdout | ConvertFrom-Json)
-        foreach ($pr in $openPrs) {
+        $pr = $transport.stdout | ConvertFrom-Json
+        if ($pr -and [string]$pr.state -eq 'OPEN') {
             Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+            $openPrs = @($pr)
         }
     }
     else {
-        $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
+        $openPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($PrNumber))
     }
     $reviewRuns = @(
         . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
@@ -64,6 +69,7 @@ function Get-ClaimedReviewStartSnapshot {
         ciChecksByPr                  = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+        transportFailure              = $transportFailure
     }
 }
 
@@ -75,8 +81,7 @@ function Get-ClaimedReviewStartReevalFreshSnapshot {
         [string]$RepoRoot
     )
 
-    # Pre-claim callers (e.g. Invoke-ReviewTriggerReevalPlannedRun claimRuns) pass no acquired claim;
-    # Get-ClaimedReviewStartSnapshot falls back to unsupervised open-PR list until claim is held.
+    # Pre-claim callers pass no acquired claim; scoped target-PR lookup uses PrNumber directly.
     . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
     $base = Get-ClaimedReviewStartSnapshot -PrNumber ([int]$Planned.prNumber) -Project $Project -RepoRoot $RepoRoot `
         -ClaimResult $ClaimResult -ResolveChecksBundle {
@@ -87,4 +92,3 @@ function Get-ClaimedReviewStartReevalFreshSnapshot {
     }
     return $base
 }
-
