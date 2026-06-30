@@ -141,4 +141,24 @@ describe('review-start-supervised-gh-pid', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('static guard ignores commented documentation param examples', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pid-param-guard-doc-comment-'));
+    const fixtureFile = path.join(dir, 'good-helper.ps1');
+    try {
+      writeFileSync(
+        fixtureFile,
+        "<#\n  Example only: param([int]$Pid)\n#>\nfunction Good-Helper { param([int]$ProcessId) }\n",
+        'utf8',
+      );
+      const result = spawnSync('pwsh', ['-NoProfile', '-File', guardPath, '-ScriptsRoot', dir], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('[PASS]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
