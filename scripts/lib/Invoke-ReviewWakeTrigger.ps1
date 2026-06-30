@@ -501,8 +501,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
                 }
             }
-            Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
-            & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             if ($isHandoffWake) {
                 $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
@@ -513,6 +511,8 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 }
             }
             if (-not $handoffReceiptAbort) {
+                Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
+                & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
                 & ao @runArgs
                 if ($LASTEXITCODE -ne 0) {
                     $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
