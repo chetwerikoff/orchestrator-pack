@@ -51,12 +51,55 @@ function ConvertTo-WorkerRecoverySessionSnapshot {
     }
 }
 
+
+function Get-WorkerRecoveryWorktreeRecordFromRepo {
+    param(
+        [string]$RepoRoot,
+        [string]$CanonicalPath,
+        [string]$ProjectId = 'orchestrator-pack',
+        [hashtable]$FallbackRecord = $null,
+        [switch]$FixtureMode
+    )
+
+    if ($FixtureMode -and $FallbackRecord) {
+        return $FallbackRecord
+    }
+    if (-not $RepoRoot -or -not $CanonicalPath) {
+        return $FallbackRecord
+    }
+
+    $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
+    if ($LASTEXITCODE -ne 0) { return $FallbackRecord }
+    $parsed = Invoke-WorkerRecoveryCli -Subcommand 'parseWorktreeList' -Payload @{
+        porcelain = (($porcelain | ForEach-Object { $_ }) -join "`n")
+    }
+    foreach ($record in @($parsed.records)) {
+        $canon = Invoke-WorkerRecoveryCli -Subcommand 'canonicalizePath' -Payload @{ path = $record.worktree }
+        if (-not ($canon.ok -and $canon.canonical -eq $CanonicalPath)) { continue }
+
+        $sessionId = ''
+        if ($CanonicalPath -match '[/\\]worktrees[/\\]([^/\\]+)') {
+            $sessionId = $Matches[1]
+        }
+        return @{
+            worktree  = $canon.canonical
+            head      = [string]$record.head
+            branch    = if ($record.branch) { [string]$record.branch } else { '' }
+            detached  = [bool]$record.detached
+            sessionId = $sessionId
+            projectId = $ProjectId
+        }
+    }
+    return $FallbackRecord
+}
+
 function Get-WorkerRecoveryPostClaimSnapshot {
     param(
         [string]$SessionId,
         [string]$CanonicalPath,
         [string]$ProjectId,
         [string]$AoBaseDir,
+        [string]$RepoRoot = '',
         [hashtable]$WorktreeRecord = $null,
         [hashtable]$FixtureSession = $null,
         [switch]$FixtureMode
@@ -76,12 +119,15 @@ function Get-WorkerRecoveryPostClaimSnapshot {
         }
     }
 
+    $liveWorktreeRecord = Get-WorkerRecoveryWorktreeRecordFromRepo -RepoRoot $RepoRoot `
+        -CanonicalPath $CanonicalPath -ProjectId $ProjectId -FallbackRecord $WorktreeRecord -FixtureMode:$FixtureMode
+
     return @{
         canonicalPath  = $CanonicalPath
         sessionId      = $SessionId
         session        = $session
         projectId      = $ProjectId
-        worktreeRecord = $WorktreeRecord
+        worktreeRecord = $liveWorktreeRecord
         aoBaseDir      = $AoBaseDir
     }
 }
@@ -348,16 +394,18 @@ function Invoke-WorkerRecovery {
         return @{ ok = $true; outcome = 'claim_lost'; reason = $claim.reason }
     }
 
+    $selectionWorktreeRecord = Get-WorkerRecoveryWorktreeRecordFromRepo -RepoRoot $RepoRoot `
+        -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -FallbackRecord $WorktreeRecord -FixtureMode:$FixtureMode
     $selectionSnapshot = @{
         canonicalPath  = $pathCanon.canonical
         sessionId      = $SessionId
         session        = $Session
         projectId      = $ProjectId
-        worktreeRecord = $WorktreeRecord
+        worktreeRecord = $selectionWorktreeRecord
         aoBaseDir      = $aoBase
     }
     $currentSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
-        -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase `
+        -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
         -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
 
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{

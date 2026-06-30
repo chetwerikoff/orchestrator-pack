@@ -280,6 +280,45 @@ function Get-WorkerRecoveryRetryAttemptState {
     return @{ attempt = $attempt; lastAttemptMs = $lastAttemptMs }
 }
 
+
+function Get-WorkerRecoveryMutexStaleSeconds {
+    $seconds = $Script:WorkerRecoveryMutexStaleSeconds
+    if ($env:AO_WORKER_RECOVERY_MUTEX_STALE_SECONDS) {
+        $parsed = 0
+        if ([int]::TryParse($env:AO_WORKER_RECOVERY_MUTEX_STALE_SECONDS, [ref]$parsed)) {
+            $seconds = $parsed
+        }
+    }
+    if ($seconds -lt 1) { return 1 }
+    return $seconds
+}
+
+function Test-WorkerRecoveryMutexAbandoned {
+    param([string]$LockDir)
+
+    if (-not (Test-Path -LiteralPath $LockDir -PathType Container)) {
+        return $false
+    }
+    try {
+        $item = Get-Item -LiteralPath $LockDir -ErrorAction Stop
+        $ageSeconds = ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds
+        return ($ageSeconds -ge (Get-WorkerRecoveryMutexStaleSeconds))
+    }
+    catch {
+        return $false
+    }
+}
+
+function Recover-WorkerRecoveryMutex {
+    param([string]$LockDir)
+
+    if (-not (Test-WorkerRecoveryMutexAbandoned -LockDir $LockDir)) {
+        return $false
+    }
+    Remove-Item -LiteralPath $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    return -not (Test-Path -LiteralPath $LockDir -PathType Container)
+}
+
 function Enter-WorkerRecoveryMutex {
     param([string]$LockDir)
     try {
@@ -287,6 +326,15 @@ function Enter-WorkerRecoveryMutex {
         return $true
     }
     catch {
+        if (Recover-WorkerRecoveryMutex -LockDir $LockDir) {
+            try {
+                New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+                return $true
+            }
+            catch {
+                return $false
+            }
+        }
         return $false
     }
 }

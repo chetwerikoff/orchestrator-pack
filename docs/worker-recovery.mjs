@@ -282,6 +282,20 @@ export function evaluatePostClaimRevalidation(input) {
   if (selectionLiveness.verdict !== currentLiveness.verdict) {
     return { ok: false, reason: 'liveness_changed' };
   }
+  const selectionRecord = asRecord(selection.worktreeRecord);
+  const currentRecord = asRecord(current.worktreeRecord);
+  if (selectionRecord && currentRecord) {
+    const selectionHead = String(selectionRecord.head ?? '').trim();
+    const currentHead = String(currentRecord.head ?? '').trim();
+    if (selectionHead && currentHead && selectionHead !== currentHead) {
+      return { ok: false, reason: 'worktree_head_changed' };
+    }
+    const selectionRecordSession = String(selectionRecord.sessionId ?? '').trim();
+    const currentRecordSession = String(currentRecord.sessionId ?? '').trim();
+    if (selectionRecordSession && currentRecordSession && selectionRecordSession !== currentRecordSession) {
+      return { ok: false, reason: 'worktree_ownership_changed' };
+    }
+  }
   const ownership = evaluateOwnershipEvidence(current);
   if (!ownership.ok) {
     return { ok: false, reason: 'ownership_became_ambiguous' };

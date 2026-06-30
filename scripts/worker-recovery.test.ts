@@ -231,6 +231,29 @@ describe('worker recovery claim lifecycle', () => {
     const mutexBody = claimText.match(/function Enter-WorkerRecoveryMutex \{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(mutexBody).toMatch(/New-Item -ItemType Directory -Path \$LockDir -ErrorAction Stop/);
     expect(mutexBody).not.toMatch(/-Force/);
+    expect(mutexBody).toMatch(/Recover-WorkerRecoveryMutex -LockDir \$LockDir/);
+  });
+
+
+  it('worker recovery claim lifecycle: recovers abandoned mutex directory before claim_held', () => {
+    const ns = tempNs();
+    const claimKey = 'worker-opk-mutex-stale';
+    const canonical = '/tmp/orchestrator-pack/worktrees/opk-mutex-stale';
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $env:AO_WORKER_RECOVERY_MUTEX_STALE_SECONDS = '1'
+      Initialize-WorkerRecoveryNamespace -Namespace ${psString(ns)}
+      $lockDir = Get-WorkerRecoveryLockDir -Namespace ${psString(ns)} -ClaimKey ${psString(claimKey)}
+      New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+      [System.IO.Directory]::SetLastWriteTimeUtc($lockDir, (Get-Date).ToUniversalTime().AddMinutes(-10))
+      $next = Acquire-WorkerRecoveryClaim -ClaimKey ${psString(claimKey)} -Surface 'test' -CanonicalPath ${psString(canonical)} -SessionId 'opk-mutex-stale' -BoundCandidates @(${psString(canonical)})
+      [pscustomobject]@{ acquired = [bool]$next.acquired; reason = [string]$next.reason; lockExists = (Test-Path -LiteralPath $lockDir) } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.acquired).toBe(true);
+    expect(result.reason).toBe('claim_acquired');
+    expect(result.lockExists).toBe(false);
   });
 
   it('worker recovery claim lifecycle: recovers stale active claim before claim_exists', () => {
@@ -276,14 +299,36 @@ describe('worker recovery post-claim revalidation', () => {
     expect(result.reason).toBe('became_live');
   });
 
+
+  it('worker recovery post-claim revalidation: blocks when worktree ownership marker changes', () => {
+    const worktree = '/tmp/orchestrator-pack/worktrees/opk-522';
+    const result = evaluatePostClaimRevalidation({
+      selection: {
+        canonicalPath: worktree,
+        sessionId: 'opk-522',
+        session: { runtime: 'exited', worktree },
+        worktreeRecord: { sessionId: 'opk-522', head: 'aaa111', projectId: 'orchestrator-pack' },
+      },
+      current: {
+        canonicalPath: worktree,
+        sessionId: 'opk-522',
+        session: { runtime: 'exited', worktree },
+        worktreeRecord: { sessionId: 'opk-999', head: 'aaa111', projectId: 'orchestrator-pack' },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('worktree_ownership_changed');
+  });
+
   it('worker recovery post-claim revalidation: Invoke-WorkerRecovery reads fresh AO snapshot', () => {
     const recoveryText = readFileSync(
       path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
       'utf8',
     );
     expect(recoveryText).toMatch(/Get-WorkerRecoveryPostClaimSnapshot/);
-    expect(recoveryText).toMatch(/selectionSnapshot/);
-    expect(recoveryText).not.toMatch(/current\s*=\s*@\{[\s\S]*session\s*=\s*\$Session[\s\S]*\}[\s\S]*selection\s*=\s*@\{[\s\S]*session\s*=\s*\$Session/);
+    expect(recoveryText).toMatch(/Get-WorkerRecoveryWorktreeRecordFromRepo/);
+    expect(recoveryText).toMatch(/selectionWorktreeRecord/);
+    expect(recoveryText).toMatch(/liveWorktreeRecord/);
   });
 });
 
