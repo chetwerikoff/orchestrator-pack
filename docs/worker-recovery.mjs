@@ -4,7 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { resolve, normalize } from 'node:path';
+import { resolve, normalize, join } from 'node:path';
 import {
   AFFIRMATIVE_LIVE_RUNTIME,
   TERMINAL_RUNTIME_VALUES,
@@ -14,6 +14,24 @@ import {
   normalizeRuntimeValue,
 } from './session-runtime-liveness.mjs';
 import { readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+
+
+function normalizePathSegments(value) {
+  return normalize(String(value ?? ''))
+    .split(/[/\\]/)
+    .filter(Boolean)
+    .join('/');
+}
+
+function isPathUnderPrefix(candidate, prefix) {
+  const normalizedCandidate = normalizePathSegments(candidate);
+  const normalizedPrefix = normalizePathSegments(prefix);
+  if (!normalizedPrefix) {
+    return false;
+  }
+  return normalizedCandidate === normalizedPrefix
+    || normalizedCandidate.startsWith(`${normalizedPrefix}/`);
+}
 
 export const WORKER_RECOVERY_VERSION = 'worker-recovery/v1';
 export const WORKER_RECOVERY_DEFAULT_RETRY_BUDGET = 3;
@@ -135,10 +153,10 @@ export function evaluateOwnershipEvidence(input) {
   }
 
   const expectedNamespace = aoBaseDir
-    ? `${normalize(aoBaseDir)}/projects/${projectId}/worktrees`
+    ? join(normalize(aoBaseDir), 'projects', projectId, 'worktrees')
     : '';
   const pathUnderNamespace = expectedNamespace
-    ? canonicalPath.startsWith(`${expectedNamespace}/`) || canonicalPath.startsWith(`${expectedNamespace}\\`)
+    ? isPathUnderPrefix(canonicalPath, expectedNamespace)
     : /[/\\]worktrees[/\\]/.test(canonicalPath);
 
   const sessionWorktree = session ? String(session.worktree ?? session.workspace ?? '').trim() : '';

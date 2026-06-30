@@ -282,6 +282,14 @@ function Invoke-WorkerRecovery {
         return @{ ok = $true; outcome = 'no_op'; reason = $retryGate.reason }
     }
 
+    if ($FixtureMode -or $PSBoundParameters.ContainsKey('WorktreePresent')) {
+        $resolvedWorktreePresent = [bool]$WorktreePresent
+    }
+    else {
+        $resolvedWorktreePresent = Test-WorkerRecoveryWorktreePresent -RepoRoot $RepoRoot `
+            -CanonicalPath $pathCanon.canonical
+    }
+
     $eligibility = Invoke-WorkerRecoveryCli -Subcommand 'evaluateCleanup' -Payload @{
         projectId        = $ProjectId
         canonicalPath    = $pathCanon.canonical
@@ -290,7 +298,7 @@ function Invoke-WorkerRecovery {
         worktreeRecord   = $WorktreeRecord
         aoBaseDir        = $aoBase
         danglingGitdir   = [bool]$DanglingGitdir
-        worktreePresent  = [bool]$WorktreePresent
+        worktreePresent  = $resolvedWorktreePresent
         dirtyState       = (Get-WorkerRecoveryDirtyState -WorktreePath $pathCanon.canonical)
     }
 

@@ -95,6 +95,19 @@ describe('worker recovery liveness discrimination', () => {
       aoBaseDir: aoBase,
     }).ok).toBe(false);
   });
+
+  it('worker recovery liveness discrimination: probes worktree presence before eligibility when switch omitted', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    const probeIndex = recoveryText.indexOf('resolvedWorktreePresent');
+    const eligibilityIndex = recoveryText.indexOf("Subcommand 'evaluateCleanup'");
+    expect(probeIndex).toBeGreaterThan(-1);
+    expect(eligibilityIndex).toBeGreaterThan(probeIndex);
+    expect(recoveryText).toMatch(/PSBoundParameters\.ContainsKey\('WorktreePresent'\)/);
+    expect(recoveryText).toMatch(/worktreePresent\s+=\s+\$resolvedWorktreePresent/);
+  });
   it('worker recovery liveness discrimination: terminated runtime with ownership is eligible', () => {
     const result = evaluateCleanupEligibility({
       projectId: 'orchestrator-pack',
@@ -312,6 +325,22 @@ describe('worker recovery cleanup failure', () => {
 });
 
 describe('worker recovery artifact preservation', () => {
+  it('worker recovery ownership: namespace membership uses platform separators', () => {
+    const aoBase = 'C:\\Users\\test\\.agent-orchestrator';
+    const worktree = 'C:\\Users\\test\\.agent-orchestrator\\projects\\orchestrator-pack\\worktrees\\opk-dead';
+    const result = evaluateOwnershipEvidence({
+      projectId: 'orchestrator-pack',
+      canonicalPath: worktree,
+      sessionId: 'opk-dead',
+      session: { runtime: 'exited', worktree, status: 'terminated' },
+      worktreeRecord: { sessionId: 'opk-dead', projectId: 'orchestrator-pack' },
+      aoBaseDir: aoBase,
+      danglingGitdir: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('dangling_orphan_namespace_match');
+  });
+
   it('worker recovery artifact preservation: dirty tree blocks blind removal', () => {
     const blocked = evaluateArtifactPreservation({
       dirtyState: { trackedModifications: true, untrackedFiles: false },
