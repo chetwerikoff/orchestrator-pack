@@ -22,12 +22,14 @@
     "scripts/fixtures/review-ready-seed-liveness/overlap-safe.json",
     "scripts/fixtures/review-ready-seed-liveness/progress-identity.json",
     "scripts/fixtures/review-ready-seed-liveness/progress-livelock-fails.json",
+    "scripts/fixtures/review-ready-seed-liveness/refresh-github-detail-progress.json",
     "scripts/fixtures/review-ready-seed-liveness/side-effect-safe-long-scan.json",
     "scripts/fixtures/review-ready-seed-liveness/stale-lock-bounded.json",
     "scripts/fixtures/review-ready-seed-liveness/stale-poll-regression.json",
     "scripts/fixtures/review-ready-seed-liveness/tick-error-classified.json",
     "scripts/fixtures/review-ready-seed-liveness/upgrade-safe-progress.json",
     "scripts/generate-review-ready-seed-grown-state-fixture.mjs",
+    "scripts/lib/Gh-PrChecks.ps1",
     "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
     "scripts/lib/Orchestrator-SideProcessHealth.ps1",
     "scripts/lib/Orchestrator-SideProcessProgress.ps1",
@@ -44,5 +46,21 @@
     "tests/external-output-references/generated/review-ready-seed-liveness/README.md"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:issue-473-review-ready-seed-liveness",
+      "new_active_scope_hash": "sha256:issue-473-refresh-github-detail-progress",
+      "changed": {
+        "added": [
+          "scripts/fixtures/review-ready-seed-liveness/refresh-github-detail-progress.json",
+          "scripts/lib/Gh-PrChecks.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Cover live refresh_github detail progress regression after the original long-tick fixture missed blocking GitHub I/O.",
+      "actor": "codex",
+      "timestamp": "2026-06-30T11:03:00.000Z",
+      "applied": true
+    }
+  ]
 }

@@ -1,0 +1,19 @@
+{
+  "issue_number": 538,
+  "iteration_id": "opk-94",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T04:40:49.076Z",
+  "baseline": {
+    "commit_sha": "296dd3e6812b80399a87bde5dde1d8c3870037d2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:bfddbabe3950864fb94f513830def52e1be64d7a9d63121618c789f480e50b90"
+  },
+  "declared_paths": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.d.mts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
