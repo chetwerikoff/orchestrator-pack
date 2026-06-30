@@ -225,6 +225,25 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## Wake supervisor ordinary Start detach (Issue #552)
+
+Ordinary `-Action Start` on Linux/macOS now launches the supervisor loop in a new
+session so it survives after the launching command's terminal or process wrapper
+exits. Operators no longer need a manual `setsid` / `nohup` shell workaround.
+
+Operator adoption after merge:
+
+1. From the primary pack checkout, `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Wait past the previous failure window (~40 s), then confirm
+   `... orchestrator-wake-supervisor.ps1 -Action Status` reports the supervisor
+   `running` with managed children in working or explicitly managed non-working
+   states.
+
+Regression signal: before this fix, ordinary `Start` could exit cleanly while the
+supervisor died with the launcher; after merge, ordinary `Start` is the supported
+path.
+
 ## GraphQL exhaustion degraded poll at `scripts/gh` (Issue #540)
 
 When **primary GraphQL quota** is exhausted, pack `scripts/gh` arms a partitioned cross-subprocess
