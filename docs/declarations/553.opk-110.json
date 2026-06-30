@@ -1,0 +1,23 @@
+{
+  "issue_number": 553,
+  "iteration_id": "opk-110",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T12:15:33.209Z",
+  "baseline": {
+    "commit_sha": "2ad7485274498db1756c2f18a3ad0adcc685e0d5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:b22ebfbebe0c70f8b4d5e741de77002d317dddda68f731564c4db36fad493f94"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/check-github-fleet-cache-bypass.ps1",
+    "scripts/invoke-verify-test-backed-smoke.ps1",
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/github-fleet-cache-bypass.test.ts",
+    "docs/declarations/553.opk-110.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

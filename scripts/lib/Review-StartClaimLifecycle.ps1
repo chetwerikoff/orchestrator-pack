@@ -634,12 +634,12 @@ function Sync-ReviewStartClaimReclaimBeforeSkip {
 
 
 function Stop-ReviewStartSupervisedGhChild {
-    param([int]$Pid)
-    if ($Pid -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
     try {
-        $proc = Get-Process -Id $Pid -ErrorAction Stop
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
         if ($proc -and -not $proc.HasExited) {
-            Stop-Process -Id $Pid -Force -ErrorAction Stop
+            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
             return @{ stopped = $true }
         }
         return @{ stopped = $false; reason = 'already_exited' }
@@ -676,7 +676,7 @@ function Invoke-ReviewStartClaimOwnershipLossCleanup {
     }
 
     if ($stalePid -gt 0) {
-        Stop-ReviewStartSupervisedGhChild -Pid $stalePid | Out-Null
+        Stop-ReviewStartSupervisedGhChild -ProcessId $stalePid | Out-Null
     }
 }
 
