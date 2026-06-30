@@ -68,6 +68,7 @@ foreach ($rel in $paths) {
 
 $snapshotPath = Join-Path $RepoRoot 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1'
 $snapshotText = Get-Content -LiteralPath $snapshotPath -Raw
+# Static regression guard (Issue #557): known-PR snapshot must not call full open-PR list.
 if ($snapshotText -match '(?<!ForNumbers)Invoke-GhOpenPrList\b') {
     Write-Host 'Get-ClaimedReviewStartSnapshot must not call full Invoke-GhOpenPrList when PrNumber is known (#557)'
     exit 1
