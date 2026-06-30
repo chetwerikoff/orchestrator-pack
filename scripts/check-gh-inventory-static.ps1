@@ -1,11 +1,12 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Static guard: gh read forms in pack scripts and agent-facing rule surfaces are REST-covered (Issues #431, #501).
+  Static guard: gh read forms in pack scripts and agent-facing rule surfaces are REST-covered (Issues #431, #501, #549).
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $GuardScript = Join-Path $Root 'scripts/lib/gh-inventory-static-guard.mjs'
+$InventoryScript = Join-Path $Root 'scripts/lib/graphql-quota-github-read-inventory.mjs'
 
 function Invoke-GhInventoryGuard {
     param(
@@ -64,5 +65,12 @@ if ($violations.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] gh inventory static guard (classifier-derived; Issues #431, #501)'
+$inventoryOutput = & node $InventoryScript validate $Root 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '[FAIL] graphql-quota github read inventory completeness (Issue #549):'
+    Write-Host $inventoryOutput
+    exit 1
+}
+
+Write-Host '[PASS] gh inventory static guard (classifier-derived; Issues #431, #501, #549)'
 exit 0

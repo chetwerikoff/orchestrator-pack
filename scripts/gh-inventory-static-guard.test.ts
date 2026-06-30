@@ -143,3 +143,74 @@ describe('gh inventory static guard', () => {
     expect(violations).toEqual([]);
   });
 });
+
+  it('classifies all in-scope executable gh read shapes (Issue #549)', async () => {
+    const { validatePackGhReadInventoryCompleteness } = await import('./lib/graphql-quota-github-read-inventory.mjs');
+    const result = validatePackGhReadInventoryCompleteness(process.cwd());
+    expect(result.residualErrors).toEqual([]);
+    expect(result.unclassified).toEqual([]);
+  });
+
+  it('fails inventory check when residual row lacks owner (Issue #549)', async () => {
+    const { validateResidualOwnership } = await import('./lib/graphql-quota-github-read-inventory.mjs');
+    expect(validateResidualOwnership()).toEqual([]);
+  });
+
+  it('fails on unowned gh api graphql in reconcile scripts (Issue #549)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-graphql-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(file, 'gh api graphql -f query={viewer{login}}\n', 'utf8');
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations.some((v) => v.command.includes('gh api graphql'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('allows classified rest_direct gh api repos reads (Issue #549)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-rest-direct-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(
+      file,
+      'gh api "repos/$Repository/issues/$PrNumber/events" --paginate\n',
+      'utf8',
+    );
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rejects rest_direct subpaths not anchored to the listed endpoint (Issue #549)', () => {
+    expect(isInventoryCoveredCommand('gh api repos/o/r/commits/SHA/statuses')).toBe(false);
+    expect(isInventoryCoveredCommand('gh api repos/o/r/issues/1/events/extra')).toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-rest-subpath-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(file, 'gh api repos/o/r/commits/SHA/statuses\n', 'utf8');
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations.some((v) => v.command.includes('commits/SHA/statuses'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  it('rejects uncovered gh api repos reads with leading api options (Issue #549)', () => {
+    expect(isClassifiedGhReadCommand('gh api --hostname ghe.example repos/o/r/commits/SHA/statuses')).toBe(false);
+    expect(isClassifiedGhReadCommand('gh api --hostname ghe.example repos/o/r/commits/SHA')).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-api-flags-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(
+      file,
+      'gh api -H "Accept: application/vnd.github+json" repos/o/r/commits/SHA/statuses\n',
+      'utf8',
+    );
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations.some((v) => v.command.includes('commits/SHA/statuses'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails on raw curl api.github.com in reconcile scripts (Issue #549)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-guard-curl-'));
+    const file = join(dir, 'sample.ps1');
+    writeFileSync(file, 'curl -s https://api.github.com/repos/o/r/pulls/1\n', 'utf8');
+    const violations = scanFileForViolations(file, 'reconcile');
+    expect(violations.some((v) => /curl.*api\.github\.com/i.test(v.command))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+});
+});

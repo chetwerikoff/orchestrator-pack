@@ -1110,6 +1110,63 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     }
   });
 
+  it('refreshes stale graphqlResetAt before arming degraded mode', () => {
+    const nowMs = 1_700_000_300_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 5000,
+      forceGraphqlQuotaError: true,
+      resetOffsetSec: 3600,
+    });
+    try {
+      mkdirSync(harness.cacheDir, { recursive: true });
+      const partition = resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      writeFileSync(cacheFilePath(harness.cacheDir, partition), JSON.stringify({
+        degraded: false,
+        graphqlResetAt: Math.floor(nowMs / 1000) - 3600,
+        graphqlRemaining: 100,
+        lastRateLimitFetchMs: nowMs - 1000,
+      }));
+      const first = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(first.status).not.toBe(0);
+      const second = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      expect(second.status).not.toBe(0);
+      expect(second.stderr).toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).filter((line) => line.includes('graphql')).length).toBe(1);
+    } finally {
+      harness.cleanup();
+    }
+  }
+
+  it('rejects unclassified pr-view passthrough that would churn GraphQL quota', () => {
+    expect(classifyArgv([
+      'pr', 'view', '530', '--repo', 'chetwerikoff/orchestrator-pack',
+      '--json', 'number,url,title,headRefName,baseRefName,isDraft,commits',
+    ]).route).toBeNull();
+  }
+
+  it('suppresses subsequent graphql when rate_limit probes fail while arming degraded mode', () => {
+    const nowMs = 1_700_000_400_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 5000,
+      forceGraphqlQuotaError: true,
+    });
+    try {
+      const env = { ...harness.env, BLOCK_RATE_LIMIT: '1' };
+      const first = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(first.status).not.toBe(0);
+      expect(first.stderr).toMatch(/graphql_rate_limit|primary quota exhausted/i);
+
+      const second = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(second.status).not.toBe(0);
+      expect(second.stderr).toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).filter((line) => line.includes('graphql')).length).toBe(1);
+    } finally {
+      harness.cleanup();
+    }
+  }
+
   it('detects graphql passthrough argv shapes', () => {
     expect(isGraphqlPassthroughArgv(['api', 'graphql'])).toBe(true);
     expect(isGraphqlPassthroughArgv(['api', '--hostname', 'ghe.example', 'graphql'])).toBe(true);

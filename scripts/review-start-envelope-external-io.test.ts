@@ -55,6 +55,16 @@ function claimWithMono(startMono: number, pauseSegments: unknown[] = []) {
 }
 
 describe('review-start-envelope-external-io', () => {
+
+  it('graphql-quota drill: review-start reconcile surfaces are inventory-classified (Issue #549)', async () => {
+    const { validatePackGhReadInventoryCompleteness } = await import('./lib/graphql-quota-github-read-inventory.mjs');
+    const result = validatePackGhReadInventoryCompleteness(repoRoot);
+    expect(result.residualErrors).toEqual([]);
+    const reviewStartHits = result.unclassified.filter((v) =>
+      /Gh-PrChecks|Get-AutoReviewPrContext|review-start|Review-Start/i.test(v.file),
+    );
+    expect(reviewStartHits).toEqual([]);
+  });
   it('infra-stall-not-envelope-exhausted', () => {
     const config = resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000 });
     const startMono = 1_000_000;

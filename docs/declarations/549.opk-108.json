@@ -1,0 +1,35 @@
+{
+  "issue_number": 549,
+  "iteration_id": "opk-108",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T12:00:00.000Z",
+  "baseline": {
+    "commit_sha": "890735b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending"
+  },
+  "declared_paths": [
+    "docs/declarations/540.opk-105.json",
+    "docs/declarations/546.opk-106.json",
+    "docs/declarations/549.opk-108.json",
+    "docs/issues_drafts/178-graphql-quota-recurrence-closure.md",
+    "docs/migration_notes.md",
+    "prompts/agent_rules.md",
+    "scripts/check-gh-inventory-static.ps1",
+    "scripts/gh-inventory-static-guard.test.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-graphql-degraded.d.mts",
+    "scripts/lib/gh-graphql-degraded.mjs",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-inventory-static-guard.d.mts",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.d.mts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/graphql-quota-github-read-inventory.mjs",
+    "scripts/review-start-envelope-external-io.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
