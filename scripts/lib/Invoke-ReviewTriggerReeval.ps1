@@ -95,6 +95,10 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
         }
 
+        if (-not $FixtureSnapshot) {
+            $holdRuns = @($fresh.reviewRuns)
+        }
+
         $prKey = [string]$planned.prNumber
         $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
         if ($transportDenial) {
