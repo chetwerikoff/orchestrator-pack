@@ -124,16 +124,13 @@ function Read-WorkerRecoveryClaimRecord {
 
 function Enter-WorkerRecoveryMutex {
     param([string]$LockDir)
-    if (-not (Test-Path -LiteralPath $LockDir)) {
-        try {
-            New-Item -ItemType Directory -Path $LockDir -Force | Out-Null
-            return $true
-        }
-        catch {
-            return $false
-        }
+    try {
+        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+        return $true
     }
-    return $false
+    catch {
+        return $false
+    }
 }
 
 function Exit-WorkerRecoveryMutex {

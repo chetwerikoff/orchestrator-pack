@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Worker-RecoveryClaim.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousSpawnGate.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 
 $Script:WorkerRecoveryCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs'
 
@@ -16,6 +17,96 @@ function Invoke-WorkerRecoveryCli {
     )
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
+}
+
+function Get-WorkerRecoveryAoSessionById {
+    param([string]$SessionId)
+
+    if (-not $SessionId) { return $null }
+    $sessions = Get-AoStatusSessionsIncludingTerminated
+    foreach ($row in @($sessions)) {
+        $name = [string]$row.name
+        if ($name -eq $SessionId) { return $row }
+        $sid = [string]$row.sessionId
+        if ($sid -eq $SessionId) { return $row }
+    }
+    return $null
+}
+
+function ConvertTo-WorkerRecoverySessionSnapshot {
+    param($AoRow)
+
+    if (-not $AoRow) { return $null }
+    $worktree = ''
+    foreach ($key in @('worktree', 'workspace', 'workspacePath')) {
+        if ($AoRow.$key) {
+            $worktree = [string]$AoRow.$key
+            break
+        }
+    }
+    return @{
+        runtime  = $AoRow.runtime
+        status   = $AoRow.status
+        worktree = $worktree
+    }
+}
+
+function Get-WorkerRecoveryPostClaimSnapshot {
+    param(
+        [string]$SessionId,
+        [string]$CanonicalPath,
+        [string]$ProjectId,
+        [string]$AoBaseDir,
+        [hashtable]$WorktreeRecord = $null,
+        [hashtable]$FixtureSession = $null,
+        [switch]$FixtureMode
+    )
+
+    $session = $null
+    if ($FixtureMode) {
+        $session = $FixtureSession
+    }
+    else {
+        try {
+            $aoRow = Get-WorkerRecoveryAoSessionById -SessionId $SessionId
+            $session = ConvertTo-WorkerRecoverySessionSnapshot -AoRow $aoRow
+        }
+        catch {
+            $session = $null
+        }
+    }
+
+    return @{
+        canonicalPath  = $CanonicalPath
+        sessionId      = $SessionId
+        session        = $session
+        projectId      = $ProjectId
+        worktreeRecord = $WorktreeRecord
+        aoBaseDir      = $AoBaseDir
+    }
+}
+
+function Test-WorkerRecoveryWorktreePresent {
+    param(
+        [string]$RepoRoot,
+        [string]$CanonicalPath,
+        [switch]$FixtureMode,
+        [switch]$FixtureWorktreePresent
+    )
+
+    if ($FixtureMode) { return [bool]$FixtureWorktreePresent }
+    $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $parsed = Invoke-WorkerRecoveryCli -Subcommand 'parseWorktreeList' -Payload @{
+        porcelain = (($porcelain | ForEach-Object { $_ }) -join "`n")
+    }
+    foreach ($record in @($parsed.records)) {
+        $canon = Invoke-WorkerRecoveryCli -Subcommand 'canonicalizePath' -Payload @{ path = $record.worktree }
+        if ($canon.ok -and $canon.canonical -eq $CanonicalPath) {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Get-WorkerRecoveryDirtyState {
@@ -152,31 +243,39 @@ function Invoke-WorkerRecovery {
         return @{ ok = $true; outcome = 'claim_lost'; reason = $claim.reason }
     }
 
+    $selectionSnapshot = @{
+        canonicalPath  = $pathCanon.canonical
+        sessionId      = $SessionId
+        session        = $Session
+        projectId      = $ProjectId
+        worktreeRecord = $WorktreeRecord
+        aoBaseDir      = $aoBase
+    }
+    $currentSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
+        -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase `
+        -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
+
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{
-        selection = @{
-            canonicalPath = $pathCanon.canonical
-            sessionId     = $SessionId
-            session       = $Session
-        }
-        current = @{
-            canonicalPath = $pathCanon.canonical
-            sessionId     = $SessionId
-            session       = $Session
-        }
+        selection = $selectionSnapshot
+        current   = $currentSnapshot
     }
     if (-not $revalidate.ok) {
-        Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
         return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = $revalidate.reason }
     }
 
     Update-WorkerRecoveryClaimPhase -Path $claim.path -Record $claim.record -Phase 'cleanup_pending'
 
+    $cleanupAttempted = $false
     $cleanupDone = $false
-    if (-not $DryRun -and $WorktreePresent) {
+    $worktreeStillPresent = Test-WorkerRecoveryWorktreePresent -RepoRoot $RepoRoot `
+        -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode -FixtureWorktreePresent:$WorktreePresent
+    if (-not $DryRun -and $worktreeStillPresent) {
+        $cleanupAttempted = $true
         & git -C $RepoRoot worktree remove --force $pathCanon.canonical
         if ($LASTEXITCODE -eq 0) { $cleanupDone = $true }
     }
-    elseif ($DryRun) {
+    elseif ($DryRun -and $worktreeStillPresent) {
         $cleanupDone = $true
     }
 
@@ -210,7 +309,14 @@ function Invoke-WorkerRecovery {
         }
     }
 
-    $finalState = if ($cleanupDone -and $spawnDecision -eq 'spawn_denied') { 'partial_failure' } else { $eligibility.outcome }
+    $finalState = $eligibility.outcome
+    if ($cleanupAttempted -and -not $cleanupDone) {
+        $finalState = 'partial_failure'
+    }
+    elseif ($cleanupDone -and $spawnDecision -eq 'spawn_denied' -and $SpawnAction) {
+        $finalState = 'partial_failure'
+    }
+    $recoveryOk = -not ($cleanupAttempted -and -not $cleanupDone)
     $audit = @{
         schemaVersion   = 'worker-recovery/v1'
         attemptId       = $claim.record.attemptId
@@ -221,15 +327,15 @@ function Invoke-WorkerRecovery {
         ownershipProof  = $eligibility.ownership
         claimHolder     = $claim.record.holder
         claimOutcome    = 'claim_acquired'
-        cleanupDecision = if ($cleanupDone) { $eligibility.outcome } else { 'skipped' }
+        cleanupDecision = if ($cleanupAttempted -and -not $cleanupDone) { 'failed' } elseif ($cleanupDone) { $eligibility.outcome } else { 'skipped' }
         spawnDecision   = $spawnDecision
         finalState      = $finalState
         recordedAtUtc   = (Get-Date).ToUniversalTime().ToString('o')
     }
     Write-WorkerRecoveryAudit -Namespace $claim.namespace -Record $audit
-    Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome $finalState
+    $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome $finalState
     return @{
-        ok        = $true
+        ok        = $recoveryOk
         outcome   = $finalState
         cleanup   = $cleanupDone
         spawn     = $spawnDecision

@@ -61,6 +61,6 @@ $result = Invoke-WorkerRecovery -Trigger $Trigger -SessionId $SessionId -Canonic
     -SkipSpawn:(-not $SpawnAction)
 
 $result | ConvertTo-Json -Compress -Depth 8
-if ($result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure') -and -not $DryRun) {
+if ((-not $result.ok -or $result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure')) -and -not $DryRun) {
     exit 2
 }

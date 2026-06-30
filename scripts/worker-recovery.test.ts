@@ -175,6 +175,16 @@ describe('worker recovery claim lifecycle', () => {
     expect(claimText).not.toMatch(/File\]::Move\(\$tmp, \$Path, \$/);
     expect(claimText).toMatch(/AllowOverwrite[\s\S]*Move-Item -LiteralPath \$tmp -Destination \$Path -Force/);
   });
+
+  it('worker recovery claim lifecycle: mutex acquisition is exclusive mkdir without -Force', () => {
+    const claimText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1'),
+      'utf8',
+    );
+    const mutexBody = claimText.match(/function Enter-WorkerRecoveryMutex \{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(mutexBody).toMatch(/New-Item -ItemType Directory -Path \$LockDir -ErrorAction Stop/);
+    expect(mutexBody).not.toMatch(/-Force/);
+  });
 });
 
 describe('worker recovery post-claim revalidation', () => {
@@ -194,6 +204,32 @@ describe('worker recovery post-claim revalidation', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('became_live');
+  });
+
+  it('worker recovery post-claim revalidation: Invoke-WorkerRecovery reads fresh AO snapshot', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/Get-WorkerRecoveryPostClaimSnapshot/);
+    expect(recoveryText).toMatch(/selectionSnapshot/);
+    expect(recoveryText).not.toMatch(/current\s*=\s*@\{[\s\S]*session\s*=\s*\$Session[\s\S]*\}[\s\S]*selection\s*=\s*@\{[\s\S]*session\s*=\s*\$Session/);
+  });
+});
+
+describe('worker recovery cleanup failure', () => {
+  it('worker recovery cleanup failure: non-zero git remove yields partial_failure and ok=false', () => {
+    const packRoot = repoRoot;
+    const bogusPath = path.join(packRoot, 'worktrees', 'opk-nonexistent-cleanup-fail');
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-nonexistent' -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SkipSpawn -FixtureMode
+      [pscustomobject]@{ ok = [bool]$result.ok; outcome = [string]$result.outcome; cleanup = [bool]$result.cleanup } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe('partial_failure');
+    expect(result.cleanup).toBe(false);
   });
 });
 
