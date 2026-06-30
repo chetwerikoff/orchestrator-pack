@@ -57,3 +57,13 @@ export function handleCliHelpOrJson(
 export function throwUnknownCliArg(arg: string, usage: string): never {
   throw new Error(`Unknown argument: ${arg}\n${usage}`);
 }
+
+export function dispatchDefaultCliArg(
+  arg: string,
+  usage: string,
+  onJson: () => void,
+): void {
+  if (!handleCliHelpOrJson(arg, usage, onJson)) {
+    throwUnknownCliArg(arg, usage);
+  }
+}

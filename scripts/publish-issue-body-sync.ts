@@ -6,11 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   isDirectCliExecution,
-  handleCliHelpOrJson,
+  dispatchDefaultCliArg,
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
   runReviewerTsCli,
-  throwUnknownCliArg,
 } from './lib/reviewer-ts-cli.js';
 import {
   readDraftFile,
@@ -68,11 +67,9 @@ function parseArgs(argv: string[]): CliOptions {
         opts.title = String(argv[++i] ?? '');
         break;
       default:
-        if (!handleCliHelpOrJson(arg, usage(), () => {
+        dispatchDefaultCliArg(arg, usage(), () => {
           opts.json = true;
-        })) {
-          throwUnknownCliArg(arg, usage());
-        }
+        });
         break;
     }
   }

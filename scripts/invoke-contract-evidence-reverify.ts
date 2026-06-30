@@ -10,7 +10,7 @@ import {
   resolveDefaultAoProjectId,
 } from './lib/reverify-bound-issue-snapshot.js';
 import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
-import { isDirectCliExecution, handleCliHelpOrJson, runReviewerTsCli, throwUnknownCliArg } from './lib/reviewer-ts-cli.js';
+import { dispatchDefaultCliArg, isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
 
 function usage(): string {
   return [
@@ -113,12 +113,10 @@ function parseArgs(argv: string[]) {
         opts.json = false;
         break;
       default:
-        if (!handleCliHelpOrJson(arg, usage(), () => {
+        dispatchDefaultCliArg(arg, usage(), () => {
           opts.json = true;
           opts.summary = false;
-        })) {
-          throwUnknownCliArg(arg, usage());
-        }
+        });
         break;
     }
   }
