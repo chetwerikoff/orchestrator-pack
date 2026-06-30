@@ -49,7 +49,17 @@ function Get-ClaimedReviewStartSnapshot {
     else {
         $openPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($PrNumber))
     }
-    $reviewRuns = @(Get-AoReviewRuns -Project $Project)
+    $reviewRuns = @(
+        . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+        . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+        $namespace = if ($ClaimResult -and [string]$ClaimResult.namespace) {
+            [string]$ClaimResult.namespace
+        }
+        else {
+            Resolve-ReviewStartClaimNamespace -ProjectId $Project
+        }
+        Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot -Namespace $namespace
+    )
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = & $ResolveChecksBundle $openPrs $PrNumber $RepoRoot
     return @{

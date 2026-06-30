@@ -9,6 +9,7 @@
   ],
   "excludePaths": [
     "tests/fixtures/**",
+    "scripts/fixtures/**",
     "vendor/**",
     "packages/core/**",
     ".ao/**",

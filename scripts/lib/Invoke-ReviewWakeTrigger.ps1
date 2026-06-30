@@ -116,7 +116,8 @@ function Get-ReviewWakeTriggerSnapshot {
     }
 
     $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-    $reviewRuns = Get-AoReviewRuns -Project $Project
+    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+    $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot)
     $sessions = Get-AoStatusSessions
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @(
         @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
@@ -388,6 +389,9 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             $claimed
         }
         $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        if (-not $FixtureSnapshot) {
+            $holdRuns = @($fresh.reviewRuns)
+        }
         $plannedStartReason = if ($planned.startReason) {
             [string]$planned.startReason
         }
@@ -497,7 +501,6 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
                 }
             }
-            & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             if ($isHandoffWake) {
                 $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $preInvokeReceiptBound = Test-ReviewHandoffReceiptToRunBound -WakeReceivedMs $wakeReceivedMs -RunCreatedAtMs $preInvokeNowMs
@@ -508,6 +511,8 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 }
             }
             if (-not $handoffReceiptAbort) {
+                Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
+                & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
                 & ao @runArgs
                 if ($LASTEXITCODE -ne 0) {
                     $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"

@@ -37,15 +37,3 @@ export declare function evaluateTimeoutRetryEligibility(
 export declare function buildTimeoutRetryObserved(
   run: ReviewRun | null | undefined,
 ): Record<string, unknown>;
-
-export declare function resolveFailedRunRetryEligibility(
-  run: ReviewRun | null | undefined,
-  reviewRuns: ReviewRun[],
-  prNumber: number,
-  headSha: string,
-): {
-  failureClass: string | null;
-  retryEligible: boolean;
-  escalationReason: string | null;
-  timeoutFailureCount: number;
-};

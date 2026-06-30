@@ -237,6 +237,59 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## Wake supervisor ordinary Start detach (Issue #552)
+
+Ordinary `-Action Start` on Linux/macOS now launches the supervisor loop in a new
+session so it survives after the launching command's terminal or process wrapper
+exits. Operators no longer need a manual `setsid` / `nohup` shell workaround.
+
+Operator adoption after merge:
+
+1. From the primary pack checkout, `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Wait past the previous failure window (~40 s), then confirm
+   `... orchestrator-wake-supervisor.ps1 -Action Status` reports the supervisor
+   `running` with managed children in working or explicitly managed non-working
+   states.
+
+Regression signal: before this fix, ordinary `Start` could exit cleanly while the
+supervisor died with the launcher; after merge, ordinary `Start` is the supported
+path.
+
+## GraphQL exhaustion degraded poll at `scripts/gh` (Issue #540)
+
+When **primary GraphQL quota** is exhausted, pack `scripts/gh` arms a partitioned cross-subprocess
+cache and suppresses further passthrough `gh api graphql` network calls until
+`resources.graphql.reset` elapses. Suppressed attempts emit
+`gh-wrapper-audit: graphql_degraded_fail_fast` on stderr (distinct from real GraphQL HTTP). Suppressed
+calls exit non-zero with a primary-quota exhaustion diagnostic — **no synthetic GraphQL success
+bodies**. Batch/review-thread enrichment stays functionally degraded until quota returns; inventory
+REST routes (#431/#538) are unchanged.
+
+Cache location: `$XDG_STATE_HOME/orchestrator-pack/gh-graphql-degraded/` (partition key = API host +
+credential fingerprint). `rate_limit` refresh is bounded to ≤1 REST call per 60s per partition.
+
+Operator adoption after merge:
+
+1. `ao stop` then `ao start` from the operator terminal so daemon PATH picks up `scripts/gh`
+   changes.
+2. Under GraphQL exhaustion, confirm repeated `gh api graphql` attempts log
+   `graphql_degraded_fail_fast` and do not spam `api.github.com/graphql`.
+3. After `resources.graphql.reset`, confirm passthrough `gh api graphql` attempts network again.
+
+
+## GraphQL quota GitHub read inventory closure (Issue #549)
+
+`scripts/lib/graphql-quota-github-read-inventory.json` classifies every in-scope executable
+GitHub read shape on pack-owned scripts/prompts as `rest_inventory`, `rest_direct`,
+`graphql_fail_fast` (wrapper passthrough only), or `accepted_upstream_residual`. CI runs
+`node scripts/lib/graphql-quota-github-read-inventory.mjs validate` via
+`scripts/check-gh-inventory-static.ps1`; new uncovered `gh` argv or script-level `gh api graphql`
+fail before merge.
+
+No operator adoption required beyond keeping pack `scripts/` on PATH (#431) and #540 fail-fast
+behavior.
+
 ## Wake supervisor degraded backoff and fault boundary (Issue #450)
 
 Wake supervisor children under sustained dependency outage or inventory failure now use
@@ -787,6 +840,32 @@ Optional env overrides (operator checkout only):
 - `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` (default `1` retry after first timeout)
 
 No AO restart required for env-only tuning; wrapper reads env per run.
+
+### Autonomous post-run review retry after recoverable infra failure (Issue #539)
+
+Pack gates now consume an **enriched** review-run view from `Get-EnrichedAoReviewRuns`
+(`scripts/lib/Review-PostRunRetry.ps1`), not raw `ao review list` rows alone. Enrichment joins
+fresh #312 `reviewer-failure-evidence` sidecars when linkage is consistent and exposes
+`failureClass`, `retryEligible`, and `escalationReason` for failed/cancelled runs.
+
+**Distinguish outcomes:**
+
+| Outcome | Meaning | Operator action |
+| --- | --- | --- |
+| Recoverable infra (`timeout_no_verdict`, transient crash/preflight) | Bounded autonomous claimed-review retry may run | Usually wait; one same-head retry is automatic |
+| `retry_bound_exhausted` / `infra_no_trustworthy_verdict` | Post-run infra retry budget exhausted | Manual retry via `scripts/invoke-manual-review-run.ps1` (audited separately) |
+| `empty_output` / `malformed_output` | Empty-review trap | Investigate reviewer output; not an infra retry |
+| `auth_failure` / `quota_exceeded` / `config_error` / `dependency_missing` | Non-recoverable | Fix credentials, quota, config, or deps |
+| `unknown` (stale/missing sidecar) | Fail closed — no autonomous retry | Inspect #312 sidecar + run linkage |
+
+Pre-launch envelope/transport stalls remain on the #516 ledger only — this path does not add a
+second counter for `infra_transport`.
+
+**Operator adoption after merge:** no live yaml change required. Verify:
+`npm test -- autonomous-review-retry`. After repeated infra exhaustion on a head, use
+`scripts/invoke-manual-review-run.ps1` with operator provenance; autonomous ledger counters are
+unchanged.
+
 
 ### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 

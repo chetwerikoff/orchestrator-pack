@@ -21,7 +21,7 @@ import {
   resolveHeadCommittedAtMs,
   toArray,
 } from './review-trigger-reconcile.mjs';
-import { resolveFailedRunRetryEligibility } from './codex-reviewer-timeout-retry.mjs';
+import { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';
 import {
   evaluateAutonomousGatePreflight,
   loadAutonomousCapabilitiesInventory,
