@@ -149,3 +149,5 @@ export function buildTimeoutRetryObserved(run) {
     escalationReason: evidence?.reviewer?.escalationReason ?? run?.reviewer?.escalationReason,
   };
 }
+
+export { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';

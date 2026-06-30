@@ -43,9 +43,11 @@ export declare function resolveFailedRunRetryEligibility(
   reviewRuns: ReviewRun[],
   prNumber: number,
   headSha: string,
+  options?: Record<string, unknown>,
 ): {
   failureClass: string | null;
   retryEligible: boolean;
   escalationReason: string | null;
   timeoutFailureCount: number;
+  failureCount: number;
 };
