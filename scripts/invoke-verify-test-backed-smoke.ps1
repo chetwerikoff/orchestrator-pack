@@ -21,6 +21,7 @@ $SmokeFiles = @(
     'scripts/github-fleet-cache-coalesce.test.ts',
     'scripts/github-fleet-cache-memo.test.ts',
     'scripts/github-fleet-cache-bypass-guard.test.ts',
+    'scripts/github-fleet-cache-bypass.test.ts',
     'scripts/github-fleet-cache-stale-snapshot.test.ts',
     'scripts/contract-evidence.test.ts',
     'scripts/autonomous-spawn-policy.test.ts',
