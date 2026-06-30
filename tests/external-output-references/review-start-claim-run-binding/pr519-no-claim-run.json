@@ -1,0 +1,22 @@
+{
+  "description": "PR #519 head a7f0e4d: pack-owned no-claim runs opk-rev-1092/opk-rev-1095 before worktree denial",
+  "projectNamespace": "orchestrator-pack",
+  "prNumber": 519,
+  "headSha": "a7f0e4d190556d2a61082878e82c6e5164f6a31e",
+  "runs": [
+    {
+      "id": "review-run-opk-rev-1092",
+      "prNumber": 519,
+      "targetSha": "a7f0e4d190556d2a61082878e82c6e5164f6a31e",
+      "project": "orchestrator-pack",
+      "status": "running",
+      "reviewerSessionId": "opk-rev-1092",
+      "startReason": "completion_wake",
+      "surface": "review-wake-trigger",
+      "packOwnedAutomated": true
+    }
+  ],
+  "claims": [],
+  "detectionPoint": "worktree_gate",
+  "surface": "review-wake-trigger"
+}

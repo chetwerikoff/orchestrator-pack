@@ -1,0 +1,34 @@
+{
+  "description": "PR #519 head 5a20a5d: launch-pending claim with visible AO run must not budget-terminalize",
+  "projectNamespace": "orchestrator-pack",
+  "prNumber": 519,
+  "headSha": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+  "claim": {
+    "state": "active",
+    "key": "pr-519-5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+    "prNumber": 519,
+    "headSha": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+    "projectId": "orchestrator-pack",
+    "launchPending": {
+      "atUtc": "2026-06-28T15:44:30.000Z",
+      "budgetMs": 15000
+    },
+    "launchPendingInvokedAtUtc": "2026-06-28T15:44:30Z",
+    "holder": {
+      "surface": "review-trigger-reeval"
+    }
+  },
+  "reviewRuns": [
+    {
+      "id": "review-run-fa05d810-85e6-4f1c-8f06-57d50790c6b5",
+      "prNumber": 519,
+      "targetSha": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+      "project": "orchestrator-pack",
+      "status": "running",
+      "createdAt": "2026-06-28T15:44:30.964Z",
+      "reviewerSessionId": "opk-rev-1072"
+    }
+  ],
+  "nowMs": 1730120894000,
+  "reaperDecisionMs": 1730120894000
+}
