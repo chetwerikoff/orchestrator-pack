@@ -44,7 +44,10 @@ function Get-ClaimedReviewStartSnapshot {
     else {
         $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
     }
-    $reviewRuns = @(Get-AoReviewRuns -Project $Project)
+    $reviewRuns = @(
+        . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+        Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot
+    )
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = & $ResolveChecksBundle $openPrs $PrNumber $RepoRoot
     return @{

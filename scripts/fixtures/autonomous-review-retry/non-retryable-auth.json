@@ -1,0 +1,5 @@
+{
+  "failureClass": "auth_failure",
+  "terminationReason": "auth failure: unauthorized for repository",
+  "expect": { "retryEligible": false }
+}

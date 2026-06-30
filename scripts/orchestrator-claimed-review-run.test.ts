@@ -120,8 +120,8 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     { status: 'clean', runs: [{ status: 'clean' }], free: false, held: false, terminal: false },
     { status: 'needs_triage', runs: [{ status: 'needs_triage' }], free: false, held: false, terminal: false },
     { status: 'waiting_update', runs: [{ status: 'waiting_update' }], free: false, held: false, terminal: false },
-    { status: 'failed', runs: [{ status: 'failed', retryEligible: true }], free: true, held: false, terminal: true },
-    { status: 'cancelled', runs: [{ status: 'cancelled', retryEligible: true }], free: true, held: false, terminal: true },
+    { status: 'failed', runs: [{ status: 'failed', retryEligible: true, findingCount: 0, terminationReason: 'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}' }], free: true, held: false, terminal: true },
+    { status: 'cancelled', runs: [{ status: 'cancelled', retryEligible: true, findingCount: 0, terminationReason: 'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}' }], free: true, held: false, terminal: true },
   ];
 
   it.each(matrixStatuses)(

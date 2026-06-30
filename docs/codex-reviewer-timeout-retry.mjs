@@ -149,22 +149,3 @@ export function buildTimeoutRetryObserved(run) {
     escalationReason: evidence?.reviewer?.escalationReason ?? run?.reviewer?.escalationReason,
   };
 }
-
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
- * @param {number} prNumber
- * @param {string} headSha
- */
-export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, headSha) {
-  const timeout = evaluateTimeoutRetryEligibility(reviewRuns, prNumber, headSha);
-  if (timeout.failureClass === TIMEOUT_NO_VERDICT_FAILURE_CLASS) {
-    return timeout;
-  }
-  return {
-    failureClass: timeout.failureClass,
-    retryEligible: run?.retryEligible === true,
-    escalationReason: null,
-    timeoutFailureCount: timeout.timeoutFailureCount,
-  };
-}

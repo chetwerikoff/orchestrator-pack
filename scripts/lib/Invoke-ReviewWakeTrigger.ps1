@@ -116,7 +116,8 @@ function Get-ReviewWakeTriggerSnapshot {
     }
 
     $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-    $reviewRuns = Get-AoReviewRuns -Project $Project
+    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+    $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot)
     $sessions = Get-AoStatusSessions
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @(
         @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
