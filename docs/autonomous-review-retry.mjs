@@ -3,6 +3,16 @@
  * Vitest: scripts/autonomous-review-retry.test.ts
  */
 import {
+  TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+  REPEATED_TIMEOUT_ESCALATION_REASON,
+  REVIEWER_EVIDENCE_PREFIX,
+  DEFAULT_TIMEOUT_RETRY_MAX,
+  resolveTimeoutRetryMax,
+  extractReviewerEvidenceFromText,
+  extractReviewerFailureClass,
+  countSameHeadFailuresByClass as countReviewerFailuresByClass,
+} from './reviewer-failure-evidence-markers.mjs';
+import {
   INFRA_NO_TRUSTWORTHY_VERDICT_ESCALATION,
   isPreLaunchFailureClass,
   POST_RUN_RETRY_LEDGER_VERSION,
@@ -18,64 +28,19 @@ export {
   POST_RUN_RETRY_LEDGER_VERSION,
 } from './post-run-retry-ledger.mjs';
 
-export const TIMEOUT_NO_VERDICT_FAILURE_CLASS = 'timeout_no_verdict';
-export const REPEATED_TIMEOUT_ESCALATION_REASON = 'repeated_timeout_no_verdict';
-export const REVIEWER_EVIDENCE_PREFIX = 'reviewer-evidence:';
+export {
+  TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+  REPEATED_TIMEOUT_ESCALATION_REASON,
+  REVIEWER_EVIDENCE_PREFIX,
+  DEFAULT_TIMEOUT_RETRY_MAX,
+  resolveTimeoutRetryMax,
+  extractReviewerEvidenceFromText,
+};
+
 export const DEFAULT_POST_RUN_RETRY_MAX = 1;
-export const DEFAULT_TIMEOUT_RETRY_MAX = 1;
 
-function parseNonNegativeInt(raw, fallback) {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
-  }
-  return Math.floor(parsed);
-}
-
-export function resolveTimeoutRetryMax(env = process.env) {
-  return parseNonNegativeInt(env.AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX, DEFAULT_TIMEOUT_RETRY_MAX);
-}
-
-/**
- * @param {string} text
- */
-export function extractReviewerEvidenceFromText(text) {
-  for (const line of String(text ?? '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith(REVIEWER_EVIDENCE_PREFIX)) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed.slice(REVIEWER_EVIDENCE_PREFIX.length));
-      if (parsed?.reviewer?.failureClass || typeof parsed?.reviewer?.effectiveBudgetMs === 'number') {
-        return parsed;
-      }
-    } catch {
-      // ignore malformed marker lines
-    }
-  }
-  return null;
-}
-
-/**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
- */
-export function extractTerminationFailureClass(run) {
-  const direct = run?.reviewer?.failureClass ?? run?.failureClass;
-  if (typeof direct === 'string' && direct.trim()) {
-    return direct.trim();
-  }
-  const termination = String(run?.terminationReason ?? '');
-  const evidence = extractReviewerEvidenceFromText(termination);
-  const fromEvidence = evidence?.reviewer?.failureClass;
-  if (typeof fromEvidence === 'string' && fromEvidence.trim()) {
-    return fromEvidence.trim();
-  }
-  if (/timeout before verdict/i.test(termination)) {
-    return TIMEOUT_NO_VERDICT_FAILURE_CLASS;
-  }
-  return null;
-}
+/** @deprecated Use extractReviewerFailureClass from codex-reviewer-timeout-retry.mjs */
+export const extractTerminationFailureClass = extractReviewerFailureClass;
 
 /**
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
@@ -287,7 +252,7 @@ export function classifyPostRunFailure(run, evidence = {}) {
     return { failureClass: direct.trim(), source: 'run_field' };
   }
 
-  const fromTermination = extractTerminationFailureClass(run);
+  const fromTermination = extractReviewerFailureClass(run);
   if (fromTermination) {
     return { failureClass: fromTermination, source: 'termination_reason' };
   }
@@ -388,24 +353,18 @@ export function enrichReviewRuns(runs, options = {}) {
  * @param {string} failureClass
  */
 export function countSameHeadFailuresByClass(runs, prNumber, headSha, failureClass) {
-  const head = normalizeSha(headSha);
   const klass = String(failureClass ?? '').trim();
   if (!klass) {
     return 0;
   }
-  return toArray(runs).filter((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    if (status !== 'failed' && status !== 'cancelled') {
-      return false;
+  const classifiedRuns = toArray(runs).map((run) => {
+    if (run?.failureClass) {
+      return run;
     }
-    if (Number(run?.prNumber) !== prNumber || normalizeSha(run?.targetSha) !== head) {
-      return false;
-    }
-    const enriched = run?.failureClass
-      ? String(run.failureClass)
-      : classifyPostRunFailure(run).failureClass;
-    return enriched === klass;
-  }).length;
+    const classified = classifyPostRunFailure(run);
+    return { ...run, failureClass: classified.failureClass };
+  });
+  return countReviewerFailuresByClass(classifiedRuns, prNumber, headSha, klass);
 }
 
 /**

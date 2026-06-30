@@ -16,7 +16,7 @@
       "targetSha": "abc3180000000000000000000000000000000000",
       "status": "failed",
       "findingCount": 0,
-      "terminationReason": "reviewer exited 1",
+      "terminationReason": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict",
       "retryEligible": true,
       "createdAt": "2026-06-16T00:00:00.000Z"
     }
@@ -37,10 +37,22 @@
     }
   ],
   "ciChecks": [
-    { "name": "Verify orchestrator-pack structure", "state": "SUCCESS" },
-    { "name": "PR scope guard", "state": "SUCCESS" },
-    { "name": "Run pack contract tests", "state": "SUCCESS" },
-    { "name": "Self-architect lint", "state": "SUCCESS" }
+    {
+      "name": "Verify orchestrator-pack structure",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "PR scope guard",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Run pack contract tests",
+      "state": "SUCCESS"
+    },
+    {
+      "name": "Self-architect lint",
+      "state": "SUCCESS"
+    }
   ],
   "requiredCheckNames": [
     "Verify orchestrator-pack structure",
@@ -49,5 +61,8 @@
     "Self-architect lint"
   ],
   "claimWindow": "free",
-  "expect": { "launch": true, "reason": "failed_retry_after_recheck" }
+  "expect": {
+    "launch": true,
+    "reason": "failed_retry_after_recheck"
+  }
 }

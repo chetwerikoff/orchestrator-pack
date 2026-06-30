@@ -28,6 +28,10 @@ const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/review-trigger-reconcile',
 );
+const scriptsFixturesDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'fixtures/review-trigger-reconcile',
+);
 
 const greenChecks = [
   { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
@@ -36,8 +40,9 @@ const greenChecks = [
   { name: 'Self-architect lint', state: 'SUCCESS' },
 ];
 
-function loadFixture<T>(name: string): T {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as T;
+function loadFixture<T>(name: string, fromScripts = false): T {
+  const dir = fromScripts ? scriptsFixturesDir : fixturesDir;
+  return JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as T;
 }
 
 function headCommittedAtMsFromPr(pr: Record<string, unknown>) {
@@ -866,7 +871,7 @@ describe('preRunHeadReadyRecheck', () => {
         requiredCheckNames: string[];
       };
       expect: { emitReviewRun: boolean; reason: string };
-    }>('pre-run-failed-retry.json');
+    }>('pre-run-failed-retry.json', true);
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toBe(fixture.expect.reason);
@@ -883,7 +888,7 @@ describe('preRunHeadReadyRecheck', () => {
         requiredCheckNames: string[];
       };
       expect: { emitReviewRun: boolean; reason: string };
-    }>('pre-run-failed-retry-ci-red.json');
+    }>('pre-run-failed-retry-ci-red.json', true);
     const result = preRunHeadReadyRecheck(fixture.planned, fixture.fresh);
     expect(result.emitReviewRun).toBe(fixture.expect.emitReviewRun);
     expect(result.reason).toBe(fixture.expect.reason);

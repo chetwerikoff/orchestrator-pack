@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { evaluateTimeoutRetryEligibility } from '../docs/codex-reviewer-timeout-retry.mjs';
 import {
   countSameHeadFailuresByClass,
-  evaluateTimeoutRetryEligibility,
   extractReviewerFailureClass,
   REPEATED_TIMEOUT_ESCALATION_REASON,
   resolveTimeoutRetryMax,
   TIMEOUT_NO_VERDICT_FAILURE_CLASS,
-} from '../docs/codex-reviewer-timeout-retry.mjs';
+} from '../docs/reviewer-failure-evidence-markers.mjs';
 import {
   evaluateOrchestratorTurnGate,
   evaluateScenarioMatrixCell,

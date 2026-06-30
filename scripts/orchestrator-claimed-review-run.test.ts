@@ -25,6 +25,7 @@ import {
 } from '../docs/orchestrator-claimed-review-run.mjs';
 
 const fixturesDir = path.join(repoRoot, 'tests/fixtures/orchestrator-claimed-review-run');
+const scriptsFixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-claimed-review-run');
 const invokePath = path.join(repoRoot, 'scripts/invoke-orchestrator-claimed-review-run.ps1');
 const helperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
 const guardPath = path.join(repoRoot, 'scripts/ao-autonomous-guard.ps1');
@@ -47,8 +48,9 @@ type TurnGateFixture = {
   expect: { launch?: boolean; reason?: string; verdict?: string };
 };
 
-function loadFixture(name: string): TurnGateFixture {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as TurnGateFixture;
+function loadFixture(name: string, fromScripts = false): TurnGateFixture {
+  const dir = fromScripts ? scriptsFixturesDir : fixturesDir;
+  return JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as TurnGateFixture;
 }
 
 function evaluateFixtureTurnGate(fixture: TurnGateFixture) {
@@ -89,7 +91,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
   });
 
   it('failed findingCount 0 is failed_or_cancelled not clean', () => {
-    const fixture = loadFixture('failed-empty-not-clean.json');
+    const fixture = loadFixture('failed-empty-not-clean.json', true);
     const cell = evaluateScenarioMatrixCell({
       claimWindow: 'free',
       reviewRuns: fixture.reviewRuns as never,
@@ -101,7 +103,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
   });
 
   it('retry-eligible failed run launches through full turn gate recheck', () => {
-    const fixture = loadFixture('failed-retry-turn-gate.json');
+    const fixture = loadFixture('failed-retry-turn-gate.json', true);
     const result = evaluateFixtureTurnGate(fixture);
     expect(result.launch).toBe(fixture.expect.launch);
     expect(result.reason).toBe(fixture.expect.reason);

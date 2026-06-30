@@ -1,10 +1,16 @@
 import type { ReviewRun } from './review-trigger-reconcile.d.mts';
 
-export declare const TIMEOUT_NO_VERDICT_FAILURE_CLASS: 'timeout_no_verdict';
-export declare const REPEATED_TIMEOUT_ESCALATION_REASON: 'repeated_timeout_no_verdict';
-export declare const REVIEWER_EVIDENCE_PREFIX: 'reviewer-evidence:';
+export {
+  TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+  REPEATED_TIMEOUT_ESCALATION_REASON,
+  REVIEWER_EVIDENCE_PREFIX,
+  DEFAULT_TIMEOUT_RETRY_MAX,
+  resolveTimeoutRetryMax,
+  extractReviewerEvidenceFromText,
+  extractReviewerFailureClass,
+} from './reviewer-failure-evidence-markers.d.mts';
+
 export declare const DEFAULT_POST_RUN_RETRY_MAX: 1;
-export declare const DEFAULT_TIMEOUT_RETRY_MAX: 1;
 export declare const FAILURE_CLASS_UNKNOWN: 'unknown';
 export declare const FAILURE_CLASS_EMPTY_OUTPUT: 'empty_output';
 export declare const FAILURE_CLASS_MALFORMED_OUTPUT: 'malformed_output';
@@ -19,10 +25,6 @@ export declare const FAILURE_CLASS_WORKSPACE_PREFLIGHT_TRANSIENT: 'workspace_pre
 export declare const RECOVERABLE_POST_RUN_FAILURE_CLASSES: ReadonlySet<string>;
 export declare const NON_RETRYABLE_POST_RUN_FAILURE_CLASSES: ReadonlySet<string>;
 
-export declare function resolveTimeoutRetryMax(env?: NodeJS.ProcessEnv): number;
-export declare function extractReviewerEvidenceFromText(
-  text: string,
-): { reviewer: Record<string, unknown> } | null;
 export declare function extractTerminationFailureClass(
   run: ReviewRun | null | undefined,
 ): string | null;
