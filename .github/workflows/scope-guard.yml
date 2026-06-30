@@ -207,18 +207,14 @@ jobs:
         shell: pwsh
         run: ./scripts/check-review-start-claim-guard.ps1
 
-  test-vitest:
-    name: Vitest shard ${{ matrix.shard }}/8
+  test-vitest-light:
+    name: Vitest light lane
     needs: classify-pr-changes
     if: |
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     permissions:
       contents: read
     steps:
@@ -234,9 +230,40 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --include=dev
 
-      - name: Run Vitest shard
+      - name: Run Vitest light lane
         shell: pwsh
-        run: ./scripts/run-vitest-shard.ps1 -Shard ${{ matrix.shard }} -ShardTotal 8
+        run: ./scripts/run-vitest-light-lane.ps1
+
+  test-vitest-heavy:
+    name: Vitest heavy shard ${{ matrix.shard }}/7
+    needs: classify-pr-changes
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Run Vitest heavy shard
+        shell: pwsh
+        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
 
   test-pester:
     name: Pester regression
@@ -270,7 +297,7 @@ jobs:
 
   test-aggregate:
     name: Run pack contract tests
-    needs: [classify-pr-changes, test-typecheck, test-vitest, test-pester]
+    needs: [classify-pr-changes, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester]
     if: |
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
@@ -286,7 +313,8 @@ jobs:
         shell: pwsh
         env:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
-          VITEST_RESULT: ${{ needs.test-vitest.result }}
+          VITEST_LIGHT_RESULT: ${{ needs.test-vitest-light.result }}
+          VITEST_HEAVY_RESULT: ${{ needs.test-vitest-heavy.result }}
           PESTER_RESULT: ${{ needs.test-pester.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}

@@ -1,8 +1,9 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Static and live guard for Issue #487 CI pipeline split: shard coverage, fail-closed
-  aggregate, worker-RPC regression guard, and current head/run binding.
+  Static and live guard for Issue #487/#556 CI pipeline split: lane classification,
+  runtime-weighted heavy shards, bounded light parallelism, fail-closed aggregate,
+  worker-RPC regression guard, and current head/run binding.
 #>
 [CmdletBinding()]
 param(
@@ -10,14 +11,12 @@ param(
     [switch]$SkipLiveCoverage
 )
 
-# Issue #487 — sharded vitest aggregate and coverage contract
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/ci-workflow-yaml.ps1')
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-$GuardIssueNumber = 487
 
 $failures = [System.Collections.Generic.List[string]]::new()
 
@@ -27,52 +26,80 @@ function Add-Fail {
 }
 
 $configPath = Join-Path $RepoRoot 'scripts/ci-pipeline-split.config.json'
+$lanesConfigPath = Join-Path $RepoRoot 'scripts/vitest-ci-lanes.config.json'
+$runtimeHistoryPath = Join-Path $RepoRoot 'scripts/vitest-runtime-history.json'
+$lanesLib = Join-Path $RepoRoot 'scripts/lib/vitest-ci-lanes.mjs'
+$budgetConfigPath = Join-Path $RepoRoot 'scripts/test-runtime-budget.config.json'
+
 if (-not (Test-Path -LiteralPath $configPath)) {
     Add-Fail 'missing scripts/ci-pipeline-split.config.json'
-    $shardCount = 4
+    $heavyShardCount = 7
     $aggregateJobName = 'Run pack contract tests'
+    $lightLaneJobName = 'Vitest light lane'
+    $heavyShardJobPrefix = 'Vitest heavy shard'
+    $typecheckJobName = 'Type-check pack sources'
+    $pesterJobName = 'Pester regression'
 }
 else {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    $shardCount = [int]$config.vitestShardCount
+    $heavyShardCount = [int]$config.heavyShardCount
     $aggregateJobName = [string]$config.aggregateJobName
+    $lightLaneJobName = [string]$config.lightLaneJobName
+    $heavyShardJobPrefix = [string]$config.heavyShardJobPrefix
     $typecheckJobName = [string]$config.typecheckJobName
-    $vitestShardJobPrefix = [string]$config.vitestShardJobPrefix
     $pesterJobName = [string]$config.pesterJobName
-    if ($shardCount -lt 2) {
-        Add-Fail 'ci-pipeline-split.config.json vitestShardCount must be >= 2'
+    if ($heavyShardCount -lt 1) {
+        Add-Fail 'ci-pipeline-split.config.json heavyShardCount must be >= 1'
     }
 }
 
 $scopeGuardPath = Join-Path $RepoRoot '.github/workflows/scope-guard.yml'
 $vitestConfigPath = Join-Path $RepoRoot 'vitest.config.ts'
 $aggregateScript = Join-Path $RepoRoot 'scripts/ci-test-aggregate.ps1'
-$shardRunnerScript = Join-Path $RepoRoot 'scripts/run-vitest-shard.ps1'
+$lightLaneScript = Join-Path $RepoRoot 'scripts/run-vitest-light-lane.ps1'
+$heavyShardScript = Join-Path $RepoRoot 'scripts/run-vitest-heavy-shard.ps1'
 $rollbackDoc = Join-Path $RepoRoot 'docs/ci-pipeline-split.md'
 
-Write-Host '== CI pipeline split guard (Issue #487) =='
+Write-Host '== CI pipeline split guard (Issues #487/#556) =='
 
-if (-not (Test-Path -LiteralPath $aggregateScript)) {
-    Add-Fail 'missing scripts/ci-test-aggregate.ps1'
-}
-if (-not (Test-Path -LiteralPath $shardRunnerScript)) {
-    Add-Fail 'missing scripts/run-vitest-shard.ps1'
-}
-if (-not (Test-Path -LiteralPath $rollbackDoc)) {
-    Add-Fail 'missing docs/ci-pipeline-split.md (rollback and timing evidence)'
+foreach ($required in @($aggregateScript, $lightLaneScript, $heavyShardScript, $lanesConfigPath, $runtimeHistoryPath, $lanesLib, $rollbackDoc)) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        Add-Fail "missing required artifact: $(Split-Path -Leaf $required)"
+    }
 }
 
 if (Test-Path -LiteralPath $vitestConfigPath) {
     $vitestText = Get-Content -LiteralPath $vitestConfigPath -Raw
+    if ($vitestText -notmatch 'VITEST_CI_LIGHT_LANE') {
+        Add-Fail 'vitest.config.ts must gate bounded parallelism on VITEST_CI_LIGHT_LANE'
+    }
     if ($vitestText -notmatch 'fileParallelism:\s*false') {
-        Add-Fail 'vitest.config.ts must keep fileParallelism: false in CI to avoid worker-RPC flake'
+        Add-Fail 'vitest.config.ts must keep serial fileParallelism for non-light CI lanes'
     }
     if ($vitestText -notmatch 'maxWorkers:\s*1') {
-        Add-Fail 'vitest.config.ts must keep maxWorkers: 1 in CI to avoid worker-RPC flake'
+        Add-Fail 'vitest.config.ts must keep maxWorkers: 1 for non-light CI lanes'
+    }
+    if ($vitestText -notmatch 'fileParallelism:\s*true') {
+        Add-Fail 'vitest.config.ts must allow fileParallelism: true for the light lane'
     }
 }
 else {
     Add-Fail 'missing vitest.config.ts'
+}
+
+if ((Test-Path -LiteralPath $budgetConfigPath) -and (Test-Path -LiteralPath $vitestConfigPath)) {
+    $budget = Get-Content -LiteralPath $budgetConfigPath -Raw | ConvertFrom-Json
+    $perTestMs = [int]$budget.perTestMs
+    $vitestText = Get-Content -LiteralPath $vitestConfigPath -Raw
+    if ($vitestText -match 'testTimeout:\s*ci\s*\?\s*([\d_]+)') {
+        $ciTimeout = [int]($Matches[1] -replace '_', '')
+        if ($ciTimeout -lt $perTestMs) {
+            Add-Fail "vitest.config.ts CI testTimeout ($ciTimeout ms) is below slow-test budget perTestMs ($perTestMs ms)"
+        }
+    }
+    else {
+        Add-Fail 'vitest.config.ts must declare CI testTimeout aligned with slow-test budget'
+    }
 }
 
 if (-not (Test-Path -LiteralPath $scopeGuardPath)) {
@@ -86,8 +113,11 @@ else {
         Add-Fail 'scope-guard.yml still defines monolithic tests job with test-all.ps1; use sharded pipeline (Issue #487)'
     }
 
-    if (-not $jobs.ContainsKey('test-vitest')) {
-        Add-Fail 'scope-guard.yml missing test-vitest matrix job'
+    if (-not $jobs.ContainsKey('test-vitest-light')) {
+        Add-Fail 'scope-guard.yml missing test-vitest-light job'
+    }
+    if (-not $jobs.ContainsKey('test-vitest-heavy')) {
+        Add-Fail 'scope-guard.yml missing test-vitest-heavy matrix job'
     }
     if (-not $jobs.ContainsKey('test-typecheck')) {
         Add-Fail 'scope-guard.yml missing test-typecheck job (fast structural lane)'
@@ -99,20 +129,34 @@ else {
         Add-Fail 'scope-guard.yml missing test-aggregate job'
     }
 
-    if ($jobs.ContainsKey('test-vitest')) {
-        $vitestJob = $jobs['test-vitest']
-        if ($vitestJob -notmatch 'strategy:\s*' -or $vitestJob -notmatch 'matrix:\s*') {
-            Add-Fail 'test-vitest job must use a matrix strategy for shards'
+    if ($jobs.ContainsKey('test-vitest-light')) {
+        $lightJob = $jobs['test-vitest-light']
+        if ($lightJob -notmatch 'run-vitest-light-lane\.ps1') {
+            Add-Fail 'test-vitest-light job must invoke scripts/run-vitest-light-lane.ps1'
         }
-        if ($vitestJob -match 'continue-on-error:\s*true') {
-            Add-Fail 'test-vitest job must not use continue-on-error: true'
+        if ($lightJob -match 'continue-on-error:\s*true') {
+            Add-Fail 'test-vitest-light job must not use continue-on-error: true'
         }
-        if ($vitestJob -notmatch 'run-vitest-shard\.ps1') {
-            Add-Fail 'test-vitest job must invoke scripts/run-vitest-shard.ps1 (includes Issue #488 runtime budget)'
+        $displayName = Get-JobDisplayName -JobText $lightJob
+        if ($displayName -and $displayName -ne $lightLaneJobName) {
+            Add-Fail "test-vitest-light display name must be '$lightLaneJobName'"
         }
-        $matrixMatches = [regex]::Matches($vitestJob, '(?m)^\s*shard:\s*\[([^\]]+)\]')
+    }
+
+    if ($jobs.ContainsKey('test-vitest-heavy')) {
+        $heavyJob = $jobs['test-vitest-heavy']
+        if ($heavyJob -notmatch 'strategy:\s*' -or $heavyJob -notmatch 'matrix:\s*') {
+            Add-Fail 'test-vitest-heavy job must use a matrix strategy for shards'
+        }
+        if ($heavyJob -match 'continue-on-error:\s*true') {
+            Add-Fail 'test-vitest-heavy job must not use continue-on-error: true'
+        }
+        if ($heavyJob -notmatch 'run-vitest-heavy-shard\.ps1') {
+            Add-Fail 'test-vitest-heavy job must invoke scripts/run-vitest-heavy-shard.ps1'
+        }
+        $matrixMatches = [regex]::Matches($heavyJob, '(?m)^\s*shard:\s*\[([^\]]+)\]')
         if ($matrixMatches.Count -eq 0) {
-            Add-Fail 'test-vitest matrix must declare shard indices'
+            Add-Fail 'test-vitest-heavy matrix must declare shard indices'
         }
         else {
             $indices = @()
@@ -122,19 +166,19 @@ else {
                     $indices += [int]$trim
                 }
             }
-            if ($indices.Count -ne $shardCount) {
-                Add-Fail "test-vitest matrix shard count ($($indices.Count)) does not match config ($shardCount)"
+            if ($indices.Count -ne $heavyShardCount) {
+                Add-Fail "test-vitest-heavy matrix shard count ($($indices.Count)) does not match config ($heavyShardCount)"
             }
-            $expected = 1..$shardCount
+            $expected = 1..$heavyShardCount
             foreach ($idx in $expected) {
                 if ($indices -notcontains $idx) {
-                    Add-Fail "test-vitest matrix missing shard index $idx"
+                    Add-Fail "test-vitest-heavy matrix missing shard index $idx"
                 }
             }
         }
-        $displayName = Get-JobDisplayName -JobText $vitestJob
-        if ($displayName -and $displayName -notmatch [regex]::Escape($vitestShardJobPrefix)) {
-            Add-Fail "test-vitest display name must include '$vitestShardJobPrefix'"
+        $displayName = Get-JobDisplayName -JobText $heavyJob
+        if ($displayName -and $displayName -notmatch [regex]::Escape($heavyShardJobPrefix)) {
+            Add-Fail "test-vitest-heavy display name must include '$heavyShardJobPrefix'"
         }
     }
 
@@ -168,8 +212,11 @@ else {
         if ($aggregateJob -notmatch 'ci-test-aggregate\.ps1') {
             Add-Fail 'test-aggregate job must invoke scripts/ci-test-aggregate.ps1'
         }
-        if ($aggregateJob -notmatch 'needs:.*test-vitest' -or $aggregateJob -notmatch 'needs:.*test-typecheck' -or $aggregateJob -notmatch 'needs:.*test-pester') {
-            Add-Fail 'test-aggregate job must need test-typecheck, test-vitest, and test-pester'
+        if ($aggregateJob -notmatch 'needs:.*test-vitest-light' -or $aggregateJob -notmatch 'needs:.*test-vitest-heavy' -or $aggregateJob -notmatch 'needs:.*test-typecheck' -or $aggregateJob -notmatch 'needs:.*test-pester') {
+            Add-Fail 'test-aggregate job must need test-typecheck, test-vitest-light, test-vitest-heavy, and test-pester'
+        }
+        if ($aggregateJob -notmatch 'VITEST_LIGHT_RESULT' -or $aggregateJob -notmatch 'VITEST_HEAVY_RESULT') {
+            Add-Fail 'test-aggregate job must bind VITEST_LIGHT_RESULT and VITEST_HEAVY_RESULT'
         }
         if ($aggregateJob -notmatch 'GITHUB_SHA' -or $aggregateJob -notmatch 'GITHUB_RUN_ID') {
             Add-Fail 'test-aggregate job must bind GITHUB_SHA and GITHUB_RUN_ID for current head/run'
@@ -191,88 +238,107 @@ else {
     }
 }
 
-function Get-VitestListFilesForShard {
-    param(
-        [int]$Shard,
-        [int]$Total,
-        [string]$Root
-    )
-    $vitestBin = Join-Path $Root 'node_modules/.bin/vitest'
-    if (-not (Test-Path -LiteralPath $vitestBin)) {
-        throw 'node_modules vitest binary missing; run npm ci before live coverage check'
+function Invoke-LanePlan {
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) {
+        throw 'node is required for lane plan validation'
     }
-    $prevCi = $env:CI
-    $env:CI = 'true'
-    try {
-        $raw = & $vitestBin list --shard="$Shard/$Total" 2>&1 | Out-String
+    $raw = & node -e "
+import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
+const plan = buildLanePlan('$($RepoRoot.Replace('\', '/'))');
+console.log(JSON.stringify(plan));
+" 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw $raw
     }
-    finally {
-        if ($null -ne $prevCi) { $env:CI = $prevCi } else { Remove-Item Env:CI -ErrorAction SilentlyContinue }
-    }
-    $files = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($line in ($raw -split '\r?\n')) {
-        if ($line -match '^(.+\.test\.ts)\s+>') {
-            $rel = $Matches[1].Replace('\', '/')
-            [void]$files.Add($rel)
-        }
-    }
-    return $files
+    return $raw | ConvertFrom-Json
 }
 
-if (-not $SkipLiveCoverage) {
-    $npm = Get-Command npm -ErrorAction SilentlyContinue
-    $vitestBin = Join-Path $RepoRoot 'node_modules/.bin/vitest'
-    if ($npm -and (Test-Path -LiteralPath $vitestBin)) {
-        Write-Host 'Running live Vitest shard coverage equivalence check...'
-        $union = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        $duplicates = [System.Collections.Generic.List[string]]::new()
-        for ($shard = 1; $shard -le $shardCount; $shard++) {
-            $files = Get-VitestListFilesForShard -Shard $shard -Total $shardCount -Root $RepoRoot
-            Write-Host "  shard $shard/$shardCount -> $($files.Count) files"
-            foreach ($file in $files) {
-                if ($union.Contains($file)) {
-                    $duplicates.Add($file) | Out-Null
-                }
-                else {
-                    [void]$union.Add($file)
-                }
+if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    try {
+        $plan = Invoke-LanePlan
+        if (-not $plan.ok) {
+            foreach ($err in $plan.errors) {
+                Add-Fail $err
             }
         }
+        else {
+            Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count)"
+            $union = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $duplicates = [System.Collections.Generic.List[string]]::new()
+            foreach ($file in $plan.light) {
+                if ($union.Contains($file)) { $duplicates.Add($file) | Out-Null } else { [void]$union.Add($file) }
+            }
+            foreach ($shard in $plan.heavyShards) {
+                foreach ($file in $shard.files) {
+                    if ($union.Contains($file)) {
+                        $duplicates.Add($file) | Out-Null
+                    }
+                    else {
+                        [void]$union.Add($file)
+                    }
+                }
+            }
+            foreach ($file in $plan.discovered) {
+                if (-not $union.Contains($file)) {
+                    Add-Fail "lane union missing discovered Vitest file: $file"
+                }
+            }
+            foreach ($file in $union) {
+                if ($plan.discovered -notcontains $file) {
+                    Add-Fail "lane union has unexpected file not in discovery: $file"
+                }
+            }
+            foreach ($dup in $duplicates) {
+                Add-Fail "duplicate Vitest file across lanes/shards: $dup"
+            }
+            if ($plan.heavyShards.Count -ne $heavyShardCount) {
+                Add-Fail "heavy shard assignment count ($($plan.heavyShards.Count)) does not match config ($heavyShardCount)"
+            }
 
-        $serialFiles = Get-VitestListFilesForShard -Shard 1 -Total 1 -Root $RepoRoot
-        foreach ($file in $serialFiles) {
-            if (-not $union.Contains($file)) {
-                Add-Fail "shard union missing serial Vitest file: $file"
+            # Negative fixture: heavy file cannot be classified light without review.
+            $negativeHeavy = 'scripts/orchestrator-wake-supervisor.test.ts'
+            if ($plan.config.classification.$negativeHeavy -eq 'light') {
+                Add-Fail "negative fixture: $negativeHeavy must not be classified light"
+            }
+
+            # Negative fixture: synthetic unclassified file must fail plan validation.
+            $syntheticPlan = & node -e "
+import { discoverVitestFiles, validateClassification, loadLanesConfig } from './scripts/lib/vitest-ci-lanes.mjs';
+const root = '$($RepoRoot.Replace('\', '/'))';
+const config = loadLanesConfig(root);
+const discovered = [...discoverVitestFiles(root), 'scripts/__classification_required_fixture__.test.ts'];
+const errors = validateClassification(discovered, config.classification);
+console.log(errors.join('\n'));
+process.exit(errors.length > 0 ? 0 : 1);
+" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Add-Fail 'negative fixture: unclassified test file must fail classification-required gate'
             }
         }
-        foreach ($file in $union) {
-            if (-not $serialFiles.Contains($file)) {
-                Add-Fail "shard union has unexpected file not in serial discovery: $file"
-            }
-        }
-        foreach ($dup in $duplicates) {
-            Add-Fail "duplicate Vitest file across shards: $dup"
-        }
-        Write-Host "  serial discovery: $($serialFiles.Count) files; shard union: $($union.Count) files"
     }
-    else {
-        Write-Host 'Skipping live shard coverage (npm/vitest unavailable)'
+    catch {
+        Add-Fail "lane plan validation failed: $_"
     }
+}
+elseif (-not $SkipLiveCoverage) {
+    Write-Host 'Skipping live lane coverage (node/lanes lib unavailable)'
 }
 
 # Negative aggregate fixture: fail-closed states must not pass
 $aggregateScriptPath = Join-Path $RepoRoot 'scripts/ci-test-aggregate.ps1'
 $negativeCases = @(
-    @{ TypecheckResult = 'failure'; VitestResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestResult = 'failure'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestResult = 'success'; PesterResult = 'cancelled'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestResult = 'skipped'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestResult = 'success'; PesterResult = 'success'; HeadSha = ''; RunId = '1' }
+    @{ TypecheckResult = 'failure'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'failure'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'cancelled'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'skipped'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = ''; RunId = '1' }
 )
 foreach ($case in $negativeCases) {
     & $aggregateScriptPath `
         -TypecheckResult $case.TypecheckResult `
-        -VitestResult $case.VitestResult `
+        -VitestLightResult $case.VitestLightResult `
+        -VitestHeavyResult $case.VitestHeavyResult `
         -PesterResult $case.PesterResult `
         -HeadSha $case.HeadSha `
         -RunId $case.RunId 2>&1 | Out-Null
@@ -281,7 +347,7 @@ foreach ($case in $negativeCases) {
         break
     }
 }
-& $aggregateScriptPath -TypecheckResult 'success' -VitestResult 'success' -PesterResult 'success' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
+& $aggregateScriptPath -TypecheckResult 'success' -VitestLightResult 'success' -VitestHeavyResult 'success' -PesterResult 'success' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Add-Fail 'ci-test-aggregate.ps1 must pass when all upstream lanes are success with head/run binding'
 }
@@ -294,5 +360,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI pipeline split shard coverage, aggregate fail-closed, and worker-RPC guard OK.'
+Write-Host '[PASS] CI pipeline split lane classification, weighted heavy shards, aggregate fail-closed, and worker-RPC guard OK.'
 exit 0

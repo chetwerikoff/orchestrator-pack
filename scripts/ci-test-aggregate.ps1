@@ -1,13 +1,14 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Fail-closed aggregate for Issue #487 CI pipeline split.
+  Fail-closed aggregate for Issue #487/#556 CI pipeline split.
   Consumes upstream job results for the current workflow run and head SHA only.
 #>
 [CmdletBinding()]
 param(
     [string]$TypecheckResult = $env:TYPECHECK_RESULT,
-    [string]$VitestResult = $env:VITEST_RESULT,
+    [string]$VitestLightResult = $env:VITEST_LIGHT_RESULT,
+    [string]$VitestHeavyResult = $env:VITEST_HEAVY_RESULT,
     [string]$PesterResult = $env:PESTER_RESULT,
     [string]$HeadSha = $env:GITHUB_SHA,
     [string]$RunId = $env:GITHUB_RUN_ID
@@ -43,7 +44,8 @@ if (-not $RunId) {
 }
 
 Test-JobResult -Name 'typecheck' -Result $TypecheckResult
-Test-JobResult -Name 'vitest-shards' -Result $VitestResult
+Test-JobResult -Name 'vitest-light' -Result $VitestLightResult
+Test-JobResult -Name 'vitest-heavy-shards' -Result $VitestHeavyResult
 Test-JobResult -Name 'pester' -Result $PesterResult
 
 if ($failures.Count -gt 0) {

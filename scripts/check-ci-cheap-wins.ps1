@@ -193,7 +193,7 @@ else {
 if (Test-Path -LiteralPath $scopeGuardPath) {
     $scopeText = Get-Content -LiteralPath $scopeGuardPath -Raw
     $hasMonolithicTests = $scopeText -match '(?m)^\s*tests:\s*$' -and $scopeText -match 'test-all\.ps1'
-    $hasShardedPipeline = $scopeText -match 'test-vitest' -and $scopeText -match 'run-vitest-shard\.ps1' -and $scopeText -match 'ci-test-aggregate\.ps1'
+    $hasShardedPipeline = $scopeText -match 'test-vitest-light' -and $scopeText -match 'test-vitest-heavy' -and $scopeText -match 'run-vitest-light-lane\.ps1' -and $scopeText -match 'run-vitest-heavy-shard\.ps1' -and $scopeText -match 'ci-test-aggregate\.ps1'
     if (-not $hasMonolithicTests -and -not $hasShardedPipeline) {
         Add-Fail 'scope-guard.yml must run scripts/test-all.ps1 or the sharded vitest/pester pipeline (Issue #487)'
     }

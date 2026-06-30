@@ -1,7 +1,11 @@
 {
   "vitestShardCount": 8,
+  "heavyShardCount": 7,
+  "lightLaneJobName": "Vitest light lane",
+  "heavyShardJobPrefix": "Vitest heavy shard",
   "aggregateJobName": "Run pack contract tests",
   "typecheckJobName": "Type-check pack sources",
-  "vitestShardJobPrefix": "Vitest shard",
-  "pesterJobName": "Pester regression"
+  "pesterJobName": "Pester regression",
+  "rollbackVitestShardCount": 8,
+  "rollbackVitestShardJobPrefix": "Vitest shard"
 }
