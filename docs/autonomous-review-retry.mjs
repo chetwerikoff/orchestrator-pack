@@ -296,6 +296,7 @@ export function enrichReviewRun(run, options = {}) {
     failureClass,
     maxRetries: options.maxRetries,
     ledger: options.ledger,
+    evidenceByRunId,
   });
 
   return {
@@ -363,17 +364,22 @@ export function enrichReviewRuns(runs, options = {}) {
  * @param {number} prNumber
  * @param {string} headSha
  * @param {string} failureClass
+ * @param {{ evidenceByRunId?: Record<string, { artifact?: Record<string, unknown>, pointer?: Record<string, unknown> }>, allRuns?: import('./review-trigger-reconcile.mjs').ReviewRun[] }} [options]
  */
-export function countSameHeadFailuresByClass(runs, prNumber, headSha, failureClass) {
+export function countSameHeadFailuresByClass(runs, prNumber, headSha, failureClass, options = {}) {
   const klass = String(failureClass ?? '').trim();
   if (!klass) {
     return 0;
   }
+  const evidenceByRunId = options.evidenceByRunId ?? {};
+  const allRuns = options.allRuns ?? runs;
   const classifiedRuns = toArray(runs).map((run) => {
     if (run?.failureClass) {
       return run;
     }
-    const classified = classifyPostRunFailure(run);
+    const runId = String(run?.id ?? run?.runId ?? '').trim();
+    const evidence = evidenceByRunId[runId] ?? {};
+    const classified = classifyPostRunFailure(run, evidence, allRuns);
     return { ...run, failureClass: classified.failureClass };
   });
   return countReviewerFailuresByClass(classifiedRuns, prNumber, headSha, klass);
@@ -427,10 +433,21 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
     };
   }
 
+  const evidenceByRunId = options.evidenceByRunId ?? {};
+  const failedRunId = String(failedRun?.id ?? failedRun?.runId ?? '').trim();
+  const countOptions = {
+    evidenceByRunId,
+    allRuns: reviewRuns,
+  };
+
   const failureClass =
     options.failureClass ??
     failedRun.failureClass ??
-    classifyPostRunFailure(failedRun).failureClass;
+    classifyPostRunFailure(
+      failedRun,
+      evidenceByRunId[failedRunId] ?? {},
+      reviewRuns,
+    ).failureClass;
 
   if (isPreLaunchFailureClass(failureClass)) {
     return {
@@ -447,7 +464,13 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
       failureClass,
       retryEligible: false,
       escalationReason: null,
-      failureCount: countSameHeadFailuresByClass(reviewRuns, prNumber, headSha, failureClass),
+      failureCount: countSameHeadFailuresByClass(
+        reviewRuns,
+        prNumber,
+        headSha,
+        failureClass,
+        countOptions,
+      ),
     };
   }
 
@@ -465,6 +488,7 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
     prNumber,
     headSha,
     failureClass,
+    countOptions,
   );
   const budget = resolvePostRunRetryBudgetCounts(
     runFailureCount,
@@ -542,7 +566,11 @@ export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, head
     enrichedRuns,
     prNumber,
     headSha,
-    { maxRetries: options.maxRetries, ledger: options.ledger },
+    {
+      maxRetries: options.maxRetries,
+      ledger: options.ledger,
+      evidenceByRunId: options.evidenceByRunId,
+    },
   );
 
   return {

@@ -59,6 +59,13 @@ export declare function countSameHeadFailuresByClass(
   prNumber: number,
   headSha: string,
   failureClass: string,
+  options?: {
+    evidenceByRunId?: Record<
+      string,
+      { artifact?: Record<string, unknown>; pointer?: Record<string, unknown> }
+    >;
+    allRuns?: ReviewRun[];
+  },
 ): number;
 export declare function resolvePostRunRetryBudgetCounts(
   runFailureCount: number,

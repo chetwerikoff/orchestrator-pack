@@ -233,6 +233,57 @@ describe('autonomous-review-retry', () => {
     expect(gate.coverage.escalationReason).toBeTruthy();
   });
 
+  it('denies launch with retry_bound_exhausted for sidecar-only sibling failures', () => {
+    const fixture = loadFixture<typeof import('./fixtures/autonomous-review-retry/pr528-timeout-sidecar.json')>(
+      'pr528-timeout-sidecar.json',
+    );
+    const headSha = String(fixture.rawRun.targetSha);
+    const run1 = {
+      ...fixture.rawRun,
+      id: 'sidecar-timeout-1',
+      reviewerSessionId: 'opk-rev-sidecar-1',
+      createdAt: '2026-06-30T00:00:00.000Z',
+    };
+    const run2 = {
+      ...fixture.rawRun,
+      id: 'sidecar-timeout-2',
+      reviewerSessionId: 'opk-rev-sidecar-2',
+      createdAt: '2026-06-30T01:00:00.000Z',
+    };
+    const artifact1 = {
+      ...fixture.sidecar,
+      runId: 'sidecar-timeout-1',
+      reviewerSessionId: 'opk-rev-sidecar-1',
+      runFingerprint: fingerprintRun(run1),
+    };
+    const artifact2 = {
+      ...fixture.sidecar,
+      runId: 'sidecar-timeout-2',
+      reviewerSessionId: 'opk-rev-sidecar-2',
+      runFingerprint: fingerprintRun(run2),
+    };
+    const pointer1 = { ...fixture.pointer, runId: 'sidecar-timeout-1', reviewerSessionId: 'opk-rev-sidecar-1' };
+    const pointer2 = { ...fixture.pointer, runId: 'sidecar-timeout-2', reviewerSessionId: 'opk-rev-sidecar-2' };
+    const evidenceByRunId = {
+      'sidecar-timeout-1': { artifact: artifact1, pointer: pointer1 },
+      'sidecar-timeout-2': { artifact: artifact2, pointer: pointer2 },
+    };
+    const enriched = enrichReviewRuns([run1, run2], { evidenceByRunId });
+    const latest = enriched.find((run) => run.id === 'sidecar-timeout-2');
+    expect(latest?.failureClass).toBe('timeout_no_verdict');
+    expect(latest?.retryEligible).toBe(false);
+    expect(latest?.failureCount).toBe(2);
+
+    const gate = evaluateScenarioMatrixCell({
+      claimWindow: 'free',
+      reviewRuns: enriched,
+      prNumber: 528,
+      headSha,
+    });
+    expect(gate.launch).toBe(false);
+    expect(gate.reason).toBe('retry_bound_exhausted');
+  });
+
   it('denies retry when ledger records attempt without a second failed run row', () => {
     const headSha = 'abc53900000000000000000000000000000000000';
     const failedRun = {
