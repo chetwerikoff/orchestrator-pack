@@ -235,6 +235,7 @@ export function matchInventoryRoute(parsed) {
       ['baseRefName', 'headRefOid', 'number', 'state'],
       ['number', 'headRefOid', 'baseRefName', 'state'],
       ['mergedAt', 'state'],
+      ['state'],
     ];
     const normalizedAllowed = allowedSets.map((s) => [...s].sort());
     const sorted = [...fields].sort();

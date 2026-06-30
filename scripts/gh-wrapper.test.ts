@@ -8,13 +8,14 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
+import { executeRestRoute } from './lib/gh-rest-routes.mjs';
 import { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } from './lib/gh-repo-resolve.mjs';
 import {
   isNativeGhExecutable,
   MAX_NON_NATIVE_GH_CANDIDATES,
   resolveRealGhBinary,
 } from './lib/gh-resolve-real-binary.mjs';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -118,6 +119,17 @@ describe('gh inventory matcher', () => {
     ]);
     expect(route?.id).toBe('pr-view');
     expect(route?.prNumber).toBe(491);
+  });
+
+  it('routes getPRState state-only pr view via REST inventory (Issue #538)', () => {
+    for (const argv of [
+      ['pr', 'view', '527', '--json', 'state'],
+      ['pr', 'view', '527', '--repo', 'chetwerikoff/orchestrator-pack', '--json', 'state'],
+    ] as const) {
+      const { route } = classifyArgv([...argv]);
+      expect(route?.id).toBe('pr-view');
+      expect(route?.prNumber).toBe(527);
+    }
   });
 
   it('routes RCA issue view state,title,body,closedAt via REST inventory (Issue #520)', () => {
@@ -248,6 +260,15 @@ describe('gh pull state mapping', () => {
     );
     expect(mapped).toEqual({ state: 'MERGED', mergedAt: '2026-06-28T05:01:44Z' });
   });
+
+  it('maps state-only pull view output for getPRState fallback (Issue #538)', () => {
+    expect(mapPullToGhJson({ state: 'open', merged_at: null }, ['state'])).toEqual({ state: 'OPEN' });
+    expect(mapPullToGhJson(
+      { state: 'closed', merged_at: '2026-06-28T05:01:44Z' },
+      ['state'],
+    )).toEqual({ state: 'MERGED' });
+  });
+
 });
 
 describe('gh issue state reason mapping', () => {
@@ -322,6 +343,70 @@ function writeExecutable(path: string, content: string) {
   writeFileSync(path, content, { mode: 0o755 });
   chmodSync(path, 0o755);
 }
+
+
+function graphqlExhaustedFakeGh(root: string) {
+  const audit = join(root, 'audit.log');
+  const fakeGh = join(root, 'fake-gh');
+  writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+printf '%s\n' "$*" >>"$audit"
+joined="$*"
+if [[ "$joined" == *graphql* ]] || [[ "$joined" == *"pr view"* ]]; then
+  echo 'GraphQL quota exhausted (https://api.github.com/graphql)' >&2
+  exit 1
+fi
+case "$joined" in
+  *"api repos/o/r/pulls/527"*)
+    echo '{"number":527,"state":"open","merged_at":null}'
+    ;;
+  *"api repos/o/r/pulls/491"*)
+    echo '{"number":491,"state":"closed","merged_at":"2026-06-28T05:01:44Z"}'
+    ;;
+  *)
+    echo "fake-gh: unhandled argv: $joined" >&2
+    exit 1
+    ;;
+esac
+`);
+  return { fakeGh, audit };
+}
+
+describe('gh pr view state-only REST execution (Issue #538)', () => {
+  it('executes state-only pr view via REST without graphql under exhausted harness', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-state-only-'));
+    try {
+      const { fakeGh, audit } = graphqlExhaustedFakeGh(root);
+      const openArgv = ['pr', 'view', '527', '--repo', 'o/r', '--json', 'state'];
+      const openParsed = parseGhArgv(openArgv);
+      const open = executeRestRoute('pr-view', {
+        realGh: fakeGh,
+        parsed: openParsed,
+        route: { id: 'pr-view', prNumber: 527 },
+        cwd: root,
+      });
+      expect(open).toEqual({ state: 'OPEN' });
+
+      const mergedArgv = ['pr', 'view', '491', '--repo', 'o/r', '--json', 'state'];
+      const mergedParsed = parseGhArgv(mergedArgv);
+      const merged = executeRestRoute('pr-view', {
+        realGh: fakeGh,
+        parsed: mergedParsed,
+        route: { id: 'pr-view', prNumber: 491 },
+        cwd: root,
+      });
+      expect(merged).toEqual({ state: 'MERGED' });
+
+      const auditLog = readFileSync(audit, 'utf8');
+      expect(auditLog).not.toMatch(/graphql/i);
+      expect(auditLog).toMatch(/api repos\/o\/r\/pulls\/527/);
+      expect(auditLog).toMatch(/api repos\/o\/r\/pulls\/491/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function twoWrapperPathFixture(order: 'ao-first' | 'pack-first') {
   const root = mkdtempSync(join(tmpdir(), 'gh-two-wrapper-'));
