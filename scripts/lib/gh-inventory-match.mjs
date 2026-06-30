@@ -2,6 +2,16 @@ import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
 /** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
 
+/** scm-github prInfoFromView consumer fields (resolvePR + detectPR; Issue #530). */
+export const PR_INFO_FROM_VIEW_FIELDS = Object.freeze([
+  'baseRefName',
+  'headRefName',
+  'isDraft',
+  'number',
+  'title',
+  'url',
+]);
+
 /**
  * @param {string | boolean | undefined} searchFlag
  * @returns {number | null}
@@ -177,6 +187,19 @@ export function matchInventoryRoute(parsed) {
         return { id: 'pr-list-head', branch: headFlag };
       }
 
+      if (jsonFieldsEqual(parsed.jsonFields, [...PR_INFO_FROM_VIEW_FIELDS])) {
+        if (!hasOnlyAllowedFlags(parsed, ['--head', '--limit'])) {
+          return null;
+        }
+        if (parsed.flags['--limit'] !== '1') {
+          return null;
+        }
+        if (parsed.jq) {
+          return null;
+        }
+        return { id: 'pr-list-head', branch: headFlag };
+      }
+
       if (!hasOnlyAllowedFlags(parsed, ['--head'])) {
         return null;
       }
@@ -219,12 +242,24 @@ export function matchInventoryRoute(parsed) {
     if (!hasOnlyAllowedFlags(parsed, [])) {
       return null;
     }
-    const num = Number(parsed.positionals[0]);
-    if (!Number.isFinite(num) || num <= 0) {
+    const prRef = parsed.positionals[0];
+    if (!prRef) {
       return null;
     }
     const fields = parsed.jsonFields;
     if (!fields) {
+      return null;
+    }
+
+    if (jsonFieldsEqual(fields, [...PR_INFO_FROM_VIEW_FIELDS])) {
+      if (parsed.jq) {
+        return null;
+      }
+      return { id: 'pr-view', prRef };
+    }
+
+    const num = Number(prRef);
+    if (!Number.isFinite(num) || num <= 0) {
       return null;
     }
 
