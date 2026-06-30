@@ -1,5 +1,6 @@
 export const CACHE_VERSION: number;
 export const RATE_LIMIT_REFRESH_MS: number;
+export const RATE_LIMIT_REFRESH_LOCK_STALE_MS: number;
 export const AUDIT_LABEL: string;
 export const SUPPRESSION_EXIT_CODE: number;
 export const PRIMARY_QUOTA_MARKER: string;
@@ -16,6 +17,13 @@ export function resolveCredentialFingerprint(
 export function resolvePartitionKey(realGh: string, argv: string[], env?: NodeJS.ProcessEnv): string;
 export function resolveCacheDir(env?: NodeJS.ProcessEnv): string;
 export function cacheFilePath(cacheDir: string, partitionKey: string): string;
+export function rateLimitRefreshLockPath(cacheDir: string, partitionKey: string): string;
+export function tryAcquireRateLimitRefreshLease(
+  cacheDir: string,
+  partitionKey: string,
+  currentMs: number,
+): { acquired: boolean; lockPath: string };
+export function releaseRateLimitRefreshLease(lockPath: string): void;
 export function readDegradedCache(
   cacheDir: string,
   partitionKey: string,

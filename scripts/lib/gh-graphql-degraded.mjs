@@ -4,8 +4,10 @@
  */
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -17,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 
 export const CACHE_VERSION = 1;
 export const RATE_LIMIT_REFRESH_MS = 60_000;
+export const RATE_LIMIT_REFRESH_LOCK_STALE_MS = 120_000;
 export const AUDIT_LABEL = 'graphql_degraded_fail_fast';
 export const SUPPRESSION_EXIT_CODE = 1;
 export const PRIMARY_QUOTA_MARKER = 'GraphQL primary quota exhausted';
@@ -382,7 +385,7 @@ export function fetchRateLimitGraphql(realGh, argv, env) {
   const { host, explicit } = extractApiHostnameInfo(argv, env);
   const args = ['api', 'rate_limit'];
   if (explicit) {
-    args.unshift('--hostname', host);
+    args.splice(1, 0, '--hostname', host);
   }
   const result = spawnSync(realGh, args, {
     cwd: process.cwd(),
@@ -403,6 +406,138 @@ export function fetchRateLimitGraphql(realGh, argv, env) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, error: message };
+  }
+}
+
+
+export function rateLimitRefreshLockPath(cacheDir, partitionKey) {
+  return `${cacheFilePath(cacheDir, partitionKey)}.refresh-lock`;
+}
+
+/**
+ * @param {string} lockPath
+ */
+function readRefreshLock(lockPath) {
+  try {
+    return JSON.parse(readFileSync(lockPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string} cacheDir
+ * @param {string} partitionKey
+ * @param {number} currentMs
+ */
+export function tryAcquireRateLimitRefreshLease(cacheDir, partitionKey, currentMs) {
+  const lockPath = rateLimitRefreshLockPath(cacheDir, partitionKey);
+  mkdirSync(cacheDir, { recursive: true });
+
+  const attempt = () => {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredMs: currentMs })}\n`, 'utf8');
+      closeSync(fd);
+      return true;
+    } catch (err) {
+      if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'EEXIST') {
+        throw err;
+      }
+      return false;
+    }
+  };
+
+  if (attempt()) {
+    return { acquired: true, lockPath };
+  }
+
+  const existing = readRefreshLock(lockPath);
+  if (
+    existing
+    && typeof existing.acquiredMs === 'number'
+    && currentMs - existing.acquiredMs > RATE_LIMIT_REFRESH_LOCK_STALE_MS
+  ) {
+    rmSync(lockPath, { force: true });
+    if (attempt()) {
+      return { acquired: true, lockPath };
+    }
+  }
+
+  return { acquired: false, lockPath };
+}
+
+/**
+ * @param {string} lockPath
+ */
+export function releaseRateLimitRefreshLease(lockPath) {
+  rmSync(lockPath, { force: true });
+}
+
+const PEER_REFRESH_WAIT_MS = 250;
+
+/**
+ * @param {string} cacheDir
+ * @param {string} partitionKey
+ * @param {string} lockPath
+ */
+function waitForPeerCacheRefresh(cacheDir, partitionKey, lockPath) {
+  const deadline = Date.now() + PEER_REFRESH_WAIT_MS;
+  while (Date.now() < deadline) {
+    const cache = readDegradedCache(cacheDir, partitionKey);
+    if (cache) {
+      return cache;
+    }
+    if (!existsSync(lockPath)) {
+      return readDegradedCache(cacheDir, partitionKey);
+    }
+  }
+  return readDegradedCache(cacheDir, partitionKey);
+}
+
+/**
+ * @param {string} cacheDir
+ * @param {string} partitionKey
+ * @param {string} realGh
+ * @param {string[]} argv
+ * @param {NodeJS.ProcessEnv} env
+ * @param {number} currentMs
+ * @param {{ ignoreCadence?: boolean }} [options]
+ */
+function maybeRefreshDegradedCache(cacheDir, partitionKey, realGh, argv, env, currentMs, options = {}) {
+  let cache = readDegradedCache(cacheDir, partitionKey);
+  const ignoreCadence = options.ignoreCadence === true;
+  if (!ignoreCadence && !shouldRefreshRateLimit(cache, currentMs)) {
+    return { cache, refreshed: false };
+  }
+
+  const lease = tryAcquireRateLimitRefreshLease(cacheDir, partitionKey, currentMs);
+  if (!lease.acquired) {
+    const reread = waitForPeerCacheRefresh(cacheDir, partitionKey, lease.lockPath);
+    return { cache: reread ?? cache, refreshed: false };
+  }
+
+  try {
+    cache = readDegradedCache(cacheDir, partitionKey);
+    if (!ignoreCadence && !shouldRefreshRateLimit(cache, currentMs)) {
+      return { cache, refreshed: false };
+    }
+
+    const rateLimit = fetchRateLimitGraphql(realGh, argv, env);
+    if (!rateLimit.ok) {
+      return { cache, refreshed: true };
+    }
+
+    const nextState = {
+      degraded: rateLimit.remaining === 0,
+      graphqlResetAt: rateLimit.reset,
+      graphqlRemaining: rateLimit.remaining,
+      lastRateLimitFetchMs: currentMs,
+    };
+    cache = writeDegradedCache(cacheDir, partitionKey, nextState);
+    return { cache, refreshed: true };
+  } finally {
+    releaseRateLimitRefreshLease(lease.lockPath);
   }
 }
 
@@ -444,22 +579,24 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
   const resetEpochSec = cache?.graphqlResetAt ?? null;
   const resetMs = resetEpochSec ? resetEpochSec * 1000 : null;
 
-  let refreshed = false;
-  if (shouldRefreshRateLimit(cache, currentMs)) {
-    const rateLimit = fetchRateLimitGraphql(realGh, argv, env);
-    refreshed = true;
-    if (rateLimit.ok) {
-      const nextState = {
-        degraded: rateLimit.remaining === 0,
-        graphqlResetAt: rateLimit.reset,
-        graphqlRemaining: rateLimit.remaining,
-        lastRateLimitFetchMs: currentMs,
-      };
-      cache = writeDegradedCache(cacheDir, partitionKey, nextState);
-      if (rateLimit.remaining === 0 && currentMs < rateLimit.reset * 1000) {
-        exitSuppressed(partitionKey, rateLimit.reset);
-      }
-    }
+  const refreshResult = maybeRefreshDegradedCache(
+    cacheDir,
+    partitionKey,
+    realGh,
+    argv,
+    env,
+    currentMs,
+  );
+  cache = refreshResult.cache;
+  const refreshed = refreshResult.refreshed;
+  if (
+    refreshed
+    && cache
+    && cache.graphqlRemaining === 0
+    && cache.graphqlResetAt !== null
+    && currentMs < cache.graphqlResetAt * 1000
+  ) {
+    exitSuppressed(partitionKey, cache.graphqlResetAt);
   } else if (cache?.degraded && cache.graphqlRemaining === 0 && resetMs !== null && currentMs < resetMs) {
     exitSuppressed(partitionKey, resetEpochSec);
   }
@@ -498,15 +635,20 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     if (refreshed && cache?.graphqlResetAt) {
       resetAt = cache.graphqlResetAt;
     } else if (!resetAt) {
-      const rateLimit = fetchRateLimitGraphql(realGh, argv, env);
-      if (rateLimit.ok) {
-        resetAt = rateLimit.reset;
-        cache = writeDegradedCache(cacheDir, partitionKey, {
-          degraded: true,
-          graphqlResetAt: rateLimit.reset,
-          graphqlRemaining: rateLimit.remaining,
-          lastRateLimitFetchMs: currentMs,
-        });
+      cache = readDegradedCache(cacheDir, partitionKey) ?? cache;
+      resetAt = cache?.graphqlResetAt ?? null;
+      if (!resetAt) {
+        const armRefresh = maybeRefreshDegradedCache(
+          cacheDir,
+          partitionKey,
+          realGh,
+          argv,
+          env,
+          currentMs,
+          { ignoreCadence: true },
+        );
+        cache = armRefresh.cache ?? cache;
+        resetAt = cache?.graphqlResetAt ?? null;
       }
     }
     if (!cache || !cache.degraded) {

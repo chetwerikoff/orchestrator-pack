@@ -27,7 +27,7 @@ import {
   resolveRealGhBinary,
 } from './lib/gh-resolve-real-binary.mjs';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -1198,6 +1198,52 @@ exit 1
       expect(auditLines(harness.audit).some((line) => line.includes('--hostname github.com') && line.includes('rate_limit'))).toBe(true);
       expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
       expect(extractApiHostnameInfo(argv)).toEqual({ host: 'github.com', explicit: true });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('builds explicit-host rate_limit argv as gh api --hostname <host> rate_limit', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const argv = ['api', '--hostname', 'github.com', 'graphql', '-f', 'query={viewer{login}}'];
+      const env = { ...harness.env, GH_HOST: 'ghe.example' };
+      expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
+      const rateLimitLine = auditLines(harness.audit).find((line) => line.includes('rate_limit'));
+      expect(rateLimitLine).toBeDefined();
+      expect(rateLimitLine).toMatch(/^api --hostname github\.com rate_limit/);
+      expect(rateLimitLine).not.toMatch(/^--hostname/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('bounds parallel rate_limit refresh with a per-partition lease', async () => {
+    const nowMs = 1_700_000_500_000;
+    const harness = buildGraphqlDegradedHarness({
+      nowMs,
+      initialRemaining: 0,
+      resetOffsetSec: 3600,
+    });
+    try {
+      const script = `import { tryGraphqlDegradedPassthrough } from './lib/gh-graphql-degraded.mjs';
+tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={viewer{login}}'])}, ${JSON.stringify(harness.fakeGh)}, { env: process.env });`;
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_NOW_MS: String(nowMs),
+      };
+      await Promise.all(Array.from({ length: 5 }, () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+          cwd: wrapperDir,
+          env,
+        });
+        child.on('error', reject);
+        child.on('close', resolve);
+      })));
+      const rateLimitCalls = auditLines(harness.audit).filter((line) => line.includes('rate_limit')).length;
+      expect(rateLimitCalls).toBeLessThanOrEqual(1);
     } finally {
       harness.cleanup();
     }
