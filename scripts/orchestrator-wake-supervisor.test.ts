@@ -408,7 +408,7 @@ describe('orchestrator-wake-supervisor', () => {
     }
 
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  });
+  }, detachedSupervisorTimeoutMs);
 
   it(
     'captures per-child logs and survives launching shell exit when detached',
