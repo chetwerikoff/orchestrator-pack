@@ -1,0 +1,23 @@
+{
+  "description": "Visible failed AO run prevents launch_pending_budget_exceeded",
+  "claim": {
+    "state": "active",
+    "prNumber": 519,
+    "headSha": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+    "launchPending": {
+      "atUtc": "2026-06-28T15:44:30.000Z",
+      "budgetMs": 15000
+    },
+    "launchPendingInvokedAtUtc": "2026-06-28T15:44:30Z"
+  },
+  "reviewRuns": [
+    {
+      "id": "review-run-failed-001",
+      "prNumber": 519,
+      "targetSha": "5a20a5d5c3d590ce6ec041e57a390ea63e39158a",
+      "status": "failed",
+      "reviewerSessionId": "opk-rev-fail"
+    }
+  ],
+  "nowMs": 1730120894000
+}
