@@ -1,0 +1,21 @@
+{
+  "issue_number": 536,
+  "iteration_id": "opk-92",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T03:22:47.446Z",
+  "baseline": {
+    "commit_sha": "2d84ba4ff5fd0fee8964c3f1766a832bc964e273",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8121c63b732237e7e008550e1f144e553895cde8fbf9f2caf73e44ee94417c7c"
+  },
+  "declared_paths": [
+    "scripts/ci-pipeline-split.config.json",
+    "scripts/check-ci-pipeline-split.test.ts",
+    ".github/workflows/scope-guard.yml"
+  ],
+  "declared_globs": [
+    "docs/**"
+  ],
+  "amendments": []
+}
