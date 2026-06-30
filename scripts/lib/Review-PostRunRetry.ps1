@@ -57,19 +57,45 @@ function Get-PostRunRetryLedger {
     return $empty
 }
 
+function ConvertTo-PostRunRetryLedgerHashtable {
+    param([object]$Ledger)
+
+    if ($null -eq $Ledger) {
+        return $null
+    }
+
+    if ($Ledger -is [hashtable] -and $Ledger.entries -is [hashtable]) {
+        return $Ledger
+    }
+
+    $schemaVersion = if ($Ledger.schemaVersion) { [string]$Ledger.schemaVersion } else { 'post-run-retry-ledger/v1' }
+    $entries = @{}
+    if ($Ledger.entries) {
+        foreach ($prop in $Ledger.entries.PSObject.Properties) {
+            $entries[$prop.Name] = $prop.Value
+        }
+    }
+    return @{
+        schemaVersion = $schemaVersion
+        entries       = $entries
+        manualAudit   = @($Ledger.manualAudit)
+    }
+}
+
 function Set-PostRunRetryLedger {
     param(
         [string]$Namespace,
-        [hashtable]$Ledger
+        [object]$Ledger
     )
 
-    if (-not $Namespace -or -not $Ledger) { return }
+    $normalized = ConvertTo-PostRunRetryLedgerHashtable -Ledger $Ledger
+    if (-not $Namespace -or -not $normalized) { return }
     $ledgerPath = Get-PostRunRetryLedgerPath -Namespace $Namespace
     $dir = Split-Path -Parent $ledgerPath
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    ($Ledger | ConvertTo-Json -Compress -Depth 30) | Set-Content -LiteralPath $ledgerPath -Encoding UTF8
+    ($normalized | ConvertTo-Json -Compress -Depth 30) | Set-Content -LiteralPath $ledgerPath -Encoding UTF8
 }
 
 function Register-PostRunAutonomousRetryAttempt {
@@ -190,18 +216,7 @@ function Write-ManualOperatorReviewRetryAudit {
     )
 
     if (-not $Namespace) { return @{ ok = $false; reason = 'namespace_missing' } }
-    $ledgerPath = Get-PostRunRetryLedgerPath -Namespace $Namespace
-    $ledger = @{}
-    if (Test-Path -LiteralPath $ledgerPath) {
-        $ledger = Get-Content -LiteralPath $ledgerPath -Raw | ConvertFrom-Json
-        if ($ledger.entries) {
-            $entries = @{}
-            foreach ($prop in $ledger.entries.PSObject.Properties) {
-                $entries[$prop.Name] = $prop.Value
-            }
-            $ledger = @{ schemaVersion = $ledger.schemaVersion; entries = $entries; manualAudit = @($ledger.manualAudit) }
-        }
-    }
+    $ledger = Get-PostRunRetryLedger -Namespace $Namespace
 
     $result = Invoke-PostRunRetryLedgerCli -Subcommand 'recordManualOperatorRetryAudit' -Payload @{
         ledger       = $ledger
@@ -212,11 +227,7 @@ function Write-ManualOperatorReviewRetryAudit {
     }
 
     if ($result.ledger) {
-        $dir = Split-Path -Parent $ledgerPath
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        }
-        ($result.ledger | ConvertTo-Json -Compress -Depth 30) | Set-Content -LiteralPath $ledgerPath -Encoding UTF8
+        Set-PostRunRetryLedger -Namespace $Namespace -Ledger $result.ledger
     }
     return $result
 }
