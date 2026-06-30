@@ -13,6 +13,7 @@
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
 . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
 
 $Script:OrchestratorPreRecheckFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reconcile.mjs'
@@ -185,6 +186,7 @@ function Invoke-OrchestratorClaimedReviewRun {
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($claimRuns) | Out-Null
         $prevBypass = $env:AO_CLAIMED_REVIEW_RUN_BYPASS
         $env:AO_CLAIMED_REVIEW_RUN_BYPASS = '1'
         try {

@@ -1,0 +1,23 @@
+{
+  "description": "fingerprint mismatch rejects join",
+  "run": {
+    "id": "run-fp-mismatch",
+    "prNumber": 539,
+    "targetSha": "abc53900000000000000000000000000000000000",
+    "reviewerSessionId": "opk-rev-fp",
+    "status": "failed",
+    "createdAt": "2026-06-30T00:00:00.000Z"
+  },
+  "artifact": {
+    "schemaVersion": 1,
+    "reviewerSessionId": "opk-rev-fp",
+    "runId": "run-fp-mismatch",
+    "runFingerprint": "deadbeefdeadbeefdeadbeefdeadbeef",
+    "phases": [],
+    "stderrTail": "reviewer-evidence:{\"reviewer\":{\"failureClass\":\"timeout_no_verdict\"}}"
+  },
+  "expect": {
+    "failureClass": "unknown",
+    "retryEligible": false
+  }
+}
