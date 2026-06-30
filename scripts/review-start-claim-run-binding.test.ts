@@ -17,7 +17,7 @@ import {
   evaluateReclaimDecision,
 } from '../docs/review-start-claim-lifecycle.mjs';
 import { evaluateAutonomousReviewRunBoundary } from '../docs/orchestrator-claimed-review-run.mjs';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const fixtureDir = path.join(
   repoRoot,
@@ -300,6 +300,30 @@ describe('review-start-claim-run-binding', () => {
     });
     expect(foreignProjectBinding.action).toBe('terminalize');
     expect(foreignProjectBinding.outcome).toBe('launch_pending_budget_exceeded');
+  });
+
+  it('pscustomobject-run-diagnostic-binding', () => {
+    const bindingLib = path.join(repoRoot, 'scripts/lib/Review-StartClaimRunBinding.ps1');
+    const result = JSON.parse(
+      runPwsh(`
+        . ${psString(bindingLib)}
+        $run = @{
+          prNumber = 519
+          targetSha = 'a7f0e4d190556d2a61082878e82c6e5164f6a31e'
+          startReason = 'completion_wake'
+          surface = 'review-wake-trigger'
+          reviewerSessionId = 'opk-rev-1092'
+          id = 'review-run-test'
+        } | ConvertTo-Json | ConvertFrom-Json
+        $diag = Get-MissingClaimForReviewRunDiagnostic -Run $run -Claims @() -DetectionPoint 'worktree_gate'
+        [pscustomobject]@{
+          emit = [bool]$diag.emit
+          kind = [string]$diag.diagnostic.kind
+        } | ConvertTo-Json -Compress
+      `),
+    );
+    expect(result.emit).toBe(true);
+    expect(result.kind).toBe(MISSING_CLAIM_FOR_REVIEW_RUN);
   });
 
   it('terminal-reconciled-claim-suppresses-missing-diagnostic', () => {

@@ -72,7 +72,7 @@ function Test-AutomatedReviewLaunchClaimGate {
 
 function Get-MissingClaimForReviewRunDiagnostic {
     param(
-        [hashtable]$Run,
+        [object]$Run,
         [array]$Claims = @(),
         [string]$ProjectId = 'orchestrator-pack',
         [string]$DetectionPoint = 'lifecycle_reconciler',
@@ -80,8 +80,10 @@ function Get-MissingClaimForReviewRunDiagnostic {
         [string]$Provenance = ''
     )
 
+    $runHt = ConvertTo-MechanicalJsonStateHashtable -Value $Run
+
     return Invoke-ReviewStartClaimRunBindingCli -Subcommand 'diagnose-missing-claim' -Payload @{
-        run              = $Run
+        run              = $runHt
         claims           = @($Claims)
         projectNamespace = $ProjectId
         detectionPoint   = $DetectionPoint
