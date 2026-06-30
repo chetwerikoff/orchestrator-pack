@@ -1,0 +1,46 @@
+{
+  "issue_number": 542,
+  "iteration_id": "opk-95",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T04:42:36.728Z",
+  "baseline": {
+    "commit_sha": "c603a8acbbb4096611fc8bd413b1474f3ba3bfb3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3429012227c4f5ee6510fdb2d5f04af8e19837e0e645e675ad8ea9da51505762"
+  },
+  "declared_paths": [
+    ".claude/skills/publish-issue-draft/SKILL.md",
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "scripts/publish-issue-body-sync.ts",
+    "scripts/publish-issue-body-sync.ps1",
+    "scripts/publish-issue-body-sync.test.ts",
+    "scripts/lib/publish-issue-body-sync.ts",
+    "scripts/lib/reviewer-ts-cli.ts",
+    "scripts/invoke-contract-evidence-reverify.ts"
+  ],
+  "declared_globs": [
+    ".claude/skills/**",
+    ".cursor/skills/**",
+    ".claude/hooks/**",
+    "scripts/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6039a47d16e534c2f7dd35d38d487254518e35276337cd58a87a00c6ba0543f5",
+      "new_active_scope_hash": "sha256:3429012227c4f5ee6510fdb2d5f04af8e19837e0e645e675ad8ea9da51505762",
+      "changed": {
+        "added": [
+          "scripts/invoke-contract-evidence-reverify.ts",
+          "scripts/lib/reviewer-ts-cli.ts"
+        ],
+        "removed": []
+      },
+      "reason": "refresh baseline after CI fix commit",
+      "actor": "opk-95",
+      "timestamp": "2026-06-30T04:43:45.121Z",
+      "applied": true
+    }
+  ]
+}
