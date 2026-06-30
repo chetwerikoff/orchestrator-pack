@@ -10,6 +10,7 @@
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
 
 function Test-ReviewTriggerReevalForbiddenCommand {
     param([string]$CommandLine)
@@ -173,6 +174,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 retainWatch = $true
             }
         }
+        Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {

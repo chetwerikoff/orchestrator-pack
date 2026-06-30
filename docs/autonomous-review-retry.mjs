@@ -16,6 +16,7 @@ import {
   INFRA_NO_TRUSTWORTHY_VERDICT_ESCALATION,
   isPreLaunchFailureClass,
   POST_RUN_RETRY_LEDGER_VERSION,
+  readPostRunLedgerEntry,
 } from './post-run-retry-ledger.mjs';
 import { resolveFailureEvidenceForRun } from './reviewer-failure-evidence.mjs';
 import { fingerprintRun } from './review-run-recovery.mjs';
@@ -290,6 +291,7 @@ export function enrichReviewRun(run, options = {}) {
   const decision = evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha, {
     failureClass,
     maxRetries: options.maxRetries,
+    ledger: options.ledger,
   });
 
   return {
@@ -298,6 +300,9 @@ export function enrichReviewRun(run, options = {}) {
     retryEligible: decision.retryEligible,
     escalationReason: decision.escalationReason ?? undefined,
     failureClassSource: classified.source,
+    failureCount: decision.failureCount,
+    autonomousAttemptCount: decision.autonomousAttemptCount,
+    effectiveFailureCount: decision.effectiveFailureCount,
   };
 }
 
@@ -368,11 +373,41 @@ export function countSameHeadFailuresByClass(runs, prNumber, headSha, failureCla
 }
 
 /**
+ * Combine terminal run-row failures with persisted autonomous retry attempts.
+ * @param {number} runFailureCount
+ * @param {Record<string, unknown> | null | undefined} ledger
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @param {string} failureClass
+ */
+export function resolvePostRunRetryBudgetCounts(
+  runFailureCount,
+  ledger,
+  prNumber,
+  headSha,
+  failureClass,
+) {
+  const { autonomousAttemptCount } = readPostRunLedgerEntry({
+    ledger,
+    prNumber,
+    headSha,
+    failureClass,
+  });
+  const normalizedRunFailures = Number(runFailureCount ?? 0);
+  const normalizedLedgerAttempts = Number(autonomousAttemptCount ?? 0);
+  return {
+    runFailureCount: normalizedRunFailures,
+    autonomousAttemptCount: normalizedLedgerAttempts,
+    effectiveFailureCount: normalizedRunFailures + normalizedLedgerAttempts,
+  };
+}
+
+/**
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
  * @param {number} prNumber
  * @param {string} headSha
- * @param {{ failureClass?: string, maxRetries?: number }} [options]
+ * @param {{ failureClass?: string, maxRetries?: number, ledger?: Record<string, unknown> }} [options]
  */
 export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha, options = {}) {
   const failedRun = run ?? findFailedOrCancelledRunForHead(reviewRuns, prNumber, headSha);
@@ -418,8 +453,15 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
     };
   }
 
-  const failureCount = countSameHeadFailuresByClass(
+  const runFailureCount = countSameHeadFailuresByClass(
     reviewRuns,
+    prNumber,
+    headSha,
+    failureClass,
+  );
+  const budget = resolvePostRunRetryBudgetCounts(
+    runFailureCount,
+    options.ledger,
     prNumber,
     headSha,
     failureClass,
@@ -430,7 +472,7 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
         ? resolveTimeoutRetryMax()
         : DEFAULT_POST_RUN_RETRY_MAX),
   );
-  const retryEligible = failureCount <= maxRetries;
+  const retryEligible = budget.effectiveFailureCount <= maxRetries;
   let escalationReason = null;
   if (!retryEligible) {
     escalationReason =
@@ -443,7 +485,9 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
     failureClass,
     retryEligible,
     escalationReason,
-    failureCount,
+    failureCount: budget.runFailureCount,
+    autonomousAttemptCount: budget.autonomousAttemptCount,
+    effectiveFailureCount: budget.effectiveFailureCount,
     maxRetries,
   };
 }
@@ -458,9 +502,28 @@ export function evaluatePostRunRetryDecision(run, reviewRuns, prNumber, headSha,
  * @param {{ maxRetries?: number, evidenceByRunId?: Record<string, unknown> }} [options]
  */
 export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, headSha, options = {}) {
+  if (
+    !options.ledger &&
+    run &&
+    typeof run.failureClass === 'string' &&
+    run.failureClass &&
+    typeof run.retryEligible === 'boolean'
+  ) {
+    return {
+      failureClass: run.failureClass,
+      retryEligible: run.retryEligible,
+      escalationReason: run.escalationReason ?? null,
+      timeoutFailureCount: Number(run.failureCount ?? 0),
+      failureCount: Number(run.failureCount ?? 0),
+      autonomousAttemptCount: Number(run.autonomousAttemptCount ?? 0),
+      effectiveFailureCount: Number(run.effectiveFailureCount ?? 0),
+    };
+  }
+
   const enrichedRuns = enrichReviewRuns(reviewRuns, {
     evidenceByRunId: options.evidenceByRunId,
     maxRetries: options.maxRetries,
+    ledger: options.ledger,
   });
   const runId = String(run?.id ?? run?.runId ?? '').trim();
   const enrichedRun =
@@ -472,7 +535,7 @@ export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, head
     enrichedRuns,
     prNumber,
     headSha,
-    { maxRetries: options.maxRetries },
+    { maxRetries: options.maxRetries, ledger: options.ledger },
   );
 
   return {
@@ -481,6 +544,8 @@ export function resolveFailedRunRetryEligibility(run, reviewRuns, prNumber, head
     escalationReason: decision.escalationReason,
     timeoutFailureCount: decision.failureCount,
     failureCount: decision.failureCount,
+    autonomousAttemptCount: decision.autonomousAttemptCount,
+    effectiveFailureCount: decision.effectiveFailureCount,
   };
 }
 

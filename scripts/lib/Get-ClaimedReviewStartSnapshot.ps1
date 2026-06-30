@@ -46,7 +46,8 @@ function Get-ClaimedReviewStartSnapshot {
     }
     $reviewRuns = @(
         . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
-        Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot
+        $namespace = if ($ClaimResult -and $ClaimResult.acquired) { [string]$ClaimResult.namespace } else { '' }
+        Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot -Namespace $namespace
     )
     $sessions = @(Get-AoStatusSessions)
     $checksBundle = & $ResolveChecksBundle $openPrs $PrNumber $RepoRoot

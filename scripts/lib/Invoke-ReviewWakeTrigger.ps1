@@ -389,6 +389,9 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             $claimed
         }
         $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
+        if (-not $FixtureSnapshot) {
+            $holdRuns = @($fresh.reviewRuns)
+        }
         $plannedStartReason = if ($planned.startReason) {
             [string]$planned.startReason
         }
@@ -498,6 +501,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                     mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
                 }
             }
+            Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
             & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
             if ($isHandoffWake) {
                 $preInvokeNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

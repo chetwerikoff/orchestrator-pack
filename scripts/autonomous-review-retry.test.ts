@@ -233,6 +233,49 @@ describe('autonomous-review-retry', () => {
     expect(gate.coverage.escalationReason).toBeTruthy();
   });
 
+  it('denies retry when ledger records attempt without a second failed run row', () => {
+    const headSha = 'abc53900000000000000000000000000000000000';
+    const failedRun = {
+      id: 'timeout-1',
+      prNumber: 539,
+      targetSha: headSha,
+      status: 'failed',
+      findingCount: 0,
+      terminationReason:
+        'reviewer-evidence:{"reviewer":{"failureClass":"timeout_no_verdict"}}',
+      createdAt: '2026-06-30T00:00:00.000Z',
+    };
+    const ledgerAttempt = applyPostRunRetryAttempt({
+      ledger: { entries: {}, manualAudit: [] },
+      prNumber: 539,
+      headSha,
+      failureClass: TIMEOUT_NO_VERDICT_FAILURE_CLASS,
+      runId: 'timeout-1',
+    });
+    const enriched = enrichReviewRuns([failedRun], { ledger: ledgerAttempt.ledger });
+    const decision = evaluatePostRunRetryDecision(
+      enriched[0],
+      enriched,
+      539,
+      headSha,
+      { ledger: ledgerAttempt.ledger },
+    );
+
+    expect(decision.failureCount).toBe(1);
+    expect(decision.autonomousAttemptCount).toBe(1);
+    expect(decision.effectiveFailureCount).toBe(2);
+    expect(decision.retryEligible).toBe(false);
+
+    const gate = evaluateScenarioMatrixCell({
+      claimWindow: 'free',
+      reviewRuns: enriched,
+      prNumber: 539,
+      headSha,
+    });
+    expect(gate.launch).toBe(false);
+    expect(gate.reason).toBe('retry_bound_exhausted');
+  });
+
   it('resets retry budget on new head SHA', () => {
     const oldHead = 'abc53900000000000000000000000000000000000';
     const newHead = 'def53900000000000000000000000000000000000';

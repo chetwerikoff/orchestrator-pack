@@ -59,6 +59,17 @@ export declare function countSameHeadFailuresByClass(
   headSha: string,
   failureClass: string,
 ): number;
+export declare function resolvePostRunRetryBudgetCounts(
+  runFailureCount: number,
+  ledger: Record<string, unknown> | null | undefined,
+  prNumber: number,
+  headSha: string,
+  failureClass: string,
+): {
+  runFailureCount: number;
+  autonomousAttemptCount: number;
+  effectiveFailureCount: number;
+};
 export declare function evaluatePostRunRetryDecision(
   run: ReviewRun | null | undefined,
   reviewRuns: ReviewRun[],
@@ -70,6 +81,8 @@ export declare function evaluatePostRunRetryDecision(
   retryEligible: boolean;
   escalationReason: string | null;
   failureCount: number;
+  autonomousAttemptCount?: number;
+  effectiveFailureCount?: number;
   maxRetries?: number;
   preLaunchOwnedBy516?: boolean;
 };
@@ -85,6 +98,8 @@ export declare function resolveFailedRunRetryEligibility(
   escalationReason: string | null;
   timeoutFailureCount: number;
   failureCount: number;
+  autonomousAttemptCount?: number;
+  effectiveFailureCount?: number;
 };
 export declare function shouldRouteNeedsTriageToSend(
   reviewRuns: ReviewRun[],
