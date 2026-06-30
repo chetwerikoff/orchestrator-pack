@@ -1,0 +1,182 @@
+{
+  "version": "graphql-quota-github-read-inventory/v1",
+  "ownerClasses": [
+    "rest_inventory",
+    "graphql_fail_fast",
+    "rest_direct",
+    "accepted_upstream_residual"
+  ],
+  "scanSurfaces": {
+    "reconcile": [
+      "scripts/lib/Gh-PrChecks.ps1",
+      "scripts/lib/Gh-FleetInventoryCache.ps1",
+      "scripts/lib/Get-AutoReviewPrContext.ps1",
+      "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
+      "scripts/lib/Ci-Failure-Notification-Common.ps1",
+      "scripts/pr-scope-check.ps1"
+    ],
+    "rules": [
+      "prompts/agent_rules.md",
+      "prompts/investigate_root_cause.md",
+      "agent-orchestrator.yaml.example"
+    ]
+  },
+  "rows": [
+    {
+      "id": "pr-list-open-headRefOid-number",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --state open --json number,headRefOid --limit 200",
+      "routeId": "pr-list-open",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-list-open-headRefOid-baseRefName-number",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --state open --json number,headRefOid,baseRefName --limit 200",
+      "routeId": "pr-list-open",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-list-head-number-jq",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --head BRANCH --json number --limit 1 --jq .[0].number",
+      "routeId": "pr-list-head",
+      "ownerIssue": 443
+    },
+    {
+      "id": "pr-list-head-number-url",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --head BRANCH --json number,url --limit 1",
+      "routeId": "pr-list-head",
+      "ownerIssue": 443
+    },
+    {
+      "id": "pr-list-merged-closes",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --state merged --search \"closes #N\" --json number,title,state,mergedAt --limit 10",
+      "routeId": "pr-list-merged-closes",
+      "ownerIssue": 520
+    },
+    {
+      "id": "pr-view-state-only",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json state",
+      "routeId": "pr-view",
+      "ownerIssue": 538
+    },
+    {
+      "id": "pr-view-state-mergedAt",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json state,mergedAt",
+      "routeId": "pr-view",
+      "ownerIssue": 501
+    },
+    {
+      "id": "pr-view-baseRefName",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json baseRefName",
+      "routeId": "pr-view",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-view-headRefOid-headRefName",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json headRefOid,headRefName",
+      "routeId": "pr-view",
+      "ownerIssue": 546
+    },
+    {
+      "id": "pr-view-headRefOid-baseRefName-number-state",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json number,headRefOid,baseRefName,state",
+      "routeId": "pr-view",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-view-body-number",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json number,body",
+      "routeId": "pr-view",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-view-prInfoFromView",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr view N --json baseRefName,headRefName,isDraft,number,title,url",
+      "routeId": "pr-view",
+      "ownerIssue": 530
+    },
+    {
+      "id": "pr-checks-inventory",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr checks N --json name,state,bucket,link,startedAt,completedAt,workflow,description",
+      "routeId": "pr-checks",
+      "ownerIssue": 431
+    },
+    {
+      "id": "pr-diff-name-only",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr diff N --name-only",
+      "routeId": "pr-diff-name-only",
+      "ownerIssue": 431
+    },
+    {
+      "id": "issue-view-body",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh issue view N --json body",
+      "routeId": "issue-view-body",
+      "ownerIssue": 431
+    },
+    {
+      "id": "issue-view-rca-metadata",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh issue view N --json state,title,body,closedAt",
+      "routeId": "issue-view-json",
+      "ownerIssue": 520
+    },
+    {
+      "id": "repo-view-nameWithOwner",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh repo view --json nameWithOwner",
+      "routeId": "repo-view-name-with-owner",
+      "ownerIssue": 431
+    },
+    {
+      "id": "gh-api-graphql-passthrough",
+      "ownerClass": "graphql_fail_fast",
+      "canonical": "gh api graphql",
+      "ownerIssue": 540,
+      "policy": "pack scripts/gh passthrough fail-fast after primary GraphQL quota exhaustion"
+    },
+    {
+      "id": "rest-repos-issues-events",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}issues/[^/\\s]+/events(?:\\s|$)",
+      "ownerIssue": 453
+    },
+    {
+      "id": "rest-repos-collaborators-permission",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}collaborators/[^/\\s]+/permission(?:\\s|$)",
+      "ownerIssue": 453
+    },
+    {
+      "id": "rest-repos-branches-protection",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}branches/[^/\\s]+/protection(?:\\s|$)",
+      "ownerIssue": 453
+    },
+    {
+      "id": "rest-repos-pulls-number",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}pulls/[^/\\s]+(?:\\s|$)",
+      "ownerIssue": 546
+    },
+    {
+      "id": "rest-repos-commits-sha",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}commits/[^/\\s]+(?:\\s|$)",
+      "ownerIssue": 453
+    }
+  ]
+}

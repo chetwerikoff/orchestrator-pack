@@ -13,7 +13,8 @@ $required = @(
     'headRefOid',
     'ConvertFrom-Json',
     'Never call bare',
-    'gh pr view'
+    'gh pr view',
+    'Do not scan the entire declarations directory'
 )
 
 $missing = @($required | Where-Object { $text -notlike "*$_*" })

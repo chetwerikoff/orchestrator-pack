@@ -4,6 +4,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import inventory from './graphql-quota-github-read-inventory.json' with { type: 'json' };
+import { ghApiEndpointFromApiTokens } from './gh-api-endpoint.mjs';
+import { isGraphqlPassthroughArgv } from './gh-graphql-degraded.mjs';
 import { classifyArgv } from './gh-inventory-match.mjs';
 
 const WRITE_VERBS = new Set(['merge', 'comment', 'create', 'close', 'edit', 'review']);
@@ -32,12 +35,21 @@ const RECONCILE_PATTERNS = [
   /\bgh\s+repo\s+view[^\r\n#|]+/gi,
 ];
 
+/** @type {RegExp[]} */
+const RECONCILE_API_PATTERNS = [
+  /\bgh\s+api\s+graphql[^\r\n#|]*/gi,
+  /\bgh\s+api\s+[^\r\n#|]+/gi,
+];
+
 /**
  * @param {string} fragment
  */
 function trimReconcileCommand(fragment) {
   return fragment
     .replace(/\s+2>&.*$/u, '')
+    .replace(/\s+2>\$.*$/u, '')
+    .replace(/\s+--paginate\b.*$/u, '')
+    .replace(/\s+--jq\s+.*$/u, '')
     .replace(/\s+\|\s+.*$/u, '')
     .replace(/\)\s*$/u, '')
     .trim();
@@ -171,6 +183,95 @@ export function isInventoryCoveredCommand(command) {
   return isInventoryCoveredArgv(argv);
 }
 
+
+/**
+ * @param {string} command
+ * @returns {string | null}
+ */
+function ghApiEndpointFromCommand(command) {
+  const prefixed = command.trim().startsWith('gh ') ? command.trim() : `gh ${command.trim()}`;
+  return ghApiEndpointFromApiTokens(commandTemplateToArgv(prefixed));
+}
+
+/**
+ * @param {string} line
+ * @returns {string | null}
+ */
+function ghApiEndpointFromLine(line) {
+  const match = line.match(/\bgh\s+api\b/i);
+  if (!match || match.index === undefined) {
+    return null;
+  }
+  const fragment = line.slice(match.index).split(/\s*[|;&]/)[0].trim();
+  return ghApiEndpointFromCommand(fragment);
+}
+
+/**
+ * @param {string} command
+ */
+export function normalizeGhApiCommand(command) {
+  let normalized = normalizeGhCommandTemplate(command).replace(/["']/g, '');
+  const prefixed = normalized.startsWith('gh ') ? normalized : `gh ${normalized}`;
+  const tokens = commandTemplateToArgv(prefixed);
+  const endpoint = ghApiEndpointFromApiTokens(tokens);
+  if (endpoint) {
+    const endpointIdx = tokens.indexOf(endpoint);
+    const after = endpointIdx >= 0 ? tokens.slice(endpointIdx + 1) : [];
+    normalized = `gh api ${endpoint}${after.length ? ` ${after.join(' ')}` : ''}`;
+  }
+  return normalized
+    .replace(/\$[A-Za-z_][\w]*/g, 'PLACEHOLDER')
+    .replace(/\{[^}]+\}/g, 'PLACEHOLDER')
+    .replace(/PLACEHOLDER\/PLACEHOLDER/g, 'OWNER/REPO')
+    .replace(/repos\/PLACEHOLDER\/PLACEHOLDER/g, 'repos/OWNER/REPO')
+    .replace(/repos\/OWNER\/REPO\/commits\/PLACEHOLDER/g, 'repos/OWNER/REPO/commits/SHA')
+    .replace(/collaborators\/PLACEHOLDER/g, 'collaborators/ACTOR')
+    .replace(/branches\/PLACEHOLDER/g, 'branches/BRANCH');
+}
+
+/**
+ * @param {string} command
+ */
+export function matchRestDirectInventoryRow(command) {
+  const normalized = normalizeGhApiCommand(command);
+  if (!/^gh api repos\//i.test(normalized)) {
+    return null;
+  }
+  for (const row of inventory.rows) {
+    if (row.ownerClass !== 'rest_direct' || !row.pattern) {
+      continue;
+    }
+    if (new RegExp(row.pattern, 'i').test(normalized)) {
+      return row;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {string} command
+ */
+export function isClassifiedGhReadCommand(command) {
+  const prefixed = command.trim().startsWith('gh ') ? command.trim() : `gh ${command.trim()}`;
+  const argv = commandTemplateToArgv(prefixed);
+  if (!argv) {
+    return true;
+  }
+
+  if (isGraphqlPassthroughArgv(argv)) {
+    return false;
+  }
+
+  if (argv[0] === 'api') {
+    if (/gh api.*\/merge/i.test(prefixed)) {
+      return true;
+    }
+    return matchRestDirectInventoryRow(prefixed) !== null;
+  }
+
+  return isInventoryCoveredCommand(prefixed);
+}
+
 /**
  * @param {string} line
  */
@@ -188,16 +289,23 @@ function $lineMatchesSkip(line) {
   if (/^\s*#/.test(line)) {
     return true;
   }
-  if (!/(^|[^a-zA-Z])gh\s+(pr|issue|repo)\s+/.test(line)) {
+  const hasHighLevel = /(^|[^a-zA-Z])gh\s+(pr|issue|repo)\s+/.test(line);
+  const endpoint = ghApiEndpointFromLine(line);
+  const hasApiRepos = endpoint?.startsWith('repos/') ?? false;
+  const hasApiGraphql = endpoint === 'graphql';
+  if (!hasHighLevel && !hasApiRepos && !hasApiGraphql) {
     return true;
   }
   if (/gh pr (merge|comment|create|close|edit|review)/.test(line)) {
     return true;
   }
-  if (/gh api\b/.test(line)) {
+  if (/gh api.*\/merge/i.test(line)) {
     return true;
   }
   if (/throw\s+"gh |Write-Error\s+"gh |WarningTemplate\s*=\s*'warn: gh /.test(line)) {
+    return true;
+  }
+  if (/=\s*"gh\s+(?:pr|issue|repo)\s+[^"]*failed/i.test(line)) {
     return true;
   }
   if (/SYNOPSIS|Shared gh pr list/.test(line)) {
@@ -210,6 +318,27 @@ function $lineMatchesSkip(line) {
  * @param {string} line
  * @returns {string[]}
  */
+
+/**
+ * @param {string} line
+ * @returns {string[]}
+ */
+function extractForbiddenWorkaroundsFromLine(line) {
+  if (/^\s*#/.test(line)) {
+    return [];
+  }
+  /** @type {string[]} */
+  const found = [];
+  for (const pattern of FORBIDDEN_RULE_SURFACE_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(line)) !== null) {
+      found.push(trimReconcileCommand(match[0]));
+    }
+  }
+  return [...new Set(found)];
+}
+
 export function extractGhCommandsFromReconcileLine(line) {
   if ($lineMatchesSkip(line)) {
     return [];
@@ -221,6 +350,16 @@ export function extractGhCommandsFromReconcileLine(line) {
     let match;
     while ((match = pattern.exec(line)) !== null) {
       found.push(trimReconcileCommand(match[0]));
+    }
+  }
+  for (const pattern of RECONCILE_API_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(line)) !== null) {
+      const trimmed = trimReconcileCommand(match[0]);
+      if (!/gh api.*\/merge/i.test(trimmed)) {
+        found.push(trimmed);
+      }
     }
   }
   return [...new Set(found)];
@@ -296,7 +435,7 @@ export function scanFileForViolations(filePath, mode) {
           violations.push({ file: filePath, command, line: line.trim() });
           continue;
         }
-        if (!isInventoryCoveredCommand(prefixed)) {
+        if (!isClassifiedGhReadCommand(prefixed)) {
           violations.push({ file: filePath, command: prefixed, line: line.trim() });
         }
       }
@@ -306,9 +445,12 @@ export function scanFileForViolations(filePath, mode) {
 
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
+    for (const command of extractForbiddenWorkaroundsFromLine(line)) {
+      violations.push({ file: filePath, command, line: line.trim() });
+    }
     for (const command of extractGhCommandsFromReconcileLine(line)) {
       const prefixed = command.startsWith('gh ') ? command : `gh ${command}`;
-      if (!isInventoryCoveredCommand(prefixed)) {
+      if (!isClassifiedGhReadCommand(prefixed)) {
         violations.push({ file: filePath, command: prefixed, line: line.trim() });
       }
     }

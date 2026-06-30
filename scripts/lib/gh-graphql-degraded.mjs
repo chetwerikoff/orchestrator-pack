@@ -564,8 +564,53 @@ function maybeRefreshDegradedCache(cacheDir, partitionKey, realGh, argv, env, cu
   }
 }
 
+
+function isGraphqlResetStale(cache, currentMs) {
+  return cache?.graphqlResetAt != null && currentMs >= cache.graphqlResetAt * 1000;
+}
+
+function boundedResetEpochSec(currentMs) {
+  return Math.ceil((currentMs + RATE_LIMIT_REFRESH_MS) / 1000);
+}
+
+/**
+ * @param {{ degraded?: boolean, graphqlResetAt?: number | null, graphqlRemaining?: number, lastRateLimitFetchMs?: number } | null} cache
+ * @param {number} currentMs
+ * @returns {number | null}
+ */
+function effectiveResetEpochSec(cache, currentMs) {
+  if (!cache) {
+    return null;
+  }
+  if (cache.graphqlResetAt != null) {
+    return cache.graphqlResetAt;
+  }
+  if (cache.degraded && cache.graphqlRemaining === 0 && cache.lastRateLimitFetchMs != null) {
+    return boundedResetEpochSec(cache.lastRateLimitFetchMs);
+  }
+  return null;
+}
+
+/**
+ * @param {{ degraded?: boolean, graphqlResetAt?: number | null, graphqlRemaining?: number, lastRateLimitFetchMs?: number } | null} cache
+ * @param {number} currentMs
+ */
+function isActivelyDegraded(cache, currentMs) {
+  if (!cache?.degraded) {
+    return false;
+  }
+  const resetSec = effectiveResetEpochSec(cache, currentMs);
+  if (resetSec === null) {
+    return false;
+  }
+  return currentMs < resetSec * 1000;
+}
+
 function shouldRefreshRateLimit(cache, currentMs) {
   if (!cache) {
+    return true;
+  }
+  if (isGraphqlResetStale(cache, currentMs)) {
     return true;
   }
   return currentMs - cache.lastRateLimitFetchMs >= RATE_LIMIT_REFRESH_MS;
@@ -636,8 +681,6 @@ function tryWriteDegradedCache(cacheDir, partitionKey, state) {
  */
 function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs) {
   let cache = readDegradedCache(cacheDir, partitionKey);
-  const resetEpochSec = cache?.graphqlResetAt ?? null;
-  const resetMs = resetEpochSec ? resetEpochSec * 1000 : null;
 
   const refreshResult = maybeRefreshDegradedCache(
     cacheDir,
@@ -648,20 +691,11 @@ function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs)
     currentMs,
   );
   cache = refreshResult.cache;
-  const refreshed = refreshResult.refreshed;
-  if (
-    refreshed
-    && cache
-    && cache.graphqlRemaining === 0
-    && cache.graphqlResetAt !== null
-    && currentMs < cache.graphqlResetAt * 1000
-  ) {
-    exitSuppressed(partitionKey, cache.graphqlResetAt);
-  } else if (cache?.degraded && cache.graphqlRemaining === 0 && resetMs !== null && currentMs < resetMs) {
-    exitSuppressed(partitionKey, resetEpochSec);
+  if (isActivelyDegraded(cache, currentMs)) {
+    exitSuppressed(partitionKey, effectiveResetEpochSec(cache, currentMs));
   }
 
-  return { cache, refreshed };
+  return { cache, refreshed: refreshResult.refreshed };
 }
 
 /**
@@ -724,13 +758,15 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     exitCode: graphqlResult.status,
   })) {
     let resetAt = cache?.graphqlResetAt ?? null;
-    if (refreshed && cache?.graphqlResetAt) {
+    const resetStale = resetAt !== null && currentMs >= resetAt * 1000;
+    if (refreshed && cache?.graphqlResetAt && !resetStale) {
       resetAt = cache.graphqlResetAt;
-    } else if (!resetAt) {
+    } else if (!resetAt || resetStale) {
       try {
         cache = readDegradedCache(cacheDir, partitionKey) ?? cache;
         resetAt = cache?.graphqlResetAt ?? null;
-        if (!resetAt) {
+        const rereadStale = resetAt !== null && currentMs >= resetAt * 1000;
+        if (!resetAt || rereadStale) {
           const armRefresh = maybeRefreshDegradedCache(
             cacheDir,
             partitionKey,
@@ -750,9 +786,9 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     if (!cache || !cache.degraded) {
       cache = tryWriteDegradedCache(cacheDir, partitionKey, {
         degraded: true,
-        graphqlResetAt: resetAt,
+        graphqlResetAt: resetAt ?? boundedResetEpochSec(currentMs),
         graphqlRemaining: 0,
-        lastRateLimitFetchMs: cache?.lastRateLimitFetchMs ?? currentMs,
+        lastRateLimitFetchMs: currentMs,
       }) ?? cache;
     }
     if (graphqlResult.stderr) {

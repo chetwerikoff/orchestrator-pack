@@ -90,29 +90,14 @@ function Get-IssueNumberFromDeclarationSnapshots {
                 }
             }
             catch {
-                # fall through to unique-issue scan
+                return $null
             }
         }
     }
 
-    $issueNumbers = [System.Collections.Generic.HashSet[int]]::new()
-    foreach ($file in Get-ChildItem -LiteralPath $declDir -Filter '*.json' -File) {
-        try {
-            $json = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
-            $n = [int]$json.issue_number
-            if ($n -gt 0) {
-                [void]$issueNumbers.Add($n)
-            }
-        }
-        catch {
-            continue
-        }
-    }
-
-    if ($issueNumbers.Count -eq 1) {
-        return @($issueNumbers)[0]
-    }
-
+    # Do not scan the entire declarations directory: review worktrees and long-lived
+    # branches accumulate many issue snapshots and yield ambiguous issue numbers.
+    # Branch-diff and session-specific files are the only authoritative fallbacks.
     return $null
 }
 
