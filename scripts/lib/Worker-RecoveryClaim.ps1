@@ -122,6 +122,140 @@ function Read-WorkerRecoveryClaimRecord {
     }
 }
 
+function Get-WorkerRecoveryStaleMinutes {
+    $minutes = $Script:WorkerRecoveryDefaultStaleMinutes
+    if ($env:AO_WORKER_RECOVERY_CLAIM_STALE_MINUTES) {
+        $parsed = 0
+        if ([int]::TryParse($env:AO_WORKER_RECOVERY_CLAIM_STALE_MINUTES, [ref]$parsed) -and $parsed -gt 0) {
+            $minutes = $parsed
+        }
+    }
+    if ($minutes -lt $Script:WorkerRecoverySafeFloorMinutes) {
+        $minutes = $Script:WorkerRecoverySafeFloorMinutes
+    }
+    return $minutes
+}
+
+function Test-WorkerRecoveryClaimHolderAlive {
+    param($Holder)
+
+    if (-not $Holder) { return $false }
+    $holderPid = 0
+    if (-not [int]::TryParse([string]$Holder.pid, [ref]$holderPid) -or $holderPid -le 0) {
+        return $false
+    }
+    return $null -ne (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)
+}
+
+function Test-WorkerRecoveryClaimStale {
+    param(
+        $Existing,
+        [double]$StaleMinutes
+    )
+
+    if (-not $Existing.ok) { return $false }
+    $acquired = $null
+    try {
+        $acquired = [datetimeoffset]::Parse([string]$Existing.record.acquiredAtUtc).UtcDateTime
+    }
+    catch {
+        return $true
+    }
+    if ($acquired -gt (Get-Date).ToUniversalTime().AddMinutes(1)) {
+        return $true
+    }
+    $age = ((Get-Date).ToUniversalTime() - $acquired).TotalMinutes
+    if ($age -ge $StaleMinutes) {
+        return $true
+    }
+    if (-not (Test-WorkerRecoveryClaimHolderAlive -Holder $Existing.record.holder)) {
+        return $true
+    }
+    return $false
+}
+
+function Move-WorkerRecoveryClaimToTerminal {
+    param(
+        [string]$Namespace,
+        [string]$ActivePath,
+        [hashtable]$Record,
+        [string]$Outcome,
+        [hashtable]$Extra = @{}
+    )
+
+    $terminalDir = Get-WorkerRecoveryTerminalDir -Namespace $Namespace
+    $terminalName = "$($Record.claimKey)-$Outcome-$([guid]::NewGuid().ToString('n')).json"
+    $terminal = @{}
+    foreach ($key in $Record.Keys) { $terminal[$key] = $Record[$key] }
+    foreach ($key in $Extra.Keys) { $terminal[$key] = $Extra[$key] }
+    $terminal.phase = 'terminal'
+    $terminal.outcome = $Outcome
+    $terminal.completedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    Write-WorkerRecoveryAtomic -Path (Join-Path $terminalDir $terminalName) -Record $terminal
+    if (Test-Path -LiteralPath $ActivePath) {
+        Remove-Item -LiteralPath $ActivePath -Force -ErrorAction SilentlyContinue
+    }
+    return $terminal
+}
+
+function Get-WorkerRecoveryRetryAttemptState {
+    param(
+        [string]$Namespace,
+        [string]$ClaimKey
+    )
+
+    $attempt = 0
+    $lastAttemptMs = 0L
+    $retryOutcomes = @('partial_failure', 'cleanup_failed')
+    $terminalDir = Get-WorkerRecoveryTerminalDir -Namespace $Namespace
+    if (Test-Path -LiteralPath $terminalDir) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $terminalDir -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
+            $read = Read-WorkerRecoveryClaimRecord -Path $file.FullName
+            if (-not $read.ok) { continue }
+            if ([string]$read.record.claimKey -ne $ClaimKey) { continue }
+            if ([string]$read.record.outcome -notin $retryOutcomes) { continue }
+            $attempt++
+            if ($read.record.completedAtUtc) {
+                try {
+                    $completedMs = [DateTimeOffset]::Parse([string]$read.record.completedAtUtc).ToUnixTimeMilliseconds()
+                    if ($completedMs -gt $lastAttemptMs) { $lastAttemptMs = $completedMs }
+                }
+                catch { }
+            }
+        }
+    }
+
+    $auditDir = Get-WorkerRecoveryAuditDir -Namespace $Namespace
+    if (Test-Path -LiteralPath $auditDir) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $auditDir -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
+            try {
+                $raw = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
+                $audit = $raw | ConvertFrom-Json -AsHashtable
+            }
+            catch { continue }
+            $auditClaimKey = [string]$audit.claimKey
+            if (-not $auditClaimKey) {
+                $candidate = $audit.candidate
+                if ($candidate -and $candidate.sessionId) {
+                    $auditClaimKey = "worker-$($candidate.sessionId)"
+                }
+            }
+            if ($auditClaimKey -ne $ClaimKey) { continue }
+            if ([string]$audit.finalState -notin $retryOutcomes) { continue }
+            $attempt++
+            if ($audit.recordedAtUtc) {
+                try {
+                    $recordedMs = [DateTimeOffset]::Parse([string]$audit.recordedAtUtc).ToUnixTimeMilliseconds()
+                    if ($recordedMs -gt $lastAttemptMs) { $lastAttemptMs = $recordedMs }
+                }
+                catch { }
+            }
+        }
+    }
+
+    return @{ attempt = $attempt; lastAttemptMs = $lastAttemptMs }
+}
+
 function Enter-WorkerRecoveryMutex {
     param([string]$LockDir)
     try {
@@ -191,12 +325,18 @@ function Acquire-WorkerRecoveryClaim {
     try {
         $existing = Read-WorkerRecoveryClaimRecord -Path $path
         if ($existing.ok) {
-            return @{
-                acquired  = $false
-                reason    = 'claim_exists'
-                path      = $path
-                namespace = $ns
-                record    = $existing.record
+            if (Test-WorkerRecoveryClaimStale -Existing $existing -StaleMinutes (Get-WorkerRecoveryStaleMinutes)) {
+                $null = Move-WorkerRecoveryClaimToTerminal -Namespace $ns -ActivePath $path -Record $existing.record `
+                    -Outcome 'recovered_stale' -Extra @{ recoveredBy = (New-WorkerRecoveryHolder -Surface $Surface) }
+            }
+            else {
+                return @{
+                    acquired  = $false
+                    reason    = 'claim_exists'
+                    path      = $path
+                    namespace = $ns
+                    record    = $existing.record
+                }
             }
         }
         $record = New-WorkerRecoveryActiveRecord -ClaimKey $ClaimKey -Surface $Surface `

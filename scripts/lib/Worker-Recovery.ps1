@@ -118,11 +118,16 @@ function Get-WorkerRecoveryDirtyState {
     Push-Location -LiteralPath $WorktreePath
     try {
         $status = & git status --porcelain 2>$null
+        $ignoredStatus = & git status --ignored --porcelain 2>$null
         $tracked = $false
         $untracked = $false
+        $relevantIgnored = $false
         foreach ($line in @($status)) {
             if ($line -match '^\?\?') { $untracked = $true }
             elseif ($line -match '^[^?]') { $tracked = $true }
+        }
+        foreach ($line in @($ignoredStatus)) {
+            if ($line -match '^!!') { $relevantIgnored = $true; break }
         }
         $unpushed = $false
         $branch = (& git rev-parse --abbrev-ref HEAD 2>$null).Trim()
@@ -139,12 +144,67 @@ function Get-WorkerRecoveryDirtyState {
         return @{
             trackedModifications = $tracked
             untrackedFiles       = $untracked
-            relevantIgnored      = $false
+            relevantIgnored      = $relevantIgnored
             unpushedCommits      = $unpushed
         }
     }
     finally {
         Pop-Location
+    }
+}
+
+function Invoke-WorkerRecoverySpawn {
+    param(
+        [string]$SpawnAction,
+        [int]$IssueNumber = 0,
+        [int]$PrNumber = 0,
+        [string]$PackRoot = '',
+        [hashtable]$SpawnPolicy = $null,
+        [switch]$FixtureMode,
+        [switch]$DryRun
+    )
+
+    if ($DryRun) {
+        return @{ ok = $true; started = $true; reason = 'spawn_started_dry_run'; grantDenied = $false }
+    }
+    if ($FixtureMode) {
+        return @{ ok = $true; started = $true; reason = 'spawn_started_fixture'; grantDenied = $false }
+    }
+
+    $argv = @('spawn')
+    if ($SpawnAction -eq 'claim-pr-resume') {
+        if ($PrNumber -le 0) {
+            return @{ ok = $false; started = $false; reason = 'missing_pr_number'; grantDenied = $true }
+        }
+        $argv += @('--claim-pr', [string]$PrNumber)
+    }
+    elseif ($SpawnAction -eq 'spawn-new') {
+        if ($IssueNumber -le 0) {
+            return @{ ok = $false; started = $false; reason = 'missing_issue_number'; grantDenied = $true }
+        }
+        $argv += @([string]$IssueNumber)
+    }
+    else {
+        return @{ ok = $false; started = $false; reason = 'unknown_spawn_action'; grantDenied = $true }
+    }
+
+    $gate = Test-AutonomousSpawnDenied -Argv $argv -PackRoot $PackRoot -FixturePolicy $SpawnPolicy -FixtureMode:$FixtureMode
+    if ($gate.denied) {
+        return @{ ok = $false; started = $false; reason = [string]$gate.reason; grantDenied = $true }
+    }
+
+    Push-Location -LiteralPath $PackRoot
+    try {
+        & ao @argv
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            return @{ ok = $false; started = $false; reason = "spawn_exit_$exitCode"; grantDenied = $false; exitCode = $exitCode }
+        }
+        return @{ ok = $true; started = $true; reason = 'spawn_started'; grantDenied = $false }
+    }
+    finally {
+        Pop-Location
+        Clear-AutonomousClaimPrResumeActiveMutex
     }
 }
 
@@ -164,6 +224,7 @@ function Invoke-WorkerRecovery {
         [switch]$WorktreePresent,
         [switch]$DryRun,
         [string]$SpawnAction = '',
+        [int]$IssueNumber = 0,
         [int]$PrNumber = 0,
         [hashtable]$SpawnPolicy = $null,
         [switch]$FixtureMode,
@@ -196,6 +257,28 @@ function Invoke-WorkerRecovery {
     $derivedKey = [string]$claimKeyResult.claimKey
 
     $aoBase = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
+    $recoveryNamespace = Resolve-WorkerRecoveryNamespace -ProjectId $ProjectId -Namespace $Namespace
+    $retryState = Get-WorkerRecoveryRetryAttemptState -Namespace $recoveryNamespace -ClaimKey $derivedKey
+    $retryGate = Invoke-WorkerRecoveryCli -Subcommand 'evaluateRetry' -Payload @{
+        attempt       = $retryState.attempt
+        budget        = 3
+        lastAttemptMs = $retryState.lastAttemptMs
+    }
+    if ($retryGate.escalate) {
+        $audit = @{
+            schemaVersion = 'worker-recovery/v1'
+            claimKey      = $derivedKey
+            finalState    = 'escalated'
+            retryAttempt  = $retryState.attempt
+            recordedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-WorkerRecoveryAudit -Namespace $recoveryNamespace -Record $audit
+        return @{ ok = $false; outcome = 'escalated'; reason = $retryGate.reason; audit = $audit }
+    }
+    if (-not $retryGate.shouldRetry -and $retryState.attempt -gt 0) {
+        return @{ ok = $true; outcome = 'no_op'; reason = $retryGate.reason }
+    }
+
     $eligibility = Invoke-WorkerRecoveryCli -Subcommand 'evaluateCleanup' -Payload @{
         projectId        = $ProjectId
         canonicalPath    = $pathCanon.canonical
@@ -281,6 +364,10 @@ function Invoke-WorkerRecovery {
 
     $spawnDecision = 'not_attempted'
     $spawnOutcome = 'spawn_denied'
+    $resolvedIssueNumber = $IssueNumber
+    if ($resolvedIssueNumber -le 0 -and $Session -and $Session.issue) {
+        [void][int]::TryParse([string]$Session.issue, [ref]$resolvedIssueNumber)
+    }
     if (-not $SkipSpawn -and $SpawnAction) {
         $policy = if ($FixtureMode -and $SpawnPolicy) {
             @{ ok = $true; policy = $SpawnPolicy; reason = 'spawn_policy_ok' }
@@ -293,15 +380,37 @@ function Invoke-WorkerRecovery {
             recoveryClaimSessionId = $SessionId
             restUnavailable        = $true
         }
+        $spawnArgv = @('spawn')
+        if ($SpawnAction -eq 'claim-pr-resume') {
+            $spawnArgv += @('--claim-pr', [string]$PrNumber)
+        }
+        elseif ($SpawnAction -eq 'spawn-new') {
+            $spawnArgv += @([string]$resolvedIssueNumber)
+        }
+        $spawnGate = if ($FixtureMode) {
+            @{ denied = $false; reason = 'spawn_policy_ok' }
+        }
+        else {
+            Test-AutonomousSpawnDenied -Argv $spawnArgv -PackRoot $PackRoot -FixturePolicy $SpawnPolicy -FixtureMode:$FixtureMode
+        }
         $route = Invoke-WorkerRecoveryCli -Subcommand 'evaluateSpawnRoute' -Payload @{
             policyLoadOk = [bool]$policy.ok
             policy       = $policy.policy
             spawnAction  = $SpawnAction
-            grantDenied  = $false
+            grantDenied  = [bool]$spawnGate.denied
+            grantReason  = [string]$spawnGate.reason
         }
         if ($freshness.allowed -and $route.allowed) {
-            $spawnDecision = 'spawn_started'
-            $spawnOutcome = if ($DryRun) { 'spawn_started' } else { 'spawn_started' }
+            $spawnResult = Invoke-WorkerRecoverySpawn -SpawnAction $SpawnAction -IssueNumber $resolvedIssueNumber `
+                -PrNumber $PrNumber -PackRoot $PackRoot -SpawnPolicy $policy.policy -FixtureMode:$FixtureMode -DryRun:$DryRun
+            if ($spawnResult.started) {
+                $spawnDecision = 'spawn_started'
+                $spawnOutcome = [string]$spawnResult.reason
+            }
+            else {
+                $spawnDecision = 'spawn_denied'
+                $spawnOutcome = [string]$spawnResult.reason
+            }
         }
         else {
             $spawnDecision = 'spawn_denied'
@@ -317,6 +426,7 @@ function Invoke-WorkerRecovery {
         $finalState = 'partial_failure'
     }
     $recoveryOk = -not ($cleanupAttempted -and -not $cleanupDone)
+    if ($SpawnAction -and $spawnDecision -eq 'spawn_denied') { $recoveryOk = $false }
     $audit = @{
         schemaVersion   = 'worker-recovery/v1'
         attemptId       = $claim.record.attemptId

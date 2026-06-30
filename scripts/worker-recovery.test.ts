@@ -185,6 +185,29 @@ describe('worker recovery claim lifecycle', () => {
     expect(mutexBody).toMatch(/New-Item -ItemType Directory -Path \$LockDir -ErrorAction Stop/);
     expect(mutexBody).not.toMatch(/-Force/);
   });
+
+  it('worker recovery claim lifecycle: recovers stale active claim before claim_exists', () => {
+    const ns = tempNs();
+    const claimKey = 'worker-opk-stale';
+    const canonical = '/tmp/orchestrator-pack/worktrees/opk-stale';
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      Initialize-WorkerRecoveryNamespace -Namespace ${psString(ns)}
+      $path = Get-WorkerRecoveryClaimPath -Namespace ${psString(ns)} -ClaimKey ${psString(claimKey)}
+      $stale = @{
+        schemaVersion='worker-recovery/v1'; claimKey=${psString(claimKey)}; surface='dead'; holder=@{ pid=999999999; host='stale'; processGuid='dead' }
+        acquiredAtUtc='2000-01-01T00:00:00.0000000Z'; canonicalPath=${psString(canonical)}; sessionId='opk-stale'; boundCandidates=@(${psString(canonical)})
+        intent='recovery'; phase='claimed'; attemptId='stale1'
+      }
+      Write-WorkerRecoveryAtomic -Path $path -Record $stale
+      $next = Acquire-WorkerRecoveryClaim -ClaimKey ${psString(claimKey)} -Surface 'test' -CanonicalPath ${psString(canonical)} -SessionId 'opk-stale' -BoundCandidates @(${psString(canonical)})
+      [pscustomobject]@{ acquired = [bool]$next.acquired; reason = [string]$next.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.acquired).toBe(true);
+    expect(result.reason).toBe('claim_acquired');
+  });
 });
 
 describe('worker recovery post-claim revalidation', () => {
@@ -220,10 +243,13 @@ describe('worker recovery post-claim revalidation', () => {
 describe('worker recovery cleanup failure', () => {
   it('worker recovery cleanup failure: non-zero git remove yields partial_failure and ok=false', () => {
     const packRoot = repoRoot;
+    const ns = tempNs();
+    const sessionId = `opk-cleanup-fail-${Date.now()}`;
     const bogusPath = path.join(packRoot, 'worktrees', 'opk-nonexistent-cleanup-fail');
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-nonexistent' -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SkipSpawn -FixtureMode
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SkipSpawn -FixtureMode
       [pscustomobject]@{ ok = [bool]$result.ok; outcome = [string]$result.outcome; cleanup = [bool]$result.cleanup } | ConvertTo-Json -Compress
     `;
     const result = JSON.parse(runPwsh(script));
@@ -250,6 +276,19 @@ describe('worker recovery artifact preservation', () => {
     });
     expect(eligibility.eligible).toBe(false);
     expect(eligibility.outcome).toBe('blocked_dirty_worktree');
+  });
+
+  it('worker recovery artifact preservation: relevant ignored artifacts block blind removal', () => {
+    const blocked = evaluateArtifactPreservation({
+      dirtyState: { trackedModifications: false, untrackedFiles: false, relevantIgnored: true },
+    });
+    expect(blocked.blocked).toBe(true);
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/git status --ignored --porcelain/);
+    expect(recoveryText).toMatch(/\^!!/);
   });
 });
 
@@ -278,6 +317,15 @@ describe('worker recovery bounded retries', () => {
     const retry = evaluateBoundedRetry({ attempt: 3, budget: 3, nowMs: 10_000, lastAttemptMs: 0 });
     expect(retry.shouldRetry).toBe(false);
     expect(retry.escalate).toBe(true);
+  });
+
+  it('worker recovery bounded retries: Invoke-WorkerRecovery applies evaluateRetry before cleanup', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/Get-WorkerRecoveryRetryAttemptState/);
+    expect(recoveryText).toMatch(/evaluateRetry/);
   });
 });
 
@@ -314,11 +362,23 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
     const worktreePath = path.join(packRoot, 'worktrees', 'opk-522');
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
-      [pscustomobject]@{ packRootMatch = ($result.packRoot -eq $result.repoRoot); outcome = $result.outcome } | ConvertTo-Json -Compress
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
+      [pscustomobject]@{ packRootMatch = ($result.packRoot -eq $result.repoRoot); outcome = $result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));
     expect(result.packRootMatch).toBe(true);
+    expect(result.spawn).toBe('spawn_started');
+  });
+
+  it('worker recovery spawn invokes ao through Invoke-WorkerRecoverySpawn', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/function Invoke-WorkerRecoverySpawn/);
+    expect(recoveryText).toMatch(/Test-AutonomousSpawnDenied/);
+    expect(recoveryText).toMatch(/& ao @argv/);
+    expect(recoveryText).toMatch(/grantDenied\s*=\s*\[bool\]\$spawnGate\.denied/);
   });
 });
 
