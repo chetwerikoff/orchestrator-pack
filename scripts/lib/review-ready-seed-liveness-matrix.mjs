@@ -5,6 +5,7 @@
 export const REVIEW_READY_SEED_LIVENESS_MATRIX = [
   { expected: 'fast-tick-ok', fixture: 'fast-tick-ok.json' },
   { expected: 'long-tick-not-stalled', fixture: 'long-tick-not-stalled.json' },
+  { expected: 'refresh-github-detail-progress', fixture: 'refresh-github-detail-progress.json' },
   { expected: 'stale-poll-regression', fixture: 'stale-poll-regression.json' },
   { expected: 'hang-still-stalled', fixture: 'hang-still-stalled.json' },
   { expected: 'tick-error-classified', fixture: 'tick-error-classified.json' },

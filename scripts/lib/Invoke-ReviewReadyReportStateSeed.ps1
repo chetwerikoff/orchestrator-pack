@@ -117,25 +117,56 @@ function Test-ReviewReadyReportStateSeedGitHubSnapshotStale {
     return (($cached -join ',') -ne ($tracked -join ','))
 }
 
+function Write-ReviewReadyReportStateSeedGitHubRefreshProgress {
+    param(
+        [scriptblock]$ProgressWriter = $null,
+        [string]$Step,
+        [int]$Ordinal = 0
+    )
+
+    if (-not $ProgressWriter) {
+        return
+    }
+
+    $detail = "refresh_github_$Step"
+    if ($Ordinal -gt 0) {
+        $detail = "${detail}_$Ordinal"
+    }
+    & $ProgressWriter @{
+        WorkStep   = $detail
+        WorkCursor = 4
+        WorkTotal  = Get-ReviewReadyReportStateSeedWorkTotal
+    }
+}
+
 function New-ReviewReadyReportStateSeedGitHubSnapshot {
     param(
         [string]$RepoRoot,
         [array]$TrackedPrNumbers,
-        [long]$NowMs
+        [long]$NowMs,
+        [scriptblock]$ProgressWriter = $null
     )
 
+    $refreshProgress = {
+        param([string]$Step, [int]$Ordinal = 0)
+        Write-ReviewReadyReportStateSeedGitHubRefreshProgress -ProgressWriter $ProgressWriter -Step $Step -Ordinal $Ordinal
+    }.GetNewClosure()
+
+    & $refreshProgress 'start'
     $openPrs = if (@($TrackedPrNumbers).Count -gt 0) {
-        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers))
+        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -ProgressWriter $refreshProgress)
     }
     else {
         @()
     }
 
+    & $refreshProgress 'checks_start'
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $openPrs -MergeRequiredNames {
         param($payload)
         Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
             -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
-    }
+    } -ProgressWriter $refreshProgress
+    & $refreshProgress 'done'
 
     return @{
         fetchedAtMs                   = $NowMs
@@ -153,13 +184,14 @@ function Resolve-ReviewReadyReportStateSeedGitHubSnapshot {
         [array]$Sessions,
         [string]$SupervisedProject,
         $CachedSnapshot,
-        [long]$NowMs
+        [long]$NowMs,
+        [scriptblock]$ProgressWriter = $null
     )
 
     $trackedPrNumbers = @(Get-ReviewReadyReportStateSeedTrackedPrNumbers -Sessions $Sessions -SupervisedProject $SupervisedProject)
     $refreshIntervalMs = Get-ReviewReadyReportStateSeedGitHubRefreshIntervalMs
     if (Test-ReviewReadyReportStateSeedGitHubSnapshotStale -Snapshot $CachedSnapshot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -RefreshIntervalMs $refreshIntervalMs) {
-        return (New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot $RepoRoot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs)
+        return (New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot $RepoRoot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -ProgressWriter $ProgressWriter)
     }
 
     return $CachedSnapshot
@@ -227,7 +259,8 @@ function Invoke-ReviewReadyReportStateSeedTick {
             -Sessions $sessions `
             -SupervisedProject $ProjectId `
             -CachedSnapshot $seedState.githubSnapshot `
-            -NowMs $nowMs
+            -NowMs $nowMs `
+            -ProgressWriter $ProgressWriter
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs $githubSnapshot.openPrs
         $checksBundle = @{
             ciChecksByPr                  = $githubSnapshot.ciChecksByPr
@@ -371,15 +404,31 @@ function Invoke-ReviewReadyReportStateSeedTick {
         }
         else {
             $plannedRunParams['ResolveFreshSnapshot'] = {
-                param($planned)
-                $freshOpenPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @([int]$planned.prNumber))
-                $scoped = @($freshOpenPrs)
+                param($planned, $claimResult)
+                $prNumber = [int]$planned.prNumber
+                $transportFailure = $null
+                if ($claimResult -and $claimResult.acquired) {
+                    . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
+                    $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claimResult -RepoRoot $RepoRoot -GhArguments @(
+                        'pr', 'view', [string]$prNumber, '--json', 'number,headRefOid,baseRefName'
+                    )
+                    if (-not $transport.ok) {
+                        $transportFailure = $transport
+                        $scoped = @()
+                    }
+                    else {
+                        $scoped = @($transport.stdout | ConvertFrom-Json)
+                    }
+                }
+                else {
+                    $scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($prNumber))
+                }
                 $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
                     param($payload)
                     Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
                         -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
                 }
-                @{
+                $freshSnapshot = @{
                     openPrs                       = $scoped
                     reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
                     sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
@@ -388,6 +437,10 @@ function Invoke-ReviewReadyReportStateSeedTick {
                     requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
                     nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 }
+                if ($null -ne $transportFailure) {
+                    $freshSnapshot.transportFailure = $transportFailure
+                }
+                $freshSnapshot
             }
         }
         $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams

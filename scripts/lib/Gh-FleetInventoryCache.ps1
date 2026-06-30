@@ -15,6 +15,18 @@ $Script:GhFleetPopulatePollMilliseconds = 50
 $Script:GhFleetPopulateLockMaxAgeSeconds = 120
 $Script:GhFleetRepoSlugByRoot = @{}
 
+function Format-GhFleetOpenPrListFailure {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('snapshot_populate_failed', 'child_list_bypass')]
+        [string]$Kind,
+        [Parameter(Mandatory = $true)]
+        [string]$InnerMessage
+    )
+
+    return "${Kind}: $InnerMessage"
+}
+
 function Write-GhFleetInventoryCacheAudit {
     param(
         [string]$Event,
@@ -380,16 +392,18 @@ function Invoke-GhFleetCachedOpenPrListRaw {
 
                 Push-Location -LiteralPath $RepoRoot
                 try {
-                    $prs = Invoke-GhFleetFetchOpenPrListUpstream
+                    $prs = Invoke-GhFleetFetchOpenPrListUpstream -FailureKind 'snapshot_populate_failed'
                 }
                 catch {
+                    $failureMessage = Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
                     $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
                     Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope @{
                         storedAt  = (Get-Date).ToUniversalTime().ToString('o')
                         expiresAt = $expiresAt
-                        error     = $_.Exception.Message
+                        error     = $failureMessage
                     }
-                    throw
+                    Write-GhFleetInventoryCacheAudit -Event 'snapshot_populate_failed' -Fields @{ key = $cacheKey; message = $failureMessage }
+                    throw $failureMessage
                 }
                 finally {
                     Pop-Location
@@ -423,20 +437,23 @@ function Invoke-GhFleetCachedOpenPrListRaw {
         }
     }
 
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_failthrough' -Fields @{ key = $cacheKey }
-        return Invoke-GhFleetFetchOpenPrListUpstream
-    }
-    finally {
-        Pop-Location
-    }
+    Write-GhFleetInventoryCacheAudit -Event 'child_list_bypass' -Fields @{ key = $cacheKey }
+    throw (Format-GhFleetOpenPrListFailure -Kind 'child_list_bypass' -InnerMessage "open-PR list must read shared snapshot (key=$cacheKey)")
 }
 
 function Invoke-GhFleetFetchOpenPrListUpstream {
+    param(
+        [ValidateSet('snapshot_populate_failed', 'gh_pr_list_failed')]
+        [string]$FailureKind = 'gh_pr_list_failed'
+    )
+
     $raw = gh pr list --state open --json number,headRefOid,baseRefName --limit 200 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "gh pr list failed (exit $LASTEXITCODE): $raw"
+        $detail = "gh pr list failed (exit $LASTEXITCODE): $raw"
+        if ($FailureKind -eq 'snapshot_populate_failed') {
+            throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $detail)
+        }
+        throw $detail
     }
 
     if (-not $raw) {

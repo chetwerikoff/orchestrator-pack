@@ -64,7 +64,7 @@ function trimRuleSurfaceCommand(fragment) {
  * @param {string} line
  */
 function isProhibitionDocLine(line) {
-  return /MUST NOT|Forbidden transports|forbidden transport|Do not run|Do not use|bypass the wrapper|temporary `gh` shims/i.test(line);
+  return /MUST NOT|Forbidden transports|forbidden transport|Do not run|Do not use|bypass the wrapper|temporary `?gh`? shims|do not create temp|do not author|workarounds\.|workarounds here|author `\/tmp\/gh-rest-bin|direct bash REST branches in `scripts\/gh`/i.test(line);
 }
 
 /**

@@ -913,6 +913,24 @@ else {
     Add-Failure 'Missing gh inventory static guard (Issue #431)'
 }
 
+Write-Host ''
+Write-Host '== PowerShell $Pid parameter static guard (Issue #534) =='
+$powershellPidParamCheck = Join-Path $Root 'scripts/check-powershell-pid-param-static.ps1'
+if (Test-Path -LiteralPath $powershellPidParamCheck -PathType Leaf) {
+    & $powershellPidParamCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'PowerShell $Pid parameter static guard failed (Issue #534)'
+    }
+}
+else {
+    Write-Check 'scripts/check-powershell-pid-param-static.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing PowerShell $Pid parameter static guard (Issue #534)'
+}
+
 Write-Check 'verify-runtime/gh-wrapper-vitest' 'SKIP' 'owned by scripts/check-gh-wrapper.ps1 + full Vitest lane (Issue #488)'
 
 
@@ -1236,6 +1254,22 @@ else {
     Add-Failure 'Missing autonomous review-start capability check (Issue #318)'
 }
 
+$envelopeLedgerStarterCheck = Join-Path $Root 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1'
+if (Test-Path -LiteralPath $envelopeLedgerStarterCheck -PathType Leaf) {
+    & $envelopeLedgerStarterCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Review-start envelope ledger starter-surface supervised gh guard failed (Issue #516)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-start-envelope-ledger-starter-surfaces.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-start envelope ledger starter-surface guard (Issue #516)'
+}
+
 $autonomousBoundaryCheck = Join-Path $Root 'scripts/check-autonomous-orchestrator-boundary.ps1'
 if (Test-Path -LiteralPath $autonomousBoundaryCheck -PathType Leaf) {
     & $autonomousBoundaryCheck
@@ -1331,6 +1365,55 @@ else {
     Add-Failure 'Missing orchestrator review-start gate preflight (Issue #318)'
 }
 
+
+Write-Host '== command-runtime bootstrap (Issue #532) =='
+$commandRuntimeWiring = Join-Path $Root 'scripts/check-command-runtime-bootstrap.ps1'
+if (Test-Path -LiteralPath $commandRuntimeWiring -PathType Leaf) {
+    & $commandRuntimeWiring
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime bootstrap wiring failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/check-command-runtime-bootstrap.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime bootstrap wiring check (Issue #532)'
+}
+
+$commandRuntimeForbidden = Join-Path $Root 'scripts/check-command-runtime-forbidden-workaround.ps1'
+if (Test-Path -LiteralPath $commandRuntimeForbidden -PathType Leaf) {
+    & $commandRuntimeForbidden
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime forbidden-workaround guard failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/check-command-runtime-forbidden-workaround.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime forbidden-workaround guard (Issue #532)'
+}
+
+$commandRuntimePreflight = Join-Path $Root 'scripts/orchestrator-command-runtime-preflight.ps1'
+if (Test-Path -LiteralPath $commandRuntimePreflight -PathType Leaf) {
+    & $commandRuntimePreflight -FixtureMode
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Command-runtime bootstrap preflight failed (Issue #532)'
+    }
+}
+else {
+    Write-Check 'scripts/orchestrator-command-runtime-preflight.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing command-runtime bootstrap preflight (Issue #532)'
+}
 
 Write-Host '== worker nudge gate (Issue #384) =='
 $workerNudgeGateCheck = Join-Path $Root 'scripts/check-worker-nudge-gate.ps1'

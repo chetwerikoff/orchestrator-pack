@@ -552,6 +552,14 @@ function Move-ReviewStartClaimToTerminal {
     $target = Join-Path (Get-ReviewStartClaimTerminalDir -Namespace $Namespace) $name
     ($terminal | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $target -Encoding UTF8
     Prune-ReviewStartClaimTerminalRecords -Namespace $Namespace
+    try {
+        . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+        Sync-ReviewStartEnvelopeLedgerFromTerminal -Namespace $Namespace -ActivePath $ActivePath -Record $Record `
+            -Outcome $Outcome -Extra $Extra | Out-Null
+    }
+    catch {
+        Write-Warning "review-start-envelope-ledger sync failed for outcome=${Outcome}: $_"
+    }
     Remove-Item -LiteralPath $ActivePath -Force -ErrorAction SilentlyContinue
     return $target
 }
@@ -732,6 +740,14 @@ function Resolve-ReviewStartClaimAgainstExisting {
             }
             return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $terminalPath; namespace = $Namespace; key = $Existing.record.key }
         }
+        try {
+            . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+            Reset-ReviewStartEnvelopeLedgerForCoveredHead -Namespace $Namespace -PrNumber $PrNumber -HeadSha $Normalized `
+                -ReviewRuns $ReviewRuns | Out-Null
+        }
+        catch {
+            Write-Warning "review-start-envelope-ledger covered-head reset failed: $_"
+        }
         return @{ acquired = $false; reason = 'covered_by_run'; holder = $Existing.record.holder; claim = $Existing.record; path = $Path; namespace = $Namespace; key = $Existing.record.key }
     }
 
@@ -905,6 +921,61 @@ function Release-ReviewStartClaimAfterRunFailure {
         return Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'released_for_retry' -ReviewRuns $ReviewRuns -Extra @{ failure = $Failure }
     }
     return Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'escalated_ambiguous' -ReviewRuns @() -Extra @{ failure = $Failure; reason = 'post_exit_state_ambiguous' }
+}
+
+function Get-ReviewStartSupervisedGhInfraTransportFailure {
+    param([object]$TransportFailure)
+
+    if (-not $TransportFailure -or $TransportFailure.ok) { return $null }
+    $failureClass = [string]$TransportFailure.failureClass
+    if (-not $failureClass -and $TransportFailure.classification) {
+        $failureClass = [string]$TransportFailure.classification.failureClass
+    }
+    if ($failureClass -ne 'infra_transport') { return $null }
+    return @{
+        failureClass     = 'infra_transport'
+        transportFailure = $TransportFailure
+    }
+}
+
+function Get-ReviewStartSupervisedGhInfraTransportRecheckDenial {
+    param([hashtable]$Snapshot)
+
+    $infra = Get-ReviewStartSupervisedGhInfraTransportFailure -TransportFailure $Snapshot.transportFailure
+    if (-not $infra) { return $null }
+    return @{
+        emitReviewRun              = $false
+        reason                     = 'supervised_gh_transport_failure'
+        supervisedGhInfraTransport = $true
+        transportFailure           = $infra.transportFailure
+    }
+}
+
+function Complete-ReviewStartClaimPreRunRecheckDenied {
+    param(
+        [hashtable]$ClaimResult,
+        [hashtable]$Recheck,
+        [array]$ReviewRuns = @(),
+        [switch]$DryRun
+    )
+
+    if ($Recheck.supervisedGhInfraTransport) {
+        if (-not $DryRun -and $ClaimResult -and $ClaimResult.acquired) {
+            Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'released_for_retry' -ReviewRuns $ReviewRuns -Extra @{
+                reason           = [string]$Recheck.reason
+                failureClass     = 'infra_transport'
+                transportFailure = $Recheck.transportFailure
+            } | Out-Null
+        }
+        return @{ outcome = 'released_for_retry'; reason = [string]$Recheck.reason }
+    }
+
+    if (-not $DryRun -and $ClaimResult -and $ClaimResult.acquired) {
+        Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'aborted_by_recheck' -ReviewRuns $ReviewRuns -Extra @{
+            reason = [string]$Recheck.reason
+        } | Out-Null
+    }
+    return @{ outcome = 'aborted_by_recheck'; reason = [string]$Recheck.reason }
 }
 
 function Release-ReviewStartClaimAfterRecheckException {

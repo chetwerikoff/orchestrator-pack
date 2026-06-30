@@ -328,6 +328,26 @@ Operator adoption: follow the Issue #318 section above (shared marker + PATH shi
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
 
+## Autonomous orchestrator command-runtime bootstrap (Issue #532)
+
+Operator adoption after merge:
+
+1. Ensure orchestrator `agentConfig.env.PATH` still prepends pack `scripts/` and `BASH_ENV` points at
+   `scripts/autonomous-orchestrator-surface-bootstrap.sh` (same channel as Issues #318 / #406).
+2. `ao stop` then `ao start` from the operator terminal (not from a managed session).
+3. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1` — must pass.
+4. Run wiring guard: `pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1` — must pass.
+5. Run forbidden-workaround guard:
+   `pwsh -NoProfile -File scripts/check-command-runtime-forbidden-workaround.ps1` — must pass.
+6. From an orchestrator bash turn, confirm missing `pwsh` / incomplete PATH fails before side effects
+   with `command-runtime-bootstrap: missing tool …` and does **not** invite temp `gh` wrappers.
+
+Temporary operator REST unblock branches that may remain in `scripts/gh` are still owned by Issues
+**#530/#531** until inventory routes land.
+
+Command-runtime failures that imply worker cleanup/respawn route to Issues **#522/#527** — do not
+improvise alternate recovery from the command runtime.
+
 ## Autonomous orchestrator spawn policy (Issue #458)
 
 Committed spawn policy lives in `docs/autonomous-spawn-policy.json` with explicit default-on toggles
@@ -1118,6 +1138,26 @@ Measured missed-savings follow-up to #145. No passthrough manifest change on the
    guidance in `prompts/agent_rules.md`.
 
 Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
+
+
+## Wake-supervisor open-PR snapshot no-child bypass (Issue #553)
+
+Wake-supervisor children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,
+`review-send-reconcile`, `review-finding-delivery-confirm`, `ci-failure-notification-reconcile`,
+`ci-failure-notification-reaction`) must consume the shared REST-backed open-PR snapshot from
+`AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/` and must not fail through to per-child upstream
+`gh pr list` when the snapshot is warm. Producer REST `403` surfaces as
+`snapshot_populate_failed`; child bypass attempts surface as `child_list_bypass`.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop`
+2. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Wait ≥120s, then `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status`
+4. During a warm snapshot window, affected child logs must not repeat
+   `gh pr list failed ... gh-wrapper: REST route failed ... (HTTP 403)` per tick.
+5. If a single producer `403` remains after duplicate child list calls are gone, track via the
+   existing Phase 2 hard-gate path (`#142`) — not this issue.
 
 ## Operator adoption contract
 

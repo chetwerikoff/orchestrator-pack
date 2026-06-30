@@ -1,5 +1,5 @@
 {
-  "vitestShardCount": 4,
+  "vitestShardCount": 8,
   "aggregateJobName": "Run pack contract tests",
   "typecheckJobName": "Type-check pack sources",
   "vitestShardJobPrefix": "Vitest shard",

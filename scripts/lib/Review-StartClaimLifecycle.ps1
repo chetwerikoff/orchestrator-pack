@@ -136,6 +136,14 @@ function Confirm-ReviewStartClaimLaunchGate {
         $reason = if ([string]$pending.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$pending.reason }
         return @{ ok = $false; reason = $reason }
     }
+    try {
+        . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
+        Reset-ReviewStartEnvelopeLedgerForPreflightSuccess -Namespace $ClaimResult.namespace `
+            -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha) | Out-Null
+    }
+    catch {
+        Write-Warning "review-start-envelope-ledger preflight reset failed: $_"
+    }
     return @{ ok = $true }
 }
 
@@ -596,12 +604,12 @@ function Sync-ReviewStartClaimReclaimBeforeSkip {
 
 
 function Stop-ReviewStartSupervisedGhChild {
-    param([int]$Pid)
-    if ($Pid -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
     try {
-        $proc = Get-Process -Id $Pid -ErrorAction Stop
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
         if ($proc -and -not $proc.HasExited) {
-            Stop-Process -Id $Pid -Force -ErrorAction Stop
+            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
             return @{ stopped = $true }
         }
         return @{ stopped = $false; reason = 'already_exited' }
@@ -638,7 +646,7 @@ function Invoke-ReviewStartClaimOwnershipLossCleanup {
     }
 
     if ($stalePid -gt 0) {
-        Stop-ReviewStartSupervisedGhChild -Pid $stalePid | Out-Null
+        Stop-ReviewStartSupervisedGhChild -ProcessId $stalePid | Out-Null
     }
 }
 

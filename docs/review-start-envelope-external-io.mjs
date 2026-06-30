@@ -18,7 +18,7 @@ function normalizeHeadSha(headSha) {
   return String(headSha ?? '').trim().toLowerCase();
 }
 
-function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
+export function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
   const normalized = normalizeHeadSha(headSha);
   if (!normalized) return null;
   for (const run of Array.isArray(reviewRuns) ? reviewRuns : []) {
