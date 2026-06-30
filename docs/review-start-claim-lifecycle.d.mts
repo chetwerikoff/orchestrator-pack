@@ -35,7 +35,6 @@ export function findCoveringRunForKey(
   reviewRuns: unknown[],
   prNumber: number,
   headSha: string,
-  projectNamespace?: string,
 ): { run: Record<string, unknown>; status: string; runId: string } | null;
 
 export function hasInFlightCoveringRun(
