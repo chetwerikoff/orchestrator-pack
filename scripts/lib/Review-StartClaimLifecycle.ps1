@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartEnvelopeExternalIo.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimRunBinding.ps1')
 
 $Script:ReviewStartClaimLifecycleCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-claim-lifecycle.mjs'
 
@@ -116,6 +117,13 @@ function Confirm-ReviewStartClaimLaunchGate {
     )
 
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
+    $bindingProjectId = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult
+    $bindingGate = Test-AutomatedReviewLaunchClaimGate -ClaimResult $ClaimResult -PrNumber ([int]$ClaimResult.claim.prNumber) `
+        -HeadSha ([string]$ClaimResult.claim.headSha) -ProjectId $bindingProjectId
+    if (-not $bindingGate.ok) {
+        if ($LogWriter) { & $LogWriter "review-start-claim: launch binding denied key=$($ClaimResult.key) reason=$($bindingGate.reason)" }
+        return @{ ok = $false; reason = [string]$bindingGate.reason; bindingGate = $bindingGate.gate }
+    }
     $holdStart = Set-ReviewStartClaimHoldStarted -ClaimResult $ClaimResult
     if (-not $holdStart.ok) {
         $reason = if ([string]$holdStart.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$holdStart.reason }
@@ -375,15 +383,18 @@ function Invoke-ReviewStartClaimReclaimOrphan {
         [object]$Record,
         [array]$ReviewRuns = @(),
         [string]$DecisionSource = 'reclaim',
+        [string]$ProjectId = '',
         [scriptblock]$LogWriter = $null
     )
 
+    $bindingProjectId = if ([string]$ProjectId) { [string]$ProjectId } else { Resolve-ReviewStartClaimProjectIdFromNamespace -Namespace $Namespace }
     $decision = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'evaluate' -Payload @{
         claim                       = $Record
         reviewRuns                  = @($ReviewRuns)
         localHost                   = Get-ReviewStartClaimLocalHostName
         nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         postAcquireSideEffectAudit  = (Test-ReviewStartClaimPostAcquireSideEffectAudit -Namespace $Namespace -ClaimKey ([string]$Record.key))
+        projectNamespace            = $bindingProjectId
     }
     if ($decision.action -eq 'skip' -or $decision.action -eq 'block') {
         return @{ reclaimed = $false; decision = $decision }
@@ -392,6 +403,24 @@ function Invoke-ReviewStartClaimReclaimOrphan {
         $result = Mark-ReviewStartClaimForeignHolderBlocking -Namespace $Namespace -Path $Path -Record $Record `
             -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns -LogWriter $LogWriter
         return @{ reclaimed = $false; manual = $true; blocking = $true; result = $result; decision = $decision }
+    }
+    if ($decision.action -eq 'reconcile') {
+        $outcome = [string]$decision.outcome
+        $extra = @{ reason = [string]$decision.reason }
+        if ($decision.runId) { $extra.boundRunId = [string]$decision.runId }
+        if ($decision.binding) { $extra.binding = $decision.binding }
+        $claimResult = @{
+            acquired  = $true
+            namespace = $Namespace
+            path      = $Path
+            claim     = $Record
+            key       = [string]$Record.key
+        }
+        $result = Complete-ReviewStartClaim -ClaimResult $claimResult -Outcome $outcome -ReviewRuns @($ReviewRuns) -Extra $extra
+        if ($LogWriter) {
+            & $LogWriter "review-start-claim-run-binding: reconciled key=$($Record.key) outcome=$outcome reason=$($decision.reason)"
+        }
+        return @{ action = 'reconcile'; outcome = $outcome; reason = [string]$decision.reason; result = $result }
     }
     if ($decision.action -eq 'terminalize') {
         $result = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $Namespace -Path $Path -Record $Record `
@@ -417,9 +446,10 @@ function Invoke-ReviewStartClaimReaperSweep {
     Initialize-ReviewStartClaimNamespace -Namespace $resolved
     $active = @(Get-ReviewStartClaimActiveRecords -Namespace $resolved)
     $sweep = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'sweep' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
-        activeClaims = @($active)
-        reviewRuns   = @($ReviewRuns)
-        localHost    = Get-ReviewStartClaimLocalHostName
+        activeClaims     = @($active)
+        reviewRuns       = @($ReviewRuns)
+        localHost        = Get-ReviewStartClaimLocalHostName
+        projectNamespace = $ProjectId
     })
     $results = @()
     foreach ($entry in @($sweep.actions)) {
@@ -433,7 +463,7 @@ function Invoke-ReviewStartClaimReaperSweep {
             continue
         }
         $reclaim = Invoke-ReviewStartClaimReclaimOrphan -Namespace $resolved -Path $path -Record $claim `
-            -ReviewRuns $ReviewRuns -DecisionSource 'reaper' -LogWriter $LogWriter
+            -ReviewRuns $ReviewRuns -DecisionSource 'reaper' -ProjectId $ProjectId -LogWriter $LogWriter
         $results += @{
             key       = $key
             action    = $decision.action

@@ -53,6 +53,8 @@ $paths = @(
     'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
     'scripts/lib/Orchestrator-AutonomousBoundary.ps1',
     'docs/orchestrator-claimed-review-run.mjs',
+    'docs/review-start-claim-run-binding.mjs',
+    'scripts/lib/Review-StartClaimRunBinding.ps1',
     'docs/autonomous-orchestrator-boundary.mjs',
     'docs/autonomous-review-start-capabilities.json',
     'docs/autonomous-real-binaries.example.json'
