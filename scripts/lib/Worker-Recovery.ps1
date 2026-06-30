@@ -368,7 +368,7 @@ function Invoke-WorkerRecovery {
     if ($resolvedIssueNumber -le 0 -and $Session -and $Session.issue) {
         [void][int]::TryParse([string]$Session.issue, [ref]$resolvedIssueNumber)
     }
-    if (-not $SkipSpawn -and $SpawnAction) {
+    if (-not $SkipSpawn -and $SpawnAction -and -not ($cleanupAttempted -and -not $cleanupDone)) {
         $policy = if ($FixtureMode -and $SpawnPolicy) {
             @{ ok = $true; policy = $SpawnPolicy; reason = 'spawn_policy_ok' }
         }

@@ -257,6 +257,34 @@ describe('worker recovery cleanup failure', () => {
     expect(result.outcome).toBe('partial_failure');
     expect(result.cleanup).toBe(false);
   });
+
+  it('worker recovery cleanup failure: does not spawn when worktree removal fails', () => {
+    const packRoot = repoRoot;
+    const ns = tempNs();
+    const sessionId = `opk-cleanup-no-spawn-${Date.now()}`;
+    const bogusPath = path.join(packRoot, 'worktrees', 'opk-nonexistent-cleanup-no-spawn');
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
+      [pscustomobject]@{ ok = [bool]$result.ok; outcome = [string]$result.outcome; cleanup = [bool]$result.cleanup; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe('partial_failure');
+    expect(result.cleanup).toBe(false);
+    expect(result.spawn).toBe('not_attempted');
+  });
+
+  it('worker recovery cleanup failure: spawn block skips when cleanup failed', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(
+      /if \(-not \$SkipSpawn -and \$SpawnAction -and -not \(\$cleanupAttempted -and -not \$cleanupDone\)\)/,
+    );
+  });
 });
 
 describe('worker recovery artifact preservation', () => {
@@ -380,6 +408,38 @@ describe('worker recovery git allow binding', () => {
     });
     expect(denied.allowed).toBe(false);
     expect(denied.reason).toBe('target_not_in_claim_set');
+  });
+
+  it('sanctioned worker recovery parent: exact script leaf match denies substring spoof', () => {
+    const ns = tempNs();
+    const canonical = '/tmp/orchestrator-pack/worktrees/opk-parent-spoof';
+    const claimKey = 'worker-opk-parent-spoof';
+    const script = `
+      $ErrorActionPreference = 'Stop'
+      . '${path.join(repoRoot, 'scripts/lib/Autonomous-WorkerRecoveryGate.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $claim = Acquire-WorkerRecoveryClaim -ClaimKey ${psString(claimKey)} -Surface 'test' -CanonicalPath ${psString(canonical)} -BoundCandidates @(${psString(canonical)}) -Namespace ${psString(ns)}
+      if (-not $claim.acquired) { throw 'expected claim acquisition' }
+      $argv = @('worktree','remove','--force',${psString(canonical)})
+      $spoof = Test-AutonomousWorkerRecoveryGitAllow -Argv $argv -FixtureParentChain @('pwsh -File scripts/run-pack-review.ps1 --note invoke-worker-recovery.ps1') -Namespace ${psString(ns)}
+      $blessed = Test-AutonomousWorkerRecoveryGitAllow -Argv $argv -FixtureParentChain @('pwsh -File scripts/invoke-worker-recovery.ps1 -SessionId opk-spoof') -Namespace ${psString(ns)}
+      [pscustomobject]@{ spoofAllowed = [bool]$spoof.allowed; spoofReason = [string]$spoof.reason; blessedAllowed = [bool]$blessed.allowed; blessedReason = [string]$blessed.reason } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.spoofAllowed).toBe(false);
+    expect(result.spoofReason).toBe('missing_recovery_parent');
+    expect(result.blessedAllowed).toBe(true);
+    expect(result.blessedReason).toBe('recovery_worktree_remove_allow');
+  });
+
+  it('sanctioned worker recovery parent: gate uses exact script leaf not substring match', () => {
+    const gateText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Autonomous-WorkerRecoveryGate.ps1'),
+      'utf8',
+    );
+    expect(gateText).toMatch(/Split-WorkerRecoveryGateCommandLineTokens/);
+    expect(gateText).toMatch(/Split-Path -Leaf/);
+    expect(gateText).not.toMatch(/-match \[regex\]::Escape\(\$Script:WorkerRecoveryParentPattern\)/);
   });
 });
 

@@ -9,6 +9,62 @@
 $Script:WorkerRecoveryCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs'
 $Script:WorkerRecoveryParentPattern = 'invoke-worker-recovery.ps1'
 
+function Split-WorkerRecoveryGateCommandLineTokens {
+    param([string]$CommandLine)
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    if (-not $CommandLine) {
+        return @()
+    }
+
+    $current = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    for ($index = 0; $index -lt $CommandLine.Length; $index++) {
+        $char = $CommandLine[$index]
+        if ($char -eq "'" -and -not $inDouble) {
+            $inSingle = -not $inSingle
+            continue
+        }
+        if ($char -eq '"' -and -not $inSingle) {
+            $inDouble = -not $inDouble
+            continue
+        }
+        if ([char]::IsWhiteSpace($char) -and -not $inSingle -and -not $inDouble) {
+            if ($current.Length -gt 0) {
+                $tokens.Add($current.ToString())
+                $current.Clear() | Out-Null
+            }
+            continue
+        }
+        [void]$current.Append($char)
+    }
+    if ($current.Length -gt 0) {
+        $tokens.Add($current.ToString())
+    }
+    return ,@($tokens.ToArray())
+}
+
+function Test-ProcessCommandLineIsWorkerRecoveryParent {
+    param([string]$CommandLine)
+
+    if (-not $CommandLine) { return $false }
+    $tokens = Split-WorkerRecoveryGateCommandLineTokens -CommandLine $CommandLine
+    if ($tokens.Count -eq 0) { return $false }
+
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        if ($tokens[$index] -ieq '-File' -and ($index + 1) -lt $tokens.Count) {
+            $scriptLeaf = Split-Path -Leaf ($tokens[$index + 1].Trim('"').Trim("'"))
+            if ($scriptLeaf -ieq $Script:WorkerRecoveryParentPattern) {
+                return $true
+            }
+        }
+    }
+
+    $firstLeaf = Split-Path -Leaf ($tokens[0].Trim('"').Trim("'"))
+    return ($firstLeaf -ieq $Script:WorkerRecoveryParentPattern)
+}
+
 function Invoke-WorkerRecoveryBoundaryCli {
     param(
         [string]$Subcommand,
@@ -16,12 +72,6 @@ function Invoke-WorkerRecoveryBoundaryCli {
     )
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery-gate' -JsonDepth 30
-}
-
-function Test-ProcessCommandLineIsWorkerRecoveryParent {
-    param([string]$CommandLine)
-    if (-not $CommandLine) { return $false }
-    return [string]$CommandLine -match [regex]::Escape($Script:WorkerRecoveryParentPattern)
 }
 
 function Test-AutonomousWorkerRecoveryGitAllow {
