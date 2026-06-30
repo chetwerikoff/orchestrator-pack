@@ -121,4 +121,24 @@ describe('review-start-supervised-gh-pid', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('static guard fails on $Pid parameter preceded by line comment', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pid-param-guard-comment-'));
+    const fixtureFile = path.join(dir, 'bad-helper.ps1');
+    try {
+      writeFileSync(
+        fixtureFile,
+        "function Bad-Helper {\n  param(\n    # process id\n    [int]$Pid\n  )\n}\n",
+        'utf8',
+      );
+      const result = spawnSync('pwsh', ['-NoProfile', '-File', guardPath, '-ScriptsRoot', dir], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('[FAIL]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

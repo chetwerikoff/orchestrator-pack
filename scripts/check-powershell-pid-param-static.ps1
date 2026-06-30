@@ -99,10 +99,38 @@ function Split-ParamSegments {
     return $segments
 }
 
+function Remove-LeadingParamSegmentComments {
+    param([string]$Segment)
+
+    $rest = $Segment
+    while ($true) {
+        $rest = $rest.TrimStart()
+        if (-not $rest) { return '' }
+
+        if ($rest.StartsWith('#')) {
+            $newline = $rest.IndexOf("`n")
+            if ($newline -lt 0) { return '' }
+            $rest = $rest.Substring($newline + 1)
+            continue
+        }
+
+        if ($rest.StartsWith('<#')) {
+            $end = $rest.IndexOf('#>')
+            if ($end -lt 0) { return '' }
+            $rest = $rest.Substring($end + 2)
+            continue
+        }
+
+        break
+    }
+
+    return $rest
+}
+
 function Test-ParamSegmentDeclaresPid {
     param([string]$Segment)
 
-    $rest = $Segment.Trim()
+    $rest = Remove-LeadingParamSegmentComments -Segment $Segment
     if (-not $rest) { return $false }
 
     while ($rest.StartsWith('[')) {
