@@ -42,16 +42,39 @@ function New-ReviewReadyReportStateSeedProgressWriter {
     $total = Get-ReviewReadyReportStateSeedWorkTotal
     $workPlan = @($Script:ReviewReadyReportStateSeedWorkPlan)
     $writeBlock = {
-        param([string]$WorkStep)
+        param($WorkStep)
 
-        $index = [array]::IndexOf($workPlan, $WorkStep)
-        if ($index -lt 0) {
-            $index = 0
+        $stepName = [string]$WorkStep
+        $cursor = 0
+        $stepTotal = $total
+        $hasCursorOverride = $false
+        if ($WorkStep -is [hashtable]) {
+            $stepName = [string]$WorkStep.WorkStep
+            if ($WorkStep.ContainsKey('WorkCursor')) {
+                $cursor = [int]$WorkStep.WorkCursor
+                $hasCursorOverride = $true
+            }
+            if ($WorkStep.ContainsKey('WorkTotal')) {
+                $stepTotal = [Math]::Max(1, [int]$WorkStep.WorkTotal)
+            }
         }
-        $cursor = $index + 1
+
+        if (-not $stepName) {
+            $stepName = 'poll_start'
+        }
+        if (-not $hasCursorOverride) {
+            $index = [array]::IndexOf($workPlan, $stepName)
+            if ($index -lt 0) {
+                $index = 0
+            }
+            $cursor = $index + 1
+        }
+        if ($cursor -gt $stepTotal) {
+            $stepTotal = $cursor
+        }
 
         Write-OrchestratorSideProcessWorkHeartbeat -ChildId $resolvedChildId -Phase 'poll' `
-            -WorkStep $WorkStep -WorkCursor $cursor -WorkTotal $total -TickId $resolvedTickId
+            -WorkStep $stepName -WorkCursor $cursor -WorkTotal $stepTotal -TickId $resolvedTickId
 
         if ($env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS -and [int]::TryParse($env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS, [ref]$null)) {
             Start-Sleep -Milliseconds ([Math]::Max(0, [int]$env:AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS))

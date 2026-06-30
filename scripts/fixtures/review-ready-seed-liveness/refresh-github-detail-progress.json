@@ -1,0 +1,30 @@
+{
+  "expected": "refresh-github-detail-progress",
+  "scenario": "progress-writer-detail-sequence",
+  "stallThresholdMs": 20000,
+  "nowMs": 1700000000000,
+  "checkAtElapsedMs": 65000,
+  "writerSteps": [
+    { "atElapsedMs": 0, "workStep": "poll_start" },
+    { "atElapsedMs": 16000, "workStep": "refresh_github" },
+    {
+      "atElapsedMs": 35000,
+      "detail": true,
+      "workStep": "refresh_github_open_pr_view_1",
+      "workCursor": 4,
+      "workTotal": 8
+    },
+    {
+      "atElapsedMs": 54000,
+      "detail": true,
+      "workStep": "refresh_github_required_checks_1",
+      "workCursor": 4,
+      "workTotal": 8
+    }
+  ],
+  "expectProgress": {
+    "workStep": "refresh_github_required_checks_1",
+    "workCursor": 4,
+    "workTotal": 8
+  }
+}

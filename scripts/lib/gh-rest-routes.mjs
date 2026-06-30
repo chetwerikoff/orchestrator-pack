@@ -95,15 +95,90 @@ function fetchPull(realGh, repo, prNumber, cwd) {
 }
 
 /**
+ * @param {string} ref
+ * @returns {number | null}
+ */
+/**
+ * @param {string} ref
+ * @returns {{ prNumber: number, slug?: string, host?: string | null } | null}
+ */
+export function parsePullReference(ref) {
+  const trimmed = String(ref).trim();
+  const asNum = Number(trimmed);
+  if (Number.isFinite(asNum) && asNum > 0 && String(asNum) === trimmed) {
+    return { prNumber: asNum };
+  }
+
+  const urlMatch = trimmed.match(
+    /^(?:https?:\/\/)?([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?(?:[?#].*)?$/i,
+  );
+  if (urlMatch) {
+    const [, host, owner, repoName, numStr] = urlMatch;
+    const prNumber = Number(numStr);
+    if (Number.isFinite(prNumber) && prNumber > 0) {
+      const slug = `${owner}/${repoName}`;
+      return {
+        prNumber,
+        slug,
+        // Preserve explicit URL host so ghApiJson passes --hostname and does not
+        // inherit GH_HOST (GHE) when the ref is a public github.com PR URL.
+        host,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * @param {string} realGh
  * @param {{ slug: string, host: string }} repo
- * @param {number} prNumber
+ * @param {string} ref
+ * @param {string} cwd
+ */
+function fetchPullByReference(realGh, repo, ref, cwd) {
+  const parsed = parsePullReference(ref);
+  if (parsed?.prNumber) {
+    const targetRepo = parsed.slug
+      ? { slug: parsed.slug, host: parsed.host ?? null }
+      : repo;
+    return fetchPull(realGh, targetRepo, parsed.prNumber, cwd);
+  }
+
+  const perPage = 100;
+  let page = 1;
+  while (true) {
+    const pulls = ghApiJson(
+      realGh,
+      `repos/${repo.slug}/pulls?state=open&per_page=${perPage}&page=${page}`,
+      { hostname: repo.host, cwd },
+    );
+    if (!Array.isArray(pulls) || pulls.length === 0) {
+      break;
+    }
+    for (const pull of pulls) {
+      if (pull.head?.ref === ref) {
+        return pull;
+      }
+    }
+    if (pulls.length < perPage) {
+      break;
+    }
+    page += 1;
+  }
+
+  throw new Error(`${REST_ERROR_MARKER}: no pull found for ref ${ref}`);
+}
+
+/**
+ * @param {string} realGh
+ * @param {{ slug: string, host: string }} repo
+ * @param {string} prRef
  * @param {string[]} fields
  * @param {string | null} jq
  * @param {string} cwd
  */
-export function routePrView(realGh, repo, prNumber, fields, jq, cwd) {
-  const pull = fetchPull(realGh, repo, prNumber, cwd);
+export function routePrView(realGh, repo, prRef, fields, jq, cwd) {
+  const pull = fetchPullByReference(realGh, repo, prRef, cwd);
   const mapped = mapPullToGhJson(pull, fields);
   return applyListedJq(mapped, jq);
 }
@@ -360,7 +435,14 @@ export function executeRestRoute(routeId, ctx) {
         return routePrListMergedCloses(realGh, repo, route.prNumber, limit, fields, cwd);
       }
       case 'pr-view':
-        return routePrView(realGh, repo, route.prNumber, parsed.jsonFields ?? [], parsed.jq, cwd);
+        return routePrView(
+          realGh,
+          repo,
+          route.prRef ?? String(route.prNumber),
+          parsed.jsonFields ?? [],
+          parsed.jq,
+          cwd,
+        );
       case 'pr-checks':
         return routePrChecks(realGh, repo, route.prNumber, cwd);
       case 'pr-diff-name-only': {

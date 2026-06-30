@@ -1,0 +1,37 @@
+{
+  "issue_number": 534,
+  "iteration_id": "opk-88",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T02:07:44.231Z",
+  "baseline": {
+    "commit_sha": "84c091e9ee7ff6a0c5d859515de31877423cda1e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:b7aa12b4f057b218ec323c7a9cd2770a5594852981366d6f36f73b62d5b0f6d5"
+  },
+  "declared_paths": [
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/lib/Review-StartSupervisedGh.ps1",
+    "scripts/verify.ps1",
+    "scripts/check-powershell-pid-param-static.ps1",
+    "scripts/review-start-supervised-gh-pid.test.ts",
+    "docs/declarations/534.opk-88.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:e8ebbbc9278b6ee3efebd66a17a6859a54d67204b003b818b87b448f6dd2aead",
+      "new_active_scope_hash": "sha256:b7aa12b4f057b218ec323c7a9cd2770a5594852981366d6f36f73b62d5b0f6d5",
+      "changed": {
+        "added": [
+          "docs/declarations/534.opk-88.json"
+        ],
+        "removed": []
+      },
+      "reason": "Restore full active scope including declaration snapshot",
+      "actor": "opk-88",
+      "timestamp": "2026-06-30T02:09:57.429Z",
+      "applied": true
+    }
+  ]
+}
