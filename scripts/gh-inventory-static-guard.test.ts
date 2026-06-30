@@ -118,8 +118,7 @@ describe('gh inventory static guard', () => {
     expect(isInventoryCoveredCommand('gh pr view 123 --json unknownField')).toBe(false);
     const dir = mkdtempSync(join(tmpdir(), 'gh-guard-unknown-'));
     const file = join(dir, 'sample.ps1');
-    writeFileSync(file, 'gh pr view 123 --json unknownField
-', 'utf8');
+    writeFileSync(file, 'gh pr view 123 --json unknownField\n', 'utf8');
     const violations = scanFileForViolations(file, 'reconcile');
     expect(violations.some((v) => v.command.includes('unknownField'))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
