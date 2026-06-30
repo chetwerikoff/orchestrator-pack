@@ -304,6 +304,34 @@ describe('review-start-claim-run-binding', () => {
     expect(foreignProjectBinding.outcome).toBe('launch_pending_budget_exceeded');
   });
 
+  it('launch-gate-fast-path-honors-nested-claim-projectid', () => {
+    const bindingLib = path.join(repoRoot, 'scripts/lib/Review-StartClaimRunBinding.ps1');
+    const headSha = '5a20a5d5c3d590ce6ec041e57a390ea63e39158a';
+    const result = JSON.parse(
+      runPwsh(`
+        . ${psString(bindingLib)}
+        $claimResult = @{
+          acquired = $true
+          claim = @{
+            state = 'active'
+            prNumber = 519
+            headSha = ${psString(headSha)}
+            projectId = 'other-pack'
+          }
+        }
+        $gate = Test-AutomatedReviewLaunchClaimGate -ClaimResult $claimResult -PrNumber 519 -HeadSha ${psString(headSha)} -ProjectId 'other-pack'
+        [pscustomobject]@{
+          ok = [bool]$gate.ok
+          reason = [string]$gate.reason
+          fastPath = [bool]$gate.fastPath
+        } | ConvertTo-Json -Compress
+      `),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('live_claim_present');
+    expect(result.fastPath).toBe(true);
+  });
+
   it('pscustomobject-run-diagnostic-binding', () => {
     const bindingLib = path.join(repoRoot, 'scripts/lib/Review-StartClaimRunBinding.ps1');
     const result = JSON.parse(

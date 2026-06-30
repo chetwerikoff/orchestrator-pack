@@ -53,7 +53,7 @@ function Test-AutomatedReviewLaunchClaimGate {
     if ($ClaimResult -and $ClaimResult.acquired -and [string]$ClaimResult.claim.state -eq 'active') {
         $claimPr = [int]$ClaimResult.claim.prNumber
         $claimHead = [string]$ClaimResult.claim.headSha
-        $claimProject = if ([string]$ClaimResult.projectId) { [string]$ClaimResult.projectId } else { 'orchestrator-pack' }
+        $claimProject = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult -ProjectId ''
         if ($claimPr -eq $PrNumber -and $claimHead -eq $HeadSha -and $claimProject -eq $ProjectId) {
             return @{ ok = $true; reason = 'live_claim_present'; fastPath = $true }
         }
@@ -66,7 +66,7 @@ function Test-AutomatedReviewLaunchClaimGate {
         claims           = @($Claims)
     }
     if ($ClaimResult -and $ClaimResult.acquired) {
-        $claimProject = if ([string]$ClaimResult.projectId) { [string]$ClaimResult.projectId } else { 'orchestrator-pack' }
+        $claimProject = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult -ProjectId ''
         $claimPr = [int]$ClaimResult.claim.prNumber
         $claimHead = [string]$ClaimResult.claim.headSha
         if ($claimPr -eq $PrNumber -and $claimHead -eq $HeadSha -and $claimProject -eq $ProjectId) {
