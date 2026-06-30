@@ -74,6 +74,7 @@ function hostnameFlagArgs(hostname, explicitHostname) {
 const GH_API_VALUE_FLAGS = new Set([
   '--hostname',
   '--method',
+  '-X',
   '-H',
   '--header',
   '-f',
@@ -83,12 +84,14 @@ const GH_API_VALUE_FLAGS = new Set([
   '--form',
   '--input',
   '--jq',
+  '-q',
   '-t',
   '--template',
   '--cache',
   '-R',
   '--repo',
   '--preview',
+  '-p',
 ]);
 
 /**
