@@ -112,6 +112,55 @@ describe('review-start-envelope-ledger unit', () => {
     expect(reconcileSrc).toMatch(/Complete-ReviewStartClaimPreRunRecheckDenied/);
   });
 
+  it('claimed-snapshot-transport-failure-skips-live-ao-reads', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    const transportBlock = src.match(/if \(-not \$transport\.ok\) \{([\s\S]*?)\n        \}/);
+    expect(transportBlock).not.toBeNull();
+    const block = transportBlock![1];
+    expect(block).not.toMatch(/@\(Get-AoReviewRuns\)/);
+    expect(block).not.toMatch(/@\(Get-AoStatusSessions\)/);
+    expect(block).toMatch(/reviewRuns\s*=\s*@\(\)/);
+    expect(block).toMatch(/sessions\s*=\s*@\(\)/);
+  });
+
+  it('claimed-snapshot-transport-failure-survives-ao-read-throw', () => {
+    const dir = tempClaimDir();
+    const fakeGhPath = path.join(
+      repoRoot,
+      'scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1',
+    );
+    const supervisedGhPath = path.join(repoRoot, 'scripts/lib/Review-StartSupervisedGh.ps1');
+    try {
+      const script = `
+        $env:AO_REVIEW_START_SUPERVISED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_GH_SCENARIO = 'dns_timeout'
+        function Get-AoReviewRuns { throw 'ao unavailable without agent-orchestrator.yaml' }
+        function Get-AoStatusSessions { throw 'ao unavailable without agent-orchestrator.yaml' }
+        . ${psString(claimHelperPath)}
+        . ${psString(supervisedGhPath)}
+        . ${psString(snapshotHelperPath)}
+        $ns = ${psString(dir)}
+        $sha = ${psString(fullSha)}
+        $claim = Acquire-ReviewStartClaim -PrNumber 516 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
+        $snap = Get-ClaimedReviewStartSnapshot -PrNumber 516 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $claim -ResolveChecksBundle {
+          param($openPrs, $prNumber, $repoRoot)
+          @{ ciChecksByPr = @{}; requiredCheckNamesByPr = @{}; requiredCheckLookupFailedByPr = @{} }
+        }
+        [pscustomobject]@{
+          transportOk = [bool]$snap.transportFailure.ok
+          reviewRunCount = @($snap.reviewRuns).Count
+          sessionCount = @($snap.sessions).Count
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.transportOk).toBe(false);
+      expect(result.reviewRunCount).toBe(0);
+      expect(result.sessionCount).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('pre-run-recheck-supervised-gh-transport-failure-counts-ledger', () => {
     const dir = tempClaimDir();
     const fakeGhPath = path.join(

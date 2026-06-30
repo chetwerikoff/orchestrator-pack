@@ -23,11 +23,14 @@ function Get-ClaimedReviewStartSnapshot {
             'pr', 'list', '--state', 'open', '--json', 'number,headRefOid,baseRefName', '--limit', '200'
         )
         if (-not $transport.ok) {
+            # Transport denial must short-circuit before live AO reads — Get-AoReviewRuns /
+            # Get-AoStatusSessions can fail in clean checkouts without agent-orchestrator.yaml
+            # and would mask supervised gh infra failures needed for ledger counting (#516).
             return @{
                 transportFailure            = $transport
                 openPrs                     = @()
-                reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
-                sessions                    = @(Get-AoStatusSessions)
+                reviewRuns                  = @()
+                sessions                    = @()
                 ciChecksByPr                = @{}
                 requiredCheckNamesByPr      = @{}
                 requiredCheckLookupFailedByPr = @{}

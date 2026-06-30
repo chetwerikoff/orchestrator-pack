@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 
 $SmokeFiles = @(
     'scripts/gh-wrapper.test.ts',
+    'scripts/command-runtime-bootstrap.test.ts',
     'scripts/github-fleet-cache-coalesce.test.ts',
     'scripts/github-fleet-cache-memo.test.ts',
     'scripts/github-fleet-cache-bypass-guard.test.ts',

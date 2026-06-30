@@ -389,6 +389,10 @@ projects:
       direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
       only the claimed entry point may launch review runs. Gate capability markers:
       orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
+      Command-runtime bootstrap (refuses command turns when tools/PATH are incomplete):
+      pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1
+      (command-runtime-bootstrap/v1; also invoked from autonomous-orchestrator-surface-bootstrap.sh).
+      Recovery-boundary: command-runtime failures route to Issue #522/#527 — no ad hoc cleanup here.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
       scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
       ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel
