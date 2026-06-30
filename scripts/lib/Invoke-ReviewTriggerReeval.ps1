@@ -10,6 +10,7 @@
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
 
 function Test-ReviewTriggerReevalForbiddenCommand {
     param([string]$CommandLine)
@@ -94,6 +95,10 @@ function Invoke-ReviewTriggerReevalPlannedRun {
             throw 'FixtureSnapshot or ResolveFreshSnapshot required for Invoke-ReviewTriggerReevalPlannedRun'
         }
 
+        if (-not $FixtureSnapshot) {
+            $holdRuns = @($fresh.reviewRuns)
+        }
+
         $prKey = [string]$planned.prNumber
         $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
         if ($transportDenial) {
@@ -173,6 +178,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 retainWatch = $true
             }
         }
+        Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
         & ao @runArgs
         if ($LASTEXITCODE -ne 0) {

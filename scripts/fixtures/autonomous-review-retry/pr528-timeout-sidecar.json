@@ -1,0 +1,35 @@
+{
+  "rawRun": {
+    "id": "review-run-57263c24-dc5e-4ed0-83bd-dd3ee7f4d886",
+    "prNumber": 528,
+    "targetSha": "a3eb5db16e3911bccfa701635cde1f9a8aca01a5",
+    "reviewerSessionId": "opk-rev-1134",
+    "status": "failed",
+    "findingCount": 0,
+    "terminationReason": "Command failed: /bin/sh -c pwsh -NoProfile -File scripts/invoke-pack-review.ps1",
+    "createdAt": "2026-06-28T12:00:00.000Z"
+  },
+  "sidecar": {
+    "schemaVersion": 1,
+    "reviewerSessionId": "opk-rev-1134",
+    "runId": "review-run-57263c24-dc5e-4ed0-83bd-dd3ee7f4d886",
+    "runFingerprint": "d2588fa10994b4577915074a4ee9a24a",
+    "prNumber": 528,
+    "targetSha": "a3eb5db16e3911bccfa701635cde1f9a8aca01a5",
+    "phases": [{ "phase": "wrapper_exited", "at": "2026-06-28T12:30:00.000Z" }],
+    "stderrTail": "reviewer-evidence:{\"reviewer\":{\"effectiveBudgetMs\":600000,\"failureClass\":\"timeout_no_verdict\"}}\nreviewer timeout before verdict (effectiveBudgetMs=600000, softDeadlineMs=510000)",
+    "completionStatus": "abnormal",
+    "exitCode": 1
+  },
+  "pointer": {
+    "schemaVersion": 1,
+    "runId": "review-run-57263c24-dc5e-4ed0-83bd-dd3ee7f4d886",
+    "reviewerSessionId": "opk-rev-1134",
+    "artifactPath": "reviewer-failure-evidence/opk-rev-1134.json"
+  },
+  "expect": {
+    "failureClass": "timeout_no_verdict",
+    "retryEligible": true,
+    "escalationReason": null
+  }
+}

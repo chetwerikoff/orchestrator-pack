@@ -797,6 +797,32 @@ Optional env overrides (operator checkout only):
 
 No AO restart required for env-only tuning; wrapper reads env per run.
 
+### Autonomous post-run review retry after recoverable infra failure (Issue #539)
+
+Pack gates now consume an **enriched** review-run view from `Get-EnrichedAoReviewRuns`
+(`scripts/lib/Review-PostRunRetry.ps1`), not raw `ao review list` rows alone. Enrichment joins
+fresh #312 `reviewer-failure-evidence` sidecars when linkage is consistent and exposes
+`failureClass`, `retryEligible`, and `escalationReason` for failed/cancelled runs.
+
+**Distinguish outcomes:**
+
+| Outcome | Meaning | Operator action |
+| --- | --- | --- |
+| Recoverable infra (`timeout_no_verdict`, transient crash/preflight) | Bounded autonomous claimed-review retry may run | Usually wait; one same-head retry is automatic |
+| `retry_bound_exhausted` / `infra_no_trustworthy_verdict` | Post-run infra retry budget exhausted | Manual retry via `scripts/invoke-manual-review-run.ps1` (audited separately) |
+| `empty_output` / `malformed_output` | Empty-review trap | Investigate reviewer output; not an infra retry |
+| `auth_failure` / `quota_exceeded` / `config_error` / `dependency_missing` | Non-recoverable | Fix credentials, quota, config, or deps |
+| `unknown` (stale/missing sidecar) | Fail closed — no autonomous retry | Inspect #312 sidecar + run linkage |
+
+Pre-launch envelope/transport stalls remain on the #516 ledger only — this path does not add a
+second counter for `infra_transport`.
+
+**Operator adoption after merge:** no live yaml change required. Verify:
+`npm test -- autonomous-review-retry`. After repeated infra exhaustion on a head, use
+`scripts/invoke-manual-review-run.ps1` with operator provenance; autonomous ledger counters are
+unchanged.
+
+
 ### Switching local reviewer: Codex ↔ Claude Sonnet (Issue #86)
 
 **REVIEW_COMMAND** is reviewer-agnostic: `scripts/invoke-pack-review.ps1` (see
