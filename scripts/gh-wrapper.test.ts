@@ -12,12 +12,14 @@ import * as repoResolve from './lib/gh-repo-resolve.mjs';
 const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } = repoResolve;
 import { executeRestRoute, parsePullReference, routePrView } from './lib/gh-rest-routes.mjs';
 import {
+  RATE_LIMIT_REFRESH_MS,
   cacheFilePath,
   extractApiHostnameInfo,
   fetchRateLimitGraphql,
   isGraphqlPassthroughArgv,
   isPrimaryGraphqlQuotaExhaustion,
   resolvePartitionKey,
+  writeDegradedCache,
 } from './lib/gh-graphql-degraded.mjs';
 import {
   isNativeGhExecutable,
@@ -1091,11 +1093,16 @@ printf '%s\n' "$*" >>"$audit"
 joined="$*"
 args=("$@")
 host="github.com"
+explicit_host=false
 for ((i=0; i<\${#args[@]}; i++)); do
   if [[ "\${args[i]}" == "--hostname" && $((i+1)) -lt \${#args[@]} ]]; then
     host="\${args[$((i+1))]}"
+    explicit_host=true
   fi
 done
+if [[ "$explicit_host" == false && -n "\${GH_HOST:-}" ]]; then
+  host="\$GH_HOST"
+fi
 if [[ "$1" == "auth" && "$2" == "token" ]]; then
   case "$host" in
     ghe.example) printf 'token-ghe' ;;
@@ -1171,6 +1178,66 @@ exit 1
       expect(auditLines(harness.audit).some((line) => line.includes('--hostname github.com') && line.includes('rate_limit'))).toBe(true);
       expect(fetchRateLimitGraphql(harness.fakeGh, argv, env).ok).toBe(true);
       expect(extractApiHostnameInfo(argv)).toEqual({ host: 'github.com', explicit: true });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('refreshes rate_limit while degraded and clears suppression when remaining returns', () => {
+    const nowMs = 1_700_000_300_000;
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 0, resetOffsetSec: 3600 });
+    try {
+      const partition = resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, harness.env);
+      mkdirSync(harness.cacheDir, { recursive: true });
+      writeDegradedCache(harness.cacheDir, partition, {
+        degraded: true,
+        graphqlResetAt: Math.floor(nowMs / 1000) + 3600,
+        graphqlRemaining: 0,
+        lastRateLimitFetchMs: nowMs - RATE_LIMIT_REFRESH_MS - 1,
+      });
+      writeFileSync(harness.statePath, JSON.stringify({
+        remaining: 5,
+        reset: Math.floor(nowMs / 1000) + 3600,
+        graphqlCalls: 0,
+      }));
+      const env = {
+        ...harness.env,
+        GH_GRAPHQL_DEGRADED_NOW_MS: String(nowMs),
+      };
+      const result = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, env);
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toMatch(/graphql_degraded_fail_fast/);
+      expect(auditLines(harness.audit).some((line) => line.includes('rate_limit'))).toBe(true);
+      expect(auditLines(harness.audit).some((line) => line.includes('graphql'))).toBe(true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('partitions degraded cache by GH_HOST when no explicit --hostname', () => {
+    const harness = buildMultiHostGraphqlHarness({
+      'ghe.example': { remaining: 0 },
+      'github.com': { remaining: 5 },
+    });
+    try {
+      const gheEnv = { ...harness.env, GH_HOST: 'ghe.example' };
+      const dotcomEnv = { ...harness.env };
+      delete dotcomEnv.GH_HOST;
+
+      expect(extractApiHostnameInfo(GRAPHQL_QUERY_ARGV, gheEnv)).toEqual({
+        host: 'ghe.example',
+        explicit: false,
+      });
+      expect(resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, gheEnv)).not.toBe(
+        resolvePartitionKey(harness.fakeGh, GRAPHQL_QUERY_ARGV, dotcomEnv),
+      );
+
+      const suppressedGhe = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, gheEnv);
+      expect(suppressedGhe.stderr).toMatch(/graphql_degraded_fail_fast|primary quota exhausted/i);
+
+      const allowedDotcom = spawnGraphqlPassthrough(harness.fakeGh, GRAPHQL_QUERY_ARGV, dotcomEnv);
+      expect(allowedDotcom.status).toBe(0);
+      expect(allowedDotcom.stderr).not.toMatch(/graphql_degraded_fail_fast/);
     } finally {
       harness.cleanup();
     }

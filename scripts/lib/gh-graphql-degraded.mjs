@@ -41,7 +41,7 @@ function nowMs() {
  * @param {string[]} argv
  * @returns {{ host: string; explicit: boolean }}
  */
-export function extractApiHostnameInfo(argv) {
+export function extractApiHostnameInfo(argv, env = process.env) {
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--hostname' && argv[i + 1]) {
@@ -51,11 +51,12 @@ export function extractApiHostnameInfo(argv) {
       return { host: token.slice('--hostname='.length), explicit: true };
     }
   }
-  return { host: DEFAULT_HOST, explicit: false };
+  const ghHost = typeof env.GH_HOST === 'string' ? env.GH_HOST.trim() : '';
+  return { host: ghHost || DEFAULT_HOST, explicit: false };
 }
 
-export function extractApiHostname(argv) {
-  return extractApiHostnameInfo(argv).host;
+export function extractApiHostname(argv, env = process.env) {
+  return extractApiHostnameInfo(argv, env).host;
 }
 
 /**
@@ -149,7 +150,7 @@ export function resolveCredentialFingerprint(
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function resolvePartitionKey(realGh, argv, env = process.env) {
-  const { host, explicit } = extractApiHostnameInfo(argv);
+  const { host, explicit } = extractApiHostnameInfo(argv, env);
   const credential = resolveCredentialFingerprint(realGh, env, host, explicit);
   return `${host}|${credential}`;
 }
@@ -345,7 +346,7 @@ function exitSuppressed(partitionKey, resetAt) {
  * @param {NodeJS.ProcessEnv} env
  */
 export function fetchRateLimitGraphql(realGh, argv, env) {
-  const { host, explicit } = extractApiHostnameInfo(argv);
+  const { host, explicit } = extractApiHostnameInfo(argv, env);
   const args = ['api', 'rate_limit'];
   if (explicit) {
     args.unshift('--hostname', host);
@@ -409,13 +410,6 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
 
   const resetEpochSec = cache?.graphqlResetAt ?? null;
   const resetMs = resetEpochSec ? resetEpochSec * 1000 : null;
-  const activelyDegraded = Boolean(
-    cache?.degraded && resetMs !== null && currentMs < resetMs,
-  );
-
-  if (activelyDegraded) {
-    exitSuppressed(partitionKey, resetEpochSec);
-  }
 
   let refreshed = false;
   if (shouldRefreshRateLimit(cache, currentMs)) {

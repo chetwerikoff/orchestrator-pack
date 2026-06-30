@@ -4,8 +4,8 @@ export const AUDIT_LABEL: string;
 export const SUPPRESSION_EXIT_CODE: number;
 export const PRIMARY_QUOTA_MARKER: string;
 
-export function extractApiHostnameInfo(argv: string[]): { host: string; explicit: boolean };
-export function extractApiHostname(argv: string[]): string;
+export function extractApiHostnameInfo(argv: string[], env?: NodeJS.ProcessEnv): { host: string; explicit: boolean };
+export function extractApiHostname(argv: string[], env?: NodeJS.ProcessEnv): string;
 export function isGraphqlPassthroughArgv(argv: string[]): boolean;
 export function resolveCredentialFingerprint(
   realGh: string,
