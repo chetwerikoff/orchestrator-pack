@@ -624,9 +624,11 @@ describe('worker recovery git allow binding', () => {
 describe('worker recovery repository identity / pack-root spawn path (#522 AC#12)', () => {
   it('worker recovery spawn routes from pack root without repository_root_mismatch', () => {
     const packRoot = repoRoot;
+    const ns = tempNs();
     const worktreePath = path.join(packRoot, 'worktrees', 'opk-522');
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
       $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
       [pscustomobject]@{ packRootMatch = ($result.packRoot -eq $result.repoRoot); outcome = $result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));

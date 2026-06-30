@@ -61,7 +61,7 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
         [switch]$FixtureMode
     )
 
-    if ($FixtureMode -and $FallbackRecord) {
+    if ($FixtureMode) {
         return $FallbackRecord
     }
     if (-not $RepoRoot -or -not $CanonicalPath) {
