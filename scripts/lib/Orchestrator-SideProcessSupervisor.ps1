@@ -1475,7 +1475,7 @@ function Start-OrchestratorWakeSupervisorDaemon {
             'set -euo pipefail'
             "cd $(Format-UnixShellSingleQuotedArgument -Value $WorkingDirectory)"
             ('export PATH={0}:${{PATH:-}}' -f $packScriptsQuoted)
-            "nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 &"
+            "setsid nohup pwsh $quotedArgs >> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 < /dev/null &"
             'echo $!'
         ) -join "`n"
         Set-Content -LiteralPath $launcher -Value $launcherContent -Encoding utf8 -NoNewline

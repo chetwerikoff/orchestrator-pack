@@ -412,7 +412,7 @@ describe('orchestrator-wake-supervisor', () => {
 
   it(
     'captures per-child logs and survives launching shell exit when detached',
-    () => {
+    async () => {
     const stateDir = makeStateDir();
     const start = runSupervisor([
       '-Action',
@@ -429,22 +429,35 @@ describe('orchestrator-wake-supervisor', () => {
     expect(start.status).toBe(0);
     expect(start.stdout).toContain('supervisor detached');
 
+    const supervisorPid = Number(
+      fs.readFileSync(path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
+    );
+    expect(supervisorPid).toBeGreaterThan(0);
+
     const childLogs = managedChildRoles.map((role) => path.join(stateDir, `${role}.log`));
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       if (childLogs.every((logPath) => fs.existsSync(logPath))) {
         break;
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
     for (const logPath of childLogs) {
       expect(fs.existsSync(logPath)).toBe(true);
     }
 
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(isAlive(supervisorPid)).toBe(true);
+
     const statusMid = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusMid.status).toBe(0);
+    expect(statusMid.stdout).toContain('supervisor: running');
+    expect(statusMid.stdout).toMatch(/listener:.*working/);
 
-    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    const stop = runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    expect(stop.status).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(isAlive(supervisorPid)).toBe(false);
     },
     detachedSupervisorTimeoutMs,
   );
