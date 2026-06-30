@@ -72,6 +72,16 @@ describe('worker recovery liveness discrimination', () => {
   });
 
 
+
+  it('worker recovery liveness discrimination: dangling gitdir cleanup runs worktree remove when absent', () => {
+    const recoveryText = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
+      'utf8',
+    );
+    expect(recoveryText).toMatch(/\$danglingGitdirCleanup = \(\$eligibility\.outcome -eq 'removed_dangling_gitdir'\)/);
+    expect(recoveryText).toMatch(/\$shouldCleanup = \$worktreeStillPresent -or \$danglingGitdirCleanup/);
+  });
+
   it('worker recovery liveness discrimination: path-only session id is insufficient ownership', () => {
     const result = evaluateCleanupEligibility({
       projectId: 'orchestrator-pack',
@@ -396,6 +406,38 @@ describe('worker recovery artifact preservation', () => {
       $state = Get-WorkerRecoveryDirtyState -WorktreePath ${psString(dir)}
       [pscustomobject]@{ unpushedCommits = [bool]$state.unpushedCommits; trackedModifications = [bool]$state.trackedModifications } | ConvertTo-Json -Compress
     `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.unpushedCommits).toBe(true);
+    expect(result.trackedModifications).toBe(false);
+  });
+
+
+  it('worker recovery artifact preservation: detached HEAD with orphan commit marks unpushed', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'worker-recovery-detached-'));
+    tempRoots.push(dir);
+    const git = (args: string[]) => {
+      const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+      expect(result.status).toBe(0);
+      return result;
+    };
+    git(['init', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    writeFileSync(path.join(dir, 'README.md'), 'seed\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'seed']);
+    git(['checkout', '--detach', 'HEAD']);
+    writeFileSync(path.join(dir, 'detached.txt'), 'orphan\n');
+    git(['add', 'detached.txt']);
+    git(['commit', '-m', 'detached orphan']);
+
+    const script = `
+      $ErrorActionPreference = 'Stop'
+      . '__WORKER_RECOVERY_PS1__'
+      $state = Get-WorkerRecoveryDirtyState -WorktreePath __DIR__
+      [pscustomobject]@{ unpushedCommits = [bool]$state.unpushedCommits; trackedModifications = [bool]$state.trackedModifications } | ConvertTo-Json -Compress
+    `.replace('__WORKER_RECOVERY_PS1__', path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/\\/g, '/').replace(/'/g, "''"))
+      .replace('__DIR__', psString(dir));
     const result = JSON.parse(runPwsh(script));
     expect(result.unpushedCommits).toBe(true);
     expect(result.trackedModifications).toBe(false);

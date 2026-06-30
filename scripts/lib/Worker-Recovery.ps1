@@ -144,6 +144,17 @@ function Get-WorkerRecoveryDirtyState {
                 $unpushed = $true
             }
         }
+        elseif ($branch -eq 'HEAD') {
+            $referencedByBranch = $false
+            foreach ($line in @(& git branch -a --contains HEAD 2>$null)) {
+                $trimmed = if ($null -ne $line) { [string]$line.Trim() } else { '' }
+                if (-not $trimmed) { continue }
+                if ($trimmed -match 'detached' -or $trimmed -match 'no branch') { continue }
+                $referencedByBranch = $true
+                break
+            }
+            if (-not $referencedByBranch) { $unpushed = $true }
+        }
         return @{
             trackedModifications = $tracked
             untrackedFiles       = $untracked
@@ -364,12 +375,14 @@ function Invoke-WorkerRecovery {
     $cleanupDone = $false
     $worktreeStillPresent = Test-WorkerRecoveryWorktreePresent -RepoRoot $RepoRoot `
         -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode -FixtureWorktreePresent:$WorktreePresent
-    if (-not $DryRun -and $worktreeStillPresent) {
+    $danglingGitdirCleanup = ($eligibility.outcome -eq 'removed_dangling_gitdir')
+    $shouldCleanup = $worktreeStillPresent -or $danglingGitdirCleanup
+    if (-not $DryRun -and $shouldCleanup) {
         $cleanupAttempted = $true
         & git -C $RepoRoot worktree remove --force $pathCanon.canonical
         if ($LASTEXITCODE -eq 0) { $cleanupDone = $true }
     }
-    elseif ($DryRun -and $worktreeStillPresent) {
+    elseif ($DryRun -and $shouldCleanup) {
         $cleanupDone = $true
     }
 
