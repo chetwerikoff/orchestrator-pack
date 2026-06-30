@@ -37,6 +37,15 @@ $session = $null
 if ($FixtureSessionJson) {
     $session = $FixtureSessionJson | ConvertFrom-Json -AsHashtable
 }
+elseif ($SessionId) {
+    try {
+        $aoRow = Get-WorkerRecoveryAoSessionById -SessionId $SessionId
+        $session = ConvertTo-WorkerRecoverySessionSnapshot -AoRow $aoRow
+    }
+    catch {
+        $session = $null
+    }
+}
 $spawnPolicy = $null
 if ($FixturePolicyJson) {
     $spawnPolicy = $FixturePolicyJson | ConvertFrom-Json -AsHashtable

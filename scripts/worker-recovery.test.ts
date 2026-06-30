@@ -319,6 +319,33 @@ describe('worker recovery bounded retries', () => {
     expect(retry.escalate).toBe(true);
   });
 
+  it('worker recovery bounded retries: deduplicates terminal and audit records by attemptId', () => {
+    const ns = tempNs();
+    const claimKey = 'worker-opk-retry-dedupe';
+    const attemptId = 'attempt-dedupe-1';
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryClaim.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      Initialize-WorkerRecoveryNamespace -Namespace ${psString(ns)}
+      $terminalDir = Get-WorkerRecoveryTerminalDir -Namespace ${psString(ns)}
+      $auditDir = Get-WorkerRecoveryAuditDir -Namespace ${psString(ns)}
+      $terminal = @{
+        schemaVersion='worker-recovery/v1'; claimKey=${psString(claimKey)}; attemptId=${psString(attemptId)}; outcome='partial_failure'
+        completedAtUtc='2026-06-30T00:00:00.0000000Z'; phase='terminal'
+      }
+      $audit = @{
+        schemaVersion='worker-recovery/v1'; claimKey=${psString(claimKey)}; attemptId=${psString(attemptId)}; finalState='partial_failure'
+        recordedAtUtc='2026-06-30T00:00:01.0000000Z'; candidate=@{ sessionId='opk-retry-dedupe' }
+      }
+      Write-WorkerRecoveryAtomic -Path (Join-Path $terminalDir 'terminal.json') -Record $terminal
+      Write-WorkerRecoveryAtomic -Path (Join-Path $auditDir 'audit.json') -Record $audit
+      $state = Get-WorkerRecoveryRetryAttemptState -Namespace ${psString(ns)} -ClaimKey ${psString(claimKey)}
+      [pscustomobject]@{ attempt = [int]$state.attempt } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.attempt).toBe(1);
+  });
+
   it('worker recovery bounded retries: Invoke-WorkerRecovery applies evaluateRetry before cleanup', () => {
     const recoveryText = readFileSync(
       path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1'),
@@ -444,3 +471,15 @@ describe('worker recovery worktree list parsing', () => {
     expect(records[0]?.worktree).toBe('/tmp/wt');
   });
 });
+
+describe('invoke-worker-recovery entrypoint', () => {
+  it('invoke-worker-recovery loads AO session snapshot when SessionId is provided', () => {
+    const entryText = readFileSync(
+      path.join(repoRoot, 'scripts/invoke-worker-recovery.ps1'),
+      'utf8',
+    );
+    expect(entryText).toMatch(/Get-WorkerRecoveryAoSessionById -SessionId \$SessionId/);
+    expect(entryText).toMatch(/ConvertTo-WorkerRecoverySessionSnapshot -AoRow \$aoRow/);
+  });
+});
+

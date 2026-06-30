@@ -198,6 +198,25 @@ function Move-WorkerRecoveryClaimToTerminal {
     return $terminal
 }
 
+function Register-WorkerRecoveryRetryAttempt {
+    param(
+        [hashtable]$SeenAttemptIds,
+        [string]$AttemptId,
+        [string]$FallbackKey,
+        [long]$TimestampMs,
+        [ref]$AttemptCount,
+        [ref]$LastAttemptMs
+    )
+
+    $key = if ($AttemptId) { $AttemptId } else { $FallbackKey }
+    if (-not $key -or $SeenAttemptIds.ContainsKey($key)) { return }
+    $SeenAttemptIds[$key] = $true
+    $AttemptCount.Value = $AttemptCount.Value + 1
+    if ($TimestampMs -gt $LastAttemptMs.Value) {
+        $LastAttemptMs.Value = $TimestampMs
+    }
+}
+
 function Get-WorkerRecoveryRetryAttemptState {
     param(
         [string]$Namespace,
@@ -206,6 +225,7 @@ function Get-WorkerRecoveryRetryAttemptState {
 
     $attempt = 0
     $lastAttemptMs = 0L
+    $seenAttemptIds = @{}
     $retryOutcomes = @('partial_failure', 'cleanup_failed')
     $terminalDir = Get-WorkerRecoveryTerminalDir -Namespace $Namespace
     if (Test-Path -LiteralPath $terminalDir) {
@@ -214,14 +234,16 @@ function Get-WorkerRecoveryRetryAttemptState {
             if (-not $read.ok) { continue }
             if ([string]$read.record.claimKey -ne $ClaimKey) { continue }
             if ([string]$read.record.outcome -notin $retryOutcomes) { continue }
-            $attempt++
+            $timestampMs = 0L
             if ($read.record.completedAtUtc) {
                 try {
-                    $completedMs = [DateTimeOffset]::Parse([string]$read.record.completedAtUtc).ToUnixTimeMilliseconds()
-                    if ($completedMs -gt $lastAttemptMs) { $lastAttemptMs = $completedMs }
+                    $timestampMs = [DateTimeOffset]::Parse([string]$read.record.completedAtUtc).ToUnixTimeMilliseconds()
                 }
                 catch { }
             }
+            Register-WorkerRecoveryRetryAttempt -SeenAttemptIds $seenAttemptIds `
+                -AttemptId ([string]$read.record.attemptId) -FallbackKey "terminal:$($file.FullName)" `
+                -TimestampMs $timestampMs -AttemptCount ([ref]$attempt) -LastAttemptMs ([ref]$lastAttemptMs)
         }
     }
 
@@ -242,14 +264,16 @@ function Get-WorkerRecoveryRetryAttemptState {
             }
             if ($auditClaimKey -ne $ClaimKey) { continue }
             if ([string]$audit.finalState -notin $retryOutcomes) { continue }
-            $attempt++
+            $timestampMs = 0L
             if ($audit.recordedAtUtc) {
                 try {
-                    $recordedMs = [DateTimeOffset]::Parse([string]$audit.recordedAtUtc).ToUnixTimeMilliseconds()
-                    if ($recordedMs -gt $lastAttemptMs) { $lastAttemptMs = $recordedMs }
+                    $timestampMs = [DateTimeOffset]::Parse([string]$audit.recordedAtUtc).ToUnixTimeMilliseconds()
                 }
                 catch { }
             }
+            Register-WorkerRecoveryRetryAttempt -SeenAttemptIds $seenAttemptIds `
+                -AttemptId ([string]$audit.attemptId) -FallbackKey "audit:$($file.FullName)" `
+                -TimestampMs $timestampMs -AttemptCount ([ref]$attempt) -LastAttemptMs ([ref]$lastAttemptMs)
         }
     }
 
