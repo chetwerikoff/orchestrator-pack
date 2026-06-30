@@ -115,6 +115,18 @@ New active claims record `firstAttemptAtMonotonicMs`; uncovered heads terminaliz
 No operator adoption required beyond the usual supervised-child restart after deploy.
 
 
+
+## Claimed review-start scoped PR lookup (Issue #557)
+
+The autonomous claimed review-start snapshot (`scripts/lib/Get-ClaimedReviewStartSnapshot.ps1`)
+resolves the target PR by number via scoped `gh pr view` / `Invoke-GhOpenPrListForNumbers` — not
+`gh pr list --state open`. Pre-claim evaluation and post-claim pre-run recheck both consume the
+same scoped row (number, head SHA, base branch, open state, commit-date enrichment). When the
+scoped lookup shows the PR is closed, missing, or no longer matches the expected head, the gate
+denies cleanly without falling back to a full open-PR list.
+
+No operator adoption required beyond Issue #318 — this is a transport-shape fix only.
+
 ## LLM-orchestrator claimed review-start gate (Issue #318)
 
 Autonomous orchestrator turns must start reviews only through

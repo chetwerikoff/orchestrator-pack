@@ -64,5 +64,20 @@ foreach ($rel in $paths) {
     }
 }
 
+$snapshotPath = Join-Path $RepoRoot 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1'
+$snapshotText = Get-Content -LiteralPath $snapshotPath -Raw
+if ($snapshotText -match '(?<!ForNumbers)Invoke-GhOpenPrList\b') {
+    Write-Host 'Get-ClaimedReviewStartSnapshot must not call full Invoke-GhOpenPrList when PrNumber is known (#557)'
+    exit 1
+}
+if ($snapshotText -match "'pr',\s*'list'|gh pr list --state open") {
+    Write-Host 'Get-ClaimedReviewStartSnapshot must use scoped PR lookup, not full open-PR list (#557)'
+    exit 1
+}
+if ($snapshotText -notmatch 'Invoke-GhOpenPrListForNumbers' -or $snapshotText -notmatch "'pr',\s*'view'") {
+    Write-Host 'Get-ClaimedReviewStartSnapshot must resolve known PR numbers via scoped lookup (#557)'
+    exit 1
+}
+
 Write-Host '[PASS] orchestrator claimed review-start gate wiring'
 exit 0

@@ -407,9 +407,13 @@ describe('claimed review-start dependency closure (#335)', () => {
       const script = `
         . ${psString(helperPath)}
         $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
+        function Invoke-GhOpenPrListForNumbers {
+          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
+          @(@{ number = 335; headRefOid = '${issue335Sha}'; headCommittedAt = '2026-06-18T00:00:00.000Z'; state = 'OPEN' })
+        }
         function Invoke-GhOpenPrList {
           param([string]$RepoRoot)
-          @(@{ number = 335; headRefOid = '${issue335Sha}'; headCommittedAt = '2026-06-18T00:00:00.000Z' })
+          throw 'full open-PR list must not run on claimed review-start path (#557)'
         }
         function Get-AoReviewRuns { param([string]$Project) @() }
         function Get-AoStatusSessions {
@@ -486,5 +490,135 @@ describe('claimed review-start dependency closure (#335)', () => {
       'ok'
     `);
     expect(output).toBe('ok');
+  });
+});
+describe('claimed review-start scoped PR lookup (#557)', () => {
+  const snapshotHelperPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
+  const issue557Sha = 'abc5570000000000000000000000000000000000';
+
+  it('static regression guard: snapshot helper avoids full open-PR list for known PR', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    expect(src).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
+    expect(src).not.toMatch(/'pr',\s*'list'/);
+    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
+    expect(src).toMatch(/'pr',\s*'view'/);
+  });
+
+  it('positive-outcome: scoped lookup reaches gate when full open-PR list would fail', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'orch-claimed-scoped-557-'));
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
+        function Invoke-GhOpenPrListForNumbers {
+          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
+          @(@{ number = 557; headRefOid = '${issue557Sha}'; headCommittedAt = '2026-06-30T00:00:00.000Z'; state = 'OPEN'; baseRefName = 'main' })
+        }
+        function Invoke-GhOpenPrList {
+          param([string]$RepoRoot)
+          throw 'HTTP 403: rate limit exceeded for gh pr list --state open'
+        }
+        function Get-AoReviewRuns { param([string]$Project) @() }
+        function Get-AoStatusSessions {
+          @(@{
+            name = 'opk-557'
+            role = 'worker'
+            prNumber = 557
+            status = 'ready_for_review'
+            reports = @(@{ reportState = 'ready_for_review'; reportedAt = '2026-06-30T00:00:00.000Z' })
+          })
+        }
+        $script:resolveCalls = 0
+        function Get-GhChecksBundleByPr {
+          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
+          $script:resolveCalls++
+          @{
+            ciChecksByPr = @{
+              '557' = @(
+                @{ name = 'Verify orchestrator-pack structure'; state = 'SUCCESS' },
+                @{ name = 'PR scope guard'; state = 'SUCCESS' },
+                @{ name = 'Run pack contract tests'; state = 'SUCCESS' },
+                @{ name = 'Self-architect lint'; state = 'SUCCESS' }
+              )
+            }
+            requiredCheckNamesByPr = @{
+              '557' = @(
+                'Verify orchestrator-pack structure',
+                'PR scope guard',
+                'Run pack contract tests',
+                'Self-architect lint'
+              )
+            }
+            requiredCheckLookupFailedByPr = @{ '557' = $false }
+          }
+        }
+        $result = Invoke-OrchestratorClaimedReviewRun -SessionId 'opk-557' -ReviewCommand 'echo review' -PrNumber 557 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -DryRun -AuditRoot ${psString(path.join(dir, 'audit'))} -LogWriter { param($m) }
+        [pscustomobject]@{
+          resolveCalls = $script:resolveCalls
+          started = [bool]$result.started
+          reason = [string]$result.reason
+          deniedBeforeClaim = [bool]$result.deniedBeforeClaim
+        } | ConvertTo-Json -Compress
+      `;
+      const parsed = JSON.parse(runPwsh(script));
+      expect(parsed.resolveCalls).toBeGreaterThanOrEqual(1);
+      expect(parsed.started).toBe(true);
+      expect(parsed.reason).toBe('dry_run');
+      expect(parsed.deniedBeforeClaim).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('denies when scoped lookup finds no open PR without full-list fallback', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'orch-claimed-scoped-deny-557-'));
+    try {
+      const script = `
+        . ${psString(helperPath)}
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
+        function Invoke-GhOpenPrListForNumbers {
+          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
+          @()
+        }
+        $script:fullListCalls = 0
+        function Invoke-GhOpenPrList {
+          param([string]$RepoRoot)
+          $script:fullListCalls++
+          @(@{ number = 557; headRefOid = '${issue557Sha}'; headCommittedAt = '2026-06-30T00:00:00.000Z'; state = 'OPEN' })
+        }
+        function Get-AoReviewRuns { param([string]$Project) @() }
+        function Get-AoStatusSessions { return @() }
+        function Get-GhChecksBundleByPr {
+          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
+          @{ ciChecksByPr = @{}; requiredCheckNamesByPr = @{}; requiredCheckLookupFailedByPr = @{} }
+        }
+        $result = Invoke-OrchestratorClaimedReviewRun -SessionId 'opk-557' -ReviewCommand 'echo review' -PrNumber 557 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -DryRun -AuditRoot ${psString(path.join(dir, 'audit'))} -LogWriter { param($m) }
+        [pscustomobject]@{
+          fullListCalls = $script:fullListCalls
+          started = [bool]$result.started
+          deniedBeforeClaim = [bool]$result.deniedBeforeClaim
+          reason = [string]$result.reason
+        } | ConvertTo-Json -Compress
+      `;
+      const parsed = JSON.parse(runPwsh(script));
+      expect(parsed.fullListCalls).toBe(0);
+      expect(parsed.started).toBe(false);
+      expect(parsed.deniedBeforeClaim).toBe(true);
+      expect(parsed.reason).toMatch(/head_unresolved|head_resolution_failed|pr_not_found|not_found/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('post-claim recheck uses scoped pr view transport, not full open-PR list', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    const acquiredIdx = src.indexOf('if ($ClaimResult -and $ClaimResult.acquired)');
+    expect(acquiredIdx).toBeGreaterThanOrEqual(0);
+    const elseIdx = src.indexOf('else {', acquiredIdx);
+    expect(elseIdx).toBeGreaterThan(acquiredIdx);
+    const block = src.slice(acquiredIdx, elseIdx);
+    expect(block).toMatch(/'pr',\s*'view'/);
+    expect(block).not.toMatch(/'pr',\s*'list'/);
+    expect(block).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
   });
 });
