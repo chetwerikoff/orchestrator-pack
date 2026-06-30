@@ -1136,14 +1136,14 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     } finally {
       harness.cleanup();
     }
-  }
+  });
 
   it('rejects unclassified pr-view passthrough that would churn GraphQL quota', () => {
     expect(classifyArgv([
       'pr', 'view', '530', '--repo', 'chetwerikoff/orchestrator-pack',
       '--json', 'number,url,title,headRefName,baseRefName,isDraft,commits',
     ]).route).toBeNull();
-  }
+  });
 
   it('suppresses subsequent graphql when rate_limit probes fail while arming degraded mode', () => {
     const nowMs = 1_700_000_400_000;
@@ -1165,7 +1165,7 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     } finally {
       harness.cleanup();
     }
-  }
+  });
 
   it('detects graphql passthrough argv shapes', () => {
     expect(isGraphqlPassthroughArgv(['api', 'graphql'])).toBe(true);

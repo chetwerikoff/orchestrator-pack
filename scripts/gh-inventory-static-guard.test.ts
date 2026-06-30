@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractGhCommandsFromRuleSurface,
   extractGhCommandsFromRuleSurfaceLine,
+  isClassifiedGhReadCommand,
   isInventoryCoveredCommand,
   scanFileForViolations,
 } from './lib/gh-inventory-static-guard.mjs';
@@ -142,7 +143,6 @@ describe('gh inventory static guard', () => {
     const violations = scanFileForViolations('prompts/investigate_root_cause.md', 'rules');
     expect(violations).toEqual([]);
   });
-});
 
   it('classifies all in-scope executable gh read shapes (Issue #549)', async () => {
     const { validatePackGhReadInventoryCompleteness } = await import('./lib/graphql-quota-github-read-inventory.mjs');
@@ -212,5 +212,4 @@ describe('gh inventory static guard', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-});
 });

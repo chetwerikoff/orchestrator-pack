@@ -681,9 +681,6 @@ function tryWriteDegradedCache(cacheDir, partitionKey, state) {
  */
 function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs) {
   let cache = readDegradedCache(cacheDir, partitionKey);
-  if (isActivelyDegraded(cache, currentMs)) {
-    exitSuppressed(partitionKey, effectiveResetEpochSec(cache, currentMs));
-  }
 
   const refreshResult = maybeRefreshDegradedCache(
     cacheDir,

@@ -167,6 +167,12 @@
       "ownerIssue": 453
     },
     {
+      "id": "rest-repos-pulls-number",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}pulls/[^/\\s]+(?:\\s|$)",
+      "ownerIssue": 546
+    },
+    {
       "id": "rest-repos-commits-sha",
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}commits/[^/\\s]+(?:\\s|$)",
