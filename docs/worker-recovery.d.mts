@@ -21,6 +21,7 @@ export declare function evaluateOwnershipEvidence(input: Record<string, unknown>
 export declare function evaluateArtifactPreservation(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateCleanupEligibility(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluatePostClaimRevalidation(input: Record<string, unknown>): Record<string, unknown>;
+export declare function evaluateLiveDifferentOwner(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateTriggerAdmission(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateSpawnFreshness(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateBoundedRetry(input: Record<string, unknown>): Record<string, unknown>;
