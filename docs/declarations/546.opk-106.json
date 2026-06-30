@@ -1,0 +1,20 @@
+{
+  "issue_number": 546,
+  "iteration_id": "opk-106",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-06-30T07:31:04.266Z",
+  "baseline": {
+    "commit_sha": "ff7035254a33464491cfcc2b16bf954c2c5fc13f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8fc6cd54f805306aa77722354474cd6154b3d31c69c538312fd32aefc23ba833"
+  },
+  "declared_paths": [
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/gh-inventory-static-guard.test.ts",
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
