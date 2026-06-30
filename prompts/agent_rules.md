@@ -394,11 +394,28 @@ patterns) to GitHub REST unconditionally. **Do not** hand-build REST replacement
 forms.
 
 **Forbidden transports:** agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`,
-throwaway temporary `gh` shims, or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper. Unknown `gh`
+throwaway temporary `gh` shims (including `/tmp/gh-rest-bin/gh`), or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper. Unknown `gh`
 argv passes through to native `gh`; if GraphQL quota is exhausted on an unlisted form, the native
 error is expected — use `gh api <REST path>` (REST endpoint only) for the needed datum, **report**
 the uncovered argv shape for inventory extension, and never fall back to GraphQL/curl/shim
 improvisation.
+
+## Command-runtime bootstrap (Issue #532)
+
+Before autonomous orchestrator command turns run side-effecting pack workflows, the command runtime
+must pass `scripts/orchestrator-command-runtime-preflight.ps1` (or the node bootstrap invoked from
+`scripts/autonomous-orchestrator-surface-bootstrap.sh`). That preflight verifies `pwsh`, `node`,
+pack `scripts/gh` on PATH ahead of other `gh` shims, and a resolvable native terminal `gh`.
+
+- Missing `pwsh`, `node`, or incomplete PATH must **fail closed** with the deterministic bootstrap
+  diagnostic — do not edit shell dotfiles, create temp wrappers, or bypass the command runtime.
+- Structured command wrappers must parse **stdout JSON only**; stderr must stay separate. Mixed
+  stderr/stdout is `structured_output_polluted`, not valid JSON.
+- Uncovered `gh` read forms: report the argv shape for inventory extension and fail closed. Do not
+  author `/tmp/gh-rest-bin/gh`, direct bash REST branches in `scripts/gh`, raw `curl
+  api.github.com`, `gh api graphql`, or `unset GH_WRAPPER_ACTIVE` workarounds.
+- Command-runtime failures that imply worker cleanup/respawn route to Issues **#522/#527** — do not
+  improvise `SURFACE=0`, raw git cleanup, `worktree remove`, or alternate recovery recipes here.
 
 ## Required CI (CI green)
 

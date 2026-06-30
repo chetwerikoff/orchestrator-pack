@@ -338,16 +338,37 @@ function Get-PreRunRecheckSnapshot {
     param(
         [int]$PrNumber,
         [string]$Project,
-        [string]$ConfigYaml = ''
+        [string]$ConfigYaml = '',
+        [hashtable]$ClaimResult = $null
     )
 
+    $transportFailure = $null
+    if ($ClaimResult -and $ClaimResult.acquired) {
+        . (Join-Path $PSScriptRoot 'lib/Get-ClaimedReviewStartSnapshot.ps1')
+        $claimed = Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
+            -ClaimResult $ClaimResult -ResolveChecksBundle {
+            param($openPrs, $prNumber, $repoRoot)
+            Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @($openPrs)
+        }
+        $transportFailure = $claimed.transportFailure
+        $openPrs = @($claimed.openPrs)
+        $reviewRuns = @($claimed.reviewRuns)
+        $sessions = @($claimed.sessions)
+        $checksBundle = @{
+            ciChecksByPr                  = $claimed.ciChecksByPr
+            requiredCheckNamesByPr        = $claimed.requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $claimed.requiredCheckLookupFailedByPr
+        }
+    }
+    else {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessions
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
-        $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
+    }
+    $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
 
     return @{
         openPrs                         = @($openPrs)
@@ -361,6 +382,7 @@ function Get-PreRunRecheckSnapshot {
         workerDeliveries                = Get-ReconcileWorkerDeliveries $deliveryPayload.workerDeliveries
         reactionMessages                = $deliveryPayload.reactionMessages
         reactionConfigUnavailable       = [bool]$deliveryPayload.reactionConfigUnavailable
+        transportFailure                = $transportFailure
     }
 }
 
@@ -371,14 +393,15 @@ function Test-PreRunHeadReadyRecheck {
         [hashtable]$FixtureSnapshot,
         [hashtable]$TrackingState = $null,
         [string]$CiGreenWakeStatePath = '',
-        [string]$ConfigYaml = ''
+        [string]$ConfigYaml = '',
+        [hashtable]$ClaimResult = $null
     )
 
     $fresh = if ($FixtureSnapshot) {
         $FixtureSnapshot
     }
     else {
-        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project -ConfigYaml $ConfigYaml
+        Get-PreRunRecheckSnapshot -PrNumber $PlannedAction.prNumber -Project $Project -ConfigYaml $ConfigYaml -ClaimResult $ClaimResult
     }
 
     if (-not $FixtureSnapshot) {
@@ -396,6 +419,11 @@ function Test-PreRunHeadReadyRecheck {
             emitReviewRun = $false
             reason        = 'reaction_config_unavailable'
         }
+    }
+
+    $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
+    if ($transportDenial) {
+        return $transportDenial
     }
 
     $prKey = [string]$PlannedAction.prNumber
@@ -475,7 +503,7 @@ function Invoke-PlannedReviewRun {
             sessionId   = $SessionId
             startReason = $StartReason
         } -Project $Project -FixtureSnapshot $FixtureSnapshot -TrackingState $TrackingState `
-            -CiGreenWakeStatePath $CiGreenWakeStatePath -ConfigYaml $ConfigYaml
+            -CiGreenWakeStatePath $CiGreenWakeStatePath -ConfigYaml $ConfigYaml -ClaimResult $claim
     }
     catch {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{
@@ -487,7 +515,7 @@ function Invoke-PlannedReviewRun {
 
     if (-not $recheck.emitReviewRun) {
         Write-ReconcileLog "pre-run re-check aborted review for PR #$PrNumber head=$HeadSha ($($recheck.reason))"
-        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+        Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         return @{ started = $false; reason = [string]$recheck.reason; recheckAborted = $true }
     }
 

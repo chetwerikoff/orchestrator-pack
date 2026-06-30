@@ -328,6 +328,26 @@ Operator adoption: follow the Issue #318 section above (shared marker + PATH shi
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
 
+## Autonomous orchestrator command-runtime bootstrap (Issue #532)
+
+Operator adoption after merge:
+
+1. Ensure orchestrator `agentConfig.env.PATH` still prepends pack `scripts/` and `BASH_ENV` points at
+   `scripts/autonomous-orchestrator-surface-bootstrap.sh` (same channel as Issues #318 / #406).
+2. `ao stop` then `ao start` from the operator terminal (not from a managed session).
+3. Run preflight: `pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1` — must pass.
+4. Run wiring guard: `pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1` — must pass.
+5. Run forbidden-workaround guard:
+   `pwsh -NoProfile -File scripts/check-command-runtime-forbidden-workaround.ps1` — must pass.
+6. From an orchestrator bash turn, confirm missing `pwsh` / incomplete PATH fails before side effects
+   with `command-runtime-bootstrap: missing tool …` and does **not** invite temp `gh` wrappers.
+
+Temporary operator REST unblock branches that may remain in `scripts/gh` are still owned by Issues
+**#530/#531** until inventory routes land.
+
+Command-runtime failures that imply worker cleanup/respawn route to Issues **#522/#527** — do not
+improvise alternate recovery from the command runtime.
+
 ## Autonomous orchestrator spawn policy (Issue #458)
 
 Committed spawn policy lives in `docs/autonomous-spawn-policy.json` with explicit default-on toggles

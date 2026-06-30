@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Pack gh shim — always-REST inventory reads; unknown argv passthrough (Issue #431).
+# Temporary operator REST unblock branches remain owned by Issues #530/#531.
 # Prepend pack scripts/ to PATH (#318 / #128) so this intercepts gh invocations.
 set -euo pipefail
 

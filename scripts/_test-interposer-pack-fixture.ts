@@ -174,6 +174,7 @@ export function spawnIsolatedOrchestratorBash(
     env: {
       ...stripInterposerBashEnvBlockers(process.env),
       AO_TMUX_NAME: 'opk-orchestrator',
+      AO_COMMAND_RUNTIME_PREFLIGHT_SKIP: '1',
       BASH_ENV: pack.bootstrapPath,
       PATH: segments.join(':'),
       ...restEnv,

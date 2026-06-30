@@ -371,7 +371,21 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             $FixtureSnapshot
         }
         else {
-            Get-ReviewWakeTriggerSnapshot -PrNumber $planned.prNumber -Project $ProjectId -RepoRoot $RepoRoot
+            . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
+            $claimed = Get-ClaimedReviewStartSnapshot -PrNumber ([int]$planned.prNumber) -Project $ProjectId -RepoRoot $RepoRoot `
+                -ClaimResult $claim -ResolveChecksBundle {
+                param($openPrs, $prNumber, $repoRoot)
+                Get-GhChecksBundleByPr -RepoRoot $repoRoot -OpenPrs @($openPrs) -MergeRequiredNames {
+                    param($payload)
+                    Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
+                        -Subcommand 'merge-required-names' -Payload $payload -Label 'review-wake-trigger' -JsonDepth 20
+                } -ProtectionLookupWarningTemplate 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as degraded'
+            }
+            $cycleState = Get-ReviewWakeCycleStateFromReconcile
+            $claimed.cycleState = $cycleState
+            $claimed.repoRoot = $RepoRoot
+            $claimed.prKey = [string]$planned.prNumber
+            $claimed
         }
         $freshPrKey = if ($fresh.prKey) { $fresh.prKey } else { [string]$planned.prNumber }
         $plannedStartReason = if ($planned.startReason) {
@@ -401,7 +415,12 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         else {
             ''
         }
-        $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
+        $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
+        if ($transportDenial) {
+            $recheck = $transportDenial
+        }
+        else {
+            $recheck = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'preRunRecheck' -Payload @{
             wakeKind = [string]$FilterResult.wakeKind
             planned  = @{
                 prNumber        = $planned.prNumber
@@ -419,6 +438,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
                 requiredCheckLookupFailed = [bool]$fresh.requiredCheckLookupFailedByPr[$freshPrKey]
             }
         }
+        }
     }
     catch {
         Release-ReviewStartClaimAfterRecheckException -ClaimResult $claim -DryRun:$DryRun -ErrorRecord $_
@@ -428,7 +448,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     if (-not $recheck.emitReviewRun) {
         & $LogWriter "review-wake-trigger: pre-run re-check aborted PR #$($planned.prNumber) ($($recheck.reason))"
         if (-not $DryRun) {
-            Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = [string]$recheck.reason } | Out-Null
+            Complete-ReviewStartClaimPreRunRecheckDenied -ClaimResult $claim -Recheck $recheck -ReviewRuns @() | Out-Null
         }
         return @{
             triggered = $false
