@@ -224,6 +224,7 @@ export function matchInventoryRoute(parsed) {
       return null;
     }
     const allowedFieldSets = [
+      ['baseRefName', 'headRefName', 'headRefOid', 'number'],
       ['baseRefName', 'headRefOid', 'number'],
       ['headRefOid', 'number'],
     ];

@@ -528,7 +528,28 @@ Write-Output 'ok'
     expect(result.stdout).toContain('ok');
   });
 
-  it('bundle resolves missing headRefOid via cached pr view (review P2)', () => {
+  it('open-pr list snapshot includes headRefName for byHeadRefName index (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-head-name-index-');
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+$idx = Get-GhFleetOpenPrIndexes -RepoRoot '${packRootEscaped}'
+if (-not $idx.byHeadRefName.ContainsKey('feat/pr-1')) { throw 'expected headRefName index for feat/pr-1' }
+if ([int]$idx.byHeadRefName['feat/pr-1'].number -ne 1) { throw 'expected pr 1 via headRefName' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+    const listCalls = auditLines(harness.auditFile).filter((line) => /\bpr list\b/.test(line));
+    expect(listCalls.some((line) => line.includes('headRefName'))).toBe(true);
+  });
+
+    it('bundle resolves missing headRefOid via cached pr view (review P2)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-number-only-');
     const script = `
 $ErrorActionPreference = 'Stop'

@@ -37,6 +37,13 @@
       "ownerIssue": 431
     },
     {
+      "id": "pr-list-open-headRefOid-baseRefName-headRefName-number",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --state open --json number,headRefOid,baseRefName,headRefName --limit 200",
+      "routeId": "pr-list-open",
+      "ownerIssue": 569
+    },
+    {
       "id": "pr-list-head-number-jq",
       "ownerClass": "rest_inventory",
       "canonical": "gh pr list --head BRANCH --json number --limit 1 --jq .[0].number",

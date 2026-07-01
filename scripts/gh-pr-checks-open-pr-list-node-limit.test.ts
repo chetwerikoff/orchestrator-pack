@@ -34,6 +34,10 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
     expect(prListLine).toMatch(/baseRefName/);
   });
 
+  it('requests headRefName for fleet head-branch indexes', () => {
+    expect(prListLine).toMatch(/headRefName/);
+  });
+
   it('does not request the heavy commits connection in the list query', () => {
     expect(prListLine).not.toMatch(/commits/);
   });

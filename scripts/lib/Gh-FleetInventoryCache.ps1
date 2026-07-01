@@ -224,7 +224,7 @@ function Resolve-GhFleetRepoSlug {
 }
 
 function Get-GhFleetOpenPrListQueryIdentity {
-    return 'open:state=open:json=number,headRefOid,baseRefName:limit=200'
+    return 'open:state=open:json=number,headRefOid,baseRefName,headRefName:limit=200'
 }
 
 function Get-GhFleetOpenPrListSnapshotPaths {
@@ -462,7 +462,7 @@ function Invoke-GhFleetFetchOpenPrListUpstream {
         [string]$FailureKind = 'gh_pr_list_failed'
     )
 
-    $raw = gh pr list --state open --json number,headRefOid,baseRefName --limit 200 2>&1
+    $raw = gh pr list --state open --json number,headRefOid,baseRefName,headRefName --limit 200 2>&1
     if ($LASTEXITCODE -ne 0) {
         $detail = "gh pr list failed (exit $LASTEXITCODE): $raw"
         if ($FailureKind -eq 'snapshot_populate_failed') {
