@@ -1,25 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { functionBody, repoRoot } from './_test-pwsh-helpers.js';
 
-const repoRoot = path.resolve(import.meta.dirname, '..');
 const ghPrChecks = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1'), 'utf8');
 const fleetCache = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1'), 'utf8');
-
-function functionBody(source: string, name: string): string {
-  const start = source.indexOf(`function ${name}`);
-  expect(start, `${name} not found`).toBeGreaterThanOrEqual(0);
-  const open = source.indexOf('{', start);
-  let depth = 0;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === '{') depth++;
-    else if (source[i] === '}') {
-      depth--;
-      if (depth === 0) return source.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unterminated function ${name}`);
-}
 
 describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
   const openPrListBody = functionBody(ghPrChecks, 'Invoke-GhOpenPrList');

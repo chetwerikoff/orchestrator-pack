@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-review-run.mjs';
 import { parseStructuredCommandOutput } from './lib/command-runtime-bootstrap.mjs';
-import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+import { functionBody, psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const ghPrChecksPath = path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1');
 const snapshotPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
@@ -15,21 +15,6 @@ const fakeGhPath = path.join(
 );
 
 const issue566Sha = '31fc8c6143c23e6db1b47fa8525aced110e2f84e';
-
-function functionBody(source: string, name: string): string {
-  const start = source.indexOf(`function ${name}`);
-  expect(start, `${name} not found`).toBeGreaterThanOrEqual(0);
-  const open = source.indexOf('{', start);
-  let depth = 0;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === '{') depth++;
-    else if (source[i] === '}') {
-      depth--;
-      if (depth === 0) return source.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unterminated function ${name}`);
-}
 
 describe('review-start scoped gh JSON capture (#566)', () => {
   const ghSrc = readFileSync(ghPrChecksPath, 'utf8');
@@ -169,7 +154,7 @@ describe('review-start scoped gh JSON capture (#566)', () => {
   it('AC5 diagnostic matrix preserves infrastructure vs PR-state vs command failures', () => {
     const openWithStderr = evaluateOrchestratorTurnGate({
       prNumber: 565,
-      openPrs: [{ number: 565, headRefOid: issue566Sha, state: 'OPEN', baseRefName: 'main' }],
+      openPrs: [{ number: 565, headRefOid: issue566Sha, baseRefName: 'main' }],
       reviewRuns: [],
       sessions: [{ name: 'opk-566', prNumber: 565, status: 'ready_for_review' }],
       sessionId: 'opk-566',
