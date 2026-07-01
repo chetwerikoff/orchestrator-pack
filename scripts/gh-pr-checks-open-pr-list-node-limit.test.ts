@@ -40,7 +40,7 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
 
   it('scopes GitHub lookups to explicit PR numbers', () => {
     expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
-    expect(captureBody).toMatch(/gh pr view/);
+    expect(captureBody).toMatch(/'pr',\s*'view'/);
     expect(body).not.toMatch(/gh pr list/);
   });
 
