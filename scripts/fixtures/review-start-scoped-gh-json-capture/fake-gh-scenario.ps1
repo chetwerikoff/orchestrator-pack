@@ -53,6 +53,23 @@ switch ($scenario) {
         } | ConvertTo-Json -Compress)
         exit 0
     }
+    'fill_stderr_then_valid_json' {
+        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        if (-not $head) {
+            $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e'
+        }
+        if ($prNumber -le 0) { $prNumber = 565 }
+        for ($i = 0; $i -lt 2000; $i++) {
+            Write-Err "stderr-line-$i"
+        }
+        Write-Output (@{
+            number      = $prNumber
+            headRefOid  = $head
+            baseRefName = 'main'
+            state       = 'OPEN'
+        } | ConvertTo-Json -Compress)
+        exit 0
+    }
     default {
         Write-Err "unknown scoped gh scenario: $scenario"
         exit 2

@@ -27,6 +27,9 @@ describe('review-start scoped gh JSON capture (#566)', () => {
     expect(reviewStartBody).toMatch(/Invoke-GhPrViewStructuredCapture/);
     expect(captureBody).toMatch(/RedirectStandardOutput\s*=\s*\$true/);
     expect(captureBody).toMatch(/RedirectStandardError\s*=\s*\$true/);
+    expect(captureBody).toMatch(/ReadToEndAsync/);
+    expect(captureBody).not.toMatch(/StandardOutput\.ReadToEnd\(\)/);
+    expect(captureBody).not.toMatch(/StandardError\.ReadToEnd\(\)/);
     expect(captureBody).not.toMatch(/2>&1/);
     const snapshotSrc = readFileSync(snapshotPath, 'utf8');
     expect(snapshotSrc).toMatch(/Invoke-ReviewStartScopedGhPrView/);
@@ -104,6 +107,27 @@ describe('review-start scoped gh JSON capture (#566)', () => {
     expect(result.count).toBe(0);
     expect(result.reason).toBe('gh_command_failed');
     expect(result.reason).not.toMatch(/empty_child_output|malformed_child_output/);
+  });
+
+  it('AC2c: drains stdout and stderr concurrently without pipe deadlock', () => {
+    const script = `
+      . ${psString(ghPrChecksPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'fill_stderr_then_valid_json'
+      $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(issue566Sha)}
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 565
+      $sw.Stop()
+      [pscustomobject]@{
+        elapsedSec = $sw.Elapsed.TotalSeconds
+        transportFailure = [bool]$lookup.transportFailure
+        head = [string]$lookup.openPrs[0].headRefOid
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.elapsedSec).toBeLessThan(10);
+    expect(result.transportFailure).toBe(false);
+    expect(result.head).toBe(issue566Sha);
   });
 
   it('AC3 positive-outcome: harmless stderr does not deny review-start for green uncovered ready head', () => {
@@ -216,6 +240,31 @@ describe('review-start scoped gh JSON capture (#566)', () => {
     const closed = JSON.parse(runPwsh(closedScript));
     expect(closed.count).toBe(0);
     expect(closed.transportFailure).toBe(false);
+  });
+
+  it('AC3b: pre-claim scoped transport failure short-circuits before live AO reads', () => {
+    const script = `
+      function Get-AoReviewRuns { throw 'ao unavailable without agent-orchestrator.yaml' }
+      function Get-AoStatusSessions { throw 'ao unavailable without agent-orchestrator.yaml' }
+      . ${psString(snapshotPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'malformed_stdout'
+      $snap = Get-ClaimedReviewStartSnapshot -PrNumber 565 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
+        param($openPrs, $prNumber, $repoRoot)
+        @{ ciChecksByPr = @{}; requiredCheckNamesByPr = @{}; requiredCheckLookupFailedByPr = @{} }
+      }
+      [pscustomobject]@{
+        transportOk = [bool]$snap.transportFailure.ok
+        reason = [string]$snap.transportFailure.reason
+        reviewRunCount = @($snap.reviewRuns).Count
+        sessionCount = @($snap.sessions).Count
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.transportOk).toBe(false);
+    expect(result.reason).toMatch(/malformed_child_output|structured_output_polluted/);
+    expect(result.reviewRunCount).toBe(0);
+    expect(result.sessionCount).toBe(0);
   });
 
   it('AC4: pre-claim infrastructure denial does not acquire review-start claim', () => {

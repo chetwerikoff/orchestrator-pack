@@ -111,9 +111,13 @@ function Invoke-GhPrViewStructuredCapture {
     $psi.WorkingDirectory = $RepoRoot
 
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit()
+    $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
+    $stderrDrain = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit() | Out-Null
+    try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
+    try { $stderrDrain.Wait(5000) | Out-Null } catch { }
+    $stdout = [string]$stdoutDrain.Result
+    $stderr = [string]$stderrDrain.Result
     $exitCode = $proc.ExitCode
 
     $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr

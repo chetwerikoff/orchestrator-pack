@@ -19,7 +19,6 @@ function Get-ClaimedReviewStartSnapshot {
         return $FixtureSnapshot
     }
 
-    $transportFailure = $null
     $openPrs = @()
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
@@ -71,7 +70,16 @@ function Get-ClaimedReviewStartSnapshot {
         $scoped = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
         $openPrs = @($scoped.openPrs)
         if ($scoped.transportFailure) {
-            $transportFailure = $scoped.transportFailure
+            # Transport denial must short-circuit before live AO reads — same as acquired-claim path.
+            return @{
+                transportFailure            = $scoped.transportFailure
+                openPrs                     = @()
+                reviewRuns                  = @()
+                sessions                    = @()
+                ciChecksByPr                = @{}
+                requiredCheckNamesByPr      = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
         }
     }
     $reviewRuns = @(
@@ -94,7 +102,7 @@ function Get-ClaimedReviewStartSnapshot {
         ciChecksByPr                  = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
-        transportFailure              = $transportFailure
+        transportFailure              = $null
     }
 }
 
