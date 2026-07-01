@@ -104,6 +104,10 @@ export declare function spawnGrantRepositoryRootsEqual(
 ): { ok: boolean; reason?: string };
 export declare function parseGitSpawnWorktreeAddArgv(argv: string[]): GitSpawnWorktreeAddShape;
 export declare function pathIsUnderCanonicalPrefix(candidatePath: string, prefixPath: string): boolean;
+export declare function evaluateSpawnWorktreePathDurable(input: {
+  canonicalPath?: string;
+  grant?: Record<string, unknown> | null;
+}): { ok: boolean; durable: boolean; reason: string };
 export declare function evaluateSpawnWorktreeGrantConsume(input: {
   grant?: Record<string, unknown> | null;
   argv?: string[];

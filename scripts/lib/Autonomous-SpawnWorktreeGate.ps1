@@ -490,13 +490,18 @@ function Get-GitSpawnWorktreeAddPathFromArgv {
 
 
 function Test-AutonomousSpawnWorktreePathDurable {
-    param([string]$CanonicalPath)
+    param(
+        [string]$CanonicalPath,
+        [object]$GrantRecord
+    )
 
-    if (-not $CanonicalPath) { return $false }
-    if (-not (Test-Path -LiteralPath $CanonicalPath)) { return $false }
+    if (-not $CanonicalPath -or -not $GrantRecord) { return $false }
     try {
-        $inside = [string](& git -C $CanonicalPath rev-parse --is-inside-work-tree 2>$null).Trim()
-        return ($inside -eq 'true')
+        $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluatePathDurable' -Payload @{
+            canonicalPath = $CanonicalPath
+            grant           = $GrantRecord
+        }
+        return [bool]$evaluation.durable
     }
     catch {
         return $false
@@ -641,7 +646,7 @@ function Consume-AutonomousSpawnWorktreeGrant {
             return @{ ok = $false; reason = 'grant_holder_not_live' }
         }
 
-        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath
+        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath -GrantRecord $read.record
         $effectiveRepo = Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot
         $effectiveWorktree = Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot
         $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
@@ -747,7 +752,7 @@ function Finalize-AutonomousSpawnWorktreeGrant {
         if (-not $read.ok) {
             return @{ ok = $false; reason = 'grant_consume_race' }
         }
-        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath
+        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath -GrantRecord $read.record
         $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateFinalize' -Payload @{
             grant            = $read.record
             canonicalPath    = $CanonicalPath

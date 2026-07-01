@@ -493,6 +493,71 @@ export function classifySpawnWorktreeGrantFailureDiagnosis(input) {
 /**
  * @param {object} input
  */
+/**
+ * Verify a reserved/consumed path is a durable AO worktree for the grant (#567).
+ *
+ * @param {object} input
+ */
+export function evaluateSpawnWorktreePathDurable(input) {
+  const canonicalPath = String(input.canonicalPath ?? '').trim();
+  const grant = input.grant ?? null;
+
+  if (!canonicalPath) {
+    return { ok: false, durable: false, reason: 'path_unresolvable' };
+  }
+  if (!existsSync(canonicalPath)) {
+    return { ok: true, durable: false, reason: 'path_missing' };
+  }
+  try {
+    const inside = execFileSync('git', ['-C', canonicalPath, 'rev-parse', '--is-inside-work-tree'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (inside !== 'true') {
+      return { ok: true, durable: false, reason: 'not_git_worktree' };
+    }
+  }
+  catch {
+    return { ok: true, durable: false, reason: 'not_git_worktree' };
+  }
+
+  if (!grant || typeof grant !== 'object') {
+    return { ok: true, durable: false, reason: 'grant_missing' };
+  }
+
+  const grantRepo = String(grant.sourceRepositoryRoot ?? '').trim();
+  if (!grantRepo) {
+    return { ok: true, durable: false, reason: 'grant_repository_unbound' };
+  }
+
+  const targetIdentity = resolveGitRepositoryIdentity(canonicalPath);
+  if (!targetIdentity.ok) {
+    return { ok: true, durable: false, reason: 'repository_root_unresolvable' };
+  }
+
+  const repoBinding = spawnGrantRepositoryRootsEqual(grantRepo, targetIdentity.identity ?? '');
+  if (!repoBinding.ok) {
+    return { ok: true, durable: false, reason: repoBinding.reason ?? 'repository_root_mismatch' };
+  }
+
+  const expectedCommitOid = String(
+    grant.normalizedCommitOid ?? grant.expectedCommitOid ?? '',
+  ).trim();
+  const headAuth = evaluateSpawnWorktreeHeadRefAuthorization({
+    repoRoot: grantRepo,
+    expectedRepoRoot: grantRepo,
+    actualRepoRoot: canonicalPath,
+    expectedRefToken: String(grant.expectedHeadRef ?? 'HEAD'),
+    expectedCommitOid,
+    actualRefToken: 'HEAD',
+  });
+  if (!headAuth.ok) {
+    return { ok: true, durable: false, reason: headAuth.reason ?? 'head_oid_mismatch' };
+  }
+
+  return { ok: true, durable: true, reason: 'spawn_worktree_durable' };
+}
+
 export function evaluateSpawnWorktreeGrantConsume(input) {
   const grant = input.grant ?? null;
   const argv = Array.isArray(input.argv) ? input.argv.map((part) => String(part)) : [];
@@ -509,20 +574,10 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_schema_mismatch' };
   }
   if (grant.consumed) {
-    const consumedPath = String(grant.consumedCanonicalPath ?? '').trim();
-    if (
-      consumedPath
-      && spawnWorktreeCanonicalPathsEqual(consumedPath, canonicalPath)
-      && worktreeDurable
-    ) {
-      return {
-        ok: true,
-        reason: 'spawn_worktree_idempotent',
-        idempotent: true,
-        consumedCanonicalPath: consumedPath,
-      };
+    const consumedPathEarly = String(grant.consumedCanonicalPath ?? '').trim();
+    if (consumedPathEarly && !spawnWorktreeCanonicalPathsEqual(consumedPathEarly, canonicalPath)) {
+      return { ok: false, reason: 'grant_already_consumed' };
     }
-    return { ok: false, reason: 'grant_already_consumed' };
   }
   const reservedPath = spawnWorktreeGrantReservedPath(grant);
   if (reservedPath && !spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
@@ -638,6 +693,23 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     action: String(grant.action ?? ''),
     grantId: String(grant.grantId ?? ''),
   };
+  if (grant.consumed) {
+    const consumedPath = String(grant.consumedCanonicalPath ?? '').trim();
+    if (
+      consumedPath
+      && spawnWorktreeCanonicalPathsEqual(consumedPath, canonicalPath)
+      && worktreeDurable
+    ) {
+      return {
+        ok: true,
+        reason: 'spawn_worktree_idempotent',
+        idempotent: true,
+        consumedCanonicalPath: consumedPath,
+        headRefAudit,
+      };
+    }
+    return { ok: false, reason: 'grant_already_consumed' };
+  }
   if (reservedPath && worktreeDurable) {
     return {
       ok: true,
@@ -908,6 +980,7 @@ export function evaluateBoundaryEscapeSignal(input) {
 runStdinJsonCli('spawn-worktree-grant.mjs', {
   parseSpawnTarget: () => parseSpawnTargetFromArgv(readStdinJson().argv ?? []),
   buildGrant: () => buildSpawnWorktreeGrantRecord(readStdinJson()),
+  evaluatePathDurable: () => evaluateSpawnWorktreePathDurable(readStdinJson()),
   evaluateConsume: () => evaluateSpawnWorktreeGrantConsume(readStdinJson()),
   evaluateFinalize: () => evaluateSpawnWorktreeGrantFinalize(readStdinJson()),
   classifyFailureDiagnosis: () => classifySpawnWorktreeGrantFailureDiagnosis(readStdinJson()),

@@ -9,8 +9,10 @@ import {
   classifySpawnWorktreeGrantFailureDiagnosis,
   evaluateSpawnWorktreeGrantConsume,
   evaluateSpawnWorktreeGrantFinalize,
+  evaluateSpawnWorktreePathDurable,
+  resolveGitRepositoryIdentity,
 } from '../docs/spawn-worktree-grant.mjs';
-import { gitFixtureEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
+import { gitFixtureEnv, resolveTrustedSystemGit, withTempGitRepo } from './_test-git-fixture.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const trustedSystemGit = resolveTrustedSystemGit();
@@ -434,6 +436,20 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(durableReplay.ok).toBe(true);
     expect(durableReplay.reason).toBe('spawn_worktree_idempotent');
     expect(durableReplay.idempotent).toBe(true);
+
+    const globalDeny = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['-C', '/tmp/evil', 'worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: true,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(globalDeny.ok).toBe(false);
+    expect(globalDeny.reason).toBe('git_source_global_denied');
   });
 
   it('reserved plain preexisting path is not idempotent without durable worktree', () => {
@@ -472,6 +488,40 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(verdict.reason).toBe('spawn_worktree_allow');
     expect(verdict.idempotent).toBeUndefined();
     expect(verdict.reservedAttemptCount).toBe(2);
+  });
+
+  it('evaluatePathDurable rejects foreign git repository at grant path', () => {
+    withTempGitRepo((repoA) => {
+      withTempGitRepo((repoB) => {
+        execFileSync('git', ['-C', repoB, 'commit', '--allow-empty', '-m', 'seed'], {
+          env: gitFixtureEnv(),
+          stdio: 'ignore',
+        });
+        const identityA = resolveGitRepositoryIdentity(repoA);
+        const identityB = resolveGitRepositoryIdentity(repoB);
+        expect(identityA.ok).toBe(true);
+        expect(identityB.ok).toBe(true);
+        expect(identityA.identity).not.toBe(identityB.identity);
+
+        const built = buildSpawnWorktreeGrantRecord({
+          argv: ['spawn', '567'],
+          grantId: 'g-foreign-path',
+          projectId: 'orchestrator-pack',
+          holder: { pid: 1 },
+          extraAuthorizedWorktreeNames: ['opk-567-foreign'],
+          sourceRepositoryRoot: identityA.identity!,
+          sourceGitWorktreeRoot: repoA,
+          nowMs: Date.parse('2026-01-01T00:00:00Z'),
+        });
+        expect(built.ok).toBe(true);
+        const verdict = evaluateSpawnWorktreePathDurable({
+          canonicalPath: repoB,
+          grant: built.grant,
+        });
+        expect(verdict.durable).toBe(false);
+        expect(verdict.reason).toBe('repository_root_mismatch');
+      });
+    });
   });
 
   it('evaluateFinalize rejects commit when worktree is not durable', () => {
