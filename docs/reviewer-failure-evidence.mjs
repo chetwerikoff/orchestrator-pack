@@ -27,7 +27,7 @@ export const EVIDENCE_PHASES = new Set([
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SECRET_PATTERN = /(?:token|secret|password|api[_-]?key|authorization|cookie|private[_-]?key|bearer\s)/i;
-const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:Set-)?Cookie:\s*(?!\[REDACTED\])[^\n]*|(?:api[_-]?key|token|secret|password|authorization|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
+const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:Set-)?Cookie:[^\n]*=[^\n]*|(?:api[_-]?key|token|secret|password|authorization|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
 export const OUTPUT_WITHHELD_MARKER = '[output_withheld]';
 const FORBIDDEN_FIELD_NAMES = new Set([
   'env',
@@ -413,7 +413,7 @@ export function buildFailureEvidenceSummary(artifact, options = {}) {
 function stringLooksSecretUnsafe(text) {
   const value = String(text ?? '');
   if (REMAINING_CREDENTIAL_PATTERN.test(value)) return true;
-  if (/(?:Set-)?Cookie:\s*(?!\[REDACTED\])[^\n]*/i.test(value)) return true;
+  if (/(?:Set-)?Cookie:[^\n]*=[^\n]*/i.test(value)) return true;
   if (/(?:token|secret|password|api[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+/i.test(value)) return true;
   return false;
 }
