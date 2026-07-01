@@ -15,6 +15,10 @@ import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const trustedSystemGit = resolveTrustedSystemGit();
 
+function fixturePwshEnv(): Record<string, string> {
+  return { ...gitFixtureEnv() } as Record<string, string>;
+}
+
 function runTrustedGit(args: string[]) {
   execFileSync(trustedSystemGit, args, { cwd: repoRoot, env: gitFixtureEnv(), stdio: 'ignore' });
 }
@@ -118,7 +122,7 @@ describe('spawn worktree grant finalization (#567)', () => {
         consumedAfterReserve = [bool]$afterReserve.record.consumed
       } | ConvertTo-Json -Compress
     `,
-      gitFixtureEnv(),
+      fixturePwshEnv(),
     );
     const reserved = JSON.parse(reserveOutput);
     expect(reserved.reserveOk).toBe(true);
@@ -143,7 +147,7 @@ describe('spawn worktree grant finalization (#567)', () => {
           worktreeExists = Test-Path -LiteralPath ${psString(target)}
         } | ConvertTo-Json -Compress
       `,
-        gitFixtureEnv(),
+        fixturePwshEnv(),
       );
       const parsed = JSON.parse(finalizeOutput);
       expect(parsed.finalizeOk).toBe(true);
