@@ -583,12 +583,6 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   if (reservedPath && !spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
     return { ok: false, reason: 'grant_reserve_path_mismatch' };
   }
-  if (reservedPath) {
-    const attemptCount = spawnWorktreeGrantReservedAttemptCount(grant);
-    if (attemptCount >= SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS) {
-      return { ok: false, reason: 'grant_finalization_attempts_exhausted' };
-    }
-  }
   const expiresAtMs = Date.parse(String(grant.expiresAtUtc ?? ''));
   if (!Number.isFinite(expiresAtMs) || nowMs > expiresAtMs) {
     return { ok: false, reason: 'grant_expired' };
@@ -723,6 +717,13 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
       reservedCanonicalPath: reservedPath,
       headRefAudit,
     };
+  }
+
+  if (reservedPath) {
+    const attemptCount = spawnWorktreeGrantReservedAttemptCount(grant);
+    if (attemptCount >= SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS) {
+      return { ok: false, reason: 'grant_finalization_attempts_exhausted' };
+    }
   }
 
   return {

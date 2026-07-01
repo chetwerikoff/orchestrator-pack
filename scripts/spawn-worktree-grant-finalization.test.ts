@@ -385,6 +385,44 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(verdict.reason).toBe('grant_finalization_attempts_exhausted');
   });
 
+  it('exhausted reserved grant still allows durable idempotent finalize recovery', () => {
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '567'],
+      grantId: 'g-exhausted-durable',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1, processGuid: 'holder-exhausted-durable' },
+      extraAuthorizedWorktreeNames: ['opk-567-exhausted-durable'],
+      sourceRepositoryRoot: repoRoot,
+      sourceGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:00Z'),
+    });
+    expect(built.ok).toBe(true);
+    const prefix = '/tmp/ao/projects/orchestrator-pack/worktrees';
+    const target = path.join(prefix, 'opk-567-exhausted-durable');
+    const grant = {
+      ...built.grant!,
+      worktreeAllowReserved: {
+        worktreeCanonicalPath: target,
+        attemptCount: SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS,
+      },
+    };
+    const verdict = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: true,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.reason).toBe('spawn_worktree_idempotent');
+    expect(verdict.idempotent).toBe(true);
+    expect(verdict.requiresFinalize).toBe(true);
+  });
+
   it('consumed grant requires durable worktree for same-path idempotent replay', () => {
     const built = buildSpawnWorktreeGrantRecord({
       argv: ['spawn', '567'],
