@@ -59,6 +59,7 @@
     "scripts/github-fleet-cache-coalesce.test.ts": "heavy",
     "scripts/github-fleet-cache-memo.test.ts": "heavy",
     "scripts/github-fleet-cache-stale-snapshot.test.ts": "heavy",
+    "scripts/github-fleet-shared-read-model.test.ts": "heavy",
     "scripts/mechanical-json-state.test.ts": "heavy",
     "scripts/mechanical-reconcile-bounds.test.ts": "heavy",
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
