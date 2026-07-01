@@ -89,6 +89,23 @@ describe('review-start scoped gh JSON capture (#566)', () => {
     expect(result.reason).not.toBe('head_resolution_failed');
   });
 
+  it('AC2b: non-zero gh exit reports gh_command_failed before parse-failure reasons', () => {
+    const script = `
+      . ${psString(ghPrChecksPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'gh_command_failed'
+      $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 565
+      [pscustomobject]@{
+        count = @($lookup.openPrs).Count
+        reason = [string]$lookup.transportFailure.reason
+      } | ConvertTo-Json -Compress
+    `;
+    const result = JSON.parse(runPwsh(script));
+    expect(result.count).toBe(0);
+    expect(result.reason).toBe('gh_command_failed');
+    expect(result.reason).not.toMatch(/empty_child_output|malformed_child_output/);
+  });
+
   it('AC3 positive-outcome: harmless stderr does not deny review-start for green uncovered ready head', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'scoped-gh-566-ac3-'));
     try {

@@ -150,18 +150,18 @@ function Invoke-ReviewStartScopedGhPrView {
     )
 
     $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber
+    if ($capture.exitCode -ne 0) {
+        return @{
+            openPrs          = @()
+            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'gh_command_failed')
+        }
+    }
     if (-not $capture.parse.ok) {
         $reason = [string]$capture.parse.reason
         if (-not $reason) { $reason = 'structured_output_polluted' }
         return @{
             openPrs          = @()
             transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason $reason)
-        }
-    }
-    if ($capture.exitCode -ne 0) {
-        return @{
-            openPrs          = @()
-            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'gh_command_failed')
         }
     }
 
