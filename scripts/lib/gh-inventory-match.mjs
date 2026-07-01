@@ -270,6 +270,7 @@ export function matchInventoryRoute(parsed) {
       ['baseRefName', 'headRefOid', 'number', 'state'],
       ['headRefOid', 'headRefName'],
       ['number', 'headRefOid', 'baseRefName', 'state'],
+      ['baseRefName', 'headRefName', 'headRefOid', 'isDraft', 'mergeable', 'number', 'state'],
       ['mergedAt', 'state'],
       ['state'],
     ];

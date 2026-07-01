@@ -340,6 +340,24 @@ Operator adoption after merge:
    `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `open_pr_list_hit` under routine ticks.
 4. Run the ≥72h measurement in `docs/github-fleet-cache-measurement.md` before opening Phase 2 (`#142`).
 
+## GitHub fleet shared PR/CI/protection read model (Issue #569)
+
+Extends the Issue #453 `Gh-FleetInventoryCache.ps1` cache family with shared per-PR view/state,
+CI/check facts keyed by `headSha`, branch-protection policy keyed by `baseBranch`, negative lookup
+facts, and review-freshness metadata. Covered wake-supervisor consumers (`Get-GhChecksBundleByPr`,
+`Invoke-GhOpenPrListForNumbers`, etc.) must read through `Gh-PrChecks.ps1` helpers — not direct
+`gh pr view`, `gh pr checks`, or branch-protection `gh api` calls.
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Optional: `export GH_FLEET_CACHE_AUDIT=1` and inspect
+   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` for `pr_view_hit`, `ci_checks_hit`,
+   and `branch_protection_hit` during warm ticks (not repeated same-key upstream `gh` calls).
+4. Verification: `npm test -- github-fleet-shared-read-model` and
+   `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
+
 ## Issue-keyed task-continuation nudge (Issue #430)
 
 Extends the #384 worker-nudge gate with `task-continuation` — issue-keyed tuples that stay

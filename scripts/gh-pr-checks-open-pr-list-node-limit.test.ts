@@ -52,8 +52,8 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
 describe('Invoke-GhOpenPrListForNumbers query cost', () => {
   const body = functionBody(ghPrChecks, 'Invoke-GhOpenPrListForNumbers');
 
-  it('scopes GitHub lookups to explicit PR numbers', () => {
-    expect(body).toMatch(/gh pr view \$n/);
+  it('scopes GitHub lookups to explicit PR numbers via fleet PR view cache', () => {
+    expect(body).toMatch(/Invoke-GhFleetCachedPrView/);
     expect(body).not.toMatch(/gh pr list/);
   });
 
@@ -62,7 +62,7 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
   });
 
   it('requests PR state and excludes closed or merged PRs', () => {
-    expect(body).toMatch(/gh pr view \$n --json[^\n]*state/);
+    expect(body).toMatch(/Invoke-GhFleetCachedPrView/);
     expect(body).toMatch(/state.*OPEN|OPEN.*state/);
   });
 });

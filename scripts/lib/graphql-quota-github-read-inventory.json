@@ -177,6 +177,12 @@
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}commits/[^/\\s]+(?:\\s|$)",
       "ownerIssue": 453
+    },
+    {
+      "id": "rest-repos-pulls-reviews",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}pulls/[^/\\s]+/reviews(?:\\s|$)",
+      "ownerIssue": 569
     }
   ]
 }

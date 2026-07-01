@@ -45,7 +45,8 @@ function ConvertTo-GhOpenPrArray {
 function Invoke-GhOpenPrList {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
+        [string]$RepoRoot,
+        [string]$Consumer = ''
     )
 
     # List query stays cheap (no commits connection). Head commit dates use the
@@ -57,7 +58,6 @@ function Invoke-GhOpenPrList {
     return $prs
 }
 
-
 function Invoke-GhOpenPrListForNumbers {
     param(
         [Parameter(Mandatory = $true)]
@@ -65,7 +65,8 @@ function Invoke-GhOpenPrListForNumbers {
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
         [int[]]$PrNumbers,
-        [scriptblock]$ProgressWriter = $null
+        [scriptblock]$ProgressWriter = $null,
+        [string]$Consumer = ''
     )
 
     $unique = @($PrNumbers | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
@@ -73,31 +74,24 @@ function Invoke-GhOpenPrListForNumbers {
         return @()
     }
 
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $prs = @()
-        $ordinal = 0
-        foreach ($n in $unique) {
-            $ordinal += 1
-            if ($ProgressWriter) {
-                & $ProgressWriter 'open_pr_view' $ordinal
-            }
-            $raw = gh pr view $n --json number,headRefOid,baseRefName,state 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                continue
-            }
-            $pr = $raw | ConvertFrom-Json
-            if ([string]$pr.state -ne 'OPEN') {
-                continue
-            }
-            Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
-            $prs += $pr
+    $prs = @()
+    $ordinal = 0
+    foreach ($n in $unique) {
+        $ordinal += 1
+        if ($ProgressWriter) {
+            & $ProgressWriter 'open_pr_view' $ordinal
         }
-        return $prs
+        $pr = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $n -Consumer $Consumer
+        if (-not $pr) {
+            continue
+        }
+        if ([string]$pr.state -ne 'OPEN') {
+            continue
+        }
+        Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+        $prs += $pr
     }
-    finally {
-        Pop-Location
-    }
+    return $prs
 }
 
 function Get-GhEncodedBranchRef {
@@ -115,21 +109,33 @@ function Invoke-GhPrChecks {
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
         [int]$PrNumber,
-        [string]$EmptyChecksWarning = ''
+        [string]$HeadSha = '',
+        [string]$EmptyChecksWarning = '',
+        [string]$Consumer = ''
     )
 
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
-        $exitCode = $LASTEXITCODE
-        $checks = ConvertFrom-GhJsonArrayOutput -RawOutput $raw
-        if ($exitCode -ne 0 -and $checks.Count -eq 0 -and $EmptyChecksWarning) {
+    if (-not $HeadSha) {
+        $view = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -Consumer $Consumer
+        $HeadSha = [string]$view.headRefOid
+    }
+    if (-not $HeadSha) {
+        if ($EmptyChecksWarning) {
             Write-GhPrChecksLog $EmptyChecksWarning
         }
-        return @($checks)
+        return @()
     }
-    finally {
-        Pop-Location
+
+    try {
+        return @(Invoke-GhFleetCachedChecksByHeadSha -RepoRoot $RepoRoot -PrNumber $PrNumber -HeadSha $HeadSha -Consumer $Consumer)
+    }
+    catch {
+        if ($_.Exception.Message -match 'snapshot_populate_failed|child_checks_bypass') {
+            throw
+        }
+        if ($EmptyChecksWarning) {
+            Write-GhPrChecksLog $EmptyChecksWarning
+        }
+        return @()
     }
 }
 
@@ -141,54 +147,47 @@ function Get-GhRequiredCheckNamesForPr {
         [int]$PrNumber,
         [Parameter(Mandatory = $true)]
         [scriptblock]$MergeRequiredNames,
-        [string]$ProtectionLookupWarning = ''
+        [string]$ProtectionLookupWarning = '',
+        [string]$Consumer = ''
     )
 
-    Push-Location -LiteralPath $RepoRoot
+    $prView = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -Consumer $Consumer
+    if (-not $prView -or -not $prView.baseRefName) {
+        return @{ names = $null; lookupFailed = $true }
+    }
+
+    $baseRef = [string]$prView.baseRefName
     try {
-        $baseRef = gh pr view $PrNumber --json baseRefName -q .baseRefName 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not $baseRef) {
-            return @{ names = $null; lookupFailed = $true }
-        }
-
-        $repoSlug = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not $repoSlug) {
-            return @{ names = $null; lookupFailed = $true }
-        }
-
-        $encodedBaseRef = Get-GhEncodedBranchRef -BranchRef $baseRef
-        $protectionRaw = gh api "repos/$repoSlug/branches/$encodedBaseRef/protection" 2>&1
-        $protectionExit = $LASTEXITCODE
-        if ($protectionExit -ne 0) {
-            $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
-            if ($protectionText -match 'Branch not protected|404') {
-                return @{ names = $null; lookupFailed = $false }
-            }
-            if ($ProtectionLookupWarning) {
-                Write-GhPrChecksLog ($ProtectionLookupWarning -f $PrNumber, $protectionExit)
-            }
-            return @{ names = $null; lookupFailed = $true }
-        }
-
-        $protection = $protectionRaw | ConvertFrom-Json
-        $rsc = $protection.required_status_checks
-        if (-not $rsc) {
-            return @{ names = $null; lookupFailed = $false }
-        }
-
-        $merged = & $MergeRequiredNames @{
-            contexts = @($rsc.contexts)
-            checks   = @($rsc.checks)
-        }
-        if (-not $merged -or @($merged).Count -eq 0) {
-            return @{ names = $null; lookupFailed = $false }
-        }
-
-        return @{ names = @($merged); lookupFailed = $false }
+        $protectionLookup = Invoke-GhFleetCachedBranchProtection -RepoRoot $RepoRoot -BaseBranch $baseRef -Consumer $Consumer
     }
-    finally {
-        Pop-Location
+    catch {
+        if ($ProtectionLookupWarning) {
+            Write-GhPrChecksLog ($ProtectionLookupWarning -f $PrNumber, 1)
+        }
+        return @{ names = $null; lookupFailed = $true }
     }
+
+    if ($protectionLookup.lookupFailed) {
+        return @{ names = $null; lookupFailed = $true }
+    }
+    if ($protectionLookup.unprotected -or -not $protectionLookup.protection) {
+        return @{ names = $null; lookupFailed = $false }
+    }
+
+    $rsc = $protectionLookup.protection.required_status_checks
+    if (-not $rsc) {
+        return @{ names = $null; lookupFailed = $false }
+    }
+
+    $merged = & $MergeRequiredNames @{
+        contexts = @($rsc.contexts)
+        checks   = @($rsc.checks)
+    }
+    if (-not $merged -or @($merged).Count -eq 0) {
+        return @{ names = $null; lookupFailed = $false }
+    }
+
+    return @{ names = @($merged); lookupFailed = $false }
 }
 
 function Get-GhChecksBundleByPr {
@@ -204,7 +203,8 @@ function Get-GhChecksBundleByPr {
         [string]$EmptyChecksWarningTemplate = 'warn: gh pr checks PR #{0} exit {1} with no parseable JSON',
         [string]$ChecksFetchFailedWarningTemplate = 'warn: checks fetch failed PR #{0} : {1}',
         [string]$ProtectionLookupWarningTemplate = 'warn: branch protection lookup failed PR #{0} (exit {1}); treating required CI as unresolved',
-        [scriptblock]$ProgressWriter = $null
+        [scriptblock]$ProgressWriter = $null,
+        [string]$Consumer = ''
     )
 
     $ciChecksByPr = @{}
@@ -226,11 +226,20 @@ function Get-GhChecksBundleByPr {
             continue
         }
 
+        $expectedHead = [string]$pr.headRefOid
+        $headGate = Test-GhFleetPrHeadCurrent -RepoRoot $RepoRoot -PrNumber $n -ExpectedHeadSha $expectedHead -Consumer $Consumer
+        if (-not $headGate.current) {
+            Write-GhPrChecksLog ("stale head fence PR #{0}: {1}" -f $n, $headGate.reason)
+            continue
+        }
+
         try {
             if ($ProgressWriter) {
                 & $ProgressWriter 'checks' $ordinal
             }
-            $ciChecksByPr[[string]$n] = @(Invoke-GhPrChecks -RepoRoot $RepoRoot -PrNumber $n)
+            $checks = @(Invoke-GhPrChecks -RepoRoot $RepoRoot -PrNumber $n -HeadSha $expectedHead -Consumer $Consumer)
+            $ciChecksByPr[[string]$n] = $checks
+            $null = Test-GhFleetCiDeltaUnchanged -RepoRoot $RepoRoot -HeadSha $expectedHead -Checks $checks -Consumer $Consumer
         }
         catch {
             Write-GhPrChecksLog ($ChecksFetchFailedWarningTemplate -f $n, $_)
@@ -242,7 +251,8 @@ function Get-GhChecksBundleByPr {
         }
         $requiredLookup = Get-GhRequiredCheckNamesForPr -RepoRoot $RepoRoot -PrNumber $n `
             -MergeRequiredNames $MergeRequiredNames `
-            -ProtectionLookupWarning $ProtectionLookupWarningTemplate
+            -ProtectionLookupWarning $ProtectionLookupWarningTemplate `
+            -Consumer $Consumer
         if ($requiredLookup.lookupFailed) {
             $requiredCheckLookupFailedByPr[[string]$n] = $true
         }
