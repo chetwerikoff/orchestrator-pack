@@ -826,8 +826,10 @@ function Test-AutonomousGitDenied {
         if ($spawnAllow.allowed) {
             return @{
                 denied                = $false
-                reason                = 'spawn_worktree_allow'
+                reason                = [string]$spawnAllow.reason
                 normalizedCommitOid   = [string]$spawnAllow.normalizedCommitOid
+                spawnGrantFinalize    = if ($spawnAllow.spawnGrantFinalize) { $spawnAllow.spawnGrantFinalize } else { $null }
+                spawnGrantSkipMutation = [bool]$spawnAllow.spawnGrantSkipMutation
             }
         }
         if ($spawnAllow.reason -and [string]$spawnAllow.reason -ne 'grant_env_missing') {
