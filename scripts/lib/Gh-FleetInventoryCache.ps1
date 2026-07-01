@@ -684,6 +684,37 @@ function ConvertFrom-GhFleetMixedJsonOutput {
     throw "gh output missing terminable JSON $Kind payload: $text"
 }
 
+
+function Get-GhFleetScalarFromMixedOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Raw
+    )
+
+    $text = [string]$Raw
+    if (-not $text.Trim()) {
+        throw 'gh output missing scalar payload: empty'
+    }
+
+    $matched = $null
+    foreach ($line in ($text -split "(`r`n|`n|`r)")) {
+        $trim = $line.Trim()
+        if ($trim -match '^\d+$') {
+            $matched = [int]$trim
+        }
+    }
+    if ($null -ne $matched) {
+        return $matched
+    }
+
+    $trimmed = $text.Trim()
+    if ($trimmed -match '(\d+)\s*$') {
+        return [int]$Matches[1]
+    }
+
+    throw "gh output missing scalar payload: $text"
+}
+
 function Get-GhFleetDatumSnapshotPaths {
     param(
         [string]$CacheRoot,
@@ -913,7 +944,11 @@ function Invoke-GhFleetFetchPrListByHeadUpstream {
     if (-not $raw) {
         return $null
     }
-    $rows = @($raw | ConvertFrom-Json)
+    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
+    if ($null -eq $parsed) {
+        return $null
+    }
+    $rows = @($parsed)
     if ($rows.Count -eq 0) {
         return $null
     }
@@ -932,8 +967,9 @@ function Invoke-GhFleetFetchReviewFreshnessUpstream {
     if ($LASTEXITCODE -ne 0) {
         throw "review freshness lookup failed (exit $LASTEXITCODE): $raw"
     }
+    $reviewCount = Get-GhFleetScalarFromMixedOutput -Raw $raw
     $etag = [string](Get-Date).ToUniversalTime().Ticks
-    return @{ etag = $etag; reviewCount = [int]$raw; fresh = $true }
+    return @{ etag = $etag; reviewCount = $reviewCount; fresh = $true }
 }
 
 function Invoke-GhFleetCachedPrView {

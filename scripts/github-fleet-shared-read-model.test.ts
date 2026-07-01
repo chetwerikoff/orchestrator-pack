@@ -454,6 +454,47 @@ Write-Output 'ok'
     expect(result.stdout).toContain('ok');
   });
 
+    it('head-branch and review freshness tolerate stderr before payload (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-head-review-stderr-');
+    const fakeGh = join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\\''");
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+if [[ "$joined" == *"pr list"* && "$joined" == *"--head"* ]]; then
+  echo 'gh notice: noisy shim warning' >&2
+  echo '[]'
+  exit 0
+fi
+if [[ "$joined" == *"pulls/"*"/reviews"* ]]; then
+  echo 'gh api notice: deprecation warning' >&2
+  echo '2'
+  exit 0
+fi
+exec ${fakeGh} "$@"
+`,
+      { mode: 0o755 },
+    );
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+$n = Invoke-GhFleetCachedPrNumberByHeadBranch -RepoRoot '${packRootEscaped}' -HeadBranch 'feat/no-pr-branch' -Consumer 'stderr-head'
+if ($null -ne $n) { throw 'expected negative head lookup from noisy output' }
+$f = Invoke-GhFleetCachedReviewFreshness -RepoRoot '${packRootEscaped}' -PrNumber 1 -HeadSha 'sha1111111111111111111111111111111111111111' -ReviewActive:$true -Consumer 'stderr-review'
+if ($f.reviewCount -ne 2) { throw "expected review count 2, got $($f.reviewCount)" }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
     it('preserves check JSON when gh pr checks exits nonzero (review P1)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-checks-nonzero-');
     writeFileSync(
