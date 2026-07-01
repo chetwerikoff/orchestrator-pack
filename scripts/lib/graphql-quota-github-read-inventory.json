@@ -37,6 +37,13 @@
       "ownerIssue": 431
     },
     {
+      "id": "pr-list-open-headRefOid-baseRefName-headRefName-number",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh pr list --state open --json number,headRefOid,baseRefName,headRefName --limit 200",
+      "routeId": "pr-list-open",
+      "ownerIssue": 569
+    },
+    {
       "id": "pr-list-head-number-jq",
       "ownerClass": "rest_inventory",
       "canonical": "gh pr list --head BRANCH --json number --limit 1 --jq .[0].number",
@@ -177,6 +184,12 @@
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}commits/[^/\\s]+(?:\\s|$)",
       "ownerIssue": 453
+    },
+    {
+      "id": "rest-repos-pulls-reviews",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}pulls/[^/\\s]+/reviews(?:\\s|$)",
+      "ownerIssue": 569
     }
   ]
 }

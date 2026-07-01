@@ -1,6 +1,6 @@
 # GitHub fleet inventory cache measurement (Issue #453 AC#5)
 
-Phase 1 ships a read-through cache (open-PR list snapshot + SHA→date memo). Use this
+Phase 1 ships a read-through cache (open-PR list snapshot + SHA→date memo + shared PR/CI/protection read model per Issue #569). Use this
 procedure after merge to decide whether Phase 2 hard rate-gating (`#142`) is warranted.
 
 ## Prerequisites
@@ -30,7 +30,7 @@ Each hour record:
 | List overlap ratio | identical `gh pr list` argv within 10s / total list calls |
 | Memo-eligible commit lookups | `gh api …/commits/` calls |
 | Fresh SHA commit lookups | first-seen SHAs per hour |
-| Checks-class calls | `gh pr checks`, branch protection, etc. (out of Phase 1 cache) |
+| Checks-class calls | `gh pr checks`, branch protection, etc. (shared per Issue #569 when supervisor cache warm) |
 | REST `core` used/remaining | `gh api rate_limit` sample |
 | GraphQL used/remaining | `gh api rate_limit` sample |
 
@@ -64,6 +64,6 @@ orchestrator, reviewer load) is **not** a Phase 2 trigger — route to repo-wide
 
 ## Operator adoption check
 
-After supervisor restart, confirm `GH_FLEET_CACHE_AUDIT=1` (if enabled) shows `open_pr_list_hit`
-events under routine ticks and that concurrent children do not produce duplicate list populate
-bursts beyond the AC#1 bound.
+After supervisor restart, confirm `GH_FLEET_CACHE_AUDIT=1` (if enabled) shows `open_pr_list_hit`,
+`ci_checks_hit`, `branch_protection_hit`, and `pr_view_hit` events under routine ticks and that concurrent
+children do not produce duplicate list/checks/protection populate bursts beyond the AC bounds.

@@ -8,6 +8,11 @@
 . (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
 
 $Script:GhFleetOpenPrListTtlSeconds = 15
+$Script:GhFleetPrViewTtlSeconds = 15
+$Script:GhFleetCiChecksTtlSeconds = 15
+$Script:GhFleetBranchProtectionTtlSeconds = 300
+$Script:GhFleetNegativeLookupTtlSeconds = 30
+$Script:GhFleetReviewFreshnessTtlSeconds = 30
 $Script:GhFleetCommitMemoTtlSeconds = 2592000
 $Script:GhFleetCommitNegativeTtlSeconds = 60
 $Script:GhFleetPopulateWaitSeconds = 30
@@ -65,6 +70,11 @@ function Get-GhFleetInventoryCacheTtlSeconds {
 
     $envName = switch ($Name) {
         'openPrList' { 'GH_FLEET_OPEN_PR_LIST_TTL_SECONDS' }
+        'prView' { 'GH_FLEET_PR_VIEW_TTL_SECONDS' }
+        'ciChecks' { 'GH_FLEET_CI_CHECKS_TTL_SECONDS' }
+        'branchProtection' { 'GH_FLEET_BRANCH_PROTECTION_TTL_SECONDS' }
+        'negativeLookup' { 'GH_FLEET_NEGATIVE_LOOKUP_TTL_SECONDS' }
+        'reviewFreshness' { 'GH_FLEET_REVIEW_FRESHNESS_TTL_SECONDS' }
         'commitMemo' { 'GH_FLEET_COMMIT_MEMO_TTL_SECONDS' }
         'commitNegative' { 'GH_FLEET_COMMIT_NEGATIVE_TTL_SECONDS' }
         default { $null }
@@ -79,6 +89,11 @@ function Get-GhFleetInventoryCacheTtlSeconds {
 
     switch ($Name) {
         'openPrList' { return $Script:GhFleetOpenPrListTtlSeconds }
+        'prView' { return $Script:GhFleetPrViewTtlSeconds }
+        'ciChecks' { return $Script:GhFleetCiChecksTtlSeconds }
+        'branchProtection' { return $Script:GhFleetBranchProtectionTtlSeconds }
+        'negativeLookup' { return $Script:GhFleetNegativeLookupTtlSeconds }
+        'reviewFreshness' { return $Script:GhFleetReviewFreshnessTtlSeconds }
         'commitMemo' { return $Script:GhFleetCommitMemoTtlSeconds }
         'commitNegative' { return $Script:GhFleetCommitNegativeTtlSeconds }
         default { return 0 }
@@ -209,7 +224,7 @@ function Resolve-GhFleetRepoSlug {
 }
 
 function Get-GhFleetOpenPrListQueryIdentity {
-    return 'open:state=open:json=number,headRefOid,baseRefName:limit=200'
+    return 'open:state=open:json=number,headRefOid,baseRefName,headRefName:limit=200'
 }
 
 function Get-GhFleetOpenPrListSnapshotPaths {
@@ -447,7 +462,7 @@ function Invoke-GhFleetFetchOpenPrListUpstream {
         [string]$FailureKind = 'gh_pr_list_failed'
     )
 
-    $raw = gh pr list --state open --json number,headRefOid,baseRefName --limit 200 2>&1
+    $raw = gh pr list --state open --json number,headRefOid,baseRefName,headRefName --limit 200 2>&1
     if ($LASTEXITCODE -ne 0) {
         $detail = "gh pr list failed (exit $LASTEXITCODE): $raw"
         if ($FailureKind -eq 'snapshot_populate_failed') {
@@ -596,4 +611,731 @@ function Add-GhPrHeadCommittedAtFromFleetMemo {
     if ($committedDate) {
         $pr | Add-Member -NotePropertyName headCommittedAt -NotePropertyValue $committedDate -Force
     }
+}
+
+function Format-GhFleetCacheFailure {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Kind,
+        [Parameter(Mandatory = $true)]
+        [string]$InnerMessage
+    )
+
+    return "${Kind}: $InnerMessage"
+}
+
+
+function ConvertFrom-GhFleetMixedJsonOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Raw,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('object', 'array')]
+        [string]$Kind
+    )
+
+    $text = [string]$Raw
+    if (-not $text.Trim()) { return $null }
+
+    $openChar = if ($Kind -eq 'array') { '[' } else { '{' }
+    $closeChar = if ($Kind -eq 'array') { ']' } else { '}' }
+    $start = $text.IndexOf($openChar)
+    if ($start -lt 0) { return $null }
+
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    for ($i = $start; $i -lt $text.Length; $i++) {
+        $c = $text[$i]
+        if ($inString) {
+            if ($escaped) {
+                $escaped = $false
+                continue
+            }
+            if ($c -eq '\') {
+                $escaped = $true
+                continue
+            }
+            if ($c -eq '"') {
+                $inString = $false
+            }
+            continue
+        }
+        if ($c -eq '"') {
+            $inString = $true
+            continue
+        }
+        if ($c -eq $openChar) {
+            $depth++
+            continue
+        }
+        if ($c -eq $closeChar) {
+            $depth--
+            if ($depth -eq 0) {
+                $slice = $text.Substring($start, $i - $start + 1)
+                if ($Kind -eq 'array') {
+                    return ,@($slice | ConvertFrom-Json)
+                }
+                return ($slice | ConvertFrom-Json)
+            }
+        }
+    }
+
+    throw "gh output missing terminable JSON $Kind payload: $text"
+}
+
+
+function Get-GhFleetScalarFromMixedOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Raw
+    )
+
+    $text = [string]$Raw
+    if (-not $text.Trim()) {
+        throw 'gh output missing scalar payload: empty'
+    }
+
+    $matched = $null
+    foreach ($line in ($text -split "(`r`n|`n|`r)")) {
+        $trim = $line.Trim()
+        if ($trim -match '^\d+$') {
+            $matched = [int]$trim
+        }
+    }
+    if ($null -ne $matched) {
+        return $matched
+    }
+
+    $trimmed = $text.Trim()
+    if ($trimmed -match '^(\d+)\b') {
+        return [int]$Matches[1]
+    }
+    if ($trimmed -match '(\d+)\s*$') {
+        return [int]$Matches[1]
+    }
+
+    throw "gh output missing scalar payload: $text"
+}
+
+function Get-GhFleetDatumSnapshotPaths {
+    param(
+        [string]$CacheRoot,
+        [string]$Category,
+        [string]$CacheKey
+    )
+
+    $dir = Join-Path $CacheRoot $Category
+    return @{
+        Dir          = $dir
+        SnapshotPath = Join-Path $dir "$CacheKey.json"
+        LockPath     = Join-Path $dir "$CacheKey.populate.lock"
+        TempPath     = Join-Path $dir "$CacheKey.tmp"
+    }
+}
+
+function Write-GhFleetCacheAuditLine {
+    param(
+        [string]$Event,
+        [hashtable]$Fields = @{}
+    )
+
+    Write-GhFleetInventoryCacheAudit -Event $Event -Fields $Fields
+    if (-not $env:GH_FLEET_TEST_AUDIT_FILE) { return }
+    $parts = @("fleet-cache-audit event=$Event")
+    foreach ($key in ($Fields.Keys | Sort-Object)) {
+        $parts += "$key=$($Fields[$key])"
+    }
+    Add-Content -LiteralPath $env:GH_FLEET_TEST_AUDIT_FILE -Value ($parts -join ' ')
+}
+
+function Invoke-GhFleetCachedDatum {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$Category,
+        [Parameter(Mandatory = $true)]
+        [string]$CacheKey,
+        [Parameter(Mandatory = $true)]
+        [string]$TtlName,
+        [Parameter(Mandatory = $true)]
+        [string]$BypassKind,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$AuditEvents,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$PopulateUpstream,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$BuildSuccessEnvelope,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ExtractFromEnvelope,
+        [string]$Consumer = '',
+        [switch]$AllowNegativeEnvelope
+    )
+
+    $cacheRoot = Get-GhFleetInventoryCacheRoot
+    if (-not $cacheRoot) {
+        Push-Location -LiteralPath $RepoRoot
+        try {
+            return & $PopulateUpstream
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    $paths = Get-GhFleetDatumSnapshotPaths -CacheRoot $cacheRoot -Category $Category -CacheKey $CacheKey
+    $ttl = Get-GhFleetInventoryCacheTtlSeconds -Name $TtlName
+    $auditBase = @{ key = $CacheKey; ttlSeconds = $ttl; consumer = $Consumer }
+
+    $readEnvelope = {
+        param($Path, $Ttl)
+        $entry = Read-GhFleetCacheEnvelope -Path $Path -TtlSeconds $Ttl
+        if (-not $entry) { return $null }
+        if ($entry.kind -eq 'error') {
+            return $null
+        }
+        if ($AllowNegativeEnvelope -and $entry.envelope.negative) {
+            return @{ kind = 'negative'; envelope = $entry.envelope }
+        }
+        return @{ kind = 'data'; envelope = $entry.envelope }
+    }
+
+    $warm = & $readEnvelope $paths.SnapshotPath $ttl
+    if ($warm) {
+        $saved = if ($warm.kind -eq 'negative') { 1 } else { 1 }
+        Write-GhFleetCacheAuditLine -Event $AuditEvents.hit -Fields ($auditBase + @{ savedDuplicateCalls = $saved })
+        return & $ExtractFromEnvelope $warm.envelope
+    }
+
+    for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
+        $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
+        if ($acquired) {
+            try {
+                $warmAfterLock = & $readEnvelope $paths.SnapshotPath $ttl
+                if ($warmAfterLock) {
+                    Write-GhFleetCacheAuditLine -Event $AuditEvents.hit -Fields ($auditBase + @{ afterLock = $true; savedDuplicateCalls = 1 })
+                    return & $ExtractFromEnvelope $warmAfterLock.envelope
+                }
+
+                Push-Location -LiteralPath $RepoRoot
+                try {
+                    $data = & $PopulateUpstream
+                }
+                catch {
+                    $failureMessage = Format-GhFleetCacheFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
+                    Write-GhFleetCacheAuditLine -Event $AuditEvents.populateFailed -Fields ($auditBase + @{ message = $failureMessage })
+                    throw $failureMessage
+                }
+                finally {
+                    Pop-Location
+                }
+
+                $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
+                $envelope = & $BuildSuccessEnvelope $data
+                $envelope.storedAt = (Get-Date).ToUniversalTime().ToString('o')
+                $envelope.expiresAt = $expiresAt
+                Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope $envelope
+                Write-GhFleetCacheAuditLine -Event $AuditEvents.populate -Fields ($auditBase + @{ generation = $envelope.storedAt })
+                return $data
+            }
+            finally {
+                Exit-GhFleetPopulateLock -LockPath $paths.LockPath
+            }
+        }
+
+        $waitedEntry = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.SnapshotPath -LockPath $paths.LockPath -TtlSeconds $ttl
+        if ($waitedEntry -and $waitedEntry.kind -eq 'error') {
+            $waitedEntry = $null
+        }
+        if ($waitedEntry) {
+            if ($AllowNegativeEnvelope -and $waitedEntry.envelope.negative) {
+                Write-GhFleetCacheAuditLine -Event $AuditEvents.waitHit -Fields ($auditBase + @{ savedDuplicateCalls = 1 })
+                return & $ExtractFromEnvelope $waitedEntry.envelope
+            }
+            Write-GhFleetCacheAuditLine -Event $AuditEvents.waitHit -Fields ($auditBase + @{ savedDuplicateCalls = 1 })
+            return & $ExtractFromEnvelope $waitedEntry.envelope
+        }
+
+        if (Test-Path -LiteralPath $paths.LockPath -PathType Leaf) {
+            break
+        }
+    }
+
+    Write-GhFleetCacheAuditLine -Event $AuditEvents.bypass -Fields $auditBase
+    throw (Format-GhFleetCacheFailure -Kind $BypassKind -InnerMessage "shared snapshot bypass (key=$CacheKey)")
+}
+
+function Invoke-GhFleetFetchPrViewUpstream {
+    param(
+        [int]$PrNumber
+    )
+
+    $raw = gh pr view $PrNumber --json number,headRefOid,baseRefName,state,isDraft,mergeable,headRefName 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh pr view failed (exit $LASTEXITCODE): $raw"
+    }
+    if (-not $raw) {
+        return $null
+    }
+    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'object'
+    if (-not $parsed) {
+        throw "gh pr view failed (exit 0): no parseable JSON object in output: $raw"
+    }
+    return $parsed
+}
+
+function Invoke-GhFleetFetchChecksUpstream {
+    param([int]$PrNumber)
+
+    $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
+    $exitCode = $LASTEXITCODE
+    if (-not $raw) {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): no parseable JSON output"
+        }
+        return @()
+    }
+    try {
+        $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
+    }
+    catch {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): $raw"
+        }
+        throw
+    }
+    if ($null -eq $parsed) {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): $raw"
+        }
+        return @()
+    }
+    return @($parsed)
+}
+
+function Invoke-GhFleetFetchBranchProtectionUpstream {
+    param(
+        [string]$RepoSlug,
+        [string]$BaseBranch
+    )
+
+    $encodedBaseRef = [uri]::EscapeDataString([string]$BaseBranch)
+    $protectionRaw = gh api "repos/$RepoSlug/branches/$encodedBaseRef/protection" 2>&1
+    $protectionExit = $LASTEXITCODE
+    if ($protectionExit -ne 0) {
+        $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
+        if ($protectionText -match 'Branch not protected|404') {
+            return @{ lookupFailed = $false; unprotected = $true; protection = $null }
+        }
+        throw "branch protection lookup failed (exit $protectionExit): $protectionText"
+    }
+    $protection = ConvertFrom-GhFleetMixedJsonOutput -Raw $protectionRaw -Kind 'object'
+    if (-not $protection) {
+        throw "branch protection lookup failed (exit 0): no parseable JSON object in output: $protectionRaw"
+    }
+    return @{ lookupFailed = $false; unprotected = $false; protection = $protection }
+}
+
+function Invoke-GhFleetFetchPrListByHeadUpstream {
+    param([string]$HeadBranch)
+
+    $raw = gh pr list --head $HeadBranch --json number,url --limit 1 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh pr list --head failed (exit $LASTEXITCODE): $raw"
+    }
+    if (-not $raw) {
+        return $null
+    }
+    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
+    if ($null -eq $parsed) {
+        return $null
+    }
+    $rows = @($parsed)
+    if ($rows.Count -eq 0) {
+        return $null
+    }
+    $n = [int]$rows[0].number
+    if ($n -le 0) { return $null }
+    return $n
+}
+
+function Invoke-GhFleetFetchReviewFreshnessUpstream {
+    param(
+        [string]$RepoSlug,
+        [int]$PrNumber
+    )
+
+    $raw = gh api "repos/$RepoSlug/pulls/$PrNumber/reviews" --jq 'length' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "review freshness lookup failed (exit $LASTEXITCODE): $raw"
+    }
+    $reviewCount = Get-GhFleetScalarFromMixedOutput -Raw $raw
+    $etag = [string](Get-Date).ToUniversalTime().Ticks
+    return @{ etag = $etag; reviewCount = $reviewCount; fresh = $true }
+}
+
+function Invoke-GhFleetCachedPrView {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber,
+        [string]$Consumer = ''
+    )
+
+    if ($PrNumber -le 0) { return $null }
+
+    $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $cacheKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|pr|$PrNumber"
+    return Invoke-GhFleetCachedDatum `
+        -RepoRoot $RepoRoot `
+        -Category 'pr-view' `
+        -CacheKey $cacheKey `
+        -TtlName 'prView' `
+        -BypassKind 'child_view_bypass' `
+        -Consumer $Consumer `
+        -AuditEvents @{
+            populate       = 'pr_view_populate'
+            hit            = 'pr_view_hit'
+            waitHit        = 'pr_view_wait_hit'
+            bypass         = 'child_view_bypass'
+            populateFailed = 'snapshot_populate_failed'
+        } `
+        -PopulateUpstream { Invoke-GhFleetFetchPrViewUpstream -PrNumber $PrNumber } `
+        -BuildSuccessEnvelope {
+            param($Data)
+            return @{ pr = $Data; negative = $false }
+        } `
+        -ExtractFromEnvelope {
+            param($Envelope)
+            return $Envelope.pr
+        }
+}
+
+function Invoke-GhFleetCachedChecksByHeadSha {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadSha,
+        [string]$Consumer = ''
+    )
+
+    if ($PrNumber -le 0 -or -not $HeadSha) { return @() }
+
+    $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $cacheKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|checks|$HeadSha"
+    $checks = Invoke-GhFleetCachedDatum `
+        -RepoRoot $RepoRoot `
+        -Category 'ci-checks' `
+        -CacheKey $cacheKey `
+        -TtlName 'ciChecks' `
+        -BypassKind 'child_checks_bypass' `
+        -Consumer $Consumer `
+        -AuditEvents @{
+            populate       = 'ci_checks_populate'
+            hit            = 'ci_checks_hit'
+            waitHit        = 'ci_checks_wait_hit'
+            bypass         = 'child_checks_bypass'
+            populateFailed = 'snapshot_populate_failed'
+        } `
+        -PopulateUpstream { Invoke-GhFleetFetchChecksUpstream -PrNumber $PrNumber } `
+        -BuildSuccessEnvelope {
+            param($Data)
+            return @{ checks = @($Data); headSha = $HeadSha; negative = $false }
+        } `
+        -ExtractFromEnvelope {
+            param($Envelope)
+            return @($Envelope.checks)
+        }
+    return @($checks)
+}
+
+function Invoke-GhFleetCachedBranchProtection {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$BaseBranch,
+        [string]$Consumer = ''
+    )
+
+    if (-not $BaseBranch) {
+        return @{ lookupFailed = $true; unprotected = $false; protection = $null }
+    }
+
+    $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $cacheKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|protection|$BaseBranch"
+    return Invoke-GhFleetCachedDatum `
+        -RepoRoot $RepoRoot `
+        -Category 'branch-protection' `
+        -CacheKey $cacheKey `
+        -TtlName 'branchProtection' `
+        -BypassKind 'child_protection_bypass' `
+        -Consumer $Consumer `
+        -AuditEvents @{
+            populate       = 'branch_protection_populate'
+            hit            = 'branch_protection_hit'
+            waitHit        = 'branch_protection_wait_hit'
+            bypass         = 'child_protection_bypass'
+            populateFailed = 'snapshot_populate_failed'
+        } `
+        -PopulateUpstream { Invoke-GhFleetFetchBranchProtectionUpstream -RepoSlug $repoSlug -BaseBranch $BaseBranch } `
+        -BuildSuccessEnvelope {
+            param($Data)
+            return @{
+                lookupFailed = [bool]$Data.lookupFailed
+                unprotected  = [bool]$Data.unprotected
+                protection   = $Data.protection
+                negative     = $false
+            }
+        } `
+        -ExtractFromEnvelope {
+            param($Envelope)
+            return @{
+                lookupFailed = [bool]$Envelope.lookupFailed
+                unprotected  = [bool]$Envelope.unprotected
+                protection   = $Envelope.protection
+            }
+        }
+}
+
+function Invoke-GhFleetCachedNegativeLookup {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$NegativeKind,
+        [Parameter(Mandatory = $true)]
+        [string]$IdentityKey,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$PopulateWhenMiss,
+        [string]$Consumer = ''
+    )
+
+    $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $cacheKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|neg|$NegativeKind|$IdentityKey"
+    return Invoke-GhFleetCachedDatum `
+        -RepoRoot $RepoRoot `
+        -Category 'negative-lookup' `
+        -CacheKey $cacheKey `
+        -TtlName 'negativeLookup' `
+        -BypassKind 'child_negative_bypass' `
+        -Consumer $Consumer `
+        -AllowNegativeEnvelope `
+        -AuditEvents @{
+            populate       = 'negative_lookup_populate'
+            hit            = 'negative_lookup_hit'
+            waitHit        = 'negative_lookup_wait_hit'
+            bypass         = 'child_negative_bypass'
+            populateFailed = 'snapshot_populate_failed'
+        } `
+        -PopulateUpstream {
+            $result = & $PopulateWhenMiss
+            return $result
+        } `
+        -BuildSuccessEnvelope {
+            param($Data)
+            if ($Data.negative) {
+                return @{ negative = $true; fact = $Data.fact }
+            }
+            return @{ negative = $false; fact = $Data.fact }
+        } `
+        -ExtractFromEnvelope {
+            param($Envelope)
+            if ($Envelope.negative) {
+                return @{ negative = $true; fact = $Envelope.fact }
+            }
+            return @{ negative = $false; fact = $Envelope.fact }
+        }
+}
+
+function Invoke-GhFleetCachedPrNumberByHeadBranch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadBranch,
+        [string]$Consumer = ''
+    )
+
+    $lookup = Invoke-GhFleetCachedNegativeLookup `
+        -RepoRoot $RepoRoot `
+        -NegativeKind 'no_pr_by_head' `
+        -IdentityKey $HeadBranch `
+        -Consumer $Consumer `
+        -PopulateWhenMiss {
+            $prNumber = Invoke-GhFleetFetchPrListByHeadUpstream -HeadBranch $HeadBranch
+            if (-not $prNumber) {
+                return @{ negative = $true; fact = 'no_pr' }
+            }
+            return @{ negative = $false; fact = $prNumber }
+        }
+    if ($lookup.negative) { return $null }
+    return [int]$lookup.fact
+}
+
+function Invoke-GhFleetCachedReviewFreshness {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadSha,
+        [Parameter(Mandatory = $true)]
+        [bool]$ReviewActive,
+        [string]$Consumer = ''
+    )
+
+    if (-not $ReviewActive) {
+        $neg = Invoke-GhFleetCachedNegativeLookup `
+            -RepoRoot $RepoRoot `
+            -NegativeKind 'no_review_active' `
+            -IdentityKey "$PrNumber|$HeadSha" `
+            -Consumer $Consumer `
+            -PopulateWhenMiss { return @{ negative = $true; fact = 'no_review_active' } }
+        return @{ active = $false; fresh = $true; etag = $null; upstreamCalls = 0; negative = $true }
+    }
+
+    $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $cacheKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|review|$PrNumber|$HeadSha"
+    return Invoke-GhFleetCachedDatum `
+        -RepoRoot $RepoRoot `
+        -Category 'review-freshness' `
+        -CacheKey $cacheKey `
+        -TtlName 'reviewFreshness' `
+        -BypassKind 'child_review_bypass' `
+        -Consumer $Consumer `
+        -AuditEvents @{
+            populate       = 'review_freshness_populate'
+            hit            = 'review_freshness_hit'
+            waitHit        = 'review_freshness_wait_hit'
+            bypass         = 'child_review_bypass'
+            populateFailed = 'snapshot_populate_failed'
+        } `
+        -PopulateUpstream { Invoke-GhFleetFetchReviewFreshnessUpstream -RepoSlug $repoSlug -PrNumber $PrNumber } `
+        -BuildSuccessEnvelope {
+            param($Data)
+            return @{ freshness = $Data; negative = $false }
+        } `
+        -ExtractFromEnvelope {
+            param($Envelope)
+            return @{ active = $true; fresh = $true; etag = $Envelope.freshness.etag; reviewCount = $Envelope.freshness.reviewCount }
+        }
+}
+
+function Test-GhFleetPrHeadCurrent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedHeadSha,
+        [string]$Consumer = ''
+    )
+
+    try {
+        $view = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -Consumer $Consumer
+    }
+    catch {
+        return @{ current = $false; reason = 'pr_view_failed' }
+    }
+    if (-not $view) {
+        return @{ current = $false; reason = 'no_pr_view' }
+    }
+    $cachedHead = [string]$view.headRefOid
+    if ($cachedHead -ne $ExpectedHeadSha) {
+        return @{
+            current      = $false
+            reason       = 'stale_head'
+            cachedHead   = $cachedHead
+            expectedHead = $ExpectedHeadSha
+        }
+    }
+    return @{ current = $true; view = $view; cachedHead = $cachedHead }
+}
+
+function Get-GhFleetOpenPrIndexes {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $prs = @(Invoke-GhFleetCachedOpenPrListRaw -RepoRoot $RepoRoot)
+    $byNumber = @{}
+    $byHeadRefName = @{}
+    $byHeadSha = @{}
+    foreach ($pr in $prs) {
+        $n = [string]$pr.number
+        if ($n) { $byNumber[$n] = $pr }
+        $headName = [string]$pr.headRefName
+        if ($headName) { $byHeadRefName[$headName] = $pr }
+        $headSha = [string]$pr.headRefOid
+        if ($headSha) { $byHeadSha[$headSha] = $pr }
+    }
+    return @{
+        prs           = $prs
+        byNumber      = $byNumber
+        byHeadRefName = $byHeadRefName
+        byHeadSha     = $byHeadSha
+    }
+}
+
+function Test-GhFleetCiDeltaUnchanged {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadSha,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Checks,
+        [string]$Consumer = ''
+    )
+
+    $fingerprint = ($Checks | ForEach-Object { "$($_.name):$($_.state)" }) -join '|'
+    $lookup = Invoke-GhFleetCachedNegativeLookup `
+        -RepoRoot $RepoRoot `
+        -NegativeKind 'no_ci_delta' `
+        -IdentityKey "$HeadSha|$fingerprint" `
+        -Consumer $Consumer `
+        -PopulateWhenMiss {
+            return @{ negative = $true; fact = 'no_ci_delta' }
+        }
+    return [bool]$lookup.negative
+}
+
+function Test-GhFleetHeadAlreadyCovered {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$HeadSha,
+        [string]$Consumer = ''
+    )
+
+    $lookup = Invoke-GhFleetCachedNegativeLookup `
+        -RepoRoot $RepoRoot `
+        -NegativeKind 'head_already_covered' `
+        -IdentityKey $HeadSha `
+        -Consumer $Consumer `
+        -PopulateWhenMiss {
+            return @{ negative = $true; fact = 'head_already_covered' }
+        }
+    return [bool]$lookup.negative
+}
+
+function Get-GhFleetInventoryCacheTtlContract {
+  return [ordered]@{
+    prView           = Get-GhFleetInventoryCacheTtlSeconds -Name 'prView'
+    ciChecks         = Get-GhFleetInventoryCacheTtlSeconds -Name 'ciChecks'
+    branchProtection = Get-GhFleetInventoryCacheTtlSeconds -Name 'branchProtection'
+    negativeLookup   = Get-GhFleetInventoryCacheTtlSeconds -Name 'negativeLookup'
+    reviewFreshness  = Get-GhFleetInventoryCacheTtlSeconds -Name 'reviewFreshness'
+    openPrList       = Get-GhFleetInventoryCacheTtlSeconds -Name 'openPrList'
+  }
 }

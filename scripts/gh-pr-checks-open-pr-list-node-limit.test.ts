@@ -19,6 +19,10 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
     expect(prListLine).toMatch(/baseRefName/);
   });
 
+  it('requests headRefName for fleet head-branch indexes', () => {
+    expect(prListLine).toMatch(/headRefName/);
+  });
+
   it('does not request the heavy commits connection in the list query', () => {
     expect(prListLine).not.toMatch(/commits/);
   });
@@ -36,11 +40,9 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
 
 describe('Invoke-GhOpenPrListForNumbers query cost', () => {
   const body = functionBody(ghPrChecks, 'Invoke-GhOpenPrListForNumbers');
-  const captureBody = functionBody(ghPrChecks, 'Invoke-GhPrViewStructuredCapture');
 
-  it('scopes GitHub lookups to explicit PR numbers', () => {
-    expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
-    expect(captureBody).toMatch(/'pr',\s*'view'/);
+  it('scopes GitHub lookups to explicit PR numbers via fleet PR view cache', () => {
+    expect(body).toMatch(/Invoke-GhFleetCachedPrView/);
     expect(body).not.toMatch(/gh pr list/);
   });
 
@@ -48,13 +50,23 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
     expect(body).toMatch(/Add-GhPrHeadCommittedAtFromFleetMemo/);
   });
 
-  it('parses scoped pr view JSON from stdout only without stderr merge (#566)', () => {
-    expect(body).not.toMatch(/2>&1/);
-    expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
+  it('requests PR state and excludes closed or merged PRs', () => {
+    expect(body).toMatch(/Invoke-GhFleetCachedPrView/);
+    expect(body).toMatch(/state.*OPEN|OPEN.*state/);
+  });
+});
+
+describe('Invoke-GhPrViewStructuredCapture review-start path (#566)', () => {
+  const captureBody = functionBody(ghPrChecks, 'Invoke-GhPrViewStructuredCapture');
+
+  it('captures scoped pr view with separated stdout/stderr', () => {
+    expect(captureBody).toMatch(/'pr',\s*'view'/);
+    expect(captureBody).toMatch(/RedirectStandardOutput/);
+    expect(captureBody).toMatch(/RedirectStandardError/);
+    expect(captureBody).not.toMatch(/2>&1/);
   });
 
-  it('requests PR state and excludes closed or merged PRs', () => {
+  it('requests PR state in scoped review-start json fields', () => {
     expect(captureBody).toMatch(/--json[^\n]*state/);
-    expect(body).toMatch(/state.*OPEN|OPEN.*state/);
   });
 });
