@@ -708,6 +708,9 @@ function Get-GhFleetScalarFromMixedOutput {
     }
 
     $trimmed = $text.Trim()
+    if ($trimmed -match '^(\d+)\b') {
+        return [int]$Matches[1]
+    }
     if ($trimmed -match '(\d+)\s*$') {
         return [int]$Matches[1]
     }
