@@ -624,6 +624,66 @@ function Format-GhFleetCacheFailure {
     return "${Kind}: $InnerMessage"
 }
 
+
+function ConvertFrom-GhFleetMixedJsonOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Raw,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('object', 'array')]
+        [string]$Kind
+    )
+
+    $text = [string]$Raw
+    if (-not $text.Trim()) { return $null }
+
+    $openChar = if ($Kind -eq 'array') { '[' } else { '{' }
+    $closeChar = if ($Kind -eq 'array') { ']' } else { '}' }
+    $start = $text.IndexOf($openChar)
+    if ($start -lt 0) { return $null }
+
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    for ($i = $start; $i -lt $text.Length; $i++) {
+        $c = $text[$i]
+        if ($inString) {
+            if ($escaped) {
+                $escaped = $false
+                continue
+            }
+            if ($c -eq '\') {
+                $escaped = $true
+                continue
+            }
+            if ($c -eq '"') {
+                $inString = $false
+            }
+            continue
+        }
+        if ($c -eq '"') {
+            $inString = $true
+            continue
+        }
+        if ($c -eq $openChar) {
+            $depth++
+            continue
+        }
+        if ($c -eq $closeChar) {
+            $depth--
+            if ($depth -eq 0) {
+                $slice = $text.Substring($start, $i - $start + 1)
+                if ($Kind -eq 'array') {
+                    return ,@($slice | ConvertFrom-Json)
+                }
+                return ($slice | ConvertFrom-Json)
+            }
+        }
+    }
+
+    throw "gh output missing terminable JSON $Kind payload: $text"
+}
+
 function Get-GhFleetDatumSnapshotPaths {
     param(
         [string]$CacheRoot,
@@ -784,7 +844,11 @@ function Invoke-GhFleetFetchPrViewUpstream {
     if (-not $raw) {
         return $null
     }
-    return ($raw | ConvertFrom-Json)
+    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'object'
+    if (-not $parsed) {
+        throw "gh pr view failed (exit 0): no parseable JSON object in output: $raw"
+    }
+    return $parsed
 }
 
 function Invoke-GhFleetFetchChecksUpstream {
@@ -798,14 +862,22 @@ function Invoke-GhFleetFetchChecksUpstream {
         }
         return @()
     }
-    $start = ([string]$raw).IndexOf('[')
-    if ($start -lt 0) {
+    try {
+        $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
+    }
+    catch {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): $raw"
+        }
+        throw
+    }
+    if ($null -eq $parsed) {
         if ($exitCode -ne 0) {
             throw "gh pr checks failed (exit $exitCode): $raw"
         }
         return @()
     }
-    return @(([string]$raw).Substring($start) | ConvertFrom-Json)
+    return @($parsed)
 }
 
 function Invoke-GhFleetFetchBranchProtectionUpstream {
@@ -824,7 +896,11 @@ function Invoke-GhFleetFetchBranchProtectionUpstream {
         }
         throw "branch protection lookup failed (exit $protectionExit): $protectionText"
     }
-    return @{ lookupFailed = $false; unprotected = $false; protection = ($protectionRaw | ConvertFrom-Json) }
+    $protection = ConvertFrom-GhFleetMixedJsonOutput -Raw $protectionRaw -Kind 'object'
+    if (-not $protection) {
+        throw "branch protection lookup failed (exit 0): no parseable JSON object in output: $protectionRaw"
+    }
+    return @{ lookupFailed = $false; unprotected = $false; protection = $protection }
 }
 
 function Invoke-GhFleetFetchPrListByHeadUpstream {

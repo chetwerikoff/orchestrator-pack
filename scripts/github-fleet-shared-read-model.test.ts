@@ -413,7 +413,48 @@ Write-Output 'recovered'
     expect(GH_AUDIT_CALL_PATTERNS[2].test('gh pr checks 1 --json name')).toBe(true);
   });
 
-  it('preserves check JSON when gh pr checks exits nonzero (review P1)', () => {
+  it('pr view and branch protection tolerate stderr before JSON on exit 0 (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-json-stderr-');
+    const fakeGh = join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\\''");
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+if [[ "$joined" == *"pr view"* ]]; then
+  echo 'gh notice: noisy shim warning' >&2
+  echo '{"number":1,"headRefOid":"sha1111111111111111111111111111111111111111","baseRefName":"main","headRefName":"feat/pr-1","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}'
+  exit 0
+fi
+if [[ "$joined" == *"branches/"*"/protection"* ]]; then
+  echo 'gh api notice: deprecation warning' >&2
+  echo '{"required_status_checks":{"contexts":["Verify orchestrator-pack structure"],"checks":[]}}'
+  exit 0
+fi
+exec ${fakeGh} "$@"
+`,
+      { mode: 0o755 },
+    );
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+$view = Invoke-GhFleetCachedPrView -RepoRoot '${packRootEscaped}' -PrNumber 1 -Consumer 'stderr-json'
+if (-not $view -or [int]$view.number -ne 1) { throw 'expected pr view from noisy output' }
+$protection = Invoke-GhFleetCachedBranchProtection -RepoRoot '${packRootEscaped}' -BaseBranch 'main' -Consumer 'stderr-json'
+if (-not $protection.protection) { throw 'expected branch protection from noisy output' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
+    it('preserves check JSON when gh pr checks exits nonzero (review P1)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-checks-nonzero-');
     writeFileSync(
       join(harness.root, 'bin/gh'),
