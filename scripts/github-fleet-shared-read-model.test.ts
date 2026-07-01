@@ -528,7 +528,26 @@ Write-Output 'ok'
     expect(result.stdout).toContain('ok');
   });
 
-  it('bundle stale-head gate contains pr view failures per PR (review P2)', () => {
+  it('bundle resolves missing headRefOid via cached pr view (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-number-only-');
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$open = @([pscustomobject]@{ number = 1 })
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'number-only' -MergeRequiredNames { param($p) @($p.contexts) }
+if (-not $bundle.ciChecksByPr.ContainsKey('1')) { throw 'expected checks for number-only open pr' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
+    it('bundle stale-head gate contains pr view failures per PR (review P2)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-bundle-view-fail-');
     writeFileSync(
       join(harness.root, 'bin/gh'),

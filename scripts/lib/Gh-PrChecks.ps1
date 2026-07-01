@@ -232,6 +232,25 @@ function Get-GhChecksBundleByPr {
         }
 
         $expectedHead = [string]$pr.headRefOid
+        if (-not $expectedHead) {
+            try {
+                $viewForHead = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $n -Consumer $Consumer
+            }
+            catch {
+                Write-GhPrChecksLog ("stale head fence PR #{0}: pr_view_failed" -f $n)
+                continue
+            }
+            if (-not $viewForHead) {
+                Write-GhPrChecksLog ("stale head fence PR #{0}: no_pr_view" -f $n)
+                continue
+            }
+            $expectedHead = [string]$viewForHead.headRefOid
+        }
+        if (-not $expectedHead) {
+            Write-GhPrChecksLog ("stale head fence PR #{0}: no_head_ref" -f $n)
+            continue
+        }
+
         $headGate = Test-GhFleetPrHeadCurrent -RepoRoot $RepoRoot -PrNumber $n -ExpectedHeadSha $expectedHead -Consumer $Consumer
         if (-not $headGate.current) {
             Write-GhPrChecksLog ("stale head fence PR #{0}: {1}" -f $n, $headGate.reason)
