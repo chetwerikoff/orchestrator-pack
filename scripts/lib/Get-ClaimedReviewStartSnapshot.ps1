@@ -19,7 +19,6 @@ function Get-ClaimedReviewStartSnapshot {
         return $FixtureSnapshot
     }
 
-    $transportFailure = $null
     $openPrs = @()
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
@@ -40,14 +39,48 @@ function Get-ClaimedReviewStartSnapshot {
                 requiredCheckLookupFailedByPr = @{}
             }
         }
-        $pr = $transport.stdout | ConvertFrom-Json
+        $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
+        if (-not $parse.ok) {
+            $reason = [string]$parse.reason
+            if (-not $reason) { $reason = 'structured_output_polluted' }
+            return @{
+                transportFailure            = @{
+                    ok           = $false
+                    reason       = $reason
+                    exitCode     = [int]$transport.exitCode
+                    stderr       = [string]$transport.stderr
+                    stdout       = [string]$transport.stdout
+                    failureClass = 'infra_transport'
+                }
+                openPrs                     = @()
+                reviewRuns                  = @()
+                sessions                    = @()
+                ciChecksByPr                = @{}
+                requiredCheckNamesByPr      = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
+        $pr = $parse.value
         if ($pr -and [string]$pr.state -eq 'OPEN') {
             Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
             $openPrs = @($pr)
         }
     }
     else {
-        $openPrs = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($PrNumber))
+        $scoped = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
+        $openPrs = @($scoped.openPrs)
+        if ($scoped.transportFailure) {
+            # Transport denial must short-circuit before live AO reads — same as acquired-claim path.
+            return @{
+                transportFailure            = $scoped.transportFailure
+                openPrs                     = @()
+                reviewRuns                  = @()
+                sessions                    = @()
+                ciChecksByPr                = @{}
+                requiredCheckNamesByPr      = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
     }
     $reviewRuns = @(
         . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
@@ -69,7 +102,7 @@ function Get-ClaimedReviewStartSnapshot {
         ciChecksByPr                  = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
-        transportFailure              = $transportFailure
+        transportFailure              = $null
     }
 }
 

@@ -381,6 +381,11 @@ function main() {
     process.stdout.write(`${JSON.stringify(evaluateCommandRuntimePreflight(payload))}\n`);
     return;
   }
+  if (sub === 'parseStructuredOutput') {
+    const payload = process.argv[3] ? JSON.parse(process.argv[3]) : {};
+    process.stdout.write(`${JSON.stringify(parseStructuredCommandOutput(payload))}\n`);
+    return;
+  }
   if (sub === 'scanWorkaround') {
     const filePath = process.argv[3];
     if (!filePath) {
@@ -408,7 +413,7 @@ function main() {
     process.exit(0);
   }
   process.stderr.write(
-    'usage: command-runtime-bootstrap.mjs livePreflight [--pack-root <path>] | evaluatePreflight <json> | scanWorkaround <file> | scanRecovery <file>\n',
+    'usage: command-runtime-bootstrap.mjs livePreflight [--pack-root <path>] | evaluatePreflight <json> | parseStructuredOutput <json> | scanWorkaround <file> | scanRecovery <file>\n',
   );
   process.exit(2);
 }

@@ -79,6 +79,7 @@ export declare function evaluateOrchestratorTurnGate(input: {
   sessionId?: string;
   claimWindow?: 'free' | 'held_by_other' | 'prior_terminal';
   provenanceAutonomous?: boolean;
+  transportFailure?: Record<string, unknown>;
 }): TurnGateResult;
 export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
 export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;

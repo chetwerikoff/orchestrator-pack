@@ -1,25 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { functionBody, repoRoot } from './_test-pwsh-helpers.js';
 
-const repoRoot = path.resolve(import.meta.dirname, '..');
 const ghPrChecks = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1'), 'utf8');
 const fleetCache = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1'), 'utf8');
-
-function functionBody(source: string, name: string): string {
-  const start = source.indexOf(`function ${name}`);
-  expect(start, `${name} not found`).toBeGreaterThanOrEqual(0);
-  const open = source.indexOf('{', start);
-  let depth = 0;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === '{') depth++;
-    else if (source[i] === '}') {
-      depth--;
-      if (depth === 0) return source.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unterminated function ${name}`);
-}
 
 describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
   const openPrListBody = functionBody(ghPrChecks, 'Invoke-GhOpenPrList');
@@ -51,9 +36,11 @@ describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
 
 describe('Invoke-GhOpenPrListForNumbers query cost', () => {
   const body = functionBody(ghPrChecks, 'Invoke-GhOpenPrListForNumbers');
+  const captureBody = functionBody(ghPrChecks, 'Invoke-GhPrViewStructuredCapture');
 
   it('scopes GitHub lookups to explicit PR numbers', () => {
-    expect(body).toMatch(/gh pr view \$n/);
+    expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
+    expect(captureBody).toMatch(/'pr',\s*'view'/);
     expect(body).not.toMatch(/gh pr list/);
   });
 
@@ -61,8 +48,13 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
     expect(body).toMatch(/Add-GhPrHeadCommittedAtFromFleetMemo/);
   });
 
+  it('parses scoped pr view JSON from stdout only without stderr merge (#566)', () => {
+    expect(body).not.toMatch(/2>&1/);
+    expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
+  });
+
   it('requests PR state and excludes closed or merged PRs', () => {
-    expect(body).toMatch(/gh pr view \$n --json[^\n]*state/);
+    expect(captureBody).toMatch(/--json[^\n]*state/);
     expect(body).toMatch(/state.*OPEN|OPEN.*state/);
   });
 });

@@ -216,6 +216,7 @@ export function evaluateScenarioMatrixCell({ claimWindow, reviewRuns, prNumber, 
  * @param {string} [input.sessionId]
  * @param {'free' | 'held_by_other' | 'prior_terminal'} [input.claimWindow]
  * @param {boolean} [input.provenanceAutonomous]
+ * @param {Record<string, unknown>} [input.transportFailure]
  */
 export function evaluateOrchestratorTurnGate(input) {
   const prNumber = Number(input.prNumber);
@@ -234,6 +235,18 @@ export function evaluateOrchestratorTurnGate(input) {
       reason: 'provenance_not_autonomous',
       stage: 'provenance',
       auditShape: 'per_start_denial',
+    };
+  }
+
+  const transportFailure = /** @type {Record<string, unknown>} */ (input.transportFailure ?? null);
+  if (transportFailure && transportFailure.ok === false) {
+    const reason = String(transportFailure.reason ?? 'scoped_gh_read_infrastructure_failure');
+    return {
+      launch: false,
+      reason,
+      stage: 'head_resolution',
+      auditShape: 'infrastructure_denial',
+      scopedGhReadInfrastructure: true,
     };
   }
 

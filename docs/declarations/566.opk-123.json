@@ -1,0 +1,37 @@
+{
+  "issue_number": 566,
+  "iteration_id": "opk-123",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-01T08:28:37.217Z",
+  "baseline": {
+    "commit_sha": "b32bbb5266a9d74d8e8d23d3a3f9a5b7cba190fa",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8e4e4303148527052b7dcf129b6815b4fdf9e7e96c7896b213f20a8f7009c7ce"
+  },
+  "declared_paths": [
+    "docs/declarations/566.opk-123.json",
+    "docs/migration_notes.md",
+    "docs/orchestrator-claimed-review-run.d.mts",
+    "docs/orchestrator-claimed-review-run.mjs",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/command-runtime-bootstrap.test.ts",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/command-runtime-bootstrap.mjs",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/review-start-envelope-ledger.test.ts",
+    "scripts/review-start-scoped-gh-json-capture.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [
+    "scripts/fixtures/**"
+  ],
+  "amendments": []
+}

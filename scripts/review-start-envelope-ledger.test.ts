@@ -123,6 +123,17 @@ describe('review-start-envelope-ledger unit', () => {
     expect(block).toMatch(/sessions\s*=\s*@\(\)/);
   });
 
+  it('pre-claim-scoped-transport-failure-skips-live-ao-reads', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    const transportBlock = src.match(/if \(\$scoped\.transportFailure\) \{([\s\S]*?)\n        \}/);
+    expect(transportBlock).not.toBeNull();
+    const block = transportBlock![1];
+    expect(block).not.toMatch(/Get-EnrichedAoReviewRuns/);
+    expect(block).not.toMatch(/Get-AoStatusSessions/);
+    expect(block).toMatch(/reviewRuns\s*=\s*@\(\)/);
+    expect(block).toMatch(/sessions\s*=\s*@\(\)/);
+  });
+
   it('claimed-snapshot-transport-failure-survives-ao-read-throw', () => {
     const dir = tempClaimDir();
     const fakeGhPath = path.join(
@@ -205,11 +216,11 @@ describe('review-start-envelope-ledger unit', () => {
     expect(src).not.toContain('requires an acquired claim');
 
     const script = `
-      function Invoke-GhOpenPrListForNumbers { param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null); return @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' }) }
       function Get-AoReviewRuns { param([string]$Project); return @(@{ prNumber = 516; targetSha = ${psString(fullSha)}; status = 'failed' }) }
       function Get-AoStatusSessions { return @() }
       function Add-GhPrHeadCommittedAtFromFleetMemo { param([string]$RepoRoot, $Pr) }
       . ${psString(snapshotHelperPath)}
+      function Invoke-ReviewStartScopedGhPrView { param([string]$RepoRoot, [int]$PrNumber); return @{ openPrs = @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' }); transportFailure = $null } }
       $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 516 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
         param($openPrs, $prNumber, $repoRoot)
         @{
@@ -228,8 +239,7 @@ describe('review-start-envelope-ledger unit', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
     expect(src).not.toMatch(/'pr',\s*'list'/);
-    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
-    expect(src).toMatch(/'pr',\s*'view'/);
+    expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
   });
 
   it('pre-claim snapshot loads post-run retry ledger from claim namespace', () => {
@@ -243,7 +253,6 @@ describe('review-start-envelope-ledger unit', () => {
       const script = `
         $env:AO_REVIEW_CLAIM_DIR = ${psString(dir)}
         $sha = ${psString(headSha)}
-        function Invoke-GhOpenPrList { param([string]$RepoRoot); return @(@{ number = 539; headRefOid = $sha; baseRefName = 'main' }) }
         function Get-AoReviewRuns { param([string]$Project); return @(@{
           id = 'timeout-1'
           prNumber = 539
@@ -257,6 +266,7 @@ describe('review-start-envelope-ledger unit', () => {
         . ${psString(postRunRetryPath)}
         Register-PostRunAutonomousRetryAttempt -Namespace $env:AO_REVIEW_CLAIM_DIR -PrNumber 539 -HeadSha $sha -FailureClass 'timeout_no_verdict' -RunId 'timeout-1' | Out-Null
         . ${psString(snapshotHelperPath)}
+        function Invoke-ReviewStartScopedGhPrView { param([string]$RepoRoot, [int]$PrNumber); return @{ openPrs = @(@{ number = 539; headRefOid = $sha; baseRefName = 'main'; state = 'OPEN' }); transportFailure = $null } }
         $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 539 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
           param($openPrs, $prNumber, $repoRoot)
           @{
@@ -319,12 +329,13 @@ describe('review-start-envelope-ledger unit', () => {
   it('report-state-seed-fresh-snapshot-preserves-terminated-sessions', () => {
     const seedPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
     const src = readFileSync(seedPath, 'utf8');
-    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
+    expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
     expect(src).toMatch(/Get-AoStatusSessionsIncludingTerminated/);
     expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
     expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);
     expect(src).toMatch(/transportFailure\s*=\s*\$transport/);
-    expect(src).toMatch(/\$freshSnapshot\.transportFailure\s*=\s*\$transportFailure/);
+    expect(src).toMatch(/if \(\$lookup\.transportFailure\)/);
+    expect(src).toMatch(/transportFailure\s*=\s*\$lookup\.transportFailure/);
   });
 
   it('consecutive-failure-notify-at-three', () => {

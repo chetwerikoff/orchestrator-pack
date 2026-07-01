@@ -419,9 +419,12 @@ describe('claimed review-start dependency closure (#335)', () => {
       const script = `
         . ${psString(helperPath)}
         $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
-        function Invoke-GhOpenPrListForNumbers {
-          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
-          @(@{ number = 335; headRefOid = '${issue335Sha}'; headCommittedAt = '2026-06-18T00:00:00.000Z'; state = 'OPEN' })
+        function Invoke-ReviewStartScopedGhPrView {
+          param([string]$RepoRoot, [int]$PrNumber)
+          @{
+            openPrs = @(@{ number = 335; headRefOid = '${issue335Sha}'; headCommittedAt = '2026-06-18T00:00:00.000Z'; state = 'OPEN'; baseRefName = 'main' })
+            transportFailure = $null
+          }
         }
         function Invoke-GhOpenPrList {
           param([string]$RepoRoot)
@@ -512,8 +515,7 @@ describe('claimed review-start scoped PR lookup (#557)', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
     expect(src).not.toMatch(/'pr',\s*'list'/);
-    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
-    expect(src).toMatch(/'pr',\s*'view'/);
+    expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
   });
 
   it('positive-outcome: scoped lookup reaches gate when full open-PR list would fail', () => {
@@ -522,9 +524,12 @@ describe('claimed review-start scoped PR lookup (#557)', () => {
       const script = `
         . ${psString(helperPath)}
         $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
-        function Invoke-GhOpenPrListForNumbers {
-          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
-          @(@{ number = 557; headRefOid = '${issue557Sha}'; headCommittedAt = '2026-06-30T00:00:00.000Z'; state = 'OPEN'; baseRefName = 'main' })
+        function Invoke-ReviewStartScopedGhPrView {
+          param([string]$RepoRoot, [int]$PrNumber)
+          @{
+            openPrs = @(@{ number = 557; headRefOid = '${issue557Sha}'; headCommittedAt = '2026-06-30T00:00:00.000Z'; state = 'OPEN'; baseRefName = 'main' })
+            transportFailure = $null
+          }
         }
         function Invoke-GhOpenPrList {
           param([string]$RepoRoot)
@@ -588,9 +593,9 @@ describe('claimed review-start scoped PR lookup (#557)', () => {
       const script = `
         . ${psString(helperPath)}
         $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
-        function Invoke-GhOpenPrListForNumbers {
-          param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null)
-          @()
+        function Invoke-ReviewStartScopedGhPrView {
+          param([string]$RepoRoot, [int]$PrNumber)
+          @{ openPrs = @(); transportFailure = $null }
         }
         $script:fullListCalls = 0
         function Invoke-GhOpenPrList {

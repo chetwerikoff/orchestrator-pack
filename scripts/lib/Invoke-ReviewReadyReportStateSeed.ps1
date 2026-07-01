@@ -197,6 +197,26 @@ function Resolve-ReviewReadyReportStateSeedGitHubSnapshot {
     return $CachedSnapshot
 }
 
+
+function Get-ReportStateSeedPreClaimTransportDenial {
+    param(
+        [int]$PrNumber,
+        [string]$RepoRoot
+    )
+
+    $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
+    if (-not $lookup.transportFailure) { return $null }
+    return Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
+        transportFailure              = $lookup.transportFailure
+        openPrs                       = @()
+        reviewRuns                    = @()
+        sessions                      = @()
+        ciChecksByPr                  = @{}
+        requiredCheckNamesByPr        = @{}
+        requiredCheckLookupFailedByPr = @{}
+    }
+}
+
 function Invoke-ReviewReadyReportStateSeedTick {
     param(
         [string]$StateRoot,
@@ -406,29 +426,69 @@ function Invoke-ReviewReadyReportStateSeedTick {
             $plannedRunParams['ResolveFreshSnapshot'] = {
                 param($planned, $claimResult)
                 $prNumber = [int]$planned.prNumber
-                $transportFailure = $null
                 if ($claimResult -and $claimResult.acquired) {
                     . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
                     $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claimResult -RepoRoot $RepoRoot -GhArguments @(
                         'pr', 'view', [string]$prNumber, '--json', 'number,headRefOid,baseRefName'
                     )
                     if (-not $transport.ok) {
-                        $transportFailure = $transport
-                        $scoped = @()
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = $transport
+                        }
                     }
-                    else {
-                        $scoped = @($transport.stdout | ConvertFrom-Json)
+                    $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
+                    if (-not $parse.ok) {
+                        $reason = [string]$parse.reason
+                        if (-not $reason) { $reason = 'structured_output_polluted' }
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = @{
+                                ok           = $false
+                                reason       = $reason
+                                exitCode     = [int]$transport.exitCode
+                                stderr       = [string]$transport.stderr
+                                stdout       = [string]$transport.stdout
+                                failureClass = 'infra_transport'
+                            }
+                        }
                     }
+                    $scoped = @($parse.value)
                 }
                 else {
-                    $scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($prNumber))
+                    $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $prNumber
+                    if ($lookup.transportFailure) {
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = $lookup.transportFailure
+                        }
+                    }
+                    $scoped = @($lookup.openPrs)
                 }
                 $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
                     param($payload)
                     Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
                         -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
                 }
-                $freshSnapshot = @{
+                @{
                     openPrs                       = $scoped
                     reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
                     sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
@@ -437,13 +497,23 @@ function Invoke-ReviewReadyReportStateSeedTick {
                     requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
                     nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 }
-                if ($null -ne $transportFailure) {
-                    $freshSnapshot.transportFailure = $transportFailure
-                }
-                $freshSnapshot
             }
         }
-        $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
+        $result = $null
+        if (-not $FixturePayload) {
+            $preClaimDenial = Get-ReportStateSeedPreClaimTransportDenial -PrNumber ([int]$action.prNumber) -RepoRoot $RepoRoot
+            if ($preClaimDenial) {
+                & $LogWriter "review-ready-report-state-seed: pre-claim transport denial PR #$($action.prNumber) ($($preClaimDenial.reason))"
+                $result = @{
+                    triggered   = $false
+                    reason      = [string]$preClaimDenial.reason
+                    retainWatch = $true
+                }
+            }
+        }
+        if (-not $result) {
+            $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
+        }
         $classified = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'classifySideEffectOutcome' -Payload @{
             triggered         = [bool]$result.triggered
             sideEffectReason  = [string]$result.reason
