@@ -1,0 +1,25 @@
+{
+  "issue_number": 567,
+  "iteration_id": "opk-124",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-01T09:46:19.530Z",
+  "baseline": {
+    "commit_sha": "025781890942c59dbbd619ba92658242dad200b3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:d806bb1e3c587bef9fd331cdee7dae4c268f84c3220e5e459d92f441ac39e8eb"
+  },
+  "declared_paths": [
+    "docs/declarations/567.opk-124.json",
+    "docs/spawn-worktree-grant.d.mts",
+    "docs/spawn-worktree-grant.mjs",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/git-autonomous-guard.ps1",
+    "scripts/lib/Autonomous-SpawnWorktreeGate.ps1",
+    "scripts/lib/Orchestrator-AutonomousBoundary.ps1",
+    "scripts/spawn-worktree-grant-finalization.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
