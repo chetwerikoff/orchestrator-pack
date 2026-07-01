@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -8,39 +7,13 @@ import {
   evaluateSpawnWorktreeBranchBinding,
   evaluateSpawnWorktreeGrantConsume,
 } from '../docs/spawn-worktree-grant.mjs';
-import { resolveSpawnDefaultBranchBaseRef } from '../docs/spawn-worktree-git-ref.mjs';
-import { resolveTrustedSystemGit, withTempGitRepo } from './_test-git-fixture.js';
+import { headOidSpawnWorktreeRepo, setupSpawnWorktreeRepo } from './_test-spawn-worktree-fixture.js';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
-const git = resolveTrustedSystemGit();
 const captureManifestPath = path.join(
   repoRoot,
   'tests/external-output-references/captures/spawn-worktree-branch-operand-binding/capture-manifest.json',
 );
-
-function gitIn(dir: string, args: string[]) {
-  execFileSync(git, ['-C', dir, ...args], { stdio: 'ignore' });
-}
-
-function headOid(dir: string) {
-  return execFileSync(git, ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().toLowerCase();
-}
-
-function setupSpawnRepo(run: (ctx: { repo: string; mainOid: string; baseRef: string }) => void) {
-  withTempGitRepo((repo) => {
-    writeFileSync(path.join(repo, 'feature.txt'), 'feature\n');
-    gitIn(repo, ['add', 'feature.txt']);
-    gitIn(repo, ['commit', '-m', 'feature']);
-    const mainOid = headOid(repo);
-    gitIn(repo, ['branch', 'feature-branch']);
-    gitIn(repo, ['update-ref', 'refs/heads/main', mainOid]);
-    gitIn(repo, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
-    gitIn(repo, ['remote', 'add', 'origin', repo]);
-    gitIn(repo, ['update-ref', 'refs/remotes/origin/main', mainOid]);
-    const baseRef = resolveSpawnDefaultBranchBaseRef(repo).refToken ?? 'refs/heads/main';
-    run({ repo, mainOid, baseRef });
-  });
-}
 
 function consumeWithBranch(
   grant: Record<string, unknown>,
@@ -64,7 +37,7 @@ function consumeWithBranch(
 
 describe('spawn worktree branch-operand binding (#561)', () => {
   it('records production-shaped branch_mismatch when grant lacks branch binding (pre-fix baseline)', () => {
-    setupSpawnRepo(({ repo, baseRef }) => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
         argv: ['spawn', '315'],
         grantId: 'grant-pre-fix',
@@ -91,7 +64,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   });
 
   it('allows production-shaped spawn-new worker branch under active grant', () => {
-    setupSpawnRepo(({ repo, baseRef }) => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
         argv: ['spawn', '561'],
         grantId: 'grant-spawn-new',
@@ -119,7 +92,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   });
 
   it('denies arbitrary, orchestrator, and malformed branch operands before mutation', () => {
-    setupSpawnRepo(({ repo, baseRef }) => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
         argv: ['spawn', '561'],
         grantId: 'grant-negative',
@@ -148,14 +121,14 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   });
 
   it('shares branch contract for claim-pr worktree add via owner session branch', () => {
-    setupSpawnRepo(({ repo, baseRef }) => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
         argv: ['spawn', '--claim-pr', '493'],
         grantId: 'grant-claim-pr',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
         expectedHeadRef: baseRef,
-        expectedPrHeadOid: headOid(repo),
+        expectedPrHeadOid: headOidSpawnWorktreeRepo(repo),
         expectedPrRefToken: 'feat/493',
         extraAuthorizedWorktreeNames: ['opk-99'],
       });
@@ -197,7 +170,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
       claimPr: { argv: string[]; workerBranch: string; worktreeBasename: string; blockedBy522: boolean };
     };
 
-    setupSpawnRepo(({ repo, baseRef }) => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const spawnBuilt = buildSpawnWorktreeGrantRecord({
         argv: ['spawn', '561'],
         grantId: 'capture-spawn-new',
@@ -226,7 +199,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
         expectedHeadRef: baseRef,
-        expectedPrHeadOid: headOid(repo),
+        expectedPrHeadOid: headOidSpawnWorktreeRepo(repo),
         expectedPrRefToken: 'feat/493',
         extraAuthorizedWorktreeNames: [manifest.claimPr.worktreeBasename],
       });

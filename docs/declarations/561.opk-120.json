@@ -13,6 +13,7 @@
     "docs/declarations/561.opk-120.json",
     "docs/spawn-worktree-grant.d.mts",
     "docs/spawn-worktree-grant.mjs",
+    "scripts/_test-spawn-worktree-fixture.ts",
     "scripts/spawn-worktree-branch-operand-binding.test.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
