@@ -205,11 +205,11 @@ describe('review-start-envelope-ledger unit', () => {
     expect(src).not.toContain('requires an acquired claim');
 
     const script = `
-      function Invoke-GhOpenPrListForNumbers { param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null); return @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' }) }
       function Get-AoReviewRuns { param([string]$Project); return @(@{ prNumber = 516; targetSha = ${psString(fullSha)}; status = 'failed' }) }
       function Get-AoStatusSessions { return @() }
       function Add-GhPrHeadCommittedAtFromFleetMemo { param([string]$RepoRoot, $Pr) }
       . ${psString(snapshotHelperPath)}
+      function Invoke-GhFleetCachedPrView { param([string]$RepoRoot, [int]$PrNumber, [string]$Consumer = ''); return @{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' } }
       $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 516 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
         param($openPrs, $prNumber, $repoRoot)
         @{
@@ -243,7 +243,6 @@ describe('review-start-envelope-ledger unit', () => {
       const script = `
         $env:AO_REVIEW_CLAIM_DIR = ${psString(dir)}
         $sha = ${psString(headSha)}
-        function Invoke-GhOpenPrList { param([string]$RepoRoot); return @(@{ number = 539; headRefOid = $sha; baseRefName = 'main' }) }
         function Get-AoReviewRuns { param([string]$Project); return @(@{
           id = 'timeout-1'
           prNumber = 539
@@ -257,6 +256,7 @@ describe('review-start-envelope-ledger unit', () => {
         . ${psString(postRunRetryPath)}
         Register-PostRunAutonomousRetryAttempt -Namespace $env:AO_REVIEW_CLAIM_DIR -PrNumber 539 -HeadSha $sha -FailureClass 'timeout_no_verdict' -RunId 'timeout-1' | Out-Null
         . ${psString(snapshotHelperPath)}
+        function Invoke-GhFleetCachedPrView { param([string]$RepoRoot, [int]$PrNumber, [string]$Consumer = ''); return @{ number = 539; headRefOid = $sha; baseRefName = 'main'; state = 'OPEN' } }
         $snapshot = Get-ClaimedReviewStartSnapshot -PrNumber 539 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -ClaimResult $null -ResolveChecksBundle {
           param($openPrs, $prNumber, $repoRoot)
           @{
