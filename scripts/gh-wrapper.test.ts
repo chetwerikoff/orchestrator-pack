@@ -1402,7 +1402,7 @@ tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={
     });
     try {
       const gheEnv = { ...harness.env, GH_HOST: 'ghe.example' };
-      const dotcomEnv = { ...harness.env };
+      const dotcomEnv = { ...harness.env } as typeof harness.env & { GH_HOST?: string };
       delete dotcomEnv.GH_HOST;
 
       expect(extractApiHostnameInfo(GRAPHQL_QUERY_ARGV, gheEnv)).toEqual({
