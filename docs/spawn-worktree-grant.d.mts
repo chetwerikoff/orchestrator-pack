@@ -58,6 +58,15 @@ export declare function evaluateSpawnWorktreeBasenameBinding(
   allowedNames: string[],
 ): { ok: boolean; reason: string };
 export declare function deriveSpawnAuthorizedWorktreeNames(parsed: SpawnTargetParse, extraAuthorizedWorktreeNames?: string[]): string[];
+export declare function deriveSpawnAuthorizedWorkerBranches(
+  parsed: SpawnTargetParse,
+  extraAuthorizedWorktreeNames?: string[],
+  extraAuthorizedWorkerBranches?: string[],
+): string[];
+export declare function evaluateSpawnWorktreeBranchBinding(
+  branch: string,
+  grant: Record<string, unknown>,
+): { ok: boolean; reason: string };
 export declare function gitArgvHasSourceSelectingGlobals(argv: string[]): boolean;
 export declare function resolveGitRepositoryIdentity(cwd: string): {
   ok: boolean;
@@ -94,6 +103,7 @@ export declare function buildSpawnWorktreeGrantRecord(input: {
   projectId?: string;
   holder?: Record<string, unknown> | null;
   extraAuthorizedWorktreeNames?: string[];
+  extraAuthorizedWorkerBranches?: string[];
   expectedHeadRef?: string;
   expectedCommitOid?: string;
   expectedPrHeadOid?: string;

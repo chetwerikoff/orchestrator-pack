@@ -242,6 +242,14 @@
       "path": "captures/gh-pr-open/pulls-merge-fields.raw.json",
       "contentHash": "sha256:99332a727941f1a1493f075f24241626e5c9bb4a4f3d7909775c243976a421fb"
     },
+    "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561": {
+      "id": "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561",
+      "producer": "spawn-worktree-branch-operand-binding",
+      "sourceCommand": null,
+      "kind": "unstructured",
+      "path": "captures/spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561.raw.txt",
+      "contentHash": "sha256:819cbf608a234841dafd5ff4e3d3ebbb11798c4e7dd46ce36ae60ad915edecf9"
+    },
     "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27": {
       "id": "spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27",
       "producer": "spawn-worktree-grant-ao-session-basename",
