@@ -638,8 +638,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     action: String(grant.action ?? ''),
     grantId: String(grant.grantId ?? ''),
   };
-  const durableWorktree = targetPreexists || worktreeDurable;
-  if (reservedPath && durableWorktree) {
+  if (reservedPath && worktreeDurable) {
     return {
       ok: true,
       reason: 'spawn_worktree_idempotent',

@@ -383,6 +383,44 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(verdict.reason).toBe('grant_finalization_attempts_exhausted');
   });
 
+  it('reserved plain preexisting path is not idempotent without durable worktree', () => {
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '567'],
+      grantId: 'g-plain-preexists',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1, processGuid: 'holder-plain' },
+      extraAuthorizedWorktreeNames: ['opk-567-plain'],
+      sourceRepositoryRoot: repoRoot,
+      sourceGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:00Z'),
+    });
+    expect(built.ok).toBe(true);
+    const prefix = '/tmp/ao/projects/orchestrator-pack/worktrees';
+    const target = path.join(prefix, 'opk-567-plain');
+    const grant = {
+      ...built.grant!,
+      worktreeAllowReserved: {
+        worktreeCanonicalPath: target,
+        attemptCount: 1,
+      },
+    };
+    const verdict = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: false,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.reason).toBe('spawn_worktree_allow');
+    expect(verdict.idempotent).toBeUndefined();
+    expect(verdict.reservedAttemptCount).toBe(2);
+  });
+
   it('evaluateFinalize rejects commit when worktree is not durable', () => {
     const built = buildSpawnWorktreeGrantRecord({
       argv: ['spawn', '567'],
