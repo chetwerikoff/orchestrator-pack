@@ -140,7 +140,7 @@ describe('spawn worktree grant (#470)', () => {
     expect(parsed.grantId).toBeTruthy();
   });
 
-  it('grant consume is single-use', () => {
+  it('grant consume is single-use after terminal finalize', () => {
     const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-grant-single-use-'));
     tempRoots.push(aoBase);
     const projectId = 'orchestrator-pack';
@@ -170,13 +170,33 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
       $first = Test-AutonomousGitDenied -Argv @('worktree','add',${psString(target)},'HEAD')
       $second = Test-AutonomousGitDenied -Argv @('worktree','add',${psString(target)},'HEAD')
-      [pscustomobject]@{ firstDenied = [bool]$first.denied; firstReason = [string]$first.reason; secondDenied = [bool]$second.denied; secondReason = [string]$second.reason } | ConvertTo-Json -Compress
+      $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId ${psString(grantId)}
+      $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
+      $terminal = @{}
+      $read.record.PSObject.Properties | ForEach-Object { $terminal[$_.Name] = $_.Value }
+      $terminal.consumed = $true
+      $terminal.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+      $terminal.consumedCanonicalPath = ${psString(target)}
+      Write-AutonomousSpawnWorktreeGrantAtomic -Namespace (Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}) -GrantId ${psString(grantId)} -Record ($terminal | ConvertTo-Json -Compress -Depth 20 | ConvertFrom-Json) | Out-Null
+      $third = Test-AutonomousGitDenied -Argv @('worktree','add',${psString(target)},'HEAD')
+      [pscustomobject]@{
+        firstDenied = [bool]$first.denied
+        firstReason = [string]$first.reason
+        secondDenied = [bool]$second.denied
+        secondReason = [string]$second.reason
+        reserved = ($null -ne $read.record.worktreeAllowReserved)
+        thirdDenied = [bool]$third.denied
+        thirdReason = [string]$third.reason
+      } | ConvertTo-Json -Compress
     `);
     const parsed = JSON.parse(output);
     expect(parsed.firstDenied).toBe(false);
     expect(parsed.firstReason).toBe('spawn_worktree_allow');
-    expect(parsed.secondDenied).toBe(true);
-    expect(parsed.secondReason).toMatch(/grant_already_consumed|grant_not_found|grant_consume_busy/);
+    expect(parsed.secondDenied).toBe(false);
+    expect(parsed.secondReason).toBe('spawn_worktree_allow');
+    expect(parsed.reserved).toBe(true);
+    expect(parsed.thirdDenied).toBe(true);
+    expect(parsed.thirdReason).toMatch(/grant_already_consumed|spawn_worktree_idempotent/);
   });
 
   it('concurrent consume: only one parallel git child wins the same grant', async () => {
@@ -249,7 +269,7 @@ describe('spawn worktree grant (#470)', () => {
     const losers = [first, second].filter((result) => result.denied);
     expect(winners).toHaveLength(1);
     expect(losers).toHaveLength(1);
-    expect(losers[0]?.reason).toMatch(/grant_already_consumed|grant_consume_busy/);
+    expect(losers[0]?.reason).toMatch(/grant_already_consumed|grant_consume_busy|grant_reserve_path_mismatch/);
   });
 
   it('serializes concurrent mint for the same spawn target', () => {

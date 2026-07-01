@@ -19,6 +19,37 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION = 1;
 export const SPAWN_WORKTREE_GRANT_TTL_SECONDS = 120;
+/** Bounded same-lineage worktree-add retries before terminal finalization failure (#567). */
+export const SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS = 3;
+
+/** Grant-boundary reasons that must not be misclassified as GitHub auth failures (#567). */
+export const SPAWN_WORKTREE_GRANT_BOUNDARY_REASONS = new Set([
+  'grant_missing',
+  'grant_schema_mismatch',
+  'grant_already_consumed',
+  'grant_expired',
+  'grant_reserve_path_mismatch',
+  'grant_finalization_attempts_exhausted',
+  'grant_finalize_path_mismatch',
+  'grant_finalize_worktree_not_durable',
+  'grant_repository_unbound',
+  'grant_pr_missing',
+  'grant_issue_missing',
+  'grant_action_invalid',
+  'git_source_global_denied',
+  'missing_path',
+  'missing_explicit_commit',
+  'path_unresolvable',
+  'path_escape',
+  'target_preexists',
+  'basename_mismatch',
+  'repository_root_unresolvable',
+  'repository_identity_mismatch',
+  'head_ref_mismatch',
+  'branch_mismatch',
+  'spawn_worktree_allow',
+  'spawn_worktree_idempotent',
+]);
 
 /** AO worker session worktree basenames allocated by @aoagents/ao-plugin-workspace-worktree. */
 export const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
@@ -398,6 +429,67 @@ export function evaluateSpawnWorktreeBasenameBinding(basename, allowedNames) {
   return { ok: false, reason: 'worktree_session_basename_invalid' };
 }
 
+
+/**
+ * @param {string} left
+ * @param {string} right
+ */
+export function spawnWorktreeCanonicalPathsEqual(left, right) {
+  const a = String(left ?? '').trim();
+  const b = String(right ?? '').trim();
+  if (!a || !b) {
+    return false;
+  }
+  return path.resolve(a) === path.resolve(b);
+}
+
+/**
+ * @param {Record<string, unknown>} grant
+ */
+export function spawnWorktreeGrantReservedPath(grant) {
+  const reserved = grant?.worktreeAllowReserved;
+  if (!reserved || typeof reserved !== 'object') {
+    return '';
+  }
+  return String(/** @type {{ worktreeCanonicalPath?: string }} */ (reserved).worktreeCanonicalPath ?? '').trim();
+}
+
+/**
+ * @param {Record<string, unknown>} grant
+ */
+export function spawnWorktreeGrantReservedAttemptCount(grant) {
+  const reserved = grant?.worktreeAllowReserved;
+  if (!reserved || typeof reserved !== 'object') {
+    return 0;
+  }
+  const count = Number(/** @type {{ attemptCount?: number }} */ (reserved).attemptCount);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+/**
+ * @param {object} input
+ */
+export function classifySpawnWorktreeGrantFailureDiagnosis(input) {
+  const boundaryReason = String(input.boundaryReason ?? '').trim();
+  const githubReadsSucceeded = Boolean(input.githubReadsSucceeded);
+  const stderr = String(input.stderr ?? '');
+  if (
+    githubReadsSucceeded
+    && boundaryReason
+    && SPAWN_WORKTREE_GRANT_BOUNDARY_REASONS.has(boundaryReason)
+  ) {
+    return {
+      kind: 'spawn_grant_finalization',
+      reason: boundaryReason,
+      misclassifiedAsGhAuth: /gh auth|GitHub CLI is not authenticated/i.test(stderr),
+    };
+  }
+  if (/gh auth|GitHub CLI is not authenticated/i.test(stderr)) {
+    return { kind: 'github_auth', reason: 'github_auth_failure' };
+  }
+  return { kind: 'unknown', reason: boundaryReason || 'boundary_reason_missing' };
+}
+
 /**
  * @param {object} input
  */
@@ -407,6 +499,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   const canonicalPath = String(input.canonicalPath ?? '');
   const worktreesPrefix = String(input.worktreesPrefix ?? '');
   const targetPreexists = Boolean(input.targetPreexists);
+  const worktreeDurable = Boolean(input.worktreeDurable);
   const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
 
   if (!grant || typeof grant !== 'object') {
@@ -416,7 +509,38 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_schema_mismatch' };
   }
   if (grant.consumed) {
+    const consumedPath = String(grant.consumedCanonicalPath ?? '').trim();
+    if (
+      consumedPath
+      && spawnWorktreeCanonicalPathsEqual(consumedPath, canonicalPath)
+      && (targetPreexists || worktreeDurable)
+    ) {
+      return {
+        ok: true,
+        reason: 'spawn_worktree_idempotent',
+        idempotent: true,
+        consumedCanonicalPath: consumedPath,
+      };
+    }
     return { ok: false, reason: 'grant_already_consumed' };
+  }
+  const reservedPath = spawnWorktreeGrantReservedPath(grant);
+  if (reservedPath) {
+    if (!spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
+      return { ok: false, reason: 'grant_reserve_path_mismatch' };
+    }
+    const attemptCount = spawnWorktreeGrantReservedAttemptCount(grant);
+    if (attemptCount >= SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS) {
+      return { ok: false, reason: 'grant_finalization_attempts_exhausted' };
+    }
+    if (targetPreexists || worktreeDurable) {
+      return {
+        ok: true,
+        reason: 'spawn_worktree_idempotent',
+        idempotent: true,
+        reservedCanonicalPath: reservedPath,
+      };
+    }
   }
   const expiresAtMs = Date.parse(String(grant.expiresAtUtc ?? ''));
   if (!Number.isFinite(expiresAtMs) || nowMs > expiresAtMs) {
@@ -438,7 +562,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   if (!pathIsUnderCanonicalPrefix(canonicalPath, worktreesPrefix)) {
     return { ok: false, reason: 'path_escape' };
   }
-  if (targetPreexists) {
+  if (targetPreexists && !reservedPath) {
     return { ok: false, reason: 'target_preexists' };
   }
 
@@ -519,6 +643,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     commit: shape.commit,
     normalizedCommitOid: headAuth.normalizedCommitOid,
     normalizationMode: headAuth.normalizationMode,
+    reservedAttemptCount: reservedPath ? spawnWorktreeGrantReservedAttemptCount(grant) + 1 : 1,
     headRefAudit: {
       expectedRefToken: headAuth.expectedRefToken,
       expectedCommitOid: headAuth.expectedCommitOid,
@@ -529,6 +654,46 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
       action: String(grant.action ?? ''),
       grantId: String(grant.grantId ?? ''),
     },
+  };
+}
+
+/**
+ * Commit terminal consumed state only after durable worker worktree creation (#567).
+ *
+ * @param {object} input
+ */
+export function evaluateSpawnWorktreeGrantFinalize(input) {
+  const grant = input.grant ?? null;
+  const canonicalPath = String(input.canonicalPath ?? '').trim();
+  const worktreeDurable = Boolean(input.worktreeDurable);
+
+  if (!grant || typeof grant !== 'object') {
+    return { ok: false, reason: 'grant_missing' };
+  }
+  if (Number(grant.schemaVersion) !== SPAWN_WORKTREE_GRANT_SCHEMA_VERSION) {
+    return { ok: false, reason: 'grant_schema_mismatch' };
+  }
+  if (!canonicalPath) {
+    return { ok: false, reason: 'path_unresolvable' };
+  }
+  if (grant.consumed) {
+    const consumedPath = String(grant.consumedCanonicalPath ?? '').trim();
+    if (consumedPath && spawnWorktreeCanonicalPathsEqual(consumedPath, canonicalPath)) {
+      return { ok: true, reason: 'grant_finalize_idempotent', consumedCanonicalPath: consumedPath };
+    }
+    return { ok: false, reason: 'grant_already_consumed' };
+  }
+  const reservedPath = spawnWorktreeGrantReservedPath(grant);
+  if (!reservedPath || !spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
+    return { ok: false, reason: 'grant_finalize_path_mismatch' };
+  }
+  if (!worktreeDurable) {
+    return { ok: false, reason: 'grant_finalize_worktree_not_durable' };
+  }
+  return {
+    ok: true,
+    reason: 'grant_finalize_commit',
+    consumedCanonicalPath: canonicalPath,
   };
 }
 
@@ -736,6 +901,8 @@ runStdinJsonCli('spawn-worktree-grant.mjs', {
   parseSpawnTarget: () => parseSpawnTargetFromArgv(readStdinJson().argv ?? []),
   buildGrant: () => buildSpawnWorktreeGrantRecord(readStdinJson()),
   evaluateConsume: () => evaluateSpawnWorktreeGrantConsume(readStdinJson()),
+  evaluateFinalize: () => evaluateSpawnWorktreeGrantFinalize(readStdinJson()),
+  classifyFailureDiagnosis: () => classifySpawnWorktreeGrantFailureDiagnosis(readStdinJson()),
   evaluateBoundaryEscape: () => evaluateBoundaryEscapeSignal(readStdinJson()),
   resolveDefaultBranchBaseRef: () => {
     const input = readStdinJson();

@@ -1,5 +1,17 @@
 export declare const SPAWN_WORKTREE_GRANT_SCHEMA_VERSION: number;
 export declare const SPAWN_WORKTREE_GRANT_TTL_SECONDS: number;
+
+export declare const SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS: number;
+export declare const SPAWN_WORKTREE_GRANT_BOUNDARY_REASONS: ReadonlySet<string>;
+
+export declare function spawnWorktreeCanonicalPathsEqual(left: string, right: string): boolean;
+export declare function spawnWorktreeGrantReservedPath(grant: Record<string, unknown>): string;
+export declare function spawnWorktreeGrantReservedAttemptCount(grant: Record<string, unknown>): number;
+export declare function classifySpawnWorktreeGrantFailureDiagnosis(input: {
+  boundaryReason?: string;
+  githubReadsSucceeded?: boolean;
+  stderr?: string;
+}): { kind: string; reason: string; misclassifiedAsGhAuth?: boolean };
 export declare const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN: RegExp;
 export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: string[];
 export declare const GIT_SOURCE_SELECTING_GLOBAL_FLAGS: ReadonlySet<string>;
@@ -93,10 +105,16 @@ export declare function evaluateSpawnWorktreeGrantConsume(input: {
   canonicalPath?: string;
   worktreesPrefix?: string;
   targetPreexists?: boolean;
+  worktreeDurable?: boolean;
   effectiveRepositoryRoot?: string;
   effectiveGitWorktreeRoot?: string;
   nowMs?: number;
 }): SpawnWorktreeGrantConsumeVerdict;
+export declare function evaluateSpawnWorktreeGrantFinalize(input: {
+  grant?: Record<string, unknown> | null;
+  canonicalPath?: string;
+  worktreeDurable?: boolean;
+}): { ok: boolean; reason: string; consumedCanonicalPath?: string };
 export declare function buildSpawnWorktreeGrantRecord(input: {
   argv?: string[];
   grantId?: string;
