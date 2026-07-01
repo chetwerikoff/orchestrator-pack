@@ -112,6 +112,40 @@ describe('reviewer-failure-evidence', () => {
     expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
   });
 
+  it('redacts entire multi-pair Cookie headers before persisting evidence tails', () => {
+    const store = tempStore();
+    const { path } = createFailureEvidenceArtifact({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-cookie',
+      wrapperKind: 'codex',
+    }) as EvidenceCreateResult;
+    const stderr = 'Cookie: sid=abc; refresh=def\nreview failed\n';
+    recordFailureEvidenceOutput({ path: path!, stderr });
+    const raw = readFileSync(path!, 'utf8');
+    expect(raw).not.toContain('sid=');
+    expect(raw).not.toContain('refresh=');
+    expect(raw).not.toContain('def');
+    const artifact = JSON.parse(raw);
+    expect(artifact.stderrTail).toContain('Cookie: [REDACTED]');
+    expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
+  });
+
+  it('redacts generic cookie key assignments outside Cookie headers', () => {
+    const store = tempStore();
+    const { path } = createFailureEvidenceArtifact({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-cookie-kv',
+      wrapperKind: 'codex',
+    }) as EvidenceCreateResult;
+    const stderr = 'cookie=sid=abc\nreview failed\n';
+    recordFailureEvidenceOutput({ path: path!, stderr });
+    const raw = readFileSync(path!, 'utf8');
+    expect(raw).not.toContain('sid=abc');
+    const artifact = JSON.parse(raw);
+    expect(artifact.stderrTail).toContain('cookie=[REDACTED]');
+    expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
+  });
+
   it('records signal detail for signal-style exit codes on linux', () => {
     const signal = resolveTerminationSignalFromExitCode(137, 'linux');
     expect(signal.signal).toBe('9');
@@ -165,6 +199,35 @@ describe('reviewer-failure-evidence', () => {
     } finally {
       if (previous === undefined) delete process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT;
       else process.env.AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT = previous;
+    }
+  });
+
+  it('honors AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT on resolveFailureEvidenceForRun recovery path', () => {
+    const previous = process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT;
+    process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT = '64';
+    try {
+      const store = tempStore();
+      const { run } = writeRun(store, { reviewerSessionId: 'opk-rev-summary-env' });
+      const { path } = createFailureEvidenceArtifact({
+        storeDir: store,
+        reviewerSessionId: 'opk-rev-summary-env',
+        wrapperKind: 'codex',
+        runId: run.id,
+        runFingerprint: fingerprintRun(run),
+      }) as EvidenceCreateResult;
+      recordFailureEvidenceOutput({ path: path!, stdout: 'z'.repeat(500) });
+      associateFailureEvidenceRun({
+        path: path!,
+        storeDir: store,
+        runId: run.id,
+        runFingerprint: fingerprintRun(run),
+      });
+      const resolved = resolveFailureEvidenceForRun(store, run) as EvidenceResolveResult;
+      expect(resolved.ok).toBe(true);
+      expect(resolved.summary.stdoutTail!.length).toBeLessThanOrEqual(64);
+    } finally {
+      if (previous === undefined) delete process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT;
+      else process.env.AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT = previous;
     }
   });
 

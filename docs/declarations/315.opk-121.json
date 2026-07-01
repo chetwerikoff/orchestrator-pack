@@ -1,0 +1,19 @@
+{
+  "issue_number": 315,
+  "iteration_id": "opk-121",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-01T06:02:03.007Z",
+  "baseline": {
+    "commit_sha": "59823f29dc6b7469cb2099a6eb9bea6877ceb89a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:0c0dd586457fcbafddf606fe70616b504ba96e2a16caefb2ed3c578ac9bcd399"
+  },
+  "declared_paths": [
+    "docs/reviewer-failure-evidence.mjs",
+    "scripts/reviewer-failure-evidence.test.ts",
+    "scripts/check-reviewer-failure-evidence.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
