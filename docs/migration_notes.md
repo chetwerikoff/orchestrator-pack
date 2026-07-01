@@ -127,6 +127,18 @@ denies cleanly without falling back to a full open-PR list.
 
 No operator adoption required beyond Issue #318 — this is a transport-shape fix only.
 
+## Review-start scoped gh JSON stderr isolation (Issue #566)
+
+Pre-claim scoped PR/head reads (`Invoke-ReviewStartScopedGhPrView` in
+`scripts/lib/Gh-PrChecks.ps1`, consumed by `Get-ClaimedReviewStartSnapshot.ps1`) parse **stdout JSON
+only**; stderr stays separate diagnostic evidence. Harmless stderr (for example bash-debugger
+warnings) must not collapse head resolution to `head_resolution_failed`. Malformed stdout or
+non-zero `gh` failures surface as infrastructure denials (`structured_output_polluted`,
+`gh_command_failed`, etc.) and remain re-evaluable on the next eligible trigger/reconcile turn
+without consuming a review-start claim.
+
+No operator adoption required.
+
 ## LLM-orchestrator claimed review-start gate (Issue #318)
 
 Autonomous orchestrator turns must start reviews only through
