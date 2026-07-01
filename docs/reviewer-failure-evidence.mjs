@@ -27,7 +27,7 @@ export const EVIDENCE_PHASES = new Set([
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SECRET_PATTERN = /(?:token|secret|password|api[_-]?key|authorization|cookie|private[_-]?key|bearer\s)/i;
-const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
+const REMAINING_CREDENTIAL_PATTERN = /Bearer\s+(?!\[REDACTED\])\S+|(?:Set-)?Cookie:\s*(?!\[REDACTED\])[^\n]*|(?:api[_-]?key|token|secret|password|authorization|private[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+|\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/i;
 export const OUTPUT_WITHHELD_MARKER = '[output_withheld]';
 const FORBIDDEN_FIELD_NAMES = new Set([
   'env',
@@ -103,8 +103,11 @@ export function scrubSecretLikeOutput(text) {
   let value = String(text ?? '');
   value = value.replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]');
   value = value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  // Whole-header redaction: multi-pair Cookie / Set-Cookie values must not leave trailing material.
+  value = value.replace(/Set-Cookie:\s*[^\n]*/gi, 'Set-Cookie: [REDACTED]');
+  value = value.replace(/Cookie:\s*[^\n]*/gi, 'Cookie: [REDACTED]');
   value = value.replace(
-    /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/gi,
+    /((?:api[_-]?key|token|secret|password|authorization|private[_-]?key)\s*[:=]\s*)\S+/gi,
     '$1[REDACTED]',
   );
   value = value.replace(/\b(?:sk|ghp|xox[baprs])-[A-Za-z0-9_-]{4,}\b/g, '[REDACTED]');
@@ -383,7 +386,7 @@ export function buildFailureEvidenceSummary(artifact, options = {}) {
   if (!asRecord(artifact)) {
     return { diagnostic: 'failure_evidence_missing' };
   }
-  const summaryTailLimit = options.summaryTailLimit ?? DEFAULT_SUMMARY_TAIL_LIMIT;
+  const summaryTailLimit = options.summaryTailLimit ?? resolveSummaryTailLimit();
   const summary = {
     schemaVersion: FAILURE_EVIDENCE_SCHEMA_VERSION,
     lastPhase: artifact.lastPhase ?? artifact.phases?.at(-1)?.phase,
@@ -410,7 +413,8 @@ export function buildFailureEvidenceSummary(artifact, options = {}) {
 function stringLooksSecretUnsafe(text) {
   const value = String(text ?? '');
   if (REMAINING_CREDENTIAL_PATTERN.test(value)) return true;
-  if (/(?:token|secret|password|api[_-]?key|cookie)\s*[:=]\s*(?!\[REDACTED\])\S+/i.test(value)) return true;
+  if (/(?:Set-)?Cookie:\s*(?!\[REDACTED\])[^\n]*/i.test(value)) return true;
+  if (/(?:token|secret|password|api[_-]?key)\s*[:=]\s*(?!\[REDACTED\])\S+/i.test(value)) return true;
   return false;
 }
 
