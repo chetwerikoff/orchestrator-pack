@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,14 @@ import {
   evaluateSpawnWorktreeGrantConsume,
   evaluateSpawnWorktreeGrantFinalize,
 } from '../docs/spawn-worktree-grant.mjs';
+import { gitFixtureEnv, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+
+const trustedSystemGit = resolveTrustedSystemGit();
+
+function runTrustedGit(args: string[]) {
+  execFileSync(trustedSystemGit, args, { cwd: repoRoot, env: gitFixtureEnv(), stdio: 'ignore' });
+}
 
 const spawnWorktreeGatePath = path.join(repoRoot, 'scripts/lib/Autonomous-SpawnWorktreeGate.ps1');
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
@@ -84,7 +92,8 @@ describe('spawn worktree grant finalization (#567)', () => {
     const target = path.join(worktrees, 'opk-567-commit');
     const grantId = 'grant-finalize-commit';
 
-    const output = runPwsh(`
+    const reserveOutput = runPwsh(
+      `
       . ${psString(spawnWorktreeGatePath)}
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
@@ -103,32 +112,51 @@ describe('spawn worktree grant finalization (#567)', () => {
       $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId ${psString(grantId)}
       $reserve = Consume-AutonomousSpawnWorktreeGrant -GrantLookup $lookup -Argv @('worktree','add',${psString(target)},'HEAD') -CanonicalPath ${psString(target)} -TargetPreexists $false
       $afterReserve = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
-      git worktree add ${psString(target)} HEAD | Out-Null
-      try {
+      [pscustomobject]@{
+        reserveOk = [bool]$reserve.ok
+        reserved = ($null -ne $afterReserve.record.worktreeAllowReserved)
+        consumedAfterReserve = [bool]$afterReserve.record.consumed
+      } | ConvertTo-Json -Compress
+    `,
+      gitFixtureEnv(),
+    );
+    const reserved = JSON.parse(reserveOutput);
+    expect(reserved.reserveOk).toBe(true);
+    expect(reserved.reserved).toBe(true);
+    expect(reserved.consumedAfterReserve).toBe(false);
+
+    try {
+      runTrustedGit(['-C', repoRoot, 'worktree', 'add', target, 'HEAD']);
+
+      const finalizeOutput = runPwsh(
+        `
+        . ${psString(spawnWorktreeGatePath)}
+        $env:AO_BASE_DIR = ${psString(aoBase)}
+        $env:AO_PROJECT_ID = ${psString(projectId)}
+        $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId ${psString(grantId)}
         $finalize = Finalize-AutonomousSpawnWorktreeGrant -GrantId ${psString(grantId)} -CanonicalPath ${psString(target)}
         $afterFinalize = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
         [pscustomobject]@{
-          reserveOk = [bool]$reserve.ok
-          reserved = ($null -ne $afterReserve.record.worktreeAllowReserved)
-          consumedAfterReserve = [bool]$afterReserve.record.consumed
           finalizeOk = [bool]$finalize.ok
           consumedAfterFinalize = [bool]$afterFinalize.record.consumed
           consumedPath = [string]$afterFinalize.record.consumedCanonicalPath
           worktreeExists = Test-Path -LiteralPath ${psString(target)}
         } | ConvertTo-Json -Compress
+      `,
+        gitFixtureEnv(),
+      );
+      const parsed = JSON.parse(finalizeOutput);
+      expect(parsed.finalizeOk).toBe(true);
+      expect(parsed.consumedAfterFinalize).toBe(true);
+      expect(parsed.consumedPath).toBe(target);
+      expect(parsed.worktreeExists).toBe(true);
+    } finally {
+      try {
+        runTrustedGit(['-C', repoRoot, 'worktree', 'remove', '--force', target]);
+      } catch {
+        // Best-effort cleanup when add never succeeded.
       }
-      finally {
-        git worktree remove --force ${psString(target)} 2>$null | Out-Null
-      }
-    `);
-    const parsed = JSON.parse(output);
-    expect(parsed.reserveOk).toBe(true);
-    expect(parsed.reserved).toBe(true);
-    expect(parsed.consumedAfterReserve).toBe(false);
-    expect(parsed.finalizeOk).toBe(true);
-    expect(parsed.consumedAfterFinalize).toBe(true);
-    expect(parsed.consumedPath).toBe(target);
-    expect(parsed.worktreeExists).toBe(true);
+    }
   });
 
   it('replay-deny-preserved: consumed grant from another path still denies before mutation', () => {
