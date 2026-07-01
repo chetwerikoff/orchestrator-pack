@@ -1,0 +1,28 @@
+{
+  "issue_number": 569,
+  "iteration_id": "opk-125",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-01T10:15:51.870Z",
+  "baseline": {
+    "commit_sha": "b3904a63f227fbb09575b9df03fe209bdb01a693",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4dfea62dde993cd0564ba3d794c45be5958da7dc9cd7aa7c59b2217551ba737d"
+  },
+  "declared_paths": [
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/check-github-fleet-cache-bypass.ps1",
+    "scripts/fixtures/github-fleet-cache/fake-gh.sh",
+    "scripts/github-fleet-cache-test-harness.ts",
+    "scripts/github-fleet-shared-read-model.test.ts",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "docs/migration_notes.md",
+    "docs/github-fleet-cache-measurement.md",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
