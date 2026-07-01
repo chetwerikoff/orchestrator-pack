@@ -681,7 +681,13 @@ function Invoke-GhFleetCachedDatum {
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
     if (-not $cacheRoot) {
-        return & $PopulateUpstream
+        Push-Location -LiteralPath $RepoRoot
+        try {
+            return & $PopulateUpstream
+        }
+        finally {
+            Pop-Location
+        }
     }
 
     $paths = Get-GhFleetDatumSnapshotPaths -CacheRoot $cacheRoot -Category $Category -CacheKey $CacheKey

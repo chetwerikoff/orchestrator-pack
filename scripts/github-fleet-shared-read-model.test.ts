@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
@@ -382,5 +382,51 @@ Write-Output 'failed-expected'
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('failed-expected');
+  });
+
+  it('uncached fail-through enters RepoRoot before upstream pr view (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-uncached-cwd-');
+    delete harness.env.AO_SIDE_PROCESS_STATE_DIR;
+    const otherCwd = join(harness.root, 'other-cwd');
+    mkdirSync(otherCwd, { recursive: true });
+    const repoRootEscaped = packRootEscaped;
+    const cwdProbe = join(harness.root, 'cwd-probe-gh.sh');
+    writeFileSync(
+      cwdProbe,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$(pwd)" != "${repoRoot.replace(/"/g, '\"')}" ]]; then
+  echo "wrong cwd: $(pwd)" >&2
+  exit 99
+fi
+exec ${join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\''")} "$@"
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(join(harness.root, 'bin/gh'), readFileSync(cwdProbe));
+    chmodSync(join(harness.root, 'bin/gh'), 0o755);
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+Push-Location '${otherCwd.replace(/'/g, "''")}'
+try {
+  New-Item -ItemType Directory -Force -Path (Get-Location).Path | Out-Null
+  Remove-Item Env:AO_SIDE_PROCESS_STATE_DIR -ErrorAction SilentlyContinue
+  . '${fleetCache}'
+  $view = Invoke-GhFleetCachedPrView -RepoRoot '${repoRootEscaped}' -PrNumber 1
+  if (-not $view.number) { throw 'expected pr view' }
+  Write-Output 'ok'
+}
+finally {
+  Pop-Location
+}
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
   });
 });
