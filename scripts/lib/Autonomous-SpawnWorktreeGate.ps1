@@ -488,6 +488,26 @@ function Get-GitSpawnWorktreeAddPathFromArgv {
     return $null
 }
 
+
+function Test-AutonomousSpawnWorktreePathDurable {
+    param(
+        [string]$CanonicalPath,
+        [object]$GrantRecord
+    )
+
+    if (-not $CanonicalPath -or -not $GrantRecord) { return $false }
+    try {
+        $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluatePathDurable' -Payload @{
+            canonicalPath = $CanonicalPath
+            grant           = $GrantRecord
+        }
+        return [bool]$evaluation.durable
+    }
+    catch {
+        return $false
+    }
+}
+
 function Test-AutonomousSpawnWorktreeTargetPathHardened {
     param(
         [string]$TargetPath,
@@ -622,13 +642,11 @@ function Consume-AutonomousSpawnWorktreeGrant {
         if (-not $read.ok) {
             return @{ ok = $false; reason = 'grant_consume_race' }
         }
-        if ($read.record.consumed) {
-            return @{ ok = $false; reason = 'grant_already_consumed' }
-        }
         if (-not (Test-AutonomousSpawnWorktreeHolderAlive -Holder $read.record.holder)) {
             return @{ ok = $false; reason = 'grant_holder_not_live' }
         }
 
+        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath -GrantRecord $read.record
         $effectiveRepo = Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot
         $effectiveWorktree = Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot
         $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateConsume' -Payload @{
@@ -637,6 +655,7 @@ function Consume-AutonomousSpawnWorktreeGrant {
             canonicalPath             = $CanonicalPath
             worktreesPrefix           = $prefixResolved.path
             targetPreexists           = [bool]$TargetPreexists
+            worktreeDurable           = [bool]$worktreeDurable
             effectiveRepositoryRoot   = if ($effectiveRepo.ok) { [string]$effectiveRepo.path } else { '' }
             effectiveGitWorktreeRoot  = if ($effectiveWorktree.ok) { [string]$effectiveWorktree.path } else { '' }
         }
@@ -644,11 +663,37 @@ function Consume-AutonomousSpawnWorktreeGrant {
             return @{ ok = $false; reason = [string]$evaluation.reason }
         }
 
+        if ($evaluation.idempotent) {
+            $requiresFinalize = -not [bool]$read.record.consumed
+            return @{
+                ok                    = $true
+                reason                = [string]$evaluation.reason
+                grantId               = $grantId
+                projectId             = $projectId
+                path                  = $CanonicalPath
+                idempotent            = $true
+                requiresFinalize      = [bool]$requiresFinalize
+                normalizedCommitOid   = if ($evaluation.normalizedCommitOid) { [string]$evaluation.normalizedCommitOid } else { [string]$read.record.normalizedCommitOid }
+                headRefAudit          = if ($evaluation.headRefAudit) { $evaluation.headRefAudit } else { $read.record.headRefAudit }
+            }
+        }
+
         $updated = @{}
         $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
-        $updated.consumed = $true
-        $updated.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-        $updated.consumedCanonicalPath = $CanonicalPath
+        $attemptCount = 1
+        if ($read.record.worktreeAllowReserved -and $null -ne $read.record.worktreeAllowReserved.attemptCount) {
+            $attemptCount = [int]$read.record.worktreeAllowReserved.attemptCount + 1
+        }
+        elseif ($evaluation.reservedAttemptCount) {
+            $attemptCount = [int]$evaluation.reservedAttemptCount
+        }
+        $updated.worktreeAllowReserved = @{
+            atUtc                  = (Get-Date).ToUniversalTime().ToString('o')
+            worktreeCanonicalPath  = $CanonicalPath
+            reservedBy             = 'autonomous-spawn-worktree-gate'
+            holderProcessGuid      = [string]$read.record.holder.processGuid
+            attemptCount           = $attemptCount
+        }
         if ($evaluation.normalizedCommitOid) {
             $updated.normalizedCommitOid = [string]$evaluation.normalizedCommitOid
         }
@@ -679,6 +724,90 @@ function Consume-AutonomousSpawnWorktreeGrant {
     }
 }
 
+
+
+function Finalize-AutonomousSpawnWorktreeGrant {
+    param(
+        [string]$GrantId,
+        [string]$CanonicalPath
+    )
+
+    if (-not $GrantId -or -not $CanonicalPath) {
+        return @{ ok = $false; reason = 'grant_finalize_invalid' }
+    }
+
+    $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId $GrantId
+    if (-not $lookup.ok) {
+        return @{ ok = $false; reason = [string]$lookup.reason }
+    }
+
+    $grantId = [string]$lookup.record.grantId
+    $lockPath = Get-AutonomousSpawnWorktreeGrantConsumeLockPath -Namespace ([string]$lookup.namespace) -GrantId $grantId
+    if (-not (Enter-AutonomousSpawnWorktreeGrantConsumeMutex -LockPath $lockPath)) {
+        return @{ ok = $false; reason = 'grant_consume_busy' }
+    }
+
+    try {
+        $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
+        if (-not $read.ok) {
+            return @{ ok = $false; reason = 'grant_consume_race' }
+        }
+        $worktreeDurable = Test-AutonomousSpawnWorktreePathDurable -CanonicalPath $CanonicalPath -GrantRecord $read.record
+        $evaluation = Invoke-SpawnWorktreeGrantCli -Subcommand 'evaluateFinalize' -Payload @{
+            grant            = $read.record
+            canonicalPath    = $CanonicalPath
+            worktreeDurable  = [bool]$worktreeDurable
+        }
+        if (-not $evaluation.ok) {
+            return @{ ok = $false; reason = [string]$evaluation.reason }
+        }
+        if ($evaluation.reason -eq 'grant_finalize_idempotent') {
+            return @{ ok = $true; reason = 'grant_finalize_idempotent'; grantId = $grantId; path = $CanonicalPath }
+        }
+
+        $updated = @{}
+        $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
+        $updated.consumed = $true
+        $updated.consumedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        $updated.consumedCanonicalPath = $CanonicalPath
+        Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $lookup.namespace -GrantId $grantId -Record ($updated | ConvertTo-Json -Compress -Depth 20 | ConvertFrom-Json)
+        return @{ ok = $true; reason = 'grant_finalize_commit'; grantId = $grantId; path = $CanonicalPath }
+    }
+    finally {
+        Exit-AutonomousSpawnWorktreeGrantConsumeMutex -LockPath $lockPath
+    }
+}
+
+function Register-AutonomousSpawnWorktreeGrantFinalizationFailure {
+    param(
+        [string]$GrantId,
+        [string]$CanonicalPath,
+        [int]$ExitCode = 1
+    )
+
+    if (-not $GrantId) { return @{ ok = $false; reason = 'grant_finalize_invalid' } }
+    $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId $GrantId
+    if (-not $lookup.ok) { return @{ ok = $false; reason = [string]$lookup.reason } }
+
+    $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
+    if (-not $read.ok) { return @{ ok = $false; reason = 'grant_consume_race' } }
+    if ($read.record.consumed) {
+        return @{ ok = $true; reason = 'grant_already_finalized' }
+    }
+
+    $projectId = [string]$lookup.record.projectId
+    if (-not $projectId) { $projectId = Get-AutonomousSpawnWorktreeProjectId }
+    Write-AutonomousSpawnWorktreeHeadRefAudit -ProjectId $projectId -AuditRecord @{
+        atUtc         = (Get-Date).ToUniversalTime().ToString('o')
+        kind          = 'spawn_worktree_finalize_failure'
+        outcome       = 'deny'
+        reason        = 'grant_finalize_git_failed'
+        grantId       = $GrantId
+        canonicalPath = $CanonicalPath
+        exitCode      = $ExitCode
+    }
+    return @{ ok = $true; reason = 'grant_finalize_failure_recorded' }
+}
 
 function Rewrite-AutonomousSpawnWorktreeAddCommitArgv {
     param(
@@ -761,15 +890,27 @@ function Test-AutonomousSpawnWorktreeGrantBoundAllow {
         return @{ allowed = $false; reason = $consume.reason }
     }
 
-    return @{
+    $reason = [string]$consume.reason
+    if (-not $reason) { $reason = 'spawn_worktree_allow' }
+    $result = @{
         allowed               = $true
-        reason                = 'spawn_worktree_allow'
+        reason                = $reason
         grantId               = $consume.grantId
         projectId             = $consume.projectId
         path                  = $consume.path
         normalizedCommitOid   = [string]$consume.normalizedCommitOid
         headRefAudit          = $consume.headRefAudit
     }
+    if ($consume.idempotent) {
+        $result.spawnGrantSkipMutation = $true
+    }
+    if ($consume.requiresFinalize -or -not $consume.idempotent) {
+        $result.spawnGrantFinalize = @{
+            grantId        = [string]$consume.grantId
+            canonicalPath  = [string]$consume.path
+        }
+    }
+    return $result
 }
 
 function Clear-AutonomousSpawnWorktreeActiveGrant {
@@ -779,7 +920,7 @@ function Clear-AutonomousSpawnWorktreeActiveGrant {
     if ($active.grantPath -and (Test-Path -LiteralPath $active.grantPath -PathType Leaf)) {
         try {
             $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $active.grantPath
-            if ($read.ok -and -not $read.record.consumed) {
+            if ($read.ok -and -not $read.record.consumed -and -not $read.record.worktreeAllowReserved) {
                 Remove-Item -LiteralPath $active.grantPath -Force -ErrorAction SilentlyContinue
             }
         }

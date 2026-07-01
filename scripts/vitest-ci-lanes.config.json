@@ -103,6 +103,7 @@
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/spawn-worktree-head-ref-oid-binding.test.ts": "heavy",
     "scripts/spawn-worktree-branch-operand-binding.test.ts": "heavy",
+    "scripts/spawn-worktree-grant-finalization.test.ts": "heavy",
     "scripts/spawn-worktree-repository-identity-binding.test.ts": "heavy",
     "scripts/submit-worker-input-draft.test.ts": "heavy",
     "scripts/supervisor-auto-recovery.test.ts": "heavy",
