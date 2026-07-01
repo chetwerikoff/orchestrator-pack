@@ -1130,7 +1130,12 @@ function Test-GhFleetPrHeadCurrent {
         [string]$Consumer = ''
     )
 
-    $view = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -Consumer $Consumer
+    try {
+        $view = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -Consumer $Consumer
+    }
+    catch {
+        return @{ current = $false; reason = 'pr_view_failed' }
+    }
     if (-not $view) {
         return @{ current = $false; reason = 'no_pr_view' }
     }

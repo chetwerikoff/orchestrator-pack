@@ -15,6 +15,9 @@ const ghChecks = join(scriptsDir, 'lib/Gh-PrChecks.ps1').replace(/'/g, "''");
 const fleetCache = join(scriptsDir, 'lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
 const packRootEscaped = repoRoot.replace(/'/g, "''");
 
+const GH_AUDIT_CALL_PATTERNS = [/\bpr list\b/, /\bpr view\b/, /\bpr checks\b/, /branches\/.*\/protection/] as const;
+
+
 const CONSUMERS: Array<{ id: string; script: string }> = [
   {
     id: 'review-trigger-reconcile',
@@ -310,7 +313,7 @@ Write-Output 'done'
 
   it('AC#12 measurement harness reports at least 5x reduction vs per-consumer reads', async () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-measure-');
-    const ghPatterns = [/pr list/, /pr view/, /pr checks/, /branches\/.*\/protection/];
+    const ghPatterns = [...GH_AUDIT_CALL_PATTERNS];
     const countGhCalls = (auditFile: string) =>
       auditLines(auditFile).filter((line) => ghPatterns.some((pattern) => pattern.test(line))).length;
     const naivePerConsumerCalls = CONSUMERS.length * 5;
@@ -385,11 +388,10 @@ Write-Output 'failed-expected'
   });
 
   it('AC#12 measurement regexes use word boundaries (review P2)', () => {
-    const patterns = [/\bpr list\b/, /\bpr view\b/, /\bpr checks\b/];
-    expect(patterns[0].test('gh pr list --state open')).toBe(true);
-    expect(patterns[0].test('gh pr listicle')).toBe(false);
-    expect(patterns[1].test('gh pr view 1 --json number')).toBe(true);
-    expect(patterns[2].test('gh pr checks 1 --json name')).toBe(true);
+    expect(GH_AUDIT_CALL_PATTERNS[0].test('gh pr list --state open')).toBe(true);
+    expect(GH_AUDIT_CALL_PATTERNS[0].test('gh pr listicle')).toBe(false);
+    expect(GH_AUDIT_CALL_PATTERNS[1].test('gh pr view 1 --json number')).toBe(true);
+    expect(GH_AUDIT_CALL_PATTERNS[2].test('gh pr checks 1 --json name')).toBe(true);
   });
 
   it('preserves check JSON when gh pr checks exits nonzero (review P1)', () => {
@@ -425,7 +427,44 @@ Write-Output 'ok'
     expect(result.stdout).toContain('ok');
   });
 
-  it('scoped PR refresh skips view misses without aborting batch (review P2)', () => {
+  it('bundle stale-head gate contains pr view failures per PR (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-bundle-view-fail-');
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+if [[ "$joined" == *"pr view 2"* ]] || [[ "$joined" == *"pr view 2 --"* ]]; then
+  echo 'transient view miss' >&2
+  exit 1
+fi
+exec ${join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\''")} "$@"
+`,
+      { mode: 0o755 },
+    );
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$open = @(
+  [pscustomobject]@{ number = 1; headRefOid = 'sha1111111111111111111111111111111111111111' }
+  [pscustomobject]@{ number = 2; headRefOid = 'sha2222222222222222222222222222222222222222' }
+)
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'bundle-view-fail' -MergeRequiredNames { param($p) @($p.contexts) }
+if (-not $bundle.ciChecksByPr.ContainsKey('1')) { throw 'expected pr 1 checks' }
+if ($bundle.ciChecksByPr.ContainsKey('2')) { throw 'pr 2 view failure must skip checks' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
+    it('scoped PR refresh skips view misses without aborting batch (review P2)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-scoped-skip-');
     writeFileSync(
       join(harness.root, 'bin/gh'),
