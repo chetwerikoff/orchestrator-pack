@@ -163,6 +163,124 @@ describe('spawn worktree grant finalization (#567)', () => {
     }
   });
 
+  it('reserved durable idempotent retry skips git mutation and commits finalize', () => {
+    const aoBase = mkdtempSync(path.join(tmpdir(), 'ao-grant-idempotent-recover-'));
+    tempRoots.push(aoBase);
+    const projectId = 'orchestrator-pack';
+    const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
+    mkdirSync(worktrees, { recursive: true });
+    const target = path.join(worktrees, 'opk-567-recover');
+    const grantId = 'grant-idempotent-recover';
+
+    const output = runPwsh(
+      `
+      . ${psString(spawnWorktreeGatePath)}
+      . ${psString(boundaryLibPath)}
+      $env:AO_BASE_DIR = ${psString(aoBase)}
+      $env:AO_PROJECT_ID = ${psString(projectId)}
+      $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
+      $trustedGit = ${psString(trustedSystemGit)}
+      $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
+        argv = @('spawn','567')
+        grantId = ${psString(grantId)}
+        projectId = ${psString(projectId)}
+        holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture-567-recover'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
+        extraAuthorizedWorktreeNames = @('opk-567-recover')
+        expectedHeadRef = 'HEAD'
+        sourceRepositoryRoot = [string](Resolve-AutonomousSpawnWorktreeSourceRepositoryRoot).path
+        sourceGitWorktreeRoot = [string](Resolve-AutonomousSpawnWorktreeSourceGitWorktreeRoot).path
+      }
+      $ns = Get-AutonomousSpawnWorktreeGrantNamespace -ProjectId ${psString(projectId)}
+      Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
+      $lookup = Find-AutonomousSpawnWorktreeGrantById -GrantId ${psString(grantId)}
+      Consume-AutonomousSpawnWorktreeGrant -GrantLookup $lookup -Argv @('worktree','add',${psString(target)},'HEAD') -CanonicalPath ${psString(target)} -TargetPreexists $false | Out-Null
+      & $trustedGit -C ${psString(repoRoot)} worktree add ${psString(target)} HEAD | Out-Null
+      try {
+        $allow = Test-AutonomousSpawnWorktreeGrantBoundAllow -Argv @('worktree','add',${psString(target)},'HEAD')
+        $read = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
+        if ($allow.spawnGrantSkipMutation -and $allow.spawnGrantFinalize) {
+          $finalize = Finalize-AutonomousSpawnWorktreeGrant -GrantId ${psString(grantId)} -CanonicalPath ${psString(target)}
+        }
+        else {
+          $finalize = @{ ok = $false; reason = 'skip_finalize_path_missing' }
+        }
+        $after = Read-AutonomousSpawnWorktreeGrantRecord -Path $lookup.path
+        [pscustomobject]@{
+          allowed = [bool]$allow.allowed
+          reason = [string]$allow.reason
+          skipMutation = [bool]$allow.spawnGrantSkipMutation
+          hasFinalize = ($null -ne $allow.spawnGrantFinalize)
+          attemptCount = [int]$read.record.worktreeAllowReserved.attemptCount
+          finalizeOk = [bool]$finalize.ok
+          consumed = [bool]$after.record.consumed
+        } | ConvertTo-Json -Compress
+      }
+      finally {
+        & $trustedGit -C ${psString(repoRoot)} worktree remove --force ${psString(target)} 2>$null | Out-Null
+      }
+    `,
+      fixturePwshEnv(),
+    );
+    const parsed = JSON.parse(output);
+    expect(parsed.allowed).toBe(true);
+    expect(parsed.reason).toBe('spawn_worktree_idempotent');
+    expect(parsed.skipMutation).toBe(true);
+    expect(parsed.hasFinalize).toBe(true);
+    expect(parsed.attemptCount).toBe(1);
+    expect(parsed.finalizeOk).toBe(true);
+    expect(parsed.consumed).toBe(true);
+  });
+
+  it('validates same-lineage before reserved durable idempotent allow', () => {
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '567'],
+      grantId: 'g-idempotent-deny',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1, processGuid: 'holder-idempotent' },
+      extraAuthorizedWorktreeNames: ['opk-567-idempotent'],
+      sourceRepositoryRoot: repoRoot,
+      sourceGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:00Z'),
+    });
+    expect(built.ok).toBe(true);
+    const prefix = '/tmp/ao/projects/orchestrator-pack/worktrees';
+    const target = path.join(prefix, 'opk-567-idempotent');
+    const grant = {
+      ...built.grant!,
+      worktreeAllowReserved: {
+        worktreeCanonicalPath: target,
+        attemptCount: 1,
+      },
+    };
+    const globalDeny = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['-C', '/tmp/evil', 'worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: true,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(globalDeny.ok).toBe(false);
+    expect(globalDeny.reason).toBe('git_source_global_denied');
+
+    const headMismatch = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['worktree', 'add', target, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: true,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(headMismatch.ok).toBe(false);
+    expect(headMismatch.reason).toMatch(/head_ref|commit|oid/i);
+  });
+
   it('replay-deny-preserved: consumed grant from another path still denies before mutation', () => {
     const built = buildSpawnWorktreeGrantRecord({
       argv: ['spawn', '567'],

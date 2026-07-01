@@ -46,10 +46,15 @@ export interface SpawnWorktreeHeadRefAudit {
 export interface SpawnWorktreeGrantConsumeVerdict {
   ok: boolean;
   reason: string;
+  idempotent?: boolean;
+  requiresFinalize?: boolean;
   basename?: string;
   commit?: string;
   normalizedCommitOid?: string;
   normalizationMode?: string;
+  reservedCanonicalPath?: string;
+  consumedCanonicalPath?: string;
+  reservedAttemptCount?: number;
   headRefAudit?: SpawnWorktreeHeadRefAudit;
   expectedRefToken?: string;
   expectedCommitOid?: string;

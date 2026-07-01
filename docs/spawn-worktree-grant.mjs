@@ -525,21 +525,13 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     return { ok: false, reason: 'grant_already_consumed' };
   }
   const reservedPath = spawnWorktreeGrantReservedPath(grant);
+  if (reservedPath && !spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
+    return { ok: false, reason: 'grant_reserve_path_mismatch' };
+  }
   if (reservedPath) {
-    if (!spawnWorktreeCanonicalPathsEqual(reservedPath, canonicalPath)) {
-      return { ok: false, reason: 'grant_reserve_path_mismatch' };
-    }
     const attemptCount = spawnWorktreeGrantReservedAttemptCount(grant);
     if (attemptCount >= SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS) {
       return { ok: false, reason: 'grant_finalization_attempts_exhausted' };
-    }
-    if (targetPreexists || worktreeDurable) {
-      return {
-        ok: true,
-        reason: 'spawn_worktree_idempotent',
-        idempotent: true,
-        reservedCanonicalPath: reservedPath,
-      };
     }
   }
   const expiresAtMs = Date.parse(String(grant.expiresAtUtc ?? ''));
@@ -636,6 +628,32 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     }
   }
 
+  const headRefAudit = {
+    expectedRefToken: headAuth.expectedRefToken,
+    expectedCommitOid: headAuth.expectedCommitOid,
+    actualRefToken: headAuth.actualRefToken,
+    actualCommitOid: headAuth.actualCommitOid,
+    normalizationMode: headAuth.normalizationMode,
+    sourceRepositoryRoot: grantRepo,
+    action: String(grant.action ?? ''),
+    grantId: String(grant.grantId ?? ''),
+  };
+  const durableWorktree = targetPreexists || worktreeDurable;
+  if (reservedPath && durableWorktree) {
+    return {
+      ok: true,
+      reason: 'spawn_worktree_idempotent',
+      idempotent: true,
+      requiresFinalize: true,
+      basename,
+      commit: shape.commit,
+      normalizedCommitOid: headAuth.normalizedCommitOid,
+      normalizationMode: headAuth.normalizationMode,
+      reservedCanonicalPath: reservedPath,
+      headRefAudit,
+    };
+  }
+
   return {
     ok: true,
     reason: 'spawn_worktree_allow',
@@ -644,16 +662,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     normalizedCommitOid: headAuth.normalizedCommitOid,
     normalizationMode: headAuth.normalizationMode,
     reservedAttemptCount: reservedPath ? spawnWorktreeGrantReservedAttemptCount(grant) + 1 : 1,
-    headRefAudit: {
-      expectedRefToken: headAuth.expectedRefToken,
-      expectedCommitOid: headAuth.expectedCommitOid,
-      actualRefToken: headAuth.actualRefToken,
-      actualCommitOid: headAuth.actualCommitOid,
-      normalizationMode: headAuth.normalizationMode,
-      sourceRepositoryRoot: grantRepo,
-      action: String(grant.action ?? ''),
-      grantId: String(grant.grantId ?? ''),
-    },
+    headRefAudit,
   };
 }
 

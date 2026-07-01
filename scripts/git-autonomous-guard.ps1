@@ -20,27 +20,38 @@ if ($deny.normalizedCommitOid) {
 }
 
 $spawnGrantFinalize = $null
-if (-not $deny.denied -and $deny.spawnGrantFinalize) {
-    $spawnGrantFinalize = $deny.spawnGrantFinalize
+$spawnGrantSkipMutation = $false
+if (-not $deny.denied) {
+    if ($deny.spawnGrantFinalize) {
+        $spawnGrantFinalize = $deny.spawnGrantFinalize
+    }
+    if ($deny.spawnGrantSkipMutation) {
+        $spawnGrantSkipMutation = $true
+    }
 }
 
 $env:AO_AUTONOMOUS_GIT_INTERNAL_EXEC = '1'
 $exitCode = 0
 try {
-    $realGit = Resolve-SystemGitExecutable
-    if ($realGit -eq 'git') {
-        & git @gitArgs
+    if ($spawnGrantSkipMutation) {
+        $exitCode = 0
     }
     else {
-        & $realGit @gitArgs
+        $realGit = Resolve-SystemGitExecutable
+        if ($realGit -eq 'git') {
+            & git @gitArgs
+        }
+        else {
+            & $realGit @gitArgs
+        }
+        $exitCode = $LASTEXITCODE
     }
-    $exitCode = $LASTEXITCODE
 }
 finally {
     if ($spawnGrantFinalize) {
         $grantId = [string]$spawnGrantFinalize.grantId
         $canonicalPath = [string]$spawnGrantFinalize.canonicalPath
-        if ($exitCode -eq 0) {
+        if ($spawnGrantSkipMutation -or $exitCode -eq 0) {
             $finalize = Finalize-AutonomousSpawnWorktreeGrant -GrantId $grantId -CanonicalPath $canonicalPath
             if (-not $finalize.ok) {
                 [Console]::Error.WriteLine("autonomous spawn worktree grant finalization failed: $($finalize.reason)")

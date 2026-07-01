@@ -658,7 +658,8 @@ function Consume-AutonomousSpawnWorktreeGrant {
             return @{ ok = $false; reason = [string]$evaluation.reason }
         }
 
-        if ($evaluation.idempotent -and $read.record.consumed) {
+        if ($evaluation.idempotent) {
+            $requiresFinalize = -not [bool]$read.record.consumed
             return @{
                 ok                    = $true
                 reason                = [string]$evaluation.reason
@@ -666,8 +667,9 @@ function Consume-AutonomousSpawnWorktreeGrant {
                 projectId             = $projectId
                 path                  = $CanonicalPath
                 idempotent            = $true
-                normalizedCommitOid   = [string]$read.record.normalizedCommitOid
-                headRefAudit          = $read.record.headRefAudit
+                requiresFinalize      = [bool]$requiresFinalize
+                normalizedCommitOid   = if ($evaluation.normalizedCommitOid) { [string]$evaluation.normalizedCommitOid } else { [string]$read.record.normalizedCommitOid }
+                headRefAudit          = if ($evaluation.headRefAudit) { $evaluation.headRefAudit } else { $read.record.headRefAudit }
             }
         }
 
@@ -894,7 +896,10 @@ function Test-AutonomousSpawnWorktreeGrantBoundAllow {
         normalizedCommitOid   = [string]$consume.normalizedCommitOid
         headRefAudit          = $consume.headRefAudit
     }
-    if (-not $consume.idempotent) {
+    if ($consume.idempotent) {
+        $result.spawnGrantSkipMutation = $true
+    }
+    if ($consume.requiresFinalize -or -not $consume.idempotent) {
         $result.spawnGrantFinalize = @{
             grantId        = [string]$consume.grantId
             canonicalPath  = [string]$consume.path
