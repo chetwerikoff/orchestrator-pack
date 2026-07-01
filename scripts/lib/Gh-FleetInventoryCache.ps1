@@ -699,7 +699,7 @@ function Invoke-GhFleetCachedDatum {
         $entry = Read-GhFleetCacheEnvelope -Path $Path -TtlSeconds $Ttl
         if (-not $entry) { return $null }
         if ($entry.kind -eq 'error') {
-            throw [string]$entry.message
+            return $null
         }
         if ($AllowNegativeEnvelope -and $entry.envelope.negative) {
             return @{ kind = 'negative'; envelope = $entry.envelope }
@@ -730,12 +730,6 @@ function Invoke-GhFleetCachedDatum {
                 }
                 catch {
                     $failureMessage = Format-GhFleetCacheFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
-                    $expiresAt = (Get-Date).ToUniversalTime().AddSeconds($ttl).ToString('o')
-                    Write-GhFleetCacheEnvelopeAtomic -TargetPath $paths.SnapshotPath -TempPath $paths.TempPath -Envelope @{
-                        storedAt  = (Get-Date).ToUniversalTime().ToString('o')
-                        expiresAt = $expiresAt
-                        error     = $failureMessage
-                    }
                     Write-GhFleetCacheAuditLine -Event $AuditEvents.populateFailed -Fields ($auditBase + @{ message = $failureMessage })
                     throw $failureMessage
                 }
@@ -757,10 +751,10 @@ function Invoke-GhFleetCachedDatum {
         }
 
         $waitedEntry = Wait-GhFleetSnapshotEnvelope -SnapshotPath $paths.SnapshotPath -LockPath $paths.LockPath -TtlSeconds $ttl
+        if ($waitedEntry -and $waitedEntry.kind -eq 'error') {
+            $waitedEntry = $null
+        }
         if ($waitedEntry) {
-            if ($waitedEntry.kind -eq 'error') {
-                throw [string]$waitedEntry.message
-            }
             if ($AllowNegativeEnvelope -and $waitedEntry.envelope.negative) {
                 Write-GhFleetCacheAuditLine -Event $AuditEvents.waitHit -Fields ($auditBase + @{ savedDuplicateCalls = 1 })
                 return & $ExtractFromEnvelope $waitedEntry.envelope

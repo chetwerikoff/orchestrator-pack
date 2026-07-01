@@ -357,7 +357,7 @@ Write-Output 'ok'
       `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
 joined="$*"
-if [[ "$joined" == *"pr checks"* ]]; then
+if [[ "$joined" == *"pr checks"* ]] && [[ "\${GH_FLEET_TEST_CHECKS_FAIL:-}" == "1" ]]; then
   echo 'rate limited' >&2
   exit 1
 fi
@@ -366,7 +366,7 @@ exec ${join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, 
       { mode: 0o755 },
     );
 
-    const script = `
+    const failScript = `
 $ErrorActionPreference = 'Stop'
 . '${ghChecks}'
 try {
@@ -378,13 +378,32 @@ catch {
 }
 Write-Output 'failed-expected'
 `;
-    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    const failEnv = { ...harness.env, GH_FLEET_TEST_CHECKS_FAIL: '1' };
+    const fail = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', failScript], {
+      cwd: repoRoot,
+      env: failEnv,
+      encoding: 'utf8',
+    });
+    expect(fail.status).toBe(0);
+    expect(fail.stdout).toContain('failed-expected');
+    const checksAfterFail = countPattern(harness.auditFile, /\bpr checks\b/);
+    expect(checksAfterFail).toBeGreaterThanOrEqual(1);
+
+    const retryScript = `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$checks = Invoke-GhPrChecks -RepoRoot '${packRootEscaped}' -PrNumber 1 -HeadSha 'sha1111111111111111111111111111111111111111'
+if ($checks.Count -lt 1) { throw 'expected recovered checks' }
+Write-Output 'recovered'
+`;
+    const retry = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', retryScript], {
       cwd: repoRoot,
       env: harness.env,
       encoding: 'utf8',
     });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('failed-expected');
+    expect(retry.status, retry.stderr || retry.stdout).toBe(0);
+    expect(retry.stdout).toContain('recovered');
+    expect(countPattern(harness.auditFile, /\bpr checks\b/)).toBeGreaterThan(checksAfterFail);
   });
 
   it('AC#12 measurement regexes use word boundaries (review P2)', () => {
