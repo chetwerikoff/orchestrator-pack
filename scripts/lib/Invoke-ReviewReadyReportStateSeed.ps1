@@ -417,11 +417,31 @@ function Invoke-ReviewReadyReportStateSeedTick {
                         $scoped = @()
                     }
                     else {
-                        $scoped = @($transport.stdout | ConvertFrom-Json)
+                        $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
+                        if (-not $parse.ok) {
+                            $reason = [string]$parse.reason
+                            if (-not $reason) { $reason = 'structured_output_polluted' }
+                            $transportFailure = @{
+                                ok           = $false
+                                reason       = $reason
+                                exitCode     = [int]$transport.exitCode
+                                stderr       = [string]$transport.stderr
+                                stdout       = [string]$transport.stdout
+                                failureClass = 'infra_transport'
+                            }
+                            $scoped = @()
+                        }
+                        else {
+                            $scoped = @($parse.value)
+                        }
                     }
                 }
                 else {
-                    $scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($prNumber))
+                    $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $prNumber
+                    $scoped = @($lookup.openPrs)
+                    if ($lookup.transportFailure) {
+                        $transportFailure = $lookup.transportFailure
+                    }
                 }
                 $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
                     param($payload)

@@ -205,7 +205,7 @@ describe('review-start-envelope-ledger unit', () => {
     expect(src).not.toContain('requires an acquired claim');
 
     const script = `
-      function Invoke-GhOpenPrListForNumbers { param([string]$RepoRoot, [int[]]$PrNumbers, [scriptblock]$ProgressWriter = $null); return @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' }) }
+      function Invoke-ReviewStartScopedGhPrView { param([string]$RepoRoot, [int]$PrNumber); return @{ openPrs = @(@{ number = 516; headRefOid = ${psString(fullSha)}; baseRefName = 'main'; state = 'OPEN' }); transportFailure = $null } }
       function Get-AoReviewRuns { param([string]$Project); return @(@{ prNumber = 516; targetSha = ${psString(fullSha)}; status = 'failed' }) }
       function Get-AoStatusSessions { return @() }
       function Add-GhPrHeadCommittedAtFromFleetMemo { param([string]$RepoRoot, $Pr) }
@@ -228,8 +228,7 @@ describe('review-start-envelope-ledger unit', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     expect(src).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
     expect(src).not.toMatch(/'pr',\s*'list'/);
-    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
-    expect(src).toMatch(/'pr',\s*'view'/);
+    expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
   });
 
   it('pre-claim snapshot loads post-run retry ledger from claim namespace', () => {
@@ -319,7 +318,7 @@ describe('review-start-envelope-ledger unit', () => {
   it('report-state-seed-fresh-snapshot-preserves-terminated-sessions', () => {
     const seedPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
     const src = readFileSync(seedPath, 'utf8');
-    expect(src).toMatch(/Invoke-GhOpenPrListForNumbers/);
+    expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
     expect(src).toMatch(/Get-AoStatusSessionsIncludingTerminated/);
     expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
     expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);

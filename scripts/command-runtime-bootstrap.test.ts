@@ -129,6 +129,21 @@ describe('command-runtime bootstrap (#532)', () => {
     expect(mixed.reason).toBe('structured_output_polluted');
   });
 
+  it('exposes parseStructuredOutput CLI subcommand for PowerShell callers (#566)', () => {
+    const cli = join(packScripts, 'lib', 'command-runtime-bootstrap.mjs');
+    const payload = JSON.stringify({
+      stdout: '{"number":565,"state":"OPEN"}',
+      stderr: '/usr/share/bashdb/debugger-support.db: No such file or directory',
+    });
+    const result = spawnSync(process.execPath, [cli, 'parseStructuredOutput', payload], {
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout.trim());
+    expect(parsed.ok).toBe(true);
+    expect(parsed.value.number).toBe(565);
+  });
+
   it('reports uncovered gh argv shapes for inventory extension', () => {
     const covered = evaluateUncoveredGhArgv(['pr', 'view', '42', '--json', 'state,mergedAt']);
     expect(covered.ok).toBe(true);

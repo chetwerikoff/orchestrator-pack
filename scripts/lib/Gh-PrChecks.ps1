@@ -57,6 +57,123 @@ function Invoke-GhOpenPrList {
     return $prs
 }
 
+$Script:CommandRuntimeBootstrapCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts/lib/command-runtime-bootstrap.mjs'
+
+function Invoke-CommandRuntimeParseStructuredOutput {
+    param(
+        [string]$Stdout = '',
+        [string]$Stderr = ''
+    )
+
+    $payload = (@{ stdout = $Stdout; stderr = $Stderr } | ConvertTo-Json -Compress -Depth 5)
+    $raw = & node $Script:CommandRuntimeBootstrapCli parseStructuredOutput $payload 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "command-runtime-bootstrap parseStructuredOutput failed: $raw"
+    }
+    return $raw | ConvertFrom-Json
+}
+
+function Resolve-ReviewStartScopedGhCommand {
+    $override = [string]$env:AO_REVIEW_START_SCOPED_GH_COMMAND
+    if ($override) { return $override }
+    $packGh = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts/gh'
+    if (Test-Path -LiteralPath $packGh) { return $packGh }
+    return 'gh'
+}
+
+function Invoke-GhPrViewStructuredCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber
+    )
+
+    $command = Resolve-ReviewStartScopedGhCommand
+    $ghArgs = @('pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state')
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    if ($command -match '\.ps1$') {
+        $psi.FileName = 'pwsh'
+        $escapedArgs = ($ghArgs | ForEach-Object {
+            $part = [string]$_
+            if ($part -match '\s') { '"' + $part.Replace('"', '\"') + '"' } else { $part }
+        }) -join ' '
+        $psi.Arguments = "-NoProfile -File `"$command`" $escapedArgs"
+    }
+    else {
+        $psi.FileName = $command
+        $psi.Arguments = ($ghArgs | ForEach-Object { [string]$_ }) -join ' '
+    }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $RepoRoot
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+
+    $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr
+    return @{
+        exitCode = $exitCode
+        stdout   = $stdout
+        stderr   = $stderr
+        parse    = $parse
+    }
+}
+
+function New-ReviewStartScopedGhTransportFailure {
+    param(
+        [hashtable]$Capture,
+        [string]$Reason
+    )
+
+    return @{
+        ok           = $false
+        reason       = $Reason
+        exitCode     = [int]$Capture.exitCode
+        stderr       = [string]$Capture.stderr
+        stdout       = [string]$Capture.stdout
+        failureClass = 'infra_transport'
+    }
+}
+
+function Invoke-ReviewStartScopedGhPrView {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [int]$PrNumber
+    )
+
+    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber
+    if (-not $capture.parse.ok) {
+        $reason = [string]$capture.parse.reason
+        if (-not $reason) { $reason = 'structured_output_polluted' }
+        return @{
+            openPrs          = @()
+            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason $reason)
+        }
+    }
+    if ($capture.exitCode -ne 0) {
+        return @{
+            openPrs          = @()
+            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'gh_command_failed')
+        }
+    }
+
+    $pr = $capture.parse.value
+    if (-not $pr -or [string]$pr.state -ne 'OPEN') {
+        return @{ openPrs = @(); transportFailure = $null }
+    }
+
+    Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+    return @{ openPrs = @($pr); transportFailure = $null }
+}
+
 
 function Invoke-GhOpenPrListForNumbers {
     param(
@@ -82,11 +199,11 @@ function Invoke-GhOpenPrListForNumbers {
             if ($ProgressWriter) {
                 & $ProgressWriter 'open_pr_view' $ordinal
             }
-            $raw = gh pr view $n --json number,headRefOid,baseRefName,state 2>&1
-            if ($LASTEXITCODE -ne 0) {
+            $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $n
+            if ($capture.exitCode -ne 0 -or -not $capture.parse.ok) {
                 continue
             }
-            $pr = $raw | ConvertFrom-Json
+            $pr = $capture.parse.value
             if ([string]$pr.state -ne 'OPEN') {
                 continue
             }

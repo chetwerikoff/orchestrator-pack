@@ -111,6 +111,9 @@ function Invoke-OrchestratorClaimedReviewRun {
         claimWindow                 = 'free'
         provenanceAutonomous        = $true
     }
+    if ($snapshot.transportFailure) {
+        $gatePayload.transportFailure = $snapshot.transportFailure
+    }
     $preClaim = Invoke-OrchestratorClaimedReviewRunFilterCli -Subcommand 'evaluateTurnGate' -Payload $gatePayload
     if (-not $preClaim.launch) {
         if ($preClaim.currentHeadSha) {

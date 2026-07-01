@@ -61,6 +61,11 @@ describe('Invoke-GhOpenPrListForNumbers query cost', () => {
     expect(body).toMatch(/Add-GhPrHeadCommittedAtFromFleetMemo/);
   });
 
+  it('parses scoped pr view JSON from stdout only without stderr merge (#566)', () => {
+    expect(body).not.toMatch(/2>&1/);
+    expect(body).toMatch(/Invoke-GhPrViewStructuredCapture/);
+  });
+
   it('requests PR state and excludes closed or merged PRs', () => {
     expect(body).toMatch(/gh pr view \$n --json[^\n]*state/);
     expect(body).toMatch(/state.*OPEN|OPEN.*state/);
