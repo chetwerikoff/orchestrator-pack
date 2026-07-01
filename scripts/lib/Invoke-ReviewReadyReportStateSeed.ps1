@@ -197,6 +197,26 @@ function Resolve-ReviewReadyReportStateSeedGitHubSnapshot {
     return $CachedSnapshot
 }
 
+
+function Get-ReportStateSeedPreClaimTransportDenial {
+    param(
+        [int]$PrNumber,
+        [string]$RepoRoot
+    )
+
+    $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
+    if (-not $lookup.transportFailure) { return $null }
+    return Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
+        transportFailure              = $lookup.transportFailure
+        openPrs                       = @()
+        reviewRuns                    = @()
+        sessions                      = @()
+        ciChecksByPr                  = @{}
+        requiredCheckNamesByPr        = @{}
+        requiredCheckLookupFailedByPr = @{}
+    }
+}
+
 function Invoke-ReviewReadyReportStateSeedTick {
     param(
         [string]$StateRoot,
@@ -479,7 +499,21 @@ function Invoke-ReviewReadyReportStateSeedTick {
                 }
             }
         }
-        $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
+        $result = $null
+        if (-not $FixturePayload) {
+            $preClaimDenial = Get-ReportStateSeedPreClaimTransportDenial -PrNumber ([int]$action.prNumber) -RepoRoot $RepoRoot
+            if ($preClaimDenial) {
+                & $LogWriter "review-ready-report-state-seed: pre-claim transport denial PR #$($action.prNumber) ($($preClaimDenial.reason))"
+                $result = @{
+                    triggered   = $false
+                    reason      = [string]$preClaimDenial.reason
+                    retainWatch = $true
+                }
+            }
+        }
+        if (-not $result) {
+            $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams
+        }
         $classified = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'classifySideEffectOutcome' -Payload @{
             triggered         = [bool]$result.triggered
             sideEffectReason  = [string]$result.reason
