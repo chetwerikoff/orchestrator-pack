@@ -513,7 +513,7 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
     if (
       consumedPath
       && spawnWorktreeCanonicalPathsEqual(consumedPath, canonicalPath)
-      && (targetPreexists || worktreeDurable)
+      && worktreeDurable
     ) {
       return {
         ok: true,

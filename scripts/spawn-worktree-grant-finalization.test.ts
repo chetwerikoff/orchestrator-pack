@@ -383,6 +383,59 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(verdict.reason).toBe('grant_finalization_attempts_exhausted');
   });
 
+  it('consumed grant requires durable worktree for same-path idempotent replay', () => {
+    const built = buildSpawnWorktreeGrantRecord({
+      argv: ['spawn', '567'],
+      grantId: 'g-consumed-plain',
+      projectId: 'orchestrator-pack',
+      holder: { pid: 1, processGuid: 'holder-consumed-plain' },
+      extraAuthorizedWorktreeNames: ['opk-567-consumed'],
+      sourceRepositoryRoot: repoRoot,
+      sourceGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:00Z'),
+    });
+    expect(built.ok).toBe(true);
+    const prefix = '/tmp/ao/projects/orchestrator-pack/worktrees';
+    const target = path.join(prefix, 'opk-567-consumed');
+    const grant = {
+      ...built.grant!,
+      consumed: true,
+      consumedCanonicalPath: target,
+      worktreeAllowReserved: {
+        worktreeCanonicalPath: target,
+        attemptCount: 1,
+      },
+    };
+    const plainReplay = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: false,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(plainReplay.ok).toBe(false);
+    expect(plainReplay.reason).toBe('grant_already_consumed');
+
+    const durableReplay = evaluateSpawnWorktreeGrantConsume({
+      grant,
+      argv: ['worktree', 'add', target, 'HEAD'],
+      canonicalPath: target,
+      worktreesPrefix: prefix,
+      targetPreexists: true,
+      worktreeDurable: true,
+      effectiveRepositoryRoot: repoRoot,
+      effectiveGitWorktreeRoot: repoRoot,
+      nowMs: Date.parse('2026-01-01T00:00:01Z'),
+    });
+    expect(durableReplay.ok).toBe(true);
+    expect(durableReplay.reason).toBe('spawn_worktree_idempotent');
+    expect(durableReplay.idempotent).toBe(true);
+  });
+
   it('reserved plain preexisting path is not idempotent without durable worktree', () => {
     const built = buildSpawnWorktreeGrantRecord({
       argv: ['spawn', '567'],
