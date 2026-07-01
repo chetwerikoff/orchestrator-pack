@@ -1,0 +1,7 @@
+spawn-new branch-operand integration (scrubbed)
+grant mint: ao spawn 561 under AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1
+authorizedWorkerBranches: feat/issue-561, feat/561, opk-561
+git argv: worktree add -b feat/issue-561 <worktree>/opk-561 <baseRef>
+consume: denied=false reason=spawn_worktree_allow
+
+claim-pr note: no safe --claim-pr candidate for live branch-operand closure; blocked by #522 claim_pr_resume_cleanup_required before worktree creation

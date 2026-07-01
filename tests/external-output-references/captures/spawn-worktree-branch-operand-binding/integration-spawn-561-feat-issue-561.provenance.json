@@ -1,0 +1,7 @@
+{
+  "captureId": "spawn-worktree-branch-operand-binding-integration",
+  "producer": "spawn-worktree-branch-operand-binding",
+  "context": "PowerShell guard integration: grant minted for ao spawn 561, production-shaped git worktree add -b feat/issue-561 targets opk-561, denied=false, reason=spawn_worktree_allow",
+  "proofCommand": "npx vitest run scripts/spawn-worktree-branch-operand-binding.test.ts -t \"replays capture manifest\"",
+  "liveFollowUp": "claim-pr branch-operand closure blocked by #522 cleanup preconditions; spawn-new branch authorization verified in-band"
+}

@@ -506,9 +506,9 @@ export function evaluateSpawnWorktreeGrantConsume(input) {
   }
 
   if (shape.branch) {
-    const expectedBranch = grant.expectedBranch ? String(grant.expectedBranch) : null;
-    if (!expectedBranch || String(shape.branch) !== expectedBranch) {
-      return { ok: false, reason: 'branch_mismatch' };
+    const branchBinding = evaluateSpawnWorktreeBranchBinding(shape.branch, grant);
+    if (!branchBinding.ok) {
+      return { ok: false, reason: branchBinding.reason };
     }
   }
 
@@ -558,6 +558,75 @@ export function deriveSpawnAuthorizedWorktreeNames(parsed, extraAuthorizedWorktr
 }
 
 /**
+ * Worker branch spellings bound to spawn lineage (#561). Issue-linked branches
+ * cover AO production `feat/issue-<N>` / `feat/<N>` shapes; session branches
+ * reuse claim-pr owner session ids carried in extraAuthorizedWorktreeNames.
+ *
+ * @param {import('./spawn-worktree-grant.d.mts').SpawnTargetParse} parsed
+ * @param {string[]} [extraAuthorizedWorktreeNames]
+ * @param {string[]} [extraAuthorizedWorkerBranches]
+ */
+export function deriveSpawnAuthorizedWorkerBranches(
+  parsed,
+  extraAuthorizedWorktreeNames = [],
+  extraAuthorizedWorkerBranches = [],
+) {
+  const authorized = new Set();
+  if (parsed.issueTarget) {
+    const issue = String(parsed.issueTarget);
+    authorized.add(`feat/issue-${issue}`);
+    authorized.add(`feat/${issue}`);
+    if (/^\d+$/.test(issue)) {
+      authorized.add(`opk-${issue}`);
+    }
+  }
+  for (const name of extraAuthorizedWorktreeNames) {
+    const value = String(name ?? '').trim();
+    if (value && isAoSpawnWorktreeSessionBasename(value)) {
+      authorized.add(value);
+    }
+  }
+  for (const name of extraAuthorizedWorkerBranches) {
+    const value = String(name ?? '').trim();
+    if (value) {
+      authorized.add(value);
+    }
+  }
+  return [...authorized];
+}
+
+/**
+ * Branch operand authorization for production-shaped `git worktree add -b`.
+ *
+ * @param {string} branch
+ * @param {Record<string, unknown>} grant
+ */
+export function evaluateSpawnWorktreeBranchBinding(branch, grant) {
+  const branchStr = String(branch ?? '').trim();
+  if (!branchStr) {
+    return { ok: false, reason: 'branch_missing' };
+  }
+  const allowed = new Set();
+  if (grant.expectedBranch) {
+    allowed.add(String(grant.expectedBranch));
+  }
+  if (Array.isArray(grant.authorizedWorkerBranches)) {
+    for (const name of grant.authorizedWorkerBranches) {
+      if (name) {
+        allowed.add(String(name));
+      }
+    }
+  }
+  if (allowed.size === 0) {
+    return { ok: false, reason: 'branch_mismatch' };
+  }
+  if (allowed.has(branchStr)) {
+    return { ok: true, reason: 'authorized_worker_branch' };
+  }
+  return { ok: false, reason: 'branch_mismatch' };
+}
+
+/**
  * @param {object} input
  */
 export function buildSpawnWorktreeGrantRecord(input) {
@@ -577,9 +646,14 @@ export function buildSpawnWorktreeGrantRecord(input) {
   }
   const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
   const expiresAtUtc = new Date(nowMs + SPAWN_WORKTREE_GRANT_TTL_SECONDS * 1000).toISOString();
-  const authorized = deriveSpawnAuthorizedWorktreeNames(
+  const extraWorktreeNames = Array.isArray(input.extraAuthorizedWorktreeNames)
+    ? input.extraAuthorizedWorktreeNames
+    : [];
+  const authorized = deriveSpawnAuthorizedWorktreeNames(parsed, extraWorktreeNames);
+  const authorizedWorkerBranches = deriveSpawnAuthorizedWorkerBranches(
     parsed,
-    Array.isArray(input.extraAuthorizedWorktreeNames) ? input.extraAuthorizedWorktreeNames : [],
+    extraWorktreeNames,
+    Array.isArray(input.extraAuthorizedWorkerBranches) ? input.extraAuthorizedWorkerBranches : [],
   );
   const expectedHeadRef = String(input.expectedHeadRef ?? 'HEAD');
   let expectedCommitOid = String(input.expectedCommitOid ?? '').trim().toLowerCase();
@@ -600,9 +674,12 @@ export function buildSpawnWorktreeGrantRecord(input) {
     issueTarget: parsed.issueTarget,
     prNumber: parsed.prNumber,
     authorizedWorktreeNames: [...authorized],
+    authorizedWorkerBranches: [...authorizedWorkerBranches],
     expectedHeadRef,
     expectedCommitOid,
-    expectedBranch: input.expectedBranch ? String(input.expectedBranch) : null,
+    expectedBranch: input.expectedBranch
+      ? String(input.expectedBranch)
+      : (authorizedWorkerBranches[0] ?? null),
     sourceRepositoryRoot,
     sourceGitWorktreeRoot,
     mintedAtUtc: new Date(nowMs).toISOString(),

@@ -1,0 +1,35 @@
+{
+  "aoPackageVersion": "0.9.5",
+  "captureId": "spawn-worktree-branch-operand-binding",
+  "scrubbed": true,
+  "proofCommand": "npx vitest run scripts/spawn-worktree-branch-operand-binding.test.ts -t \"replays capture manifest\"",
+  "spawnNew": {
+    "gateEntrypoint": "scripts/git-autonomous-guard.ps1 -> Test-AutonomousGitDenied",
+    "argv": [
+      "worktree",
+      "add",
+      "-b",
+      "feat/issue-561",
+      "/tmp/projects/orchestrator-pack/worktrees/opk-561",
+      "origin/main"
+    ],
+    "workerBranch": "feat/issue-561",
+    "worktreeBasename": "opk-561",
+    "preFixDenialReason": "branch_mismatch"
+  },
+  "claimPr": {
+    "gateEntrypoint": "scripts/git-autonomous-guard.ps1 -> Test-AutonomousGitDenied",
+    "argv": [
+      "worktree",
+      "add",
+      "-b",
+      "opk-99",
+      "/tmp/projects/orchestrator-pack/worktrees/opk-99",
+      "origin/main"
+    ],
+    "workerBranch": "opk-99",
+    "worktreeBasename": "opk-99",
+    "blockedBy522": true,
+    "blockedReason": "claim_pr_resume_cleanup_required"
+  }
+}

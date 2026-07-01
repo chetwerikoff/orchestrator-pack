@@ -62,6 +62,7 @@
     "scripts/review-wake-trigger.test.ts": 45000,
     "scripts/session-runtime-liveness.test.ts": 45000,
     "scripts/spawn-worktree-head-ref-oid-binding.test.ts": 45000,
+    "scripts/spawn-worktree-branch-operand-binding.test.ts": 45000,
     "scripts/spawn-worktree-repository-identity-binding.test.ts": 45000,
     "scripts/submit-worker-input-draft.test.ts": 45000,
     "scripts/supervisor-child-openprs-null.test.ts": 45000,
