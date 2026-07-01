@@ -1,0 +1,17 @@
+{
+  "issue_number": 443,
+  "iteration_id": "opk-direct-572",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "opk-5",
+  "created_at": "2026-07-01T21:47:48.176Z",
+  "baseline": {
+    "commit_sha": "61e1fa3dcafa571378ed6baf32ab60496bad9037",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:91abf1f2910751ba9b32f69541607665bcda901f8bcbe1ae3aefe95f33a94969"
+  },
+  "declared_paths": [
+    "scripts/gh"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

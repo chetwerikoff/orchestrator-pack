@@ -12,4 +12,31 @@ if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
   exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" "$@"
 fi
 
+
+# Operator REST unblock: resolvePR argv (claim-pr) — Issue #443 gap for pr view field set
+case "${1:-} ${2:-} ${*:--json}" in
+  "pr view "*headRefName*isDraft*)
+    pr_num="${3:-}"
+    repo=""
+    json_fields=""
+    args=("$@")
+    i=4
+    while (( i < ${#args[@]} )); do
+      case "${args[i]}" in
+        --repo|-R) repo="${args[i+1]}"; ((i+=2));;
+        --json) json_fields="${args[i+1]}"; ((i+=2));;
+        *) ((i+=1));;
+      esac
+    done
+    if [[ -n "$pr_num" && "$json_fields" == *headRefName* && "$json_fields" == *isDraft* ]]; then
+      if [[ -z "$repo" ]]; then
+        repo="$(git -C "${SCRIPT_DIR}/.." remote get-url origin | sed -E 's#.*github.com[:/]([^/]+/[^/.]+).*#\1#')"
+      fi
+      real_gh="$(node "${SCRIPT_DIR}/lib/gh-resolve-real-binary.mjs")"
+      exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" api "repos/${repo}/pulls/${pr_num}" \
+        --jq '{number, url: .html_url, title, headRefName: .head.ref, baseRefName: .base.ref, isDraft: .draft}'
+    fi
+    ;;
+esac
+
 exec node "${SCRIPT_DIR}/lib/gh-wrapper.mjs" "$@"
