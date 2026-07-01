@@ -2,8 +2,9 @@
 name: merge-with-local-adoption
 description: >-
   Merge a ready PR, safely pull main in the live checkout, and apply documented
-  local operator adoption. For runtime-sensitive merges, verify the AO orchestrator
-  runs on the current commit after operator restart. After merge, kill the merged PR's
+  local operator adoption. After every merge, verify the AO orchestrator runtime
+  worktree contains the merge commit (Step 6e); for runtime-sensitive merges, also restart AO
+  and confirm adoption surfaces (Step 8). After merge, kill the merged PR's
   worker AO session and run ao session cleanup -p orchestrator-pack. Use when the user asks to merge
   a finished task — e.g. «мерж», «мерж 385», «мерж и пул», «смерж», «merge»,
   «merge and pull» — or clearly wants a ready PR merged after review/CI. Operates
@@ -20,8 +21,8 @@ to `opencode run`, `opencode-publish.sh`, or DeepSeek.
 Goal: merge the PR → update local `main` when needed → apply post-merge local steps
 from the issue/PR → for runtime-sensitive merges, restart AO from the **operator
 terminal** and confirm the orchestrator runtime worktree is on the merged commit →
-kill the merged PR's worker session and run project session cleanup → report exactly
-what changed.
+kill the merged PR's worker session and run project session cleanup → **always**
+probe the orchestrator runtime worktree commit after merge (Step 6e) → report exactly what changed.
 
 **OpenCode terminal sessions** use
 [`.claude/skills/opencode-merge-and-pull/SKILL.md`](../opencode-merge-and-pull/SKILL.md)
@@ -67,8 +68,9 @@ Before **any** git command after the pre-flight snapshot, obey this list.
   issue explicitly says to remove that path **and** the user named the task
 - `opencode run`, `opencode-publish.sh`, or nested agent delegation for merge/pull
 - **Inside the AO-managed orchestrator worktree** (`~/.agent-orchestrator/projects/orchestrator-pack/worktrees/<session-id>/`):
-  `git pull`, `git fetch`, `git reset`, `git checkout` / `git switch`, manual file
-  edits to adopt merged content, or `git worktree remove`
+  `git reset`, `git checkout` / `git switch`, `git clean`, manual file edits to adopt merged
+  content, or `git worktree remove` — **except** the sanctioned clean fast-forward in
+  **Step 6e** (`git fetch` + `git pull --no-rebase origin main` when behind `origin/main`)
 - Manually deleting the AO worktree directory — use documented recovery scripts only
 
 ### REQUIRED
@@ -304,6 +306,110 @@ before must still exist or be accounted for. **Never** use
 `git reset --hard origin/main` to “sync”.
 
 ---
+### 6e — Orchestrator worktree commit probe (mandatory after merge)
+
+Step 6 updates only the **operator live checkout**. The AO **orchestrator runtime worktree**
+(`~/.agent-orchestrator/projects/orchestrator-pack/worktrees/<session-id>/`) is a separate
+clone — it does **not** auto-sync on `git pull` in the pack root. After every successful
+merge, probe it even when Step 8 is skipped (non-runtime-sensitive PRs).
+
+**Skip only when:** `ao status --project orchestrator-pack` has no `role: orchestrator` row
+**and** no orchestrator session json exists under
+`~/.agent-orchestrator/projects/orchestrator-pack/sessions/`.
+
+#### Resolve orchestrator session id and worktree (Steps 6e / 8)
+
+Fail closed — resolve from env or live `ao status` only; **never** guess a default id.
+
+```bash
+P=orchestrator-pack
+AO="$HOME/.agent-orchestrator/projects/$P"
+
+resolve_orchestrator_session_id() {
+  if [ -n "${AO_ORCHESTRATOR_SESSION_ID:-}" ]; then
+    printf '%s\n' "${AO_ORCHESTRATOR_SESSION_ID}"
+    return 0
+  fi
+  local status_json status_err
+  status_err="$(mktemp)"
+  if ! status_json="$(ao status --project orchestrator-pack --json 2>"$status_err")"; then
+    echo "Step 6e aborted: ao status failed: $(cat "$status_err")" >&2
+    rm -f "$status_err"
+    return 1
+  fi
+  rm -f "$status_err"
+  printf '%s' "$status_json" | node -e '
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let payload;
+  try { payload = JSON.parse(input); } catch { process.exit(2); }
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const orch = rows.find((row) => row && row.role === "orchestrator");
+  if (!orch || !orch.name) process.exit(2);
+  process.stdout.write(String(orch.name));
+});
+' || {
+    echo "Step 6e aborted: orchestrator session id not found in ao status .data[]" >&2
+    return 1
+  }
+}
+```
+
+#### Probe and sync (operator pack root — not inside `$WT` for the live-checkout pull)
+
+```bash
+git fetch origin
+ORIGIN_MAIN="$(git rev-parse origin/main)"
+MERGE_SHA="<from Step 5 mergeCommit.oid>"
+
+S="$(resolve_orchestrator_session_id)" || { echo "Step 6e: no orchestrator session — skipped"; exit 0; }
+WT="$AO/worktrees/$S"
+WT_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
+WT_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
+
+# Required: worktree must contain the merge commit (not merely an older ancestor of main)
+git merge-base --is-ancestor "$MERGE_SHA" "$WT_HEAD"
+WT_CONTAINS_MERGE=$?
+
+git merge-base --is-ancestor "$MERGE_SHA" "$ORIGIN_MAIN"
+ORIGIN_CONTAINS_MERGE=$?
+```
+
+**Pass without sync** when `WT_CONTAINS_MERGE=0` **and** `ORIGIN_CONTAINS_MERGE=0` (ideal:
+`WT_HEAD` equals `ORIGIN_MAIN`).
+
+**If `WT_CONTAINS_MERGE` ≠ 0** (stale orchestrator worktree — common after merge+pull):
+
+1. Check worktree cleanliness: `git -C "$WT" status --porcelain` must be empty.
+2. If clean, sanctioned fast-forward from the **operator terminal**:
+
+```bash
+git -C "$WT" fetch origin main
+git -C "$WT" pull --no-rebase origin main
+WT_HEAD="$(git -C "$WT" rev-parse HEAD)"
+git merge-base --is-ancestor "$MERGE_SHA" "$WT_HEAD"
+```
+
+3. Re-record `WT_HEAD` / `WT_BRANCH`. Pass when the final `merge-base` check exits 0.
+
+**If worktree is dirty, pull fails, or still stale after fast-forward:**
+
+- **Do not** `reset`, `checkout`, or `clean` inside `$WT`.
+- Classify the merge as **runtime-sensitive retroactively** and run **Step 8** (restart +
+  `orchestrator-worktree-preflight.ps1`), or escalate
+  `docs/orchestrator-recovery-runbook.md` Step 2b → Step 4.
+- Record expected (`MERGE_SHA`, `ORIGIN_MAIN`) vs actual (`WT_HEAD`) in the final report.
+
+**Optional after successful sync:** when `ao status` shows orchestrator `stuck` / non-working
+runtime but `$WT` is current, run `env -u BASH_ENV ao stop orchestrator-pack` then
+`env -u BASH_ENV ao start orchestrator-pack` and
+`pwsh -NoProfile -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId "$S"`.
+This is **not** a substitute for Step 8 when the merge was runtime-sensitive.
+
+Record `S`, `WT`, `WT_HEAD`, `WT_BRANCH`, sync action (none / fast-forward / escalated) for
+Step 10 — even when Step 8 is skipped.
+
 
 ## Step 7 — Apply local operator adoption
 
@@ -358,42 +464,11 @@ reload and live worker-send routing was unchanged. Adoption binding is keyed to 
 
 ### 8a — Resolve orchestrator session id and worktree path
 
-Fail closed — resolve from env or live `ao status` only; **never** guess a default id.
+Reuse `resolve_orchestrator_session_id`, `P`, and `AO` from **Step 6e** (same shell session
+if possible). If Step 6e was skipped because no orchestrator existed, fail closed here when
+Step 4 required runtime-sensitive adoption.
 
 ```bash
-P=orchestrator-pack
-AO="$HOME/.agent-orchestrator/projects/$P"
-
-resolve_orchestrator_session_id() {
-  if [ -n "${AO_ORCHESTRATOR_SESSION_ID:-}" ]; then
-    printf '%s\n' "${AO_ORCHESTRATOR_SESSION_ID}"
-    return 0
-  fi
-  local status_json status_err
-  status_err="$(mktemp)"
-  if ! status_json="$(ao status --project orchestrator-pack --json 2>"$status_err")"; then
-    echo "Step 8 aborted: ao status failed: $(cat "$status_err")" >&2
-    rm -f "$status_err"
-    return 1
-  fi
-  rm -f "$status_err"
-  printf '%s' "$status_json" | node -e '
-let input = "";
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  let payload;
-  try { payload = JSON.parse(input); } catch { process.exit(2); }
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  const orch = rows.find((row) => row && row.role === "orchestrator");
-  if (!orch || !orch.name) process.exit(2);
-  process.stdout.write(String(orch.name));
-});
-' || {
-    echo "Step 8 aborted: orchestrator session id not found in ao status .data[] (invalid JSON or no role=orchestrator row)" >&2
-    return 1
-  }
-}
-
 S="$(resolve_orchestrator_session_id)" || exit 1
 WT="$AO/worktrees/$S"
 ```
@@ -727,6 +802,15 @@ Reply in the user’s language (Russian if they wrote Russian):
 - Stash: создан / не нужен / pop OK / pop с конфликтами (stash сохранён: …)
 - **Запрещённые команды не использовались** (reset --hard, clean, restore ., stash drop, opencode delegation, git в AO worktree)
 
+### Orchestrator worktree (Step 6e)
+- **Probe:** выполнен / пропущен (нет orchestrator-сессии)
+- **origin/main SHA:** <ORIGIN_MAIN>
+- **merge SHA:** <MERGE_SHA>
+- **Orchestrator session id:** <S / —>
+- **Runtime worktree:** <WT> @ <WT_HEAD> (<WT_BRANCH>)
+- **Sync:** не требовался / fast-forward pull / escalated → Step 8 или runbook
+- **Post-sync HEAD contains merge:** да / нет
+
 ### Локальное adoption
 - Выполнено: <нумерованный список конкретных действий и файлов>
 - Требует оператора вручную: <если осталось — restarts, секреты, отдельные терминалы>
@@ -773,7 +857,8 @@ Do not claim CI/adoption/restart succeeded without the commands you actually ran
 - `ao session kill` on the orchestrator session (`role: orchestrator`) — only the
   merged PR's worker (`role: worker` / `coding`) in Step 9
 - Skip Step 9 worker teardown after a successful merge (kill + cleanup are mandatory)
-- `git pull`, `reset`, `checkout`, or hand-edit inside the AO orchestrator worktree
+- Destructive git (`reset`, `checkout`, `switch`, `clean`) or hand-edits inside the AO
+  orchestrator worktree — **except** Step 6e sanctioned fast-forward when clean and behind
 - Delete AO worktrees manually or claim restart succeeded without post-start HEAD check
 - Claim journaled worker-send adoption from `worker-message-submit-reconcile -DryRun` alone
   (dry-run skips adoption preflight; use `worker-message-send-adoption-preflight.ps1`)
