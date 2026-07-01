@@ -7,22 +7,39 @@
   "baseline": {
     "commit_sha": "b3904a63f227fbb09575b9df03fe209bdb01a693",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4dfea62dde993cd0564ba3d794c45be5958da7dc9cd7aa7c59b2217551ba737d"
+    "active_scope_hash": "sha256:70d6b39dfe4253536ba7e290cb172235ac103e877f50cb3ff43189a7a0d87703"
   },
   "declared_paths": [
-    "scripts/lib/Gh-FleetInventoryCache.ps1",
-    "scripts/lib/Gh-PrChecks.ps1",
+    "docs/declarations/569.opk-125.json",
+    "docs/github-fleet-cache-measurement.md",
+    "docs/migration_notes.md",
     "scripts/check-github-fleet-cache-bypass.ps1",
     "scripts/fixtures/github-fleet-cache/fake-gh.sh",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
     "scripts/github-fleet-cache-test-harness.ts",
     "scripts/github-fleet-shared-read-model.test.ts",
-    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
     "scripts/lib/gh-inventory-match.mjs",
     "scripts/lib/graphql-quota-github-read-inventory.json",
-    "docs/migration_notes.md",
-    "docs/github-fleet-cache-measurement.md",
+    "scripts/review-start-envelope-ledger.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:4dfea62dde993cd0564ba3d794c45be5958da7dc9cd7aa7c59b2217551ba737d",
+      "new_active_scope_hash": "sha256:70d6b39dfe4253536ba7e290cb172235ac103e877f50cb3ff43189a7a0d87703",
+      "changed": {
+        "added": [
+          "scripts/review-start-envelope-ledger.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "include envelope ledger test mock fix in declared scope",
+      "actor": "opk-125",
+      "timestamp": "2026-07-01T10:26:37.484Z",
+      "applied": true
+    }
+  ]
 }
