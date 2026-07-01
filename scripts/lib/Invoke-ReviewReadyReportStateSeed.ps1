@@ -406,22 +406,36 @@ function Invoke-ReviewReadyReportStateSeedTick {
             $plannedRunParams['ResolveFreshSnapshot'] = {
                 param($planned, $claimResult)
                 $prNumber = [int]$planned.prNumber
-                $transportFailure = $null
                 if ($claimResult -and $claimResult.acquired) {
                     . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
                     $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claimResult -RepoRoot $RepoRoot -GhArguments @(
                         'pr', 'view', [string]$prNumber, '--json', 'number,headRefOid,baseRefName'
                     )
                     if (-not $transport.ok) {
-                        $transportFailure = $transport
-                        $scoped = @()
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = $transport
+                        }
                     }
-                    else {
-                        $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
-                        if (-not $parse.ok) {
-                            $reason = [string]$parse.reason
-                            if (-not $reason) { $reason = 'structured_output_polluted' }
-                            $transportFailure = @{
+                    $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
+                    if (-not $parse.ok) {
+                        $reason = [string]$parse.reason
+                        if (-not $reason) { $reason = 'structured_output_polluted' }
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = @{
                                 ok           = $false
                                 reason       = $reason
                                 exitCode     = [int]$transport.exitCode
@@ -429,26 +443,32 @@ function Invoke-ReviewReadyReportStateSeedTick {
                                 stdout       = [string]$transport.stdout
                                 failureClass = 'infra_transport'
                             }
-                            $scoped = @()
-                        }
-                        else {
-                            $scoped = @($parse.value)
                         }
                     }
+                    $scoped = @($parse.value)
                 }
                 else {
                     $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $prNumber
-                    $scoped = @($lookup.openPrs)
                     if ($lookup.transportFailure) {
-                        $transportFailure = $lookup.transportFailure
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = $lookup.transportFailure
+                        }
                     }
+                    $scoped = @($lookup.openPrs)
                 }
                 $freshChecks = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $scoped -MergeRequiredNames {
                     param($payload)
                     Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ci-green-wake-reconcile.mjs') `
                         -Subcommand 'merge-required-names' -Payload $payload -Label 'review-ready-report-state-seed' -JsonDepth 20
                 }
-                $freshSnapshot = @{
+                @{
                     openPrs                       = $scoped
                     reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
                     sessions                      = @(Get-AoStatusSessionsIncludingTerminated)
@@ -457,10 +477,6 @@ function Invoke-ReviewReadyReportStateSeedTick {
                     requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr
                     nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 }
-                if ($null -ne $transportFailure) {
-                    $freshSnapshot.transportFailure = $transportFailure
-                }
-                $freshSnapshot
             }
         }
         $result = Invoke-ReviewTriggerReevalPlannedRun @plannedRunParams

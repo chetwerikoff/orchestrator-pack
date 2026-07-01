@@ -8,6 +8,8 @@ import { functionBody, psString, repoRoot, runPwsh } from './_test-pwsh-helpers.
 
 const ghPrChecksPath = path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1');
 const snapshotPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
+const seedPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
+const reevalPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
 const helperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
 const fakeGhPath = path.join(
   repoRoot,
@@ -302,5 +304,71 @@ describe('review-start scoped gh JSON capture (#566)', () => {
     const forbidden = /curl\s+api\.github\.com|gh api graphql|unset GH_WRAPPER_ACTIVE|\/tmp\/gh-rest-bin/;
     expect(captureBody).not.toMatch(forbidden);
     expect(reviewStartBody).not.toMatch(forbidden);
+  });
+
+  it('AC7: report-state seed scoped transport failure short-circuits before live reads', () => {
+    const src = readFileSync(seedPath, 'utf8');
+    const block = src.match(/if \(\$lookup\.transportFailure\) \{([\s\S]*?)\n                    \}/);
+    expect(block).not.toBeNull();
+    const body = block![1];
+    expect(body).not.toMatch(/Get-GhChecksBundleByPr/);
+    expect(body).not.toMatch(/Get-AoReviewRuns/);
+    expect(body).not.toMatch(/Get-AoStatusSessionsIncludingTerminated/);
+    expect(body).toMatch(/transportFailure\s*=\s*\$lookup\.transportFailure/);
+  });
+
+  it('AC7b: reeval planned run denies before claim on pre-claim scoped transport failure', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'scoped-gh-566-ac7-'));
+    try {
+      const script = `
+        . ${psString(reevalPath)}
+        . ${psString(ghPrChecksPath)}
+        $env:AO_REVIEW_CLAIM_DIR = ${psString(dir)}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'malformed_stdout'
+        $params = @{
+          Action = @{ prNumber = 565; headSha = ${psString(issue566Sha)}; sessionId = 'opk-566' }
+          ReviewCommand = 'echo review'
+          StateRoot = ${psString(dir)}
+          RepoRoot = ${psString(repoRoot)}
+          ResolveFreshSnapshot = {
+            param($planned, $claimResult)
+            $prNumber = [int]$planned.prNumber
+            if ($claimResult -and $claimResult.acquired) {
+              throw 'acquired fresh snapshot must not run before pre-claim transport denial'
+            }
+            $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber $prNumber
+            if ($lookup.transportFailure) {
+              return @{
+                openPrs = @()
+                reviewRuns = @()
+                sessions = @()
+                ciChecksByPr = @{}
+                requiredCheckNamesByPr = @{}
+                requiredCheckLookupFailedByPr = @{}
+                transportFailure = $lookup.transportFailure
+              }
+            }
+            throw 'expected scoped transport failure fixture'
+          }
+          LogWriter = { param($m) }
+        }
+        $result = Invoke-ReviewTriggerReevalPlannedRun @params
+        $claimFiles = @(Get-ChildItem -LiteralPath ${psString(dir)} -Recurse -File -ErrorAction SilentlyContinue)
+        [pscustomobject]@{
+          triggered = [bool]$result.triggered
+          reason = [string]$result.reason
+          retainWatch = [bool]$result.retainWatch
+          claimFileCount = $claimFiles.Count
+        } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('supervised_gh_transport_failure');
+      expect(result.retainWatch).toBe(true);
+      expect(result.claimFileCount).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

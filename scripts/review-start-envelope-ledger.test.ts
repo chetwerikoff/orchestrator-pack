@@ -334,7 +334,8 @@ describe('review-start-envelope-ledger unit', () => {
     expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
     expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);
     expect(src).toMatch(/transportFailure\s*=\s*\$transport/);
-    expect(src).toMatch(/\$freshSnapshot\.transportFailure\s*=\s*\$transportFailure/);
+    expect(src).toMatch(/if \(\$lookup\.transportFailure\)/);
+    expect(src).toMatch(/transportFailure\s*=\s*\$lookup\.transportFailure/);
   });
 
   it('consecutive-failure-notify-at-three', () => {

@@ -48,14 +48,22 @@ function Invoke-ReviewTriggerReevalPlannedRun {
 
     $claim = @{ acquired = $true; dryRun = $true; key = "dry-run:$($planned.prNumber):$($planned.headSha)" }
     if (-not $DryRun) {
-        $claimRuns = if ($FixtureSnapshot) {
-            @($FixtureSnapshot.reviewRuns)
+        $claimRuns = @()
+        if ($FixtureSnapshot) {
+            $claimRuns = @($FixtureSnapshot.reviewRuns)
         }
         elseif ($ResolveFreshSnapshot) {
-            @((& $ResolveFreshSnapshot $planned).reviewRuns)
-        }
-        else {
-            @()
+            $preClaimFresh = & $ResolveFreshSnapshot $planned
+            $preClaimDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $preClaimFresh
+            if ($preClaimDenial) {
+                & $LogWriter "review-trigger-reeval: pre-claim transport denial PR #$($planned.prNumber) ($($preClaimDenial.reason))"
+                return @{
+                    triggered   = $false
+                    reason      = [string]$preClaimDenial.reason
+                    retainWatch = $true
+                }
+            }
+            $claimRuns = @($preClaimFresh.reviewRuns)
         }
         $claim = Acquire-ReviewStartClaim -PrNumber ([int]$planned.prNumber) -HeadSha ([string]$planned.headSha) `
             -Surface 'review-trigger-reeval' -ReviewRuns $claimRuns -ProjectId $ProjectId `
