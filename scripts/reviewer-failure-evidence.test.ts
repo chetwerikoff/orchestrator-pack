@@ -130,6 +130,22 @@ describe('reviewer-failure-evidence', () => {
     expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
   });
 
+  it('redacts generic cookie key assignments outside Cookie headers', () => {
+    const store = tempStore();
+    const { path } = createFailureEvidenceArtifact({
+      storeDir: store,
+      reviewerSessionId: 'opk-rev-cookie-kv',
+      wrapperKind: 'codex',
+    }) as EvidenceCreateResult;
+    const stderr = 'cookie=sid=abc\nreview failed\n';
+    recordFailureEvidenceOutput({ path: path!, stderr });
+    const raw = readFileSync(path!, 'utf8');
+    expect(raw).not.toContain('sid=abc');
+    const artifact = JSON.parse(raw);
+    expect(artifact.stderrTail).toContain('cookie=[REDACTED]');
+    expect(assertFailureEvidenceSecretSafe(artifact).ok).toBe(true);
+  });
+
   it('records signal detail for signal-style exit codes on linux', () => {
     const signal = resolveTerminationSignalFromExitCode(137, 'linux');
     expect(signal.signal).toBe('9');
