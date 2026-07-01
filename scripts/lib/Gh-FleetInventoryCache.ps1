@@ -797,14 +797,18 @@ function Invoke-GhFleetFetchChecksUpstream {
     param([int]$PrNumber)
 
     $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh pr checks failed (exit $LASTEXITCODE): $raw"
-    }
+    $exitCode = $LASTEXITCODE
     if (-not $raw) {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): no parseable JSON output"
+        }
         return @()
     }
     $start = ([string]$raw).IndexOf('[')
     if ($start -lt 0) {
+        if ($exitCode -ne 0) {
+            throw "gh pr checks failed (exit $exitCode): $raw"
+        }
         return @()
     }
     return @(([string]$raw).Substring($start) | ConvertFrom-Json)

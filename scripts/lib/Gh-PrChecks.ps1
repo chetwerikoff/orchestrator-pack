@@ -81,7 +81,12 @@ function Invoke-GhOpenPrListForNumbers {
         if ($ProgressWriter) {
             & $ProgressWriter 'open_pr_view' $ordinal
         }
-        $pr = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $n -Consumer $Consumer
+        try {
+            $pr = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $n -Consumer $Consumer
+        }
+        catch {
+            continue
+        }
         if (-not $pr) {
             continue
         }

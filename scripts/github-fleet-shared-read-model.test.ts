@@ -384,6 +384,80 @@ Write-Output 'failed-expected'
     expect(result.stdout).toContain('failed-expected');
   });
 
+  it('AC#12 measurement regexes use word boundaries (review P2)', () => {
+    const patterns = [/\bpr list\b/, /\bpr view\b/, /\bpr checks\b/];
+    expect(patterns[0].test('gh pr list --state open')).toBe(true);
+    expect(patterns[0].test('gh pr listicle')).toBe(false);
+    expect(patterns[1].test('gh pr view 1 --json number')).toBe(true);
+    expect(patterns[2].test('gh pr checks 1 --json name')).toBe(true);
+  });
+
+  it('preserves check JSON when gh pr checks exits nonzero (review P1)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-checks-nonzero-');
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+if [[ "$joined" == *"pr checks"* ]]; then
+  echo '[{"name":"Verify","state":"FAILURE","bucket":"fail"}]'
+  exit 1
+fi
+exec ${join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\''")} "$@"
+`,
+      { mode: 0o755 },
+    );
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$checks = Invoke-GhPrChecks -RepoRoot '${packRootEscaped}' -PrNumber 1 -HeadSha 'sha1111111111111111111111111111111111111111'
+if ($checks.Count -ne 1) { throw 'expected parsed checks on nonzero exit' }
+if ($checks[0].state -ne 'FAILURE') { throw 'expected failure state' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
+  it('scoped PR refresh skips view misses without aborting batch (review P2)', () => {
+    harness = createGithubFleetCacheHarness('gh-fleet-shared-scoped-skip-');
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+if [[ "$joined" == *"pr view 2"* ]] || [[ "$joined" == *"pr view 2 --"* ]]; then
+  echo 'transient view miss' >&2
+  exit 1
+fi
+exec ${join(scriptsDir, 'fixtures/github-fleet-cache/fake-gh.sh').replace(/'/g, "'\''")} "$@"
+`,
+      { mode: 0o755 },
+    );
+
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$rows = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers @(1,2) -Consumer 'scoped-skip')
+if ($rows.Count -ne 1) { throw "expected one open pr, got $($rows.Count)" }
+if ([int]$rows[0].number -ne 1) { throw 'expected pr 1 only' }
+Write-Output 'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      env: harness.env,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
   it('uncached fail-through enters RepoRoot before upstream pr view (review P2)', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-uncached-cwd-');
     delete harness.env.AO_SIDE_PROCESS_STATE_DIR;
