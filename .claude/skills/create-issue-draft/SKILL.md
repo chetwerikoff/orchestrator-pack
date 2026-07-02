@@ -752,5 +752,6 @@ in the test-harness code.
   `opencode-publish.sh --dangerously-skip-permissions --dir .` with
   `OPENCODE_PUBLISH_INCLUDE` and a temp-file prompt (default path), or publish
   manually in a separate checkout (fallback).
-- Pass `PUBLISH=yes` to deepseek when the user did not ask to merge — default is
-  sync-only; the full PR→merge cycle runs only on explicit request.
+- Pass `PUBLISH=no` to deepseek unless the user explicitly opted out of merge/PR —
+  default is `PUBLISH=yes`; the full PR→CI→merge cycle runs by default for the
+  create-task flow.
