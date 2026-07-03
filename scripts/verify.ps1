@@ -1099,6 +1099,31 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Task complexity tier calibration consistency (Issue #574) =='
+$tierCalibrationCheck = Join-Path $Root 'scripts/check-tier-calibration-consistency.ps1'
+if (Test-Path -LiteralPath $tierCalibrationCheck -PathType Leaf) {
+    & $tierCalibrationCheck
+    if ($LASTEXITCODE -eq 0) {
+        & $tierCalibrationCheck -SelfTest
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check 'scripts/check-tier-calibration-consistency.ps1' 'PASS' 'completed'
+        }
+        else {
+            Write-Check 'scripts/check-tier-calibration-consistency.ps1' 'FAIL' "self-test exit=$LASTEXITCODE"
+            Add-Failure 'Task complexity tier calibration self-test failed (Issue #574)'
+        }
+    }
+    else {
+        Write-Check 'scripts/check-tier-calibration-consistency.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Task complexity tier calibration consistency check failed (Issue #574)'
+    }
+}
+else {
+    Write-Check 'scripts/check-tier-calibration-consistency.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing task complexity tier calibration check script (Issue #574)'
+}
+
+Write-Host ''
 Write-Host '== Coworker delegation threshold drift (Issue #255) =='
 $coworkerThresholdDriftCheck = Join-Path $Root 'scripts/check-coworker-delegation-threshold-drift.ps1'
 if (Test-Path -LiteralPath $coworkerThresholdDriftCheck -PathType Leaf) {
