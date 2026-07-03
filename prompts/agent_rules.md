@@ -764,6 +764,80 @@ the run for the operator.
   failed review** (reviewer infra/command failure), not a clean review. Read
   `terminationReason`; do not infer success from zero findings alone.
 
+## Task complexity tier rubric (Issue #574)
+
+Classify every incoming task into **T1**, **T2**, or **T3** before choosing
+authoring ceremony. The tier measures **how much ceremony** the task warrants —
+not implementation shape. **Orthogonal to behavior-kind (Issue #221):** both are
+intake declarations on one draft; behavior-kind classifies action shape, this
+rubric classifies complexity/ceremony. Neither replaces the other.
+
+**Below the ladder — no tier.** Reuse the **#237 design-analysis skip line**
+verbatim: operator/runtime steps, config or YAML changes, one-line spec or rule
+edits, typo/rename, and other small fixes carry **no tier** and no authoring
+ceremony. See `prompts/investigate_root_cause.md` (**Conditional design-analysis
+block** — *Skips when*).
+
+### Tier meanings (ceremony weight)
+
+- **T1** — light ceremony: small, obvious, self-contained (~1–2 files); text or
+  local cosmetics; little design judgment.
+- **T2** — moderate ceremony: one component needing real design judgment on
+  *how*; still a single coherent surface.
+- **T3** — full ceremony: subsystem behavior, system guarantees, or any red-flag
+  marker below — size does not discount danger.
+
+### Failure-type lens (apply first)
+
+Ask: **what is the worst thing this task can break?**
+
+- Text/cosmetics only → usually **T1** (after marker silence).
+- Local behavior of one function or module → usually **T2** (after marker silence).
+- A subsystem's behavior or a system guarantee (CI gate, recovery, durable state,
+  trust, concurrency, merge safety, operator evidence) → **T3**.
+
+The enumerated red-flag markers below are the **reference backstop** for this
+lens — not a substitute for reading it. Concrete examples live in the labeled
+calibration sample (`tests/fixtures/task-complexity-tier-calibration.json`), not
+here.
+
+### Classification order (hard precedence)
+
+1. **Red-flag markers → unconditional T3.** If **any** marker below is present,
+   the task is **T3** regardless of apparent size.
+2. **Only if every marker is silent — size.** Small, obvious, ~1–2 files,
+   self-contained → **T1**. One component needing real design judgment → **T2**.
+3. **Doubt escalates up (fail-up).** Between two tiers, take the **higher**.
+
+**Demote-only magnitude rule.** Numeric file/diff ceilings may only
+**disqualify** a task from a lower tier (push it up). They may **never qualify**
+a task into **T1**. Smallness is necessary but not sufficient for T1.
+
+### Red-flag markers (any one → T3)
+
+| Marker class | Present when the task… |
+|---|---|
+| **trust-boundary** | touches auth, permission, or trust-boundary surfaces |
+| **spawn-capability** | grants spawn, capability, or elevated execution |
+| **concurrency-state-retry** | changes concurrency, state-machine, event-ordering, or retry semantics |
+| **ci-review-gating** | changes required CI/review gating, branch protection, merge authorization, or fail-closed check aggregation |
+| **durable-state-evidence** | mutates durable state, evidence, provenance, ledgers, audit logs, or operator-visible snapshots |
+| **test-harness-correctness** | risks fixture isolation, real-vs-stub binaries, self-certifying tests, or fixtures touching live state |
+| **crash-recovery** | changes crash/recovery, restart mid-phase, orphaned claims/processes, duplicate execution, or liveness/kill-restart thresholds |
+| **external-api-transport** | **changes** external-API transport behavior (retry, fallback, rate-limit, timeout, response-shape assumptions) — not mere API presence |
+| **shared-contract-dependency** | introduces a new contract ≥2 future issues will depend on |
+| **multi-surface** | spans multiple otherwise-independent surfaces |
+| **ambiguity** | leaves genuine ambiguity in what is being asked |
+
+### Worker pre-flight (blocking)
+
+Before implementation, the worker **re-runs the same marker check with fresh eyes**.
+If reality is larger than the assigned tier, **stop and escalate the tier upward**
+— never silently proceed, never demote.
+
+Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
+committed calibration sample.
+
 ## RCA spec discipline (Issue #221)
 
 Workers and architects share these invariants when authoring specs or

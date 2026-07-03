@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "markerClasses": [
+    "trust-boundary",
+    "spawn-capability",
+    "concurrency-state-retry",
+    "ci-review-gating",
+    "durable-state-evidence",
+    "test-harness-correctness",
+    "crash-recovery",
+    "external-api-transport",
+    "shared-contract-dependency",
+    "multi-surface",
+    "ambiguity"
+  ],
+  "samples": [
+    {
+      "id": "readme-typo-heading",
+      "task": "Fix a spelling error in a README section heading (text only).",
+      "tier": "T1",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "agents-skill-pointer",
+      "task": "Add a one-line pointer in AGENTS.md to an existing skill (no new behavior).",
+      "tier": "T1",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "migration-notes-waiver-line",
+      "task": "Clarify operator-adoption waiver wording in one docs subsection (~1 file).",
+      "tier": "T1",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "gh-inventory-single-route",
+      "task": "Extend gh wrapper inventory for one new documented read argv shape (~2 files).",
+      "tier": "T2",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "plugin-scope-guard-message",
+      "task": "Improve denylist violation error text in one plugin module (local behavior).",
+      "tier": "T2",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "self-architect-lint-rule",
+      "task": "Add one new self-architect lint check for a single prompt convention.",
+      "tier": "T2",
+      "decider": "size-decided",
+      "markersPresent": [],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "scope-guard-required-check",
+      "task": "Change which CI jobs are fail-closed required checks for merge (branch protection contract).",
+      "tier": "T3",
+      "decider": "ci-review-gating",
+      "markersPresent": ["ci-review-gating"],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": true
+    },
+    {
+      "id": "review-start-claim-lease",
+      "task": "Add shared-machine claim semantics for automated review-start (concurrency / single-winner).",
+      "tier": "T3",
+      "decider": "concurrency-state-retry",
+      "markersPresent": ["concurrency-state-retry"],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": true
+    },
+    {
+      "id": "spawn-grant-worktree-binding",
+      "task": "Bind autonomous spawn grants to named worktree provenance (capability grant surface).",
+      "tier": "T3",
+      "decider": "spawn-capability",
+      "markersPresent": ["spawn-capability"],
+      "checkedSilent": [
+        "trust-boundary",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": true
+    },
+    {
+      "id": "contract-evidence-ledger-row",
+      "task": "Mutate operator-visible contract-evidence ledger rows and snapshot provenance.",
+      "tier": "T3",
+      "decider": "durable-state-evidence",
+      "markersPresent": ["durable-state-evidence"],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "test-harness-correctness",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": true
+    },
+    {
+      "id": "fixture-live-state-leak",
+      "task": "Fix test fixtures that can pass while touching live AO session state.",
+      "tier": "T3",
+      "decider": "test-harness-correctness",
+      "markersPresent": ["test-harness-correctness"],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "crash-recovery",
+        "external-api-transport",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    },
+    {
+      "id": "gh-rest-retry-backoff",
+      "task": "Change GitHub REST wrapper retry/backoff and rate-limit fallback semantics.",
+      "tier": "T3",
+      "decider": "external-api-transport",
+      "markersPresent": ["external-api-transport"],
+      "checkedSilent": [
+        "trust-boundary",
+        "spawn-capability",
+        "concurrency-state-retry",
+        "ci-review-gating",
+        "durable-state-evidence",
+        "test-harness-correctness",
+        "crash-recovery",
+        "shared-contract-dependency",
+        "multi-surface",
+        "ambiguity"
+      ],
+      "boundaryCase": false
+    }
+  ]
+}
