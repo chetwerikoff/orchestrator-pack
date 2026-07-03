@@ -15,8 +15,8 @@
   ],
   "samples": [
     {
-      "id": "readme-typo-heading",
-      "task": "Fix a spelling error in a README section heading (text only).",
+      "id": "plugin-readme-usage-subsection",
+      "task": "Add a Usage subsection to a plugin README documenting existing CLI flags (~1 file, new prose — not a typo/rename).",
       "tier": "T1",
       "decider": "size-decided",
       "markersPresent": [],
@@ -36,8 +36,8 @@
       "boundaryCase": false
     },
     {
-      "id": "agents-skill-pointer",
-      "task": "Add a one-line pointer in AGENTS.md to an existing skill (no new behavior).",
+      "id": "agent-rules-cross-reference",
+      "task": "Add a short cross-reference paragraph in agent_rules linking two existing policy sections (~1 file).",
       "tier": "T1",
       "decider": "size-decided",
       "markersPresent": [],
@@ -57,8 +57,8 @@
       "boundaryCase": false
     },
     {
-      "id": "migration-notes-waiver-line",
-      "task": "Clarify operator-adoption waiver wording in one docs subsection (~1 file).",
+      "id": "verify-wire-existing-check",
+      "task": "Wire an already-shipped check script into verify.ps1 with a new section stanza (~2 files, no new contract).",
       "tier": "T1",
       "decider": "size-decided",
       "markersPresent": [],

@@ -799,7 +799,8 @@ Ask: **what is the worst thing this task can break?**
 The enumerated red-flag markers below are the **reference backstop** for this
 lens — not a substitute for reading it. Concrete examples live in the labeled
 calibration sample (`tests/fixtures/task-complexity-tier-calibration.json`), not
-here.
+here. That sample includes **on-ladder tasks only** — below-ladder work per the
+skip line above is intentionally omitted.
 
 ### Classification order (hard precedence)
 
