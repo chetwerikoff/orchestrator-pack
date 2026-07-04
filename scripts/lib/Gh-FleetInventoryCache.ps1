@@ -42,32 +42,32 @@ function Write-GhFleetInventoryCacheAudit {
     $root = Get-GhFleetInventoryCacheRoot
     if (-not $root) { return }
 
-    if (-not $Script:AuditJsonlRetentionLoaded) {
-        . (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
-        $Script:AuditJsonlRetentionLoaded = $true
-    }
-
-    $auditPath = Join-Path $root 'audit.jsonl'
-    $payload = @{
-        at    = (Get-Date).ToString('o')
-        event = $Event
-    }
-    foreach ($key in $Fields.Keys) {
-        $payload[$key] = $Fields[$key]
-    }
-    $policy = Resolve-AuditJsonlRetentionPolicy -StreamId 'github-fleet-cache'
-    $logWriter = {
-        param($Kind, $Fields)
-        if (-not $env:GH_FLEET_CACHE_AUDIT) { return }
-        $suffix = ($Fields.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '
-        if ($suffix) {
-            [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind $suffix")
-        }
-        else {
-            [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind")
-        }
-    }
     try {
+        if (-not $Script:AuditJsonlRetentionLoaded) {
+            . (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
+            $Script:AuditJsonlRetentionLoaded = $true
+        }
+
+        $auditPath = Join-Path $root 'audit.jsonl'
+        $payload = @{
+            at    = (Get-Date).ToString('o')
+            event = $Event
+        }
+        foreach ($key in $Fields.Keys) {
+            $payload[$key] = $Fields[$key]
+        }
+        $policy = Resolve-AuditJsonlRetentionPolicy -StreamId 'github-fleet-cache'
+        $logWriter = {
+            param($Kind, $Fields)
+            if (-not $env:GH_FLEET_CACHE_AUDIT) { return }
+            $suffix = ($Fields.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '
+            if ($suffix) {
+                [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind $suffix")
+            }
+            else {
+                [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind")
+            }
+        }
         Add-AuditJsonlLine -ActivePath $auditPath -Line ($payload | ConvertTo-Json -Compress) -Policy $policy -LogWriter $logWriter
     }
     catch {

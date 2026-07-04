@@ -26,8 +26,23 @@ const STREAM_ENV_PREFIX = {
   'github-fleet-cache': 'GH_FLEET_CACHE_AUDIT',
 };
 
-function loadPolicyDefaults() {
-  return JSON.parse(readFileSync(POLICY_PATH, 'utf8'));
+function loadPolicyDefaults(streamId, env = process.env) {
+  try {
+    const path = env.AUDIT_JSONL_RETENTION_POLICY_PATH?.trim() || POLICY_PATH;
+    return JSON.parse(readFileSync(path, 'utf8'))[streamId];
+  } catch {
+    return embeddedPolicyDefaults(streamId);
+  }
+}
+
+function embeddedPolicyDefaults(streamId) {
+  if (streamId === 'gh-wrapper') {
+    return { maxActiveBytes: 64 * 1024 * 1024, maxTotalBytes: 1024 * 1024 * 1024, maxAgeDays: 7 };
+  }
+  if (streamId === 'github-fleet-cache') {
+    return { maxActiveBytes: 16 * 1024 * 1024, maxTotalBytes: 200 * 1024 * 1024, maxAgeDays: 7 };
+  }
+  throw new Error(`unknown audit stream: ${streamId}`);
 }
 
 function parsePositiveInt(value, fallback) {
@@ -36,10 +51,7 @@ function parsePositiveInt(value, fallback) {
 }
 
 export function resolveAuditJsonlPolicy(streamId, env = process.env) {
-  const defaults = loadPolicyDefaults()[streamId];
-  if (!defaults) {
-    throw new Error(`unknown audit stream: ${streamId}`);
-  }
+  const defaults = loadPolicyDefaults(streamId, env);
   const prefix = STREAM_ENV_PREFIX[streamId];
   const maxActiveBytes = parsePositiveInt(env[`${prefix}_MAX_ACTIVE_BYTES`], defaults.maxActiveBytes);
   const maxTotalBytes = parsePositiveInt(env[`${prefix}_MAX_TOTAL_BYTES`], defaults.maxTotalBytes);
@@ -111,7 +123,67 @@ function activeFileSize(activePath) {
   return statSync(activePath).size;
 }
 
-function tryAcquireMaintenanceLock(lockPath) {
+const DEFAULT_MAINTENANCE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+
+function maintenanceLockMaxAgeMs(env = process.env) {
+  const parsed = Number.parseInt(String(env.AUDIT_JSONL_MAINTENANCE_LOCK_MAX_AGE_SECONDS ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : DEFAULT_MAINTENANCE_LOCK_MAX_AGE_MS;
+}
+
+function readMaintenanceLockPid(lockPath) {
+  try {
+    const text = readFileSync(lockPath, 'utf8').trim();
+    const pid = Number.parseInt(text.split('\n')[0], 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'EPERM') {
+      return true;
+    }
+    return false;
+  }
+}
+
+function isMaintenanceLockStale(lockPath, maxAgeMs) {
+  if (!existsSync(lockPath)) {
+    return false;
+  }
+  try {
+    const pid = readMaintenanceLockPid(lockPath);
+    if (pid !== null && !isProcessAlive(pid)) {
+      return true;
+    }
+    const { mtimeMs } = statSync(lockPath);
+    return Date.now() - mtimeMs > maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function clearStaleMaintenanceLockIfNeeded(lockPath, log, env = process.env) {
+  if (!isMaintenanceLockStale(lockPath, maintenanceLockMaxAgeMs(env))) {
+    return false;
+  }
+  try {
+    unlinkSync(lockPath);
+    log?.('stale_lock_reclaimed', { lock: basename(lockPath) });
+    return true;
+  } catch (err) {
+    log?.('stale_lock_reclaim_failed', { reason: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
+}
+
+function tryAcquireMaintenanceLock(lockPath, log, env = process.env) {
+  clearStaleMaintenanceLockIfNeeded(lockPath, log, env);
   try {
     mkdirSync(dirname(lockPath), { recursive: true });
     const fd = openSync(lockPath, 'wx', 0o600);
@@ -216,7 +288,7 @@ export function maybeMaintainAuditJsonl(activePath, policy, log) {
   }
 
   const lockPath = `${activePath}.maintenance.lock`;
-  if (!tryAcquireMaintenanceLock(lockPath)) {
+  if (!tryAcquireMaintenanceLock(lockPath, log)) {
     return { rotated: false, activeSize, lockContended: true };
   }
 
@@ -250,6 +322,7 @@ export function maintenanceLockPath(activePath) {
 
 export {
   activeFileSize,
+  clearStaleMaintenanceLockIfNeeded,
   listSegments,
   parseCompactRotationTimestamp,
   pruneSegments,

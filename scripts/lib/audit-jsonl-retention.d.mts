@@ -48,5 +48,14 @@ export function segmentNameRegex(activePath: string): RegExp;
 export function resolveRotationSegmentPath(dir: string, base: string): string | null;
 export function rotationStamp(): string;
 export function parseCompactRotationTimestamp(compact: string): number;
-export function tryAcquireMaintenanceLock(lockPath: string): boolean;
+export function clearStaleMaintenanceLockIfNeeded(
+  lockPath: string,
+  log?: (kind: string, fields?: Record<string, unknown>) => void,
+  env?: NodeJS.ProcessEnv,
+): boolean;
+export function tryAcquireMaintenanceLock(
+  lockPath: string,
+  log?: (kind: string, fields?: Record<string, unknown>) => void,
+  env?: NodeJS.ProcessEnv,
+): boolean;
 export function releaseMaintenanceLock(lockPath: string): void;

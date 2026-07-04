@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
   writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -148,6 +149,46 @@ describe('gh-wrapper audit retention scenarios', () => {
     }
     const totalBytes = activeFileSize(activePath) + segments.reduce((sum: number, seg) => sum + seg.size, 0);
     expect(totalBytes).toBeLessThanOrEqual(policy.maxTotalBytes + 256);
+  });
+
+  it('reclaims stale maintenance locks from dead owners before rotating', () => {
+    const root = makeRoot();
+    const activePath = join(root, 'gh-wrapper-audit.jsonl');
+    const lockPath = maintenanceLockPath(activePath);
+    writeFileSync(lockPath, '999999\n');
+    appendFileSync(activePath, `${makeLine(0)}\n${'x'.repeat(200)}\n`);
+    const policy = {
+      ...resolveAuditJsonlPolicy('gh-wrapper', {}),
+      maxActiveBytes: 100,
+      maxTotalBytes: 1024 * 1024,
+      maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+    };
+    const result = maybeMaintainAuditJsonl(activePath, policy);
+    expect(result.rotated).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(listSegments(root, activePath).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not throw fleet cache calls when audit retention policy is missing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-cache-audit-guard-'));
+    roots.push(root);
+    const fleetLib = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
+    const missingPolicy = join(root, 'missing-policy.json').replace(/'/g, "''");
+    const script = `
+$env:GH_FLEET_CACHE_AUDIT = '1'
+$env:AO_SIDE_PROCESS_STATE_DIR = '${root.replace(/'/g, "''")}'
+$env:AUDIT_JSONL_RETENTION_POLICY_PATH = '${missingPolicy}'
+. '${fleetLib}'
+Write-GhFleetInventoryCacheAudit -Event 'setup_guard' -Fields @{ key = 'x' }
+'ok'
+`;
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('ok');
+    expect(existsSync(join(root, 'github-fleet-cache', 'audit.jsonl'))).toBe(true);
   });
 
   it('lets lock contenders skip rotation and still append complete lines', () => {

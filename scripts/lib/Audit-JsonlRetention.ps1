@@ -4,12 +4,120 @@
 #>
 
 $Script:AuditJsonlRetentionPolicyPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'audit-jsonl-retention-policy.json'
+$Script:AuditJsonlProcessAliveLoaded = $false
+
+function Ensure-AuditJsonlProcessAliveLoaded {
+    if ($Script:AuditJsonlProcessAliveLoaded) { return }
+    . (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
+    $Script:AuditJsonlProcessAliveLoaded = $true
+}
+
+function Get-AuditJsonlMaintenanceLockMaxAgeSeconds {
+    $raw = [Environment]::GetEnvironmentVariable('AUDIT_JSONL_MAINTENANCE_LOCK_MAX_AGE_SECONDS')
+    $parsed = 0
+    if ($raw -and [int]::TryParse([string]$raw, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+    return 300
+}
+
+function Get-AuditJsonlMaintenanceLockPid {
+    param([string]$LockPath)
+
+    if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+        return 0
+    }
+    try {
+        $text = Get-Content -LiteralPath $LockPath -Raw
+        if ($text -match '^\s*(\d+)') {
+            return [int]$Matches[1]
+        }
+    }
+    catch {
+        return 0
+    }
+    return 0
+}
+
+function Test-AuditJsonlMaintenanceLockStale {
+    param([string]$LockPath)
+
+    if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) {
+        return $false
+    }
+
+    $ownerPid = Get-AuditJsonlMaintenanceLockPid -LockPath $LockPath
+    if ($ownerPid -gt 0) {
+        Ensure-AuditJsonlProcessAliveLoaded
+        if (-not (Test-ProcessAlive -ProcessId $ownerPid)) {
+            return $true
+        }
+    }
+
+    try {
+        $startedAt = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
+    }
+    catch {
+        return $false
+    }
+    return ((Get-Date).ToUniversalTime() - $startedAt).TotalSeconds -gt (Get-AuditJsonlMaintenanceLockMaxAgeSeconds)
+}
+
+function Clear-AuditJsonlStaleMaintenanceLockIfNeeded {
+    param(
+        [string]$LockPath,
+        [scriptblock]$LogWriter = $null
+    )
+
+    if (-not (Test-AuditJsonlMaintenanceLockStale -LockPath $LockPath)) {
+        return $false
+    }
+    Remove-AuditJsonlMaintenanceLock -LockPath $LockPath
+    if ($LogWriter) {
+        & $LogWriter 'stale_lock_reclaimed' @{ lock = (Split-Path -Leaf $LockPath) }
+    }
+    return $true
+}
+
+function Get-AuditJsonlRetentionPolicyFilePath {
+    if ($env:AUDIT_JSONL_RETENTION_POLICY_PATH) {
+        return $env:AUDIT_JSONL_RETENTION_POLICY_PATH.Trim()
+    }
+    return $Script:AuditJsonlRetentionPolicyPath
+}
+
+function Get-AuditJsonlRetentionEmbeddedDefaults {
+    param([string]$StreamId)
+
+    switch ($StreamId) {
+        'gh-wrapper' {
+            return @{
+                maxActiveBytes = 67108864
+                maxTotalBytes  = 1073741824
+                maxAgeDays     = 7
+            }
+        }
+        'github-fleet-cache' {
+            return @{
+                maxActiveBytes = 16777216
+                maxTotalBytes  = 209715200
+                maxAgeDays     = 7
+            }
+        }
+        default { throw "unknown audit stream: $StreamId" }
+    }
+}
 
 function Get-AuditJsonlRetentionPolicyDefaults {
     param([string]$StreamId)
 
-    $raw = Get-Content -LiteralPath $Script:AuditJsonlRetentionPolicyPath -Raw | ConvertFrom-Json
-    return $raw.$StreamId
+    try {
+        $raw = Get-Content -LiteralPath (Get-AuditJsonlRetentionPolicyFilePath) -Raw | ConvertFrom-Json
+        return $raw.$StreamId
+    }
+    catch {
+        return Get-AuditJsonlRetentionEmbeddedDefaults -StreamId $StreamId
+    }
 }
 
 function Resolve-AuditJsonlRetentionPolicy {
@@ -93,12 +201,17 @@ function Get-AuditJsonlActiveFileSize {
 }
 
 function Test-AuditJsonlMaintenanceLock {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [scriptblock]$LogWriter = $null
+    )
 
     $dir = Split-Path -Parent $LockPath
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
+
+    Clear-AuditJsonlStaleMaintenanceLockIfNeeded -LockPath $LockPath -LogWriter $LogWriter | Out-Null
 
     try {
         $stream = [System.IO.FileStream]::new(
@@ -261,7 +374,7 @@ function Invoke-AuditJsonlRetentionMaintenance {
     }
 
     $lockPath = "$ActivePath.maintenance.lock"
-    if (-not (Test-AuditJsonlMaintenanceLock -LockPath $lockPath)) {
+    if (-not (Test-AuditJsonlMaintenanceLock -LockPath $lockPath -LogWriter $LogWriter)) {
         return @{ rotated = $false; activeSize = $activeSize; lockContended = $true }
     }
 

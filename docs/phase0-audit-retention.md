@@ -36,13 +36,18 @@ Per-stream environment variables (all optional, positive integers only):
 `GH_WRAPPER_AUDIT_FILE` still redirects the wrapper active file path for tests or custom
 layouts; retention operates on that resolved active file and sibling rotated segments in the
 same directory.
+- Optional `AUDIT_JSONL_RETENTION_POLICY_PATH` overrides the policy JSON location; missing or
+  malformed policy files fall back to embedded conservative defaults.
+- Optional `AUDIT_JSONL_MAINTENANCE_LOCK_MAX_AGE_SECONDS` (default `300`) bounds stale lock
+  reclamation before writers treat maintenance as contended.
 
 ## Maintenance semantics
 
 - Hot append path performs at most one active-file size probe before append.
 - Segment enumeration and age/total-footprint pruning run only when a rotation trigger fires.
 - Rotation uses a nonblocking per-file advisory lock (`<active>.maintenance.lock`). Writers that
-  cannot acquire the lock append and skip rotation for that call.
+  cannot acquire the lock append and skip rotation for that call. Stale locks left by dead owners
+  are reclaimed by PID/mtime before contending writers give up.
 - Active-file size triggers rotation to timestamped JSONL segment(s) with millisecond stamp and random suffix (legacy second-precision segments remain readable). Retention
   age and total-footprint policy delete older segments; footprint is authoritative when pressures
   conflict.
